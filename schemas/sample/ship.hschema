@@ -1,0 +1,83 @@
+/// Ships: hull records, motion replication, damage and docking.
+package sample.ship;
+import "sample/common.hschema";
+
+enum ShipSize : u8 { Small; Medium; Large; Capital }
+
+/// A thruster mount point on a hull.
+struct ThrusterMount {
+  bone:     Name
+  dir:      vec3f = [0, 0, -1] @normalized
+  maxForce: f32 = 50000 @unit(N) @range(0, 1e8) @editor(category="Thrust")
+}
+
+/// A weapon or module hardpoint; lists of hardpoints are keyed by slot name.
+struct Hardpoint {
+  slot:   Name
+  size:   ShipSize
+  offset: vec3f
+}
+
+/// Ship motion: replicated to everyone, predicted by the owning client (04 §4.1).
+component ShipMotion replicate(all) lod(core) {
+  pos:    WorldPos @quant(frame_cell, cell=4096m, res=1/256m) @predicted
+  rot:    quatf    @quant(smallest3, bits=10) @predicted @interp(slerp)
+  vel:    vec3f    @quant(range=±4096, bits=16) @predicted
+  angvel: vec3f    @quant(range=±8, bits=10) lod(near)
+  server { lastInputTick: u32 }
+}
+
+/// One loot table entry.
+struct LootEntry {
+  itemName: Name
+  weight:   f32 = 1 @range(0, 1000)
+  minCount: u16 = 1
+  maxCount: u16 = 1
+}
+
+/// Server-only loot tables (never cooked for clients).
+record LootTableDef @table("loot") @server_only {
+  entries: list<LootEntry> @keyed
+}
+
+/// A hull type; instances live in content/records/hull/*.hrec.
+record ShipHullDef @table("hull") {
+  name:         LocString
+  size:         ShipSize = Medium
+  faction:      Faction
+  mass:         f32 @unit(kg) @range(100, 1e9)
+  thrusters:    list<ThrusterMount> @keyed @max(64)   // elements carry stable "$key" GUIDs
+  hardpoints:   list<Hardpoint> @keyed(slot)
+  handling:     { pitchRate: f32 @unit(deg/s); yawRate: f32; rollRate: f32 }
+  capabilities: Capability = [Fly, Dock]
+  client { prefab: AssetRef<Prefab>; icon: AssetRef<Texture> }
+  server { lootTable: LootTableRef?; aiHints: map<Name, f32> }
+}
+
+/// Hull damage checkpointed with the ship (02 §3.4: `breaches` was renamed from `holes`).
+struct HullDamage @store(checkpoint) @version(2) {
+  hp:       f32
+  breaches: list<u8> @was("holes")
+}
+
+/// A gameplay effect with a variant duration (06 §1.3).
+struct EffectDef {
+  duration:  variant { Instant; Timed{secs: f32 = 1}; Infinite; Periodic{period: Duration = 1s; ticks: u16; executeOnApply: bool} }
+  magnitude: f64
+  tags:      TagSet
+  stacking:  enum { None, BySource, ByTarget } = BySource
+}
+
+event ShipDestroyed @audience(relevant) { ship: EntityId; killer: EntityId?; at: Tick }
+
+rpc RequestDock(target: NetHandle, bay: u8) client->server reliable @ratelimit(2/s) @intent(interact);
+
+relation DockedTo @exclusive @target(sample.ship.ShipHullDef)
+
+/// Script-callable ship queries (hand-written C++; `--emit luau` generates the fuel-charging glue).
+scriptlib ShipQueries @realm(server, client) {
+  /// Hull record of a ship entity (none if the entity is not a ship).
+  fn hullOf(ship: EntityId) -> ShipHullRef? @script(cost=4) @pure;
+  /// Ships docked at a station; costs one extra fuel unit per returned ship.
+  fn dockedShips(station: EntityId) -> list<EntityId> @max(256) @script(cost=10, each=1, of=result) @pure;
+}

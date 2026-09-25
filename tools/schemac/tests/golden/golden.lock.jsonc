@@ -1,0 +1,290 @@
+// helios-schemac schema lock (docs/plan/02-engine-runtime.md §3.4). Generated; append-only.
+// Commit this file. Never edit or delete entries: ids must never be reused. CI runs --check-lock.
+{
+  "format": 1,
+  "types": {
+    "golden.all.Chat": {
+      "id": 3681907271,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "from", "type": "EntityId"},
+        {"id": 2, "name": "text", "type": "string"}
+      ]
+    },
+    "golden.all.Color": {
+      "id": 2113248476,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Red", "value": 0},
+        {"name": "Green", "value": 5},
+        {"name": "Blue", "value": 6}
+      ]
+    },
+    "golden.all.Containers": {
+      "id": 4248913933,
+      "kind": "struct",
+      "nextField": 16,
+      "fields": [
+        {"id": 1, "name": "l", "type": "list<i32>"},
+        {"id": 2, "name": "ls", "type": "list<string>"},
+        {"id": 3, "name": "ll", "type": "list<list<u8>>"},
+        {"id": 4, "name": "lo", "type": "list<f32?>"},
+        {"id": 5, "name": "st", "type": "set<Name>"},
+        {"id": 6, "name": "m", "type": "map<string,golden.all.Scalars>"},
+        {"id": 7, "name": "me", "type": "map<golden.all.Color,list<u64>>"},
+        {"id": 8, "name": "arr", "type": "f32[3]", "default": "[1,2,0]"},
+        {"id": 9, "name": "opt", "type": "golden.all.Scalars?"},
+        {"id": 10, "name": "optv", "type": "vec3f?"},
+        {"id": 11, "name": "keyed", "type": "keyed<golden.all.Item>"},
+        {"id": 12, "name": "bySlot", "type": "list<golden.all.Item>"},
+        {"id": 13, "name": "ref", "type": "Ref<golden.all.ThingDef>?"},
+        {"id": 14, "name": "refs", "type": "list<Ref<golden.all.ThingDef>>"},
+        {"id": 15, "name": "asset", "type": "AssetRef<Mesh>"}
+      ]
+    },
+    "golden.all.Early": {
+      "id": 166007320,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "later", "type": "list<golden.all.Late>"},
+        {"id": 2, "name": "keyedLater", "type": "keyed<golden.all.Late>"},
+        {"id": 3, "name": "byName", "type": "map<Name,golden.all.Item>"}
+      ]
+    },
+    "golden.all.Exploded": {
+      "id": 3370161098,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "at", "type": "WorldPos"},
+        {"id": 2, "name": "radius", "type": "f32"}
+      ]
+    },
+    "golden.all.Fire": {
+      "id": 1985107693,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "slot", "type": "u8"},
+        {"id": 2, "name": "aim", "type": "vec3f"}
+      ]
+    },
+    "golden.all.Hud": {
+      "id": 1980070194,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "hp", "type": "f32"},
+        {"id": 2, "name": "target", "type": "Ref<golden.all.ThingDef>?"}
+      ]
+    },
+    "golden.all.Item": {
+      "id": 1495052146,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "slot", "type": "Name"},
+        {"id": 2, "name": "count", "type": "u16", "default": "1"}
+      ]
+    },
+    "golden.all.Late": {
+      "id": 187438317,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "n", "type": "u8"},
+        {"id": 2, "name": "tree", "type": "list<golden.all.Late>"}
+      ]
+    },
+    "golden.all.Motion": {
+      "id": 1522661283,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "pos", "type": "WorldPos"},
+        {"id": 2, "name": "vel", "type": "vec3f"},
+        {"id": 3, "name": "hp", "type": "f32", "default": "100"}
+      ]
+    },
+    "golden.all.Motion.Server": {
+      "id": 1275926668,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "lastTick", "type": "u32"}
+      ]
+    },
+    "golden.all.Owns": {
+      "id": 3871244576,
+      "kind": "struct",
+      "nextField": 1,
+      "fields": []
+    },
+    "golden.all.Pair": {
+      "id": 4217745765,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "x", "type": "f32"},
+        {"id": 2, "name": "y", "type": "f32"}
+      ]
+    },
+    "golden.all.Perm": {
+      "id": 2656619455,
+      "kind": "flags",
+      "base": "u8",
+      "values": [
+        {"name": "None", "value": 0},
+        {"name": "Read", "value": 1},
+        {"name": "Write", "value": 2},
+        {"name": "Exec", "value": 4}
+      ]
+    },
+    "golden.all.Plain": {
+      "id": 2651108739,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "value", "type": "i32"}
+      ]
+    },
+    "golden.all.Req": {
+      "id": 158644087,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "n", "type": "u32"}
+      ]
+    },
+    "golden.all.Scalars": {
+      "id": 767562990,
+      "kind": "struct",
+      "nextField": 33,
+      "fields": [
+        {"id": 1, "name": "b", "type": "bool", "default": "true"},
+        {"id": 2, "name": "i8v", "type": "i8", "default": "-8"},
+        {"id": 3, "name": "i16v", "type": "i16"},
+        {"id": 4, "name": "i32v", "type": "i32", "default": "-32"},
+        {"id": 5, "name": "i64v", "type": "i64", "default": "-9223372036854775808"},
+        {"id": 6, "name": "u8v", "type": "u8", "default": "255"},
+        {"id": 7, "name": "u16v", "type": "u16"},
+        {"id": 8, "name": "u32v", "type": "u32", "default": "4294967295"},
+        {"id": 9, "name": "u64v", "type": "u64", "default": "18446744073709551615"},
+        {"id": 10, "name": "f32v", "type": "f32", "default": "0.1"},
+        {"id": 11, "name": "f64v", "type": "f64", "default": "-2.5e-10"},
+        {"id": 12, "name": "s", "type": "string", "default": "\"quote\\\" backslash\\\\ tab\\t é\""},
+        {"id": 13, "name": "n", "type": "Name", "default": "\"a.b\""},
+        {"id": 14, "name": "g", "type": "Guid", "default": "\"00112233-4455-6677-8899-aabbccddeeff\""},
+        {"id": 15, "name": "v2", "type": "vec2f", "default": "[1,2]"},
+        {"id": 16, "name": "v3", "type": "vec3f"},
+        {"id": 17, "name": "v4", "type": "vec4f", "default": "[0,0,0,1]"},
+        {"id": 18, "name": "v3d", "type": "vec3d", "default": "[10000000000,0,-1]"},
+        {"id": 19, "name": "q", "type": "quatf", "default": "[0,0,0,1]"},
+        {"id": 20, "name": "qd", "type": "quatd"},
+        {"id": 21, "name": "c", "type": "color", "default": "[1,0.5,0.25,1]"},
+        {"id": 22, "name": "wp", "type": "WorldPos"},
+        {"id": 23, "name": "e", "type": "EntityId"},
+        {"id": 24, "name": "nh", "type": "NetHandle"},
+        {"id": 25, "name": "d", "type": "Duration", "default": "\"90s\""},
+        {"id": 26, "name": "t", "type": "Tick"},
+        {"id": 27, "name": "loc", "type": "LocString"},
+        {"id": 28, "name": "tags", "type": "TagSet"},
+        {"id": 29, "name": "tq", "type": "TagQuery"},
+        {"id": 30, "name": "hx", "type": "HxlExpr"},
+        {"id": 31, "name": "col", "type": "golden.all.Color", "default": "\"Green\""},
+        {"id": 32, "name": "perm", "type": "golden.all.Perm", "default": "[\"Read\",\"Exec\"]"}
+      ]
+    },
+    "golden.all.Spellings": {
+      "id": 695112080,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "n", "type": "list<u8>"},
+        {"id": 2, "name": "r", "type": "f32", "default": "0.5"}
+      ]
+    },
+    "golden.all.StoreBuyRequest": {
+      "id": 1211075103,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "req", "type": "golden.all.Req"}
+      ]
+    },
+    "golden.all.ThingDef": {
+      "id": 991367234,
+      "kind": "struct",
+      "nextField": 7,
+      "fields": [
+        {"id": 1, "name": "label", "type": "LocString"},
+        {"id": 2, "name": "shape", "type": "golden.all.ThingDef.Shape"},
+        {"id": 3, "name": "mode", "type": "golden.all.ThingDef.Mode", "default": "\"On\""},
+        {"id": 4, "name": "inner", "type": "golden.all.ThingDef.Inner"},
+        {"id": 5, "name": "secret", "type": "u64"},
+        {"id": 6, "name": "icon", "type": "AssetRef<Texture>"}
+      ]
+    },
+    "golden.all.ThingDef.Inner": {
+      "id": 4145299940,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "a", "type": "u8"},
+        {"id": 2, "name": "b", "type": "golden.all.ThingDef.Inner.B"}
+      ]
+    },
+    "golden.all.ThingDef.Inner.B": {
+      "id": 1010620404,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "c", "type": "string"}
+      ]
+    },
+    "golden.all.ThingDef.Mode": {
+      "id": 1079282855,
+      "kind": "enum",
+      "base": "u32",
+      "values": [
+        {"name": "Off", "value": 0},
+        {"name": "On", "value": 1}
+      ]
+    },
+    "golden.all.ThingDef.Shape": {
+      "id": 1916830777,
+      "kind": "variant",
+      "nextField": 4,
+      "alternatives": [
+        {"id": 1, "name": "Point"},
+        {"id": 2, "name": "Box"},
+        {"id": 3, "name": "Sphere"}
+      ]
+    },
+    "golden.all.ThingDef.Shape.Box": {
+      "id": 2012584194,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "size", "type": "vec3f", "default": "[1,1,1]"}
+      ]
+    },
+    "golden.all.ThingDef.Shape.Point": {
+      "id": 4157983937,
+      "kind": "struct",
+      "nextField": 1,
+      "fields": []
+    },
+    "golden.all.ThingDef.Shape.Sphere": {
+      "id": 2226873608,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "radius", "type": "f32", "default": "0.5"}
+      ]
+    }
+  }
+}

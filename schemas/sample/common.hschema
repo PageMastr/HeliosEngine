@@ -1,0 +1,47 @@
+/// Shared vocabulary of the sample game. The sample schemas double as the reference for schema
+/// authors and as the fixture of tools/schemac's tests (C++ round trips, Go interop).
+package sample.common;
+
+/// Faction alignment of an entity.
+enum Faction : u8 {
+  Neutral
+  Pilots
+  Syndicate
+  /// Hostile automatons.
+  Drones = 10
+}
+
+/// Capabilities an entity has (a bit set).
+flags Capability : u16 {
+  None = 0
+  Fly
+  Dock
+  Mine
+  Scan
+}
+
+/// Local transform in the entity's reference frame (02 §5.2).
+component Transform {
+  position: WorldPos
+  rotation: quatf
+  scale: vec3f = [1, 1, 1] @range(0.001, 1000)
+}
+
+/// Hit points, replicated to everyone; regeneration bookkeeping stays on the server.
+component Health replicate(all) {
+  current: f32 = 100 @range(0, 1e6) @editor(category="Combat", order=1)
+  max: f32 = 100 @range(1, 1e6) @editor(category="Combat", order=2)
+  shieldFraction: f32 @range(0, 1)
+  server {
+    regenPerSecond: f32 = 1.5 @unit(hp/s)
+    lastDamageTick: Tick
+  }
+}
+
+/// Largest stack any item may form.
+const MaxStackSize: u32 = 9999;
+const RespawnDelay: Duration = 30s;
+const DefaultCallsign: string = "Unnamed";
+
+/// Currency amounts (ledger units).
+alias Credits = i64;

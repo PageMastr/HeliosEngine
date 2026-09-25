@@ -1,0 +1,131 @@
+/// Golden-file fixture for helios-schemac's generators: one declaration of every kind and every
+/// type form. Regenerate the expected outputs with HELIOS_UPDATE_GOLDEN=1 (see tests/test_golden.cpp)
+/// and review the diff like any other code change.
+package golden.all;
+
+/// Enum with a doc comment and a gap.
+enum Color : u8 {
+  Red
+  /// Green is 5.
+  Green = 5
+  Blue
+}
+
+flags Perm : u8 { None = 0; Read; Write; Exec }
+
+/// Every scalar and builtin type, with defaults.
+struct Scalars {
+  b:    bool = true
+  i8v:  i8 = -8
+  i16v: i16
+  i32v: i32 = -32
+  i64v: i64 = -9223372036854775808
+  u8v:  u8 = 255
+  u16v: u16
+  u32v: u32 = 0xFFFFFFFF
+  u64v: u64 = 18446744073709551615
+  f32v: f32 = 0.1
+  f64v: f64 = -2.5e-10
+  s:    string = "quote\" backslash\\ tab\t é"
+  n:    Name = "a.b"
+  g:    Guid = "00112233-4455-6677-8899-aabbccddeeff"
+  v2:   vec2f = [1, 2]
+  v3:   vec3f
+  v4:   vec4f = [0, 0, 0, 1]
+  v3d:  vec3d = [1e10, 0, -1]
+  q:    quatf = [0, 0, 0, 1]
+  qd:   quatd
+  c:    color = [1, 0.5, 0.25, 1]
+  wp:   WorldPos
+  e:    EntityId
+  nh:   NetHandle
+  d:    Duration = 90s
+  t:    Tick
+  loc:  LocString
+  tags: TagSet
+  tq:   TagQuery
+  hx:   HxlExpr
+  col:  Color = Green
+  perm: Perm = [Read, Exec]
+}
+
+/// Containers of every shape.
+struct Containers {
+  l:     list<i32>
+  ls:    list<string>
+  ll:    list<list<u8>>
+  lo:    list<f32?>
+  st:    set<Name>
+  m:     map<string, Scalars>
+  me:    map<Color, list<u64>>
+  arr:   f32[3] = [1, 2]
+  opt:   Scalars?
+  optv:  vec3f?
+  keyed: list<Item> @keyed @max(8)
+  bySlot: list<Item> @keyed(slot)
+  ref:   ThingRef?
+  refs:  list<ThingRef>
+  asset: AssetRef<Mesh>
+}
+
+/// Lists may reference types declared later and the type itself (C++ order and incomplete types).
+struct Early { later: list<Late>; keyedLater: list<Late> @keyed; byName: map<Name, Item> }
+struct Late { n: u8; tree: list<Late> }
+
+struct Item {
+  slot:  Name
+  count: u16 = 1
+}
+
+/// A record (declares ThingRef).
+record ThingDef @table("thing") {
+  label: LocString
+  shape: variant { Point; Box { size: vec3f = [1, 1, 1] }; Sphere { radius: f32 = 0.5 } }
+  mode:  enum { Off, On } = On
+  inner: { a: u8; b: { c: string } }
+  server { secret: u64 }
+  client { icon: AssetRef<Texture> }
+}
+
+/// Replicated component with a server part.
+component Motion replicate(owner) lod(core) {
+  pos: WorldPos @quant(frame_cell, cell=4096m, res=1/256m) @predicted
+  vel: vec3f @quant(range=±64, bits=12)
+  hp:  f32 = 100 @range(0, 1000) @editor(category="Stats", order=2)
+  server { lastTick: u32 }
+}
+
+component Plain { value: i32 @was("old_value") }
+
+event Exploded @audience(relevant) { at: WorldPos; radius: f32 }
+message Chat { from: EntityId; text: string @max(256) }
+viewmodel Hud @client { hp: f32; target: ThingRef? }
+relation Owns @exclusive @target(golden.all.ThingDef)
+rpc Fire(slot: u8, aim: vec3f) client->server unreliable @ratelimit(20/s) @intent(combat);
+
+struct Req { n: u32 }
+service Store @scope(global) {
+  rpc Buy(req: Req) -> Containers @idempotent @timeout(2s);
+}
+
+/// Attribute spellings that must still generate valid C++ (digit separators, hex, exponents).
+struct Spellings {
+  n: list<u8> @max(1_000)
+  r: f32 = 0.5 @range(-0x10, 1_000.5) @step(.25) @editor(category="Edge", order=1e1)
+}
+
+/// Script-callable functions (their Luau glue comes from `--emit luau`, a later work package).
+scriptlib Queries @realm(server, client) {
+  /// Nearest thing within `radius`.
+  fn nearest(at: WorldPos, radius: f32 @unit(m)) -> ThingRef? @script(cost=12) @pure;
+  fn inRadius(at: WorldPos, radius: f32) -> list<EntityId> @max(64) @script(cost=20, each=1, of=result) @pure;
+  fn spawn(thing: ThingRef, at: WorldPos) -> EntityId @realm(server) @script(cost=50, each=4, of=thing);
+}
+
+const Limit: u32 = 16;
+const Pi: f64 = 3.141592653589793;
+const Greeting: string = "hi";
+const Cooldown: Duration = 1500ms;
+alias Money = i64;
+alias Pair = { x: f32; y: f32 };
+formula Twice(x) = x * 2;

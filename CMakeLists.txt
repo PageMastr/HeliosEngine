@@ -1,4 +1,9 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.28)
+cmake_policy(SET CMP0141 NEW)  # CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
+# Static CRT everywhere so the client/launcher run on a clean Windows install with no VC++ redist,
+# and /Z7 (embedded debug info) so compiler caches can cache MSVC builds. Must precede project().
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
 project(Helios VERSION 0.1.0 LANGUAGES C CXX)
 
 # ---------------------------------------------------------------------------------------------
@@ -28,9 +33,20 @@ if(CCACHE_PROGRAM)
   set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
 endif()
 
-if(HELIOS_SANITIZE AND NOT MSVC)
-  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
-  add_link_options(-fsanitize=address,undefined)
+if(MSVC)  # true for cl and clang-cl
+  add_compile_options(/utf-8 /Zc:__cplusplus /Zc:inline /EHsc /bigobj
+                      $<$<CXX_COMPILER_ID:MSVC>:/Zc:preprocessor>)
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+  add_link_options($<$<CONFIG:Release,RelWithDebInfo>:/OPT:REF> $<$<CONFIG:Release,RelWithDebInfo>:/OPT:ICF>)
+endif()
+
+if(HELIOS_SANITIZE)
+  if(MSVC)
+    add_compile_options(/fsanitize=address)
+  else()
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+  endif()
 endif()
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)

@@ -1,0 +1,2 @@
+# Trace goldens compare byte for byte: keep LF on Windows checkouts.
+*.txt text eol=lf

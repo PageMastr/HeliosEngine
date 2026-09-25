@@ -1,0 +1,105 @@
+RenderGraph "postchain": passes=6 culled=0 batches=5 lists=6 barriers=12 waits=4
+resources:
+  r0 "Output" texture RGBA8Unorm 320x180 mips=1 layers=1 imported initial=Undefined final=CopySource usage=Color versions=2 life=5..5 physical=p2
+  r1 "T0" texture RGBA16Float 320x180 mips=1 layers=1 usage=Sampled|Storage versions=2 life=0..1 physical=p0 bytes=524288 heap=Textures@0
+  r2 "T1" texture RGBA16Float 320x180 mips=1 layers=1 usage=Sampled|Storage versions=2 life=1..2 physical=p1 bytes=524288 heap=Textures@524288
+  r3 "T2" texture RGBA16Float 320x180 mips=1 layers=1 usage=Sampled|Storage versions=2 life=2..3 physical=p0 bytes=524288 heap=Textures@0
+  r4 "T3" texture RGBA16Float 320x180 mips=1 layers=1 usage=Sampled|Storage versions=2 life=3..4 physical=p1 bytes=524288 heap=Textures@524288
+  r5 "T4" texture RGBA16Float 320x180 mips=1 layers=1 usage=Sampled|Storage versions=2 life=4..5 physical=p0 bytes=524288 heap=Textures@0
+physicals:
+  p0 texture RGBA16Float 320x180 mips=1 layers=1 usage=Sampled|Storage residents=[T0, T2, T4]
+  p1 texture RGBA16Float 320x180 mips=1 layers=1 usage=Sampled|Storage residents=[T1, T3]
+  p2 imported texture RGBA8Unorm 320x180 mips=1 layers=1 residents=[Output]
+batches:
+  b0 Graphics#1 passes=[Seed] waits=[] lists=1
+  b1 AsyncCompute#1 passes=[BlurH] waits=[b0] lists=1
+  b2 Graphics#2 passes=[BlurV] waits=[b1] lists=1
+  b3 AsyncCompute#2 passes=[BlurH2] waits=[b2] lists=1
+  b4 Graphics#3 passes=[BlurV2, Blit] waits=[b3] lists=2
+passes:
+  #0 "Seed" Compute Graphics b0 L0
+    write T0@1 UnorderedAccess mips=0+1 layers=0+1
+    pre  p0:T0 Undefined->UnorderedAccess mips=0+1 layers=0+1
+  #1 "BlurH" AsyncCompute AsyncCompute b1 L1
+    read  T0@1 ShaderResource mips=0+1 layers=0+1
+    write T1@1 UnorderedAccess mips=0+1 layers=0+1
+    pre  p0:T0 UnorderedAccess->ShaderResource mips=0+1 layers=0+1
+    pre  p1:T1 Undefined->UnorderedAccess mips=0+1 layers=0+1
+  #2 "BlurV" Compute Graphics b2 L2
+    read  T1@1 ShaderResource mips=0+1 layers=0+1
+    write T2@1 UnorderedAccess mips=0+1 layers=0+1
+    pre  p1:T1 UnorderedAccess->ShaderResource mips=0+1 layers=0+1
+    pre  p0:T0 ShaderResource->UnorderedAccess mips=0+1 layers=0+1
+  #3 "BlurH2" AsyncCompute AsyncCompute b3 L3
+    read  T2@1 ShaderResource mips=0+1 layers=0+1
+    write T3@1 UnorderedAccess mips=0+1 layers=0+1
+    pre  p0:T0 UnorderedAccess->ShaderResource mips=0+1 layers=0+1
+    pre  p1:T1 ShaderResource->UnorderedAccess mips=0+1 layers=0+1
+  #4 "BlurV2" Compute Graphics b4 L4
+    read  T3@1 ShaderResource mips=0+1 layers=0+1
+    write T4@1 UnorderedAccess mips=0+1 layers=0+1
+    pre  p1:T1 UnorderedAccess->ShaderResource mips=0+1 layers=0+1
+    pre  p0:T0 ShaderResource->UnorderedAccess mips=0+1 layers=0+1
+  #5 "Blit" Raster Graphics b4 L5
+    read  T4@1 ShaderResource mips=0+1 layers=0+1
+    write Output@1 RenderTarget mips=0+1 layers=0+1
+    pre  p0:T0 UnorderedAccess->ShaderResource mips=0+1 layers=0+1
+    pre  p2:Output Undefined->RenderTarget mips=0+1 layers=0+1
+    post p2:Output RenderTarget->CopySource mips=0+1 layers=0+1
+memory: transient=2621440 pooled=1048576 placed=1048576 (buffers=0 rendertargets=0 textures=1048576)
+--- Null trace ---
+submit Graphics #1 waits=[]
+  list "postchain:Seed"
+    beginLabel "Seed"
+    barrier texture "T0" Undefined->UnorderedAccess mips=0+1 layers=0+1
+    bindPipeline "Pattern"
+    pushConstants offset=0 size=16 data=0100000040010000b400000001000000
+    dispatch 40x23x1
+    endLabel
+submit AsyncCompute #1 waits=[Graphics:1]
+  list "postchain:BlurH"
+    beginLabel "BlurH"
+    barrier texture "T0" UnorderedAccess->ShaderResource mips=0+1 layers=0+1
+    barrier texture "T1" Undefined->UnorderedAccess mips=0+1 layers=0+1
+    bindPipeline "Blur"
+    pushConstants offset=0 size=24 data=010000000200000040010000b40000000100000000000000
+    dispatch 40x23x1
+    endLabel
+submit Graphics #2 waits=[AsyncCompute:1]
+  list "postchain:BlurV"
+    beginLabel "BlurV"
+    barrier texture "T1" UnorderedAccess->ShaderResource mips=0+1 layers=0+1
+    barrier texture "T0" ShaderResource->UnorderedAccess mips=0+1 layers=0+1
+    bindPipeline "Blur"
+    pushConstants offset=0 size=24 data=020000000100000040010000b40000000000000001000000
+    dispatch 40x23x1
+    endLabel
+submit AsyncCompute #2 waits=[Graphics:2]
+  list "postchain:BlurH2"
+    beginLabel "BlurH2"
+    barrier texture "T0" UnorderedAccess->ShaderResource mips=0+1 layers=0+1
+    barrier texture "T1" ShaderResource->UnorderedAccess mips=0+1 layers=0+1
+    bindPipeline "Blur"
+    pushConstants offset=0 size=24 data=010000000200000040010000b40000000200000000000000
+    dispatch 40x23x1
+    endLabel
+submit Graphics #3 waits=[AsyncCompute:2]
+  list "postchain:BlurV2"
+    beginLabel "BlurV2"
+    barrier texture "T1" UnorderedAccess->ShaderResource mips=0+1 layers=0+1
+    barrier texture "T0" ShaderResource->UnorderedAccess mips=0+1 layers=0+1
+    bindPipeline "Blur"
+    pushConstants offset=0 size=24 data=020000000100000040010000b40000000000000002000000
+    dispatch 40x23x1
+    endLabel
+  list "postchain:Blit"
+    beginLabel "Blit"
+    barrier texture "T0" UnorderedAccess->ShaderResource mips=0+1 layers=0+1
+    barrier texture "Output" Undefined->RenderTarget mips=0+1 layers=0+1
+    beginRendering area=0,0 320x180 color0="Output" mip=0 layer=0 load=DontCare store=Store
+    bindPipeline "Blit"
+    pushConstants offset=0 size=16 data=01000000000000000000000000000000
+    draw vertices=3 instances=1 firstVertex=0 firstInstance=0
+    endRendering
+    barrier texture "Output" RenderTarget->CopySource mips=0+1 layers=0+1
+    endLabel

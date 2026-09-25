@@ -1,0 +1,37 @@
+RenderGraph "bindless": passes=1 culled=0 batches=1 lists=1 barriers=2 waits=0
+resources:
+  r0 "Output" texture RGBA8Unorm 320x180 mips=1 layers=1 imported initial=Undefined final=CopySource usage=Color versions=2 life=0..0 physical=p0
+  r1 "Checker" texture RGBA8Unorm 16x16 mips=1 layers=1 imported initial=ShaderResource final=last usage=Sampled versions=1 life=0..0 physical=p1
+  r2 "Gradient" texture RGBA8Unorm 16x16 mips=1 layers=1 imported initial=ShaderResource final=last usage=Sampled versions=1 life=0..0 physical=p2
+  r3 "Stripes" texture RGBA8Unorm 16x16 mips=1 layers=1 imported initial=ShaderResource final=last usage=Sampled versions=1 life=0..0 physical=p3
+  r4 "Dots" texture RGBA8Unorm 16x16 mips=1 layers=1 imported initial=ShaderResource final=last usage=Sampled versions=1 life=0..0 physical=p4
+physicals:
+  p0 imported texture RGBA8Unorm 320x180 mips=1 layers=1 residents=[Output]
+  p1 imported texture RGBA8Unorm 16x16 mips=1 layers=1 residents=[Checker]
+  p2 imported texture RGBA8Unorm 16x16 mips=1 layers=1 residents=[Gradient]
+  p3 imported texture RGBA8Unorm 16x16 mips=1 layers=1 residents=[Stripes]
+  p4 imported texture RGBA8Unorm 16x16 mips=1 layers=1 residents=[Dots]
+batches:
+  b0 Graphics#1 passes=[Quads] waits=[] lists=1
+passes:
+  #0 "Quads" Raster Graphics b0 L0
+    read  Checker@0 ShaderResource mips=0+1 layers=0+1
+    read  Gradient@0 ShaderResource mips=0+1 layers=0+1
+    read  Stripes@0 ShaderResource mips=0+1 layers=0+1
+    read  Dots@0 ShaderResource mips=0+1 layers=0+1
+    write Output@1 RenderTarget mips=0+1 layers=0+1
+    pre  p0:Output Undefined->RenderTarget mips=0+1 layers=0+1
+    post p0:Output RenderTarget->CopySource mips=0+1 layers=0+1
+memory: transient=0 pooled=0 placed=0 (buffers=0 rendertargets=0 textures=0)
+--- Null trace ---
+submit Graphics #5 waits=[]
+  list "bindless:Quads"
+    beginLabel "Quads"
+    barrier texture "Output" Undefined->RenderTarget mips=0+1 layers=0+1
+    beginRendering area=0,0 320x180 color0="Output" mip=0 layer=0 load=Clear(0.12,0.12,0.12,1) store=Store
+    bindPipeline "Quads"
+    pushConstants offset=0 size=64 data=01000000020000000300000004000000010000000200000003000000040000000100000000000000030000000100000002000000030000000000000002000000
+    draw vertices=6 instances=8 firstVertex=0 firstInstance=0
+    endRendering
+    barrier texture "Output" RenderTarget->CopySource mips=0+1 layers=0+1
+    endLabel

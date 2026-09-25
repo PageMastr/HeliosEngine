@@ -1,0 +1,83 @@
+RenderGraph "mips": passes=5 culled=0 batches=3 lists=5 barriers=10 waits=2
+resources:
+  r0 "Output" texture RGBA8Unorm 320x180 mips=1 layers=1 imported initial=Undefined final=CopySource usage=Color versions=2 life=4..4 physical=p1
+  r1 "Chain" texture RGBA16Float 128x128 mips=4 layers=1 usage=Sampled|Storage versions=5 life=0..4 physical=p0 bytes=196608 heap=Textures@0
+physicals:
+  p0 texture RGBA16Float 128x128 mips=4 layers=1 usage=Sampled|Storage residents=[Chain]
+  p1 imported texture RGBA8Unorm 320x180 mips=1 layers=1 residents=[Output]
+batches:
+  b0 Graphics#1 passes=[Mip0, Mip1] waits=[] lists=2
+  b1 AsyncCompute#1 passes=[Mip2] waits=[b0] lists=1
+  b2 Graphics#2 passes=[Mip3, View] waits=[b1] lists=2
+passes:
+  #0 "Mip0" Compute Graphics b0 L0
+    write Chain@1 UnorderedAccess mips=0+1 layers=0+1 keeps@0
+    pre  p0:Chain Undefined->UnorderedAccess mips=0+1 layers=0+1
+  #1 "Mip1" Compute Graphics b0 L1
+    read  Chain@1 ShaderResource mips=0+1 layers=0+1
+    write Chain@2 UnorderedAccess mips=1+1 layers=0+1 keeps@1
+    pre  p0:Chain UnorderedAccess->ShaderResource mips=0+1 layers=0+1
+    pre  p0:Chain Undefined->UnorderedAccess mips=1+1 layers=0+1
+  #2 "Mip2" AsyncCompute AsyncCompute b1 L2
+    read  Chain@2 ShaderResource mips=1+1 layers=0+1
+    write Chain@3 UnorderedAccess mips=2+1 layers=0+1 keeps@2
+    pre  p0:Chain UnorderedAccess->ShaderResource mips=1+1 layers=0+1
+    pre  p0:Chain Undefined->UnorderedAccess mips=2+1 layers=0+1
+  #3 "Mip3" Compute Graphics b2 L3
+    read  Chain@3 ShaderResource mips=2+1 layers=0+1
+    write Chain@4 UnorderedAccess mips=3+1 layers=0+1 keeps@3
+    pre  p0:Chain UnorderedAccess->ShaderResource mips=2+1 layers=0+1
+    pre  p0:Chain Undefined->UnorderedAccess mips=3+1 layers=0+1
+  #4 "View" Raster Graphics b2 L4
+    read  Chain@4 ShaderResource mips=0+4 layers=0+1
+    write Output@1 RenderTarget mips=0+1 layers=0+1
+    pre  p0:Chain UnorderedAccess->ShaderResource mips=3+1 layers=0+1
+    pre  p1:Output Undefined->RenderTarget mips=0+1 layers=0+1
+    post p1:Output RenderTarget->CopySource mips=0+1 layers=0+1
+memory: transient=196608 pooled=196608 placed=196608 (buffers=0 rendertargets=0 textures=196608)
+--- Null trace ---
+submit Graphics #1 waits=[]
+  list "mips:Mip0"
+    beginLabel "Mip0"
+    barrier texture "Chain" Undefined->UnorderedAccess mips=0+1 layers=0+1
+    bindPipeline "Pattern"
+    pushConstants offset=0 size=16 data=01000000800000008000000002000000
+    dispatch 16x16x1
+    endLabel
+  list "mips:Mip1"
+    beginLabel "Mip1"
+    barrier texture "Chain" UnorderedAccess->ShaderResource mips=0+1 layers=0+1
+    barrier texture "Chain" Undefined->UnorderedAccess mips=1+1 layers=0+1
+    bindPipeline "Downsample"
+    pushConstants offset=0 size=24 data=020000000200000040000000400000000000000000000000
+    dispatch 8x8x1
+    endLabel
+submit AsyncCompute #1 waits=[Graphics:1]
+  list "mips:Mip2"
+    beginLabel "Mip2"
+    barrier texture "Chain" UnorderedAccess->ShaderResource mips=1+1 layers=0+1
+    barrier texture "Chain" Undefined->UnorderedAccess mips=2+1 layers=0+1
+    bindPipeline "Downsample"
+    pushConstants offset=0 size=24 data=030000000300000020000000200000000000000000000000
+    dispatch 4x4x1
+    endLabel
+submit Graphics #2 waits=[AsyncCompute:1]
+  list "mips:Mip3"
+    beginLabel "Mip3"
+    barrier texture "Chain" UnorderedAccess->ShaderResource mips=2+1 layers=0+1
+    barrier texture "Chain" Undefined->UnorderedAccess mips=3+1 layers=0+1
+    bindPipeline "Downsample"
+    pushConstants offset=0 size=24 data=040000000400000010000000100000000000000000000000
+    dispatch 2x2x1
+    endLabel
+  list "mips:View"
+    beginLabel "View"
+    barrier texture "Chain" UnorderedAccess->ShaderResource mips=3+1 layers=0+1
+    barrier texture "Output" Undefined->RenderTarget mips=0+1 layers=0+1
+    beginRendering area=0,0 320x180 color0="Output" mip=0 layer=0 load=DontCare store=Store
+    bindPipeline "MipView"
+    pushConstants offset=0 size=16 data=01000000010000000400000000000000
+    draw vertices=3 instances=1 firstVertex=0 firstInstance=0
+    endRendering
+    barrier texture "Output" RenderTarget->CopySource mips=0+1 layers=0+1
+    endLabel

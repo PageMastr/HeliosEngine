@@ -1,0 +1,11 @@
+# Applications. Graphical apps are skipped in headless builds.
+set(HELIOS_HEADLESS_APPS cellserver gateway tools)
+file(GLOB children RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/*)
+foreach(a ${children})
+  if(IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/${a} AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${a}/CMakeLists.txt)
+    if(NOT HELIOS_BUILD_GRAPHICS AND NOT a IN_LIST HELIOS_HEADLESS_APPS)
+      continue()
+    endif()
+    add_subdirectory(${a})
+  endif()
+endforeach()

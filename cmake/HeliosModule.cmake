@@ -8,12 +8,16 @@
 
 function(helios_apply_warnings target)
   if(MSVC)
-    target_compile_options(${target} PRIVATE /W4 /permissive-)
+    target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus /Zc:preprocessor /fp:precise)
+    target_compile_definitions(${target} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
     if(HELIOS_WARNINGS_AS_ERRORS)
       target_compile_options(${target} PRIVATE /WX)
     endif()
   else()
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers)
+    # Keep float results identical to MSVC's default (/fp:precise, no contraction) so procedural
+    # generation and simulation stay bit-identical between Windows clients and Linux servers.
+    target_compile_options(${target} PRIVATE -ffp-contract=off)
     if(HELIOS_WARNINGS_AS_ERRORS)
       target_compile_options(${target} PRIVATE -Werror)
     endif()

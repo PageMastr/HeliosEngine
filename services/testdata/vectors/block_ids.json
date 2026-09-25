@@ -1,0 +1,20 @@
+{
+  "description": "Helios block IDs (05 §1.4.5, §3.2): 0 | 41-bit block prefix (ms since 2026-01-01T00:00:00Z) | 5-bit shard | 17-bit offset. Allocation: last = max(last + n, now_ms); prefixes = last-n+1 .. last.",
+  "epoch_unix_ms": "1767225600000",
+  "block_size": 131072,
+  "vectors": [
+    { "prefix": "0",             "shard": 0,  "offset": 0,      "id": "0" },
+    { "prefix": "1",             "shard": 0,  "offset": 0,      "id": "4194304" },
+    { "prefix": "0",             "shard": 1,  "offset": 0,      "id": "131072" },
+    { "prefix": "0",             "shard": 0,  "offset": 1,      "id": "1" },
+    { "prefix": "0",             "shard": 0,  "offset": 131071, "id": "131071" },
+    { "prefix": "22809600000",   "shard": 3,  "offset": 12345,  "id": "95670396518805561" },
+    { "prefix": "2199023255551", "shard": 31, "offset": 131071, "id": "9223372036854775807" }
+  ],
+  "allocations": [
+    { "last": "-1",   "n": 2,  "now": "1000", "new_last": "1000", "prefixes": ["999", "1000"] },
+    { "last": "1000", "n": 2,  "now": "1000", "new_last": "1002", "prefixes": ["1001", "1002"] },
+    { "last": "1002", "n": 1,  "now": "900",  "new_last": "1003", "prefixes": ["1003"] },
+    { "last": "1003", "n": 16, "now": "5000", "new_last": "5000", "prefixes": ["4985", "4986", "4987", "4988", "4989", "4990", "4991", "4992", "4993", "4994", "4995", "4996", "4997", "4998", "4999", "5000"] }
+  ]
+}

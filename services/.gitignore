@@ -1,0 +1,5 @@
+# Local state of go run ./cmd/helios-backend (default --data ./saved/backend)
+/saved/
+/bin/
+*.test
+/pkg/connecttoken/testdata/fuzz/

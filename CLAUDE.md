@@ -24,7 +24,7 @@ cmake --preset cross-mingw && cmake --build --preset cross-mingw   # Win32 porta
   `cmake -S . -B build/<your-task> -G Ninja`), never share one. ccache is enabled automatically.
 - Software Vulkan (lavapipe) is available in this container; GPU tests run under `xvfb-run -a`
   and carry the CTest label `gpu`.
-- Go services: `cd services && go build ./... && go test ./...` (Go 1.24, no CGO).
+- Go services: `cd services && go build ./... && go test ./...` (Go 1.27.1 via go.mod toolchain, no CGO).
 
 ## Layout
 ```

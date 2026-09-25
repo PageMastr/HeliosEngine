@@ -34,5 +34,11 @@ network. Re-vendor with `tools/vendor/fetch_third_party.sh [name...]`. Only perm
 
 Planned additions (vendored when their phase starts, per docs/research/10-tech-selection.md §13): RmlUi 6.3,
 FreeType VER-2-14-3 (FTL: credit required in product docs), HarfBuzz 14.5.0, SheenBidi v3.0.0, libunibreak 8.0,
-basis_universal v2_50, nats.c v3.14.0, sentry-native 0.17.1; tools-only: Slang v2026.18.2 (prebuilt, SHA-256
-pinned), bc7enc_rdo, tinyexr v3.2.0, ufbx v0.23.0, msdfgen v1.13.
+basis_universal v2_50, nats.c v3.14.0, sentry-native 0.17.1; tools-only: bc7enc_rdo, tinyexr v3.2.0, ufbx v0.23.0, msdfgen v1.13.
+
+## Prebuilt tools (downloaded at configure time, never committed)
+
+| Tool | Version | Asset | SHA-256 | Fetched by |
+|---|---|---|---|---|
+| Slang (slangc + runtime) | v2026.18.2 | slang-2026.18.2-linux-x86_64.tar.gz | 8a097d4365e1cab10265d0b0d77b461b5d30576f99ddc0521a35723c34cad816 | tools/prebuilt/fetch_slang.cmake (override: `HELIOS_SLANG_ROOT`) |
+| Slang (slangc + runtime) | v2026.18.2 | slang-2026.18.2-windows-x86_64.zip | 747602aec6b3623658d55fea87492d71828e15d16802d7941204fde418ceee8e | same |

@@ -1,6 +1,7 @@
 # 08 — Game Client and Launcher
 
-*Helios master plan, section 08. Draft v5 (round 4, from the other sections' fixes: the invisible Relocating
+*Helios master plan, section 08. Draft v5 (round 5: the group-content HUD, as the Group and raid frames and the
+Encounter and match HUD panels §1.7.2, with their flows §1.7.3 and CL-23; round 4, from the other sections' fixes: the invisible Relocating
 state for make-before-break gateway deploys §1.2 and §4.3 (05 §6.3.1); the CPU gate as the first TLS callback
 §2.2 (02 §1.1); WP-2.16b for packaging §2.10.5 and §4.8; the Placement ghost's `ZoneStructures` and city
 footprint pre-check and the City panel's binding to `CityGovernance` §1.7.2 (06 §9.2). Round 3: the
@@ -373,6 +374,7 @@ view-models (`…VM`, generated from `schemas/ui/`).
 | Frontend | Login; shard and character select over a 3D scene; queue position and ETA; handles `name#1234` (R03-P0-8) | `FrontendVM`, `ShardListVM`, `CharacterListVM`, `QueueVM` | 1 (1.20); queue UX 2 (2.13) |
 | Character creator | Species and body type from `SpeciesDef`; parameter groups generated from `CustomizationParamDef` by kind (slider for Morph and BoneScale, swatches for PaletteColor, grids for MeshOption, TextureLayer and Decal). The preview quantizes exactly as `CharacterAppearance` does, so it equals what observers see (06 §10). Seeded randomize, 64-step undo, 8 preset slots in the account blob, face/body/full camera presets. Name entry checks `SpeciesDef` name rules locally as the player types; a rejection from Character `Create` (taken, reserved, filtered; 05 §1.5) returns to the name field with the failing rule. **Image-designer mode** opens the same panel on another player's vector after consent, and both players see one preview | `CreatorVM`, `AppearanceParamVM`, `NameRuleVM` | 1: species, body type, basic morphs (1.20) / 2: full parameter set (2.13) / 3: image designer (3.8) / 4: DNA blend (4.9) |
 | HUD | Vitals; ability bar with predicted cooldowns; target; radar; ping/loss; **TiDi indicator when d < 0.95** (R01-P0-3); **interaction prompts** from 06 §9.6's `InteractPrompt` (verb, input glyph, disabled reason, hold progress); follower portraits and a command bar (06 §7.3); tracked objectives | `HudVM`, `AbilityBarVM`, `TargetVM`, `InteractPromptVM` | 1 (1.20); followers 2 (2.13) |
+| Group and raid frames | **Party frames** (up to 6 members: a fireteam or a flashpoint group) and **raid frames** (up to 16, as 4 groups of 4 or sorted by role); the player can move, resize and lock them. Each frame shows the name, a role icon (`Role.Tank`, `.Healer`, `.Damage`), a sync marker (06 §6.9), health, shield and resource bars, up to 8 effects filtered by a per-role tag query (a healer sees dispellable debuffs first), threat for tanks, and a state: incapacitated with its bleed-out countdown (`incapSecs`), being revived with the hold progress, dead with its respawn or wave timer, AFK, linkdead with the rejoin-grace countdown, or out of range. A member outside the viewer's interest set (another zone, instance or phase) shows only the roster's presence (zone, online, role), never vitals (04 §9). **Targeting:** a click on a frame targets that member. **Gamepad frame focus** (hold a bind) moves a cursor across frames with the d-pad or stick, a bumper jumps between groups, and releasing the bind targets the focused member. Frames beyond the selected ability's range dim, so a healer can play with no pointer. Targeting from frames is a protected action (§1.12). The leader's context menu has promote, kick and role check; *Vote to kick* opens the Encounter and match HUD's vote | `GroupFramesVM`, `UnitFrameVM` | 2: party (2.13) / 3: raid (3.8) |
 | Settings | Graphics presets with per-setting cost hints (§1.4), audio buses, latency options, accessibility (§1.9), privacy and legal links (§2.3); keybind rebinding with the conflict display (§1.5) | `SettingsVM`, `BindingVM` | 1 (1.20); rebinding 2 (2.13) |
 | Maps | System orrery from f64 positions; galaxy map (jump graph, routes) as a 3D view with an RML overlay; **minimap** that switches between surface, interior and space scales; **surface maps** generated on the client from `engine/pcg` coarse tiles with `MapLayerDef` overlays and fog of war; **interior maps** per deck from cooked `PortalGraph` floor plans with live door and hazard state; markers from 06 §9.8, with hostiles shown only when detected | `MapVM`, `MarkerVM` | 1: orrery, minimap (1.20) / 2: galaxy, surface, interior (2.13) |
 | Terminal host | Opens a `TerminalDef.ui` document with one tab per listed service (Market, Missions, Vendor, Bank, Mail, Crafting, Fitting, Customization, CrewMissions). Each tab hosts the panel from this table. The host's lifetime is the server's `TerminalSession`: at range + 2 m it closes with "Out of range" (06 §9.6). Renders on a `UiSurface` (§1.8) or in 2D, with a pop-out. The **Bank** tab moves items and currency between the character, its hangars and permitted org divisions | `TerminalVM`, `BankVM` | 1: host, mission board (1.20) / 2: all services (2.13) |
@@ -388,7 +390,8 @@ view-models (`…VM`, generated from `schemas/ui/`).
 | Survey, harvesters | **Survey:** the resource-class tree; current spawns on this body with attribute ranges as bars; survey samples drawn as a heat-map overlay on the minimap and surface map, with a waypoint to the best sample; sampling progress on the HUD. **Harvester manager:** location, resource, concentration, rate, hopper fill, power, maintenance and time-to-full per harvester, projected on the client from `{lastEval, rate, hopper, power, maintenance}` for display only (the server stays authoritative, 06 §3); empty hopper, add power, pay maintenance, change resource, recall | `SurveyVM`, `SpawnListVM`, `HarvesterListVM` | 2 (2.13) |
 | Placement, decoration | **Placement** (Build context): a ghost of the `StructureDef` footprint, coloured live by an advisory client pre-check that uses the cell's shared `PlacementCheck` sampler (slope, height delta, clearance against the zone's `ZoneStructures` manifest, city footprints and zoning, lot budget; 06 §9.2.1); 15° snap rotation, free with a modifier; a cost confirmation, then a spinner until the ledger acknowledges. **Decoration:** move and rotate gizmos clamped to interior bounds, an item-cap counter, undo of the last 20 moves (each an intent). **Structure panel:** ACL lists (admin, entry, ban, vendor), maintenance pool, decay stage, pack-up. **City panel:** rank, citizens, civic unlocks, taxes, treasury journal, elections (stand, vote) and the mayor's policy, bound to the `CityGovernance` world script through the cell (06 §9.2.4) | `PlacementVM`, `DecorVM`, `StructureVM`, `CityVM` | 2: placement, used by harvesters in M2 (2.13) / 3: housing, decoration, cities (3.8) |
 | Organization | Roster (the 10k `<datagrid>`); a **role editor** over the schema's `Perm.*` names, grouped by domain (hangar and wallet divisions, structures, followers), with a diff preview before saving (06 §9.1); division names; **org wallets** with balances, a journal filtered by reason code and permission-gated transfers; applications and invites; titles; alliances; an audit-log view | `OrgVM`, `RoleEditorVM`, `OrgWalletVM`, `OrgAuditVM` | 2: roles, wallets (2.13) / 3: hangars, alliances (3.8) |
-| Activity director, group finder | The **director** (06 §6.13): activities, tiers, modifiers, per-character lockouts and queue estimates. The queue panel: role selection, ETA and the 30 s ready check. The **group finder**: browse listings filtered by activity, tier, role and requirement; create a listing (140-character note); apply; the leader accepts. **Leaderboards** with shard, friends, guild and class partitions | `DirectorVM`, `QueueTicketVM`, `GroupFinderVM`, `LeaderboardVM` | 3 (3.8); ranked seasons and windows 4 (4.9) |
+| Activity director, group finder | The **director** (06 §6.13): activities, tiers, modifiers, per-character lockouts and queue estimates. The queue panel: role selection, ETA and the 30 s ready check. The **group finder**: browse listings filtered by activity, tier, role and requirement; create a listing (140-character note); apply; the leader accepts. **Leaderboards** with shard, friends, guild and class partitions. The deserter tag's remaining time disables the queue buttons. In-activity screens (encounter state, the match scoreboard, AFK, vote-kick and deserter prompts) are the Encounter and match HUD's | `DirectorVM`, `QueueTicketVM`, `GroupFinderVM`, `LeaderboardVM` | 3 (3.8); ranked seasons and windows 4 (4.9) |
+| Encounter and match HUD | **Encounter** (06 §6.7): boss bars for the arena's entities tagged `HUD.Boss` (health, shields, phase name); the enrage countdown; revive tokens left per team, or "No revives while engaged" under a `None` policy; banners for *Checkpoint reached*, *Wiped — resetting in n s* (`reset.delaySecs`) and *Resumed from checkpoint* after a cell kill. The player's own downed screen shows the bleed-out timer, a self-revive button while `selfRevives` remain, and the `Timed` or `Waves` respawn countdown. **Match** (06 §6.11): round, clock, team scores and objective states from the replicated `MatchState`; banners for warmup, countdown, round end and overtime; medal toasts; a mercy warning; and a 20 s end screen with the result, its cause (score limit, time, mercy or tie-break) and the rating change. The **scoreboard** (hold a bind) lists each player's score, kills, deaths, assists, objective points and medals from the cell's per-player standings, the running fold of 06 §6.11's event log. **Roster policy** (06 §6.10): the AFK warning with its countdown from `warnAtPct`; the vote-kick prompt (target, reason, votes needed, deadline), which the target never sees, and a start button that shows the server's refusal reason while `State.InEncounter`, inside `immunitySecs`, in cooldown or after `maxPerRun`; a deserter confirmation, with the penalty duration, before leaving a matchmade activity; and the rejoin prompt during `rejoinGraceSecs`. The activity-end summary shows rewards and lockout results ("already rewarded this period") | `EncounterVM`, `MatchStateVM`, `ScoreboardVM`, `VoteKickVM`, `RosterPolicyVM` | 3 (3.8) |
 | Fleet | EVE-style fleet window (05 §1.12.1, 06 §8.3a). **Hierarchy tree** of fleet → wings → squads with commander slots, member rows (hull, zone, docked or in space from presence) and a filter; **drag and drop** of members between squads, wings and commander slots, gated by the viewer's rights, with a pending state and a refresh on `ROSTER_STALE`; invite by name, kick, promote, transfer boss, free-move and MOTD. **Broadcast bar** with one button per `BroadcastDef` and hotkeys, plus a broadcast history whose entries lock, align or warp in one click. **Fleet warp** to a selected object or bookmark at a chosen range, by fleet, wing or squad, showing each refused member's reason. **Adverts** (goal, join ACL, default squad) published to the group finder. Command bursts show on the HUD's effect bar and as range rings. Voice levels follow the slot (04 §2.7) | `FleetVM`, `FleetMemberVM`, `BroadcastVM`, `FleetAdvertVM` | 3 (3.8) |
 | Killmail viewer | Personal, org and **fleet** lists (virtualized). Detail: victim, hull and fit (`.hfit` export), attackers with damage share and final blow, dropped and destroyed items with estimated value, location and time. Names resolve at display through `ResolveNames` (05 §1.5), so an erased character shows "Former pilot". A shareable `<uriScheme>://killmail/<id>` link (§2.10) | `KillmailListVM`, `KillmailVM` | 3 (3.8) |
 | Dialogue | Letterbox, subtitles, choice wheel, group roll display, 30 s vote timer (06 §6.4) | `DialogueVM` | 2 (2.13); group 3 (3.8) |
@@ -401,9 +404,10 @@ view-models (`…VM`, generated from `schemas/ui/`).
 **Coverage.** M2 "Osk Yard" (09) uses Survey, Placement, Crafting, Inventory, Market, Journal, Dialogue,
 Chat and Organization, all Ph2 rows. The starter templates (09 §2.7.4) map as follows: `starter-sandbox` →
 Survey, Crafting, Placement, NPC vendor, player vendors; `starter-fleet` → Fitting, Market, Organization,
-Killmail viewer, Overview, Fleet; `starter-shooter` → Activity director, Loot, Progression; `starter-seamless` →
-Maps, Terminal host, HUD; `starter-story` → Dialogue, Journal, Progression. Every template ships Support and
-report. Customization appears wherever a terminal lists that service, and Store wherever the product sells
+Killmail viewer, Overview, Fleet; `starter-shooter` → Activity director, Group and raid frames, Encounter and match
+HUD (strike and rated 6v6 scoreboard), Loot, Progression; `starter-seamless` → Maps, Terminal host, HUD;
+`starter-story` → Dialogue, Journal, Progression, Group and raid frames, Encounter and match HUD (the flashpoint).
+Every template ships Support and report. Customization appears wherever a terminal lists that service, and Store wherever the product sells
 entitlements (`starter-shooter` and `starter-story` enable season passes). A template adds its own screens
 through the same contract; `template-proof-<id>` runs the flows of the panels its class uses.
 
@@ -422,7 +426,8 @@ through the same contract; `template-proof-<id>` runs the flows of the panels it
     or outside the species range is refused; a report whose chat line carries a forged or altered evidence tag
     is refused (`EVIDENCE_INVALID`), and an 11th report in an hour is rate-limited; a checkout by the 15-year-old
     fixture account above its remaining allowance is refused (`SPEND_CAP_EXCEEDED`); a replayed provider
-    webhook grants once; a stale `priceVersion` re-quotes.
+    webhook grants once; a stale `priceVersion` re-quotes; a vote-kick started while `State.InEncounter` is refused
+    with the server's reason; a heal on a frame beyond the ability's range is refused as out of range.
   - **Store and support fixtures.** The Store flow runs against the dev backend's fake payment provider
     (05 §1.20). The test plays the provider: it posts signed `paid`, `refunded` and replayed webhooks and
     asserts one grant per receipt. The Support flow files a chat report, a voice report (the fixture fleet
@@ -430,6 +435,20 @@ through the same contract; `template-proof-<id>` runs the flows of the panels it
     queue with its category's priority and `first_response_due`/`resolve_due`, and that the chat evidence is
     marked verified. A staff reply and a state change made through the admin API must reach the player's
     thread and notice.
+  - **Group-content fixtures.** They run against a headless `--dev` instance cell, driven by 07 §1.6.3's dev GM
+    commands (checkpoint jump, force wipe, cell kill):
+    - *Frames:* in a 16-member bot raid, the healer fixture uses gamepad frame focus only (0 pointer events) to
+      target each of the 16 raid frames in turn and heal it. The server's heal events name the intended member
+      for all 16 casts, and a member in another zone shows presence only.
+    - *Encounter:* a fixture encounter passes a checkpoint phase, is force-wiped and has its cell killed. The flow
+      asserts the checkpoint banner, the wipe banner with its reset countdown, the reset revive-token count and
+      the *Resumed from checkpoint* banner, and that each downed state shows its bleed-out timer.
+    - *Match:* a bot 6v6 Control match on a fixture rule set with a 30 s time limit, with a cell kill mid-match. At
+      `MatchEnd` the scoreboard's rows equal the offline fold of the match's event log (exported by the `--dev`
+      cell), and the team scores equal `MatchState`.
+    - *Roster policy:* an idle fixture player sees the AFK warning, then the AFK state; a vote-kick is started,
+      voted and passes, and its target never sees the prompt; leaving a matchmade match shows the deserter
+      confirmation, and the director's queue buttons then show the tag's remaining time.
   - Assertions cover view-model state **and** the authoritative outcome: ledger history through the admin
     API's `dev` role (05 §1.17), and mail, market, structure and org state through the services' own `List`
     and `Get` calls made as the test character.
@@ -502,7 +521,7 @@ MMO players expect UI mods (R08-T19). The Foundation UI itself uses the addon AP
 | Surface | View-models, RML/RCSS, localization, rate-limited chat send, SavedVariables ≤ 1 MiB |
 | Sandbox | Separate Luau VM (R10-§4) with no `io`/`os`/`debug`/`loadstring`, network or files. **≤ 1.5 ms/frame** across all addons and a **64 MiB** heap. An addon that errors is disabled; it never crashes the client |
 | Information | Only what the default UI sees, i.e. what the server sent (04 §9) |
-| **Protected actions** | Movement, targeting, abilities, market orders, trades, mail, vendor and store purchases, restyles, collection reacquires, structure placement and player reports need a *secure context*: a hardware input event dispatched to a signed Foundation handler with no addon code (taint) on the call path. This blocks bots, automated rotations and addon-driven mass reporting |
+| **Protected actions** | Movement, targeting (including from group and raid frames), abilities, market orders, trades, mail, vendor and store purchases, restyles, collection reacquires, structure placement, vote-kick starts and votes, and player reports need a *secure context*: a hardware input event dispatched to a signed Foundation handler with no addon code (taint) on the call path. This blocks bots, automated rotations and addon-driven mass reporting or kicking |
 | Phasing | Ph3: internal only. Ph4: public `AddOns/` folder. Ph5: curated, signed portal |
 
 ### 1.13 Headless and bot modes
@@ -519,7 +538,7 @@ bot-scoped credentials that only test shards accept.
 | Server authority | Intents only, validation, movement budgets, capped lag compensation, information hiding (04 §5, §9) | 1 |
 | Integrity | Authenticode, plus a launcher `WinVerifyTrust` check before launch; verified install; pak block checksums; no shipped symbols or cheat cvars | 2 |
 | Client hygiene | Sandboxed Luau and addons with protected actions; Luau codegen is W^X, never RWX (R10-§4) | 3 |
-| Optional vendor | `IAntiCheatProvider`: init, attestation in the token's 256 B user data, tick, vendor channel via the gateway. Candidate: **EAC via EOS** (free, Linux/Proton support, proprietary, flagged; R10-§9). Decided in Phase 4; the design never depends on it | 4 |
+| Optional vendor | `IAntiCheatProvider`: init, attestation in the token's 256 B user data, tick, vendor channel via the gateway. Candidate: **EAC via EOS** (free, Linux/Proton support, proprietary, flagged; R10-§9). Decided in Phase 3 by WP-3.11 (Linux support is a criterion; 05 §1.16a), integrated in Phase 4; the design never depends on it | 4 |
 
 ### 1.15 Windows specifics
 
@@ -1120,7 +1139,7 @@ struct IAddonHost { virtual bool secureContext() const = 0; };            // pro
 | Install / signing | — | Dev installer, tarball | **Signed installer**, uninstall (PLT-6) | AppImage (PLT-6) | Optional Inno | Flatpak |
 | Client shell | SDL3 window, Null/Vulkan RHI | State machine, threads, settings, reconnect, camera late latch | Queue UX, synced settings; **Phase A/B split, JIT `FramePacer`, chunked submit, speculative cue step, `LatencyMarkers`, `helios-latbench` (CL-6 Ph2)** | Headless UI flows at scale; `VK_NV_low_latency2` / `VK_AMD_anti_lag` providers; BENCH-4 latency runs | HDR, exclusive FS; 120 fps latency gates; the Relocating state for gateway deploys (§1.2; 05 §6.3.1) | — |
 | Input / camera | Keyboard/mouse actions | Contexts, gamepad, rumble, FP↔cockpit camera | Rebinding, HOTAS, IME | Aim-assist class, tactical camera | Gyro, photo mode | — |
-| Game UI (§1.7.2) | — (RmlUi lands in Ph1; the Ph0 launcher is a plain SDL3 window) | RmlUi on RHI; frontend, basic creator, HUD, settings, terminal host, system map, MFDs (R06); panel contract, themes, first flows (CL-23) | Journal, chat, social, inventory, loot, market and contracts, NPC vendor, trade, mail, crafting and industry, survey and harvesters, placement, organization, dialogue, galaxy map, full creator | Overview, killmails, fleet window, director and group finder, housing, decoration, cities, player vendors, factories, group dialogue, image designer, collections reacquire, **support and report**, **customization** (restyle, liveries), internal addons | Public addons, crafting minigames, seasons, ranked, DNA blend, **store** | Addon portal |
+| Game UI (§1.7.2) | — (RmlUi lands in Ph1; the Ph0 launcher is a plain SDL3 window) | RmlUi on RHI; frontend, basic creator, HUD, settings, terminal host, system map, MFDs (R06); panel contract, themes, first flows (CL-23) | Journal, chat, social, party frames, inventory, loot, market and contracts, NPC vendor, trade, mail, crafting and industry, survey and harvesters, placement, organization, dialogue, galaxy map, full creator | Overview, killmails, fleet window, director and group finder, raid frames, **encounter and match HUD** (scoreboard, vote-kick, AFK and deserter prompts), housing, decoration, cities, player vendors, factories, group dialogue, image designer, collections reacquire, **support and report**, **customization** (restyle, liveries), internal addons | Public addons, crafting minigames, seasons, ranked, DNA blend, **store** | Addon portal |
 | Product / packaging (§2.10) | — | `helios-dev` product, `ProductIdentity` paths | Product descriptor and lint, `product init` and `stamp`, T29 *Package & publish* (Windows installer, Linux tarball), side-by-side products (CL-24) | AppImage in the profile; first root-rotation drill | Per-product storefront SKUs | — |
 | Access / i18n | — | UI scale, subtitles | Pseudo-loc CI, colourblind palettes | Remapping, comfort | 2 languages + CJK/RTL test locales, TTS | RTL mirroring |
 | Crash / telemetry | Local minidumps | Breadcrumbs, perf aggregates | Sentry, crashgw, symbols (STB-1) | Release gates, GPU markers | Driver advisories, hang dumps | — |
@@ -1159,7 +1178,7 @@ Each criterion is registered in `scorecard.jsonc` with its class.
 | CL-20 | Headless login → world → logout ≤ 90 s per commit; smoke tests on Win10 22H2, Win11 24H2 and Ubuntu 24.04 | N | PLT-3 | 1 |
 | CL-21 | Linux client within 10 % of Windows in every BENCH; memory within CNT-3 | H | PLT-5, CNT-3 | 4 |
 | CL-22 | Hostile-addon suite (loops, heap bombs, protected calls) stays ≤ 1.5 ms/frame and ≤ 64 MiB and never runs a protected action | N | SEC-1 | 4 |
-| CL-23 | **Foundation UI flows** (§1.7.3): every §1.7.2 panel whose phase has been reached, plus the launcher's login and patch documents, completes its headless Luau flow on Windows and Linux (happy path, listed reject paths, keyboard-only and gamepad-only passes) with view-model and authoritative-state assertions (Store against the dev backend's fake payment provider; Support and report against the admin API's case queue); passes the RmlUi layout lints at 75–200 % with +40 % pseudo-loc and the CJK and RTL test locales; and the `ui-reskin-fixture` gem passes the same flows and lints, differs from the default skin in ≥ 30 % of each panel's pixels, and leaves every engine and Foundation binary byte-identical to the SDK | N | TOOL-9, R06 | 1–4 (per panel) |
+| CL-23 | **Foundation UI flows** (§1.7.3): every §1.7.2 panel whose phase has been reached, plus the launcher's login and patch documents, completes its headless Luau flow on Windows and Linux (happy path, listed reject paths, keyboard-only and gamepad-only passes) with view-model and authoritative-state assertions (Store against the dev backend's fake payment provider; Support and report against the admin API's case queue; the group-content fixtures: a gamepad-only heal-targeting pass over 16 raid frames, revive-token and wipe-banner states, a scoreboard equal to the event-log fold after a cell kill, and the AFK, vote-kick and deserter prompts); passes the RmlUi layout lints at 75–200 % with +40 % pseudo-loc and the CJK and RTL test locales; and the `ui-reskin-fixture` gem passes the same flows and lints, differs from the default skin in ≥ 30 % of each panel's pixels, and leaves every engine and Foundation binary byte-identical to the SDK | N | TOOL-9, R06 | 1–4 (per panel) |
 | CL-24 | **Side-by-side branded products** (§2.10): two products packaged from `starter-blank` by T29's *Package & publish* profile, each with its own `product init --dev --ceremony-sim` keys, install per-user, patch a 1 % CDC change, open through their own URI schemes, store "remember me" credentials, report an injected crash to their own `crashgw`, self-update and uninstall **side by side** on Windows 10 22H2, Windows 11 24H2 and Ubuntu 24.04. Pass: no shared file, directory, registry key, credential, lock or scheme (a diff of filesystem, HKCU and Secret Service before and after); each rejects 100 % of the other's pointers, manifests and keysets; uninstalling one leaves the other passing full verify; Windows outputs pass `signtool verify /pa /all` and the AppImage signature verifies; no engine or backend source differs from the SDK | N | PLT-6, TOOL-9, SEC-6 | 2 (Windows, Linux tarball layout) / 3 (AppImage) |
 
 ### 4.5 Test strategy
@@ -1181,7 +1200,8 @@ Each criterion is registered in `scorecard.jsonc` with its class.
     deduplicated or cancelled by key.
   - Nightly `helios-latbench` on the lab (CL-6); the weekly photodiode rig validates the instrumentation.
 - **UI automation (CL-23, §1.7.3):** one headless Luau flow per Foundation panel, with reject paths and
-  keyboard-only and gamepad-only passes, asserting view-model and authoritative state; the RmlUi layout lints;
+  keyboard-only and gamepad-only passes, asserting view-model and authoritative state; the group-content fixtures
+  on a `--dev` instance cell; the RmlUi layout lints;
   the reskin fixture. Lavapipe golden screenshots cover {en, pseudo, CJK, RTL} × {75, 100, 200 %} × {default,
   high contrast, colour-blind palettes}, and T19 reuses the harness.
 - **CPU floor (CL-17, §2.1.1):**
@@ -1225,6 +1245,7 @@ Each criterion is registered in `scorecard.jsonc` with its class.
 | Patch egress cost (05 §6.4) | CDC + patch-from, shared cache, CL-9 gate |
 | Addons enable botting | Protected actions + taint; server-side detection |
 | Licence sign-offs | FreeType FTL, Inno (if used), SIL OFL fonts, EOS/Steamworks, Sentry FSL; vendor low-latency *branding* (the extensions themselves need none) |
+| Group content ships without the HUD a healer or PvP player needs (no frames, encounter state or scoreboard) | Group and raid frames with gamepad frame focus, and the Encounter and match HUD (§1.7.2); CL-23's group-content fixtures, including the scoreboard-equals-fold check after a cell kill |
 | Foundation UI breadth slips behind 06's systems, so M2 or a template has no screen | Every panel has a phase and an owning WP (§1.7.2); CL-23 fails a phase exit for a panel without a passing flow; panels use generated adapters, so most need no C++ |
 | Two Helios games collide on one PC, or a studio needs an engine rebuild to brand its game | Every OS name comes from `ProductIdentity` (§2.10.2) with a CI grep against literals; prebuilt stampable binaries; CL-24 on both OSes |
 | A studio loses its root key or leaks a subkey | 3-of-5 shares in two locations plus a pre-committed `next` root; quarterly subkeys with revocation; annual reconstruction drill (§2.10.3) |
@@ -1249,6 +1270,7 @@ Each criterion is registered in `scorecard.jsonc` with its class.
 | R10-§5 (AVX2 gate) on any x86-64 CPU; 02 §1.1's ISA levels (`base` = x86-64-v1) | §2.1.1, §2.2 (CL-17) |
 | 05 §1.20 entitlements and the 13–17 caps (§6.6); 06 §5.2 collection reacquire; 06 §5.3 season premium lane | §1.7.2 Store and Progression (CL-23) |
 | 05 §1.10 chat reports; 04 §2.7 voice reports; 05 §1.17 cases; 06 §9.6 `Customization` terminal service; 06 §10 appearance | §1.7.2 Support and report, Customization (CL-23) |
+| 06 §6.7 encounters, revives and wipes; §6.10 AFK, vote-kick and leavers; §6.11 match state and scoring; §12.4's scoreboard in the Activities panel; GP-14 (a)'s role queues (1-tank, 1-healer flashpoint; 2/2/4 operation) | §1.7.2 Group and raid frames, Encounter and match HUD (CL-23) |
 | AAA-REN-4/5, SRV-5/7, CNT-2/3/7, STB-1/5, SEC-1/6/7, PLT-3/5/6, TOOL-9 | §4.4 |
 
 ### 4.8 Cross-section dependencies
@@ -1293,10 +1315,17 @@ Each criterion is registered in `scorecard.jsonc` with its class.
   Done (round 2): 06 §3 states that `CraftQuality` and 06 §9.2 that `PlacementCheck` are pure functions shared
   with §1.7.2's crafting estimate and placement ghost. 06 §6.13's "activity director (08 §1.7)" is the
   Activity director panel. Done (round 3): 06 §10 defines the `Restyle` and `SetLivery` intents behind the
-  Customization panel.
+  Customization panel. Needed (round 5) for the group-content HUD (§1.7.2): a replicated, instance-audience
+  encounter state sent on change like `MatchState` (engaged encounter, phase, enrage deadline tick, revive tokens
+  left per team, wipe count, checkpoint `seq`; the fields 06 §6.7 checkpoints); the downed and reviving states with
+  their deadline ticks on each player entity; per-player match standings (the running fold of 06 §6.11's event
+  log, restored after a cell kill) and the match end cause; the seconds left on 06 §6.10's AFK warning cue;
+  vote-kick start and cast intents with refusal reasons, and the vote's replicated state; a `HUD.Boss` tag on
+  boss record templates.
 - **07 Editor:** T19 on `engine/ui` (it runs §1.7.3's panel flows), T25 string tables, PIE on `apps/client`,
   addon API docs. Done (round 2): T29 lists the *Package & publish* profile (§2.10.5). Done (round 3): T27
-  has the case queue with SLA fields (Ph3).
+  has the case queue with SLA fields (Ph3). Done (round 5): 07 §1.6.3's dev GM commands (checkpoint jump, force
+  wipe, instance-cell kill) drive §1.7.3's group-content fixtures.
 - **09 Roadmap:** CL-6 (Ph2) in WP-2.13 and the Phase 2 exit (done); the Phase 0 launcher skeleton; buying the
   HSM signing certificate in Phase 1; legal sign-offs. Done (round 2): the §1.7.2 panels in WP-1.20, 2.13, 3.8
   and 4.9 with CL-23 per phase; product scoping in WP-2.7; `product init`, `stamp` and *Package & publish* in
@@ -1304,6 +1333,8 @@ Each criterion is registered in `scorecard.jsonc` with its class.
   `template-proof` packages through the profile; two test-matrix rows; CL-23 and CL-24 in the Ph1–4 exits.
   Done (round 3): WP-0.17 builds the launcher at x86-64-v1 with the pre-v2 emulator runs; WP-3.3 the cases and support queue;
   WP-3.8 the Support and report, Customization and collections panels; WP-4.4 the Store API and caps; WP-4.9
-  the Store panel.
+  the Store panel. Round 5: WP-2.13 and WP-3.8 own the new panels through their "Ph2/Ph3 panels of 08 §1.7.2"
+  scope (party frames in Ph2; raid frames and the Encounter and match HUD in Ph3); their parenthetical panel lists
+  can name them at the next integration pass.
 - **PLAN.md:** §4.2 names the `base` level as x86-64-v1 and the pre-v2 emulator check behind "runs on any
-  x86-64 CPU" (done, round 3).
+  x86-64 CPU" (done, round 3); the Foundation panel count is 29 (done, round 5).

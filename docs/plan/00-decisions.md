@@ -9,7 +9,7 @@ Research backing lives in `docs/research/01..10-*.md` (cited as R01..R10).
 | [001](#adr-001-platforms) | Platforms; [001a](#adr-001a-windows-toolset-policy-review-round-2) Windows toolset policy | [009](#adr-009-editor) | Editor |
 | [002](#adr-002-languages) | Languages | [010](#adr-010-client-game-ui--launcher) | Client, game UI, launcher |
 | [003](#adr-003-rendering) | Rendering | [011](#adr-011-core-runtime) | Core runtime |
-| [004](#adr-004-entity-model--reflection) | Entity model, reflection | [012](#adr-012-quality-bar--process) | Quality bar, process |
+| [004](#adr-004-entity-model--reflection) | Entity model, reflection; [004a](../adr/ADR-004a-ecs-rt01-structural-ops.md) ECS structural ops vs RT-01 (*open*) | [012](#adr-012-quality-bar--process) | Quality bar, process |
 | [005](#adr-005-world-model-large-worlds) | Large worlds | [013](#adr-013-runtime-libraries-r10-manifest) | Runtime libraries |
 | [006](#adr-006-content-model) | Content model | [014](#adr-014-backend-toolchain-r10-11) | Backend toolchain |
 | [007](#adr-007-server--network-architecture) | Server and network | [015](#adr-015-voice-chat) | Voice chat |
@@ -196,6 +196,11 @@ The Nightly tier adds `windows-vs2026`, `windows-vs2022`, `linux-dev` and the sa
   schema codegen; replication dirty bits live in our components (Iris-style push); network IDs are
   our own 64-bit IDs mapped to `flecs::entity`; flecs systems run on the Helios job system.
   A custom ECS is the fallback only if the Phase 1 50k-entity zone benchmark fails (R10 §6).
+- ***Open:* [ADR-004a](../adr/ADR-004a-ecs-rt01-structural-ops.md) (2026-09-25).** The Phase 0 pre-bench
+  (`engine/ecs/SPIKES.md` §3) passed every RT-01 clause except structural ops: 3.4–6.7 ms for 9k ops against
+  1.5 ms, while raw flecs does the same ops in ≈ 0.9 ms. The overhead is the Helios wrapper's bookkeeping, so
+  option A (optimize the wrapper, keep flecs) runs first in WP-1.1a. A custom ECS is decided only if the
+  optimized wrapper still fails RT-01 on SERVER at the Phase 1 gate. The budget stays 9k ops per sync point.
 - Terminology: "**ECS archetype**" means component storage only; designer-facing content types
   are "**record templates**" (never "archetype") across all plan sections.
 - **One schema language** (`*.hschema`, compiled by `helios-schemac`, a C++ tool built first in

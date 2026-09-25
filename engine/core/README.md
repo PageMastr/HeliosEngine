@@ -178,3 +178,12 @@ ninja -C build/core helios_core core_tests && ctest --test-dir build/core -R cor
 * Async reads block one IO thread per in-flight request until the IORing / io_uring backends land.
 * The job system uses lock-protected deques (short spin locks) rather than lock-free Chase-Lev
   deques; fibers are a Phase 2+ option behind the same API (ADR-011).
+
+## Plan conformance
+
+Plan-Rev: 3
+
+The CPU-gate code was written to plan revision 3, before the ADR-011 amendment (revision 4). Open deltas are in
+09 §5.10.4 (b), for WP-0.5r: gate placement, the failure path, the exports, and the round-5 backstop
+classifier and crash-handler handover. §5.10.4 (c) has one more, for WP-0.5: 02 §2.2's ≤ 3× `mi_malloc`
+accounting target. The rest of the module has no open delta.

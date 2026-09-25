@@ -265,3 +265,12 @@ schemac); OIDC/MFA; region leases beyond v0 zone placement (`region_lease`, zone
 two-signal failure detection and control-plane degraded mode (Phase 2); per-role NATS users with narrow
 subject permissions; PostgreSQL roles per service; the transactional outbox and JetStream `EVT` stream; OTLP
 exporters.
+
+## Plan conformance
+
+Plan-Rev: 1
+
+Written to draft v1 (plan revision 1), and since reworked to revision 2's lease and ID design, except the open
+rows of 09 §5.10.4 (a) from revisions 2 and 3: the `svc_identity` and `svc_orch` schema names, the encrypted
+e-mail columns, `region_lease`, failure domains in registration and held regions in heartbeats. WP-0.15r
+reworks them. Revisions 4–6 added no delta (§5.10.4 (a), (c)).

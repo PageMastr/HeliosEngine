@@ -201,3 +201,10 @@ tables); everything is safe to call concurrently.
   per axis.
 * `PositionQuantizer::fromExtent` returns an invalid quantizer (`isValid() == false`, bits = 0)
   when 32 bits cannot cover the extent; check it before encoding.
+
+## Plan conformance
+
+Plan-Rev: 6
+
+Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
+`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.

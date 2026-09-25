@@ -57,3 +57,10 @@ posix_spawn; `src/tool_process.cpp`) with its output captured: no shell is invol
 spaces, quotes, `%`, `$`, `&` or `;` reach it verbatim (tested).
 
 Tests: `render_tests` (`engine/render/tests/test_shaderc.cpp`) drive the built executable.
+
+## Plan conformance
+
+Plan-Rev: 6
+
+Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
+`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.

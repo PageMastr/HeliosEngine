@@ -42,3 +42,10 @@ review (09 §5.3 item 7).
 
 Goldens are small PNGs committed with the tree for now; 03 §8.4 moves them to Git LFS per backend
 and driver once the repository enables LFS.
+
+## Plan conformance
+
+Plan-Rev: 6
+
+Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
+`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.

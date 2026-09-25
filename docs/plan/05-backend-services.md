@@ -48,6 +48,23 @@ Round-4 fixes:
   world-script host by default (§5); the GM row-edit guard for `@currency` and escrow-condition fields and
   the WSH's `--dev` debugging hooks (§1.23 items 7 and 11).
 
+Round-5 fixes (minor):
+- **Cheat and bot detection (§1.16a).** Cells extract aim, input and routine features from data they
+  already hold. A red-team corpus labels cheat and farm bots. Trust scores sessions and stages delayed ban
+  waves through §1.17's cases. The client anti-cheat vendor is now chosen in Phase 3 (WP-3.11). A21 (Ph4) is
+  the acceptance.
+- **Shard-primary write mix (§3.6).** Every writer is budgeted, not only the ledger, the fence and world
+  scripts, and there is a replay budget for the synchronous standby. Account progression becomes append-only
+  deltas (§1.5). Leaderboards and activity snapshots move to the persistence cluster (§1.12, §3.1). A5 (Ph4)
+  runs the whole mix at once.
+- **Replicants stay in their cells' availability zone (§1.4.6).** A zone loss therefore restores that zone's
+  world cells from checkpoints, with ≤ 30 s of non-value state lost. §6.7 and A19 now state this bound.
+- **NATS least privilege (§6.5).** A generated permission matrix covers every role. Credentials are issued
+  per process, and services check that the cell in `Helios-Fence` is the process that sent the request.
+- **Node maintenance (§6.1a).** Cordoning a SERVER node triggers `Drain` for every process on it.
+  GameServers cannot be evicted. Batches are bounded by the blast radius and add capacity before they drain.
+  A14 (d) covers this in Phase 4.
+
 Conforms to ADR-002, -004, -006, -007, -008, -010, -012, -013 and **-014**.
 
 Citations: `R07-P0-7` = requirement 7 of `docs/research/07-*.md` (R09: its gameplay/backend list; R03: its
@@ -218,7 +235,7 @@ mismatch.
 - `AssignReplicant(cells[], replicant)` (Phase 4): one 2-vCPU replicant per ≤ 4 cells of persistent world
   zones, from one zone instance or several (the default for every world-zone profile, mandatory for multi-cell
   zones; instances and housing opt in), placed on a different host and, while the blast radius is a
-  rack, a different rack from every one of its cells (§1.4.6). It is generation-fenced like a region (04 §6.4, ADR-007).
+  rack, a different rack from every one of its cells, but in their availability zone (§1.4.6). It is generation-fenced like a region (04 §6.4, ADR-007).
 - `Split`/`Merge` arrive in Phase 5.
 
 **Why the design changed:** draft v1 had region leases in NATS KV with a 3 s TTL, holders that self-fenced
@@ -441,6 +458,16 @@ default `Packed`, plus topology spread constraints on host, AZ and, from Phase 4
   possible.
 - **Replicants** (Phase 4) never share a host with any of their cells. While B = rack they also never share a
   rack with them, so a rack loss leaves the lost cells' replicant state alive.
+  - **They stay in their cells' availability zone.** `AssignReplicant` groups a replicant's ≤ 4 cells by
+    zone and picks a replicant in that zone. It uses another zone only while that zone has no replicant
+    capacity, and it moves the assignment back once capacity returns. The ≤ 20 Mbit/s stream per cell
+    (04 §6.4) therefore normally never crosses zones (§6.4).
+  - **Consequence.** An availability-zone loss is a wide loss (§1.4.3) that takes a zone's cells and their
+    replicants together. Those cells restore from checkpoints and lose ≤ 30 s of non-value state (§6.7,
+    A19). AGs whose replicant lived in another zone still restore from it.
+  - **Rejected alternative:** zone-disjoint replicants. They would keep a zone loss at ≤ 1 s, but they add
+    ≈ 4 Gbit/s of cross-zone traffic at Phase 4 peak, ≈ $7–13k/month at cloud inter-zone rates. That buys
+    ≤ 29 s less rollback in an event whose recovery already takes up to 5 min (§6.7).
 - **Standbys** spread with `maxSkew 1` across hosts and AZs, and from Phase 4 across racks. A recovery
   assigns only standbys outside the failed domain, and never one on a host that already runs another cell of
   the same zone instance.
@@ -479,7 +506,8 @@ activity cells count ¼ slot, and a small-class standby takes up to 4 of their r
    This takes ≤ 1 s p99 at 5k AGs, and ≤ 2 s p99 for 40 regions totalling 150k AGs advancing at once.
 5. The standby restores state.
    - From Phase 4, in persistent world zones (single-cell or multi-cell), it restores from the region's
-     replicant and loses ≤ 1 s.
+     replicant and loses ≤ 1 s. This holds for any loss inside the blast radius. In an availability-zone
+     loss the zone's replicants are lost too, so checkpoints apply (≤ 30 s).
    - Otherwise, and for any AG the replicant lacks, it loads checkpoints (04 §6.4), at most 64 in flight per
      standby. The persistence cluster's load path is sized for 30k loads/s at Phase 4, so even a rack whose
      zones have no replicant restores in ≤ 6 s.
@@ -504,12 +532,21 @@ A zone leader on a confirmed-dead cell is replaced by its standby under a new `l
 - **Follower progression (06 §7.3):** the levels, influence and learned commands of a bound companion or pet
   are progression rows keyed by its control-device item ID, written through the same `ApplyProgression`.
 - **Account (legacy) progression (06 §5.2–5.3), Phase 2:**
-  - *Stores:* per-`(account, shard)` rows `account_progress(account_id, graph_id, completed BYTEA,
-    counters BYTEA, claims BYTEA, version)` for achievement, collection, codex, legacy and season-track
-    graphs, ≤ 32 KiB per account.
-  - *API:* `ApplyAccountProgression(account, deltas[], flush_seq)`, which applies counter increments
-    and completions and is idempotent by `(account, cell incarnation, flush_seq)`, at 2k flushes/s with
-    p99 ≤ 20 ms. Also `GetAccountProgression(account)`.
+  - *Stores:* per-`(account, shard)` base rows `account_progress(account_id, graph_id, completed BYTEA,
+    counters BYTEA, claims BYTEA, hw BYTEA, version)` for achievement, collection, codex, legacy and
+    season-track graphs, ≤ 32 KiB per account. Flushes go to **append-only deltas**
+    `account_progress_delta(account_id, graph_id, incarnation, flush_seq, deltas BYTEA)` of ≈ 200 B each.
+    Rewriting the whole BYTEA row on every flush would cost ≈ 3 KB of WAL on average and up to 32 KiB; a
+    delta costs ≈ 0.4 KB (§3.6).
+  - *API:* `ApplyAccountProgression(account, deltas[], flush_seq)` applies counter increments and
+    completions. It is idempotent by `(account, cell incarnation, flush_seq)`, at 2k flushes/s with
+    p99 ≤ 20 ms. It takes `pg_advisory_xact_lock(account)`, which writes no WAL. The flush is a duplicate if
+    the base row's high-water mark `hw` for that incarnation (kept 7 days) is ≥ `flush_seq` or the delta row
+    already exists. Otherwise it inserts one delta row.
+  - *Folding.* An account's deltas are folded into its base rows once it has 32 of them, or once the oldest
+    is 15 min old. The fold takes the same lock, applies the deltas, advances `hw` and `version` and deletes
+    the folded rows, all in one transaction. `GetAccountProgression(account)` returns the base rows with any
+    unfolded deltas applied, so readers never see the split.
   - *Rewards* are ledger grants keyed `(account, node, tier)`. The legacy bank is a ledger hangar with
     owner kind `Legacy`.
   - *Mirroring:* graphs marked `mirrorAsEntitlement` also issue an idempotent entitlement grant (§1.20),
@@ -767,14 +804,25 @@ side. This service owns groups (parties and fleets), queues, ratings, listings, 
   30 min unless the leader's client refreshes it. ≤ 50k listings per shard, search p95 ≤ 200 ms. Apply and
   accept go through the party API, and notes pass the §1.10 text filter.
 - **Leaderboards.** The truth is PG `leaderboard_entry(board, window, partition, entrant, value,
-  result_hash, instance)`, upserted with keep-best, keep-latest or sum. Valkey sorted sets are the read
-  cache, rebuilt from PG (§3.4). Only `ReportActivityResult` and `ReportMatchResult` write entries. Per
-  shard: ≥ 10k writes/s, top-100 reads p95 ≤ 50 ms, "around me" p95 ≤ 100 ms. Windows close on calendar
-  events (§1.15) and are archived (GP-14g).
+  result_hash, instance)`, upserted with keep-best, keep-latest or sum.
+  - *Location.* It lives on the **persistence cluster** (§3.1), not the shard primary. It is non-value,
+    write-behind state, and 10k writes/s would take ≈ 4.5 MB/s of the primary's WAL budget (§3.6).
+  - *Writes.* Only `ReportActivityResult` and `ReportMatchResult` write entries. They commit the result (and
+    the ratings, for a match) on the shard primary, together with an outbox event. The board writer consumes
+    that event and upserts, deduplicated by an inbox row in the same persistence-cluster transaction, ≤ 1 s
+    behind the result.
+  - *Failover.* After a persistence-cluster failover the consumer rewinds 5 min in `EVT` (7 d retention),
+    and the inbox discards what survived, so no entry is lost.
+  - *Reads.* Valkey sorted sets are the read cache, rebuilt from PG (§3.4).
+  - *Budgets per shard:* ≥ 10k writes/s, top-100 reads p95 ≤ 50 ms, "around me" p95 ≤ 100 ms. Windows
+    close on calendar events (§1.15) and are archived (GP-14g).
 - **Activity state (the Destiny Activity Host, R05-P0-5):** objectives, encounter phase and checkpoints
   (06 §6.7 lists the contents).
-  - Lives in KV `ACTIVITY`, updated async by cells.
-  - Snapshotted to PG.
+  - It lives in KV `ACTIVITY`. Cells update it asynchronously through `Activity.Update(instance, (region,
+    lease_gen), state)`. The service rejects a superseded cell and writes the key, so cells need no KV write
+    rights (§6.5).
+  - It is snapshotted to the persistence cluster every 10 s and on each phase change: ≤ 4 KiB per
+    snapshot, 500/s at design load (§3.6).
   - A standby rehydrates from it in ≤ 5 s.
   - Lockouts are ledger guards (§1.6 `ClaimGuard`, 06 §6.8, R03-P1-8). `LockoutView(char)` reads them
     and is cached per character for 60 s.
@@ -910,7 +958,8 @@ inside budget:
 - **Fence check last.** `Execute` writes its items and currency first. Its last statement before commit reads
   the custody rows `FOR SHARE`, so each share lock lasts only through the commit (≈ 1–2 ms with the
   synchronous standby). A transaction that reaches a row an advance holds waits, sees the new epoch and fails
-  with `FENCE_STALE`. The new owner then re-issues it under the same idempotency key.
+  with `FENCE_STALE`. The new owner then re-issues it under the same idempotency key. From Phase 3 the check
+  also requires the `owner_cell` of the AG named in `Helios-Fence` to be the authenticated caller (§6.5).
 - **One lock order.** Every statement locks fence rows in ascending `ag_id`:
   - `Advance`, `Join` and `Leave` run `SELECT … ORDER BY ag_id FOR UPDATE` over their tree or trees before
     they update;
@@ -1098,7 +1147,8 @@ economy switches need two approvers.
 ### 1.16 Telemetry, economy dashboards, trust — Phase 1 basic, Phase 2 ClickHouse
 **Ingest:** `tel.<scope>.<source>.<type>` events are batched every 100 ms into ClickHouse (a PG table in
 dev).
-- Ingest replaces account and character IDs with the account's random `analytics_id` (§6.6).
+- Ingest replaces account and character IDs with the account's random `analytics_id` (§6.6). The only
+  exception is the pseudonymous `trust` stream, whose detectors act on accounts (§1.16a).
 - It truncates IP addresses to /24 (IPv4) or /48 (IPv6).
 - Raw events are kept 13 months. Aggregates carry no IDs.
 
@@ -1108,12 +1158,102 @@ dev).
 - price indices;
 - destruction.
 
-**Trust (Phase 3: report evidence and cases; Phase 4: rules):** stores report evidence, including 04 §2.7's
-voice-ring snapshots, and opens §1.17's cases. From Phase 4 it also consumes 04 §9 violation telemetry and
-ledger events. Rules cover wealth jumps > 6σ, item-count drift and RMT graphs. A rule hit opens a case and can
-trip a kill switch.
+**Trust (Phase 3: report evidence, cases, cheat features; Phase 4: rules and detectors):** stores report
+evidence, including 04 §2.7's voice-ring snapshots, and opens §1.17's cases. From Phase 4 it also consumes 04 §9
+violation telemetry and ledger events.
+- Economy rules cover wealth jumps > 6σ, item-count drift and RMT graphs.
+- §1.16a's detectors cover aimbots, triggerbots, input automation and farm bots.
+- A rule or detector hit opens a case. An economy rule can also trip a kill switch.
 
 **Transport:** JetStream until 200k events/s, then evaluate Redpanda (R07 flag 4).
+
+### 1.16a Trust detection: cheats and bots — Phase 3 features and corpus, Phase 4 detectors and ban waves
+**Why.** Authority (04 §9) stops a client from asserting value, movement or hits, and AAA-SEC-3 catches speed
+and teleport hacks. Neither catches input that is legal but not human:
+- aimbots and triggerbots in Destiny-class PvP;
+- input automation;
+- the mining, ratting, mission and gathering bots that inflate EVE- and SWG-class economies.
+
+R05 records that Bungie eventually needed kernel anti-cheat, and a native Linux client (08) limits which
+vendors can serve it. Detection is therefore **server-side first**, built from data the cell already holds. A
+client vendor adds signals, but no detector depends on one (04 §9).
+
+**1. Features, computed in cells.** Each session has a `TrustFeatures` accumulator, updated from the input
+stream and from 04 §5.6's lag-compensation resolve. Clients send no new data.
+
+| Family | Features (per session, per 60 s window) | Source |
+|---|---|---|
+| Aim | **snap angle**: view change in the 100 ms before a shot. **Time to target**: from the target's first unoccluded frame in the shooter's rewound view to the first on-target shot, per weapon class. **On-target dwell before fire**: triggerbot latency and its spread. **Hit and precision-zone rate** by distance band against target visibility, including the share of shots and pre-aim at targets occluded in the rewound view (ESP). **Silent-aim mismatch**: hits the server validates although the view never crossed the target | look yaw/pitch and `view_tick` per input (04 §5.2); rewind history and occlusion test (04 §5.6) |
+| Input | inter-input interval entropy and coefficient of variation (1 ms bins); exact repeats of input sequences ≥ 2 s long; the look-angle jerk spectrum; **`device_class` consistency**: stick-quantized look deltas versus mouse deltas, since aim assist depends on the declared class (04 §5.2) | the input stream |
+| Routine | route and loop periodicity (autocorrelation of 10 s position samples over 30 min, per zone); action cadence regularity; **stimulus response**: time from an unscripted event (NPC aggro, a node that depletes early, a local-chat mention) to a changed action; session length and daily active hours | positions, actions and events the cell already has |
+| Economy | yield per active hour against the zone's population percentile; faucet mix | ledger events (§1.6), joined in Trust |
+
+- **Cost:** ≤ 1 % of the cell's tick budget at 500 players, measured in NS-4.1.
+- **Output:** one ≈ 200 B summary per session per 60 s on `tel.<shard>.<proc>.trust`, ≈ 0.2 MB/s at 50k
+  CCU. The subject's process token is authenticated (§6.5), so no process can forge another's features.
+- **Evidence:** a window that crosses a cheap in-cell pre-filter also sends its shot-level trace and asks the
+  cell to flush its tick-recording ring for that session, as a report does (04 §10.2).
+- **Normalization:** features are normalized per `device_class`, weapon class and activity, so pad aim assist
+  and PvE auto-targeting are not flagged.
+
+**2. Scoring (Trust, Go).** Session features are stored in ClickHouse under the pseudonymous `account_id` for
+180 days (§6.6). The `trust` stream is the one telemetry stream that keeps `account_id` instead of
+`analytics_id` (§1.16), because Trust acts on accounts. It is still pseudonymous. There are two detector tiers:
+- **Streaming rules**, which flag within ≤ 15 min. Initial thresholds, re-tuned on the corpus:
+  - silent-aim mismatch > 2 % over ≥ 200 shots;
+  - on-target-to-fire latency with p50 < 60 ms and IQR < 20 ms over ≥ 100 shots;
+  - input-interval entropy below the honest floor for ≥ 30 min.
+- **Daily models**, which flag within ≤ 24 h: gradient-boosted trees per family (aim, input, routine). They are
+  trained offline on the labelled corpus, evaluated in Go (`pkg/trust`), versioned, and changed only through
+  a reviewed change.
+
+A score above its detector's threshold opens a `trust_rule` case (§1.17). The case carries the feature
+vector, the top contributing features and linked evidence (shot traces, tick recordings, ledger references).
+Each threshold is set for ≤ 0.1 % false positives on the honest populations below.
+
+**3. Labelled corpus.**
+- **Cheats (red team).** `helios-bot` variants (04 §10.3), each at humanization levels 0–3 (timing jitter,
+  route noise, breaks):
+  - the seam fighter with aim cheats: a snap aimbot with 0–150 ms Bézier smoothing, silent aim, a
+    triggerbot with a randomized 50–150 ms delay, and ESP-driven pre-aim at occluded targets;
+  - input macros (ability rotations with jitter);
+  - farm bots: mining loops, ratting and mission runners, gatherers.
+- **Honest.**
+  - NS-4.1's bot swarm in `--human-model` mode, which replays recorded human input timing and aim onto the
+    bots' goals. It is used for the aim and input detectors only, because scripted routes are periodic by
+    design.
+  - ≥ 5,000 human sessions from internal playtests and the Phase 3 beta, reviewed as clean. They are used
+    for every detector.
+- Feature logs and tick recordings are versioned. The red team adds variants every quarter. A nightly job
+  scores every detector on every corpus version and fails on a recall or false-positive regression.
+
+**4. Delayed ban waves (§1.17).** Detections are not acted on at once, so cheat authors cannot bisect the
+detectors.
+- A `gm` reviews each `trust_rule` case (P3 SLA). A confirmed case stages its sanction in
+  `ban_wave(wave_id, scheduled_at, state, case_ids[])`.
+- A wave runs at a randomized 7–21-day interval. Before it runs, a dry run lists the accounts, the sanctions
+  and the value to remediate, and two people approve it: `senior_gm`, plus `economy` for remediation.
+- Execution:
+  - `LinkSanction` runs per case, so each ban carries its case ID;
+  - farmed value is remediated through ledger `Reverse` or `Burn` with reason `Sink.Trust.Remediation`, and
+    the conservation audits still hold (§4.4);
+  - the account's entries in open leaderboard windows are voided.
+- **Immediate action** is reserved for economy-threatening cases (RMT rings, exploit dupes): a kill switch
+  (§1.15), an account lock, then the normal case.
+- Appeals are `appeal` cases. A detector pauses (`TrustDetectorPaused`) until it is re-evaluated on the
+  corpus when appeals overturn > 2 % of a wave's sanctions for it, or overturn any of its high-confidence hits.
+
+**5. Client vendor (`IAntiCheatProvider`, 08 §1.14).** The vendor is chosen in **Phase 3 by WP-3.11**, not
+Phase 4. Its Linux support constrains the native Linux client, and a kernel-mode choice needs counsel and
+platform review before the public beta.
+- **Criteria:** native Linux and Proton support; kernel or user mode; licence (09 K19's EOS/EAC sign-off); a
+  server-side signal API.
+- **Candidates:** EAC (via EOS) and BattlEye.
+- Vendor detections and attestation failures enter Trust as one more feature family. A player without a vendor
+  module, on Linux for example, is scored on server features alone.
+
+**Phasing.** Phase 3: cell features, the `trust` telemetry stream, corpus v1 and the vendor decision
+(WP-3.11). Phase 4: detectors, ban-wave tooling, vendor integration and A21 (WP-4.8).
 
 ### 1.17 GM/admin API & audit — Phase 1 commands, Phase 4 full
 **RBAC roles:** `support`, `gm`, `senior_gm`, `economy`, `ops`, `dev`, `privacy` (DSAR handling). MFA is
@@ -1488,7 +1628,9 @@ Generated Go is committed and CI-verified, so Go builds never need the C++ toolc
 
 **Cells and gateways: nats.c v3.14 with Helios-binary payloads (ADR-013).**
 - Calls are request/reply on `rpc.<scope>.<svc>.<Method>`, with the service name as queue group.
-- Headers: `Helios-Idem`, `Helios-Deadline-Ms`, `Helios-Fence` (`ag:epoch:cell`), `traceparent`.
+- Headers: `Helios-Idem`, `Helios-Deadline-Ms`, `Helios-Fence` (`ag:epoch:cell`), `traceparent`. From Phase 3 the
+  `cell` in `Helios-Fence` must equal the caller's authenticated process ID from the server-stamped
+  `Nats-Request-Info` header (§6.5).
 - The generated Go binding calls the *same* handler as connect-go.
 - No service discovery or HTTP/2 is needed in the sim process (R01-P1-11).
 
@@ -1497,7 +1639,7 @@ Grammar: `<class>.<scope>.<domain>[.<id>…].<verb>`.
 - `class` ∈ {rpc, evt, ctl, persist, tel, chat, presence, content, timer, audit}.
 - `scope` = shard (`eu1`) or `g` (global).
 - Lowercase tokens only.
-- Environments are separate NATS **accounts**, never subject prefixes.
+- Environments are separate NATS **accounts** (a `svc` and a `sim` account each, §6.5), never subject prefixes.
 
 | Purpose | Example | Kind |
 |---|---|---|
@@ -1541,6 +1683,7 @@ The simulation thread does no network I/O.
 | Checkpoint batch, telemetry | cell, gateway | JetStream async publish; per-AG coalescing while degraded; telemetry drop-and-count | nothing |
 | Loot, trade, craft, currency | cell | async request with idem key; effect applied on reply | the coroutine |
 | World flags | cell | KV watch; `SetFlag` async with `(region, lease_gen)` | nothing / the coroutine |
+| Activity state | cell | `Activity.Update` async with `(region, lease_gen)`; the service writes KV `ACTIVITY` (§1.12) | nothing |
 | Fleet roster | cell | KV `GROUP` watch, applied at a tick boundary (§1.12.1) | nothing |
 | World-script RPC (§1.23) | cell | async request to the partition owner with `(region, lease_gen)`; reply after commit | the coroutine |
 | Market, mail, chat, social UI | gateway service lane | bypasses the cell; identity injected by gateway | nothing |
@@ -1555,8 +1698,8 @@ The simulation thread does no network I/O.
 | Store | Holds |
 |---|---|
 | Global PostgreSQL 18 (EU home region, §6.7) | identity (the only direct PII, encrypted), social, chat global channels, content, config, audit, entitlements |
-| Per-shard primary | character, ledger, fence, orchestrator, market, industry, mail, world state, activity, parties and fleets, world-script tables (§1.23) |
-| Separate persistence cluster | `ag_checkpoint`, region checkpoints and `ag_checkpoint_hist`, so checkpoints never compete with the ledger |
+| Per-shard primary | character (with account-progression base rows and deltas, §1.5), ledger, fence, orchestrator, market, industry and durable timers, mail, world state, parties and fleets, matchmaking, ratings and listings, world-script tables (§1.23). Each writer has a WAL budget (§3.6) |
+| Separate persistence cluster | `ag_checkpoint`, region checkpoints and `ag_checkpoint_hist`, so checkpoints never compete with the ledger; from Phase 3 also the non-value write-behind tables `leaderboard_entry` and activity snapshots (§1.12) |
 | ClickHouse | analytics (pseudonymous `analytics_id` only) and the ledger archive query path |
 | S3-compatible object storage (MinIO in compose) | backups, WAL archive, ledger Parquet archive, CDN origin, crash dumps, audit anchors, `shred_log`, DSAR exports |
 
@@ -1732,30 +1875,67 @@ They size IOPS and WAL, not retention. The "expected" columns size retention.
 | Fence rows updated/s, bulk included | ≈ 45 | 500, with 5k-row recovery bursts | ≈ 1.5k | ≈ 8.1k (6.1k + 2k bulk) |
 | Shard-primary WAL: ledger | 0.15 MB/s | 3 MB/s | 3.8 MB/s | 15 MB/s |
 | Shard-primary WAL: fence | 0.04 MB/s | 0.5 MB/s | 1.5 MB/s | 7.6 MB/s |
-| Shard-primary WAL: total (world scripts at their ≤ 5 MB/s cap from Phase 3, design column only) | 0.19 MB/s | 3.5 MB/s = 0.3 TB/day | 5.3 MB/s = 0.46 TB/day | 27.6 MB/s = 2.4 TB/day |
-| Shard-primary write IOPS (8 KB pages + WAL flushes) | ≈ 150 | ≈ 0.9k | ≈ 1.3k | ≈ 5k |
+| Shard-primary WAL: total, every writer (Phase 4 split in the write-mix table below; Phase 2 design = A5's mix, since A7, A10 and 06's progression test run separately at ≤ 2 MB/s each) | 0.26 MB/s | 3.5 MB/s = 0.3 TB/day | 8.1 MB/s = 0.70 TB/day | 34.5 MB/s = 3.0 TB/day |
+| Shard-primary write IOPS (8 KB pages + WAL flushes) | ≈ 190 | ≈ 0.9k | ≈ 2.1k | ≈ 7.5k |
 | `idempotency` live size (4 partitions) | 4.8 GB | 97 GB | 121 GB | 484 GB |
 | Ledger online (90 days) | 0.47 TB | — | 11.7 TB | — |
 | Parquet archive growth (≈ 5× zstd) | 1 GB/day | — | 26 GB/day (9.5 TB/year) | — |
 | Checkpointed AG/s | 250 | 3,000 | 6,000 | 30,000 (A9) |
 | Checkpoint payload | 0.56 MB/s | 6.8 MB/s | 13.5 MB/s | 68 MB/s |
-| Persistence-cluster WAL | 0.6 MB/s = 53 GB/day | 7.4 MB/s = 0.64 TB/day | 15 MB/s = 1.3 TB/day | 74 MB/s = 6.4 TB/day |
+| Persistence-cluster WAL (from Phase 3 including leaderboards and activity snapshots: +1.7 / +6.2 MB/s at Phase 4) | 0.6 MB/s = 53 GB/day | 7.4 MB/s = 0.64 TB/day | 17 MB/s = 1.5 TB/day | 80 MB/s = 6.9 TB/day |
 | `ag_checkpoint` live size | 2 M AGs ≈ 4.5 GB | — | 10 M AGs ≈ 23 GB (38 GB at fillfactor 60) | — |
 | `ag_checkpoint_hist` (14 d, sampled) | 8 GB | — | 195 GB | ≤ 760 GB (1 M AGs dirty/h) |
 | `PERSIST` stream per replica (1 h) | 2 GB | 24 GB | 49 GB | 243 GB |
 | `EVT` stream (7 d, ≈ 600 B per tx) | 36 GB | — | 0.9 TB | — |
 
+**Shard-primary write mix (Phase 4, per writer).** Every service that writes the shard primary has a row. The
+design rates are the writers' acceptance rates, and A5 (Ph4) runs all of them at once. WAL per unit includes
+tuple, index, outbox and commit records, with full-page images amortized as above. IOPS is page writeback
+(WAL ÷ 8 KB). WAL flushes, ≈ 21k commits/s at design grouped ≈ 7 per flush, add ≈ 3k IOPS to the total row.
+
+| Writer | Rate: expected / design | Rows/s: exp / design | WAL MB/s: exp / design | Writeback IOPS (design) |
+|---|---|---|---|---|
+| Ledger (§1.6) | 2,500 / 10,000 tx/s (A5) | 16k / 65k | 3.8 / 15 | 1.9k |
+| Fence (§1.13) | 660 / 2,900 operations/s (A5) | 1.5k / 8.1k | 1.5 / 7.6 | 950 |
+| World scripts (§1.23) | 1,000 / 5,000 row writes/s (the shard cap) | 1k / 5k | 1.0 / 5.0 | 625 |
+| Market orders and trades (§1.7); escrow legs are ledger rows | 250 / 2,000 order operations/s (A7's hub rate as the shard ceiling), ≈ 1 KB each | 625 / 5k | 0.25 / 2.0 | 250 |
+| Durable timers (§1.8): arm, claim, fire | 300 / 1,500 timers/s over 1 M pending (A10), ≈ 0.7 KB each | 900 / 4.5k | 0.21 / 1.05 | 130 |
+| Account progression (§1.5), as deltas | 1,000 / 2,000 flushes/s (06 §5.2's 30 s flush; §1.5's rate) at ≈ 0.4 KB, plus 55 / 65 folds/s at ≈ 5 KB | 2.8k / 4.1k | 0.7 / 1.1 | 140 |
+| Character: rows, `ApplyProgression`, follower progression; settings blobs only when changed | 200 / 1,000 writes/s at ≈ 1 KB, plus ≤ 20 blobs/s at ≈ 16 KiB | 200 / 1k | 0.3 / 1.3 | 160 |
+| Mail (§1.9) | 50 / 200 mails/s, ≈ 2.5 KB each | 150 / 600 | 0.13 / 0.5 | 60 |
+| World state (§1.21): flags, territory, influence batches | 100 / 500 flag writes/s, ≈ 0.6 KB each | 200 / 1k | 0.06 / 0.3 | 40 |
+| Groups (§1.12, §1.12.1): rosters, listings, matchmaker rows, ratings | ≤ 200 roster mutations/s, ≈ 30 listing refreshes/s, 17 matches/s × 13 rating rows | 300 / 1.2k | 0.08 / 0.3 | 40 |
+| Industry jobs, resources, structure upkeep (§1.8) | 50 / 300 job rows/s, ≈ 0.8 KB | 50 / 300 | 0.04 / 0.25 | 30 |
+| Orchestrator, ID blocks, migrations (§1.4) | — | ≤ 100 | 0.05 / 0.1 | 10 |
+| **Total on the shard primary** | | **≈ 24k / 96k** | **8.1 / 34.5** | **4.3k (+ ≈ 3k flushes)** |
+| *Moved to the persistence cluster:* leaderboards (§1.12) | 2,000 / 10,000 upserts/s, ≈ 0.45 KB (non-HOT: the rank index changes) | 2k / 10k | 0.9 / 4.5 | — |
+| *Moved to the persistence cluster:* activity snapshots (§1.12) | 250 / 500 snapshots/s, ≤ 4 KiB, ≈ 3.3 KB WAL | 250 / 500 | 0.8 / 1.65 | — |
+
+**Standby replay budget.** The synchronous standby replays WAL in one process, which is the binding limit
+(below). Its capacity for this mix is measured by `helios-loadgen replay`: it replays 30 min of recorded
+design-mix WAL flat out on the reference standby, with `recovery_prefetch = on` and the working set resident.
+- **Rule:** the design mix must stay ≤ 2/3 of the measured rate.
+- **Planning figure:** 60 MB/s (≈ 150k records/s at ≈ 400 B), which gives a budget of 40 MB/s.
+- **Why the two moves:** the mix above is 34.5 MB/s, 58 % of the planning figure. Without them it would
+  exceed the budget: leaderboards and activity on the primary make 40.7 MB/s, and whole-row progression
+  flushes (≈ 3 KB each, 6 MB/s at design) make 45.6 MB/s.
+- **If the measured capacity is below 52 MB/s** (34.5 ÷ 2/3), the next moves, in order, are:
+  1. world-script tables to their own cluster (−5 MB/s; they commit through one service and reach the
+     ledger only through the outbox, §1.23);
+  2. the Phase 5 ledger split.
+
 **Consequences:**
 - **Phase 4 shard primary:** ≈ 15 TB NVMe (11.7 TB of online ledger plus idempotency, other schemas and 25 %
   headroom). Phase 5's owner-hash ledger partitions split this.
-  - At design load it writes ≈ 28 MB/s of WAL and ≈ 5k IOPS, far inside one NVMe's write rate. The binding
+  - At design load it writes ≈ 35 MB/s of WAL and ≈ 7.5k IOPS, far inside one NVMe's write rate. The binding
     limits are commit latency to the synchronous standby and that standby's single-process replay. A5 (Ph4)
-    therefore asserts replay lag.
-  - Fence traffic is ≈ 27 % of that WAL (7.6 of 27.6 MB/s). If A5 finds the fence budget exceeded, the first
+    therefore runs the whole write mix above and asserts replay lag and the replay budget.
+  - Fence traffic is ≈ 22 % of that WAL (7.6 of 34.5 MB/s). If A5 finds the fence budget exceeded, the first
     fix is less WAL per row, by making more updates HOT, and the Phase 5 ledger split comes after that.
-- **Phase 4 persistence cluster:** it must sustain ≥ 80 MB/s of WAL and ≈ 30k row updates/s. A9 measures
-  exactly this. The same numbers drive the Scylla/FDB comparison.
-- **WAL archive:** 35 days of shard WAL at Phase 4 expected load (5.3 MB/s) is ≈ 16 TB raw (≈ 5.7 TB
+- **Phase 4 persistence cluster:** it must sustain ≥ 90 MB/s of WAL: 74 MB/s of checkpoints, 6.2 MB/s of
+  leaderboards and activity snapshots, and headroom. That is ≈ 40k row writes/s. A9 measures exactly this.
+  The checkpoint numbers drive the Scylla/FDB comparison.
+- **WAL archive:** 35 days of shard WAL at Phase 4 expected load (8.1 MB/s) is ≈ 24.5 TB raw (≈ 8.7 TB
   compressed).
 - **NATS:** at design load, `PERSIST` means ≈ 200 MB/s of disk writes across the R3 cluster. This is why it
   has 8 partitions, whose leaders spread over the nodes.
@@ -1763,9 +1943,11 @@ They size IOPS and WAL, not retention. The "expected" columns size retention.
   Only the ledger grows without bound, and it moves to object storage after 90 days. A6 asserts this over
   72 h.
 - **World scripts and groups (§1.23, §1.12.1):** world scripts share a shard write budget of ≤ 5k row
-  writes/s (≈ 5 MB/s of WAL, counted in the total WAL row above) and, by default quota, ≤ 64 ×
+  writes/s (≈ 5 MB/s of WAL, their row in the write mix above) and, by default quota, ≤ 64 ×
   10 GiB of rows per project, with `@ttl` expiry. Fleet rosters add ≤ 100k rows and ≤ 200 writes/s. Both are
   rerun here at each gate with the templates' measured rates.
+- **Every writer is rerun at each gate** (09 K30). A new shard-primary writer, or a rate change > 20 %, adds or
+  updates its row in the write mix and `helios-loadgen mix` before its WP closes.
 
 ---
 
@@ -1894,6 +2076,7 @@ helios-data\  helios.toml  pg\  nats\  cdn\{chunks,packs,manifests,channels}\  c
 | `--seed` | `dev` | `dev1…dev10` (password `dev`), 1 M credits, items, a corp, NPC orders; `loadtest` = 50k accounts |
 | `--lan` | off | loopback avoids the Windows Firewall prompt |
 | `--retention-scale` | `1` | shrinks every retention horizon, for soak tests (A6) |
+| `--dev-clock` | off | dev flavour only, refused when `env` is `staging` or `live`: a monotonic offset and rate for game-calendar time, published as the dev-only KV `CONFIG` key `dev.clock` and applied by the timer worker (due timers fire in due order), the calendar, `--dev` cells and WSHs and offline-progress services; leases, tokens, TTLs and idempotency windows stay on real time (07 §1.6.4) |
 
 **Subcommands:** `migrate`, `seed`, `reset`, `pg-install`, `doctor`, `privacy {export,erase} --account`,
 `chaos {nats-leader,orch-leader,pg-switchover,kill-domain,nats-block}`.
@@ -1937,6 +2120,69 @@ is a weekly maintenance window.
 - Gateways run on bare metal behind anycast scrubbing (04 §1), spread evenly over the shard's 3 availability
   zones and sized so that two zones hold every session (§6.7): 6 boxes at Phase 3, 12 at Phase 4.
 - A colo baseline is decided at Phase 3 (§6.4). Regional placement is in §6.7.
+- SERVER nodes are patched only through the node-maintenance controller (§6.1a).
+
+### 6.1a Node maintenance: cordon, Drain, release — Phase 3 (host batches), Phase 4 (rack batches, A14 (d))
+**Why.** SERVER hosts need kernel, firmware and Kubernetes upgrades about monthly: ≈ 5 hosts at Phase 3 and
+≈ 30 at Phase 4. `Drain(process, maintenance)` (§1.4) already moves regions without disconnects, but nothing
+connected a node cordon to it. An allocated Agones GameServer blocks `kubectl drain`, and a forced eviction is
+a crash: A3b's ≤ 10 s hitch and, outside the replicant tier, up to 30 s of non-value state lost. Without a
+controller, patching either stalls or takes the crash path.
+
+**Controller.** `helios-nodemaint` runs inside the orchestrator deployment and is leader-elected with it
+(§1.4.1). It is the only path that empties a SERVER node.
+1. **Request.** The patch pipeline (kured or the provider's node upgrade), or an operator with
+   `helios-admin node maintain <node | rack>`, labels nodes `helios.dev/maintenance=requested`. A plain
+   `kubectl cordon` of a SERVER node counts as a request.
+2. **Admission.** A batch is admitted only when all of these hold:
+   - all of its nodes lie in one blast-radius domain: one host in Phase 3, the hosts of one rack in Phase 4
+     (§1.4.3);
+   - no other batch is in flight;
+   - the control plane is in normal mode (§1.4.4);
+   - neither `WarmPoolBelowDomain` nor `FailureDomainLost` is open;
+   - no `PreProvision` window or epoch flip falls within the next hour (§1.14.1);
+   - its surge capacity is Ready (step 3).
+3. **Surge first.** The Fleet buffer grows by the batch's slots (its cells, standbys, replicants and WSHs,
+   §1.4.6) on nodes outside the batch's domain, and the drain starts only once they are Ready. The warm pool
+   therefore never falls below the domain bound, and a real host or rack loss during maintenance is still
+   absorbed.
+   - In cloud, surge capacity comes from the cluster autoscaler.
+   - In colo, each shard keeps one spare SERVER host (≈ 3 % of Phase 4 SERVER capacity). Each patched host
+     rejoins as the next batch's surge, so the spare is used once per roll.
+4. **Cordon and Drain.** The controller cordons the batch and calls `Drain(process, maintenance, 30 min)` for
+   every Helios process on it:
+   - **cells** move by planned region migration (04 §6.7), ≤ 4 regions at a time per process and ≤ 16 per
+     shard, so each region hitches ≤ 1 s, once;
+   - **replicants** move make-before-break: `AssignReplicant` opens the replacement, the cells stream it full
+     state, and the old replicant is released only once the new one has committed a tick for every region,
+     so no cell is ever left without one;
+   - **world-script partitions** hand over their lease at an invocation boundary, a ≤ 1 s pause (§1.23
+     item 9);
+   - **Ready standbys** are deleted once the surge has replaced them.
+
+   An emptied process exits through the Agones SDK `Shutdown`.
+5. **Eviction is blocked.** GameServers run with Agones `eviction.safe: Never`. Neither `kubectl drain`, the
+   cluster autoscaler nor a patch agent can evict an allocated process. The controller labels the node
+   `helios.dev/maintenance=ready` only once no Helios pod remains, and the patch agent then reboots or replaces
+   it.
+6. **Rejoin.** Once the node is Ready again it runs a self-test: a canary GameServer boots, ticks and opens a
+   trunk to one gateway per zone. The node is then uncordoned, the surge buffer returns to normal and the next
+   batch may start.
+7. **Brakes.**
+   - A drain past its deadline raises `NodeDrainOverdue` (SEV3) and pauses the roll. It is never forced.
+   - A roll also pauses when the hitch p99 of its last 50 migrations exceeds 1 s, or when one migration aborts
+     twice.
+   - `helios-admin node evacuate` (for failing hardware) takes the crash path on purpose, and is audited
+     (§1.17).
+
+**Times (Phase 4).** A host of 12 cells drains in ≈ 2–3 min (three rounds of ≤ 30 s preparation and a ≤ 1 s
+hitch). With a ≈ 10 min reboot and ≈ 2 min rejoin, a batch takes ≈ 15 min. One-host batches (colo, one
+spare) patch ≈ 30 hosts in ≈ 7.5 h. Rack batches with cloud surge take ≈ 9 × 20 min ≈ 3 h. Every region moves
+once per roll.
+
+**Metrics:** `node_maint_state{node}`, `node_maint_drain_seconds` and the per-region migration hitch.
+**Dev and CI:** the dev orchestrator's `LocalProcessPlacer` accepts `helios-admin node maintain local`, which
+drains every local process through the same path. Acceptance is A14's clause (d).
 
 ### 6.2 Observability and SLOs
 **Pipeline.**
@@ -1954,7 +2200,10 @@ operations and rows per second with `fence_lock_wait_ms` (§1.13), gateway reloc
 lag, cell tick p99 (R04-P1-16), control-plane mode, heartbeat misses, silence classifications by class
 (domain loss, wide loss, control-plane fault, NATS-isolated), warm-pool slots surviving the worst domain,
 gateway free slots surviving the worst availability zone (§6.7), world-script invocations, fuel kills and
-commit lag per partition (§1.23), ID-block reserve, partition-drop success and table sizes against §3.6. Alerts use multi-window burn rates (§6.8).
+commit lag per partition (§1.23), ID-block reserve, partition-drop success and table sizes against §3.6,
+shard-primary WAL per writer and standby replay lag against the §3.6 write mix, node-maintenance state
+(§6.1a), NATS permission violations and caller mismatches (§6.5), and trust detector flags and appeal
+overturns (§1.16a). Alerts use multi-window burn rates (§6.8).
 
 | SLO | Target |
 |---|---|
@@ -2127,7 +2376,10 @@ Assumptions, to be replaced by vendor quotes at Phase 3:
 - egress at $0.02–0.05/GB;
 - one 8-vCPU cell per 250–500 players, plus a warm pool sized to the largest blast-radius domain (§1.4.6):
   ≈ 30 % of cell capacity at Phase 3, ≈ 13 % at Phase 4;
-- from Phase 4, one 2-vCPU replicant per ≤ 4 world-zone cells (04 §6.4), about 6 % more compute;
+- from Phase 4, one 2-vCPU replicant per ≤ 4 world-zone cells (04 §6.4), about 6 % more compute. Replicants
+  sit in their cells' availability zone (§1.4.6), so their ≤ 20 Mbit/s per-cell streams (≈ 4 Gbit/s at
+  Phase 4 peak) add no cross-zone traffic;
+- in colo, one spare SERVER host per shard as node-maintenance surge (§6.1a);
 - gateways at 8k sessions per 8-core box, spread over 3 availability zones and sized so that two zones hold
   every session and still meet 04 §2.6's box rule (§6.7): 12 boxes at 50k CCU, ≈ $1.2–2.8k/month more than
   the 8 a box-only rule needs, or 2–3 % of the Phase 4 bill.
@@ -2150,11 +2402,58 @@ cheaper. Storage sizing is in §3.6.
     KMS (§6.6).
   - 04's X25519 re-key (forward secrecy) is a Phase 4 security-review item.
 - **Transport:** TLS 1.3 at the edge, mTLS between services.
-- **NATS:** per-role users with **subject permissions**.
-  - A cell publishes only to `persist.<shard>.>`, `tel.>` and
-    `rpc.<shard>.{orch,ledger,persist,fence,character,activity,chat,world}.>`.
-  - It reads only the KV buckets `DIRECTORY`, `CONFIG`, `PERMS`, `ACTIVITY` and `WORLD`.
-  - It subscribes only to `ctl.<shard>.cell.<own-id>.>`.
+- **NATS: a generated permission matrix, per-process credentials and authenticated callers.** Phase 2 has
+  per-role users with the generated matrix and its CI check. From Phase 3, before the public beta, there is a
+  credential per process and the caller check.
+  - **Generated matrix.** `schemac` emits `nats-perms.json` from the `.hschema` service blocks, their
+    declared callers (`@callers`, service-lane marks) and the declared event, control and KV subjects. It is
+    one entry per role, listing publish, subscribe, `allow_responses` and KV buckets. Deployment renders it
+    into NATS account and user templates, and nothing is written by hand. The table below is a summary, and
+    the generated file is authoritative.
+
+    | Role | Publishes and requests | Subscribes and serves | KV |
+    |---|---|---|---|
+    | Cell (`helios-cell`) | `rpc.<shard>.{orch,ledger,persist,fence,character,activity,group,chat,world,trust}.>`; `rpc.<shard>.ws.>` (world-script calls, §1.23); `persist.<shard>.*.<self>`; `tel.<shard>.<self>.>`; the event subjects its schema declares (`World.emit`) | `ctl.<shard>.cell.<self>.>`, `ctl.<shard>.cell.all.>` (04 §6.6's `gateway_dead`), its own reply inbox | read: `DIRECTORY`, `CONFIG`, `PERMS`, `ACTIVITY`, `WORLD`, `GROUP` (fleet rosters, §1.12.1). Writes go through services (`Activity.Update`, `SetFlag`) |
+    | Replicant (`--replicant`) | `rpc.<shard>.orch.{RegisterProcess,Heartbeat}`; `tel.<shard>.<self>.>` | `ctl.<shard>.cell.<self>.>` | read: `DIRECTORY` |
+    | World-script host (`--role world-script`) | `rpc.<shard>.{orch,worldscript,world}.>`; `tel.<shard>.<self>.>` | `rpc.<shard>.ws.>` (only the partitions it holds answer; commits are lease-fenced, §1.23); its `ws.<script>` event and timer consumers; `ctl.<shard>.cell.<self>.>` | read: `DIRECTORY`, `CONFIG`, `WORLD` |
+    | Gateway | `rpc.<shard>.orch.{Heartbeat,ReportSuspect}`; `rpc.<shard>.session.>`; the service-lane RPCs that schemac marks callable by gateways (market, mail, chat, social, groups, cases; §2.4), on `rpc.<shard>` or `rpc.g`; `tel.<shard>.<self>.>` | `ctl.<shard>.gateway.<self>.>`, `ctl.<shard>.gateway.all.>`, `chat.>`, `presence.>` | read: `DIRECTORY`, `CONFIG`, `PERMS`, `GROUP` |
+    | Voice forwarder (`helios-voice`) | `rpc.<shard>.orch.{RegisterProcess,Heartbeat}`; `rpc.<shard>.trust.>` (voice-ring snapshots, §1.16); `tel.<shard>.<self>.>` | `ctl.<shard>.voice.<self>.>` | read: `GROUP` |
+    | Go service `<svc>` | requests to the services its block declares as dependencies; outbox publishes to its own `evt.<scope>.<svc>.>`; its declared `ctl` subjects (orchestrator, persistence's `released`, GM) | serves `rpc.<scope>.<svc>.>` (queue group `<svc>`); its declared durable consumers | writes only the bucket it projects (orchestrator → `DIRECTORY`, config → `CONFIG`, social → `PERMS`, activity → `ACTIVITY`, world → `WORLD`, group → `GROUP`) |
+
+  - **CI check.**
+    - Every integration test and bot run connects with the generated credentials, and any server
+      `Permissions Violation` fails the run.
+    - A static check resolves every subject literal and subject builder in Go (`pkg/bus`) and C++
+      (`engine/server`'s NATS bus) to a declared subject, so a subject the code uses cannot be missing from
+      the matrix.
+  - **Two accounts per environment.** `svc` holds the Go services, the world-script hosts and the JetStream
+    streams and buckets. `sim` holds cells, replicants, gateways and voice forwarders.
+    - `svc` exports its RPC and stream-publish subjects to `sim` as **service exports with `share: true`**.
+      The NATS server therefore stamps every cross-account request with a `Nats-Request-Info` header naming
+      the calling user. A client cannot set or forge that header, and JetStream stores it with a `persist`
+      message.
+    - `ctl`, `chat` and `presence` are exported the other way as needed.
+    - The read-only buckets are mirrored into `sim`, as §6.7 mirrors global buckets into shards, so
+      simulation processes hold no JetStream API rights in `svc`.
+  - **Per-process credentials (Phase 3).**
+    - A process proves its pod with a projected Kubernetes service-account token (on VMs, the
+      `helios-agent` machine credential) to the orchestrator's credential endpoint (mTLS). It receives its
+      process ID and an nkey user JWT whose name is `p<proc_id>` and whose tags are `role:<role>` and
+      `proc:<proc_id>`. It is signed by a role-scoped signing key whose template fills `<self>` from the tag.
+    - JWTs expire after 30 days and are renewed after 7. The client reconnects with the new one, a
+      sub-second NATS blip that nothing on the tick path notices.
+    - A process confirmed dead, deregistered or deliberately replaced (§1.4.3) is revoked in the account JWT
+      at once, so a zombie also loses the bus.
+  - **Caller checks.**
+    - The ledger, persistence (fence operations and `persist` batches) and the WSH reject a request whose
+      `Helios-Fence` cell, or whose `persist` subject token, differs from the `proc` tag in
+      `Nats-Request-Info`.
+    - The fence check then also requires the `authority_fence.owner_cell` of the AG named in the header to
+      be that process (§1.13). A compromised cell therefore cannot write fenced requests as another cell.
+    - The WSH also requires the caller to hold the region named by the `(region, lease_gen)` it sends.
+    - Services accept a player identity injected on the service lane only from a `role:gateway` caller.
+    - A mismatch returns `CALLER_MISMATCH` and raises `NatsCallerMismatch` (SEV1, a possible compromise,
+      §6.8).
 - **Database:** each role is confined to its own schema. `UPDATE` and `DELETE` are revoked on the ledger
   and audit tables. Partition maintenance runs under a separate `retention` role that may only detach and
   drop partitions on the expiry schedule.
@@ -2216,6 +2515,7 @@ here.
 | Chat | whisper / corp / local | 30 d / 90 d / none | DEK shred; partition drop |
 | Mail | bodies | 90 d after read, 365 d max | delete; DEK shred |
 | Moderation | cases, report evidence | 2 y after closure; held while open | DEK shred at expiry |
+| Trust (§1.16a) | session feature vectors, detector scores | 180 d; features attached to a case follow the case | kept, pseudonymous; partition drop |
 | Idempotency / outbox / inbox | pseudonymous | 3–4 d / 3 d / 7 d | partition drop |
 | JetStream | `EVT` / `TEL` / `AUDIT` | 7 d / 24 h / 30 d | pseudonymous; ages out |
 | ClickHouse | raw events / aggregates | 13 months / indefinite (no IDs) | `analytics_id` mapping deleted |
@@ -2318,7 +2618,7 @@ service without one.
 | Valkey | rebuilt (§3.4) | rebuilt | never the truth |
 | ClickHouse | replica | ≤ 24 h / ≤ 24 h | daily backup; analytics only |
 | Object storage (backups, anchors, `shred_log`, manifests, CDN origin) | multi-zone | ≤ 15 min / minutes | cross-region replication; CDN origin failover |
-| Cells, gateways | cells: warm standby outside the lost AZ (wide-loss hold, §1.4.3), restored from replicants in world zones from Phase 4; gateways: reconnect tickets onto the surviving zones' pre-provisioned slots (below) | with the shard | state is in checkpoints, and from Phase 4 also in replicant RAM (04 §6.4) |
+| Cells, gateways | cells: warm standby outside the lost AZ (wide-loss hold, §1.4.3), restored from **checkpoints**, losing ≤ 30 s of non-value state (one checkpoint window) and 0 value. Replicants sit in their cells' zone (§1.4.6), so the lost zone's replicants go with it; an AG whose replicant was in another zone restores from it (≤ 1 s). Gateways: reconnect tickets onto the surviving zones' pre-provisioned slots (below) | with the shard | state is in checkpoints, and from Phase 4 also in replicant RAM (04 §6.4), which covers losses inside the blast radius |
 
 **Gateway capacity for an availability-zone loss (Phase 3 sizing, Phase 4 drill).** 04 §2.6's box rule
 (free slots ≥ 1.2 × the sessions on the most loaded box) covers one box of ≤ 8k sessions. A zone holds a third of
@@ -2367,7 +2667,8 @@ provisioned in advance, and degradation is only a backstop.
     backlog, ≤ 4 s of backoff granularity, 0.5 s of handshake and `ClientRebind`, and ≤ 1 s of near-tier
     resync: ≈ 17.5 s.
   - *Cell lost:* the "Reconnecting" overlay stays up until the player's region is served again. That is ≤ 5 min
-    after the wide-loss hold ends, in descending CCU order (§1.4.6).
+    after the wide-loss hold ends, in descending CCU order (§1.4.6). The player resumes from the last
+    checkpoint: position and XP roll back ≤ 30 s, and value never does.
 
 **What a region loss costs.** Losing a shard's region loses at most the last 60 s of committed ledger
 transactions. PITR restores a transaction-consistent point, so trades vanish atomically on both sides,
@@ -2434,7 +2735,11 @@ failure mode's drill is a nightly or weekly chaos test (09 §6).
 | Cell crash | `CellConfirmedDead`; crash loop ≥ 3/h | warm standby (§1.4.6), restored from the replicant in world zones | confirm the standby served; triage the dump in Sentry; on a crash loop, pin the zone to the previous content build |
 | Host or rack loss | `FailureDomainLost` | domain-loss confirmation by H+T or H+R; parallel recovery to standbys outside the domain; no degraded mode (§1.4.3, §1.4.6) | check the host or ToR; confirm every region is served and the pool refilled; after the heal, confirm zombie writes were rejected |
 | NATS-isolated cell | `CellNatsIsolated` | none for 60 s, then a planned replacement over a gateway trunk | check the host's NATS path (firewall, DNS, client bug) |
-| Warm pool below the worst domain | `WarmPoolBelowDomain` | Fleet scale-up | add SERVER capacity or fix the spread constraints |
+| Warm pool below the worst domain | `WarmPoolBelowDomain` | Fleet scale-up; node maintenance pauses admission (§6.1a) | add SERVER capacity or fix the spread constraints |
+| Node maintenance stuck | `NodeDrainOverdue` (SEV3) | the roll pauses; nothing is forced (§6.1a) | find the process that will not drain (migration aborts, hold); resume, or `helios-admin node evacuate` for failing hardware |
+| Forged or mismatched caller on NATS | `NatsCallerMismatch` (SEV1), permission violations | the request is rejected (§6.5) | revoke the process's credential, isolate its host, run the conservation audit, open a security incident |
+| Standby replay falling behind | `StandbyReplayLagHigh` (p99 > 1 s for 5 min) | — | compare WAL per writer with the §3.6 write mix; throttle the offending writer; apply §3.6's next move |
+| Trust detector misfiring | `TrustDetectorPaused` (appeal overturns > 2 % of a wave) | the detector stops flagging (§1.16a) | re-evaluate it on the corpus; re-tune the threshold; review its open cases |
 | Standby crash loop | `StandbyCrashLoop` (SEV1) | poison-build brake stops recovery on that build (§1.4.6) | pin the previous server build; triage the dumps |
 | Replicant crash (Phase 4) | `ReplicantDown`; `replicant_lag_ms` > 1,000 | `AssignReplicant`; cells resend full state (04 §6.4) | confirm the resync; check trunk loss and replicant host load |
 | Cell overload | `TickBudgetBurn` | overload ladder (04 §8) | check TiDi and admission; `PreProvision`; move instances |
@@ -2530,8 +2835,9 @@ failure mode's drill is a nightly or weekly chaos test (09 §6).
 ```
 cmd/        helios-backend helios-admin helios-patch helios-loadgen helios-dev helios-agent
 internal/   app/, <service>/{service.go, domain/, store/ (sqlc), events.go, privacy.go}   # one per §1 service
+            orch/nodemaint (§6.1a)
 pkg/        bus cache idgen authn perm outbox inbox saga ratelimit obs connecttoken cdc manifest hxl
-            privacy retention testkit
+            privacy retention testkit trust (§1.16a)
 gen/ proto/ migrations/<svc>/ deploy/{compose,k8s,grafana,alerts,runbooks} seed/ loadtest/ testdata/vectors/
 ```
 
@@ -2590,7 +2896,10 @@ type WorldScriptStore interface {                                               
 - **Integration:** `pkg/testkit` runs embedded-postgres, NATS and miniredis in-process. It needs no Docker
   and runs on Windows. Each test clones a migrated template database (~150 ms). A relocation test runs two
   dev gateways and 16 bots through a `DrainGateway`, on Windows and Linux. Linux CI adds
-  `testcontainers-go` for real Valkey, a 3-node NATS cluster and PG failover.
+  `testcontainers-go` for real Valkey, a 3-node NATS cluster and PG failover. Integration runs connect with
+  the generated per-role (from Phase 3, per-process) NATS credentials, and any permission violation fails the
+  run. A forged-caller test sends a fenced request under another process's cell ID and expects
+  `CALLER_MISMATCH` (§6.5).
 - **Contract:** golden vectors (tokens, manifests, Helios-binary messages, block IDs) are checked by both
   `go test` and doctest.
 - **Chaos:**
@@ -2605,6 +2914,8 @@ type WorldScriptStore interface {                                               
   - live content: server-part hotfix swaps and N/N+1 rolling restarts with a staged client build (A14);
   - gateway rolls: `DrainGateway` under load with a box kill mid-roll, and relocations aborted by blocking UDP
     to the target box (A14 c);
+  - host-patch rolls through `helios-nodemaint`, with an unadmitted `kubectl drain` and a host power-off
+    mid-roll (A14 d);
   - world scripts: `kill -9` and SIGSTOP/SIGCONT of the WSH past a takeover, duplicated events and RPC
     retries, hot swaps and `migrate` runs under load (A20);
   - an availability-zone loss including its gateways, Session replicas and the Valkey primary (A19);
@@ -2612,7 +2923,8 @@ type WorldScriptStore interface {                                               
   - the privacy canary (export, erase, then scan every store for the canary's markers);
   - DR drills.
 - **Load:** `helios-loadgen` covers login storms, the ledger mix beside the design fence mix
-  (`helios-loadgen fence`, A5), a hub market, checkpoint floods and chat.
+  (`helios-loadgen fence`, A5), the whole §3.6 shard-primary write mix (`helios-loadgen mix`, A5 Ph4), the
+  standby's replay capacity (`helios-loadgen replay`, §3.6), a hub market, checkpoint floods and chat.
   The C++ bot swarm runs at **3–5× target CCU** (R05-P1-20). Runs are nightly with a ±10 % regression gate.
 
 ---
@@ -2621,14 +2933,14 @@ type WorldScriptStore interface {                                               
 
 | Area | Phase 0 | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Phase 5 |
 |---|---|---|---|---|---|---|
-| Runtime | all-in-one exe, Win+Linux CI | compose; combined binary in prod | Sentry crash ingest | K8s + Agones; gateways over 3 zones (6 boxes) | multi-region DR, zone-loss gateway sizing (12 boxes) and drill (§6.7), gateway rolls by make-before-break relocation (§6.3.1) | global tier (CockroachDB eval) |
+| Runtime | all-in-one exe, Win+Linux CI | compose; combined binary in prod | Sentry crash ingest; generated NATS permission matrix and CI check (§6.5) | K8s + Agones; gateways over 3 zones (6 boxes); per-process NATS credentials and caller checks (§6.5); node-maintenance controller, host batches (§6.1a) | multi-region DR, zone-loss gateway sizing (12 boxes) and drill (§6.7), gateway rolls by make-before-break relocation (§6.3.1), rack-batch host-patch rolls (A14 d) | global tier (CockroachDB eval) |
 | Identity/session | password, JWT, tokens + vectors | launch codes, reconnect tickets | queue lanes, 50/s admission, ToS acceptance, age gate | full queue | OIDC, MFA, 200/s | 500/s |
-| Orchestrator | local supervisor, 1 cell, PG leadership, block IDs | PG generations, fence, crash restore | warm standby, two-signal detection, failure-domain registration and classifier (host blast radius), degraded mode, multi-zone | multi-cell, zone leader, instances, pre-provision, control-plane and host-loss chaos (A15), domain-sized warm pool, spread constraints | rolling restarts, 3 replicas, rack blast radius (NS-4.1), ID scale (A16), rack-disjoint replicant placement | split/merge |
-| Ledger | schema, reason codes | wallets, grants, custody, idem | items, trades, escrow, audits, 2k tx/s, partition retention | rollback tools | 10k tx/s beside the design fence mix (§3.6), trust rules, Parquet archive reads | partitioned 50k tx/s |
-| Persistence | — | checkpoints ≤ 30 s, barrier | lifecycle cleanup, blob budgets, `PERSIST` partitions | sampled history + restore | 30k AG/s; replicant tier (04 §6.4) cuts world-zone loss to ≤ 1 s | ≤ 10 s window elsewhere |
+| Orchestrator | local supervisor, 1 cell, PG leadership, block IDs | PG generations, fence, crash restore | warm standby, two-signal detection, failure-domain registration and classifier (host blast radius), degraded mode, multi-zone | multi-cell, zone leader, instances, pre-provision, control-plane and host-loss chaos (A15), domain-sized warm pool, spread constraints | rolling restarts, 3 replicas, rack blast radius (NS-4.1), ID scale (A16), rack-disjoint, zone-local replicant placement (§1.4.6) | split/merge |
+| Ledger | schema, reason codes | wallets, grants, custody, idem | items, trades, escrow, audits, 2k tx/s, partition retention | rollback tools | 10k tx/s inside the full §3.6 write mix (A5), trust rules, Parquet archive reads | partitioned 50k tx/s |
+| Persistence | — | checkpoints ≤ 30 s, barrier | lifecycle cleanup, blob budgets, `PERSIST` partitions | sampled history + restore; leaderboards and activity snapshots (§1.12) | 30k AG/s beside them (A9); replicant tier (04 §6.4) cuts world-zone loss to ≤ 1 s inside the blast radius | ≤ 10 s window elsewhere |
 | Economy | — | — | market (fenced partitions), industry, timers, resources, mail | contracts, territory timers | public market API, economy-sim hooks | economy sim (R04-P2-20) |
 | World state | — | — | flags, meta-events | influence, territory | sovereignty | cross-shard events |
-| Social | — | — | chat, friends, presence, corps | alliances, parties, **fleets** (§1.12.1), matchmaking, activity | moderation tools | cross-shard |
+| Social | — | — | chat, friends, presence, corps | alliances, parties, **fleets** (§1.12.1), matchmaking, activity; trust features, red-team corpus v1, anti-cheat vendor decision (§1.16a) | moderation tools; trust detectors, ban waves, vendor integration (§1.16a, A21) | cross-shard |
 | World scripts (§1.23) | — | — | — | WSH, declared tables, timers, escrow-only ledger intents, events, cell RPC; API `1.0`; bounty-board proof (A20) | partitions over ≥ 2 WSHs, public read endpoints | Go service modules revisited with the UGC API |
 | Content | local build pointer | pins, hot reload | live/ptr/dev channels, client/server parts and compat epochs (§1.14.1), collab locks/presence | live-edit changesets, overlay versions | two-person promote, staged server-part hotfixes, coordinated epoch flip (A14 Ph4) | UGC publish (R03-P2-1) |
 | Privacy | PII only in Identity, DEKs, `@pii` lint | — | retention jobs, log redaction | DSAR export and erasure sagas | 72 h SLA (A18), residency sign-off | per-residency identity |
@@ -2646,22 +2958,23 @@ type WorldScriptStore interface {                                               
 | A3a | Killing a cell: the orchestrator restarts it from checkpoints and players reconnect; non-value loss ≤ 60 s, **0** item deltas in the audit | 1 |
 | A3b | Killing a cell: a warm standby serves in ≤ 10 s, non-value loss ≤ 30 s, **0** item deltas (no-reconnect ≤ 10 s hitch is AAA-SRV-12, Ph3) | 2 |
 | A4 | Dev ledger (embedded PG, laptop) 500 tx/s at p99 < 20 ms; `Fence.Advance` p99 < 5 ms | 1 |
-| A5 | PG ledger 2k tx/s for 1 h at p99 < 50 ms, beside the Phase 2 design fence mix (250 operations/s, §3.6) with `Fence.Advance` p99 < 5 ms. **Phase 4: 10k tx/s for 1 h at p99 < 25 ms, beside the Phase 4 design fence mix** (§1.13, §3.6). That mix is ≈ 2.9k fence operations/s and ≈ 8.1k rows/s: 200 loads, 200 parks, 1,000 zone transitions, 1,000 handoffs and 500 `Join`/`Leave` per second, `MigrateRegion` calls on 750-row regions totalling 2k rows/s, and one 5k-row `AdvanceOwnedBy` per minute. It includes a **60-member carrier tree** that hands off across a boundary every 2 s and launches or recovers a fighter (`Join`/`Leave`) every second, while its members issue 200 ledger tx/s. `helios-loadgen fence` drives the mix with synthetic cells that speak the fence and ledger RPCs, with 04 §6.3's handoff timing and the fence gate; the carrier flies in a real 2-cell zone with bot crews. Pass: `Fence.Advance`, `Join`/`Leave` and `Park` p99 < 5 ms, including the carrier's 61-row statements; ledger p99 < 25 ms, overall and for the carrier's members; the carrier's **handoff p99 < 100 ms** (offer to first authoritative tick); `AdvanceOwnedBy` ≤ 1 s p99; **0** deadlocks; `FENCE_BUSY` ≤ 0.01 % of fence operations and `FENCE_STALE` ≤ 0.1 % of ledger transactions; shard-primary WAL and write IOPS within §3.6 ±20 %; synchronous-standby replay lag p99 ≤ 1 s; `mxid_age` of `authority_fence` below 40 % of `autovacuum_multixact_freeze_max_age`; a zero conservation audit | 2 / 4 |
+| A5 | PG ledger 2k tx/s for 1 h at p99 < 50 ms, beside the Phase 2 design fence mix (250 operations/s, §3.6) with `Fence.Advance` p99 < 5 ms. **Phase 4: 10k tx/s for 1 h at p99 < 25 ms, beside the Phase 4 design fence mix** (§1.13, §3.6). That mix is ≈ 2.9k fence operations/s and ≈ 8.1k rows/s: 200 loads, 200 parks, 1,000 zone transitions, 1,000 handoffs and 500 `Join`/`Leave` per second, `MigrateRegion` calls on 750-row regions totalling 2k rows/s, and one 5k-row `AdvanceOwnedBy` per minute. It includes a **60-member carrier tree** that hands off across a boundary every 2 s and launches or recovers a fighter (`Join`/`Leave`) every second, while its members issue 200 ledger tx/s. `helios-loadgen fence` drives the mix with synthetic cells that speak the fence and ledger RPCs, with 04 §6.3's handoff timing and the fence gate; the carrier flies in a real 2-cell zone with bot crews. Pass: `Fence.Advance`, `Join`/`Leave` and `Park` p99 < 5 ms, including the carrier's 61-row statements; ledger p99 < 25 ms, overall and for the carrier's members; the carrier's **handoff p99 < 100 ms** (offer to first authoritative tick); `AdvanceOwnedBy` ≤ 1 s p99; **0** deadlocks; `FENCE_BUSY` ≤ 0.01 % of fence operations and `FENCE_STALE` ≤ 0.1 % of ledger transactions; synchronous-standby replay lag p99 ≤ 1 s; `mxid_age` of `authority_fence` below 40 % of `autovacuum_multixact_freeze_max_age`; a zero conservation audit. **The Phase 4 run carries the whole §3.6 shard-primary write mix at once:** `helios-loadgen mix` adds every other writer at its design rate: world scripts 5k row writes/s, market 2k order operations/s, timers 1.5k/s over 1 M pending, account progression 2k flushes/s (including 32 KiB worst-case accounts, with folds running), character 1k/s, mail 200/s, world flags 500/s, groups 1.2k rows/s and industry 300 rows/s. A9's persistence-cluster writers run at the same time. Pass adds: each writer's WAL within ±20 % of its §3.6 row; total WAL (34.5 MB/s) and write IOPS (≈ 7.5k) within ±20 %; the design mix ≤ 2/3 of the replay capacity that `helios-loadgen replay` measured on the same standby; each writer's own SLO held (`ApplyAccountProgression` p99 ≤ 20 ms, `PlaceOrder` p99 < 150 ms, timer lateness p99 < 1 s, `worldscript.Commit` lag p99 < 1 s) | 2 / 4 |
 | A6 | 72 h chaos soak: **0** invariant violations, **0** stuck sagas. **Bounded storage:** with retention horizons compressed via `--retention-scale` (idempotency 6 h, outbox 3 h, inbox 12 h, hist 24 h), every partition-drop job runs ≥ 3 times, each of those tables stays within ±10 % over the last 24 h, and total PG growth matches §3.6 within ±20 % | 2 |
 | A7 | Hub market 2k orders/s into one actor; `PlaceOrder` p99 < 150 ms; settlement p99 < 2 s. **Split-brain chaos:** in 1,000 runs, an old owner paused past a partition takeover and resumed mid-match gives **0** over-fills, **0** settlement failures and a zero conservation audit. Bots keep placing, modifying and cancelling orders on the partition before, during and after the takeover: every open order in PG is in the new owner's book ≤ 1 s after the takeover (book-vs-PG diff = 0), **0** order inserts, modifies or cancels commit at a stale `owner_gen`, and **0** orphan escrows remain after the reconciler horizon | 2 |
 | A8 | Admission 50/s (Phase 2), 200/s (Phase 4), 500/s (Phase 5) per shard; unqueued login p95 < 3 s | 2–5 |
-| A9 | Checkpoints 30k AG/s per persistence cluster at the §1.13 blob budget; durability lag p99 < 5 s; WAL and disk rates within §3.6 ±20 % | 4 |
+| A9 | Checkpoints 30k AG/s per persistence cluster at the §1.13 blob budget, beside leaderboard upserts at 10k/s and activity snapshots at 500/s (§1.12); durability lag p99 < 5 s; leaderboard entries visible ≤ 1 s after their result p99; WAL (≈ 80 MB/s) and disk rates within §3.6 ±20 % | 4 |
 | A10 | Timers: 1 M pending, lateness p99 < 1 s, 0 double effects | 2 |
 | A11 | Chat 5k msg/s at p99 < 250 ms | 3 |
 | A12 | Patch download ≤ 1.5× the changed bytes; verifying a 50 GB install ≤ 5 min (AAA-CNT-7; 08 CL-9, CL-10) | 2 |
 | A13 | PG failover: recovery < 30 s, 0 lost committed ledger txs; monthly PITR drill ≤ 1 h | 3 |
-| A14 | Content hot reload ≤ 2 s from publish to applied (dev). **Phase 4, live compatibility (§1.14.1; measures AAA-ITR-8 and AAA-STB-6):** under 50k bots, with a same-epoch client build staged at `rollout_pct` 5 %, run (a) a server-part hotfix from canary to 100 % of instances in ≤ 15 min, each swap ≤ 2 s at a tick boundary, then its rollback, and (b) a rolling N/N+1 restart of every cell by planned region migration (04 §6.7), with each zone's **hitch p99 ≤ 1 s** and **0 state loss** (every migration's state hash equal on both sides, 0 lost transients). In both (a) and (b): **0** clients disconnected or re-placed, **0** zones duplicated by version (one instance set per zone and layer throughout) and **0** value errors. **(c) Gateway roll (§6.3.1):** under the same 50k bots, `DrainGateway` rolls all 12 gateway boxes to a new gateway build, two zones in parallel. A host-patch roll then reboots one box per zone, and during the binary roll one more box is `kill -9`ed (NS-4.7's procedure). Pass, for every relocated session: **0** linkdead episodes (no netcode timeout, no ticket redemption, `gw_relocate_fallback_total` = 0); input gap at the home cell p99 ≤ 250 ms and max ≤ 1 s; STATE gap at the client p99 ≤ 250 ms; **0** creates or destroys caused by a relocation (handle audit and boundary observers, 04 §10.3); NS-4.7's field-state audit clean on 1,000 sampled field-auditor bots 2 s after `RelocateDone`; relocation p99 ≤ 2 s. For the roll: each box empty ≤ 20 s after its drain starts, and the binary roll done in ≤ 15 min; the box and zone rules (§6.7) hold at every 10 s check, with **0** "full" denials; the killed box's sessions still pass NS-4.7; **0** value errors. CI and `Promote` refuse a build whose fingerprint changed without an epoch bump, and the manifest service refuses `rollout_pct` < 100 for another epoch. A PTR epoch-flip rehearsal puts every zone on E+1 in ≤ 10 min, with players back in ≤ 3 min without queueing | 1 / 4 |
+| A14 | Content hot reload ≤ 2 s from publish to applied (dev). **Phase 4, live compatibility (§1.14.1; measures AAA-ITR-8 and AAA-STB-6):** under 50k bots, with a same-epoch client build staged at `rollout_pct` 5 %, run (a) a server-part hotfix from canary to 100 % of instances in ≤ 15 min, each swap ≤ 2 s at a tick boundary, then its rollback, and (b) a rolling N/N+1 restart of every cell by planned region migration (04 §6.7), with each zone's **hitch p99 ≤ 1 s** and **0 state loss** (every migration's state hash equal on both sides, 0 lost transients). In both (a) and (b): **0** clients disconnected or re-placed, **0** zones duplicated by version (one instance set per zone and layer throughout) and **0** value errors. **(c) Gateway roll (§6.3.1):** under the same 50k bots, `DrainGateway` rolls all 12 gateway boxes to a new gateway build, two zones in parallel. A host-patch roll then reboots one box per zone, and during the binary roll one more box is `kill -9`ed (NS-4.7's procedure). Pass, for every relocated session: **0** linkdead episodes (no netcode timeout, no ticket redemption, `gw_relocate_fallback_total` = 0); input gap at the home cell p99 ≤ 250 ms and max ≤ 1 s; STATE gap at the client p99 ≤ 250 ms; **0** creates or destroys caused by a relocation (handle audit and boundary observers, 04 §10.3); NS-4.7's field-state audit clean on 1,000 sampled field-auditor bots 2 s after `RelocateDone`; relocation p99 ≤ 2 s. For the roll: each box empty ≤ 20 s after its drain starts, and the binary roll done in ≤ 15 min; the box and zone rules (§6.7) hold at every 10 s check, with **0** "full" denials; the killed box's sessions still pass NS-4.7; **0** value errors. **(d) Host-patch roll (§6.1a):** under the same 50k bots, `helios-nodemaint` takes every SERVER node (≈ 30 hosts) through admission, surge, cordon, `Drain`, reboot and rejoin, in rack batches where surge capacity allows. During the roll, one `kubectl drain` of an unadmitted node is attempted, and one host is powered off mid-drain. Pass: each region moves once, with a **hitch p99 ≤ 1 s per region moved** and **0** state loss (state hash equal on both sides, 0 lost transients); **0** clients disconnected; every world-zone cell keeps a live replicant throughout; `WarmPoolBelowDomain` never opens because of maintenance; no batch spans two racks and none overlaps another; the unadmitted `kubectl drain` evicts nothing; the powered-off host is recovered within A15's bounds and pauses the roll until `FailureDomainLost` closes; **0** value errors; the roll finishes in ≤ 8 h. CI and `Promote` refuse a build whose fingerprint changed without an epoch bump, and the manifest service refuses `rollout_pct` < 100 for another epoch. A PTR epoch-flip rehearsal puts every zone on E+1 in ≤ 10 min, with players back in ≤ 3 min without queueing | 1 / 4 |
 | A15 | **Control-plane chaos** under 5k-CCU bot load (AAA-STB-5). Each is run 10×: kill the NATS node leading the JetStream meta group and the `PERSIST`/`DIRECTORY`/`EVT` streams; kill the orchestrator leader; do a PG switchover. Result: **0** self-stopped cells, **0** reassignments, **0** value errors (only "pending" retries), no client hitch > 2 s. A real `kill -9` of a cell is still recovered ≤ 10 s in normal mode, and ≤ 10 s after exit when it happens during degraded mode. **Failure domains** (§1.4.3), each run 10×: power off a SERVER host carrying ≥ 8 cells (a hard stop, no clean shutdown), and block only NATS (port 4222) on one host. Pass: the host's cells are confirmed ≤ 3.5 s after the fault (≤ 5 s for cells without players), and every affected region is served by a standby ≤ 10 s after confirmation. **No** degraded episode lasts > 5 s (none is expected), login admission **never** pauses, ≥ 99 % of affected sessions are kept, unaffected cells hitch ≤ 2 s, and there are **0** value errors. The NATS-blocked host's cells are not reassigned in the first 60 s and keep serving over their trunks. Phase 4 repeats this under 50k bots, adding a SERVER-rack partition at its ToR, as part of 04 NS-4.1 | 3 (Ph4: NS-4.1) |
 | A16 | **IDs:** 600 concurrent minting processes per shard for 1 h, plus a 2,000-ship volley burst (250k IDs in 1 s from one cell) and 1 M IDs/s shard-wide: **0** duplicates over all minted IDs, **0** minter waits for a block, `AllocateIdBlocks` p99 < 20 ms; killing the orchestrator leader mid-burst changes nothing | 4 |
 | A17 | **World state:** a flag set by one cell is applied by every cell watching its scope, p99 ≤ 1 s; a 3-zone meta-event advances each phase exactly once under duplicated reports and `kill -9` of a zone cell; after a `WORLD` KV loss, it is rebuilt from PG in ≤ 30 s with 0 lost flags; a superseded cell's `SetFlag` is rejected | 2 |
 | A18 | **Privacy:** 100 DSAR exports and 100 erasures on a loaded shard each complete in ≤ 72 h. Afterwards: the conservation audits pass; the audit hash chain verifies end to end; a canary account's unique markers appear in plaintext **0** times across PG, ClickHouse, Loki, JetStream, object storage and a restored backup (after shred-log replay); the handle is released after 30 days; login refuses an account until the current ToS version is accepted | 4 (tooling 3) |
-| A19 | **DR drill:** failing the global home region → global services serve from the DR region with RTO ≤ 1 h and RPO ≤ 60 s, while live shards keep playing with **0** committed ledger loss; a shard availability-zone loss → PG RPO 0 and recovery < 30 s, then the lost zone's cells confirmed through a wide-loss hold (§1.4.3) and every populated region served again ≤ 5 min after exit, in descending CCU order. **Gateways (§6.7):** at 50k CCU the zone loss takes that zone's gateways (≈ 17k sessions), Session replicas and the Valkey primary with it; ≥ 99 % of sessions whose gateway was lost and whose cell survived are back in the world ≤ 20 s, and 100 % ≤ 60 s; ≥ 99 % of all the lost zone's sessions, gateway or cell, are back ≤ 5 min; the Session service redeems ≥ 20k tickets in ≤ 8 s at p99 < 250 ms per call; **0** "full" denials and **0** reconnects held in the reconnect lane; login admission resumes ≤ 10 s after the wide-loss hold ends; a gateway-box kill during the drill (NS-4.7's procedure) still passes NS-4.7. Restoring a shard in another region from backups and WAL → RTO ≤ 1 h, RPO ≤ 60 s, conservation audit passing before opening; planned evacuation ≤ 30 min downtime, 0 value loss; every alert has a runbook exercised in the last quarter | 4 |
+| A19 | **DR drill:** failing the global home region → global services serve from the DR region with RTO ≤ 1 h and RPO ≤ 60 s, while live shards keep playing with **0** committed ledger loss; a shard availability-zone loss → PG RPO 0 and recovery < 30 s, then the lost zone's cells confirmed through a wide-loss hold (§1.4.3) and every populated region served again ≤ 5 min after exit, in descending CCU order. **State loss (§1.4.6, §6.7):** for the lost zone's world-zone AGs, measured against the truth tap (04 §10.3), non-value rollback is ≤ 30 s p99 and ≤ 35 s max (the checkpoint window plus flush lag) with **0** value loss; AGs whose replicant was in a surviving zone roll back ≤ 1 s. **Gateways (§6.7):** at 50k CCU the zone loss takes that zone's gateways (≈ 17k sessions), Session replicas and the Valkey primary with it; ≥ 99 % of sessions whose gateway was lost and whose cell survived are back in the world ≤ 20 s, and 100 % ≤ 60 s; ≥ 99 % of all the lost zone's sessions, gateway or cell, are back ≤ 5 min; the Session service redeems ≥ 20k tickets in ≤ 8 s at p99 < 250 ms per call; **0** "full" denials and **0** reconnects held in the reconnect lane; login admission resumes ≤ 10 s after the wide-loss hold ends; a gateway-box kill during the drill (NS-4.7's procedure) still passes NS-4.7. Restoring a shard in another region from backups and WAL → RTO ≤ 1 h, RPO ≤ 60 s, conservation audit passing before opening; planned evacuation ≤ 30 min downtime, 0 value loss; every alert has a runbook exercised in the last quarter | 4 |
 | A20 | **World scripts (§1.23)** on the `starter-sandbox` bounty board (09 §2.7.4), under 5k-CCU bots across ≥ 3 zones on ≥ 4 cells: bots post 20k bounties at terminals in every zone, and kills in other zones claim them. Pass: every bounty is paid exactly once or refunded once at expiry; the conservation audit finds 0 deltas and every hourly escrow-backing audit matches; with 50 `kill -9`s of the WSH, 20 restarts of the `worldscript` service, duplicated killmail events and RPC retries, and a JetStream stream-leader kill, there are **0** duplicate effects and every partition serves again ≤ 10 s after confirmation; a WSH paused past a takeover and resumed commits **0** writes; `Post` p99 ≤ 50 ms and `List` p99 ≤ 20 ms at 2k invocations/s per partition; a runaway handler is killed at its fuel limit with nothing committed and no other partition slowed > 5 %; a hot swap under load pauses each partition ≤ 1 s and loses 0 invocations; a v1 → v2 table change with a `migrate` handler passes `upgrade-test` and migrates 1 M rows online in ≤ 10 min with RPCs served throughout; the template differs from the SDK in **no** engine or backend source file | 3 |
+| A21 | **Trust detection (§1.16a)** under NS-4.1's 50k-bot load. The red-team corpus runs live: snap aimbot, silent aim, triggerbot, ESP pre-aim, input macros and farm bots (mining, ratting and mission runners, gatherers), each at humanization levels 0–3, with ≥ 200 sessions per variant. Pass: **≥ 90 %** of the aimbot, triggerbot and silent-aim sessions and ≥ 90 % of the farm-bot sessions are flagged within 24 h (each family scored separately), and 100 % of level-0 variants within 15 min; false positives **≤ 0.1 %** on each honest population (the swarm in `--human-model` mode for the aim and input detectors, and ≥ 5,000 reviewed human sessions for every detector); feature extraction ≤ 1 % of each cell's tick budget; every flag opens a `trust_rule` case with its evidence linked; a staged ban wave's dry run matches its execution (accounts, sanctions, remediated value), remediation leaves a zero conservation audit, and no sanction executes before its wave | 4 |
 
 ---
 
@@ -2684,6 +2997,10 @@ type WorldScriptStore interface {                                               
 | An availability-zone loss strands ≈ 17k sessions with no gateway slots | Gateways sized so two zones hold every session and still meet the box rule (12 boxes at 50k CCU); admission capped by the zone rule; a reconnect lane ahead of logins as a backstop; Session and Valkey spread over zones; A19 gateway clause (§6.7) |
 | A studio world script corrupts value, stalls or leaks load into the shard | Escrow-only value in, capped faucets, outbox with idempotency keys, hourly escrow-backing audit; per-invocation fuel, heap and op caps; per-partition rate limits; `ws_dead`; per-script kill switch; lease-fenced commits; A20 (§1.23) |
 | Fleet mechanics exist only for bots, so EVE-class play is untested | Player fleets as a group kind (§1.12.1) with 06 §8.3a's warp, broadcasts and bursts; the Fleet panel (08 §1.7.2); GP-15; NS-4.2's bots fight as player fleets |
+| Aimbots, triggerbots, input automation or farm bots play inside the rules that authority enforces | Cell-side aim, input and routine features from existing data; a labelled red-team corpus with a nightly regression gate; streaming rules and daily models; delayed ban waves with two-person approval and ledger remediation; the client vendor chosen in Phase 3 for Linux support but never depended on (§1.16a); A21 |
+| The shard-primary write mix outgrows the synchronous standby's single-process replay | Every writer budgeted (§3.6 write mix); a replay budget of ≤ 2/3 of measured capacity; account-progression deltas; leaderboards and activity snapshots on the persistence cluster; ordered next moves (world-script cluster, Phase 5 ledger split); A5 (Ph4) runs the whole mix |
+| A compromised process impersonates another on NATS (forged `Helios-Fence` cell, foreign subjects) | Generated per-role permission matrix with a CI check; per-process credentials; server-stamped `Nats-Request-Info` checked against the fence header and `owner_cell`; revocation on confirmed death (§6.5) |
+| Monthly host patching stalls on allocated GameServers or takes the crash path | `helios-nodemaint`: cordon → `Drain`, `eviction.safe: Never`, surge-first batches bounded by the blast radius, pause on `WarmPoolBelowDomain` (§6.1a); A14 (d) |
 | embedded-postgres offline/first run (R10 §14) | Cached binaries, `pg-install --from`, `--db` to local PG, Windows cold-start CI |
 | Ledger becomes a single point of failure | Sync replica, idempotent retries, "pending" UX, per-feature kill switches |
 | Hot rows (escrow, corp wallets) | Unmaterialized system accounts; escrow wallets sharded per region |
@@ -2713,8 +3030,8 @@ type WorldScriptStore interface {                                               
 | 01 §1.1 (no backend source edits), AAA-TOOL-9 | §1.23 (world scripts), A20 |
 | R09-A9, R04 (BGS), R04-P2-20, 06 §6/§9 | §1.21–1.22 |
 | R07-P1-17/18, R03-P1-11, R05-P1-16 | §1.14.1, §1.15, §1.20, §6.3, §6.3.1 (gateway relocation) |
-| R07-P1-19, R01-P0-8 | §1.16 |
-| R07-P1-20, R07-P2-21/23/26 | §6.5, §6.7 (including zone-loss gateway sizing), §7, §3.3, §9 |
+| R07-P1-19, R01-P0-8; R05 (server-side cheat detection, Bungie's kernel anti-cheat) | §1.16, §1.16a (trust detection), A21 |
+| R07-P1-20, R07-P2-21/23/26 | §6.1a (node maintenance), §6.5 (NATS permission matrix, per-process credentials), §6.7 (including zone-loss gateway sizing), §7, §3.3, §3.6 (write mix), §9 |
 | R01-P1-11/12/17, R05-P2-23 | §2.1, §3, §1.18 |
 | R03-P0-3/4/5, R04-P0-9, R05-P0-7 | §1.14, §1.14.1 (compat epochs), §2.1 |
 | Data protection (GDPR, CCPA, COPPA) | §1.1, §6.6 |
@@ -2725,8 +3042,8 @@ type WorldScriptStore interface {                                               
 
 | Section | Depends on / must deliver |
 |---|---|
-| **04 Networking** | Token format + vectors, service lane, fence ops over AG trees (`Advance`, `Join/Leave`, `AdvanceMany`, `AdvanceOwnedBy`, `MigrateRegion`), planned region migration with `Drain` and `PreProvision` (04 §6.7), fence cache, checkpoint cadence, `item_refs` reconcile, zone-leader and handle-block tables, N↔N+1 mesh, `AssignReplicant` placement (Phase 4). Detection: H plus one of T, P or R, classified by failure domain (§1.4.3). Gateways report `trunk_health` with `ReportSuspect`, run `ProbeCell` over a trunk or a probe connection, and relay `Fenced` over a trunk. The NS-4.1 rack and host clause is shared with A15. Placement matches the compat epoch, not the client build, and open-world zones roll in place (§1.14.1, 04 §7). No cell self-fences on lost renewals; it stops on a higher generation or a rejected write. Gateways and neighbour cells drop trunk messages below the current `(region, lease_gen)`. Handoffs and zone-leader changes are deferred in degraded mode (§1.4.4). Gateways are sized for a zone loss, not only a box loss (§6.7; 04 §2.6 defers to it). The voice forwarder reads fleet rosters from KV `GROUP` (§1.12.1). NS-4.2's bots fight as player fleets (06 §8.3a). Gateway relocation (Phase 4): `Relocate`, `ClientRebind{mode = relocate}` with the contributor re-key that keeps baselines, `RebindFence` and `PathClosed` (04 §2.4, §6.6; §6.3.1). The cell's fence gate holds new ledger requests for a tree while a fence operation on it is in flight (04 §6.1; §1.13). |
-| **02 Engine** | Time-prefixed block IDs 41/5/17 and the cell `EntityRegistry` minter (§1.4.5). `.hschema` must support service blocks, `ledger_policy`, lifecycle rules, `ReasonCodeDef`, `@pii` column classes and deterministic-key guards. schemac must emit `.proto`, Helios-binary codecs and the Go NATS binding. The cook splits each build into a client part and a server part and computes the compat fingerprint (§1.14.1). A ZoneInstance pins its compat epoch; its server part hot-swaps at a tick boundary. The cell binary runs as a world-script host (`--role world-script`, §1.23) with the 02 §7.4 sandbox and no zone simulation; schemac accepts `worldscript` blocks and emits the `world` realm's `.d.luau`. |
+| **04 Networking** | Token format + vectors, service lane, fence ops over AG trees (`Advance`, `Join/Leave`, `AdvanceMany`, `AdvanceOwnedBy`, `MigrateRegion`), planned region migration with `Drain` and `PreProvision` (04 §6.7), fence cache, checkpoint cadence, `item_refs` reconcile, zone-leader and handle-block tables, N↔N+1 mesh, `AssignReplicant` placement (Phase 4). Detection: H plus one of T, P or R, classified by failure domain (§1.4.3). Gateways report `trunk_health` with `ReportSuspect`, run `ProbeCell` over a trunk or a probe connection, and relay `Fenced` over a trunk. The NS-4.1 rack and host clause is shared with A15. Placement matches the compat epoch, not the client build, and open-world zones roll in place (§1.14.1, 04 §7). No cell self-fences on lost renewals; it stops on a higher generation or a rejected write. Gateways and neighbour cells drop trunk messages below the current `(region, lease_gen)`. Handoffs and zone-leader changes are deferred in degraded mode (§1.4.4). Gateways are sized for a zone loss, not only a box loss (§6.7; 04 §2.6 defers to it). The voice forwarder reads fleet rosters from KV `GROUP` (§1.12.1). NS-4.2's bots fight as player fleets (06 §8.3a). Gateway relocation (Phase 4): `Relocate`, `ClientRebind{mode = relocate}` with the contributor re-key that keeps baselines, `RebindFence` and `PathClosed` (04 §2.4, §6.6; §6.3.1). The cell's fence gate holds new ledger requests for a tree while a fence operation on it is in flight (04 §6.1; §1.13). Round 5: cells compute `TrustFeatures` from the input stream and the lag-compensation resolve (04 §5.2, §5.6) within ≤ 1 % of the tick, and flush the tick-recording ring on a trust pre-filter (§1.16a); `helios-bot` gains the red-team cheat and farm-bot variants and `--human-model` (04 §10.3). Cells subscribe to `ctl.<shard>.cell.all.>` and connect with per-process NATS credentials under the generated matrix (§6.5). Replicants sit in their cells' availability zone, so an AZ loss restores those cells from checkpoints (§1.4.6, §6.7). |
+| **02 Engine** | Time-prefixed block IDs 41/5/17 and the cell `EntityRegistry` minter (§1.4.5). `.hschema` must support service blocks, `ledger_policy`, lifecycle rules, `ReasonCodeDef`, `@pii` column classes and deterministic-key guards. schemac must emit `.proto`, Helios-binary codecs and the Go NATS binding. The cook splits each build into a client part and a server part and computes the compat fingerprint (§1.14.1). A ZoneInstance pins its compat epoch; its server part hot-swaps at a tick boundary. The cell binary runs as a world-script host (`--role world-script`, §1.23) with the 02 §7.4 sandbox and no zone simulation; schemac accepts `worldscript` blocks and emits the `world` realm's `.d.luau`. schemac also emits the NATS permission matrix (`nats-perms.json`) from service, caller and subject declarations (§6.5). |
 | **06 Gameplay** | Keep the anchors §1.5, §1.6 and §1.8. Use "record template", not "archetype". World state (§1.21) owns `WorldFlagDef` storage, meta-events, influence, territory structures and sovereignty; the Industry service owns structure upkeep (§1.8), and the ledger owns plots (§1.6). The Economy Sim (§1.22) writes `RegionEconomyState`. Crafting refunds and crew missions use §1.8 timers; Go HXL is `pkg/hxl` and follows 06 §1.2's float rules (§8). `CraftStamp` stores only `crafterId` (§6.6). Account progression and follower progression live in §1.5; `mirrorAsEntitlement` grants go through §1.20; `WeatherOverride` flags live in §1.21. Activities, lockouts, PvP results, queues, the group finder and leaderboards (06 §6.6–6.13) are served by §1.12, and lockouts use the ledger's `ClaimGuard` (§1.6). Fleets: §1.12.1 owns the roster and 06 §8.3a the mechanics (`FleetDef`, `FleetMembership`, fleet warp, broadcasts, command bursts, killmail `fleetId`), with GP-15; `GroupListing` gains `kind: Fleet`. World scripts (§1.23) are called from server Luau with `World.call` and `World.emit` (06 §11). |
-| **08 Launcher** | Launch codes, SSE queue, BLAKE2b chunks, tiers, `rollout_pct`, patch-from, anti-rollback, install journal, legal-acceptance screen and age gate (§1.1, §6.6), status banners from the incident feed (§6.8). Pointer `compat_epoch` fields; on `CONTENT_EPOCH_FLIP` the client applies the pre-downloaded build and rejoins with its reconnect ticket (§1.14.1, 08 §2.6); `CreateSession` refuses only another compat epoch or a build below `min_client` (08 §1.1 step 7). The Fleet panel (`FleetVM`) with its CL-23 flow in Ph3; the "Reconnecting" overlay shows the reconnect lane's ETA (§6.7). The invisible Relocating state (Phase 4) keeps two connections open, sends input on both and holds EVENT_R until `PathClosed` (08 §1.2; §6.3.1) |
-| **07 / 09** | Collab service and changeset export to git (07 §1.8). T27 hotfix changesets are classified by CI as server hotfix, compatible client build or refused (§1.14.1). A1–A20 (A3 split into A3a/A3b) as phase exits: A17 in Ph2, A15 and A20 in Ph3, A16/A18/A19 and A14 (Ph4) in Ph4. The perf environment and bot swarm arrive by Phase 2 (09). Privacy and residency counsel sign-off is 09 risk K32. A20 in Ph3 (WP-3.12), with the world-script API `1.0` in the public API list, its generated reference and tutorial, and the bounty board in `starter-sandbox` and `upgrade-test` (09 §2.7). 09 §4.3.2's soak model uses the domain-sized warm pool and 12 gateway boxes. WP-4.3 builds gateway relocation, and WP-4.4 builds `DrainGateway` and the fence budget; both are accepted by A5 and A14 (Ph4). |
+| **08 Launcher** | Launch codes, SSE queue, BLAKE2b chunks, tiers, `rollout_pct`, patch-from, anti-rollback, install journal, legal-acceptance screen and age gate (§1.1, §6.6), status banners from the incident feed (§6.8). Pointer `compat_epoch` fields; on `CONTENT_EPOCH_FLIP` the client applies the pre-downloaded build and rejoins with its reconnect ticket (§1.14.1, 08 §2.6); `CreateSession` refuses only another compat epoch or a build below `min_client` (08 §1.1 step 7). The Fleet panel (`FleetVM`) with its CL-23 flow in Ph3; the "Reconnecting" overlay shows the reconnect lane's ETA (§6.7). The invisible Relocating state (Phase 4) keeps two connections open, sends input on both and holds EVENT_R until `PathClosed` (08 §1.2; §6.3.1). The `IAntiCheatProvider` vendor is chosen in Phase 3 by WP-3.11 and integrated in Phase 4; its signals are one Trust feature family (§1.16a, 08 §1.14) |
+| **07 / 09** | Collab service and changeset export to git (07 §1.8). T27 hotfix changesets are classified by CI as server hotfix, compatible client build or refused (§1.14.1). A1–A21 (A3 split into A3a/A3b) as phase exits: A17 in Ph2, A15 and A20 in Ph3, A16/A18/A19/A21 and A14 (Ph4) in Ph4. A21 and the trust detectors belong to WP-4.8; WP-3.11 delivers the cell features, corpus v1 and the anti-cheat vendor decision (§1.16a). WP-3.3 builds the node-maintenance controller and per-process NATS credentials (§6.1a, §6.5), and WP-4.4 the rack-batch rolls (A14 d) and the full write mix (A5 Ph4, §3.6). The perf environment and bot swarm arrive by Phase 2 (09). Privacy and residency counsel sign-off is 09 risk K32. A20 in Ph3 (WP-3.12), with the world-script API `1.0` in the public API list, its generated reference and tutorial, and the bounty board in `starter-sandbox` and `upgrade-test` (09 §2.7). 09 §4.3.2's soak model uses the domain-sized warm pool and 12 gateway boxes. WP-4.3 builds gateway relocation, and WP-4.4 builds `DrainGateway` and the fence budget; both are accepted by A5 and A14 (Ph4). |

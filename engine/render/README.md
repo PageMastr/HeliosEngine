@@ -123,3 +123,10 @@ ctest --test-dir build/render -R "render|rendertest" --output-on-failure
   are balanced by pass count rather than last frame's costs.
 * Declared resource accesses are checked at the resource level (`RgContext`); per-binding checks
   against `.hsr` accesses arrive with materials.
+
+## Plan conformance
+
+Plan-Rev: 6
+
+Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
+`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.

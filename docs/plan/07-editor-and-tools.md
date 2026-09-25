@@ -10,7 +10,10 @@
 > collision-tile checks and T22's per-tier vertex lint. Round-4 review fixes: world scripts (05 §1.23) in the
 > editor §1.6.2: one WSH in every PIE mode with per-partition DAP, T08's `worldscript` block editor with the
 > `ws.*` rules and a migration preview, the World scripts panel (T26/T27), world-script hot-reload budgets in
-> §4.1, and ED-23.
+> §4.1, and ED-23. Round-5 minor revisions: Activity PIE for group content at a desk §1.6.3 (ED-24); the
+> dev shard clock for wall-clock systems §1.6.4 (ED-25); structure, zone-rules, city and territory authoring
+> with the generated no-build set, T21's Structure tab, the buildable-area heat map and four T28 rule
+> families §2.7; ED-10 settled as an authored settlement at BENCH-5 scale.
 > **Conforms to:** ADR-001, -002, -003, -004, -005, -006, -007, -009, -010, -011, -012, -013, -014, -016.
 > **Satisfies capabilities (01 §2.6):** G02, G11, G15, G16 (tooling side) and the tool dependencies of
 > all five reference games. **Citations:** `R08-T04` = research 08 tool T04; `R08-ED-P0-07` = its requirement
@@ -218,6 +221,7 @@ compile/validate workers behind the web tools (§1.9, R03 §8.1).
 | **Possess/eject** (F8) | Switch between client 1 and the free camera without stopping | Debugging |
 | **Multi-cell** (Play or Simulate with **Cells: N**, 1–8; Ph3) | `helios-gateway` + N `helios-cell` processes + the dev backend's orchestrator (`LocalProcessPlacer`, zone leader, handle blocks, fence), partitioned by a debug partition or the zone's `ZonePartitionDef` (§2.6); clients, bots and the world-script host as in Play | Handoff, ghost and effect-ordering bugs |
 | **Two zones** (Ph2) | A second cell hosts an adjacent zone, so v0 zone transitions exercise the handoff seam (04 §6.5). In a project with one zone, the second cell hosts a second instance of it. From Ph3 both cells share one world-script host (§1.6.2) | Transition bugs before v1; cross-zone world scripts |
+| **Activity** (Ph3; `--dev`) | `helios-gateway`, the origin zone's cell, the dev backend's activity service, matchmaker, ledger and orchestrator, and instance cells spawned through `CreateInstance` from a warm pool (§1.6.3); clients, bots and the world-script host as in Play | Strikes, flashpoints, raids and matches: queue → instance → encounters → rewards and lockouts → return |
 | **Join shard** | Client joins a dev/staging shard at its pinned content version | Multi-machine |
 
 - **Content path.** The cell loads cooked base content from the assetd DDC plus an **editor
@@ -398,6 +402,109 @@ the same API that `helios-admin ws call | rows | edit` uses (05 §1.23 item 7). 
 | `ws.compat` | A non-additive table change with no `migrate` handler for its version step; a non-additive RPC record change within the compat epoch; a `@key`, `@partitionKey` or `@partitions` change | Error | 3 |
 | `ws.globals` | A handler module that writes a module global after load. Globals are frozen at run time, so the write would fail | Warning | 3 |
 | `ws.budget` | From PIE traces, a handler whose p99 fuel over the session exceeds 50 % of its 5 ms, or whose row operations exceed 128 of the 256 allowed | Warning | 3 |
+
+#### 1.6.3 Activity PIE (Ph3, with 05 §1.12's activity service; `--dev` only)
+
+T12 authors activities, encounters, lockouts, match rules and queues (06 §6.6–6.13), and its queue simulator runs
+the real matchmaker. But Play runs one zone cell, and an activity runs in an instance cell that the activity
+service creates through the orchestrator (04 §7). Without an activity mode, a designer could not run a strike,
+flashpoint, raid or match end to end at a desk. **Activity PIE** runs that whole loop, so group content is iterated
+at production pace with no shard and no engineer.
+
+**What runs.**
+- `helios-gateway`, the origin zone's cell, and the dev backend with its activity service, matchmaker, ledger and
+  orchestrator. The orchestrator's `LocalProcessPlacer` spawns instance cells from a warm pool of two pre-started
+  `helios-cell --dev` processes, so `CreateInstance` → Loading takes ≤ 2 s (AAA-SRV-11).
+- Clients, bots and the world-script host, as in Play (§1.6, §1.6.2).
+
+The path from queue to reward is the production code. The director or the queue leads to the matchmaker and its
+ready check. Launching checks requirements, key items, lockout eligibility and the deserter tag. `CreateInstance`
+runs with the tier, modifiers and seed, and players arrive by zone transition. Encounters, wipes and checkpoints
+follow, then rewards and `ClaimGuard` lockout claims in the PIE ledger. Closing returns every player to the origin
+zone at the saved position (06 §6.6–6.8). Only the controls below are dev-only.
+
+**Activity panel** (hosted by T12 in PIE; `Editor.cmd("activity.*")` for scripts):
+- *Director.* Activities with their tiers and modifiers, and each PIE character's `LockoutView`. *Launch premade*
+  forms the party from chosen PIE clients and bots. *Queue* enters PIE clients as solo or party tickets with
+  chosen roles.
+- *Fill roles.* For each role minimum the tickets leave open, it queues one `helios-bot` as a solo ticket for that
+  role, running a Foundation role behaviour from the Foundation bot library (Luau): a tank keeps threat on the
+  encounter's current target, a healer heals the lowest-health member in range, and a damage bot attacks the
+  tank's target. Bots accept ready checks at once. PIE clients get the real ready-check prompt, or accept
+  automatically when *Auto-accept* is set.
+- *Live state.* The matchmaker's tickets and widening, and the formed roster. For the instance: its
+  `ActivityState` (state, encounter and phase, wipe count, revive tokens, checkpoint `seq`), the roster policy
+  state (AFK strikes, vote-kick state), and the lockout claims made, each with its `ledger_guard` row.
+
+**Controls** (PIE toolbar and panel). They are GM commands on T27's audited command path (05 §1.17), accepted only
+by `--dev` processes and compiled out of shipping builds, like §1.6.1's hooks:
+
+| Control | Effect |
+|---|---|
+| Tier, modifiers, seed | Chosen before launch and passed to `CreateInstance` as the activity service's own parameters. Any modifier set from the pool may be chosen, which overrides the weekly rotation for this instance only. A pinned seed replaces the salted one, so seeded choices repeat from run to run |
+| Jump to encounter or phase checkpoint | Restores the instance from the **checkpoint library**. PIE's supervisor keeps every `ActivityState` checkpoint that its runs write to the dev `ACTIVITY` bucket, labelled by activity, tier, encounter and phase. The instance cell runs 06 §6.7's replacement-cell rehydrate in place, at a tick boundary: enemies and spawners reset, completed encounters and instance flags are restored, and players respawn at the checkpoint's respawn point. With *Engage on jump* set, the encounter starts at once. A checkpoint that names a phase the edited `EncounterDef` no longer has falls back to the encounter's start, with a warning. With no saved checkpoint, *Jump* synthesizes one that marks earlier encounters complete as `devSkipped`, with no rewards, claims or instance flags, and the panel says so. ≤ 1 s from the command until the players are in place |
+| Force wipe | Makes the engaged encounter's wipe condition hold now, so 06 §6.7's wipe and reset runs unchanged |
+| Kill instance cell | As §1.6.1's *Kill cell k*. The orchestrator places a replacement, which rehydrates from `WORLD` and `ACTIVITY` in ≤ 5 s (06 GP-14 (c)'s path) |
+| Advance lockout period | Runs the dev shard clock (§1.6.4) to the next `calendar.reset.*` event of the policy's `reset`. Every cell applies the reset, the new `periodId` opens new guard keys, and the same characters can claim again. Guard rows are immutable per period (06 §6.8), so this is the only way to re-earn a claim, and it is the production reset path |
+| End run | Abandons the instance, and Closing returns every player to the origin zone |
+
+- **Iteration.** Edits reach the running instance like any PIE edit (§1.6): an `EncounterDef` or activity record
+  on the next tick, and a boss BT or Luau mechanic in ≤ 2 s. A phase edit takes effect at the next entry to that
+  phase, so the loop is *save*, then *Jump to phase checkpoint*: ≤ 10 s p95 from the save to the phase
+  re-engaged with the edit live (ED-24).
+- **Headless.** `helios-tool pie --activity <id> --tier <tag> --seed <n> --script <scenario.luau>` runs the same
+  set-up without UI, for ED-24's nightly run and `template-proof` jobs.
+- **Budgets.** Instance ready ≤ 2 s after launch; checkpoint jump ≤ 1 s; save → phase re-engaged ≤ 10 s p95.
+  The warm instance pool adds ≤ 5 s to PIE's cold start.
+
+#### 1.6.4 Dev shard clock (Ph3; 05 §1.8, §1.15)
+
+Several systems run on wall-clock durable timers or on the shard calendar:
+- upkeep settles, decay stages (72 h each) and condemnation (30 d) (06 §9.2.3);
+- reinforcement exits (24–48 h) and vulnerability windows (06 §9.3);
+- weekly lockout resets and seasons (06 §6.8, §5.3);
+- industry jobs, skill training and crew missions, and resource spawns with 6–21-day lifetimes (05 §1.8).
+
+A designer tuning them cannot wait days, and compressed record values test other data than the data that ships.
+The **dev shard clock** moves the shard's game-calendar time in PIE and on dev shards.
+
+- **Model.** Game time is `g = g₀ + (t − t₀) × rate`, where `t` is real time, and it starts equal to real time.
+  *Advance* and rate changes re-anchor `(t₀, g₀)`, so `g` never decreases, because guard periods, `seq` ordering
+  and exactly-once settles assume a monotonic clock. There is no rewind: *Reset clock* exists only together with
+  *Reset PIE data*. `rate` runs from 1 to 3,600 (one hour per second).
+- **Distribution.** The dev backend publishes `dev.clock = {epoch, t₀, g₀, rate}` as a dev-only key in KV
+  `CONFIG`, applied within 1 s (05 §1.15). Every consumer of game-calendar time reads it:
+  - the durable-timer worker (05 §1.8) compares `due_us` with `g`. On a new epoch it fires every due timer in due
+    order, including timers that those firings arm, until none is due, and only then applies the next epoch;
+  - the calendar (05 §1.15) publishes every event that `g` crossed, in order, each stamped with its scheduled time;
+  - in cells, `ZoneClock::wall_now()` returns `g` in `--dev` processes, so `Wall` effects, weather epochs and wall
+    deadlines (06 §11 rule 4) follow it. A deadline still takes effect at the first tick whose start passes it;
+  - world-script hosts use it for `ctx.now` and world-script timers;
+  - the Go services use it wherever they compute offline progress: industry jobs, skill training, crew missions,
+    resource spawn lifetimes and mail expiry.
+- **What stays on real time.** Leases, heartbeats and failure detection; JWTs and connect and launch tokens;
+  JetStream ack, redelivery and dedup windows; ledger idempotency windows; KV TTLs; and metrics, logs and timer
+  lateness. Only game-calendar time moves, so a one-week jump never expires a session or a lease.
+- **Replay.** Per-cell replay logs already record each wall deadline as a `WallDeadline{tick, id}` event
+  (04 §10.2), so a replay needs no clock. The `.hrepro` manifest and the PIE session log record every clock epoch,
+  for triage.
+- **Guards.** The flag exists only in the dev flavour of `helios-backend`, which refuses to start with it when
+  `env` is `staging` or `live` (05 §5). Cells and WSHs honour `dev.clock` only when started with `--dev`, and
+  shipping builds compile the hook out (ADR-016). Every change is audited with its author.
+- **Controls.** These are on the PIE toolbar's *Clock* menu; in T27 on shards whose `env` is `dev` (GM role
+  `dev.clock`, audited); through `Editor.cmd("clock.*")`; and through `helios-admin clock`:
+  - the current game time, its offset from real time and the rate;
+  - *Advance 1 h / 1 d / 1 w*;
+  - *Run to next due timer*: advances to the next pending durable timer or, with an entity selected, to that
+    entity's next timer (for example `upkeep:<structure>:<seq>` or `terr:<s>:reinf:<k>`);
+  - *Fire calendar event*: picks the next occurrence of a calendar event, such as `calendar.reset.weekly` or
+    `calendar.season.end`, and advances to it, so period IDs stay consistent;
+  - *Rate* ×1, ×60 or ×3,600.
+
+  T26's PIE panel gains a **Timers** tab: pending durable timers by kind and entity with their due times in game
+  time, and the last 1,000 firings with their outcomes.
+- **Budgets.** *Run to next due timer* ≤ 1 s from the command to the firing's commit. *Advance 1 w* with ≤ 10k due
+  timers ≤ 30 s until every due timer has fired and committed. Cells apply a new epoch within 1 s (ED-25).
 
 ### 1.7 Content versioning and source control
 
@@ -1000,8 +1107,11 @@ Issues unless listed):
 - **Volumes mode** (§2.6.3–2.6.5): portal cells and portals auto-generated from collision (T03
   blockout or imported kits) and then edited; pressurized, roofed, airlock and window flags; door
   binding; a `GridVolume` editor with a hysteresis visualizer and transfer probe; the **Partition
-  tool** that writes each zone's `ZonePartitionDef`; and one list of every other volume kind
-  (trigger, post, reverb, weather shelter, nav blocker).
+  tool** that writes each zone's `ZonePartitionDef`; **zone-rules regions** (`ZoneRulesRegion`, with
+  `Region.NoBuild` and other region tags) that feed the generated no-build set (§2.7.1); and one list of every
+  other volume kind (trigger, post, reverb, weather shelter, nav blocker).
+- **Buildable-area heat map** (Ph3, §2.7.3): the runtime `PlacementCheck` evaluated on a grid for a chosen
+  `StructureDef`, coloured by verdict and reason.
 - *Data → consumer:* object-container folder = `.hcont` manifest (frame, bounds, data layers) + one
   `.hent` JSONC per entity (OFPA; format owned by 02) → container blobs split client/cell, streamed
   by both. `PortalCell`/`Portal` entities cook into the container's `PortalGraph` (02 §5.1);
@@ -1010,9 +1120,10 @@ Issues unless listed):
 - **MVP (Ph1):** one zone with its frame hierarchy (Tallis → Harrow → Saltmarch), gizmos, snapping,
   outliner, multi-edit, undo, OFPA save, editor layers, bookmarks; Volumes mode for cells, portals
   and grid volumes, and `Whole` partitions (ED-16, Harrow High).
+- **Ph2:** zone-rules regions and the no-build cook (§2.7.1), for M2's harvester placement.
 - **AAA (Ph3):** planet-scale region editing, data layers with "view as" preview, HLOD builds, notes
   ↔ issue tracker, per-cell budget heatmap, bulk operations across containers; multi-cell zone
-  partitions with load preview (Harrow orbit, M3).
+  partitions with load preview (Harrow orbit, M3); the buildable-area heat map (§2.7.3).
 
 **T02 Prefabs & Variants** (R08-T02, ED-P0-05).
 - *Features:* nested prefabs as flecs `IsA` hierarchies; edit-in-context; overrides as sparse
@@ -1240,10 +1351,13 @@ Issues unless listed):
     and backfill fill time, and flags a `QueueDef` whose role supply cannot meet its demand. Its p95 must
     be within ±10 % of GP-14a's measured value;
   - validators: unreachable encounters, a `None` revive policy with no wipe condition, a lockout with no
-    reset, and match rules with no reachable end state.
+    reset, and match rules with no reachable end state;
+  - the **Activity panel** of Activity PIE (§1.6.3): launch or queue with role-filling bots, tier, modifier and
+    seed overrides, jump to an encounter or phase checkpoint, force wipe, kill the instance cell and advance the
+    lockout period, with live `ActivityState`, roster and claims (ED-24).
 - **MVP (Ph2):** branching quests, objectives, rewards, validator, debug commands, view-as.
 - **AAA (Ph3):** template-driven dynamic missions (R03-P2-2), world-event scheduler preview,
-  per-stage funnels (§3.7), coverage bots; Activity mode with the queue simulator.
+  per-stage funnels (§3.7), coverage bots; Activity mode with the queue simulator and Activity PIE (ED-24).
 
 **T13 Dialogue Editor** (R08-T13, ED-P1-03; G11; R03-P0-11, R03-P1-1/2/4).
 - *Features:* Line, Choice, Branch, Action and Cinematic nodes; speaker roles incl. `PlayerSpeaker`;
@@ -1366,11 +1480,14 @@ stations and housing parts.
   hull and emits a *from cells* `GridVolume` (§2.6.4); seats, stations, damage sections, liveries,
   fleet HLOD; **ground vehicles** (06 §8.1a): wheel, pad, seat and saddle ports, torque and power curves,
   the gear chart, suspension natural frequencies, and an envelope preview that drives the cooked drivetrain
-  on flat ground for `phys.vehicle.envelope`.
+  on flat ground for `phys.vehicle.envelope`; the **Structure tab** for `StructureDef` (§2.7.2): footprint
+  generated from collision and edited, clearance, terrain stamp, lots, upkeep, and a placement preview that runs
+  the runtime `PlacementCheck` on real terrain.
 - *Data → consumer:* `.hassembly` part tree → prefab + ship record-template variant; port hierarchies
   become ledger locations on the cell (06 §8.4).
 - **MVP (Ph2):** parts, ports, snapping, validation, stats (Kestrel variants, a housing kit); a speeder
-  bike, a landspeeder and a rover with drivetrain tuning and the envelope preview.
+  bike, a landspeeder and a rover with drivetrain tuning and the envelope preview; the Structure tab (M2's
+  harvesters).
 - **AAA (Ph3):** multi-crew Mule, interior volumes, damage sections, shared player-builder library.
   **Ph5+:** shareable player blueprints (ED-P2-08).
 
@@ -1444,10 +1561,11 @@ stations and housing parts.
   **content budget views** (per-cell triangles, draws, texture MB, entities, script CPU vs declared
   budgets, 01 pillar 6); memory by asset type; Luau profiler; the **World scripts panel** for PIE and dev
   backends (§1.6.2: partitions, tables through their indexes, the invocation log with fuel, `ws_dead`, audited
-  row edits and dev-data migrations), with the WSH listed under Processes.
+  row edits and dev-data migrations), with the WSH listed under Processes; the **Timers** tab of the dev shard
+  clock (§1.6.4).
 - **MVP (Ph1):** Tracy, overlays, packet inspector.
 - **AAA (Ph3):** unified cross-process timeline, automated nightly-soak captures with regression
-  diffs, budget heatmaps, the World scripts panel (ED-23).
+  diffs, budget heatmaps, the World scripts panel (ED-23), the Timers tab (ED-25).
 
 **T27 Live-Ops / GM Client & Admin** (R08-T27, ED-P1-15; G17; 05 §1.17; R02-P2-18 god client).
 - *Split with 05:* the **web admin console** (05 §5, Go + htmx) owns accounts, ledger explorer,
@@ -1463,6 +1581,8 @@ stations and housing parts.
 - *World scripts (Ph3):* §1.6.2's World scripts panel against a shard, read-only by default. Row edits,
   `ws_dead` replays and discards, and the `ws.<script>` kill switch are audited GM commands with a reason, and
   a shard migration's progress is shown read-only.
+- *Dev shard clock (Ph3):* on shards whose `env` is `dev`, the *Clock* menu of §1.6.4 (GM role `dev.clock`,
+  audited). Staging and live shards never show it, and their backends refuse the flag.
 - *Case queue (Ph3):* the same queue as the web console's (05 §1.17), in a dockable panel. It filters by
   priority, category, state, shard, assignee and SLA due time. Each row shows the first-response and resolve
   due times, the time left and a breach badge, and rows sort by the nearest due time. The evidence viewer
@@ -1483,11 +1603,13 @@ stations and housing parts.
   reserved names like `CON`/`AUX`); **physics, volume and partition rules** (`phys.*`, `zone.*`,
   §2.6.6), including interior leak detection with a leak path drawn in the viewport and hitbox
   coverage and fairness; **world-script rules** (`ws.*`, §1.6.2: quotas, escrow backing and flow,
-  partitioning, index coverage, privacy, compatibility and migrations).
+  partitioning, index coverage, privacy, compatibility and migrations); **structure, zone, city and territory
+  rules** (`structure.*`, `zone.nobuild.*`, `zone.structures.*`, `city.*`, `territory.*`, §2.7.5).
 - **MVP (Ph1):** framework, ≥ 20 rules (including the Ph1 portal, grid-volume and hitbox rules), CI
   gate, issue browser.
+- **Ph2:** the `structure.*`, `zone.nobuild.*` and `zone.structures.*` rules.
 - **AAA (Ph3):** ≥ 150 rules covering every asset class (required from Ph2, AAA-TOOL-6), auto-fix bot
-  PRs, content-health dashboards.
+  PRs, content-health dashboards; the `city.*` and `territory.*` rules.
 
 **T29 Build / Cook / Deploy** (R08-T29, ED-P0-16).
 - *Features:* `helios-assetd` (§3.1); **cook profiles** for client (win64, linux64), cell
@@ -1707,6 +1829,106 @@ targetGrid}` is 02 §5.4's component.
 | `zone.partition.grid` | A boundary passes within H of a static host grid's bounds (a station or anchored structure). Boundaries must route around them, or interactions inside them would constantly cross cells as effects and handoffs; moving ships cross boundaries by design (BENCH-6) | Error | 3 |
 | `zone.partition.hotspot` | A spawner or interactable cluster lies within H of a boundary | Warning | 3 |
 
+### 2.7 Structures, zone rules, cities and territory (T01, T08, T21, T28; 06 §9.2–9.3)
+
+06 §9.2 and §9.3 own the runtime: `StructureDef`, `CityDef`, `StructureLifecycleDef`, `ZoneRulesDef` and the pure
+`PlacementCheck`, whose inputs include cooked no-build polygons. This section is where they are authored and
+where those polygons are produced. **The editor never places a player structure.** Player structures exist only as
+ledger plot rows (06 §9.2), so edit mode writes rules, footprints and authored settlements, and every structure in
+PIE is placed through the runtime path: the placement ghost, or 06 GP-16 (e)'s scripted bot builder.
+
+| Data | Schema (runtime owner) | Authored in | Consumers | Ph |
+|---|---|---|---|---|
+| Zone rules and region tags | `ZoneRulesDef` (06 §9.2.1); `ZoneRulesRegion` authoring component | T08; T01 Volumes mode | `PlacementCheck` rule 1 on cell and client; crimewatch, mounts and territory windows (06 §9.3–9.5) | 2 |
+| No-build set | Cooked `ZoneNoBuild` blob, generated | assetd `zonerules` builder from T01, T05, T06 and T23 sources (§2.7.1) | `PlacementCheck` rule 2 on cell and client | 2 |
+| Footprint, clearance, stamp, lots, upkeep | `StructureDef` (06 §9.2.1) | T21 Structure tab (§2.7.2); T08 | Cell; client placement ghost (08 §1.7.2); ledger lots; upkeep worker | 2 |
+| City ranks, taxes and spacing | `CityDef` (06 §9.2.4) | T08 customizer; T01 radius preview (§2.7.4) | `CityGovernance` WSH; cells | 3 |
+| Territory lifecycle | `StructureLifecycleDef` (06 §9.3) | T08 customizer (§2.7.4) | World State service; cells | 3 |
+
+#### 2.7.1 Zone-rules regions and the generated no-build set
+
+- **Regions.** T01 Volumes mode draws `ZoneRulesRegion{shape, tags, priority}` entities. On a body the shape is a
+  spherical polygon snapped to the terrain; in space or a station it is a box or a convex volume. Tags are region
+  tags such as `Region.NoBuild`, `Region.Structures.Harvester` or `PvP.Open`, and the higher priority wins where
+  regions overlap. `ZoneRulesDef` itself (`structures`, `cities`, `maxStructures`, security, territory window
+  bounds and the rest) is edited in T08.
+- **Generated no-build polygons.** 06 §9.2.1's no-build polygons are cooked zone data. The assetd `zonerules`
+  builder generates them for every zone whose `ZoneRulesDef` allows structures, as the union of:
+  1. `ZoneRulesRegion`s tagged `Region.NoBuild`;
+  2. authored settlements: every entity in a container or data layer tagged `Settlement` (NPC towns, outposts,
+     authored stations on a surface) contributes its collision's ground footprint, and each settlement's union is
+     grown by `noBuild.settlementMarginM` (default 32 m);
+  3. roads: T06 splines tagged `Road`, swept by their half-width plus `noBuild.roadMarginM` (default 8 m);
+  4. spawn lairs (T05, T23): the lair's spawn radius plus `noBuild.lairMarginM` (default 16 m);
+  5. travel points: every entity with a `TravelPoint` component (shuttleports, landing pads, transit terminals),
+     as a 64 m circle (06 §9.2.1).
+
+  The margins are a `noBuild` block of `ZoneRulesDef`. Polygons are stored per cube face in face-local integer
+  centimetres. The builder unions and simplifies them with an integer polygon clipper (tools only), tags each
+  polygon with its source, and indexes them on a 64 m grid. `PlacementCheck` only tests footprints against the
+  cooked polygons, in integers, so the cooked bytes fix every verdict. The blob's hash is part of the zone content
+  hash that client and cell both load, and a cook is byte-identical on every toolchain (§4.1.1's
+  incremental-equals-clean rule).
+- **Budget.** A full Harrow-sized zone cooks in ≤ 10 s. An edit to a source (a moved settlement entity, road spline,
+  lair or travel point, or an edited region) rebuilds the affected 1 km face tiles in ≤ 2 s p95 (§4.1.1).
+
+#### 2.7.2 T21 Structure tab
+
+- **Footprint.** It is generated from the assembled prefab's collision. Every collision shape within 1 m of the
+  lowest ground-contact point is projected onto the structure's ground plane, and the hull is simplified to
+  ≤ 16 vertices. Vertex gizmos then edit it in structure-local metres; a concave footprint is allowed if it is a
+  simple polygon. `r_fp`, the bounding-circle radius, updates live.
+- **Clearance.** The plot circle (`r_fp + clearanceM`) is drawn. A *neighbour* ghost of any other `StructureDef`
+  shows the combined gap `clearanceA + clearanceB` that rule 4 enforces.
+- **Terrain stamp.** The `Flatten` or `Road` stamp (extent ≤ `r_fp` + 16 m) is edited with gizmos and previewed by
+  applying the real `engine/pcg` stamp to the preview terrain (02 §5.8).
+- **Placement preview.** *Try on terrain* drags the ghost over a zone's terrain in the viewport. Every frame runs
+  the runtime `PlacementCheck` (principle 5) against the cooked zone data: rules and region tags, the no-build
+  set, and an empty `ZoneStructures` manifest or, while PIE runs, the PIE store's plots and city footprints. The
+  ghost is coloured by verdict with the reason code (`SLOPE`, `NO_BUILD`, `CLEARANCE`, `CITY_*` and the rest),
+  exactly as 08's placement ghost shows it. Overlays show the 1 m sample grid, the least-squares plane and the
+  `samplesHash`.
+- **Other fields.** Kind, `lotCost`, `placeRules`, `cityRule` and `civicRankMin`, the interior link (a T01
+  interior with portal cells), `itemCap`, the upkeep spec with a per-week cost readout, and the lifecycle reference
+  of a `Territory` def.
+
+#### 2.7.3 T01 buildable-area heat map (Ph3)
+
+This view mode answers "where can players build this?". The designer picks a `StructureDef` (by default the
+smallest `House`) and a rotation set (by default 0°, 45°, 90° and 135°). The job pool runs `PlacementCheck` on a
+grid over the viewport's region (16 m spacing by default, 8 m at the finest), against an empty manifest or the PIE
+store's plots (*as built*).
+- Each grid cell is coloured by its verdict and dominant reason, with a shape per reason as well as a colour (§4.3).
+- A summary gives the buildable area in km² and an estimate of how many plots of that def fit (a greedy packing of
+  plot circles), against `ZoneRulesDef.maxStructures`. This is how a level designer sizes a zone for a
+  BENCH-5-scale settlement.
+- City rank radii around a chosen centre, and the `minCenterSpacingM` ring, overlay the map.
+- **Budget.** ≤ 2 s for a 4 × 4 km window at 16 m on DEV, refreshed incrementally when the no-build set or terrain
+  tiles change.
+
+#### 2.7.4 City and territory records (Ph3)
+
+- **`CityDef`** has a T08 customizer: the rank table with a live monotonicity check, rank radii drawn in T01 around
+  a chosen centre, tax bounds, and civic-unlock and civic-upkeep pickers limited to `Civic` structure defs.
+- **`StructureLifecycleDef`** has a T08 customizer: a 168-hour week grid that shows a sample owner window (blocks of
+  ≥ `minBlockHours`) against the zone's window bounds, and each layer's possible exit band after
+  `reinforceHours[k]` (the window-snapped exit plus its [0, 1 h) seeded offset). Real timings are exercised in PIE
+  with the dev shard clock (§1.6.4).
+
+#### 2.7.5 T28 structure, zone, city and territory rules
+
+| Rule | Fails when | Severity | Ph |
+|---|---|---|---|
+| `structure.footprint` | The footprint is not a simple polygon, has more than 16 vertices, or covers more than 1,024 points of rule 3's 1 m sample grid; or ground-contact collision lies > 0.25 m outside it | Error | 2 |
+| `structure.stamp` | The terrain stamp extends beyond `r_fp` + 16 m (06 §9.2.1) | Error | 2 |
+| `structure.kind` | `lotCost` ≠ 0 on a `Civic`, `CityHall` or `Territory` def; `upkeep` set on a `Civic` or `CityHall` def; `lifecycle` set on a def that is not `Territory`, or missing on a `Territory` def; an `interior` with `itemCap` = 0 | Error | 2 |
+| `structure.placeable` | No zone of the project allows the def (its kind in `ZoneRulesDef`, its `placeRules` matching), or the heat map finds no grid cell where it fits in any such zone | Warning | 3 |
+| `zone.nobuild.stale` | A zone's cooked no-build set was built from other sources than the current ones | Warning on save; error in CI | 2 |
+| `zone.structures.layers` | A zone whose `ZoneRulesDef` allows structures enables overflow layers (06 §9.2.1) | Error | 2 |
+| `zone.structures.max` | `maxStructures` > 3,000, so the `ZoneStructures` manifest could exceed 144 KiB (06 §9.2.1) | Warning | 2 |
+| `city.ranks` | Ranks are not strictly increasing in `minCitizens` and `radiusM`; `minCenterSpacingM` < 2 × the largest radius + 100 m (06 §9.2.4); a civic unlock or civic-upkeep key is not a `Civic` def | Error | 3 |
+| `territory.lifecycle` | `reinforceHours` does not have `layers − 1` entries, or an entry is < 1 h, which would leave `PreProvision` no 30 min lead; `hoursPerWeek` < `minBlockHours`, or no window meets the zone's `ZoneRulesDef` bounds; `capture.ability` is not a `Channel` ability; `fightProfile` names no zone profile | Error; an entry < 24 h is a warning (06 §9.3 assumes ≥ 24 h) | 3 |
+
 ---
 
 ## 3. Supporting infrastructure
@@ -1783,6 +2005,9 @@ DEV hardware, sample project, measured in CI or nightly.
 | Multi-cell PIE (4 cells + gateway + backend + 2 clients) cold / warm (Ph3) | ≤ 25 / 8 s | ED-14 |
 | World scripts in PIE (§1.6.2, Ph3): WSH serving after the backend is ready (within the PIE cold start); handler edit → swapped in every partition p95; additive `worldscript` block edit → live p95 | ≤ 3 s; ≤ 2 s; ≤ 5 s | ED-23, ITR-1 |
 | World-script `migrate` on dev data, dry run or apply, with RPCs served throughout; World scripts panel: 500-row table page p95 over 1 M rows, invocation visible after commit, panel draw p95 | ≤ 60 s per 100k rows; ≤ 200 ms, ≤ 1 s, ≤ 1 ms | ED-23 |
+| Activity PIE (§1.6.3, Ph3): instance ready after launch; checkpoint jump; save → phase re-engaged with the edit live, p95 | ≤ 2 s; ≤ 1 s; ≤ 10 s | ED-24, SRV-11 |
+| Dev shard clock (§1.6.4, Ph3): *Run to next due timer* → firing committed; *Advance 1 w* with ≤ 10k due timers → all fired and committed | ≤ 1 s; ≤ 30 s | ED-25 |
+| No-build set (§2.7.1): full Harrow-sized zone cook; incremental rebuild after a source edit, p95. Buildable-area heat map, 4 × 4 km at 16 m (§2.7.3) | ≤ 10 s; ≤ 2 s; ≤ 2 s | ED-10 |
 | Portal-cell generation, 60 × 40 × 20 m deck at 0.25 m | ≤ 5 s | ED-16 |
 | Source-control budgets at 500 GB (§1.7.1) | as listed | ED-18 |
 | Gameplay `.cpp` edit → relinked and reloaded (MSVC) | ≤ 30 s | AAA-ITR-5 |
@@ -1813,6 +2038,7 @@ each product has a budget from commit to live, and a defined state until then.
 | T04 sculpt, stamp or layer edit | Terrain height and collision tiles; terrain nav tiles | pcg re-evaluates dirty tiles (T04); terrain nav tiles build on the Pathfind pool (≤ 5 ms each, 02 §7.3) | ≤ 2 s p95 for a 50 m brush stroke | Old tiles | 1 |
 | Blockout or kit edit inside an interior | That container's `PortalGraph`; `phys.portal.*` rules | T01 Volumes-mode regeneration of the affected cells, keeping pinned overrides (§2.6.3), then cook | ≤ 5 s for a 60 × 40 × 20 m deck | The old graph, plus a T28 "portal graph stale" warning | 1 |
 | T05 rule or brush edit; a placement inside a scatter exclusion | Scatter instance caches of the affected 64 m scatter cells (visual on the client; collidable and gameplay instances on the cell) | assetd `scatter` builder per scatter cell | Visual ≤ 2 s p95; collidable on the PIE cell ≤ 5 s p95 | Old instances; a dotted outline marks the brushed region | 2 |
+| Move a `Settlement` entity, T06 road, lair or travel point; edit a `ZoneRulesRegion` | The zone's no-build set on the affected 1 km face tiles (§2.7.1) | assetd `zonerules` builder | ≤ 2 s p95 | The old set, with a T28 `zone.nobuild.stale` warning; the heat map hatches stale tiles | 2 |
 | Any placement or mesh change in a container | The container's HLOD: the 1/8-triangle merged mesh and its impostor (02 §5.6) | assetd `hlod` builder, asynchronous and low priority, GPU offscreen; it starts 10 s after the container's last edit, so a burst of edits costs one rebuild | ≤ 30 s p95 for a container of ≤ 5,000 entities | The stale proxy, with a "stale HLOD" badge in the outliner and stats overlay; the near field shows the live meshes | 3 |
 | T21 part or assembly edit; livery change | The hull/livery group's octahedral impostor atlas (03 §3.4) and fleet HLOD | The `helios-bake` impostor baker (03), run by assetd as a builder | ≤ 30 s p95 per hull/livery group | The stale impostor, badged; brackets are unaffected | 3 |
 | T21 assembly edit; placement of an authored settlement | Assembly-time L2 SH probes, the MIN GI path (03 §4.6) | The `helios-bake` probe baker, run by assetd (raster capture on the 1.5 m / 2 m grids) | ≤ 30 s p95 for a Mule-size interior (≈ 1,800 probes) | Stale probes, still relit from the current sky and sun. REF viewports show DDGI, which needs no bake; a "MIN GI stale" badge shows in the MIN preview | 3 |
@@ -1907,7 +2133,8 @@ every night, and humans run only the M-class phase-exit sessions.
   `ui.*` input, and both runs must end at identical document hashes. A workflow that works only through
   commands fails.
 - **Scripted replays.** ED-2 and ED-16 (Ph1), ED-7 and ED-17 (Ph2), and ED-10 (Ph3, with three editor
-  processes co-editing through the dev collab service) and ED-23 (Ph3) run nightly as UI-level scripts. They are
+  processes co-editing through the dev collab service), ED-23, ED-24 and ED-25 (Ph3) run nightly as UI-level
+  scripts. They are
   N-class evidence for the flows and record a wall-time trend. Humans run the timed M-class versions
   only at phase exits.
 - **Tiers.** PR: open every shipped tool at 100 % in the dark theme and run the lints (≤ 6 min).
@@ -1923,19 +2150,19 @@ every night, and humans run only the M-class phase-exit sessions.
 
 | Tool | Ph0 | Ph1 | Ph2 | Ph3 | Ph4 | Ph5 |
 |---|---|---|---|---|---|---|
-| Framework / UI | Transactions, journal, property grid, shell, `helios-tool`, `helios-uitest` driver | Viewport, PIE, automation; incremental nav tiles live in PIE; UI goldens, ED-2 and ED-16 replays | Crash reports, role layouts, source-control UI, LFS scale set-up; two-zone PIE; editor extension API `0.x` with Luau `EditorUI` panels; ED-7 and ED-17 replays | Web tools, remote control; multi-cell PIE; world scripts in PIE (one WSH, per-partition DAP, §1.6.2); collab multi-document transactions, rebase, linearized publish, journal durability (§1.8.1), and the data session with document homes (§1.8.2); editor extension API `1.0`; asynchronous HLOD, impostor and probe rebuilds; ED-10 and ED-23 replays | Accessibility pass; optional Perforce adapter; N−2 → N extension upgrades | |
-| T01 World | | M (incl. cells, portals, grid volumes) | Data layers | A (incl. multi-cell partitions) | | |
+| Framework / UI | Transactions, journal, property grid, shell, `helios-tool`, `helios-uitest` driver | Viewport, PIE, automation; incremental nav tiles live in PIE; UI goldens, ED-2 and ED-16 replays | Crash reports, role layouts, source-control UI, LFS scale set-up; two-zone PIE; editor extension API `0.x` with Luau `EditorUI` panels; ED-7 and ED-17 replays | Web tools, remote control; multi-cell PIE; world scripts in PIE (one WSH, per-partition DAP, §1.6.2); collab multi-document transactions, rebase, linearized publish, journal durability (§1.8.1), and the data session with document homes (§1.8.2); editor extension API `1.0`; asynchronous HLOD, impostor and probe rebuilds; Activity PIE (§1.6.3) and the dev shard clock (§1.6.4); ED-10 and ED-23…25 replays | Accessibility pass; optional Perforce adapter; N−2 → N extension upgrades | |
+| T01 World | | M (incl. cells, portals, grid volumes) | Data layers; zone-rules regions and the no-build cook (§2.7.1) | A (incl. multi-cell partitions, buildable-area heat map) | | |
 | T02 Prefabs | | M | | A | | |
 | T03 Blockout | | | M | A | | |
 | T04 Terrain/Planet | `pcg` lib | M (cube-sphere) | Ecosystems | A (Earth-size) | | |
 | T05 Scatter | | | M | A | | |
 | T06 Splines | | | M | A | | |
 | T07 System/Galaxy | | M (Tallis) | Galaxy (Osk) | A | | Telemetry overlays |
-| T08 Data | Headless inspector | M | Migrations; governed schema editor (ED-22) | A (incl. `worldscript` blocks, ED-23) | Live tuning | |
+| T08 Data | Headless inspector | M | Migrations; governed schema editor (ED-22) | A (incl. `worldscript` blocks, ED-23; `CityDef` and lifecycle customizers) | Live tuning | |
 | T09 Gameplay | HXL test runner | lite (ASM compile, HXL) | M (loot, crafting, economy) | A | Economy model | |
 | T10 Script | | M | | A (incl. code pane, WSH DAP) | | |
 | T11 Graphs | Graph model | | M | A | | |
-| T12 Quest | | | M | A (incl. Activity mode, queue simulator) | | UGC missions |
+| T12 Quest | | | M | A (incl. Activity mode, queue simulator, Activity PIE panel, ED-24) | | UGC missions |
 | T13 Dialogue | | | M | Complete | A (auto-staging) | |
 | T14 Sequencer | | | | M | A | |
 | T15 Animation | | M (import, headless hitbox fit) | M (Physics Asset tab; mount and rider sets) | A | Motion matching, facial, lip-sync, cloth | Learned MM |
@@ -1944,18 +2171,18 @@ every night, and humans run only the M-class phase-exit sessions.
 | T18 Environment | | lite | M | A | Clouds (03) | |
 | T19 UI Designer | | lite | M | A | | Addon sandbox |
 | T20 Audio | | | M | A | | |
-| T21 Assembly | | | M (incl. ground vehicles) | A | | Player blueprints |
+| T21 Assembly | | | M (incl. ground vehicles, Structure tab) | A | | Player blueprints |
 | T22 Character | | lite | M | | A | |
 | T23 AI/Nav | | lite | M | A | | |
 | T24 Assets | | M | | A | | HDA, USD |
 | T25 Localization | | | M | A | String hotfix | |
-| T26 Profiling | Tracy | M | | A (incl. World scripts panel) | | |
-| T27 GM/Live-ops | | M (GM cmds) | | GM client, case queue, World scripts panel | A | |
-| T28 Validation | Framework | M (≥ 20 rules) | All asset classes | A (≥ 150, incl. `ws.*`) | | |
+| T26 Profiling | Tracy | M | | A (incl. World scripts panel, Timers tab) | | |
+| T27 GM/Live-ops | | M (GM cmds) | | GM client, case queue, World scripts panel, dev-shard clock | A | |
+| T28 Validation | Framework | M (≥ 20 rules) | All asset classes; `structure.*`, `zone.nobuild.*`, `zone.structures.*` | A (≥ 150, incl. `ws.*`, `city.*`, `territory.*`) | | |
 | T29 Build/Cook | assetd skeleton | M | Incremental ≤ 60 s | A | | |
 | T30 Collab | | | M (locks, presence; project-wide data session) | A (edit instance; document homes, checkout, carries) | Live shards via T27 | UGC publish |
 | Docs, projects, templates (09 §2.7) | | Generated reference, manual page per tool, F1 help | Project Browser, New Project, SDK, `upgrade-project`, executable tutorials, `starter-blank` | 3 starter templates, C++ API reference | 5 templates, N−2 → N upgrades | |
-| **Gate** | PLT-1 | TOOL-1, TOOL-7 (Ph1) | TOOL-2, TOOL-6, TOOL-7/8 (Ph2); ED-22 | TOOL-3 (26/30), TOOL-5, TOOL-7/9 (Ph3, TOOL-7 including the editor API), ITR-7; ED-19…21, ED-23 | TOOL-4, TOOL-8/9 (Ph4), TOOL-10 (content-team zone, UI provenance), ITR-8 | |
+| **Gate** | PLT-1 | TOOL-1, TOOL-7 (Ph1) | TOOL-2, TOOL-6, TOOL-7/8 (Ph2); ED-22 | TOOL-3 (26/30), TOOL-5, TOOL-7/9 (Ph3, TOOL-7 including the editor API), ITR-7; ED-19…21, ED-23…25 | TOOL-4, TOOL-8/9 (Ph4), TOOL-10 (content-team zone, UI provenance), ITR-8 | |
 
 At the end of Ph3, 26 tools are AAA-complete; the four finishing in Ph4 (T13, T14, T22, T27) are
 exactly those AAA-TOOL-4 names.
@@ -1976,12 +2203,12 @@ are M-class evidence at phase exits (09 §5.6).
 | ED-7 | **Osk loop, editor only:** resource class, schematic, vendor, loot table and a two-stage quest with dialogue; the loot table passes chi-square at 10⁶ rolls in simulator and CI | 2 | TOOL-2, G04–G06 |
 | ED-8 | Cold open ≤ 10 s (warm DDC); single-zone incremental cook ≤ 60 s; artist prebuilt editor → in-game ≤ 10 min | 2 | ITR-2/4/6 |
 | ED-9 | **Designer day:** a newcomer adds a hull variant (T21), a weapon with rolled perks (T09), a 3-step quest with dialogue (T12/T13) and a vendor in ≤ 1 day, with no engineer and no restart | 3 | TOOL-5 |
-| ED-10 | **Co-edited BENCH-5:** three designers in one Saltmarch edit instance build ≥ 300 structures and 3,000 decor items in 2 h; propagation ≤ 1 s p95; journal vs git export diff = 0; publish to a play instance ≤ 5 min | 3 | ITR-7, TOOL-3 |
+| ED-10 | **Co-edited settlement at BENCH-5 scale:** three designers in one Saltmarch edit instance build an authored, `Settlement`-tagged town of ≥ 300 kit structures and 3,000 decor items in 2 h; propagation ≤ 1 s p95; journal vs git export diff = 0; publish to a play instance ≤ 5 min. The cook regenerates the zone's no-build set around the town (§2.7.1) and T28 reports 0 `zone.*` errors. In the play instance a bot's house placement just inside the set is refused with `NO_BUILD` and one just outside it is accepted, both as the T01 heat map predicted. BENCH-5's measured scene is not this town: it is 06 GP-16 (e)'s settlement, placed through the housing rules with 0 structures by editor fiat (01 §3.2) | 3 | ITR-7, TOOL-3 |
 | ED-11 | BENCH-4 Hollow Vault encounter authored with T01, T11, T12, T23 only; coverage shows 0 unreachable nodes; 26/30 tools AAA-complete (§5.1) | 3 | TOOL-3 |
 | ED-12 | Editor crashes ≤ 1 per 40 user-hours (Ph3), ≤ 1 per 100 (Ph4), measured by sentry | 3–4 | STB-2 |
 | ED-13 | ~300 voiced lines in 2 languages auto-staged, ≥ 80% of conversations with no manual shot edits; a data/Luau hotfix goes live via T27 in ≤ 15 min with canary and rollback; 30/30 tools AAA-complete | 4 | TOOL-4, ITR-8, CNT-6 |
 | ED-14 | **Seams at a desk:** multi-cell PIE with Cells: 2 and a plane partition across the *Mule*'s route. A Luau-scripted Mule with 3 crew and a 2-player boarding party (the BENCH-6 set-up) crosses the boundary 100 times, including 10 forced handoffs mid-boarding and 2 cell kills: 0 Luau errors, 0 duplicated effects (every idempotency ID applied exactly once), 0 lost input sequences and 0 seam errors in the effect log. The `.hrepro` of one crossing replays bit-exactly. 4-cell PIE cold start ≤ 25 s. Runs nightly headless on Windows and Linux | 3 | 06 §0 rule 4; NS-3.2, NS-3.6; M09 |
-| ED-15 | **UI harness (§4.4):** every shipped tool opens through `ui.*` input and passes the layout lints at five scales; goldens at 100 % and 200 % in the dark and high-contrast themes match; dual-path scenario hashes match; the UI-level replays of ED-2 and ED-16 (Ph1), ED-7 and ED-17 (Ph2) and ED-10 and ED-23 (Ph3) pass on 3 consecutive nightlies on Windows and Linux | 1–3 | TOOL-1/2/3, PLT-3 |
+| ED-15 | **UI harness (§4.4):** every shipped tool opens through `ui.*` input and passes the layout lints at five scales; goldens at 100 % and 200 % in the dark and high-contrast themes match; dual-path scenario hashes match; the UI-level replays of ED-2 and ED-16 (Ph1), ED-7 and ED-17 (Ph2) and ED-10 and ED-23…25 (Ph3) pass on 3 consecutive nightlies on Windows and Linux | 1–3 | TOOL-1/2/3, PLT-3 |
 | ED-16 | **Harrow High interior, no text editor:** a designer generates and edits the hangar and concourse portal cells (≥ 12 cells, ≥ 16 portals, 1 airlock with bound doors) from imported kit collision, sets the pressurized and roofed flags, and authors the station-interior and hangar `GridVolume`s. T28 reports 0 leaks and 0 band errors. A scripted walk from the concourse through the airlock to the *Kestrel*'s boarding point transfers at every volume in ≤ 1 tick with < 1 mm error and no repeated transfer within the dwell, and *view from cell* matches 03's visible-cell set | 1 | TOOL-1; W02, W08 |
 | ED-17 | **Hollow drone precision hits:** a designer authors the Hollow drone's `HitboxSetDef` in T15 (auto-fit, a `HitZone.Weakpoint.Core`, physical materials) with no text editor; T28 shows coverage ≥ 95 % and 0 fairness errors. NS-2.2's lag-compensation harness, run against that set with bots at 50–150 ms RTT firing 10k hitscan shots at a drone playing its full clip set, agrees with the local-hit reference on the hit **zone** for ≥ 98 % of shots, and every server-registered weakpoint hit applies its `WeaponDef` `HitZone` multiplier | 2 | M05, M08; NS-2.2; 06 §8.6 |
 | ED-18 | **Repository scale:** every §1.7.1 budget holds on the 500 GB reference repository (W-class, weekly, lab hardware) and on its 50 GB nightly cut, on Windows (Dev Drive) and Linux | 2 | ITR-6, PLT-3 |
@@ -1990,6 +2217,8 @@ are M-class evidence at phase exits (09 §5.6).
 | ED-21 | **Derived data stays live (§4.1.1):** in a running PIE session a scripted designer moves 200 entities across 5 Saltmarch containers, re-assembles the *Mule* in T21 and repaints 20 scatter regions. Each container's HLOD, the Mule's impostor and its assembly-time SH probes are rebuilt in ≤ 30 s p95, and scatter caches are live in ≤ 2 s (visual) and ≤ 5 s (collidable). Until then the stale proxy is shown with its badge, never a hole or a pop to nothing. PIE never blocks on a rebuild, and incremental products equal a clean rebuild byte for byte. Nightly on Windows and Linux (lavapipe for the GPU bakes; timings on `win-gpu` and the lab) | 3 | ITR-1, ITR-4; 03 §3.4, §4.6 |
 | ED-22 | **Project types with no compiler (02 §3.8):** on the packaged artist editor (AAA-ITR-6), on a Windows 11 and an Ubuntu 24.04 machine with no C++ compiler or Go toolchain installed, a designer uses T08's schema editor to add (a) a record type with 3 fields, including a list, with a `@range` and a `@validate` rule, (b) a `ScriptState` component that a Luau module reads and writes, and (c) a view-model bound in a new T19 screen through `@source` on that component. All three are live in the running PIE cell and client in ≤ 5 s p95 from save, with no DLL built. A record that breaks the rule is rejected by T28 and by the collab service. The project then packages with the SDK's prebuilt stamped client and cell through T29 (the CL-24 route), and the packaged build runs the screen against a cell whose `helios-backend` is the unmodified SDK binary. No engine, backend or C++ source is edited, and no native package is added. Nightly headless (the designer's steps as `helios-uitest` replays) on Windows and Linux | 2 | TOOL-9; ITR-1, ITR-6; 01 §1.1 |
 | ED-23 | **A cross-zone system, editor only (§1.6.2; 05 §1.23):** in a project created from `starter-sandbox`, a designer uses only the editor: T08's schema editor, T10's embedded code pane and the World scripts panel. No external text editor, CLI, compiler, or engine, backend or C++ source edit is used. **(a) Author.** In the bounty board's `worldscript` block the designer adds a `claimZone: ZoneId?` field to `Bounty` and a `Cancel` RPC (`@callers(cell)`, `@partitionBy(target)`, a `@rate`). They write its handler from T08's generated stub: the poster cancels an `Open` bounty, the row closes as `Cancelled`, the `Expire` timer is cancelled and the escrow is released to the poster under `BountyRefund`. They also edit the `Killmail` handler to set `claimZone`. The block edit is live in the running PIE in ≤ 5 s p95, and each of 20 handler edits is live in every partition in ≤ 2 s p95, with no PIE restart. T28 rejects two seeded variants: a `Cancel` handler that releases under a `Sink` reason, and a second `@currency` field that no `@escrowBacked` declaration covers. **(b) Play.** In two-zone PIE (one WSH, 2 clients and a bot hunter), client 1 posts a bounty on client 2's character at the terminal in zone A. The bot kills client 2 in zone B, and the bounty pays exactly once, with `claimZone` = B. Client 2 then posts a second bounty at zone B's terminal, crosses to zone A and cancels it there, and it is refunded exactly once. **(c) Debug.** With a breakpoint in the `Killmail` handler, the next kill stops that partition's VM in the code pane, where `ctx` and the row are inspectable. Zone cells keep ticking and the other partitions keep serving. After 60 s at the breakpoint and a continue, the payout commits once, with no `ws_dead` entry and no partition takeover. **(d) Inspect.** The Tables tab, queried through the `(target, status)` index, shows the row with `status = Paid` and `claimZone` = B. The Invocations tab shows the `Post`, `Killmail` and `Cancel` invocations with their fuel and ledger intents, and *Check escrow backing now* matches. A GM row edit with a reason appears in the Audit tab, and an edit to `amount` is refused by the panel and by the service. **(e) Migrate.** With 100k v1 rows loaded from the template fixture, the designer splits `status` into `status: enum { Open, Closed }` and `outcome: enum { Paid, Expired, Cancelled }?`, and fixes the handlers that the code pane's type checker then flags. T28 blocks the save until a `migrate` handler exists. The migration preview classifies the change as *migrate* and counts 100k affected rows, and the dry run shows 20 sample row diffs and 0 failures. *Run on dev data* migrates every row in ≤ 60 s while 4 bots keep posting, with every `Post` served, 0 rows in `ws_dead` and a matching escrow-backing check. The migrated rows hash identically to `helios-tool upgrade-project` run on the same fixture. Nightly on Windows and Linux as a dual-path `helios-uitest` replay (§4.4); a timed human run is M-class evidence at the Ph3 exit | 3 | TOOL-9, ITR-1; 01 §1.1; 05 A20 |
+| ED-24 | **Group content at a desk (§1.6.3):** in Activity PIE on the *Hollow Vault* (BENCH-4's activity, authored in ED-11), a designer uses only the editor. **(a) Launch.** Two PIE clients queue as a premade through the Activity panel, *Fill roles* completes the roster's role minimums with role bots, the matchmaker forms the roster and the ready check passes, and the instance cell is ready ≤ 2 s after launch (SRV-11). The run uses a matchmade tier, a forced modifier outside this week's rotation and a pinned seed. **(b) Iterate.** The designer jumps to the boss encounter's second checkpoint phase and runs 20 iterations. Each edits either that phase in T12 (a spawn wave, a mechanic or `enrageSecs`) or the boss BT in T23, saves, and re-engages the phase with *Jump to phase checkpoint*. Save → phase re-engaged with the edit live is ≤ 10 s p95, with no PIE restart. **(c) Failure paths.** *Force wipe* runs 06 §6.7's wipe and reset: revive tokens reset, doors reopen and players respawn at the reset point. *Kill instance cell* resumes from the last phase checkpoint in ≤ 5 s with completed encounters kept. **(d) Rewards and lockouts.** Clearing the boss commits exactly one lockout claim per eligible character: the panel and the ledger show one `ledger_guard` row and one grant each. A second clear in the same period grants nothing, and the client shows "already rewarded this period". *Advance lockout period* then lets one character claim exactly once more. *End run* returns every player to the origin zone at the saved position. Nightly on Windows and Linux as a dual-path `helios-uitest` replay (§4.4) and as a headless `helios-tool pie --activity` run; a timed human run is M-class evidence at the Ph3 exit | 3 | TOOL-3, ITR-1, ITR-3, SRV-11; 06 GP-14 (b, c) |
+| ED-25 | **Wall-clock systems at a desk (§1.6.4):** in PIE on *Cinder Reach* with its shipped `StructureDef`, `UpkeepSpec` and `StructureLifecycleDef` values (no compressed timings), a designer uses only the editor and the dev shard clock. **(a) Upkeep.** A PIE client places a House through the placement ghost and deposits two days of upkeep. With *Run to next due timer* and *Advance 1 d / 1 w*, the designer takes it through Paid, Decay 1–3, Condemned and Reclaimed (about 41 days of game time). Each stage shows on the client's Structure panel as it happens, the reclaim container holds every interior item, and the plot and lots are released. **(b) Territory.** A territory structure anchors (*Run to next due timer*). During an open window, the GM *Damage* command (audited) depletes its first layer, which enters Reinforced(1) and issues exactly one `PreProvision` request with ≥ 30 min of game-time lead. *Run to next due timer* then takes it into Vulnerable(1) at a `reinforceUntil` inside the owner's window, with the audited seeded offset. **(c) Audits.** Both chains finish within 10 min of wall time with no process restart. GP-16 (c)'s fold of `structure_upkeep` against the journal and GP-17 (c)'s `territory_audit` fold find 0 mismatches, every settle, stage change and transition happened exactly once, and the conservation audit finds 0 deltas. No session, lease or token expires during the jumps. **(d) Guards.** A `helios-backend` configured `env = staging` refuses to start with `--dev-clock`, and a shipping-configuration cell run against the dev backend keeps real wall time, because the hook is compiled out. Nightly on Windows and Linux as a dual-path `helios-uitest` replay (§4.4) | 3 | TOOL-3, ITR-1; 06 GP-16 (c), GP-17 (c) |
 
 ### 5.3 Risks and mitigations
 
@@ -2013,6 +2242,9 @@ are M-class evidence at phase exits (09 §5.6).
 | Git + LFS does not scale to AAA content (hundreds of GB, millions of files) | Sparse index, fsmonitor, on-demand LFS, DDC-first consumption (§1.7.1); ED-18 weekly at 500 GB; a missed budget twice promotes the Perforce adapter, whose scope is fixed (§1.7.2) |
 | Authored physics data drifts from what the server samples (unfair hitboxes, leaking interiors) | Previews run the runtime lag-compensation, transfer and portal code; `phys.*` rules; ED-16, ED-17 |
 | World-script bugs surface only on shards: designers cannot see the rows, step through a handler or rehearse a migration at a desk, so they fall back to engineers and the CLI | A production-path WSH in every PIE mode, per-partition DAP with dev-only pause hooks, *Re-run under debugger*, the World scripts panel, dry-run migrations on dev data and the `ws.*` rules (§1.6.2); ED-23 nightly |
+| Group content can be tested only on shards or by CI bots: designers cannot queue, jump to a phase, wipe or re-earn a lockout at a desk | Activity PIE on the production activity path, with dev-only seed, modifier, jump, wipe and lockout-period controls (§1.6.3); ED-24 nightly; a strike in TOOL-10's brief (01 §3.9.1) |
+| Wall-clock systems (upkeep, reinforcement, lockouts, industry) are tuned only with compressed record values or CI's test clock, so designers depend on engineers | A monotonic dev shard clock applied to every game-calendar consumer, with leases and tokens on real time, refused outside dev (§1.6.4); ED-25 |
+| Placement rules drift from the content they protect: a new road or town is missing from the no-build set, or a footprint does not match its model | A generated no-build set with stale detection; footprints generated from collision; previews and the heat map run the runtime `PlacementCheck`; the `structure.*` and `zone.*` rules (§2.7); ED-10's placement clause |
 
 ### 5.4 Traceability
 - **R08:** §3 T01–T30 → §2; §4.1–4.10 → §1, §3, with §4 item 9 (C++ plugin API for modes, panels,
@@ -2029,12 +2261,16 @@ are M-class evidence at phase exits (09 §5.6).
 - **06 asks:** graph compilers with rollback checks and loot/EV simulators (T09, T11); "view as
   state" (§1.5, T12); AI and spawn tool (T23); `HitZone.*` hitboxes for FPS multipliers (§8.6 →
   §2.6.2); portal cells for pressure, maps and weather shelter (§9.6–9.9 → §2.6.3); the
-  split-authority model exercised at a desk (§0 rule 4 → §1.6.1).
+  split-authority model exercised at a desk (§0 rule 4 → §1.6.1); group content run end to end at a desk
+  (§6.6–6.13 → §1.6.3, ED-24); wall-clock chains testable without waiting (§6.8, §9.2.3, §9.3 → §1.6.4, ED-25);
+  authoring for `StructureDef`, `CityDef`, `StructureLifecycleDef` and `ZoneRulesDef`, and the cooked no-build
+  polygons that `PlacementCheck` reads (§9.2–9.3 → §2.7).
 - **04 asks:** hitbox capsule sets for lag compensation (§5.6 → §2.6.2); static multi-cell partitions
   (§6.5 → §2.6.5); grid volumes that are the only valid transfer points (§5.5 → §2.6.4).
 - **05 asks:** world scripts as the studio's backend extension surface (§1.23: a dev WSH with DAP, tables
   browsed with `helios-admin ws rows`, GM `call` and `edit`, `migrate` handlers run by `upgrade-project`) →
-  §1.6.2, T08, T26, T27, T28 and ED-23.
+  §1.6.2, T08, T26, T27, T28 and ED-23; durable timers and the calendar (§1.8, §1.15) → the dev shard clock
+  (§1.6.4); the activity service and matchmaker (§1.12) → Activity PIE (§1.6.3).
 - **R08 §3 T15** "cloth and physics preview" → §2.6.2.
 
 ### 5.5 Cross-section dependencies
@@ -2058,7 +2294,9 @@ are M-class evidence at phase exits (09 §5.6).
 - **04 Networking:** tools channel for PIE overlays; GM connect tokens and RBAC; NetSim toolbar
   hooks; server debug-draw stream; DAP hooks in `helios-cell --replay`; dev-only multi-cell PIE hooks
   (`DevForceHandoff`, zone-leader debug hold, `DebugPaused`, trunk NetSim; 04 §10.3); the
-  lag-compensation library linkable by the editor for T15 test shots.
+  lag-compensation library linkable by the editor for T15 test shots; instance cells spawned by the dev
+  orchestrator through `CreateInstance` for Activity PIE (04 §7, §1.6.3); `ZoneClock::wall_now()` returning the dev
+  shard clock in `--dev` processes, with wall deadlines still logged as `WallDeadline` events (§1.6.4).
 - **05 Backend:** the **collab service** (sessions, one-subject JetStream stream with
   multi-document transactions and groups, session rebase, submit/validate, locks, notes, snapshots,
   linearized git export); overlay content versions; telemetry query API; web-tools hosting; region
@@ -2070,10 +2308,20 @@ are M-class evidence at phase exits (09 §5.6).
   Kubernetes, journal segments and snapshots in object storage, a WIP git ref, a `collab_owner` PG lease
   with 05 §1.4.1's term fencing, and the restore runbook; session scope (§1.8.2): one project-wide data
   session beside the zone sessions, the `HOMES_data` mirror, handoff and adopt events, and carry
-  publishes.
+  publishes. Activity PIE (§1.6.3): the activity service's dev-only launch overrides (any modifier set from the
+  pool, a pinned seed) and a warm pool of two instance cells in the dev orchestrator. The dev shard clock
+  (§1.6.4): `helios-backend --dev-clock` (05 §5), the dev-only `dev.clock` key in KV `CONFIG`, and its use by the
+  timer worker (catch-up in due order), the calendar (crossed events in order) and the Go services' offline
+  progress, with leases, tokens, TTLs and idempotency windows left on real time.
+- **06 Gameplay:** the dev-only activity GM commands (checkpoint restore through §6.7's replacement-cell rehydrate,
+  force wipe) accepted only by `--dev` cells; the Foundation role behaviours for bots (§1.6.3); a `noBuild` margins
+  block in `ZoneRulesDef`, the `Settlement` and `Road` tags and the `TravelPoint` component that the no-build cook
+  reads (§2.7.1).
 - **08 Client:** RmlUi view-model codegen and hot reload; runtime text rendering for editor
-  previews.
-- **09 Roadmap:** gates ED-1…23, with ED-23 owned by WP-3.12 beside the world-script API; carry publishes (§1.8.2) queued ahead of their dependent `collab/*` PR in
+  previews; the group frames and the Encounter and match HUD, whose CL-23 flows use Activity PIE's dev commands
+  (08 §1.7.3).
+- **09 Roadmap:** gates ED-1…25, with ED-23 owned by WP-3.12 beside the world-script API and ED-24 and ED-25 by
+  WP-3.7; carry publishes (§1.8.2) queued ahead of their dependent `collab/*` PR in
   §5.2a's content tier; a dedicated widget-library owner; nightly editor-performance CI;
   bot-editor soaks; the developer-experience track (09 §2.7: docs pipeline, Project Browser and New Project,
   `upgrade-project`, starter templates; AAA-TOOL-7/8/9), which reuses ToolsFramework automation and T28;

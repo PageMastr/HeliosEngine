@@ -1,0 +1,19 @@
+# JSON written by the Go services' own types (services/internal/orchestrator, services/internal/session)
+# with encoding/json. Regenerate with tests/data/gen_go_vectors.go.txt (see its header). name<TAB>json
+ProcessInfoCell	{"name":"cell-a","kind":"cell","address":"127.0.0.1:7810","version":"0.1.0","zones":["tallis"]}
+ProcessInfoGateway	{"name":"gw-1","kind":"gateway","address":"127.0.0.1:7777","keyId":3,"capacity":256}
+RegisterResult	{"processId":"9007199254740993","epoch":"2","leaseTtlMs":12000,"heartbeatIntervalMs":1000,"assignments":[{"zoneId":"1002","zoneName":"tallis","leaseGen":"7"}],"idShard":3,"idBlocks":["101","102"]}
+RegisterResultGateway	{"processId":"5","epoch":"1","leaseTtlMs":12000,"heartbeatIntervalMs":1000,"assignments":[],"idShard":0,"idBlocks":[]}
+HeartbeatRequest	{"processId":"9007199254740993","epoch":"2","load":{"players":3,"freeSlots":0,"tickP99Ms":0.25}}
+HeartbeatResult	{"leaseExpires":"2026-09-25T12:34:56.789Z","assignments":[{"zoneId":"1002","zoneName":"tallis","leaseGen":"7"}],"mode":"normal"}
+AllocateIdBlocksRequest	{"processId":"9007199254740993","epoch":"2","n":2}
+AllocateIdBlocksResponse	{"idShard":3,"prefixes":["103","104"]}
+DeregisterRequest	{"processId":"9007199254740993","epoch":"2"}
+ResolveZoneRequestId	{"zoneId":"1002"}
+ResolveZoneRequestName	{"zoneName":"tallis"}
+Route	{"zoneId":"1002","zoneName":"tallis","leaseGen":"7","processId":"9007199254740993","process":"cell-a","epoch":"2","address":"127.0.0.1:7810"}
+SealRequest	{"sessions":[{"sessionId":"9223372036854775807","zoneId":"1002","epoch":"4","ticket":"abc"},{"sessionId":"12"}]}
+SealResponse	{"tickets":[{"sessionId":"9223372036854775807","ticket":"t1","expiresAt":"2026-09-25T12:34:56.789Z"}],"missing":["12"]}
+ControlKick	{"sessionId":"42","reason":"superseded"}
+UserDataV1	010300000000000008070605040302014d000000000000000500000000000000d204000000000000ea030000000000006300000000000000f0f0000000000000000306090c0f1215181b1e2124272a2d303336393c3f4245484b4e5154575a5d00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+ControlEpoch	{"sessionId":"42","epoch":"5","reason":"reconnect"}

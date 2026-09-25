@@ -14,3 +14,5 @@ imgui.ini
 /content/.cache/
 __pycache__/
 node_modules/
+/tools/prebuilt/slang/
+/tools/prebuilt/cache/

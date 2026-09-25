@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <format>
 #include <map>
+#include <optional>
 #include <set>
 #include <thread>
 
@@ -82,6 +83,7 @@ class LockFileMutex {
 public:
     static constexpr auto kStaleAfter = std::chrono::seconds(120);
     static constexpr auto kGiveUpAfter = std::chrono::seconds(300);
+    static constexpr auto kDeniedRetryFor = std::chrono::seconds(5);
 
     ~LockFileMutex() {
         if (!m_dir.empty()) {
@@ -97,6 +99,7 @@ public:
             std::filesystem::create_directories(dir.parent_path(), ignored);
         }
         const auto start = std::chrono::steady_clock::now();
+        std::optional<std::chrono::steady_clock::time_point> deniedSince;
         auto delay = std::chrono::milliseconds(2);
         for (;;) {
             std::error_code ec;
@@ -104,14 +107,26 @@ public:
                 m_dir = dir;
                 return true;
             }
-            if (ec) {
+            if (ec == std::errc::permission_denied) {
+                // Windows: a directory another run has just removed while a third still holds a handle to it
+                // (e.g. its stale check below) is "delete pending", and creating it fails with
+                // ERROR_ACCESS_DENIED until that handle closes. Treat it as contention unless it persists.
+                const auto now = std::chrono::steady_clock::now();
+                if (!deniedSince) deniedSince = now;
+                if (now - *deniedSince > kDeniedRetryFor) {
+                    err += std::format("helios-schemac: error: cannot create '{}': {}\n", fs::pathToUtf8(dir), ec.message());
+                    return false;
+                }
+            } else if (ec) {
                 err += std::format("helios-schemac: error: cannot create '{}': {}\n", fs::pathToUtf8(dir), ec.message());
                 return false;
-            }
-            const auto modified = std::filesystem::last_write_time(dir, ec);
-            if (!ec && std::filesystem::file_time_type::clock::now() - modified > kStaleAfter) {
-                std::filesystem::remove(dir, ec); // stale: a killed run left it behind
-                continue;
+            } else {
+                deniedSince.reset();
+                const auto modified = std::filesystem::last_write_time(dir, ec);
+                if (!ec && std::filesystem::file_time_type::clock::now() - modified > kStaleAfter) {
+                    std::filesystem::remove(dir, ec); // stale: a killed run left it behind
+                    continue;
+                }
             }
             if (std::chrono::steady_clock::now() - start > kGiveUpAfter) {
                 err += std::format("helios-schemac: error: timed out waiting for '{}' (another helios-schemac is updating the lock; "

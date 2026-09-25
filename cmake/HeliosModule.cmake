@@ -54,7 +54,8 @@ function(helios_apply_warnings target)
   if(MSVC)
     # /permissive- and /Zc:__cplusplus are C++-only; C sources (the CPU gate) must not see them.
     target_compile_options(${target} PRIVATE /W4 /utf-8 /fp:precise
-                           $<$<COMPILE_LANGUAGE:CXX>:/permissive- /Zc:__cplusplus /Zc:preprocessor>)
+                           $<$<COMPILE_LANGUAGE:CXX>:/permissive- /Zc:__cplusplus>
+                           $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/Zc:preprocessor>)
     target_compile_definitions(${target} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
     if(HELIOS_WARNINGS_AS_ERRORS)
       target_compile_options(${target} PRIVATE /WX)

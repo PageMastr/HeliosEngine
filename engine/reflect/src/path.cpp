@@ -2,6 +2,7 @@
 
 #include "helios/reflect/path.h"
 
+#include <charconv>
 #include <format>
 
 #include "helios/reflect/serialize.h"

@@ -4,6 +4,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <vector>
 
 #include "helios/ecs/world.h"

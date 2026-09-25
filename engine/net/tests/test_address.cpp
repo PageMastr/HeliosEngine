@@ -104,12 +104,12 @@ TEST_SUITE("net.address") {
             netcode_address_t nc;
             REQUIRE(netcode_parse_address(s, &nc) == NETCODE_OK);
             const Address ours = Address::parse(s).value();
-            CHECK(detail::fromNetcode(nc) == ours);
-            netcode_address_t back = detail::toNetcode(ours);
+            CHECK(helios::net::detail::fromNetcode(nc) == ours);
+            netcode_address_t back = helios::net::detail::toNetcode(ours);
             CHECK(netcode_address_equal(&back, &nc) == 1);
         }
         // IPv4-mapped addresses reach netcode as plain IPv4 (tokens list plain IPv4).
-        const netcode_address_t nc = detail::toNetcode(Address::ipv4(1, 2, 3, 4, 5).toV4Mapped());
+        const netcode_address_t nc = helios::net::detail::toNetcode(Address::ipv4(1, 2, 3, 4, 5).toV4Mapped());
         CHECK(nc.type == NETCODE_ADDRESS_IPV4);
         CHECK(nc.port == 5);
     }

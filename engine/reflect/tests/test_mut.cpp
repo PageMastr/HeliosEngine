@@ -21,7 +21,7 @@ struct Motion {
 
 // Hand-written copy of what the generator emits.
 template <>
-class helios::refl::Mut<Motion> : public detail::MutBase<Motion> {
+class helios::refl::Mut<Motion> : public helios::refl::detail::MutBase<Motion> {
 public:
     using MutBase::MutBase;
     static constexpr u64 kVel = 1ull << 0;

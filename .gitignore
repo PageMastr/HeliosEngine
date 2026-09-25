@@ -1,0 +1,16 @@
+/build/
+/out/
+/.cache/
+compile_commands.json
+*.swp
+.DS_Store
+.vscode/
+.idea/
+*.user
+imgui.ini
+/saved/
+/services/bin/
+/content/.cooked/
+/content/.cache/
+__pycache__/
+node_modules/

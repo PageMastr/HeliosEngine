@@ -109,6 +109,8 @@ add_library(helios::tp::headers ALIAS tp_headers)
 
 add_library(tp_doctest INTERFACE)
 target_include_directories(tp_doctest SYSTEM INTERFACE ${TP}/doctest)
+# Include real <ostream>/<string> instead of doctest's std forward declarations, which newer MSVC STLs reject.
+target_compile_definitions(tp_doctest INTERFACE DOCTEST_CONFIG_USE_STD_HEADERS)
 add_library(helios::tp::doctest ALIAS tp_doctest)
 
 # --- zstd -----------------------------------------------------------------------------------

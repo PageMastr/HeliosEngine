@@ -1469,6 +1469,7 @@ cell and the client's `SingleBodyPredictor` path (GP-4a). The rules:
    owner snapshot 250 ms before the tick it applies from. Clients at up to 200 ms RTT receive every change
    before they predict its tick. Above that, each wind change costs one correction. Cue wind emitters
    (§1.5) are presentation-only and never enter physics.
+9. **Jolt order and caches.** Jolt orders contacts by stable body keys, never `BodyID`, and ShipHull and Vehicle bodies carry no contact cache across ticks (02 §7.1), so the collider set alone decides a step on the cell and the predictor.
 
 Corrections therefore come only from contacts with other dynamic bodies, damage, and effects that others
 apply (webs, knockback). The client tags each correction with its cause: `contact`, `effect`,
@@ -2408,7 +2409,7 @@ record EmoteDef @table("emt") {
   coroutine (the EVE tasklet lesson, R01-Q4). Coroutines never cross processes. When an entity's
   authority moves by handoff, planned migration or crash recovery, the new owner raises
   `Authority.Adopted{entity, cause}` for it, and the module re-arms from `ScriptState` (rule 7), where
-  the results of re-issued service calls also arrive (04 §6.7). The analyzer flags a module that
+  the results of re-issued service calls also arrive (04 §6.7); a cell's replay-keyframe rebase raises it with `cause = rebase` (04 §10.2). The analyzer flags a module that
   waits more than 5 s of zone time with no `Adopted` handler.
 - **Capability manifests.** Each module declares one
   (`caps = {"items.grant", "wallet.faucet:Faucet.Quest.*"}`), checked at publish time. Calls that

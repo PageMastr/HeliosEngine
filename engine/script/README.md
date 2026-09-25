@@ -236,3 +236,12 @@ ninja -C build/script helios_script script_tests && ./build/script/bin/script_te
   needs), and no DAP adapter yet (WP-1.6).
 * Wrapping `coroutine.resume` with a plain call means a debugger break inside a nested coroutine
   cannot propagate through it; the DAP adapter must re-add a continuation.
+
+## Plan conformance
+
+Plan-Rev: 5
+
+Written to plan revision 5. Revision 6 (the round-5 minor revisions) changed 02 §7.4: `VmConfig` must
+refuse native codegen on cells and world-script hosts (today `create()` warns), and the `fuel-counter` and
+`codegen-fornloop-fuel` Luau patches are required. The rework is WP-0.10r (09 §5.10.4 (c)), which raises this
+line to 6.

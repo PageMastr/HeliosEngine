@@ -1,6 +1,12 @@
 # 02 — Engine Runtime
 
-> **Status:** draft v5 (round-3 review fixes: whole-image ISA levels with a pre-gate audit (§1.1, ADR-011
+> **Status:** draft v5 (round-5 minor revisions: the illegal-instruction backstop passes deliberate traps
+> through, handles only VEX/EVEX and POPCNT faults and hands #UD to the crash handler once it installs, and the
+> mimalloc init mode is stated as the default that check 3 guards (§1.1); heap lifetime and sharded tag
+> accounting from the ECS spike (§2.2); Jolt ordering independence: stable body keys, the `stable-order`
+> patch, no cross-`Update` contact cache on predicted bodies and body tables for restores, with RT-03's
+> permuted variant and RT-19's multi-tile case (§5.4, §7.1); the Luau codegen-fuel and inline-counter patches
+> and the replay-keyframe script rebase (§7.4; 04 §10.2); round-3 review fixes: whole-image ISA levels with a pre-gate audit (§1.1, ADR-011
 > amendment); terrain collision tiles with a workload model, a no-substitution rule and RT-20 (§5.8a); project
 > schema packages that need no C++ (§3.8, RT-21); from 03's round-3 fixes: CPU tables at 45, 30 and 120 fps
 > with the Performance-mode interleave (§2.4, RT-12 clauses), the appearance skeleton and facial runtime (§7.2,
@@ -150,7 +156,7 @@ baseline callers. So Helios builds **whole images at one level** and audits the 
     |---|---|---|---|
     | Other TLS callbacks | `.CRT$XLB`–`.CRT$XLY` | The loader, before the entry point | mimalloc's `mi_tls_attach` (`.CRT$XLB`) and `mi_tls_detach` (`.CRT$XLY`) in its default `MI_WIN_INIT_USE_CRT_TLS` mode (`third_party/mimalloc/src/prim/windows/prim.c`); the CRT's `__dyn_tls_init` (`.CRT$XLC`) and `__dyn_tls_dtor` (`.CRT$XLD`); MinGW's winpthreads (`.CRT$XLF`) |
     | Dynamic `thread_local` initializers | `.CRT$XDA`–`.CRT$XDZ` | `__dyn_tls_init`, a TLS callback | Tracy's `s_token`, `s_token_detail`, `s_threadHandle` and `s_gpuCtx` (`TracyProfiler.cpp`) |
-    | Raw DLL entry | `_pRawDllMain` | `_DllMainCRTStartup`, before the CRT initializes (DLLs only) | None. mimalloc's `MI_WIN_INIT_USE_RAW_DLLMAIN` mode would set it, and `tp_mimalloc` pins `MI_WIN_INIT_USE_CRT_TLS=1` |
+    | Raw DLL entry | `_pRawDllMain` | `_DllMainCRTStartup`, before the CRT initializes (DLLs only) | None. mimalloc's `MI_WIN_INIT_USE_RAW_DLLMAIN` mode would set it. `tp_mimalloc` defines only `MI_STATIC_LIB` and relies on mimalloc's default, which `prim.c` sets to `MI_WIN_INIT_USE_CRT_TLS` for every Helios toolchain (only Intel's compilers get `MI_WIN_INIT_USE_TLS_DLLMAIN`, whose hooks are the same `.CRT$XLB`/`.CRT$XLY` symbols). The raw mode must be requested explicitly, and check 3 fails an image whose `_pRawDllMain` is not CRT-owned, so no define is needed |
     | C initializers | `.CRT$XIA`–`.CRT$XIZ` | The entry point (`_initterm_e`) | The CRT; mimalloc's `mi_crt_init` (`.CRT$XIB`) |
     | C++ initializers | `.CRT$XCA`–`.CRT$XCZ` | The entry point (`_initterm`) | Tracy's `init_seg(".CRT$XCB")` statics; `init_seg(compiler)` (`.CRT$XCC`), `lib` (`.CRT$XCL`) and every ordinary dynamic initializer (`.CRT$XCU`) |
 
@@ -187,8 +193,8 @@ baseline callers. So Helios builds **whole images at one level** and audits the 
        code on the way out. The backstop's handler exits the same way.
 
     On success the hook records the verdict, installs the illegal-instruction backstop
-    (`AddVectoredExceptionHandler`) and returns. For `DLL_THREAD_ATTACH` and the detach reasons it returns at
-    once.
+    (`AddVectoredExceptionHandler`; rules below) and returns. For `DLL_THREAD_ATTACH` and the detach reasons it
+    returns at once.
   - *Linux: `.preinit_array`.* The gate is the executable's single `.preinit_array` entry. glibc runs that
     array before any `.init_array` and before the initializers of shared objects, so the gate also precedes
     `libhelios_runtime.so` in dev builds. mimalloc's `constructor(101)` and Tracy's `init_priority(101…108)`
@@ -213,6 +219,35 @@ baseline callers. So Helios builds **whole images at one level** and audits the 
       `sigaction`.
   - *What the gate checks:* 08 §2.2's feature list (which includes BMI2) and XCR0. On failure it shows or
     prints the CPU message and exits with code 78.
+  - *The illegal-instruction backstop* catches the one fault a missed feature check would cause, #UD, on the
+    way to the crash handler. On Windows it is the vectored handler above (`STATUS_ILLEGAL_INSTRUCTION`); on
+    Linux the gate installs it with `sigaction(SIGILL)` and `SA_SIGINFO | SA_RESETHAND`.
+    - *It decodes the faulting opcode* at `ExceptionAddress` or `si_addr`, and it handles only a genuine ISA
+      fault: a VEX or EVEX lead byte (`C4`, `C5`, `62`, after optional `66`, `F2`, `F3` or REX prefixes),
+      which covers every AVX, AVX2, FMA, F16C and BMI1/2 instruction, or POPCNT (`F3 0F B8`). Only those get
+      the CPU message and exit 78. LZCNT and TZCNT decode as BSR and BSF on older CPUs and never fault, which
+      is why the gate checks them explicitly.
+    - *Deliberate traps pass straight through:* `ud2` (`0F 0B`), `ud1` (`0F B9`) and `ud0` (`0F FF`), which
+      `__builtin_trap`, `-fsanitize-trap` and trap-on-unreachable emit, and every other #UD. Windows returns
+      `EXCEPTION_CONTINUE_SEARCH`. Linux returns, and `SA_RESETHAND` has restored `SIG_DFL`, so the
+      re-executed instruction takes the normal crash path. A real crash therefore never ends as
+      "CPU unsupported" without a dump. The in-tree hooks already pass the three traps through
+      (`hcg_is_deliberate_trap`); the VEX/EVEX test is WP-0.5r's.
+    - *It stops at the crash handler.* `core`'s crash handler (Phase 0–1) and, from Phase 2, `engine/crash`
+      take over when they install. On Linux their `sigaction(SIGILL)` replaces the backstop, and their
+      re-raise path restores `SIG_DFL`, never the saved backstop (today's `posix_crash.cpp` restores the
+      previous handler, which is the backstop). On Windows the crash handler adds its own vectored handler
+      first in the chain (`AddVectoredExceptionHandler(1, …)`). It sends every `STATUS_ILLEGAL_INSTRUCTION`
+      except the three traps to the dump path, which terminates the process, so the backstop behind it never
+      runs again; the traps continue to SEH and the unhandled-exception filter. This keeps the gate objects at
+      three exports. The crash report carries a `cpu_gate` annotation (the verdict, the CPU brand, the feature
+      bits and the fault's lead bytes, classified by the same decoder from a shared `static inline` header),
+      so an unsupported encoding that slips past the gate is still labelled in triage.
+    - *Proof (audit check 5 and `core_tests`).* A gate test child that passes the gate executes, before the
+      crash handler installs: `ud2`, which must die by SIGILL or an unhandled exception, never exit 78; and,
+      under SDE `-hsw`, an EVEX (AVX-512) instruction, which must exit 78 with the message. After the crash
+      handler installs, the same two must each produce a dump with no exit 78, the EVEX one annotated as an
+      ISA fault.
   - *Nothing can sort ahead of it.* No object other than the gate and the CRT may contribute to `.CRT$XLA`
     through `.CRT$XLA0`. Dynamic `thread_local` initializers are no longer banned, because `__dyn_tls_init`
     is a later TLS callback. §1.4's rule against `thread_local` destructors in reloadable code still applies.
@@ -290,6 +325,9 @@ baseline callers. So Helios builds **whole images at one level** and audits the 
      - The client, cell, editor, bot and `helios-tool` each show or print the CPU message and exit with
        code 78, never with SIGILL.
      - The launcher reaches its refusal screen.
+     - The backstop fixtures pass (*illegal-instruction backstop* above): `ud2` never exits 78, and under SDE
+       `-hsw` an EVEX instruction exits 78 before the crash handler installs and produces an annotated dump
+       after it.
      - *Which builds.* The runs cover the shipping client with and without `HELIOS_PROFILE`. They also cover
        the modular `HELIOS_PROFILE=ON` dev flavour of the editor, PIE client, bot and `helios-tool`, whose
        `helios_runtime.dll` carries the gate together with mimalloc's and Tracy's pre-`main` hooks.
@@ -494,6 +532,34 @@ It has the same ≤ 30 s budget, and ADR-016 is then reopened.
 - **No global mimalloc override** (ADR-011). A Phase 0 spike checks heap thread affinity under job migration.
   In dev builds the heaps live in the `helios_runtime` shared library and every image shares one `/MD` CRT
   heap, so no override is needed at the DLL boundary either (§1.4, ADR-016).
+- **Heap lifetime (normative; spike (a), `engine/ecs/SPIKES.md` §1).** mimalloc 3.5 lets any thread use a
+  first-class `mi_heap_t`, but each thread caches its last theap and validates the cache only by heap address.
+  After `mi_heap_destroy` + `mi_heap_new` the new heap usually has the old address, and in the spike 200 of 200
+  allocations then landed in the dead heap. So:
+  - a heap that any thread other than its creator has used is **never freed**. It returns to a process-wide
+    pool (`TaggedHeap`, one heap per tag group), and while it still has live blocks it is quarantined and not
+    reused, so no heap address is ever recycled;
+  - bulk free (`destroyAll`) is allowed only on heaps confined to one thread;
+  - a `mi_theap_t*` is never cached across a job boundary or `JobSystem::wait()`, because a job may resume on
+    another worker (fibers, Phase 2).
+
+  The rule binds every `mi_heap_*` user, `core` included. A `core_tests` regression repeats the spike's 200
+  destroy-and-new rounds with a live foreign theap and requires 0 misrouted allocations.
+- **Tag accounting is sharded and batched (normative).** Exact accounting on a tag's shared atomics
+  (`liveBytes`, `liveCount`, `totalCount` and a CAS loop on the peak) collapsed to 460–890 ns per alloc+free
+  pair at 4 threads in the spike, and core `alignedAlloc` ran ≈ 30× slower than `mi_malloc` there. So:
+  - each `MemoryTag` counts in 32 cache-line shards chosen by thread; a shard forwards its byte and count
+    deltas to the tag once they pass 256 KiB (`trackAllocationBatch`), and the peak is touched only when a batch
+    raises it;
+  - `flushAccounting()` at each cell tick end and client frame end makes every tag exact. Soft and hard
+    budgets and telemetry read the tag there, so a hard budget is enforced to within 256 KiB per thread;
+  - exact per-allocation accounting remains an option only for low-rate heaps, such as flecs' ECS heap, which
+    rarely calls `malloc`;
+  - `mi_usable_size` supplies sizes, so blocks carry no header and frees take no size.
+
+  Target, checked by a `core_tests` benchmark on SERVER: a tagged alloc+free pair costs ≤ 3× `mi_malloc`'s at
+  4 and 16 threads. The spike's batched `TaggedHeap` measured 57–173 ns against 8–18 ns on a loaded 4-vCPU VM,
+  and the two `mi_usable_size` calls, ≈ 200 of its 364 instructions per pair, are the next cut.
 - **Frame arenas** use `FrameAllocator` (the Naughty Dog pattern, R06 §4.7).
   - Clients keep 3 generations (sim N, extract N, render N−1), each freed on its GPU fence.
   - Cells reset per zone tick.
@@ -1294,7 +1360,9 @@ of ≤ 2 mm (R06 §6.7). Those bounds are rounded outward, and narrowphase and i
     integration holds across re-centres and merges.
   - The client predicts only the owned hull against static colliders, and remote ships are interpolated
     kinematic proxies. Statics are instanced identically in both bubbles, so a hull-versus-static contact
-    predicted by the client is bit-identical to the cell's, even when the static straddles a seam.
+    predicted by the client is bit-identical to the cell's, even when the static straddles a seam. That also
+    needs Jolt's solver order to ignore `BodyID`s, which differ between the two systems, and the hull to carry
+    no contact cache across ticks: §7.1's ordering-independence rule.
   - Ship–ship contacts are cell-authoritative. I1 and I2 guarantee that no seam contact is ever missed or
     doubled (RT-19).
 - **Ships.** The hull is one compound body in the parent grid. The interior is a child grid, so passengers
@@ -1746,6 +1814,53 @@ TOC        sorted { AssetId, cookedHash XXH3-128, offset, compSize, rawSize, cod
 - **Determinism.**
   - Fixed dt, and bodies are added in EntityId order.
   - Contacts and query results are sorted (06 §11).
+  - **Ordering independence (normative).** No result may depend on a `BodyID`. A `BodyID` is a slot index
+    that follows each `PhysicsSystem`'s add and remove history: the predictor's differ from the cell's
+    (06 §8.1a), the cell's depend on which tile bodies came and went before, and a replay from a keyframe
+    allocates new bodies into different free slots. Stock Jolt 5.6.0 orders solver work by `BodyID` in three
+    places:
+    1. `ContactConstraintManager` builds each contact constraint's `mSortKey` from
+       `SubShapeIDPair{body 1 ID, sub-shape 1, body 2 ID, sub-shape 2}.GetHash()`, and `SortContacts` orders
+       by that key, then by the body IDs;
+    2. `PhysicsSystem::ProcessBodyPair` makes the lower-ID body "body 1" when both have the same motion type;
+    3. `CharacterVirtual`'s `ContactOrderingPredicate` orders by `mBodyB`, then by `mCharacterIDB`, which a
+       global counter assigns.
+
+    A hull, chassis or character touching several tile bodies would therefore run Gauss–Seidel in a different
+    order on each host and diverge in the low bits, whatever the cast tie-breaks above do. The rules:
+    - *Stable body keys.* Each body's `mUserData` holds its key: the `EntityId` for entity bodies (placed
+      statics included), the packed `TileKey` for Terrain-layer tile bodies, and the deterministic PCG instance
+      key for generated asteroids and collidable scatter (§5.8). A `CharacterVirtual` carries its entity's
+      `EntityId`. `(object layer, key)` is unique within a `PhysicsSystem`; debug builds assert it
+      in `AddBody`, which refuses key 0.
+    - *Vendored patch `third_party/jolt/patches/stable-order`* (≈ 80 lines, listed in
+      `third_party/MANIFEST.md` beside Luau's patches, rebased on each Jolt update and covered by
+      `sim_abi.physics`, 04 §6.7). It uses `(layer, key)` in all three places: the sort-key hash and its
+      tie-break, the body-1 choice and `ContactOrderingPredicate`. Jolt's caches stay keyed by `BodyID`,
+      because they are lookups, not orders.
+    - *No cross-`Update` contact cache on predicted bodies.* Warm-start impulses, and manifolds that Jolt
+      reuses when a pair moved < 1 mm (`mBodyPairCacheMaxDeltaPositionSq`), carry state from one step to the
+      next in caches keyed by `BodyID`. A client rollback restores the chassis and constraint (06 §8.1a
+      rule 3) or the server's full state, never the cell's cache. The same patch therefore adds
+      `Body::EFlags::NoCrossUpdateCache` (the last free flag bit), set on every ShipHull- and Vehicle-layer
+      body on every host. On the first collision step of each `PhysicsSystem::Update`, a pair involving such a
+      body recomputes its manifold and starts its impulses at zero. Later collision steps of the same `Update`
+      (a vehicle bubble's 3 substeps) warm-start as usual, and the old manifold is still found, so
+      `OnContactPersisted` and 06's impact events are unchanged. A predicted step is thus a pure function of
+      06 §8.2's inputs and the collider set. Resting ships and parked vehicles lose only warm-start
+      convergence, and RT-03's permuted variant bounds the effect.
+    - *Wheel contact IDs.* A `VehicleConstraint`'s `SaveState`, which 06 §8.1a's correction carries from the
+      cell to the client, holds each wheel's contact `BodyID`. Vehicles keep Jolt's default of a full wheel
+      test on every step (`SetNumStepsBetweenCollisionTestActive` and `…Inactive` at 1), which replaces that
+      ID before anything but its validity is read, so the cell's bytes restore correctly into the predictor.
+    - *Where exact IDs are still needed.* Jolt's `RestoreState` writes into existing bodies by ID. Replay
+      keyframes and migration residuals therefore carry a per-grid body table `(BodyID, stable key)`, and the
+      restoring host creates every body with `BodyInterface::CreateBodyWithID` and every constraint in
+      `mConstraintIndex` order before restoring (04 §6.7, §10.2).
+    - *Rejected: deterministic `BodyID`s everywhere* (`CreateBodyWithID` from a shared allocator driven by
+      stable keys). The predictor holds only a subset of the cell's bodies, so a shared key → slot map needs a
+      global slot space per system and collision probing whose result depends on which other keys exist. A
+      keyed order does not care which bodies exist.
   - A CI hash runs on every determinism toolchain (both MSVC toolsets, clang-cl, GCC, Clang and MinGW; 09 §6,
     ADR-001a rule 7) and at 1, 4 and 16 workers.
   - `HeliosJoltJobSystem` (a `JobSystemWithBarrier`) runs Jolt work as High-priority jobs.
@@ -1988,7 +2103,22 @@ The client never decides who hears whom. Per-player mute is local, and block and
 - **Debugging.** The **DAP adapter lives in `engine/script`** (about 2 kLOC over `lua_breakpoint` and
   `lua_singlestep`). It serves over TCP from the editor, dev client and cells, including `--replay`.
   luau-lsp reads the generated `.d.luau`, and CI uses the old type solver (R10 §4).
-- **Native codegen** is opt-in per module and off for UGC (Phase 5).
+- **Native codegen** is opt-in per module and off for UGC (Phase 5). On cells and world-script hosts it stays
+  off until the vendored `third_party/luau/patches/codegen-fornloop-fuel` makes its fuel equal to the
+  interpreter's: Luau 0.739's code generator puts the numeric-`for` interrupt at the top of the loop body
+  instead of in `FORNLOOP`, so a loop left by `break` or `return` costs one extra fuel in native code
+  (04 §10.2). `VmConfig` refuses codegen on those hosts until then (today it warns).
+- **Interrupt cost.** WP-0.10 measured the `interrupt` callback at 12–17 % of script time against RT-13's
+  ≤ 10 %, so the vendored `third_party/luau/patches/fuel-counter` (an inline counter decremented at each
+  `gc < 0` safepoint, calling the host only when it reaches zero) is required on every host that meters fuel.
+  It also lets the VM charge operations the API cannot see, such as `..` copies. Both patches join `det-math`
+  in `sim_abi.script` (04 §6.7).
+- **Replay-keyframe rebase (cells; 04 §10.2).** Every 30 min of zone time a cell rebases its VM so that a
+  replay keyframe can be cut. It waits for a tick at which no coroutine of a module without an
+  `Authority.Adopted` handler is suspended (≤ 60 s, else the keyframe is skipped once), ends every
+  coroutine, swaps in a fresh VM already loaded for the same content pin, runs the module chunks in manifest
+  order and raises `Adopted{cause = rebase}` for every entity with a `ScriptState`, exactly as after a
+  planned migration. The lane's per-module kill history and disabled set are C++ state and carry across.
 
 ### 7.5 Game UI runtime (RmlUi 6.3; R04-P1-18, R03-P0-9, R08-ED-P1-10)
 
@@ -2057,10 +2187,10 @@ The client never decides who hears whom. Per-player mute is local, and block and
 | Streaming | `.hpak` v0 | Containers, sources, budgets | HLOD, layers, residency | AAA-CNT-2 | MIN tuning | — |
 | PCG | `hnoise` + Slang twin; AVX2/SSE4.2-width/scalar kernels | Harrow, stamps, scatter, Scree; collision tile sets, fence and cache (§5.8a; RT-20 slice) | Biomes, roads, deltas; RT-20 at 500 players with vehicles | Earth-size | Vendor lab | Ecosystems |
 | Assets | `.meta`, DDC, glTF, textures | assetd; records/Luau reload | All-asset reload, shared DDC, paks | Zone cook ≤ 60 s | Nightly ≤ 4 h | Distributed |
-| Physics | Small hash | Characters, ships, grids, disjoint bubbles (RT-19); physical materials | Vehicles (06 §8.1a); bubble merge/split at fleet scale; ragdolls (cosmetic system) | Hangars, buoyancy; powered ragdolls | Budgets; cloth (Jolt soft bodies) | Destruction |
+| Physics | Small hash; `stable-order` patch and stable body keys (RT-03 permuted variant) | Characters, ships, grids, disjoint bubbles (RT-19); physical materials | Vehicles (06 §8.1a); bubble merge/split at fleet scale; ragdolls (cosmetic system) | Hangars, buoyancy; powered ragdolls | Budgets; cloth (Jolt soft bodies) | Destruction |
 | Anim | Sampling | Graph, root motion, `HitboxSetDef` hitboxes | IK, retarget, secondary chains; appearance skeleton (`BoneScale`) | Crowd LOD, staggered A1/A2 | Motion matching; facial runtime (FACS layers, visemes, eyes, face LOD; RT-22) | LMM |
 | Audio / voice / nav | Device | Events, 3D / — / tiles | Banks, occlusion / — / terrain tiles | HRTF / `engine/voice` + prox audience (NS-3.9) / moving interiors | Budgets | — |
-| Script | VM, sandbox, fuel meter, sticky kill | Budgets, tasks, `task.checkpoint`, DAP, reload; `scriptlib` binding fuel, builtin wrappers, calibrated cost table | Capabilities (06) | Codegen opt-in | — | UGC VMs |
+| Script | VM, sandbox, fuel meter, sticky kill | Budgets, tasks, `task.checkpoint`, DAP, reload; `scriptlib` binding fuel, builtin wrappers, calibrated cost table; `fuel-counter` and `codegen-fornloop-fuel` patches | Capabilities (06); replay-keyframe rebase (04 §10.2) | Codegen opt-in on cells | — | UGC VMs |
 | UI / input / loc | SDL3 input | RmlUi, view-models, `UiSurface` | IME, loc, rebinding | `<datagrid>` scale | Voiced languages | Addons |
 
 ### 8.2 Acceptance criteria (automated)
@@ -2069,7 +2199,7 @@ The client never decides who hears whom. Per-player mute is local, and block and
 |---|---|---|---|
 | RT-01 | **50k-entity zone**, SERVER, 20 Hz (20k replicated + 30k placed, ~150 ECS archetypes, 5k bodies in 12 grids). Engine stages ≤ 12 ms p99; 9k structural ops ≤ 1.5 ms; 50k×3 iteration ≤ 0.4 ms on one thread; ECS ≤ 400 MB; ≤ 5,000 tables. **Failure opens the custom-ECS ADR** | AAA-SRV-4, CNT-4 | 1 |
 | RT-02 | **10¹³ m** (with 03): ship at 1 km/s, cockpit camera. Jitter < 0.05 px for a grid cube at 2 m and a system-frame object at 1 km; physics drift < 1 mm over 10 min; replication error ≤ 1/256 m | AAA-REN-5 | 1 |
-| RT-03 | **Physics hash**: 1,000 bodies + 50 characters + 10 vehicles × 3,600 steps, identical on every determinism toolchain (both MSVC toolsets, clang-cl, GCC, Clang and MinGW; 09 §6, ADR-001a rule 7), at 1/4/16 workers, and on AMD and Intel CPUs (the H1 lab's SERVER and Intel boxes, 09 §4.3.1; 04 NS-3.8). The same job runs 06 GP-4a's FBW hash (flight controller and thruster allocation, including saturation and damaged-thruster cases, and EVA suit thrusters), on which 04 §5.3's bit-exact hull prediction depends, and from Ph2 06 GP-4d's ground-vehicle and mount hash | AAA-PLT-4 | 0–1 |
+| RT-03 | **Physics hash**: 1,000 bodies + 50 characters + 10 vehicles × 3,600 steps, identical on every determinism toolchain (both MSVC toolsets, clang-cl, GCC, Clang and MinGW; 09 §6, ADR-001a rule 7), at 1/4/16 workers, and on AMD and Intel CPUs (the H1 lab's SERVER and Intel boxes, 09 §4.3.1; 04 NS-3.8). The same job runs 06 GP-4a's FBW hash (flight controller and thruster allocation, including saturation and damaged-thruster cases, and EVA suit thrusters), on which 04 §5.3's bit-exact hull prediction depends, and from Ph2 06 GP-4d's ground-vehicle and mount hash. **Permuted variant (§7.1):** the same scene, with hulls, chassis and characters each touching ≥ 3 terrain tile bodies, is rebuilt so that every `BodyID` differs (1,000 dummy add/remove cycles first, tiles admitted in reverse, bodies re-added in shuffled order) and must give the identical hash; a CI build without the `stable-order` patch must fail it. ShipHull and Vehicle bodies resting on a 20° tile slope creep < 1 mm in 60 s and sleep within 2 s (the no-cross-`Update`-cache rule) | AAA-PLT-4 | 0–1 |
 | RT-04 | **PCG hash**: 10k tiles on 3 bodies + scatter + asteroids, bit-identical across compilers, client/cell, AMD and Intel CPUs, and the AVX2, SSE4.2 and scalar kernel widths (§5.8). `hnoise` C++/Slang corpus matches on lavapipe and vendor GPUs (≤ 1 cm). The CPU bench runs on the `avx2` kernel (asserted from the `pcg.kernel` log) | AAA-PLT-4, CNT-1 | 1 |
 | RT-05 | **Hot reload** in PIE client and cell ≤ 2 s p95: records and Luau (Ph1); all asset kinds (Ph2) | AAA-ITR-1 | 1–2 |
 | RT-06 | **Streaming**: game-thread I/O waits ≤ 1 ms; zero misses in BENCH-2 at 1,500 m/s; ≤ 150 MB/s; `physics.collision_tile_miss` = 0 on the client and the cell through the descent and landing (§5.8a) | AAA-CNT-2 | 1–3 |
@@ -2085,7 +2215,7 @@ The client never decides who hears whom. Per-player mute is local, and block and
 | RT-16 | **Crashes**: 100 % symbolicated dumps | AAA-STB-1 | 2 |
 | RT-17 | **Paks**: 1 % change → ≤ 1.5× changed bytes downloaded; bad blocks re-fetched | AAA-CNT-7 | 2 |
 | RT-18 | **Link-model spike (WP-0.6c)**: a game-DLL component on 10k live entities survives 100 reloads (code-only, add-field and remove-field edits) with an identical values checksum, memory tags back to baseline, and the old image unmapped. A CVar, a system, an observer, a Luau binding and a Tracy zone from the DLL all work after every reload. ASan is clean with MSVC and Clang. The DLL passes §1.4's symbol audit. The edit-to-reload time is ≤ 30 s p95 on DEV | AAA-ITR-5, PLT-1 | 0 |
-| RT-19 | **Bubble seams**: 1,000 randomized trials of two ships closing at 1 km/s with the contact on a bubble seam. The contact count, pair and tick match a single-bubble control run exactly. The contact point is within 1 mm, the normal within 0.1° and the impulse and post-contact velocities within 0.5 %. The residue is f64 re-expression at the merge, not a missed contact. There are zero pass-throughs, and replays of the seam run are bit-exact. A ship at 1 km/s hitting a static asteroid that straddles a seam produces bit-identical contacts on the predicting client and the cell. A merge or split of 2,000 bodies takes ≤ 2 ms. BENCH-3 shows zero `bubble_oversize` | W02 | 1 (fleet scale: 2) |
+| RT-19 | **Bubble seams**: 1,000 randomized trials of two ships closing at 1 km/s with the contact on a bubble seam. The contact count, pair and tick match a single-bubble control run exactly. The contact point is within 1 mm, the normal within 0.1° and the impulse and post-contact velocities within 0.5 %. The residue is f64 re-expression at the merge, not a missed contact. There are zero pass-throughs, and replays of the seam run are bit-exact. A ship at 1 km/s hitting a static asteroid that straddles a seam produces bit-identical contacts on the predicting client and the cell. So do a hull (and, from Ph2, a chassis) in contact with ≥ 3 terrain tiles at once for 600 steps, with the predictor's `BodyID`s allocated in a different order from the cell's and a client rollback re-simulating 10 ticks mid-run (§7.1). A merge or split of 2,000 bodies takes ≤ 2 ms. BENCH-3 shows zero `bubble_oversize` | W02 | 1 (fleet scale: 2) |
 | RT-20 | **Surface collision load (§5.8a)**: the ground-hub profile (8 SERVER cores, 20 Hz) on Harrow's mountain and plains presets for 30 min, with 500 bots dispersed ≥ 1 km apart: 440 on foot, sprinting with random turns and jumps; 50 ground vehicles at 100 m/s; 10 ships in low flight at 300 m/s through valleys; 1 respawn or warp exit per second; and 2,000 NPCs in 50 lairs. Pass: tick p99 ≤ 35 ms (04 §3.3); collision-tile generation, fence builds included, ≤ 1,000 core-ms per second in every 10 s window; `TerrainFence` ≤ 8 core-ms of builds in every tick and ≤ 1.2 ms p99 wall (≤ 0.2 ms p99 on ticks that build nothing); `physics.collision_tile_miss` = 0, and `physics.collision_tile_sync` ≤ 1 per 1,000 body-ticks; `pcg.collision` ≤ 0.4 GB; `pcg.kernel=avx2` logged. Twenty of the bots run full client prediction: every terrain contact matches the cell bit for bit (0 corrections caused by terrain), and a probe finds 0 bodies below the collision surface. A 10 min replay of the run is bit-exact. **Fence-cap variant:** 5 min with prefetch throttled to 10 % and 20 respawns and warp exits in one second: the fence reaches its cap, ticks that hit it stay ≤ 1.2 ms p99 in the fence and ≤ 35 ms p99 overall, every body over the cap is held and logged as `CollisionHold`, no held body falls through, and the replay repeats each hold. **Ph1 slice:** 50 bots (44 on foot, 6 ships) on the same terms, with generation ≤ 250 core-ms/s | AAA-SRV-1, CNT-1; W04 | 1 (full: 2) |
 | RT-21 | **Project types without C++ (§3.8)**: a dynamic package of 200 types (records; `ScriptState` components of 10–40 fields with lists, maps and optionals; replicated components; events; view-models) passes schemac's round-trip and keyed-merge tests through generic `TypeOps`. Its JSONC, tagged, cooked and network bytes equal those of the same package compiled native, on every determinism toolchain. Generic ops meet §3.8's targets on REF. In PIE, 10k entities carrying 3 dynamic components survive 100 data-only schema edits (added, removed, `@was`-renamed and widened fields) with an identical values checksum, and each save is live in ≤ 5 s p95 with no compiler present. The SDK's prebuilt `helios-backend` and collab service validate a 10k-record corpus of the package with 0 differences from the native Go validators | AAA-ITR-1, TOOL-9; 01 §1.1 | 2 |
 | RT-22 | **Facial runtime (§7.2; 03 §7.6b)**, in the BENCH-1 dialogue bookmark: a T13-staged conversation with 8 F0 faces (2 captured hero heads and 6 DNA-blended, viseme-driven heads) in 2 languages, plus 32 F1 faces in view. **Sync:** the lip-to-audio offset (each viseme's onset in the displayed frame's weights, timed at M7, against its phoneme onset in the mixer's output-sample timestamps) is within ±40 ms p95 and never beyond +45/−125 ms (ITU-R BT.1359's detectability limits). **Eyes:** gaze converges on a new look-at target in ≤ 250 ms; blink rate is 10–20 per minute; saccade amplitude and rate stay within §7.2's ranges; with a camera still for 60 s, no face holds a fixed gaze for > 4 s. **Cost:** ≤ 0.05 ms per F0 face p95 and ≤ 0.8 core-ms in total on REF; the MIN box keeps 4 F0 faces within the same per-face bound; 03's GPU side is ≤ 0.15 ms (REF) and ≤ 0.1 ms (MIN). **Data paths:** the same thresholds hold with the audio-viseme fallback of 09 §4.3.3 (no captured clips), and a replayed dialogue produces bit-identical weights | R04; AAA-REN-8 (L5) | 4 |
@@ -2125,8 +2255,11 @@ The client never decides who hears whom. Per-player mute is local, and block and
   schemac's round-trip fixtures and are fuzzed with the other readers.
 - **Seams.** RT-19's randomized seam trials run in the physics suite. A debug invariant checker asserts I1
   and I2 after every sync point in bots and BENCH runs.
+- **Physics order.** RT-03's permuted variant and RT-19's multi-tile case run on every PR with the determinism
+  hashes; debug builds assert unique `(layer, key)` pairs per `PhysicsSystem` (§7.1).
 - **Script.** WP-0.10's corpus covers the RT-13 kill and yield cases, plus fuel identity between the
-  interpreter and native codegen (04 §10.2). The binding-heavy RT-13 case runs in WP-1.6 once `scriptlib`
+  interpreter and native codegen (04 §10.2), which passes once `codegen-fornloop-fuel` lands (the case is
+  pinned today), and RT-13's ≤ 10 % overhead with `fuel-counter` (§7.4). The binding-heavy RT-13 case runs in WP-1.6 once `scriptlib`
   glue exists. `--calibrate-fuel --check` runs nightly on the SERVER lab node (§7.4), and a unit test asserts
   that every wrapped builtin appears in `disabledBuiltins`, so no call reaches it through `FASTCALL`.
 
@@ -2134,10 +2267,11 @@ The client never decides who hears whom. Per-player mute is local, and block and
 
 | Risk | Mitigation |
 |---|---|
-| flecs performance, fragmentation, single maintainer (R10 §14.2) | RT-01 in Phase 1; flecs confined to `engine/ecs`; non-fragmenting traits; custom ECS behind the same API |
+| flecs performance, fragmentation, single maintainer (R10 §14.2) | RT-01 in Phase 1; flecs confined to `engine/ecs`; non-fragmenting traits; custom ECS behind the same API. The Phase 0 pre-bench (`engine/ecs/SPIKES.md` §3) failed only the structural-ops clause, 3.4–6.7 ms for 9k ops against 1.5 ms, while raw flecs does the same ops in ≈ 0.9–1.7 ms: the cost is the wrapper's identity maps, structural log and command fusion, which a custom ECS would need too, so wrapper optimization comes first and is re-measured on SERVER (09 records the decision) |
 | Grid-transition bugs (SC's longest-running class, R04 §2.3) | One transfer path, hysteresis, invariant checks, boarding bots |
 | GPU/CPU terrain mismatch | Fixed-point `hnoise` with a Slang twin, a conformance corpus, CPU-tile fallback |
 | Determinism regressions | `fp_control.h`, `det::`, sorted callbacks, hashes on every determinism toolchain (09 §6) |
+| Jolt orders solver work by `BodyID`, so predictor, cell and replay diverge on multi-body contacts | Stable body keys and the `stable-order` patch; no cross-`Update` contact cache on ShipHull and Vehicle bodies; body tables with `CreateBodyWithID` for keyframes and residuals (§7.1); RT-03's permuted variant and RT-19's multi-tile case |
 | Jolt float broadphase; many `PhysicsSystem`s | ≤ 20 km bubbles, re-centring, pooling, body caps |
 | Contacts lost or doubled at bubble seams | Disjoint-cluster invariants I1 and I2 (§5.4), statics instanced per bubble, RT-19 seam trials, invariant checker in bots |
 | Game-DLL reload corrupts memory or splits singletons | ADR-016 modular dev build with one CRT heap, single-image singletons, registration scopes, symbol audit, RT-18 spike in Phase 0; fallback is snapshot-and-restart iteration |
@@ -2169,7 +2303,7 @@ The client never decides who hears whom. Per-player mute is local, and block and
 | Section | What this section provides or adopts |
 |---|---|
 | 03 Rendering | Two-level transforms (§5.2); GPU terrain from `hnoise` (§5.8); `FrameChanged`; Gerstner buoyancy; portal and crowd-LOD contracts. `RenderScene` is defined in `render` and filled by `presentation`. The 8-lane CPU VM of 03 §5.5a is `pcg`'s default `vm_avx2.cpp` kernel, built at the image's `avx2` level (§1.1, §5.8). 03 §8.1.5's render CPU lines come from §2.4's tables, including the 45, 30 and 120 fps columns. 03 §7.6a–b consume §7.2's staggered A1/A2 palettes, the appearance skeleton (`BoneScale`) and the F0 face weights. Physics uses only collision-level tiles and never 03 §5.4's parent fallback (§5.8a) |
-| 04 Networking | Field-level `Mut<C>` dirty bits; EntityId↔NetHandle; `ScriptState`; frame-local hitbox poses; §3.1 header sugar. Luau budgets: fuel metering with **no involuntary yields** and a sticky kill at `fuel_kill` (§7.4; 04 §3.1 and §10.2 follow). Voice: `engine/voice` client pipeline and the `PortalGraph` proximity helper for 04 §2.7; `helios-voice` build target. Per-call binding fuel with a calibrated table in the zone profile and replay header, `fuel_kill` ≤ 25 % of the tick, and the stage 4 Luau allowance (§7.4; 04 §3.3, §10.2). `TerrainFence` at the start of stage 3 (≤ 8 core-ms of builds per tick, ≤ 1.2 ms p99 wall) and the `CollisionHold` replay event (§5.8a; 04 §3.3, §10.2). Dynamic components replicate through `repl::describeDynamic` (§3.8) |
+| 04 Networking | Field-level `Mut<C>` dirty bits; EntityId↔NetHandle; `ScriptState`; frame-local hitbox poses; §3.1 header sugar. Luau budgets: fuel metering with **no involuntary yields** and a sticky kill at `fuel_kill` (§7.4; 04 §3.1 and §10.2 follow). Voice: `engine/voice` client pipeline and the `PortalGraph` proximity helper for 04 §2.7; `helios-voice` build target. Per-call binding fuel with a calibrated table in the zone profile and replay header, `fuel_kill` ≤ 25 % of the tick, and the stage 4 Luau allowance (§7.4; 04 §3.3, §10.2). `TerrainFence` at the start of stage 3 (≤ 8 core-ms of builds per tick, ≤ 1.2 ms p99 wall) and the `CollisionHold` replay event (§5.8a; 04 §3.3, §10.2). Dynamic components replicate through `repl::describeDynamic` (§3.8). Jolt's solver order by stable body keys, the no-cross-`Update` cache rule and body tables for `RestoreState` (§7.1; 04 §5.3, §6.7, §10.2); the replay-keyframe script rebase and the `codegen-fornloop-fuel` and `fuel-counter` Luau patches (§7.4; 04 §10.2) |
 | 05 Backend | `service` blocks, `@ledger_policy`, `@lifecycle`, `ReasonCodeDef`, `@table`/`@sql`, proto/Go/C++/NATS emitters. Dev database is embedded-postgres (ADR-014, 05 §3.5); no service uses SQLite. `services/pkg/htypes` interprets dynamic project packages, so the prebuilt backend and the collab service validate project types (§3.8; 05 §1.14) |
 | 06 Gameplay | §3 is normative. `hmath` means `helios::det` |
 | 07 Editor | `EDITOR_ONLY`, `@keyed`, minted `$rid`, editor metadata, Go validators, DAP in `engine/script`; the planet library is `engine/pcg` (07 uses this name). **Adopted from 07:** assetd transport over a named pipe or Unix socket (07 §3.1), local DDC at 200 GB (07 §3.2), and the SQLite authoring registry (07 §3.4). 02 keeps the DDC key, the cooked formats and `registry.hreg`. Game-DLL reload (§1.4) backs 07 §1.6's hot swap. Dynamic project packages (§3.8) back T08's governed schema editor and ED-22; T04's budget analyzer checks the collision interpolation bound and `slabMargin` (§5.8, §5.8a) |

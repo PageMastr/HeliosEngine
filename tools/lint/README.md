@@ -56,3 +56,11 @@ MSVC the equivalent is `tools/ci/msvc_gate_audit.ps1` (run by the Windows CI job
   executables (WP-0.17, WP-0.14).
 - Base-image disassembly (item 4) and the Intel SDE emulation runs (item 5, CL-17) start with the
   launcher (WP-0.17) and the nightly tier (WP-0.3).
+
+## Plan conformance
+
+Plan-Rev: 3
+
+`isa_audit.cmake` was written to plan revision 3, before the ADR-011 amendment (revision 4). Its open deltas
+are in 09 §5.10.4 (b), and WP-0.2r reworks them. The layering, licence, IP-name and manifest lints have no open
+delta.

@@ -217,3 +217,10 @@ with label `bench`. Results and the RT-01 verdict are in SPIKES.md §3.
   value is persisted (`idLastPrefix`) and a shard is served by one source.
 * Deleting a prefab silently strips `IsA` and its inherited components from live instances (flecs
   cleanup); no structural event is logged for that.
+
+## Plan conformance
+
+Plan-Rev: 6
+
+Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
+`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.

@@ -12,7 +12,7 @@ disagreed, the owner won: **01** for scorecard numbers and phases, **00** for te
 |---|---|
 | Every `AAA-*` ID cited in any section exists in 01 §3, including slash lists such as `SRV-2/5/10/12` | Pass: 0 undefined |
 | Every `RT-*`, `RC-*`, `ED-*` and `CL-*` ID cited exists in 02 §8.2, 03 §9.3, 07 §5.2 and 08 §4.4 (17, 11, 18 and 22 IDs at the first pass; now RT-01…22 after §29 (RT-20, RT-21) and §31 (RT-22), RC-1…13 after fix 9.1, ED-1…22 after the round-2 section (ED-19…21) and §29 (ED-22), ED-1…23 after §39 (ED-23), and CL-1…24 after the round-2 section (CL-23, CL-24); each round-3 and round-4 ID has an owning WP and a phase exit in 09) | Pass (re-run in §41) |
-| 09's aliases `NS-p.k` resolve to a row of 04 §11.4 (7/5/7/12/7/4 IDs for Ph0–5 after §5, §14, the round-2 04 fixes and the round-3 04 fixes below; 04 §11.4 lists every ID explicitly and only appends, and 09's alias definition now says so); `BE-A1…A20` and `GP-1…17` exist (GP-4 as 4a–4c after §22, and 4a–4d after §30; BE-A20 and GP-15 after §26; GP-16 and GP-17 after §40) | Pass. `BE-A3a/A3b` were missing before fix 5.4; `BE-A15…A19` were added by 05's round-1 fixes (§7 below), and `BE-A20` and `GP-15` by 05's round-3 fixes (§26); all are assigned to WPs and exits |
+| 09's aliases `NS-p.k` resolve to a row of 04 §11.4 (7/5/7/12/7/4 IDs for Ph0–5 after §5, §14, the round-2 04 fixes and the round-3 04 fixes below; 04 §11.4 lists every ID explicitly and only appends, and 09's alias definition now says so); `BE-A1…A21` and `GP-1…17` exist (GP-4 as 4a–4c after §22, and 4a–4d after §30; BE-A20 and GP-15 after §26; GP-16 and GP-17 after §40; BE-A21 after the round-5 05 revisions) | Pass. `BE-A3a/A3b` were missing before fix 5.4; `BE-A15…A19` were added by 05's round-1 fixes (§7 below), and `BE-A20` and `GP-15` by 05's round-3 fixes (§26); all are assigned to WPs and exits |
 | "archetype" means only ECS storage, or the five reference game classes (01 §2) | 11 stale uses fixed (fixes 0.2, 1.2, 2.3, 2.4, 6.1) |
 | No SQLite for services; the dev database is embedded-postgres | Pass after fixes 2.5, 8.3. The remaining SQLite mentions are the tool registry (07 §3.4, allowed by ADR-014) and "no SQLite" notes |
 | Gateway game port | UDP 7777 in 04 §1 and 05 §5. No 27015 anywhere |
@@ -30,6 +30,7 @@ disagreed, the owner won: **01** for scorecard numbers and phases, **00** for te
 | The replicant tier's scope reads "every persistent world zone" wherever a section states it (00 ADR-007, 01 SRV-9 and glossary, 04 §6.4, 05, 06 §7.3, 09 exits and #21, README, PLAN.md) | Pass after fixes 35.1–35.7, 41.2, 41.4, 41.5 and 41.6 |
 | A reference to a split WP names the sub-WP that owns the deliverable (WP-2.16 → 2.16a1…f) | Pass after fixes 37.1–37.3 and 41.1 |
 | A section's MVP → AAA ladder puts each deliverable in the phase of the WP that 09 assigns it (checked for every round-4 deliverable) | Pass after fixes 41.7 and 41.9 |
+| 09 §8.1 names every module directory under `engine/`, `apps/`, `tools/` and `services/{cmd,internal,pkg}/`, and every module README records a `Plan-Rev` ≤ `docs/plan/PLAN-REV` (`cmake -P tools/status/check_status.cmake`; 09 D6, D7) | Pass after R5-09.10 and R5-09.11: 42 directories, PLAN-REV 6 |
 
 ## 2. Fixes
 
@@ -1662,3 +1663,235 @@ edit:**
 - The WSH's `--dev` flag is 04 §10.3's existing dev-process flag, so 02 §1.3 and 04 §1 need no new mode.
 - 05 §6.3.1's pacing (≤ 500 relocations/s per box for deploys) and 04 §2.6's drift repair (≤ 50/s) are
   different uses of the same protocol, and both keep baselines.
+
+## 42. Round 5 minor revisions (2026-09-25)
+
+### Round 5 minor revisions owned by 05 (2026-09-25)
+
+These are the minor gaps `_round5-gaps.md` filed against 05:
+- **Detection.** Nothing detected aimbots, triggerbots, input automation or farm bots. Trust's Phase 4 rules
+  covered only the economy, AAA-SEC-3 measures only speed and teleport hacks, and the anti-cheat vendor
+  decision waited until Phase 4.
+- **Capacity.** §3.6's shard-primary WAL and IOPS, and A5's ±20 % assertion, counted only the ledger, the
+  fence and world scripts.
+- **Replicants.** They were host- and rack-disjoint but not zone-disjoint. §6.7 nevertheless claimed that
+  cells lost with an availability zone restore from replicants, and A19 did not measure state loss.
+- **NATS.** §6.5's permissions contradicted subjects the plan uses (`rpc.<shard>.ws.…`, KV `GROUP`,
+  `ctl.<shard>.cell.all.gateway_dead`) and omitted four roles. Per-role credentials also left the
+  `Helios-Fence` cell unauthenticated.
+- **Maintenance.** No workflow covered SERVER node maintenance.
+
+| # | File | What changed | Why |
+|---|---|---|---|
+| R5-05.1 | 05-backend-services.md (§1.16; new §1.16a; §6.2; §6.6 retention row; §6.8 `TrustDetectorPaused`; §8 `pkg/trust`; §9 Social row; new A21; §11; §12; §13) | **Trust detection framework.** <br>• **Cell features** from data the cell already has. Aim: snap angle, time to target in the rewound view, on-target dwell before fire, hit and precision rate against occlusion, silent-aim mismatch. Input: interval entropy, exact repeats, jerk spectrum, `device_class` consistency. Routine: loop periodicity, cadence, stimulus response, session length. Economy: yield. Cost ≤ 1 % of tick. <br>• **Scoring:** streaming rules (≤ 15 min) and daily gradient-boosted models (≤ 24 h). <br>• **Corpus:** red-team seam-fighter aim cheats, input macros and farm bots at humanization levels 0–3. Honest populations: the NS-4.1 swarm in `--human-model` mode and ≥ 5k reviewed human sessions. A nightly regression gate. <br>• **Ban waves:** delayed 7–21 days on §1.17 cases, with a dry run, two-person approval and ledger remediation under `Sink.Trust.Remediation`. A detector pauses when appeals overturn > 2 % of a wave. <br>• **New BE-A21 (Ph4)** | Gap 1 asked for a design and an acceptance criterion |
+| R5-05.2 | 04-networking-and-servers.md (§9 anti-tamper bullet), 08-client-and-launcher.md (§1.14 "Optional vendor" row), 09-roadmap-and-process.md (WP-3.11, WP-4.8 rows) | The vendor is chosen in Phase 3 by WP-3.11, with native Linux support a criterion, and integrated in Phase 4. WP-3.11 also owns the cell features and corpus v1. WP-4.8 owns the detectors, the ban waves and BE-A21, and cites 05 §1.16a. Each edit changes one line | Gap 1 moves the vendor decision to the Phase 3 security WP. The three sections said "Phase 4" |
+| R5-05.3 | 05 (§1.5, §1.12, §1.13, §2.4, §3.1, §3.6, A5, A9, §8, §9, §11, §13) | **§3.6 write mix:** one row per shard-primary writer (ledger, fence, world scripts, market, timers, account progression, character, mail, world state, groups, industry, orchestrator), with rows/s, WAL and IOPS at expected and design rates. <br>• **Phase 4 totals:** expected WAL 8.1 MB/s (was 5.3). Design WAL 34.5 MB/s (was 27.6) and ≈ 7.5k IOPS (was ≈ 5k). <br>• **Replay budget:** the design mix must stay ≤ 2/3 of the replay capacity that `helios-loadgen replay` measures (planning figure 60 MB/s, so 40 MB/s). <br>• **Account progression** moves to append-only deltas with folds, keeping 06 §5.2's `(account, incarnation, flushSeq)` contract: 1.1 MB/s instead of ≈ 6 MB/s at design. <br>• **Leaderboards and activity snapshots** move to the persistence cluster: 6.2 MB/s, fed from the outbox with an inbox and a 5 min `EVT` rewind after failover. Cells update `ACTIVITY` through `Activity.Update`. Without these moves the primary would carry 40.7 MB/s, or 45.6 MB/s with whole-row progression. <br>• **Persistence cluster:** Phase 4 design WAL 74 → 80 MB/s, sized for ≥ 90 MB/s (was ≥ 80). <br>• **WAL archive:** ≈ 16 → ≈ 24.5 TB raw. <br>• **Next moves, in order:** a world-script cluster, then the Phase 5 ledger split. <br>• **A5 (Ph4)** runs the whole mix with per-writer ±20 %. **A9** adds the board and snapshot writers | Gap 2 |
+| R5-05.4 | 05 (§1.4 `AssignReplicant`; §1.4.6 placement and recovery step 5; §6.4; §6.7 RPO table and "what players see"; A19; §9 Orchestrator and Persistence rows) | **Option (b).** Replicants stay host- and rack-disjoint and are kept in their cells' availability zone. An AZ loss restores that zone's world cells from checkpoints (≤ 30 s of non-value state, 0 value). A19 asserts ≤ 30 s p99 and ≤ 35 s max against the truth tap, and ≤ 1 s for AGs whose replicant survived. Option (a), zone-disjoint replicants, is recorded as rejected: ≈ 4 Gbit/s of cross-zone streams at Phase 4 peak (≈ $7–13k/month in cloud) to save ≤ 29 s of rollback in an event whose recovery takes up to 5 min | Gap 3: choose one option and make it consistent |
+| R5-05.5 | 05 (§2.1, §2.2, §1.13, §6.5, §6.8, §8 integration tests, §9 Runtime row, §11, §13) | **Generated NATS permission matrix.** `schemac` emits `nats-perms.json` for the cell, replicant, WSH, gateway, voice and Go-service roles. CI fails on any permission violation, and a static check requires every subject in code to be declared. The matrix grants the three missing subjects. <br>• **Two accounts per environment** (`svc`, `sim`), with `share: true` service exports, so the server stamps `Nats-Request-Info`. <br>• **Per-process credentials (Phase 3):** nkey user JWTs tagged `proc:<id>`, issued against a projected service-account token and revoked on confirmed death. <br>• **Caller checks:** the ledger, persistence and the WSH reject a request whose `Helios-Fence` cell (or `persist` subject token) is not the authenticated process, and the fence check requires the header AG's `owner_cell` to be that process. Only gateways may inject a player identity. `NatsCallerMismatch` is SEV1 | Gap 4 |
+| R5-05.6 | 05 (§6.1; new §6.1a; §6.2; §6.4; §6.8 `NodeDrainOverdue`; §8 chaos; §9 Runtime row; A14 (d); §11; §13) | **`helios-nodemaint`:** request, then admission (one blast-radius domain; one batch at a time; normal mode; no `WarmPoolBelowDomain` or `FailureDomainLost`; no `PreProvision` or epoch flip within 1 h), then surge first, then cordon and `Drain`. Cells move by migration, replicants make-before-break, and WSH leases hand over. Agones `eviction.safe: Never`. Then self-test and uncordon. <br>• **Surge:** colo keeps one spare SERVER host per shard (≈ 3 %); in cloud, the autoscaler. <br>• **Times:** ≈ 7.5 h with one-host batches, ≈ 3 h with rack batches. <br>• **A14 (d) (Ph4):** hitch p99 ≤ 1 s per region moved, 0 disconnects, 0 state loss, the pool never below its bound, an unadmitted `kubectl drain` evicts nothing, done in ≤ 8 h | Gap 5 |
+| R5-05.7 | ../PLAN.md (§9 criteria list); this file (§1 criteria check row) | `BE-A1…A20` → `BE-A1…A21` | New criterion BE-A21 |
+
+**Criteria.**
+- New: **BE-A21** (Ph4, WP-4.8).
+- **A5 (Ph4)** now runs the whole §3.6 write mix. It asserts each writer's WAL within ±20 % of its row, total
+  WAL (34.5 MB/s) and IOPS (≈ 7.5k) within ±20 %, the mix ≤ 2/3 of measured replay capacity, and each
+  writer's SLO.
+- **A9** adds 10k leaderboard upserts/s and 500 activity snapshots/s (≈ 80 MB/s of WAL).
+- **A14** gains clause (d).
+- **A19** gains the zone-loss state-loss bound.
+- No ID was renumbered.
+
+**Left to the integration pass or other owners.**
+- *AAA-SEC-9.* The reviewer proposed it, but a scorecard row would change 01 §3.8 and the 65-criterion count
+  that PLAN.md §1 and §3 and the §41 check state, and 01 owns those. The criterion is therefore BE-A21, owned by
+  WP-4.8. 01's owner may promote it.
+- *09's Phase 4 exit* reads "every criterion with Ph ≤ 4", which covers BE-A21, but it is not in the named
+  list.
+- *02 and 04 may mirror 05 §13.* 02: schemac's `nats-perms.json` emitter. 04 §10.3: `helios-bot`'s red-team
+  variants and `--human-model`. 04 §10.2: the trust pre-filter's ring flush.
+- *05's status header* lists the round-5 fixes. Its version ("draft v5") is left to the integration pass, as
+  in fix 41.11.
+
+**Checked and consistent, no edit.**
+- 00 ADR-007 and 04 §6.4 place replicants "on a different host (and rack)", and ADR-007's ≤ 1 s is for a cell
+  crash. Both hold under option (b).
+- 01 AAA-SRV-9 is "on cell crash".
+- 06 §5.2's flush contract and 06 §6.7's `ACTIVITY` key are unchanged: the service now writes the key for
+  the cell.
+- 06 GP-11 (c)'s account-row limit (≤ 32 KiB) still holds for the base rows, and its 2k flushes/s with p99 ≤ 20 ms is the delta insert.
+- 09 WP-3.3 (cites 05 §6, §9) owns §6.1a and the per-process credentials. WP-4.4 (cites 05 §9) owns rack
+  batches, A14 (d) and the full A5 mix. WP-3.2 (cites 05 §1.12) owns the leaderboard and snapshot move. All
+  of these criteria are already in those WPs' acceptance lists.
+
+### Round 5 minor revisions owned by 02 and 04 (2026-09-25)
+
+Round-5 gaps addressed: engine/02 (Jolt ordering independence; gate spec lag), engine/04 (replay keyframes for
+long-lived zones), backend/04 (load-dependent decisions missing from the replay contract), plus the parts of the
+engine/09 and tools/09 gaps whose fixes name 02 §2.2 or 04 §10.2.
+
+| # | File | What changed | Why |
+|---|---|---|---|
+| R5-02.1 | 02-engine-runtime.md (§1.1 backstop; mimalloc row of the pre-`main` table; check 5) | The illegal-instruction backstop decodes the faulting opcode. `ud2`/`ud1`/`ud0` and every #UD that is not an ISA fault pass through (Windows `EXCEPTION_CONTINUE_SEARCH`; Linux returns after `SA_RESETHAND` restored `SIG_DFL`). Only a VEX/EVEX lead byte (`C4`, `C5`, `62` after optional prefixes) or POPCNT gets the CPU message and exit 78. When the crash handler installs it takes #UD over: on Linux its `sigaction` replaces the backstop and its re-raise restores `SIG_DFL` (today's `posix_crash.cpp` restores the backstop); on Windows it adds a first-in-chain vectored handler that sends non-trap #UD to the dump path, so the gate keeps three exports. Dumps carry a `cpu_gate` annotation. Check 5 gains ud2 and EVEX (SDE `-hsw`) fixtures before and after crash-handler install. The mimalloc row no longer claims `tp_mimalloc` pins `MI_WIN_INIT_USE_CRT_TLS=1` (`third_party/CMakeLists.txt` defines only `MI_STATIC_LIB`): it relies on mimalloc's default, which is that mode on every Helios toolchain, and check 3 fails the one unsafe mode through a non-CRT `_pRawDllMain` | A real crash could end as "CPU unsupported" with no dump; the working tree already passes the three traps (`hcg_is_deliberate_trap`), so the spec lagged the code; the mimalloc claim was false and unowned |
+| R5-02.2 | 02 (§2.2) | Heap lifetime rule (a heap used by another thread is never freed, only pooled or quarantined; `destroyAll` only for thread-confined heaps; no `mi_theap_t*` across a job boundary), and sharded, batched tag accounting (32 shards, 256 KiB forwarding, peak touched only by a raising batch, `flushAccounting()` per tick or frame, hard budgets exact to 256 KiB per thread), with a `core_tests` recycling regression and a ≤ 3× `mi_malloc` cost target at 4 and 16 threads | engine/09 gap: fold spike (a)'s heap-recycling hazard (200/200 misrouted allocations) and the 460–890 ns exact-accounting collapse into 02 §2.2, which only 02 can edit |
+| R5-02.3 | 02 (§5.4; §7.1 Determinism; RT-03; RT-19; §8.3; §8.4) | **Ordering independence:** stable body keys in `mUserData` (EntityId; packed `TileKey` for tiles; PCG instance key for asteroids and scatter); vendored `third_party/jolt/patches/stable-order` keys the contact sort key and tie-break, the equal-motion-type body-1 choice and `CharacterVirtual`'s contact predicate by `(layer, key)`; `Body::EFlags::NoCrossUpdateCache` on ShipHull and Vehicle bodies (no manifold reuse or warm start on the first collision step of each `Update`; persisted-contact events unchanged); wheel contact IDs are replaced by Jolt's default full wheel test before use; keyframes and residuals re-create bodies with `CreateBodyWithID` from a body table. Deterministic `BodyID`s everywhere rejected. RT-03 gains a permuted-ID variant (must fail without the patch) and a resting-creep bound (< 1 mm in 60 s); RT-19 gains a ≥ 3-tile contact case with permuted IDs and a 10-tick rollback | engine/02 gap. Verified in the vendored Jolt 5.6.0: `ContactConstraintManager.cpp` (`mSortKey` from `SubShapeIDPair` with body IDs; `SortContacts`), `PhysicsSystem::ProcessBodyPair` (lower ID is body 1), `CharacterVirtual::ContactOrderingPredicate` (`mBodyB`, `mCharacterIDB`). The gap's `EStateRecoverType::Contacts` is `EStateRecorderState::Contacts`; putting the contact cache into the rollback snapshot was not chosen, because corrections restore the cell's state and the cell's cache is keyed by cell `BodyID`s, so the flag removes that state instead |
+| R5-02.4 | 02 (§7.4; §8.3 Script; §8.1 Physics and Script ladder rows) | Native codegen stays off on cells and world-script hosts until `third_party/luau/patches/codegen-fornloop-fuel` lands (`VmConfig` refuses it; today it warns); `third_party/luau/patches/fuel-counter` is required (measured 12–17 % against ≤ 10 %); both join `det-math` in `sim_abi.script`. A replay-keyframe rebase bullet mirrors 04 §10.2 | tools/09 gap (b): the patches had no home in the plan text |
+| R5-02.5 | 02 (§8.4 flecs row; §8.6 04 row; status header) | The flecs risk row records RT-01's Phase 0 pre-bench (structural ops 3.4–6.7 ms against 1.5 ms; raw flecs ≈ 0.9–1.7 ms; the cost is wrapper bookkeeping a custom ECS would also need), so wrapper optimization comes first; §8.6 and the header list the round-5 changes | Keeps 02's risk row consistent with the committed spike; the decision record itself is 09's and 00's |
+| R5-04.1 | 04-networking-and-servers.md (§10.2 table; §6.2a item 4; §6.3; §11.2) | New replay rows `ColocDecision{tick, set_id, pair, outcome, reason, inputs}` and `HandoffDecision{tick, root, role, peer, epoch, reason}` (each side), and `Keyframe{tick, cause}`. The overload row now says the stage and measured tick times do change sim state, but only through logged decisions (`JobResult`, `ColocDecision`, `HandoffDecision`). §6.2a and §6.3 say each decision is logged; the replayer applies logged outcomes and never reads a load measurement | backend/04 gap: host choice, refusals and NACKs depended on load but were not replay events, and the overload row said "never" |
+| R5-04.2 | 04 (§10.2 contract, Recording, new *Replay keyframes* and *Script rebase*, Replay; §3.1; §6.7 residual row and Replay bullet; §10.3 metrics; §11.1; §11.2 `Recorder::keyframe`) | A zone replays from any keyframe. Keyframes are cut at start, migration (Q), recovery or rejoin (S), and every 30 min by a script rebase. The contents table lists ECS at full precision, registry and handle blocks, AG table, effect inboxes and outboxes, co-location leases, ghosts and hit history, per-grid body and constraint tables with `SaveState(All)` incl. contacts, tile bodies and holds, nav inputs, RNG and clock, inbox and in-flight requests, and the lane's C++ state; no Luau state. The rebase waits (≤ 60 s) for no suspended coroutine of a module without an `Adopted` handler, ends all coroutines, swaps a pre-loaded fresh VM, runs module chunks and raises `Adopted{cause = rebase}`. The ring keeps the log back to the newest keyframe ≥ 30 min old (≤ 1 GB at 500 players). The migration residual carries the body table so Q can `CreateBodyWithID` before `RestoreState` | engine/04 gap: no mid-session keyframe existed, Luau threads cannot be serialized, and the 30 min ring could not be replayed alone for a long-lived zone. Jolt's `RestoreState` needs matching IDs, which the residual did not provide either |
+| R5-04.3 | 04 (NS-2.4; NS-3.8) | NS-2.4 **keyframe clause**: a 70 min run replays its 10 min window from the rebase keyframe cut ≥ 60 min in, with that keyframe and the log alone; ≥ 1,000 coroutines re-armed, ≥ 20 in `awaitService`; keyframe tick ≤ 3 ms extra; 0 script errors and lost results; a handler-less 2 s wait defers the rebase. NS-3.8 **multi-cell clause**: every cell of an NS-3.12(c) furball and of NS-3.11(c)'s migrations (incl. a 30 s outage with an expired hold) replays bit-exact one cell at a time, also GCC↔MSVC, with load measurements forced to other values; `MigratedFrom` chains verified; `ZoneRejoin` present. **Physics-order clause**: a keyframe replay whose post-K bodies take other slots stays bit-exact | Both gaps' acceptance asks. IDs unchanged (clauses appended in place); owners stay WP-2.4 (NS-2.4) and WP-3.1 (NS-3.8) |
+| R5-04.4 | 04 (§5.3; §10.2 physics row; §10.2 lint paragraph; §10.2 Replay; §11.1; §11.3 Tooling; §11.5 replay risk; status header) | Mirrors 02 §7.1's ordering rule; names `codegen-fornloop-fuel` (the `FORNLOOP` interrupt in `CodeGen/src/IrTranslation.cpp`) and `fuel-counter`, with cells interpreter-only until the first lands; ladder, layout and risk rows updated | engine/02 gap ("mirror in 04 §10.2"); tools/09 gap (b) ("name the CodeGen patch in 04 §10.2") |
+| R5-06.1 | 06-gameplay-framework.md (§8.2 rule 9; §11 *Coroutines are tasks*) | One line each: rule 9 cites 02 §7.1's stable order and cache rule; §11 notes that a cell's replay-keyframe rebase raises `Adopted` with `cause = rebase` | The engine/02 gap asks for the mirror in 06 §8.2; designers read 06 §11 to know when `Adopted` fires |
+
+**Hand-offs (not edited here; other owners' files):**
+- **09 §5.10.4 (b), "Windows failure path and gate-object rules" row:** "The objects keep `/GS` (the allowlist
+  admits `__security_check_cookie`)" is stale. The working tree's `helios_cpu_gate_sources()`
+  (`cmake/HeliosIsa.cmake`) applies `/GS-` and `-fno-stack-protector`, and `cmake/isa_allowlist.cmake` admits no
+  cookie symbol. The CONF table should also record the trap passthrough (present in both hooks) and, as open
+  WP-0.5r deltas, the VEX/EVEX classifier, the crash-handler handover (`posix_crash.cpp` must re-raise with
+  `SIG_DFL`; a first-in-chain Windows vectored handler) and check 5's new fixtures (02 §1.1).
+- **09 WP owners:** `third_party/jolt/patches/stable-order` and the `NoCrossUpdateCache` flag are needed by
+  RT-03's permuted variant (Ph0–1) and RT-19 (WP-1.2); the two Luau patches need the WP the tools gap proposes
+  (WP-0.10r or WP-1.6); the sharded tag accounting is a `core` change in WP-0.5's scope; keyframes and the
+  rebase fall under WP-2.4's "`SimInbox` + replay".
+
+No criterion ID was added or renumbered. Extended in place: RT-03, RT-19 (02); NS-2.4, NS-3.8 (04). Checked and
+consistent, no edit: 06 §8.1a rule 3's snapshot needs no contact state under the new flag, and its rule 6 full-state
+correction restores correctly (wheel contact IDs above); 04 §6.7's Scripts rule is the model the rebase reuses;
+05's world-script hosts inherit the interpreter-only rule through 02 §7.4's "cell rules"; 07 §1.6's per-cell PIE
+replay logs gain keyframes with no tool change.
+
+### Round 5 minor revisions owned by 07 and 08 (2026-09-25)
+
+These are the four tools-lens gaps `_round5-gaps.md` filed against 07 and 08:
+- **08, group-content HUD.** §1.7.2 had no party or raid frames, no encounter HUD, no PvP match HUD or scoreboard,
+  and no AFK, vote-kick or deserter prompts. A healer could not play GP-14 (a)'s flashpoint or operation, and 06
+  §12.4's scoreboard had no panel.
+- **07, group content at a desk.** No PIE mode ran an activity through the activity service end to end, there
+  were no dev controls for tier, modifiers, seed, checkpoints, wipes, role bots or lockout periods, and no ED
+  criterion timed an encounter edit-and-retest loop. TOOL-10's brief had no activity.
+- **07, wall-clock systems.** Neither PIE nor `helios-backend` could move game-calendar time, so upkeep,
+  reinforcement, lockouts, industry and resource shifts could only be tested with compressed record values.
+- **07, structure authoring.** 07 never mentioned `StructureDef`, `CityDef`, `StructureLifecycleDef` or
+  `ZoneRulesDef`; nothing produced 06 §9.2.1's cooked no-build polygons; there was no placement preview, heat map
+  or T28 rule family; and BENCH-5 was defined twice (ED-10's editor-built structures against GP-16 (e)'s
+  rule-placed snapshot).
+
+| # | File | What changed | Why |
+|---|---|---|---|
+| R5-07.1 | 07-editor-and-tools.md (§1.6 modes table; new §1.6.3; T12; §4.1; §5.1; §5.3; §5.4; §5.5; new ED-24) | **Activity PIE (Ph3, `--dev` only).** Gateway, origin-zone cell and the dev backend's activity service, matchmaker, ledger and orchestrator; instance cells from a warm pool of two, so `CreateInstance` → Loading ≤ 2 s (SRV-11). The queue → ready check → launch → encounters → `ClaimGuard` rewards → Closing path is production code. T12's **Activity panel**: director, *Launch premade*, *Queue*, *Fill roles* with Foundation role-behaviour bots, live `ActivityState`, roster policy and claims. Dev controls as audited GM commands accepted only by `--dev` processes: tier, any modifier set and a pinned seed; *Jump to encounter or phase checkpoint* from a checkpoint library, restored in place by 06 §6.7's replacement-cell rehydrate (≤ 1 s; missing phases fall back with a warning; synthesized jumps are `devSkipped`); *Force wipe*; *Kill instance cell*; *Advance lockout period* through the dev shard clock (guard rows stay immutable per period); *End run*. Save → phase re-engaged ≤ 10 s p95. **ED-24 (Ph3):** on the *Hollow Vault*, a queued premade plus role bots, a matchmade tier with a forced modifier and pinned seed, 20 T12/T23 edit iterations at ≤ 10 s p95, wipe and cell-kill resume, exactly one claim per character per period and one more after *Advance lockout period*, and the return to the origin zone | Gap "designers cannot iterate on instanced group content at a desk" |
+| R5-07.2 | 07 (new §1.6.4; T26; T27; §4.1; §5.1; §5.3–5.5; new ED-25) | **Dev shard clock (Ph3).** `g = g₀ + (t − t₀) × rate`, monotonic (no rewind; rate 1–3,600), published as the dev-only KV `CONFIG` key `dev.clock`. The timer worker fires due timers in due order with catch-up; the calendar publishes crossed events in order; `ZoneClock::wall_now()` returns `g` in `--dev` cells (Wall effects, weather epochs, wall deadlines); WSHs and offline-progress services use it. Leases, heartbeats, tokens, JetStream windows, idempotency windows and TTLs stay on real time. Replay needs no change because 04 §10.2 logs `WallDeadline{tick, id}`; `.hrepro` manifests record clock epochs. Refused when `env` is `staging` or `live`, and compiled out of shipping cells. Controls on the PIE *Clock* menu, T27 on dev shards (GM role `dev.clock`), `Editor.cmd` and `helios-admin clock`: *Advance 1 h / 1 d / 1 w*, *Run to next due timer* (optionally for the selected entity), *Fire calendar event* (advances to it), *Rate*; a T26 **Timers** tab. Budgets ≤ 1 s and ≤ 30 s. **ED-25 (Ph3):** with *Cinder Reach*'s shipped (uncompressed) values, a House runs Paid → Decay 1–3 → Condemned → Reclaimed and a territory structure runs anchoring → Reinforced(1) (one `PreProvision`) → Vulnerable(1) inside the owner's window, within 10 min of wall time, with GP-16 (c)'s and GP-17 (c)'s audit folds at 0 mismatches and the guards checked | Gap "wall-clock systems cannot be exercised in PIE" |
+| R5-07.3 | 07 (new §2.7; T01; T21; T28; §4.1; §4.1.1; §5.1; §5.3–5.5) | **Structure, zone-rules, city and territory authoring.** The editor never places a player structure (plot rows only through the runtime path). §2.7.1: `ZoneRulesRegion` entities in T01 Volumes mode, and an assetd `zonerules` builder that generates the no-build set as the union of `Region.NoBuild` regions, `Settlement`-tagged authored settlements (+32 m), T06 `Road` splines (half-width + 8 m), lairs (spawn radius + 16 m) and `TravelPoint`s (64 m), stored per cube face in integer centimetres and hashed into the zone content; ≤ 10 s full, ≤ 2 s p95 incremental (a §4.1.1 row). §2.7.2: T21's **Structure tab**: footprint generated from collision (≤ 16 vertices, editable), clearance and neighbour gap, terrain stamp preview on real `pcg`, and a *Try on terrain* preview that runs the runtime `PlacementCheck` with 08's reason codes. §2.7.3: the T01 **buildable-area heat map** (Ph3; ≤ 2 s for 4 × 4 km at 16 m; buildable km² and a plot-count estimate against `maxStructures`). §2.7.4: `CityDef` and `StructureLifecycleDef` customizers. §2.7.5: nine T28 rules (`structure.footprint`, `.stamp`, `.kind`, `.placeable`; `zone.nobuild.stale`; `zone.structures.layers`, `.max`; `city.ranks`; `territory.lifecycle`). Ph2 for regions, the cook, the Structure tab and the `structure.*`/`zone.*` rules (M2's harvesters place through `PlacementCheck`); Ph3 for the heat map and the city and territory parts | Gap "round 4's structure systems have no authoring workflow" |
+| R5-07.4 | 07 (ED-10); 01-vision-and-scope.md (§3.2 BENCH-5 row); 09-roadmap-and-process.md (§2.4 M3 paragraph); ../PLAN.md (§8 M3 row) | **BENCH-5 settled.** ED-10 co-edits an authored, `Settlement`-tagged town at BENCH-5 scale, then checks the regenerated no-build set: a bot placement just inside is refused with `NO_BUILD` and one just outside is accepted, as the heat map predicted. BENCH-5's measured scene is GP-16 (e)'s rule-placed snapshot, as 01's BENCH-5 row and 09's M3 sentence now say (one line each) | Gap's last bullet: BENCH-5 was defined twice |
+| R5-07.5 | 01-vision-and-scope.md (§3.9.1 brief table, one row) | TOOL-10's brief gains a **Strike** deliverable: a 2-encounter strike with 2 tiers, a phase checkpoint, a weekly lockout and a `QueueDef`, iterated in Activity PIE and cleared through the queue (T12, T23, T09, T01) | Gap asked for an activity deliverable in TOOL-10's brief |
+| R5-07.6 | 05-backend-services.md (§5 flag table, one row) | `--dev-clock`: dev flavour only, refused for `staging`/`live`; the `dev.clock` key and its consumers; real-time leases, tokens, TTLs and idempotency windows; points to 07 §1.6.4 | The gap names `helios-backend --dev-clock`, and §5 lists every backend flag |
+| R5-07.7 | 09-roadmap-and-process.md (WP-3.7 row) | Own adds 07 §1.6.3, §1.6.4 and §2.7; Deps add "3.2 and 3.6 for ED-24 and ED-25" (the activity service, encounters, housing and territory); Deliverables add Activity PIE, the dev shard clock (with `--dev-clock`) and the heat map; Acceptance adds ED-24 and ED-25 | Every new criterion needs an owning WP (check row 1). The Phase 3 exit already covers every Ph ≤ 3 criterion |
+| R5-08.1 | 08-client-and-launcher.md (header; §1.7.2 two new rows and the Activity director row; coverage paragraph; §1.7.3 reject paths and a new group-content fixtures bullet; §1.12 protected actions; §4.3 Game UI row; CL-23; §4.5; §4.6; §4.7; §4.8) | **Group and raid frames** (`GroupFramesVM`, `UnitFrameVM`; party ≤ 6 in Ph2, raid ≤ 16 in Ph3): role, sync, health, shields, resource, role-filtered effects, threat, downed/reviving/dead/AFK/linkdead/out-of-range states, presence only outside the interest set (04 §9), click targeting and **gamepad frame focus**, range dimming, protected targeting. **Encounter and match HUD** (`EncounterVM`, `MatchStateVM`, `ScoreboardVM`, `VoteKickVM`, `RosterPolicyVM`; Ph3): boss bars (`HUD.Boss`), phase, enrage, revive tokens, checkpoint, wipe and resume banners, the downed screen; `MatchState` round, clock, scores, phase banners, medals, mercy warning and end screen with cause; a scoreboard from the cell's per-player standings (the event-log fold); AFK warning, vote-kick prompt with server refusal reasons, deserter confirmation and rejoin prompt. Flows: a gamepad-only heal-targeting pass over 16 frames, encounter banners through a checkpoint, a forced wipe and a cell kill, a 6v6 scoreboard equal to the offline fold after a cell kill, and AFK, vote-kick and deserter prompts (driven by 07 §1.6.3's dev commands). The panels are listed in the `starter-shooter` and `starter-story` coverage and in CL-23. Vote-kick starts and votes join the protected actions | Gap "§1.7.2 has no group-content HUD" |
+| R5-08.2 | ../PLAN.md (§2 "Client" row; §6 08 bullet; §9 criteria list) | 27 → 29 Foundation UI panels (twice); `ED-1…23` → `ED-1…25` | Keeps the summary truthful for the two new panels and two new criteria |
+
+**Criteria.**
+- New: **ED-24** and **ED-25** (both Ph3, WP-3.7), nightly as dual-path `helios-uitest` replays (§4.4); ED-24 also
+  runs headless through `helios-tool pie --activity`.
+- Reworded in place: **ED-10** (an authored town at BENCH-5 scale plus the no-build placement clause).
+- Extended in place: **ED-15** (replays of ED-23…25), **CL-23** (the group-content fixtures).
+- No ID was renumbered.
+
+**Hand-offs (other owners' files, not edited here).**
+- **06:** §6.7 a replicated, instance-audience encounter state sent on change like `MatchState` (engaged encounter,
+  phase, enrage deadline tick, revive tokens left per team, wipe count, checkpoint `seq`), and the downed and
+  reviving states with their deadline ticks on player entities; §6.11 per-player standings (the running fold,
+  restored after a cell kill) and the match end cause; §6.10 the seconds left on the AFK warning cue, vote-kick
+  start and cast intents with refusal reasons, and the vote's replicated state; a `HUD.Boss` tag; the dev-only
+  activity GM commands (checkpoint restore, force wipe) accepted only by `--dev` cells; §9.2.1 may list
+  `ZoneRulesDef`'s `noBuild` margins block, the `Settlement` and `Road` tags and the `TravelPoint` component.
+- **05:** §1.12 the activity service's dev launch overrides (any modifier set, pinned seed) and the dev
+  orchestrator's warm instance pool; §1.8 and §1.15 the dev clock's catch-up and crossed-event rules, which the
+  new §5 row summarizes.
+- **04:** §11.2's `ZoneClock::wall_now()` gains the `--dev` path; §10.3's dev-only hook list may add the activity
+  GM commands; the §10.2 recording header may carry the dev-clock epoch (07 records it in the `.hrepro` manifest).
+- **09:** §6's editor-UI test-matrix row can add the ED-24 and ED-25 replays; the WP-2.13 and WP-3.8 parenthetical
+  panel lists can name the new panels (both rows already own "the Ph2/Ph3 panels of 08 §1.7.2"); the Phase 3
+  exit's "notably" list can name ED-24 and ED-25.
+- **01:** TOOL-10's brief grew by one deliverable, so its "about 7 working days" sizing should be rechecked.
+- **This file:** check row 1's ED range becomes ED-1…25 at the integration pass.
+
+**Checked and consistent, no edit.**
+- 06 §9.2.1 already calls the no-build polygons cooked zone data, and `PlacementCheck` rule 2 is unchanged:
+  §2.7.1 only produces its input.
+- 06 GP-16 (e) already makes BENCH-5's snapshot rule-placed, and 01's Phase 3 proof line already says "built
+  through the housing and city rules". TOOL-10's "inside the BENCH-5 frame budget" still measures an authored
+  settlement against BENCH-5's frame budget.
+- 04 §10.2 already logs `WallDeadline{tick, id}`, so the dev clock needs no replay change; 06 §11 rule 4 confines
+  wall time to durable timers, `Wall` effects and calendar resets, which are exactly the clock's consumers.
+- 06 §6.13's "activity director (08 §1.7)" and §12.4's Activities panel with a scoreboard are now covered by the
+  Activity director and Encounter and match HUD rows.
+- 08 §1.14 and 05 §1.16a are unaffected by the protected-action addition: vote-kicks were already reported to
+  Trust (06 §6.10).
+
+### Round 5 minor revisions owned by 09 and PLAN.md (2026-09-25)
+
+`_round5-gaps.md` filed three minor gaps against 09 and PLAN.md:
+- **backend/09.** §8.1 said "cell and gateway not started" and listed no HXL work, although `engine/server`,
+  `engine/authority`, `engine/hxl`, `services/pkg/hxl` and `nats.c` were in the tree.
+- **engine/09.** RT-01's committed pre-bench FAIL (`engine/ecs/SPIKES.md`) was missing from §8.1. §8.2 still
+  said WP-0.6 "retires K2 and K3", and K2 was an open risk rather than a fired trigger.
+- **tools/09.** Four items:
+  - (a) RT-01 and K2, with no `docs/adr/` entry;
+  - (b) the RT-13 overhead and the codegen fuel mismatch, with no owning WP for the two Luau patches;
+  - (c) the mimalloc heap hazard and the `alignedAlloc` contention;
+  - (d) six modules ahead of the round order, no README `Plan-Rev`, and D6 not mechanical.
+
+This pass also takes three other inputs:
+- item (3) of the engine/02 gate gap (09 §5.10.4 (b)'s stale `/GS` row);
+- the hand-offs to 09 in the three subsections above;
+- the lead's tasks: rebuild the status from the verified facts in `_round5-gaps.md`, record the fired
+  triggers with the lead's disposition, open ADR-004a, and add PLAN.md's review record.
+
+| # | File | What changed | Why |
+|---|---|---|---|
+| R5-09.1 | 09-roadmap-and-process.md (§8.1) | Rebuilt from the lead's verified facts only. **Committed:** WP-0.1 partial; core 141 and math 104 tests; WP-0.7 (121); the ECS (90); WP-0.10 (79, except two RT-13 clauses); WP-0.11 (51, Slang pinned); WP-0.13 (84, NS-0.4 partial); WP-0.15 (124). **In progress:** WP-0.2 and 0.5, 0.12, 0.14 and 0.19. **Not started:** 0.3, 0.4, 0.6c, 0.9, 0.16–0.18 and 0.20. Terms are defined: "committed" stands in for "merged" until the queue exists. Rows marked *re-checked* were confirmed by reading the tree: the presets' 3.24 minimum; SDL3 renderers and Wayland off; no merge-queue script; the ISA and gate state; WP-0.15r's open rows. WP-0.15 was committed ahead of WP-0.15r, so D4 holds the next backend WPs. New rows: fired risks, and a tree inventory that names every module path with its WP | backend/09, engine/09 and tools/09 (a) (c) (d); the lead's task (1). The older counts (174/115 tests; "cell and gateway not started") are superseded |
+| R5-09.2 | 09 (§8.2) | First the in-progress WPs finish (0.14, 0.19, 0.12, 0.2, 0.5). Then, in order: 0.15r, 0.10r, **1.1a**, the rest of 0.1, 0.2r, 0.3 (with NS-0.4's libFuzzer nightly), **0.7b**, the rest of 0.8, 0.6c, 0.5r, 0.9 and 0.16. WP-0.6 no longer claims to retire K2 and K3, since (a) and (b) are done | engine/09 gap; the lead's task (1) |
+| R5-09.3 | 09 (§7 intro, **K2**) | K2 is **fired**, with the numbers. Disposition, as the lead gave it: option A, wrapper optimization in WP-1.1a, keeping flecs, because raw flecs meets the budget with 40 % headroom; a custom ECS only if the optimized wrapper still fails RT-01 at the Phase 1 gate. The mitigation is rewritten, because a custom ECS alone would not help (SPIKES §3.4). Next triggers: the Ph1-midpoint indicator and the Ph1 gate. The intro now defines how a fired row is written | engine/09, tools/09 (a); the lead's task (1) |
+| R5-09.4 | 09 (§7 **K3**) | Spike (a) findings. The recycling hazard (200/200 misrouted allocations and one crash in the raw API; 0/200 with pooled heaps), exact accounting at 460–890 ns per pair, and `alignedAlloc` ≈ 30× mimalloc. Mitigation: 02 §2.2 (R5-02.2) in WP-0.5. New triggers: a wrong-heap allocation, or > 3× `mi_malloc` | tools/09 (c) |
+| R5-09.5 | 09 (§7, new **K39**) | Luau fuel metering, **fired**: codegen charges +1 fuel per `for` exited by `break` or `return`, and the interrupt overhead is ≈ 12–15 % against ≤ 10 %. Mitigations: the `codegen-fornloop-fuel` patch (interrupt in `FORNLOOP`), cells interpreter-only until then with `VmConfig` refusing, and the `fuel-counter` inline-counter patch, in WP-0.10r. The register now has 40 entries (K1–K39 plus K5b) | tools/09 (b); the lead's task (1) |
+| R5-09.6 | **New `docs/adr/ADR-004a-ecs-rt01-structural-ops.md`**; 00-decisions.md (index; ADR-004 bullet) | **ADR-004a, status Open.** <br>• **Context:** the SPIKES.md numbers, per clause, run and op, with the callgrind breakdown. <br>• **Options:** A, optimize the World wrapper on flecs (SPIKES §3.4 items 1–5); B, a custom archetype ECS; C, raw flecs for hot structural paths. <br>• **Decision so far:** A, time-boxed to WP-1.1a, re-evaluated at the Phase 1 RT-01 gate. <br>• **Burst budget:** per sync point. The "per two sync points" reading is rejected, because it would relax a threshold. <br>• **Measured storage:** the verdict takes the worse of tag and DontFragment toggles. <br>• **Midpoint check:** if M1 is above 2.5×, a scoping spike for B. <br>• **Gate outcomes:** A accepted; B decided; or, with SERVER unmeasured, the ADR stays open. <br>• **Consequences**, and **closing measurements M1–M5.** <br>00 lists ADR-004a as open under ADR-004 | engine/09 ("open the ADR-004 decision in 00"); tools/09 (a) ("ADR-004a … an explicit call on the burst budget"); the lead's task (2) |
+| R5-09.7 | 09 (§2.1 WP-0.6 acceptance; §2.2 WP-1.1 and new **WP-1.1a**; Phase 0 exit; §3.2 #4 and #5) | WP-1.1a delivers option A. Its only dependency is WP-0.8's committed ECS, so it starts now. It is accepted on M1 (World ≤ 1.6× raw flecs) with the tests and the hash unchanged. WP-1.1 runs the formal SERVER run (asserts off, no other load) and closes ADR-004a. Outcome notes go on WP-0.6 and reconciliations #4 and #5. The Phase 0 exit gains WP-0.10r and "option A under way" | engine/09 ("a WP for wrapper structural-op overhead, with a SERVER re-measure … as the formal RT-01 run"); the lead placed it in WP-1.1 |
+| R5-09.8 | 09 (§2.1 WP-0.10 note; new **WP-0.10r**) | The owning WP for both Luau patches: `third_party/luau/patches/`, the `VmConfig` refusal, and `sim_abi.script`. Acceptance: RT-13's fuel identity (the pinned test flips, and fails with the patch reverted), ≤ 10 % overhead, and a refused cell codegen config. It is a D3 rework, because R5-02.4 made the refusal normative | tools/09 (b) (WP-0.10r or WP-1.6: RT-13 gates Phase 0, so WP-0.10r); the 02/04 hand-off |
+| R5-09.9 | 09 (§2.1 WP-0.7 note; new **WP-0.7b**) | WP-0.7 is closed with the `cpp`, `go` and JSON emitters. `luau`, `sql`, `repl` and `lint` move to WP-0.7b, because 01 §5.4's Phase 0 clause needs Luau and SQL. `records`, `editor`, `docs` and `proto` go with their consumers | The lead's status (the emitters are stubs, "later WPs") against WP-0.7's deliverables and 01 §5.4 |
+| R5-09.10 | 09 (§5.10.2 D1, D6, D7; K37); **new `docs/plan/PLAN-REV`** (6); **new `tools/status/check_status.cmake`** | **D1:** the counter starts at 6. Revisions 1–5 are drafts v1–v5, and 6 is this round's minor revisions. **D6 made mechanical before WP-0.3:** a CMake script, with no build and no network, fails the round audit when a module directory under `engine/`, `apps/`, `tools/` or `services/{cmd,internal,pkg}/` is not named in §8.1, or when a module README lacks `Plan-Rev` or exceeds `PLAN-REV`. WP-0.2 registers it and WP-0.3 absorbs it. **D7:** a module with an open delta keeps the revision before the change that opened it | tools/09 (d) ("make D6 mechanical: a script that diffs engine/, apps/ and services/ against §8.1") |
+| R5-09.11 | 09 (§5.10.4, new part **(c)**); **20 module READMEs**, each with a "Plan conformance" section: `engine/{authority,core,ecs,gameplay,hxl,math,net,reflect,render,rhi,script,server}`, `apps/{cellserver,gateway}`, `services/`, `services/pkg/hxl`, `tools/{lint,rendertest,schemac,shaderc}` | D7 by hand at revision 6, one row per module group. **`Plan-Rev` values:** 6 for most modules; 5 for `engine/script` (WP-0.10r); 3 for `engine/core` and `tools/lint` (§5.10.4 (b)); 1 for `services/` (WP-0.15r). **Result:** `engine/authority`, `engine/server` and the apps conform (CONF-01/02/04/08 read). `LeaseHolder` follows the holder rule, but the C++ test partitions for 20 s where CONF-03 asks 60 s, so WP-0.14 lengthens it. `engine/gameplay`'s two extra record fields go to 06's owner. Directories without a README (`engine/platform`, `apps/samples`, `tools/ci`, `tools/prebuilt`, `tools/vendor`, and the Go packages under `services/`) are named in §8.1 without a `Plan-Rev` | backend/09 ("record each new module against its WP … run the D7 check … `LeaseHolder`"); tools/09 (d) ("Plan-Rev in every in-tree module README, plus a §5.10.4 (c) table") |
+| R5-09.12 | 09 (§5.10.4 (b): the gate-object row; new "Illegal-instruction backstop" row) | `/GS-`, `-fno-stack-protector` and `-fno-sanitize=all` on the gate objects are now **conforming**, and the allowlist admits no cookie symbol. New row: trap passthrough is present in both hooks. The VEX/EVEX classifier, the crash-handler handover and check 5's fixtures stay open for WP-0.5r | engine/02 gap item (3); the 02/04 hand-off. The tree was re-checked: `cmake/HeliosIsa.cmake`, `isa_allowlist.cmake`, both `cpu_gate_hook.c` |
+| R5-09.13 | 09 (WP-0.5, WP-0.5r, WP-0.9, WP-1.5, WP-2.2, WP-2.4, WP-3.1) | **WP-0.5:** 02 §2.2's sharded accounting and heap rule, with the recycling regression and ≤ 3× `mi_malloc`. **WP-0.5r:** the round-5 backstop rules and a minidump acceptance. **WP-0.9:** stable body keys and the `stable-order` patch. **WP-1.5:** `NoCrossUpdateCache` on hulls, and RT-03's permuted variant. **WP-2.2:** the same flag on vehicles. **WP-2.4:** replay keyframes and the script rebase (NS-2.4's keyframe clause). **WP-3.1:** the `ColocDecision` and `HandoffDecision` rows (NS-3.8's multi-cell clause) | The hand-offs to "09 WP owners" in the 02 and 04 subsection |
+| R5-09.14 | 09 (WP-2.13, WP-3.8, Phase 3 exit, §6 Editor UI row; Phase 4 exit) | WP-2.13 gains party frames. WP-3.8 gains raid frames, the encounter and match HUD, and the AFK and vote-kick prompts. The Phase 3 exit adds ED-24 and ED-25, the §6 UI replays add ED-24 and ED-25, and the Phase 4 exit adds BE-A21 | Hand-offs in the 07/08 and 05 subsections |
+| R5-09.15 | 09 (status header; §9 traceability row) | The round-5 changes are listed, and ADR-004a is added to the conformance list. A trace row covers the fired triggers | Same rule as fixes 33.9 and 41.11. The version label is left to the integration pass, as the 05 subsection does |
+| R5-09.16 | ../PLAN.md (status; §1 "Where we are"; §5 ADR-004 row; §6 00 and 09 bullets; §8.1 Phase 1 row and the next-WP sentence; §10 intro, K2 row and a "Fired in Phase 0" note; §11 current state; §12 document map and K1–K39; **new §13 Review record**) | The status is **approved in round 5, with the minor revisions applied (revision 6)**, and two triggers have fired. §1 and §11 are rebuilt from the verified facts: committed and in-progress lists, test counts, failing gates, known deltas and CI, with `check_status.cmake` named. §10 and §5 match K2 and ADR-004a, and K39 and K3 are noted. §13 gives the five rounds' scores (8.6/8.7/8.5; 8.7/9.1/8.7; 8.8/9.1/8.7; 8.8/9.2/8.8; 9.2/9.0/9.0, approved with minor revisions), each round's §-range in this log, and a note that the round-5 minor revisions were applied afterwards (this §42) | The PLAN.md parts of all three gaps; the lead's task (4) |
+
+**Criteria and IDs.**
+- No criterion was added, renumbered or relaxed. RT-01 and RT-13 are unchanged. ADR-004a interprets RT-01's
+  burst per sync point and proposes no change.
+- New WPs: WP-0.7b, WP-0.10r and WP-1.1a.
+- New risk: K39, so the register has 40 entries.
+- New files: `docs/adr/ADR-004a-ecs-rt01-structural-ops.md`, `docs/plan/PLAN-REV` and
+  `tools/status/check_status.cmake`.
+
+**Hand-offs (other owners' files, not edited here).**
+- **02:**
+  - RT-01's text may state ADR-004a's measurement protocol: one sync point, the median of 7 warm bursts, the
+    worst worker configuration, and the worse toggle storage.
+  - §8.4's flecs row and §8.6's 09 row may name ADR-004a, WP-1.1a and WP-0.10r.
+  - §7.4 quotes the interrupt overhead as 12–17 % (WP-0.10's runs), where the lead's verified figure is
+    ≈ 12–15 %. Both exceed ≤ 10 %, and nothing depends on the difference.
+- **06:** `engine/gameplay`'s `AttributeDef.id` and `ModifierDef.priority`, which 06's snippets lack.
+- **WP-0.14:** lengthen the C++ holder-rule partition to CONF-03's 60 s.
+- **WP-0.2:** add `tools/status/check_status.cmake` to `tools/ci/run_lints.cmake` once the in-progress
+  modules are named, so it does not fail parallel work mid-round.
+- **Integration pass:** move the sections' "draft v5" labels to revision 6; add a register-count check row
+  (40) beside §41's historical "39 risks".
+
+**Checked and consistent, no edit.**
+- 02 §8.4's flecs row (R5-02.5), 02 §7.4 (R5-02.4) and 04 §10.2 (R5-04.4) describe the same disposition and
+  the same two Luau patches as K2, K39, ADR-004a and WP-0.10r.
+- 02 §2.2 (R5-02.2) is the rule that K3 and WP-0.5 cite.
+- PLAN.md §8.1's Phase 0 exit gates are unchanged. RT-13 stays a Phase 0 gate, and RT-01 a Phase 1 gate.
+- Links: 154 relative links and anchors in PLAN.md, 00, 09, ADR-004a and this file resolve (GitHub slug
+  rules).
+- `cmake -P tools/status/check_status.cmake` passes: 42 module directories, PLAN-REV 6.

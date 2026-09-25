@@ -170,3 +170,10 @@ Machines without Vulkan can skip the gpu suites with `HELIOS_SKIP_GPU_TESTS=1`.
 * Swapchain surfaces come from SDL3 (`SwapchainDesc::sdlWindow`); `HDR10`/colorspace selection is
   Phase 4. Device loss is reported, not recovered (Phase 4 per 03 §1.5).
 * The Null backend does not execute shaders or clears; texture contents only change through copies.
+
+## Plan conformance
+
+Plan-Rev: 6
+
+Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
+`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.

@@ -1,6 +1,10 @@
 # 04 — Networking & Servers
 
-*Helios master plan, section 04. Draft v5 (round-4 review fixes: co-location protocol with set caps, leash and
+*Helios master plan, section 04. Draft v5 (round-5 minor revisions: load-dependent co-location and handoff
+decisions logged as `ColocDecision` and `HandoffDecision` replay events, the overload row corrected and a
+multi-cell clause in NS-3.8; replay keyframes cut every 30 min through a script rebase, with a keyframe clause
+in NS-2.4; the Luau `codegen-fornloop-fuel` and `fuel-counter` patches named, §10.2, §6.2a, §6.3; from 02's
+round-5 fix, Jolt's solver order by stable body keys, §5.3, §6.7 residual, §10.2; round-4 review fixes: co-location protocol with set caps, leash and
 location-based presence §6.2a; production `MigrationHold` with a bounded zone-wide hold and hitch counts per
 rollout, `sim_abi` portable residuals §6.7; replicant recovery for every persistent world zone §6.4; trunk IO
 pool, per-trunk buffer sizing and zone-instance affinity for gateway assignment §2.6; Luau math, hitbox
@@ -380,8 +384,8 @@ the budget is sized to ≈ 15 % of the tick, and once it is spent the lane stops
 resume next tick). A running resume is never preempted, because there are no involuntary yields: it is killed at
 `fuel_kill` (02 §7.4). Wall time is only a logged 20 ms backstop (§10.2). Heap caps are 16 MB (small) and 256 MB (large). Service
 calls yield the coroutine, and results arrive as messages through the sim inbox (§10.2). **Rule:** per-entity
-script state lives in schema components (`ScriptState`), never VM locals, so it survives handoff and
-checkpoints.
+script state lives in schema components (`ScriptState`), never VM locals, so it survives handoff,
+checkpoints and the script rebase that cuts a replay keyframe every 30 min (§10.2).
 
 ### 3.2 Zone clock and time dilation (TiDi)
 
@@ -685,8 +689,9 @@ discrete difference → rewind and replay; visual error decays over 150 ms. Misp
 ### 5.3 Ships, multi-crew, remote entities
 
 The pilot predicts its ship by stepping only the owned body with the flight controller in a client Jolt system
-against static colliders, in the owning cell bubble's coordinates (the replicated `BubbleOrigin`, 02 §5.4); with `JPH_CROSS_PLATFORM_DETERMINISTIC` on both sides (ADR-013) the integration
-matches the server bit-for-bit, so corrections come only from unpredicted contacts, damage and others' effects, which are smoothed. The flight controller and
+against static colliders, in the owning cell bubble's coordinates (the replicated `BubbleOrigin`, 02 §5.4); with `JPH_CROSS_PLATFORM_DETERMINISTIC` on both sides (ADR-013),
+Jolt's contact order keyed by stable body keys rather than `BodyID`s, which differ between the two systems, and
+no contact cache carried across ticks on the hull (02 §7.1), the integration matches the server bit-for-bit, so corrections come only from unpredicted contacts, damage and others' effects, which are smoothed. The flight controller and
 thruster allocation that drive the hull are held to the same bit-exact bar on every toolchain (06 §8.2, GP-4a), and the `Flight` channel sends six
 8-bit axes and an 8-bit throttle in the §5.2 input record. EVA characters are predicted the same way, in the owning grid's coordinates (06 §8.2a). Only the seat
 holding the flight input channel predicts the hull; gunners predict turret aim; passengers walk in the ship's
@@ -1008,7 +1013,9 @@ bound cost.
      damage lands by `ApplyDamage`.
 
    A pair refused for a set cap stays effect-only until it uncouples, so no chain can grow a set past the cap,
-   and a 100-ship furball on a seam splits into many small sets rather than one cell's worth.
+   and a 100-ship furball on a seam splits into many small sets rather than one cell's worth. Each of these
+   choices depends on measured load, so every host choice, NACK, fallback, leash handoff, release and overstay
+   is logged by the cell that makes it as a `ColocDecision` replay event with its inputs (§10.2).
 5. **Location: presence, ghosts and the leash.** A leased AG usually sits inside another cell's region.
    - *Presence follows location (§6.6).* Each cell reports class and party presence **per region its owned
      entities occupy**, not per region it owns. A cell that tentatively accepts a co-located part sends the
@@ -1082,7 +1089,9 @@ authoritative tick ≤ 1 tick + fence CAS: **p99 < 100 ms at 20 Hz** (Phase 3), 
 **Abort:** B NACKs (epoch, overload, decode), no Accept within 250 ms, or CAS fails → A re-promotes x at
 **epoch e+2** (`Fence.Advance(e→e+2)`), catches up from buffered inputs, sends `HandoffCancel`; B's tentative
 copy is fenced out. If B times out awaiting Commit it reads the fence: owner = B at e+1 (A died after the CAS)
-→ self-commit; otherwise drop. Retries back off 1/2/4 s, then alert.
+→ self-commit; otherwise drop. Retries back off 1/2/4 s, then alert. NACKs depend on load and retries on wall
+time, so each side logs every offer, accept, NACK, deferral, commit, abort, self-commit and drop as a
+`HandoffDecision` replay event (§10.2); zone transfers (§7) log the same events.
 
 ### 6.4 Crash recovery
 
@@ -1407,7 +1416,7 @@ The **hitch**, from P's last tick to Q's first, is steps 3–6: **budget ≤ 350
 |---|---|---|
 | Header | P's build, schema hashes and `sim_abi` (below) | < 1 KB |
 | Last tick | tick T's chunks and `TickFlush{T, state_hash}` | ≤ 0.3 MB |
-| Simulation state outside the stream | Jolt `SaveState` of ρ's awake bodies and constraints per grid, only when `sim_abi.physics` matches (sleeping bodies restore from replicated transforms); RNG stream positions; zone timers; async job requests in flight (nav, AI planning), which Q re-issues | ≤ 2 MB |
+| Simulation state outside the stream | Jolt `SaveState` of ρ's awake bodies and constraints per grid, only when `sim_abi.physics` matches (sleeping bodies restore from replicated transforms), with the grid's body table `(BodyID, stable key)`: Jolt restores state into bodies by ID, so Q creates every body of ρ with P's `BodyID` (`CreateBodyWithID`) before `RestoreState` (02 §7.1); RNG stream positions; zone timers; async job requests in flight (nav, AI planning), which Q re-issues | ≤ 2 MB |
 | Region control | AG table `(ag, root, epoch)`; handle-block table with free lists and quarantine (§3.5); `LeaderState` if P leads; per-pair effect sequences and outboxes (§6.2); pending service calls `{idem key, request, entity}`; co-location leases | ≤ 0.5 MB |
 | Session records | one per local session and remote viewer of ρ (below) | ≈ 3.5 MB |
 
@@ -1478,8 +1487,9 @@ or the replicant stream, plus an xxh3 over all of them.
 - **Q dies after the commit.** ρ recovers like any crash (§6.4) at g+2. While P holds its frozen copy (10 s),
   it serves as that recovery's replicant: an AG restores from the copy if its returned epoch is P's snapshot
   epoch + 2 (the migrate advance committed) or + 1 (it did not). State lost ≤ the time since the commit.
-- **Replay.** Q's recording starts at T+1 with the post-residual world as its initial checkpoint, and its header
-  records `MigratedFrom{P, T, state_hash}`, so P's log to T and Q's from T+1 chain (§10.2).
+- **Replay.** Q's recording starts at T+1 with the post-residual world as a `migrate` keyframe (§10.2), and its
+  header records `MigratedFrom{P, T, state_hash}`, so P's log to T and Q's from T+1 chain; NS-3.8 checks the
+  chain.
 
 **Clock.** In a single-cell zone Q re-anchors its schedule at resume (`anchor_tick = T+1`): game time pauses for
 the hitch like a TiDi dip, so no timer or cooldown advances. A multi-cell zone keeps §3.5's lockstep through a
@@ -1639,7 +1649,7 @@ with an alert 5 min before the fight; R01-P1-14, R07-P2-25). A zone already at s
 - **Telemetry:** budget violations, strikes, snaps, aim statistics and economy anomalies → NATS → Trust service (05); tick recordings (§10) for review.
 - **Fuzzing:** libFuzzer (clang; MSVC `/fsanitize=fuzzer`) on vendored netcode/reliable read paths, the channel parser and every generated decoder, with recorded-session corpora; 1 h nightly per target; crashes block release.
 - **DDoS:** only gateways are public (anycast behind scrubbing, IP rotation); cells and services have no public IPs; pre-auth XDP/eBPF fast path drops bad prefix/size/version and rate-limits per IP (Phase 4).
-- **Windows client anti-tamper:** code-signed binaries (ADR-010), Ed25519-signed pak manifests (Monocypher), an `IAntiCheatProvider` seam plus attestation hash in token user data; vendor (EAC/BattlEye class) chosen in Phase 4, never *depended* on. External security review before Phase 4 launch.
+- **Windows client anti-tamper:** code-signed binaries (ADR-010), Ed25519-signed pak manifests (Monocypher), an `IAntiCheatProvider` seam plus attestation hash in token user data; vendor (EAC/BattlEye class) chosen in Phase 3 (WP-3.11; its Linux support constrains the native Linux client) and integrated in Phase 4, never *depended* on; server-side cheat and bot detection is 05 §1.16a. External security review before Phase 4 launch.
 
 ## 10. Testing and tooling
 
@@ -1649,7 +1659,8 @@ with an alert 5 min before the fight; R01-P1-14, R07-P2-25). A zone already at s
 
 ### 10.2 Deterministic replay
 
-**Contract (normative, design rule 8).** A zone replays bit-exactly from its initial checkpoint plus a log.
+**Contract (normative, design rule 8).** A zone replays bit-exactly from any **replay keyframe** (below) plus
+the log that follows it; the first keyframe is the instance's initial checkpoint.
 Every decision that can change simulation state is therefore either (a) a pure function of logged inputs and
 state, or (b) itself a logged **replay event** stamped with the tick, and the position within the tick, where it
 took effect. Every asynchronous producer (network, services, I/O, job pools) reaches gameplay only through the
@@ -1668,14 +1679,17 @@ at that boundary, so arrival timing never matters.
 | Hot reload | 05 §1.14 | Swaps only at tick boundaries | `ContentSwap{tick, build}` |
 | Terrain collision tiles | 02 §5.8a | A tile's content is a pure function of the body seed, graph, stamps and `TileKey`. The stage 3 fence builds any missing contact tile synchronously, so contacts never depend on generation timing. Only a hold past the fence's per-tick cap does | Synchronous builds: nothing. Holds: `CollisionHold{tick, entity}` |
 | Wall-time effects, durable-timer firings, calendar resets | 06 §11 rule 4; 05 §1.8 | A wall deadline takes effect at the first tick whose start passes it | `WallDeadline{tick, id}` |
-| Job-system merge order, physics, RNG, floating point | 02 §2.4 rule 7; ADR-013; 06 §11 | Stable merge by `(system, EntityId)`; `JPH_CROSS_PLATFORM_DETERMINISTIC`, bodies added and query results sorted by EntityId; named seeded streams; `/fp:precise`, `-ffp-contract=off`, `det::` transcendentals | seeds and build IDs in the header |
+| Job-system merge order, physics, RNG, floating point | 02 §2.4 rule 7; 02 §7.1; ADR-013; 06 §11 | Stable merge by `(system, EntityId)`; `JPH_CROSS_PLATFORM_DETERMINISTIC`, bodies added and query results sorted by EntityId; **Jolt's solver order keyed by stable body keys, never `BodyID`** (the vendored `third_party/jolt/patches/stable-order`: contact sort keys, body-pair order and `CharacterVirtual` contact order), and ShipHull and Vehicle bodies start every `PhysicsSystem::Update` with no cached manifold or warm-start impulse, so a predictor or replay whose `BodyID`s differ computes the same bits (02 §7.1); named seeded streams; `/fp:precise`, `-ffp-contract=off`, `det::` transcendentals | seeds and build IDs in the header; per-grid body tables in keyframes |
 | **Luau math** | 02 §7.4 | Stock Luau calls the CRT's libm, and MSVC's UCRT and glibc differ in the last ULP (the UCRT also picks FMA3 variants at run time). A vendored patch, `third_party/luau/patches/det-math`, routes every transcendental to `det::` on cells, world-script hosts and clients alike (clients for PIE parity): `luai_numpow` in `lnumutils.h` (the `^` operator); `lmathlib.cpp` (`sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `exp`, `log`, `log10`, `pow`, `sinh`, `cosh`, `tanh`); the `luauF_*` fastcalls in `lbuiltins.cpp`; the `vector` library; the libm pointers that native codegen calls through `NativeContext`; and the compiler's constant and builtin folding, so cooked bytecode is identical whichever compiler built the cook. `sqrt`, `floor`, `ceil`, `fmod`, `abs`, `ldexp`, `frexp`, `modf` and `round` stay, being exact or correctly rounded. At start each VM host evaluates 256 golden vectors and refuses to start on any mismatch | nothing |
 | **Hitbox sampling** (lag compensation) | 02 §7.2; §5.6 | ozz's `SamplingJob` and `BlendingJob` normalize with `RSqrtEst`/`NormalizeEst` (`rsqrtps`), whose bits differ between Intel and AMD. Cells and clients therefore pose the ≤ 24 hitbox joints with **`det::HitboxSampler`**: ozz key decompression, interpolation with an exact normalize (`sqrt` then a divide) and scalar local-to-model without contraction, ≈ 1.5× ozz's cost, inside 02 §7.2's 1 ms for 200 entities at 60 Hz. ozz's SIMD jobs remain for cosmetic client animation only | nothing |
 | **Sorting** | 02 §2.4 rule 7 | MSVC's STL and libstdc++ order equal elements differently. SIM modules sort with `det::sort(range, key)`, whose key must end in a unique ID (EntityId, handle or index); debug builds assert that no two keys are equal. Vendored SIM-path code is audited: Jolt and Luau (`table.sort`) use their own sort implementations, and Recast's `qsort` call sites are patched to `det::sort` with an index tiebreak | nothing |
 | **Floating-point environment** | 02 §2.1 | Every simulation thread, on cells and in the client's prediction step (§5.3), runs with the default MXCSR, `0x1F80` (round to nearest, FTZ and DAZ off, exceptions masked). Workers set it at start; the zone asserts it at each tick start, the client at each prediction step, and the job system at each SIM job-batch start (`stmxcsr`, ≈ 1 ns). A mismatch, such as a driver or injected DLL changing it, resets it and raises `FpStateCorrupt{thread, value}`, and the recorder logs the event. On Windows, `_set_FMA3_enable(0)` at start keeps any CRT math left outside `det::` on one code path on every CPU | `FpReset{tick, thread, value}` |
 | **Region rejoin** | §3.5, §6.4, §6.7 | A recovered region, or one rejoining > 2 s after an expired migration hold, starts at the schedule's current tick | `ZoneRejoin{from, to}` |
+| **Co-location decisions** | §6.2a | The host choice reads measured `ag_tick_us`. Refusal reads the receiver's tick p95, its overload stage, the set caps (5 % of the host's tick) and its leased-in load (10 %). All are load-dependent, and each decides which cell simulates an AG and whether a contact is co-simulated or solved against a puppet. Every cell logs each decision it makes. The replayer applies the logged outcome and never reads a load measurement | `ColocDecision{tick, set_id, pair, outcome ∈ host \| move \| nack \| effect_only \| leash \| release \| overstay, reason, inputs{rows, tick_us, centroid, p95, stage, leased_in}}` |
+| **Handoff and transfer decisions** | §6.3, §6.7, §7 | Whether an offer is sent, accepted or NACKed (epoch, overload, decode, a region in a migration's quiesce or a suspect contributor, admission at stage 5), deferred, retried after the 1/2/4 s wall-clock back-off, aborted, self-committed or dropped decides which cell simulates an AG tree from which tick | `HandoffDecision{tick, root, role ∈ offer \| accept \| nack \| commit \| abort \| self_commit \| drop \| defer, peer, epoch, reason}`, on each side |
+| **Keyframes and script rebases** | below | A rebase ends every coroutine and swaps the VM; the cut tick depends on script state, the cadence and deferrals (overload stage ≥ 4, a migration) | `Keyframe{tick, cause}` |
 | Luau GC and table order | 02 §7.4 | GC timing is unobservable: Luau has no table `__gc`, and on cells the sandbox removes `collectgarbage` and rejects `__mode` (weak tables) (02 §7.4). Iterating tables keyed by tables, userdata or functions is rejected (address-ordered); entity maps use `EntityMap`, which iterates in EntityId order | nothing |
-| TiDi, overload stage, interest refresh | §3.2, §8, §4.3 | Change wall pacing or replication only, never sim state | `d` and stage per tick, for review |
+| TiDi, overload stage, interest refresh | §3.2, §8, §4.3 | TiDi and the interest refresh change wall pacing or replication only. The overload stage and measured tick times **do** change sim state, but only through decisions logged in their own rows: offloaded jobs (`JobResult`), co-location refusals and fallbacks (`ColocDecision`), and handoff, transfer and admission NACKs (`HandoffDecision`) | `d` and stage per tick, for review |
 
 **Lint (`simdet`, every PR).** A clang-tidy plugin plus rules on modules tagged `SIM` (gameplay, authority
 apply paths, server netgame, `engine/pcg`) forbids `std::chrono::*::now`, `QueryPerformanceCounter`,
@@ -1693,23 +1707,89 @@ apply paths, server netgame, `engine/pcg`) forbids `std::chrono::*::now`, `Query
 The lint has a self-test with one planted violation per rule. Wall time is only available as a `WallTime` type
 from `ZoneClock::wall_now()`, and it cannot convert into sim types. A Luau analyzer rule applies the
 table-order and removed-API checks to scripts. CI also runs the script corpus through the interpreter and native codegen and asserts **identical fuel
-counts**, since both hit the same safepoints. The `interrupt` hook's overhead must stay ≤ 10 % of script time
-(RT-13); the fallback is a small vendored VM patch that decrements an inline counter.
+counts**. Stock Luau 0.739 fails that: its code generator emits the numeric-`for` interrupt at the top of the
+loop body instead of in `FORNLOOP`, so every numeric `for` left by `break` or `return` costs one extra fuel in
+native code (WP-0.10 pins the case in a test). The vendored patch **`third_party/luau/patches/codegen-fornloop-fuel`**
+emits it in `FORNLOOP`, as the interpreter does (`CodeGen/src/IrTranslation.cpp`). Until that patch lands,
+cells and world-script hosts run the interpreter only, and `VmConfig` refuses native codegen on them (today it
+only warns). The `interrupt` hook's overhead must stay ≤ 10 % of script time (RT-13). WP-0.10 measured
+12–17 % with the callback, so the second vendored patch, **`third_party/luau/patches/fuel-counter`** (an
+inline counter decremented at each `gc < 0` safepoint, which calls the host only when it reaches zero), is
+required rather than a fallback. Both patches, and `det-math`, are in `sim_abi.script` (§6.7); 09 names their
+owning WP, and RT-13 plus the interpreter-versus-codegen parity test are its acceptance.
 
 **Recording.** The header holds the content build, schema hashes, binary build ID, compiler, CPU model,
 `sim_abi` (§6.7), zone profile, fuel constants and the binding fuel-cost table (02 §7.4), RNG seeds and the
-initial checkpoint. Each tick then logs consumed inputs, inbox items in apply order, replay events and a 64-bit **state hash** (xxh3 over quantized replicated plus server-audience
+keyframe the segment starts from. Each tick then logs consumed inputs, inbox items in apply order, replay events and a 64-bit **state hash** (xxh3 over quantized replicated plus server-audience
 state; per-system hashes in debug builds). The log is zstd-compressed: ~2 MB/min at 50 players, ~15 MB/min
-at 500. A 30 min ring lives on local NVMe and is flushed to object storage on a crash, a report or a killmail.
+at 500. The ring on local NVMe keeps the log back to the newest keyframe that is at least 30 min old, so at
+least 30 min is always replayable on its own (30–60 min at the default cadence, ≤ 1 GB at 500 players). A
+crash, a report or a killmail flushes it to object storage from the newest keyframe at least 5 min before
+the event.
 
-**Replay.** `helios-cell --replay <log> [--until tick] [--dap]` runs as fast as possible. It injects inbox items,
-kills and activations at their logged ticks and compares per-tick hashes. At the first divergence it bisects
-with per-system hashes and dumps an ECS diff.
-- **Phase 2:** same platform and binary, with budgets binding (NS-2.4).
+**Replay keyframes.** A keyframe is a tick-boundary snapshot holding everything a bit-exact replay needs, so a
+segment of log can start at it. The recorder cuts one:
+- at instance start, and at a region's first tick under a new simulator: Q's T+1 after a planned migration
+  (§6.7, whose header also carries `MigratedFrom`) and S's first tick after a recovery or a `ZoneRejoin` (§6.4);
+- every 30 min of zone time (`replay.keyframeMinutes` in the zone profile, 10–120) through a **script rebase**
+  (below), which is what makes a zone that has run for days replayable from a recent point.
+
+| Part | Content |
+|---|---|
+| Header | The recording header above, plus `{tick K, cause ∈ start \| migrate \| recover \| rebase, xxh3 of the previous keyframe}` |
+| ECS | Every entity's components in every audience, server-only included, at full precision in the tagged format (02 §3.7), in EntityId order; the `EntityRegistry` (EntityId ↔ NetHandle); handle blocks with free lists and quarantine (§3.5) |
+| Authority | AG table `(ag, root, epoch)`; `EffectInbox`es, and outboxes with their per-pair sequences (§6.2); co-location sets and leases (§6.2a); ghost records with their `HitPose` history, and the cell's own lag-compensation history (§5.6) |
+| Physics | Per grid: the bubble box and origin (02 §5.4); a **body table** `(BodyID, stable key, layer, motion type, shape AssetId or TileKey)` in `BodyID` order and the constraint table in `mConstraintIndex` order; `PhysicsSystem::SaveState(EStateRecorderState::All)`, contacts included (manifold and body-pair caches). Jolt restores state into existing bodies by ID, so the replayer re-creates each body with `BodyInterface::CreateBodyWithID` and each constraint in index order, then calls `RestoreState` (02 §7.1) |
+| Terrain | The collision-tile bodies instanced per grid, by `TileKey` (their content is a pure function, 02 §5.8a), and the bodies held at K (`CollisionHold`). Tile-cache residency is not state: a fence build never changes a result |
+| Nav | Runtime-built tiles on moving grids, by input hash; the replayer rebuilds them from their inputs, as §6.7's `nav` rule does |
+| RNG and clock | Every named stream's `(seed, position)`; the `ZoneClock` anchor, schedule and `d`; zone-time timers; durable-timer mirrors and pending `WallDeadline`s |
+| Inbox | `SimInbox` items already assigned an apply tick after K (count-capped replies, late job results) and in-flight requests (service calls with their idempotency keys, nav and AI jobs), whose results the log carries |
+| Scripts | **No Luau state.** The VM is fresh at every keyframe: at start, after a migration or recovery (§6.7 Scripts) and after a rebase. `ScriptState` components and script timers are ECS data above; the lane's per-module kill history and disabled set (02 §7.4) are C++ state and are included |
+
+A keyframe is ≈ 10 MB (zstd) for the reference 500-player, 20k-entity zone and ≈ 40 MB at 50k entities. The
+cut copies ECS columns and Jolt state at the end of tick K, ≤ 3 ms on that one tick (in stage 8), and
+serializes the copy on the Background pool.
+
+**Script rebase.** A Luau thread cannot be serialized (§6.7), so a keyframe can be cut only where the VM holds
+nothing the snapshot would miss. A rebase creates that point, with the same semantics as a planned migration's
+Scripts rule:
+1. At the due tick the lane waits for the first tick at which **no coroutine of a module without an
+   `Authority.Adopted` handler is suspended**. Such modules wait ≤ 5 s by 06 §11's analyzer rule, so this
+   normally arrives within seconds. After 60 s of zone time without one, the keyframe is skipped for one
+   interval (`replay_keyframe_deferred`) and the ring keeps the older one. No rebase starts in a migration's
+   quiesce, freeze or catch-up, or at overload stage ≥ 4.
+2. At the end of that tick K the cell ends every suspended coroutine, swaps in a fresh VM for the instance's
+   content pin (a background job has already created it and loaded the bytecode, as Q does at §6.7 step 0)
+   and cuts the keyframe. The old VM is closed on the Background pool.
+3. From K+1 the lane runs the zone's module chunks in manifest order, as at instance start, and then raises
+   `Authority.Adopted{entity, cause = rebase}` for every entity with a `ScriptState`, in EntityId order, under
+   the normal fuel budget. Modules re-arm their waits from `ScriptState`, and replies to service calls whose
+   coroutine ended arrive in that handler, as after a migration.
+4. `Keyframe{K, rebase}` is logged and a new segment starts. A replay started at that keyframe builds the same
+   fresh VM and raises the same events, and a replay passing through K performs the same rebase, so the live
+   cell and every replay agree bit for bit.
+
+A module that is correct under handoff, migration and recovery is therefore correct under a rebase. Players
+see nothing: there is no hitch, no client message and no value movement. Rejected: (a) keyframes only at
+natural quiescence (no coroutine suspended anywhere), which a populated zone never reaches; (b) serializing
+Luau stacks with an Eris-style persister, a large patch against Luau's internals and native frames on every
+update; (c) replay only from instance start, a migration or a recovery, which leaves a world zone that has run
+for days with no recent replayable window.
+
+**Replay.** `helios-cell --replay <log> [--from keyframe] [--until tick] [--dap]` runs as fast as possible from
+the named keyframe (default: the segment's first). It injects inbox items, kills, activations and logged
+decisions (`ColocDecision`, `HandoffDecision`, `Keyframe`) at their logged ticks, never re-deciding them from
+load, and compares per-tick hashes. At the first divergence it bisects with per-system hashes and dumps an ECS
+diff. Logs stay per cell, so a multi-cell zone replays one cell at a time, with trunk traffic from its
+neighbours injected from the log and migrations chained by `MigratedFrom`.
+- **Phase 2:** same platform and binary, with budgets binding, from instance start and from a rebase keyframe
+  (NS-2.4).
 - **Phase 3:** cross-compiler (GCC-record/MSVC-replay and the reverse) and **cross-vendor** (AMD-record/
-  Intel-replay and the reverse), NS-3.8. This needs identical fuel counts, which hold because bytecode and
-  safepoints are compiler-independent, and it is why Luau math, hitbox sampling, sorting and MXCSR are
-  covered above: Linux production logs replay on Windows dev boxes with either CPU vendor.
+  Intel-replay and the reverse), and multi-cell zones through handoffs, co-location, migration holds and
+  rejoins, NS-3.8. This needs identical fuel counts, which hold because bytecode and
+  safepoints are compiler-independent (and, once `codegen-fornloop-fuel` is in, identical in native code), and it is why Luau math, hitbox
+  sampling, sorting, MXCSR and Jolt's solver order are covered above: Linux production logs replay on Windows
+  dev boxes with either CPU vendor.
 
 It feeds crash repro, anti-cheat review and server-built killcams (R05-P1-19), and the DAP adapter attaches to
 a replay at any tick (07).
@@ -1719,7 +1799,7 @@ a replay at any tick (07).
 - **Bots:** `helios-bot` is a headless thin client sharing net/prediction/decode code (collision/nav data only); Luau behaviours (login, fight, fly, dock, zone-hop, trade, boundary ping-pong, relog storm, **boundary observer**: holds station 100 m from a cell boundary and logs, per watched EntityId, creates, destroys, update ticks and source cell; **seam fighter**: fights across a boundary with hitscan, fast projectiles or ship guns and logs its client-side reference hit, hit zone and idempotency id for every shot; **tug**: tows a wreck by tractor along a scripted route through one or more cell boundaries, or rams and grapples on a seam, to drive co-location (§6.2a); **field auditor**: after a rejoin or migration, compares every replicated field it holds with the cell's authoritative quantized state from a dev-build debug query); 500–2,000 bots per process; `helios-swarm` (Go) schedules pods. **16 bots per commit** (ADR-012), **1k-bot 1 h soak nightly**, **10k bots weekly** on staging with chaos: cell kills, gateway-instance and whole-box kills, loss, handoff torture, **migration torture** (repeated `Drain`s and N↔N+1 migrations under load, each checked by state hash and transient census) (R05-P1-20, R06-ENG-27). Test builds add a **truth tap**: each cell streams per-tick transforms to the harness over a separate socket, so a restore can be compared with what the killed cell really held.
 - **Metrics:** in-house `engine/telemetry` (Prometheus exposition + sampled OTLP/HTTP-JSON spans, no protobuf in C++): `cell_tick_ms{zone,stage}`, `cell_dilation`, `repl_bytes{class,component}`, `conn_budget_bps`, `conn_loss`, `handoff_latency_ms`, `fence_conflicts`, `fence_tree_mismatch`, `fence_bulk_ms`, `ckpt_rejected{reason}`, `zone_tick_skew_ms`, `leader_gen`, `replicant_lag_ms`, `fence_parked_total`, `fence_released_sent`, `fence_active_orphans`,
 `view_contributors{zone}`, `repl_remote_viewers{level}`, `gw_grant_bytes{role}`, `gw_pack_delay_ms`,
-`gw_free_slot_ratio`, `session_reconnect_rps`, `trunk_pps{link}`, `gw_trunk_conns`, `gw_trunk_state_bytes`, `gw_affinity_hit_ratio`, `gw_dead_trunk_writes`, `migration_hitch_ms{profile}`, `migration_zone_hitch_total_ms{zone}`, `migration_hold_expired`, `migration_portable_physics`, `migration_residual_bytes`, `migration_aborts{reason}`, `coloc_set_size`, `coloc_refused{reason}`, `coloc_late`, `coloc_leased_in{cell}`, `coloc_overstay`, `coloc_leash_break`, `ghost_audit_missing`, `fp_state_resets`, `effect_outbox_depth`, `effect_outbox_dropped`, `effect_resent_total`, `lagcomp_ghost_gap`, `restore_depenetrations`, `script_fuel_used`, `replay_divergence`, `voice_m2e_ms`, `voice_streams`, `gw_drops{reason}`, `overload_stage`; traces login → token → gateway → cell, handoff phases and migration steps (§6.7).
+`gw_free_slot_ratio`, `session_reconnect_rps`, `trunk_pps{link}`, `gw_trunk_conns`, `gw_trunk_state_bytes`, `gw_affinity_hit_ratio`, `gw_dead_trunk_writes`, `migration_hitch_ms{profile}`, `migration_zone_hitch_total_ms{zone}`, `migration_hold_expired`, `migration_portable_physics`, `migration_residual_bytes`, `migration_aborts{reason}`, `coloc_set_size`, `coloc_refused{reason}`, `coloc_late`, `coloc_leased_in{cell}`, `coloc_overstay`, `coloc_leash_break`, `ghost_audit_missing`, `fp_state_resets`, `effect_outbox_depth`, `effect_outbox_dropped`, `effect_resent_total`, `lagcomp_ghost_gap`, `restore_depenetrations`, `script_fuel_used`, `replay_divergence`, `replay_keyframe_ms`, `replay_keyframe_deferred`, `voice_m2e_ms`, `voice_streams`, `gw_drops{reason}`, `overload_stage`; traces login → token → gateway → cell, handoff phases and migration steps (§6.7).
 - **Packet inspector** (editor profiling tool): per-connection bandwidth by channel/class/component (ImPlot), priority tables, relevancy set in the viewport, schema-decoded message log, `.hnetcap` captures (decrypted at L1, dev builds only); schema-generated Wireshark dissector in Phase 3.
 - **Audits:** a nightly **custody/fence audit** checks every custody item's `custody_ag` row:
   - *active:* it names a live cell that holds the region lease at `owner_lease_gen` and lists the AG in its
@@ -1761,9 +1841,11 @@ engine/telemetry/    metrics, spans, cheat events
 apps/cellserver/     helios-cell (ZoneHost, profiles, --replay, --embedded-gateway, --replicant, --role world-script)
 apps/gateway/        helios-gateway (--embedded-voice)
 apps/voice/          helios-voice forwarder (engine/net only; no ECS)
-engine/replay/       SimInbox, recorder, replayer, state hashing
+engine/replay/       SimInbox, recorder, keyframes and script rebase, replayer, state hashing
 tools/bots/  tools/devcluster/  tools/netinspect/  tools/fuzz/  tools/lint/simdet/
 third_party/luau/patches/det-math   Luau transcendentals, ^ and constant folding → det:: (§10.2)
+third_party/luau/patches/codegen-fornloop-fuel, fuel-counter   native-code fuel parity; inline fuel counter (§10.2)
+third_party/jolt/patches/stable-order   solver order by stable body keys; no cross-Update cache on predicted bodies (02 §7.1)
 schemas/net/         *.hschema wire messages (token format shared with Go via schemac)
 tests/net/ tests/replication/ tests/authority/   doctest suites, Windows↔Linux and Go-token interop
 ```
@@ -1820,7 +1902,7 @@ public:
 class Colocation {                      // §6.2a; one per zone instance on each cell
 public:
   void couple(AgId mine, GhostRef other, CouplingKind);           // predicate true: request or join a set
-  ColocDecision on_request(const ColocRequest&);                   // host rule, caps → accept or ColocNack
+  ColocDecision on_request(const ColocRequest&);                   // host rule, caps → accept or ColocNack; logged (§10.2)
   void tick(Tick);                        // renew leases, leash check, set handoff, release at expiry
   bool effect_only(AgId a, AgId b) const; // refused pair: puppet contact, TractorForce, retries
 };
@@ -1857,7 +1939,8 @@ public:
   void post(InboxItem&&);                                         // any thread
   std::span<const InboxItem> drain(Tick, const DrainLimits&);     // count/bytes caps; recorded
 };
-class Recorder { public: void event(Tick, const ReplayEvent&); void state_hash(Tick, uint64_t); };
+class Recorder { public: void event(Tick, const ReplayEvent&); void state_hash(Tick, uint64_t);
+                 void keyframe(Tick, KeyframeCause);  };          // start | migrate | recover | rebase (§10.2)
 }
 ```
 
@@ -1874,7 +1957,7 @@ class Recorder { public: void event(Tick, const ReplayEvent&); void state_hash(T
 | Authority | AG/epoch/fence API | Transitions via handoff; AG trees, `Join/Leave`; `Park`, dormant rows, `released` | Warm standby, `AdvanceOwnedBy` (active rows), fence cache | v1 handoff with resync records, co-location protocol (sets, caps, leash, effect-only fallback; §6.2a), bundles; exactly-once effects with outboxes (§6.2); `Fence.MigrateRegion` | Replicant recovery for every persistent world zone, ≤ 1 s state loss, tick-consistent restore (v1.5) | v2 < 50 ms |
 | Instancing | — | — | Instance lifecycle, overflow layers | Activities (05 §1.12), phases, housing, pinning | Placement tuning | Cross-shard |
 | Overload | Metrics | Tick budgets in CI | Degrade + TiDi | Admission, pre-provision | Offload | Split |
-| Tooling | NetSim, unit tests, `simdet` lint | 16 bots, inspector, recorder, relog storms; `simdet` libm, estimate, sort and MXCSR rules; Luau `det-math` patch (§10.2) | 1k nightly, same-platform replay, custody audit (active and dormant) | 10k, handoff and migration torture, cross-compiler and cross-vendor replay, handle and ghost audits, boundary observer, seam fighter, tug | Chaos drills, gateway-box kill, field auditor, truth tap | 100k simulation |
+| Tooling | NetSim, unit tests, `simdet` lint | 16 bots, inspector, recorder, relog storms; `simdet` libm, estimate, sort and MXCSR rules; Luau `det-math`, `fuel-counter` and `codegen-fornloop-fuel` patches; Jolt `stable-order` patch (§10.2) | 1k nightly, same-platform replay, replay keyframes with script rebase, custody audit (active and dormant) | 10k, handoff and migration torture, cross-compiler and cross-vendor replay, multi-cell replay with `ColocDecision` and `HandoffDecision` events, handle and ghost audits, boundary observer, seam fighter, tug | Chaos drills, gateway-box kill, field auditor, truth tap | 100k simulation |
 
 ### 11.4 Acceptance criteria (CI or bot swarm)
 
@@ -1897,7 +1980,7 @@ IDs are stable: 09 cites them as `NS-p.k`, and new clauses are only ever appende
 | **NS-2.1** | 500 bots/zone at 20 Hz: tick p99 ≤ 35 ms, ≤ 256 kbit/s steady |
 | **NS-2.2** | Lag comp ≥ 98 % agreement with the local-hit reference at ≤ 150 ms RTT |
 | **NS-2.3** | 1k soak, 0 crashes |
-| **NS-2.4** | **10 min replay bit-exact** on the same platform, of a 500-bot zone with budgets binding: the lane fuel budget deferring coroutines every tick, ≥ 10 injected fuel kills and ≥ 2 wall-backstop kills, ≥ 100 container activations and ≥ 10k service replies arriving under NetSim jitter |
+| **NS-2.4** | **10 min replay bit-exact** on the same platform, of a 500-bot zone with budgets binding: the lane fuel budget deferring coroutines every tick, ≥ 10 injected fuel kills and ≥ 2 wall-backstop kills, ≥ 100 container activations and ≥ 10k service replies arriving under NetSim jitter. **Keyframe clause:** the same zone runs 70 min at the default 30 min cadence, and the 10 min window that starts at the rebase keyframe cut ≥ 60 min into the run replays bit-exact from that keyframe and the log after it alone, with no earlier log present. At that rebase ≥ 1,000 coroutines are ended and re-armed through `Adopted{cause = rebase}`, ≥ 20 of them waiting in `awaitService`; the keyframe tick costs ≤ 3 ms more than its neighbours; the run's quest and level-script corpus completes with 0 script errors and 0 lost service results across both rebases; and in a variant where a module with no `Adopted` handler is part-way through a 2 s wait at the due tick, the rebase comes only after that wait ends, and the window still replays bit-exact |
 | **NS-2.5** | TiDi absorbs 3× overload without desync |
 | **NS-2.6** | **Gateway capacity:** one gateway instance serves 256 encrypted bot sessions at 20 pps each way on ≤ 1 core (≤ 70 % busy), adding ≤ 2 ms p99; 8 instances on an 8-core SERVER box serve 2,048 sessions; a 500-player cell's K = 2 trunks carry its full egress between two SERVER hosts with < 0.1 % drops |
 | **NS-2.7** | **Recovery fence:** `Fence.AdvanceOwnedBy` over 5k active persistent AGs, in a region from which ≥ 50k AGs have been parked, p99 ≤ 1 s; it returns exactly the 5k active rows, and 0 dormant AGs are loaded or revived; 100 % of zombie checkpoints written after the advance are rejected (fence cache or merge rule) and alerted; hitch ≤ 10 s (BE-A3b) |
@@ -1908,7 +1991,7 @@ IDs are stable: 09 cites them as `NS-p.k`, and new clauses are only ever appende
 | **NS-3.5** | Instance ready ≤ 2 s |
 | **NS-3.6** | **AG-tree torture (BENCH-6 class):** 100k board/disembark and dock/undock cycles, interleaved with handoffs of the carrying ship and random cell kills: 0 custody/fence mismatches, 0 tree-epoch mismatches, 0 zombie checkpoints accepted, 0 conservation deltas (05 §4.4) |
 | **NS-3.7** | **Zone-leader kill:** killing the leader cell of a 4-cell zone under 2,000 bots gives a new leader in ≤ 3.5 s; 0 handle reuse (handle audit); 0 TiDi desync (every cell reports the same `d` for every tick number); 0 spawn stalls; tick skew p99 ≤ 1 ms throughout |
-| **NS-3.8** | **Cross-compiler and cross-vendor replay:** NS-2.4's recordings replay bit-exact GCC→MSVC and MSVC→GCC, and between an AMD host (the EPYC SERVER node) and an Intel host (the H1 Intel box, 09 §4.3.1) in both directions, with identical fuel counts. The recordings include a Luau corpus that calls every `math.*` function and `vector` operation and uses `^` with non-integer exponents in both runtime and constant-folded forms, and ≥ 10k lag-compensated hits posed by `det::HitboxSampler`. Cooked bytecode is byte-identical from MSVC- and GCC-built cooks; every VM host's 256-vector `det-math` self-test passes on both vendors; 0 `FpReset` events; and the `simdet` self-test flags each planted violation (a libm call, an `rsqrt` estimate, `std::sort` on SIM data, `long double`, an MXCSR write) |
+| **NS-3.8** | **Cross-compiler and cross-vendor replay:** NS-2.4's recordings replay bit-exact GCC→MSVC and MSVC→GCC, and between an AMD host (the EPYC SERVER node) and an Intel host (the H1 Intel box, 09 §4.3.1) in both directions, with identical fuel counts. The recordings include a Luau corpus that calls every `math.*` function and `vector` operation and uses `^` with non-integer exponents in both runtime and constant-folded forms, and ≥ 10k lag-compensated hits posed by `det::HitboxSampler`. Cooked bytecode is byte-identical from MSVC- and GCC-built cooks; every VM host's 256-vector `det-math` self-test passes on both vendors; 0 `FpReset` events; and the `simdet` self-test flags each planted violation (a libm call, an `rsqrt` estimate, `std::sort` on SIM data, `long double`, an MXCSR write). **Multi-cell clause:** every cell's log from one NS-3.12(c) seam-furball run and from NS-3.11(c)'s migrations, including a 30 s control-plane outage whose hold expires, replays bit-exact one cell at a time, both on the recording platform and GCC↔MSVC. The replayer takes co-location and handoff outcomes only from `ColocDecision` and `HandoffDecision` events: a replay run with `ag_tick_us`, tick p95 and the overload stage forced to other values still matches. P's log to T and Q's from T+1 chain through `MigratedFrom{P, T, state_hash}`, with Q's `migrate` keyframe hashing to P's tick-T state hash, and each late ρ's log carries its `ZoneRejoin`. **Physics order:** a replay from a keyframe re-creates the keyframe's bodies with their recorded `BodyID`s, but bodies created after it take other free slots than the live cell's did; the NS-2.4 zone, with ground vehicles and landing ships on multi-tile terrain, still replays bit-exact for 10 min from such a keyframe (02 §7.1) |
 | **NS-3.9** | **Voice:** a 250-member fleet channel across ≥ 4 gateways (3 concurrent speakers plus commander) and 50 concurrent proximity speakers in a 500-player hub: mouth-to-ear p95 ≤ 250 ms with both legs at 80 ms RTT and 1 % loss; ≤ 104 kbit/s down and ≤ 40 kbit/s up per client; forwarder ≤ 1 core; block, mute and sanction effective ≤ 1 s; ≤ 15 voice pps per session on average |
 | **NS-4.1** | 50k CCU shard, held ≥ 1 h with every Ph4 metric in budget (AAA-SRV-3); the same load runs the 72 h AAA-STB-4 soak. **Failure domains (05 §1.4.3, BE-A15):** during the hour, power off a SERVER host carrying ≥ 8 cells, and separately partition a SERVER rack (≥ 30 processes) at its top-of-rack switch for 5 min. Pass: every affected region served by a standby ≤ 10 s after confirmation; no control-plane degraded episode > 5 s; login admission never pauses; ≥ 99 % of affected sessions kept; 0 value errors; after the rack heals, 100 % of its zombies' writes and trunk messages rejected |
 | **NS-4.2** | 2,000 ships fight for 30 min in one 2 Hz fleet-battle zone (§3.4) and `d` never needs to drop below 0.1. Measured at `d` = 0.1: module response p95 ≤ 1 tick of game time + RTT, and no activation waits more than 2 ticks (01 AAA-SRV-10). The bots fight as **8 player fleets of 250** (05 §1.12.1, 06 §8.3a), four per side: bot fleet commanders call targets and positions with broadcasts, fleet-warp their fleets onto the grid mid-fight and run command bursts, and every fleet warp meets 06 GP-15's same-tick, in-formation landing |
@@ -1937,7 +2020,7 @@ IDs are stable: 09 cites them as `NS-p.k`, and new clauses are only ever appende
 | Gateway becomes a stateful bottleneck | Sessions sharded across netcode instances; horizontal scale; gateways keep only soft per-session state (routes, latest `ViewerState`, registrations, grants) that a replacement rebuilds from the home cell within one 4 Hz refresh; entity state lives in cells and replicants, never gateways; v2 layer only after measurement |
 | Replicant tier cost, lag or patent exposure (Improbable US 11,792,306) | Reuses stage-6 chunks (NS-4.6 caps stream and tick cost); 2-vCPU replicants shared by ≤ 4 world-zone cells across zones (≈ 6 % compute); epoch- and generation-fenced like any receiver; checkpoint fallback per AG; recovery-only scope with no client views; counsel review before WP-4.3 (09 K18), with a per-zone hot-standby cell on the same stream as the design-around |
 | Luau stalls ticks | Fuel-metered lane, deterministic fuel kill with a 20 ms wall backstop, heap caps, `ScriptState` rule, script-cost telemetry |
-| Replay erodes as features land | Design rule 8, `SimInbox` as the only async path, `simdet` lint, nightly replay of the 1k soak, NS-2.4/3.8 |
+| Replay erodes as features land, or cannot start mid-session | Design rule 8, `SimInbox` as the only async path, `simdet` lint, logged load-dependent decisions (`ColocDecision`, `HandoffDecision`), replay keyframes every 30 min through a script rebase, Jolt order by stable body keys, nightly replay of the 1k soak, NS-2.4 (keyframe clause) and NS-3.8 (multi-cell clause) |
 | AG-tree/fence drift (dupe window when a ship with passengers hands off) | Lockstep tree epochs, fenced Join/Leave, custody never re-homed, fence cache + `(e+1, 0)` records, nightly custody audit, NS-1.5/2.7/3.6 |
 | Offline AGs revived or orphaned (stale owner on logged-out characters, parked ships, unloaded interiors) | `Fence.Park` to dormant rows with NULL owner; recovery matches active rows only; at-rest custody via dormant-fence ledger preconditions; `released` to superseded owners; orphan and dormant audits; NS-1.5 relog storms, NS-2.7 with ≥ 50k parked rows |
 | Seams visible across cells (pop-in, 5 Hz ghosts, full-state bursts) or remote-viewer cost at 2,000–5,000 players per zone | Owner-only replication to registered remote viewers; handoff moves per-session resync records; one source per tick by epoch plus the client's per-handle tick rule; gateway water-filling over one budget; stage 7 cost model with a far-broadcast fallback; NS-3.10 and its Ph4 rerun |

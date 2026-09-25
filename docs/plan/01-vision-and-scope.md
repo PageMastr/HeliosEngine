@@ -172,7 +172,7 @@ Scripted, deterministic runs in the reference content, run nightly (owned by 09)
 | BENCH-2 | Descent from 400 km orbit through atmosphere and clouds, landing, then into an interior | Continuous, no loading screen |
 | BENCH-3 | Vane engagement: the client view of the AAA-SRV-10 / 04 NS-4.2 battle | 2,000 ships (20 capitals, 1 % as in SRV-10, the *Bastion* among them), 2,000 brackets, 400k active particles (REF; MIN's significance pass keeps its 256k pool, 03 §6.1). Phase 5: 3,000 ships and 30 capitals with SRV-10 (09 M5) |
 | BENCH-4 | Hollow Vault encounter | 6 players, 80 AI, 60 Hz cell |
-| BENCH-5 | Saltmarch settlement | 300 structures, 3,000 decor items, 150 avatars |
+| BENCH-5 | Saltmarch settlement, placed through the housing and city rules (the snapshot of 06 GP-16 (e); 07 ED-10 co-edits an authored town at this scale) | 300 structures, 3,000 decor items, 150 avatars |
 | BENCH-6 | Mule boarding | EVA → airlock → interior at 300 m/s under thrust; from Ph3 the Mule crosses a cell boundary of multi-cell Harrow orbit while an observer 100 m from the boundary watches it cross, with no pop-in and far-side entities at the near-tier rate (04 NS-3.10) |
 
 **BENCH-3 and the battle gate are one battle.** Each ID means one thing:
@@ -428,6 +428,7 @@ Meanwhile, *Cinder Reach*'s levels, quests, dialogue and balance are mostly agen
 | Settlement | ≥ 40 structures and ≥ 400 decor items; one walkable interior with portal cells and an airlock; a landing pad | T01, T02, T03, T21, T28 |
 | Spawns | ≥ 3 AI record templates (Foundation or new variants), ≥ 2 spawn regions with baked navmesh, one lair | T23, T08, T09 |
 | Quest chain | 5 quests with ≥ 12 objectives; branching dialogue with ≥ 1 persistent consequence; rewards through the ledger (loot table or vendor); placeholder VO (TTS); strings in 2 languages (placeholder translation) | T12, T13, T25, T09, T20 |
+| Strike | A 2-encounter strike with 2 difficulty tiers, a phase checkpoint, a weekly lockout on its final encounter and a `QueueDef`, iterated in Activity PIE (07 §1.6.3) and cleared through the queue in the play instance | T12, T23, T09, T01 |
 | Cinematic | One cinematic of ≥ 60 s: ≥ 4 camera cuts, 2 characters, 1 VO line, a hand-off back to gameplay | T14, T15, T20 |
 | UI screen and project types | One new data-bound screen (for example a settlement bulletin board) with gamepad navigation. It binds a **new project view-model**, and the zone declares at least one new record type and one new `ScriptState` component, all created in T08's schema editor as dynamic project types (02 §3.8) with no compiler | T19, T08, T10 |
 | Ship variant | One new hull variant with its own loadout and livery, fittable and flyable | T21, T16, T08, T17 |

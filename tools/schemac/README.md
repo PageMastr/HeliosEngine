@@ -386,3 +386,10 @@ and review the diff of `tests/golden/*.expected` like any code change.
 - `list<bool>` is not supported.
 - `Name` values read from untrusted input are interned (`helios::Name`); servers should bound the
   input size before parsing.
+
+## Plan conformance
+
+Plan-Rev: 6
+
+Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
+`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.

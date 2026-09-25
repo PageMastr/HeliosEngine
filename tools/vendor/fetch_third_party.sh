@@ -42,7 +42,7 @@ if want recast;     then clone recast recastnavigation/recastnavigation v1.6.0; 
 if want jolt;       then clone jolt jrouwe/JoltPhysics v5.6.0; fresh jolt; copy jolt Jolt LICENSE; rm -rf "$TP/jolt/Jolt/Compute" "$TP/jolt/Jolt/Shaders" "$TP/jolt/Jolt/Physics/Hair"; fi
 if want monocypher; then clone monocypher LoupVaillant/Monocypher 4.0.3; fresh monocypher; copy monocypher src/monocypher.c src/monocypher.h src/optional/monocypher-ed25519.c src/optional/monocypher-ed25519.h LICENCE.md; fi
 if want tracy;      then clone tracy wolfpld/tracy v0.14.1; fresh tracy; copy tracy public LICENSE; fi
-if want luau;       then clone luau luau-lang/luau 0.739; fresh luau; copy luau Common Ast Bytecode Inliner Compiler Config Analysis CodeGen VM Require CLI extern CMakeLists.txt Sources.cmake LICENSE.txt lua_LICENSE.txt; fi
+if want luau;       then clone luau luau-lang/luau 0.739; fresh luau; copy luau Common Ast Bytecode Inliner Compiler Config Analysis CodeGen VM Require CLI extern tools/natvis CMakeLists.txt Sources.cmake LICENSE.txt lua_LICENSE.txt; fi
 if want sdl3;       then clone sdl3 libsdl-org/SDL release-3.4.16; fresh sdl3; copy sdl3 include src cmake CMakeLists.txt LICENSE.txt wayland-protocols build-scripts; fi
 if want flecs;      then clone flecs SanderMertens/flecs v4.1.6; fresh flecs; copy flecs distr/flecs.c distr/flecs.h LICENSE; fi
 if want mimalloc;   then clone mimalloc microsoft/mimalloc v3.5.3; fresh mimalloc; copy mimalloc include src LICENSE; fi

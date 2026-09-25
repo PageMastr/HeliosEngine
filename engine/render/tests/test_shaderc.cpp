@@ -6,6 +6,7 @@
 #include <doctest/doctest.h>
 
 #include <cstring>
+#include <string>
 
 #include "helios/core/fs.h"
 #include "helios/render/shader_reflection.h"
@@ -46,6 +47,12 @@ std::vector<u8> readBytes(const std::filesystem::path& p) {
 }
 
 std::string str(const std::filesystem::path& p) { return fs::pathToUtf8(p); }
+
+// Tool stdout is a text stream: on Windows its lines end in CRLF.
+std::string withLf(std::string s) {
+    std::erase(s, '\r');
+    return s;
+}
 
 bool spirvValAvailable() {
     auto r = shaderc::runProcess({"spirv-val", "--version"});
@@ -99,7 +106,7 @@ TEST_CASE("shaderc: output is byte-identical to the build's slangc and reflects 
     // --dump prints the JSONC of a blob; --reflect-spirv reflects an existing module.
     const shaderc::ProcessResult dump = runTool({"--dump", str(t.dir / "out" / "reflect_compute.hsr")});
     REQUIRE(dump.ok());
-    CHECK(dump.output == reflectionToJsonc(hsr.value()));
+    CHECK(withLf(dump.output) == reflectionToJsonc(hsr.value()));
     const shaderc::ProcessResult again = runTool({"--reflect-spirv", str(spv), "--hsr", str(t.dir / "again.hsr")});
     INFO(again.output);
     REQUIRE(again.ok());

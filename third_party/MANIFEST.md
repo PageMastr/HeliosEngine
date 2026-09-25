@@ -18,8 +18,8 @@ network. Re-vendor with `tools/vendor/fetch_third_party.sh [name...]`. Only perm
 | stb | nothings/stb | master (2c980bb) | MIT / public domain | Image load/write, font rasterization, Perlin noise |
 | miniaudio | mackron/miniaudio | 0.11.25 (9634bed) | MIT-0 / public domain | Audio device + mixing + 3D spatialization |
 | zstd | facebook/zstd | v1.5.7 (f8745da) | BSD-3 | Pak/chunk compression, network compression |
-| xxHash | Cyan4973/xxHash | v0.8.3 (e626a72) | BSD-2 | Content hashing (XXH3/XXH128) |
-| doctest | doctest/doctest | v2.4.12 (1da23a3) | MIT | Unit tests |
+| xxHash | Cyan4973/xxHash | v0.8.4 (c87183a) | BSD-2 | Content hashing (XXH3/XXH128) |
+| doctest | doctest/doctest | v2.5.3 (2d0a935) | MIT | Unit tests |
 | Recast/Detour | recastnavigation/recastnavigation | v1.6.0 (6dc1667) | zlib | Navmesh generation, pathfinding, crowds |
 | Monocypher | LoupVaillant/Monocypher | 4.0.3 (ab2b16d) | BSD-2 / CC0 | Ed25519 manifest signing, X25519/XChaCha20 utilities (4.0.3 fixes an EdDSA timing leak) |
 | Tracy | wolfpld/tracy | v0.14.1 (30997d5) | BSD-3 | Frame/zone profiler (enabled with `HELIOS_PROFILE=ON`; viewer must match 0.14.1) |

@@ -36,8 +36,8 @@ if want cgltf;      then clone cgltf jkuhlmann/cgltf v1.15; fresh cgltf; copy cg
 if want stb;        then clone stb nothings/stb master; fresh stb; copy stb stb_image.h stb_image_write.h stb_truetype.h stb_rect_pack.h stb_perlin.h LICENSE; fi
 if want miniaudio;  then clone miniaudio mackron/miniaudio 0.11.25; fresh miniaudio; copy miniaudio miniaudio.h LICENSE; fi
 if want zstd;       then clone zstd facebook/zstd v1.5.7; fresh zstd; copy zstd lib/common lib/compress lib/decompress lib/zstd.h lib/zdict.h lib/zstd_errors.h LICENSE; fi
-if want xxhash;     then clone xxhash Cyan4973/xxHash v0.8.3; fresh xxhash; copy xxhash xxhash.h LICENSE; fi
-if want doctest;    then clone doctest doctest/doctest v2.4.12; fresh doctest; copy doctest doctest/doctest.h LICENSE.txt; fi
+if want xxhash;     then clone xxhash Cyan4973/xxHash v0.8.4; fresh xxhash; copy xxhash xxhash.h LICENSE; fi
+if want doctest;    then clone doctest doctest/doctest v2.5.3; fresh doctest; copy doctest doctest/doctest.h LICENSE.txt; fi
 if want recast;     then clone recast recastnavigation/recastnavigation v1.6.0; fresh recast; copy recast Recast Detour DetourCrowd DetourTileCache License.txt; find "$TP/recast" -name CMakeLists.txt -delete; fi
 if want jolt;       then clone jolt jrouwe/JoltPhysics v5.6.0; fresh jolt; copy jolt Jolt LICENSE; rm -rf "$TP/jolt/Jolt/Compute" "$TP/jolt/Jolt/Shaders" "$TP/jolt/Jolt/Physics/Hair"; fi
 if want monocypher; then clone monocypher LoupVaillant/Monocypher 4.0.3; fresh monocypher; copy monocypher src/monocypher.c src/monocypher.h src/optional/monocypher-ed25519.c src/optional/monocypher-ed25519.h LICENCE.md; fi

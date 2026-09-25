@@ -85,10 +85,12 @@ docs/          master plan, research, ADRs
 | `engine/render`, `tools/shaderc`, `tools/rendertest` | Render graph v0, shader compiler, golden-image testing | Done for Phase 0 |
 | `engine/net` | Encrypted UDP transport (netcode + reliable), channels, NetSim | Done for Phase 0 |
 | `engine/script` | Luau host: sandbox, fuel budgets, scheduler | Done; two budget items need a Luau patch |
-| `engine/server`, `engine/authority`, `apps/cellserver`, `apps/gateway` | Cell and gateway skeletons | In progress |
+| `engine/server`, `engine/authority`, `apps/cellserver`, `apps/gateway` | Cell and gateway skeletons: epoch-fenced authority, handoff, TiDi, gateway routing | Done for Phase 0 |
 | `engine/gameplay`, `engine/hxl` | Gameplay kernel and HXL formulas | In progress |
 | `services/` | Go backend skeleton: identity, sessions, connect tokens, orchestrator | Done for Phase 0 |
-| Client, editor, launcher, assets, physics, animation, audio, game UI | — | Not started (see roadmap) |
+| `engine/physics` | Jolt integration: one physics grid, handle-keyed bodies and shapes, deterministic queries, character mover | Done for Phase 0; the Jolt `stable-order` patch is still due |
+| `engine/pcg` | Fixed-point `hnoise` (scalar, SSE4.2, AVX2 and a bit-exact GPU twin) and the terrain-graph VM | Done for Phase 0; the throughput spike came out red (F3), see [ADR-0.9c](docs/adr/ADR-0.9c-hnoise-throughput.md) |
+| Client, editor, launcher, assets, animation, audio, game UI | — | Not started (see roadmap) |
 
 ## Building on Windows
 

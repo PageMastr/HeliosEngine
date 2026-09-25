@@ -1,0 +1,58 @@
+// Generator for go_contract_vectors.tsv: prints the Go services' JSON (and connect-token user data)
+// for fixed values, so the C++ codecs in engine/server (orch_protocol.cpp, protocol.cpp) are checked
+// against the real Go types. It must be compiled inside the services module (it imports internal
+// packages) without adding a file there, which `go run -overlay` does:
+//
+//   cd services
+//   echo '{"Replace":{"'$PWD'/cmd/zzgolden/main.go":"<abs path>/gen_go_vectors.go.txt"}}' > /tmp/ov.json
+//   go run -overlay /tmp/ov.json ./cmd/zzgolden > /tmp/body.tsv
+//
+// then replace everything after the two comment lines of go_contract_vectors.tsv with its output.
+package main
+
+import (
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/PageMastr/scifi-test/services/internal/orchestrator"
+	"github.com/PageMastr/scifi-test/services/internal/session"
+	"github.com/PageMastr/scifi-test/services/pkg/connecttoken"
+)
+
+func dump(name string, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("%s\t%s\n", name, b)
+}
+
+func main() {
+	t := time.Date(2026, 9, 25, 12, 34, 56, 789000000, time.UTC)
+	dump("ProcessInfoCell", orchestrator.ProcessInfo{Name: "cell-a", Kind: "cell", Address: "127.0.0.1:7810", Version: "0.1.0", Zones: []string{"tallis"}})
+	dump("ProcessInfoGateway", orchestrator.ProcessInfo{Name: "gw-1", Kind: "gateway", Address: "127.0.0.1:7777", KeyID: 3, Capacity: 256})
+	dump("RegisterResult", orchestrator.RegisterResult{ProcessID: 9007199254740993, Epoch: 2, LeaseTTLMs: 12000, HeartbeatIntervalMs: 1000,
+		Assignments: []orchestrator.Assignment{{ZoneID: 1002, ZoneName: "tallis", LeaseGen: 7}}, IDShard: 3, IDBlocks: orchestrator.Int64Strings{101, 102}})
+	dump("RegisterResultGateway", orchestrator.RegisterResult{ProcessID: 5, Epoch: 1, LeaseTTLMs: 12000, HeartbeatIntervalMs: 1000, Assignments: []orchestrator.Assignment{}})
+	dump("HeartbeatRequest", orchestrator.HeartbeatRequest{ProcessID: 9007199254740993, Epoch: 2, Load: orchestrator.Load{Players: 3, FreeSlots: 0, TickP99Ms: 0.25}})
+	dump("HeartbeatResult", orchestrator.HeartbeatResult{LeaseExpires: t, Assignments: []orchestrator.Assignment{{ZoneID: 1002, ZoneName: "tallis", LeaseGen: 7}}, Mode: "normal"})
+	dump("AllocateIdBlocksRequest", orchestrator.AllocateIdBlocksRequest{ProcessID: 9007199254740993, Epoch: 2, N: 2})
+	dump("AllocateIdBlocksResponse", orchestrator.AllocateIdBlocksResponse{IDShard: 3, Prefixes: orchestrator.Int64Strings{103, 104}})
+	dump("DeregisterRequest", orchestrator.DeregisterRequest{ProcessID: 9007199254740993, Epoch: 2})
+	dump("ResolveZoneRequestId", orchestrator.ResolveZoneRequest{ZoneID: 1002})
+	dump("ResolveZoneRequestName", orchestrator.ResolveZoneRequest{ZoneName: "tallis"})
+	dump("Route", orchestrator.Route{ZoneID: 1002, ZoneName: "tallis", LeaseGen: 7, ProcessID: 9007199254740993, Process: "cell-a", Epoch: 2, Address: "127.0.0.1:7810"})
+	dump("SealRequest", session.SealRequest{Sessions: []session.SealItem{{SessionID: 9223372036854775807, ZoneID: 1002, Epoch: 4, Ticket: "abc"}, {SessionID: 12}}})
+	dump("SealResponse", session.SealResponse{Tickets: []session.SealedTicket{{SessionID: 9223372036854775807, Ticket: "t1", ExpiresAt: t}}, Missing: []string{"12"}})
+	dump("ControlKick", session.ControlMessage{SessionID: 42, Reason: "superseded"})
+	ud := connecttoken.UserData{Flags: connecttoken.FlagReconnect | connecttoken.FlagBot, AccountID: 0x0102030405060708, CharacterID: 77,
+		SessionEpoch: 5, ContentBuild: 1234, ZoneID: 1002, PlacementTicket: 99, Entitlements: 0xF0F0}
+	for i := range ud.AttestationHash {
+		ud.AttestationHash[i] = byte(i * 3)
+	}
+	b := ud.Marshal()
+	fmt.Printf("UserDataV1\t%s\n", hex.EncodeToString(b[:]))
+	dump("ControlEpoch", session.ControlMessage{SessionID: 42, Epoch: 5, Reason: "reconnect"})
+}

@@ -58,10 +58,31 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.24"
-      - name: Test
-        if: hashFiles('services/go.mod') != ''
+          go-version-file: services/go.mod
+          cache-dependency-path: services/go.sum
+      - name: Vet, test, cross-build
         working-directory: services
+        env:
+          CGO_ENABLED: "0"
         run: |
           go vet ./...
           go test ./...
+          GOOS=windows go vet ./...
+          GOOS=windows go build ./...
+          GOOS=linux go build ./...
+        shell: bash
+
+  services-integration:
+    name: Backend integration (embedded PostgreSQL/NATS, Linux, non-root)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: services/go.mod
+          cache-dependency-path: services/go.sum
+      - name: Integration tests (embedded PostgreSQL refuses to run as root; runner user is non-root)
+        working-directory: services
+        env:
+          HELIOS_NETCODE_INTEROP: "1"
+        run: go test -tags integration ./internal/integration/...

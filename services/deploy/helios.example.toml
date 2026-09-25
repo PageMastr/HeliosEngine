@@ -1,0 +1,95 @@
+# helios-backend configuration. Copy to <data>/helios.toml (default ./saved/backend/helios.toml)
+# or pass --config. Precedence: built-in defaults < this file < HELIOS_* environment < flags.
+# Unknown keys are rejected so typos fail loudly. Durations use Go syntax ("250ms", "1m30s").
+
+env = "dev"              # dev | prod (prod: no seed data, no /admin routes on the ops port)
+data_dir = "./saved/backend"
+shard = "dev"            # NATS subject scope (05 §2.2), e.g. "eu1"
+shard_index = 0          # 0..31, the shard field of block IDs (05 §1.4.5)
+services = ["all"]       # or a subset: "identity", "session", "orchestrator"
+seed = ""                # "dev" creates dev1..dev10 / password "dev"
+lan = false              # true: bind API and NATS on all interfaces
+keys_dir = ""            # key files; "" = <data>/keys. prod never generates missing keys
+
+[log]
+level = "info"           # debug | info | warn | error
+format = "text"          # text | json (Loki)
+
+[http]                   # public API: launcher, client, tools
+addr = "127.0.0.1:7700"
+tls_cert = ""            # set both for HTTPS (TLS 1.3 only)
+tls_key = ""
+trusted_proxies = []     # CIDRs whose X-Forwarded-For is honoured, e.g. ["10.0.0.0/8"]
+
+[ops]                    # /metrics /healthz /readyz /debug/pprof, orchestrator directory
+addr = "127.0.0.1:7701"
+pprof = true
+
+[db]
+url = "embedded"         # or "postgres://helios:helios@127.0.0.1:5432/helios?sslmode=disable"
+port = 7702              # embedded server port (loopback only)
+cache_dir = ""           # PostgreSQL binaries; default %LOCALAPPDATA%\helios\pg-bin or ~/.cache/helios/pg-bin
+max_conns = 16
+
+[bus]
+url = "embedded"         # or "nats://user:password@127.0.0.1:4222"
+listen = "127.0.0.1:4222"  # embedded server port for nats.c cells/gateways; "" = in-process only
+                           # (clients authenticate as user "fleet", password in <keys>/nats-fleet.json)
+
+[cache]
+url = "miniredis"        # or "valkey://127.0.0.1:6379"
+listen = "127.0.0.1:7703"
+
+[telemetry]
+traces = "none"          # none | stdout
+sample_ratio = 1.0
+
+[identity]
+issuer = "helios-identity"
+audience = "helios"
+access_ttl = "10m"
+refresh_ttl = "720h"
+launch_code_ttl = "60s"
+password_min_length = 8
+allow_registration = true
+argon2 = { memory_kib = 65536, iterations = 3, parallelism = 1, max_concurrent = 0 }  # 05 §1.1; 0 = 2 x GOMAXPROCS
+login_per_ip = { rate = 30, per = "1m", burst = 10 }
+login_per_account = { rate = 6, per = "1m", burst = 5 }
+register_per_ip = { rate = 10, per = "1m", burst = 5 }
+refresh_per_ip = { rate = 60, per = "1m", burst = 20 }
+
+[session]
+protocol_id = "0x48454c494f530001"   # netcode protocol id: bump on incompatible client/server builds
+token_expiry = "30s"     # <= 45s; gateways must set netcode max_connect_token_lifetime to the same value
+timeout = "10s"
+max_gateways = 4         # addresses per token (2-4 per 04 §2.3)
+gateways = ["127.0.0.1:7777"]        # fallback when no gateway has registered with the orchestrator
+content_build = 0
+session_ttl = "24h"
+ticket_ttl = "5m"
+create_per_account = { rate = 10, per = "1m", burst = 5 }
+reconnect_per_ip = { rate = 30, per = "1m", burst = 10 }
+
+[orchestrator]
+lease_ttl = "12s"        # liveness TTL (05 §1.4.2): a silent process loses its zones after this
+heartbeat_interval = "1s"  # gateways that miss 3 heartbeats get no new connect tokens
+spawn_filter = "all"     # all | none | comma-separated spawn names (flag --spawn)
+
+[[orchestrator.zones]]
+id = 1001
+name = "dev-sandbox"
+
+# Supervised processes (restarted with exponential backoff; killed with the backend).
+# [[orchestrator.spawn]]
+# name = "gateway"
+# exe = "../build/windows-msvc-release/bin/helios-gateway"
+# args = ["--listen", "127.0.0.1:7777"]
+# restart = "always"         # always | on-failure | never
+# backoff_min = "250ms"
+# backoff_max = "30s"
+# stop_timeout = "5s"
+#
+# [[orchestrator.spawn]]
+# name = "cell-a"
+# exe = "../build/windows-msvc-release/bin/helios-cellserver"
+# args = ["--zone", "dev-sandbox"]

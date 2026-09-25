@@ -1,6 +1,6 @@
 # 01 — Vision, Target Games, the AAA Bar, Scope and Non-Goals
 
-*Helios master plan, section 01. This section follows `00-decisions.md` (ADR-001…012) and the phase vocabulary in `README.md`. Research citations use the key format described in §7.*
+*Helios master plan, section 01. This section follows `00-decisions.md` (ADR-001…014) and the phase vocabulary in `README.md`. Research citations use the key format described in §7.*
 
 ---
 
@@ -70,7 +70,7 @@ Each archetype lists its experiences, research numbers, critical capability IDs 
 - *Experiences:* hangar on a rotating planet → multi-crew ship → orbit → quantum travel → boarding, with no loading screens; walking in moving ships; physical components with power and heat; persistent entities; server meshing (R04 §1).
 - *Numbers:* ~4×10¹⁰ m systems (float32 step ≈ 2.4 km); ~500-player static-mesh shards; authority transfer < 2 ticks (R04 §4.3).
 - *Critical:* W01–W03, W05, M02, M09, G16, S02, S03, S07, R02, R06.
-- *Lessons:* seams from day one; a cleanup policy for every persistent archetype; gameplay written for split authority; data-driven flight envelopes (R04 §6.1, §9).
+- *Lessons:* seams from day one; a cleanup policy for every persistent record template; gameplay written for split authority; data-driven flight envelopes (R04 §6.1, §9).
 - *Proof:* BENCH-2 descent (Ph1), Mule multi-crew (Ph3), seamless Lattice travel (Ph5).
 
 **(e) SWTOR-style story-driven themepark.**
@@ -99,7 +99,7 @@ Columns: SWG = (a), EVE = (b), DST = (c), SC = (d), TOR = (e). Legend: **●** c
 | M03 | Locomotion, mounts, vehicles | ● | ○ | ● | ● | ● | 02, 06 | 1 |
 | M04 | Tab-target combat; telegraph shapes | ● | – | ○ | – | ● | 06 | 2 |
 | M05 | Predicted gunplay, lag-compensated hits, aim assist | ○ | – | ● | ● | ○ | 04, 06 | 1 |
-| M06 | Rollback-safe native ability graphs | ○ | – | ● | ◐ | ◐ | 06 | 3 |
+| M06 | Rollback-safe native ability graphs | ○ | – | ● | ◐ | ◐ | 06 | 1 (full: 3) |
 | M07 | Statistical space weapons, sensors, EWAR | ○ | ● | – | ◐ | – | 06 | 3 |
 | M08 | Damage pipeline: resists, layered pools, subsystems | ● | ● | ● | ● | ● | 06 | 1 |
 | M09 | Multi-crew stations, item ports, boarding, EVA | ◐ | – | – | ● | ○ | 06 | 3 |
@@ -262,8 +262,8 @@ Tick p99 must stay at or below 80% of the tick period. The TiDi floor is 10%.
 |---|---|---|
 | AAA-TOOL-1 | MVPs of T01, T04, T08, T10, T15 (import), T16 (instances), T24, T26–T29 | 1 |
 | AAA-TOOL-2 | R08-ED-P0-01…16 met; MVPs of T11–T13, T23, T25 | 2 |
-| AAA-TOOL-3 | T05–T07, T15, T17, T19, T21 and T30 (live edit instances) complete; 26/30 tools at "AAA prio" | 3 |
-| AAA-TOOL-4 | All 30 tools at "AAA prio", including T14 auto-staging, T22 and the T27 web admin | 4 |
+| AAA-TOOL-3 | T05–T07, T15, T17, T19, T21 and T30 (live edit instances) complete; 26/30 tools at "AAA prio" (T15's motion matching and facial items follow their Ph4 runtime, 07 §2) | 3 |
+| AAA-TOOL-4 | All 30 tools at "AAA prio", including T13 auto-staging, T14, T22 and the T27 web admin | 4 |
 | AAA-TOOL-5 | **Designer day:** a designer new to Helios adds a hull variant, a weapon with rolled perks, a 3-step quest with dialogue and a vendor in ≤ 1 day, with no engineer and no restart | 3 |
 | AAA-TOOL-6 | Every tool writes through transactions; every record type is editable in T08; every asset class has T28 rules | 2 |
 
@@ -380,6 +380,7 @@ Helios will not match that breadth early; pretending otherwise is how SWTOR ende
 - **Object Container:** an authored, nested, streamable unit that is edited, streamed, persisted and hot-reloaded as one.
 - **Record:** a typed static-data entry defined by the `.hschema` schema, with a stable hash ID and text source. It may inherit from a **record template**.
 - **ECS archetype:** the storage for one exact component set. It never means a content template.
+- **Reference archetype:** one of the five target game classes (a)–(e) in §2. It is unrelated to ECS archetypes and record templates.
 - **Gameplay kernel:** the shared attributes, effects, tags, abilities and cues.
 - **Edit Instance / Play Instance:** the edit instance is the only instance of an area that persists authored changes. Play instances run a pinned **Content Version**, an immutable, hash-identified published snapshot.
 - **Instance / Layer / Phase:**

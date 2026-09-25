@@ -61,10 +61,10 @@ record AttributeDef @table("attr") {
   stackingPenalised: bool = false;
   replicate: Audience = server; quant: Quantization?; persistBase: bool = false;
 }
-record AttributeSetDef @table("aset") { attrs: list<AttrRef>; }   // one per archetype
+record AttributeSetDef @table("aset") { attrs: list<AttrRef>; }   // one per record template
 ```
 
-**Storage.** Each archetype's `AttrBlock` component stores `base[]`, `final[]`, a dirty bitset and
+**Storage.** Each entity's `AttrBlock` component (layout from its record template's attribute set) stores `base[]`, `final[]`, a dirty bitset and
 aggregator heads in SoA form. Designers add attributes without writing code. Attributes that native
 code reads every tick (`Ship.MaxLinearSpeed`) get schemac-generated slot constants, so reading them
 needs no lookup.
@@ -401,14 +401,16 @@ The **crafting session** is a server state machine:
 - **Cinematic hooks.** `Cinematic.Play(seq, participants, blocking)` tags players
   `State.InCinematic` (immune, ignored by AI). Clients play the sequence synced to server time.
 - **Phasing.** Actions call `Phase.Enter/Leave(layer)`. An entity's `PhaseFilter` is a TagQuery
-  over viewer facts, evaluated by interest management (R03-P0-6, 04-networking). The editor's
+  over viewer facts. The content cook assigns each distinct filter a bit of 04 §7's 64-bit per-zone
+  `phase_mask`; the cell sets a viewer's bits when its facts change, and interest management tests
+  the masks (R03-P0-6, 04 §4.3). The editor's
   "view as state" debugger uses the same evaluator.
 
 ## 7. AI
 
 - **Brain (R09-A13).** Each NPC's `Brain` combines a **behavior tree** (compiled from the AI graph
   to a flat node array, with running-node resumption and event interrupts), **utility selectors**
-  (IAUS response curves, multiplied with a compensation factor), a typed blackboard per archetype,
+  (IAUS response curves, multiplied with a compensation factor), a typed blackboard per record template,
   and an optional **HTN** planner for squad tasks (Phase 4). NPCs use the player kernel:
   server-only `AbilityDef`s and the same effects and damage pipeline, so a boss mechanic is
   authored like a player ability.
@@ -423,7 +425,7 @@ The **crafting session** is a server state machine:
   keep-at-range, align, warp-out. Formations are slots in the leader's frame. A **fleet/squad
   coordinator** entity uses utility scoring to issue primary targets, remote-repair assignments,
   EWAR distribution and retreat.
-- **Spawners.** A `SpawnerDef` has a volume, population entries (archetype, weight, level, group
+- **Spawners.** A `SpawnerDef` has a volume, population entries (record template, weight, level, group
   size, conditions on time, world flags and economy weights), respawn timers and a max-alive count.
   Lairs are destructible spawners with waves. `PopulationDef` sets regional densities.
 
@@ -447,7 +449,7 @@ relevance.
 
 ### 8.1 Movement models (R09-A1, R09-G3)
 
-Each archetype picks one model. The gameplay controllers sit on 02-engine-runtime's physics:
+Each record template picks one model. The gameplay controllers sit on 02-engine-runtime's physics:
 - `CharacterVirtual`: on foot, grid-local.
 - `NewtonianFBW`: 6-DoF ships.
 - `CommandKinematic`: EVE "ball" movement in 1 Hz zones; commands replicate, not transforms.
@@ -550,7 +552,7 @@ struct DamagePacket { EntityId source, instigator; RecordId ability; TagSet tags
                       vec3 point, dir; u32 predictionKey; u64 idempotencyKey; };
 ```
 
-`DamageModelDef` (per archetype) runs these steps in order:
+`DamageModelDef` (per record template) runs these steps in order:
 1. The attacker's `DamageExecution` applies crit and multipliers, then immunity tags are checked.
 2. **Ordered layers** absorb damage: the shield face chosen by `dir`, then armor, then hull (or
    health). Each applies `absorbed = min(pool, amount·(1 − resist[type]))` and passes the rescaled
@@ -561,7 +563,7 @@ struct DamagePacket { EntityId source, instigator; RecordId ability; TagSet tags
 
 Packets that cross authority groups arrive as `ApplyDamage` messages with their idempotency key.
 
-**Death pipeline (R09-A17, R09-G11).** `DeathPipelineDef` is chosen per archetype and
+**Death pipeline (R09-A17, R09-G11).** `DeathPipelineDef` is chosen per record template and
 `ZoneRulesDef`. It runs: optional incapacitation with a revive window → death →
 `onVehicleDestroyed: ejectTo` a capsule (EVE pod) → per-item drop, destroy or keep rolls (seeded,
 audited, one ledger transaction) → a wreck entity with loot and a lifetime → a `Killmail` event →
@@ -688,7 +690,7 @@ effects (wounds, implant loss) → an insurance claim paid on a durable timer.
 | World / social | — | — | Guild permissions, mounts, PvP flags | Housing, cities, territory, crimewatch | Sovereignty, pre-provisioning | Player-programmable structures |
 | Character | — | Species + basic morphs | Full parameter set | Image-designer edits | DNA blend | — |
 
-### 12.2 Acceptance criteria (each is an automated CI test or benchmark)
+### 12.2 Acceptance criteria (each is an automated CI test or benchmark; phases per 09 §3.2 #15)
 
 1. **Kernel.** 200 golden ship and character builds match reference values within 1e-9, and are
    bit-identical on MSVC, GCC and Clang. C++ and Go HXL agree on 100% of the corpus. A

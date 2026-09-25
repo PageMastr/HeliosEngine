@@ -15,7 +15,7 @@ Research backing lives in `docs/research/01..10-*.md` (cited as R01..R10).
 
 ## ADR-002 Languages
 - **C++20** for engine runtime, editor, client, launcher, zone/cell servers, gateway and tools.
-- **Go 1.27** for control-plane / backend services (no CGO, so they build natively on Windows; see ADR-014).
+- **Go 1.27.1** for control-plane / backend services (no CGO, so they build natively on Windows; see ADR-014).
 - **Luau** (typed, sandboxed Lua dialect, MIT) for gameplay scripting on client, server and editor —
   chosen over LuaJIT by R01/R03/R05/R06 (sandboxing for UGC & server, gradual typing, active
   maintenance, native codegen on x64). One VM per zone/worker; the hot path never goes through
@@ -129,7 +129,7 @@ Research backing lives in `docs/research/01..10-*.md` (cited as R01..R10).
   instance** (only the edit instance persists changes; play instances are pinned to published
   content versions) (R03).
 - Tool suite T01–T30 per R08 §3 (world, prefabs, terrain/planet, star-system/galaxy, data &
-  archetypes, gameplay systems, script IDE + debugger, visual graphs, quest, dialogue, sequencer,
+  record templates, gameplay systems, script IDE + debugger, visual graphs, quest, dialogue, sequencer,
   animation, material graph, VFX, environment, UI designer, audio, modular ship/base assembly,
   character customization, AI/nav/spawn, asset browser, localization, profiling, GM/live-ops,
   validation, build/cook/deploy, collaboration).
@@ -139,7 +139,10 @@ Research backing lives in `docs/research/01..10-*.md` (cited as R01..R10).
 - **Game UI** is a retained-mode, data-bound runtime UI system (renders to screen or to texture
   for diegetic screens). ImGui is editor/debug-only (R04).
 - **Launcher** (C++, Windows-first): login, news, content-addressed chunk patching from CDN
-  manifests, verification/repair, self-update; code-signing and installer per R10.
+  manifests, verification/repair, self-update; code-signing and installer per R10. UI is **RmlUi on
+  SDL_Renderer** (shares the game-UI toolkit; no Vulkan/AVX2 dependency so it can run a CPU gate
+  and explain unsupported hardware). Self-installing per-user installer; MSIX/WiX rejected.
+- Font assets: SIL OFL-1.1 is allow-listed for fonts (not code).
 
 ## ADR-011 Core runtime
 - Platform layer with Win32 and POSIX implementations (sockets, file mapping, dynamic libraries,
@@ -164,12 +167,12 @@ Research backing lives in `docs/research/01..10-*.md` (cited as R01..R10).
 | Physics | Jolt **5.6.0**, `JPH_DOUBLE_PRECISION` + **`JPH_CROSS_PLATFORM_DETERMINISTIC`** on client and server, AVX2 baseline (launcher checks CPUID) | CI golden-hash test across MSVC/clang-cl/GCC/Clang |
 | Animation | **ozz-animation 0.17** (runtime sampling/blending/IK + offline builders) | motion matching/IK extensions are Helios code |
 | Navigation | **Recast/Detour 1.6** per physics grid, incl. moving ship interiors | |
-| Audio | **miniaudio** device/mixing + Helios audio event system (banks, buses, 3D attenuation, occlusion); Wwise/FMOD only as optional proprietary plugins | Steam Audio (Apache-2.0) optional later for HRTF |
-| Game UI | **RmlUi 6.x** (HTML/CSS-like, data binding) + FreeType + HarfBuzz (+ SheenBidi, libunibreak) | ImGui stays editor/debug-only |
+| Audio | **miniaudio** device/mixing + Helios audio event system (banks, buses, 3D attenuation, occlusion); Wwise/FMOD only as optional proprietary plugins | Steam Audio (Apache-2.0) optional later for HRTF; **libopus** (BSD-3) for VO/music cooking and voice chat, approved in 09 §3.2 #6 |
+| Game UI | **RmlUi 6.3** (HTML/CSS-like, data binding) + FreeType + HarfBuzz (+ SheenBidi, libunibreak) | ImGui stays editor/debug-only |
 | Text content | **JSONC** (canonical key order, one entity per file) parsed with **yyjson** | Go reads via hujson |
 | Transport | **netcode v1.4.8 + reliable v1.4.5** (connect tokens, encrypted UDP, reliability/fragmentation) wrapped by Helios channels/replication | Monocypher 4.0.3 for Ed25519 manifest signing |
-| Cell ↔ services | **nats.c v3.14** from C++; schema-codegen binary payloads | no protobuf/gRPC in C++ |
-| Crash reporting | **sentry-native 0.17 (crashpad)**, self-hostable backend | Phase 2 |
+| Cell ↔ services | **nats.c v3.14** from C++ (cells, gateways, and the editor for T30 collaboration, 07 §1.8); schema-codegen binary payloads | no protobuf/gRPC in C++ |
+| Crash reporting | **sentry-native 0.17.1 (crashpad)**, self-hostable backend | Phase 2 |
 | Textures | basis_universal (KTX2/UASTC), bc7enc_rdo (tools), tinyexr | |
 | Import | cgltf, **ufbx** (FBX), msdfgen (UI/SDF fonts) | tools only |
 | Profiling | **Tracy 0.14.1** (client+viewer versions must match) | |

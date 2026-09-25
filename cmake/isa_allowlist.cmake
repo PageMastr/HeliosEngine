@@ -4,8 +4,10 @@
 # change: every allowlisted unit may only run after the CPU gate has confirmed AVX2 support.
 
 # Targets whose every translation unit may be compiled with AVX/AVX2/BMI/F16C/LZCNT flags. Jolt's
-# headers select AVX paths inline (JPH_USE_AVX2), so the whole library is built at that level.
-set(HELIOS_ISA_AVX2_TARGETS tp_jolt)
+# headers select AVX paths inline (JPH_USE_AVX2), so the whole library is built at that level, and so
+# is helios_physics, whose sources include those headers and inherit tp_jolt's PUBLIC flags. Interim:
+# WP-0.2r replaces this list with whole-image ISA levels (09 §5.10.4).
+set(HELIOS_ISA_AVX2_TARGETS tp_jolt helios_physics)
 
 # Designated AVX2 kernel files (added with helios_avx2_sources(), cmake/HeliosIsa.cmake): pcg's
 # vm_avx2.cpp and any other CPUID-dispatched kernel. Regular expressions on the source path.

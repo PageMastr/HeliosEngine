@@ -1,6 +1,9 @@
-# Helios
+# Helios MMO Engine
 
-**Helios** is a sci-fi MMO engine being built as one integrated product: the engine runtime, an editor
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Buy Me a Coffee](https://img.shields.io/badge/Support-Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/heliosengine)
+
+**Helios** is an open-source sci-fi MMO engine being built as one integrated product: the engine runtime, an editor
 with a full content tool suite, the game client, a launcher/patcher, dedicated simulation servers, and a
 modern MMO backend. The target is a AAA-grade engine capable of building games in the vein of *Star Wars
 Galaxies*, *EVE Online*, *Destiny*, *SWTOR* and *Star Citizen*: seamless space ↔ planet ↔ interior play,
@@ -151,8 +154,9 @@ A [nightly workflow](.github/workflows/nightly.yml) adds sanitizers and full Vis
 Contributions are welcome. Everything here applies to AI-assisted and agent-authored work too; AI
 contributions also follow the extra rules in the next section.
 
-> **Before you start:** Helios has no licence yet (see [Licence](#licence)). Talk to the maintainer before
-> investing in a substantial contribution, so it is clear which terms your work will be accepted under.
+> **Licensing of contributions:** Helios is released under the [MIT License](LICENSE). By submitting a
+> contribution you agree that it is licensed under the same MIT terms (inbound = outbound), and you confirm
+> you have the right to submit it.
 
 ### Find something to work on
 
@@ -172,8 +176,8 @@ contributions also follow the extra rules in the next section.
   create branches directly in the main repository.
 
   ```sh
-  git clone https://github.com/<you>/scifi-test.git && cd scifi-test
-  git remote add upstream https://github.com/PageMastr/scifi-test.git
+  git clone https://github.com/<you>/HeliosEngine.git && cd HeliosEngine
+  git remote add upstream https://github.com/PageMastr/HeliosEngine.git
   git fetch upstream
   git switch -c feat/wp-0.16-patch-pipeline upstream/main
   # ...work, commit...
@@ -332,9 +336,22 @@ Periodically, independent reviewer agents score the project against the AAA scor
 full. Humans supply what agents cannot: real-GPU and hardware testing, art and audio, playtesting, legal
 review and funding decisions.
 
+## Support the project
+
+Helios is built in the open and is free to use. If you want to help fund development (hardware for the
+real-GPU test lab, art and audio for the sample game, hosting for the build farm and CDN), you can support
+the project here:
+
+**☕ [Buy Me a Coffee: buymeacoffee.com/heliosengine](https://buymeacoffee.com/heliosengine)**
+
+Contributions of code, documentation, testing on your own hardware (especially Windows GPUs) and bug
+reports help just as much. See [Contributing](#contributing).
+
 ## Licence
 
-No licence has been chosen for Helios itself yet, so all rights are reserved by the repository owner until
-one is added. Contributors should agree terms with the maintainer before submitting substantial work.
-Vendored third-party components keep their own licences, recorded in
-[`third_party/MANIFEST.md`](third_party/MANIFEST.md).
+Helios MMO Engine is released under the [MIT License](LICENSE). Copyright © 2026 PageMastr and the Helios
+MMO Engine contributors.
+
+Vendored third-party components keep their own (permissive) licences, recorded in
+[`third_party/MANIFEST.md`](third_party/MANIFEST.md). Some of them require attribution in shipped products,
+for example FreeType's credit line once it is vendored; the manifest records those obligations.

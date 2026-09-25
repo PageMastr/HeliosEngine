@@ -75,6 +75,8 @@ third_party/                                  vendored deps (see MANIFEST.md); n
   benchmark or test that measures it.
 
 ## Legal / IP hygiene
+- Helios itself is MIT-licensed (`LICENSE`); every contribution, including agent-written code, is
+  submitted under MIT. Do not add per-file licence headers that contradict it.
 - Only permissive licenses (MIT, BSD, ISC, zlib, Apache-2.0, Boost, PostgreSQL, public domain) in shipped code
   (`ctest -L lint` enforces this over third_party/ and MANIFEST.md; fonts may also be SIL OFL-1.1).
 - Never copy code from leaked Star Wars Galaxies source, SWGEmu/Core3 (AGPL), or any GPL/AGPL

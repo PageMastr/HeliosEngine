@@ -1,4 +1,7 @@
-# Contributing to Helios
+# Contributing to Helios MMO Engine
+
+Helios is released under the [MIT License](LICENSE). By contributing, you agree that your contribution is
+licensed under the same terms.
 
 The full contribution guide lives in the README:
 

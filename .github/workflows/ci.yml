@@ -10,8 +10,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Primary Windows toolchain: VS 2026 / MSVC 14.5x on windows-latest.
   windows-msvc:
-    name: Windows (MSVC)
+    name: Windows (MSVC, primary)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -22,8 +23,40 @@ jobs:
         run: cmake --preset windows-msvc-release
       - name: Build
         run: cmake --build --preset windows-msvc-release
-      - name: Test
+      - name: Test (no GPU on hosted runners)
         run: ctest --preset windows-msvc-release -LE gpu
+
+  # Supported floor: VS 2022 17.14 / MSVC 14.44 on the pinned windows-2022 image (ADR-001).
+  windows-msvc-floor:
+    name: Windows (MSVC 14.44 floor)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+          toolset: "14.44"
+      - name: Configure
+        run: cmake --preset windows-msvc-release
+      - name: Build
+        run: cmake --build --preset windows-msvc-release
+      - name: Test (no GPU on hosted runners)
+        run: ctest --preset windows-msvc-release -LE gpu
+
+  windows-clang-cl:
+    name: Windows (clang-cl)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Configure
+        run: cmake --preset windows-clang-cl
+      - name: Build
+        run: cmake --build --preset windows-clang-cl
+      - name: Test (no GPU on hosted runners)
+        run: ctest --test-dir build/windows-clang-cl -LE gpu --output-on-failure
 
   linux:
     name: Linux (${{ matrix.preset }})
@@ -46,6 +79,34 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test (software Vulkan via lavapipe, the only ICD on GPU-less runners)
         run: xvfb-run -a ctest --preset ${{ matrix.preset }}
+
+  # Dedicated-server configuration: no graphics modules may be required.
+  linux-headless:
+    name: Linux (headless servers + tools)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: cmake --preset linux-headless
+      - name: Build
+        run: cmake --build --preset linux-headless
+      - name: Test
+        run: ctest --test-dir build/linux-headless --output-on-failure
+
+  # Win32 code paths compiled and linked with MinGW-w64 (portability signal; binaries are not run).
+  mingw-cross:
+    name: Windows cross-build (MinGW-w64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++-mingw-w64-x86-64-posix gcc-mingw-w64-x86-64-posix
+      - name: Configure
+        run: cmake --preset cross-mingw
+      - name: Build
+        run: cmake --build --preset cross-mingw
 
   services:
     name: Backend services (Go, ${{ matrix.os }})

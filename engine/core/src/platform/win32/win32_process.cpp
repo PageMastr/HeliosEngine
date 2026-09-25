@@ -6,6 +6,7 @@
 #include "platform/win32/win32_common.h"
 
 #include <algorithm>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -299,8 +300,21 @@ Result<SpawnedProcess> processSpawn(const ProcessDesc& desc) {
 }
 
 Result<std::optional<i32>> processWait(NativeHandle process, u32, i64 timeoutMs) {
-    const DWORD ms = timeoutMs < 0 ? INFINITE : static_cast<DWORD>(std::min<i64>(timeoutMs, INFINITE - 1));
-    const DWORD r = WaitForSingleObject(win32::toHandle(process), ms);
+    // WaitForSingleObject can time out up to one scheduler tick (~15.6 ms) before the requested interval;
+    // wait again for the remainder so a timed-out wait() always lasted at least `timeoutMs`.
+    using Clock = std::chrono::steady_clock;
+    const i64 cappedMs = std::min<i64>(timeoutMs, INFINITE - 1);
+    const Clock::time_point deadline = Clock::now() + std::chrono::milliseconds(std::max<i64>(cappedMs, 0));
+    DWORD r = WAIT_TIMEOUT;
+    for (;;) {
+        DWORD ms = INFINITE;
+        if (timeoutMs >= 0) {
+            const i64 left = std::chrono::ceil<std::chrono::milliseconds>(deadline - Clock::now()).count();
+            ms = static_cast<DWORD>(std::clamp<i64>(left, 0, INFINITE - 1));
+        }
+        r = WaitForSingleObject(win32::toHandle(process), ms);
+        if (r != WAIT_TIMEOUT || Clock::now() >= deadline) break;
+    }
     if (r == WAIT_TIMEOUT) return std::optional<i32>();
     if (r != WAIT_OBJECT_0) return lastError("WaitForSingleObject(process)");
     DWORD code = 0;

@@ -1,0 +1,1 @@
+This library is available under your choice of the MIT License or the GNU General Public License v2.

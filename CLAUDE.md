@@ -20,6 +20,9 @@ cmake --build --preset linux-gcc
 ctest --preset linux-gcc
 cmake --preset cross-mingw && cmake --build --preset cross-mingw   # Win32 portability check on Linux
 ```
+- Lints (layering fixtures, ISA audit, licences, IP names, Windows manifest) are CTests with the
+  label `lint` (`ctest -L lint`); `cmake -P tools/ci/run_lints.cmake` runs the build-independent ones.
+  See `tools/lint/README.md`.
 - Agents working in parallel must use **their own build directory** (e.g.
   `cmake -S . -B build/<your-task> -G Ninja`), never share one. ccache is enabled automatically.
 - Software Vulkan (lavapipe) is available in this container; GPU tests run under `xvfb-run -a`
@@ -37,11 +40,19 @@ schemas/                                      *.hschema — the single source of
 content/                                      sample game content (text sources; cooked output is ignored)
 third_party/                                  vendored deps (see MANIFEST.md); never edit in place
 ```
-- Declare modules with `helios_module(name [HEADLESS] SOURCES … DEPS …)` and tests with
-  `helios_test(...)` (see `cmake/HeliosModule.cmake`).
-- Module layering is a strict DAG (L1 core → L2 foundation → L3 servers → L4 framework → L5 apps).
-  HEADLESS modules (everything a cell server links) must never depend on rhi/render/ui/audio.
-  Editor-only code never links into client or servers.
+- Declare modules with `helios_module(name [HEADLESS|EDITOR_ONLY] [LAYER n] SOURCES … DEPS …)`,
+  executables with `helios_executable(name [ROLE role] SOURCES … DEPS …)` and tests with
+  `helios_test(...)` (see `cmake/HeliosModule.cmake`). Each module's layer, flags and allowed
+  same-layer peers come from the table in `engine/CMakeLists.txt` (02 §1.1); a new module adds a row
+  there (or passes LAYER).
+- Module layering is a strict DAG (L1 core → L2 foundation → L3 servers → L4 framework → L5 apps),
+  checked at configure time (`cmake/HeliosLayering.cmake`): no upward or unlisted same-layer
+  dependency, no cycle. HEADLESS modules (everything a cell server links) must never reach
+  app/input/rhi/render/ui/audio or a graphics library. EDITOR_ONLY modules never link into the client,
+  launcher, bot or servers.
+- AVX/AVX2 flags only on the ISA allowlist (`cmake/isa_allowlist.cmake`: `tp_jolt` and `*_avx2.cpp`
+  kernels added with `helios_avx2_sources`); the CPU gate (`engine/core/src/cpugate`) stays at the
+  x86-64-v1 baseline.
 
 ## Code style
 - C++20. `snake_case` files, `PascalCase` types, `camelCase` functions and variables,
@@ -64,7 +75,8 @@ third_party/                                  vendored deps (see MANIFEST.md); n
   benchmark or test that measures it.
 
 ## Legal / IP hygiene
-- Only permissive licenses (MIT, BSD, zlib, Apache-2.0, Boost, public domain) in shipped code.
+- Only permissive licenses (MIT, BSD, ISC, zlib, Apache-2.0, Boost, PostgreSQL, public domain) in shipped code
+  (`ctest -L lint` enforces this over third_party/ and MANIFEST.md; fonts may also be SIL OFL-1.1).
 - Never copy code from leaked Star Wars Galaxies source, SWGEmu/Core3 (AGPL), or any GPL/AGPL
   project. Learn architecture from public descriptions only. No Star Wars or other third-party IP
   in sample content.

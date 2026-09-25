@@ -137,7 +137,8 @@ TEST_CASE("vec: component-wise helpers") {
 
 TEST_CASE("vec: reflection, refraction and projection") {
     const Vec3 n{0.0f, 1.0f, 0.0f};
-    CHECK(reflect(Vec3(1.0f, -1.0f, 0.0f), n) == Vec3(1.0f, 1.0f, 0.0f));
+    CHECK(reflectVector(Vec3(1.0f, -1.0f, 0.0f), n) == Vec3(1.0f, 1.0f, 0.0f));
+    CHECK(reflectVector(DVec3(0.0, -2.0, 3.0), DVec3(0.0, 1.0, 0.0)) == DVec3(0.0, 2.0, 3.0));
     const Vec3 i = normalize(Vec3(1.0f, -1.0f, 0.0f));
     CHECK(approxEqual(refract(i, n, 1.0f), i));
     // Snell: n1 sin1 = n2 sin2.

@@ -31,6 +31,9 @@ and `src/platform/posix/` behind the internal interface `src/platform/os.h`.
 | `containers.h` | `SmallVector`, `RingBuffer`, bounded `MpmcQueue`, `SpscQueue` |
 | `crash.h` | Minidumps (Windows) / signal backtraces (POSIX), on-demand reports |
 | `version.h` | Version constants and build info (compiler, config, git hash via `-DHELIOS_GIT_HASH`) |
+| `cpu.h` | CPU gate: CPUID/XGETBV feature detection (AVX2, FMA, BMI1/2, F16C, LZCNT, POPCNT, AVX-512, OS YMM/ZMM state), `cpuGate()` report + message, synthetic `CpuidSnapshot` evaluation |
+| `process.h` | `Process::spawn` (CreateProcessW / posix_spawn): UTF-8 args, env, working dir, stdio pipes/null/inherit, inherit-handle whitelist, `wait(timeout)`, `kill()`, `communicate()`; `Pipe`/`PipeEnd`; Windows argument quoting |
+| `async_io.h` | `fs::readFileAsync` / `fs::readAsync` on a `BackgroundPool`: `AsyncRead` handle (poll, counter, callback, cancel); IORing / io_uring plan |
 
 ## Threading rules
 
@@ -54,6 +57,80 @@ and `src/platform/posix/` behind the internal interface `src/platform/os.h`.
   recursively (re-entrant log calls are dropped).
 * CVar change callbacks run on the thread that changed the value, outside registry locks.
 
+## CPU gate (02 §1.1, 08 §2.2)
+
+`cpuGate()` checks the running CPU against what every AVX2 image needs (x86-64-v2 + AVX, AVX2,
+BMI1, BMI2, F16C, LZCNT and OS-enabled YMM state; FMA is reported, never required). The probe is the
+C unit `src/cpugate/cpu_gate.c`, compiled at the x86-64-v1 baseline with no libc calls, so it runs
+on any x86-64 CPU and before the C runtime. `helios_cpu_gate(<exe>)` (applied by
+`helios_executable()` to client, cell, gateway, voice, editor, bot and tool images) links the
+per-OS pre-initializer `src/platform/{posix,win32}/cpu_gate_hook.c`: an ELF `.preinit_array` entry
+or a `.CRT$XIB` C initializer, which runs before any C++ initializer, prints
+
+> Helios requires an AVX2 CPU (Intel Haswell / AMD Excavator or newer). Detected: <brand>. Missing: AVX2, BMI2.
+
+to stderr (a message box when there is no console) and exits with **78** (`kCpuGateExitCode`). On a
+supported CPU it installs a SIGILL / `STATUS_ILLEGAL_INSTRUCTION` backstop with the same kind of
+message; core's crash handler replaces it once installed. Deliberate traps (`ud2`/`ud1`/`ud0`:
+`__builtin_trap`, clang-cl's trap-on-unreachable, sanitizer traps) are passed through, so they still
+crash normally and reach the crash handler instead of being reported as an unsupported CPU. The gate
+TUs are built with `helios_cpu_gate_sources()`: x86-64-v1, no stack protector (`/GS-`,
+`-fno-stack-protector`) and no sanitizer instrumentation, because they run before those runtimes. The ISA audit (`tools/lint`) checks the
+gate objects' flags, disassembly and symbols on every build; `core_cpugate_child_snb` (the hook
+evaluating a recorded Sandy Bridge) tests the refusal path on any machine (CL-17, early).
+
+## Processes
+
+`Process::spawn` runs a program with UTF-8 arguments (quoted by `quoteWindowsArgument` so the MSVC CRT
+splits them back exactly), an optional working directory, environment overrides or a clean
+environment, and per-stream stdio (inherit, null, pipe). Only the standard streams and the handles in
+`ProcessDesc::inheritHandles` reach the child: `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` on Windows; on
+POSIX close-on-exec for Helios descriptors plus, in the child, a close of every other descriptor above
+2 (gap closes and `posix_spawn_file_actions_addclosefrom_np`, glibc >= 2.34; `POSIX_SPAWN_CLOEXEC_DEFAULT`
+on macOS), so sockets or `fopen` files that third-party code opened without close-on-exec do not leak
+either. That whitelist is the launcher's launch-code channel (WP-1.21): create a `Pipe`, list one end,
+pass its value on the command line, `PipeEnd::adopt()` it in the child. `wait(timeout)`, `kill()`
+(exit code 137 everywhere) and `communicate()` (threaded, no pipe deadlocks) complete it. Inputs are
+validated for untrusted callers: arguments and environment values with NUL bytes and variable names
+that are empty or contain `=` are refused (`InvalidArgument`), and so are Windows batch files
+(`.bat`/`.cmd`, even with trailing dots or spaces), which `CreateProcessW` runs through cmd.exe where
+no quoting is safe. A relative program path is relative to the parent's working directory on every
+platform, also when `workingDirectory` is set. POSIX needs glibc >= 2.29 / musl >= 1.1.24 for
+`posix_spawn_file_actions_addchdir_np` and close-on-exec clearing by `adddup2(fd, fd)`.
+
+## Asynchronous reads
+
+`fs::readFileAsync(pool, path, {offset, size})` and `fs::readAsync(pool, file, offset, dst)` queue
+positional reads on an IO `BackgroundPool` and return an `AsyncRead`: poll `isReady()`, wait on its
+`counter()` with `JobSystem::wait` (which helps), or pass an `onComplete` callback (runs on the IO
+thread; `take()`/`bytesRead()` work inside it). Queued requests can be cancelled. Fire-and-forget is
+safe: the request's job owns its state until the counter is released, so dropping every `AsyncRead`
+right away is fine. Phase 0 issues one blocking `pread`/`ReadFile` per
+request; the Phase 3 backends (Windows 11 IORing, Linux io_uring with fixed files and buffers, batched
+per streaming tick, pool fallback when unavailable) keep the same request shape and completion
+counter, so callers do not change.
+
+## Memory-tag accounting at scale
+
+Tag counters are sharded per thread (16 shards, assigned round-robin on a thread's first
+allocation), so threads allocating under one tag no longer bounce one cache line. Live bytes and
+allocation counts stay exact (readers sum the shards); the peak and budget crossings are exact for a
+tag used by one thread, and within 16 × 64 KiB when several threads race. The peak is written only
+when it rises. `trackAllocations(tag, bytes, count)` / `trackDeallocations` account a batch in one
+call (pools, arenas, a heap flushing a thread-local tally). Budget: <= 25 ns per tracked
+allocate+free pair per thread, flat from 1 to 8 threads. `core_memory_bench` measures it against a
+replica of the old single-slot counters (4-core container, ns per pair, best of 3):
+
+| Threads | Old counters | Sharded | `alignedAlloc` + free (64 B) |
+|---|---|---|---|
+| 1 | 29 ns | 29 ns | 41 ns |
+| 2 | 368 ns | 30 ns | 41 ns |
+| 4 | 866 ns | 31 ns | 42 ns |
+
+Before the change, `alignedAlloc` + free cost 42 / 94 / 230 ns at 1 / 2 / 4 threads (same machine).
+`core_memory_bench --gate` fails unless sharded tracking is >= 2x faster than the old counters at
+>= 4 threads (not part of the default CTest run, which only checks that the accounting balances).
+
 ## Conventions
 
 * Errors cross module boundaries as `helios::Result<T>`; no exceptions on hot paths.
@@ -65,8 +142,10 @@ and `src/platform/posix/` behind the internal interface `src/platform/os.h`.
 ## Tests
 
 `core_tests` (doctest, `tests/*.cpp`) covers every header, including job-system stress tests
-(1M jobs, nested waits, random DAGs), a real crash in a child process (`tests/support/crash_child.cpp`)
-and loading a plugin DLL/.so (`tests/support/test_plugin.cpp`).
+(1M jobs, nested waits, random DAGs), a real crash in a child process (`tests/support/crash_child.cpp`),
+loading a plugin DLL/.so (`tests/support/test_plugin.cpp`), processes against
+`tests/support/process_child.cpp` (argument round trips, pipes, env, cwd, kill, inherited-handle
+whitelist) and the CPU gate's pre-initializer against `tests/support/cpugate_child.cpp`.
 
 ```
 cmake -S . -B build/core -G Ninja -DHELIOS_BUILD_GRAPHICS=OFF
@@ -89,5 +168,13 @@ ninja -C build/core helios_core core_tests && ctest --test-dir build/core -R cor
   SIGABRT hook; MSVC pure-call / invalid-parameter failures are hooked too. `__fastfail` paths
   (e.g. /GS buffer overruns) cannot be intercepted in-process.
 * `File::readAt` moves the file position on Windows (positional reads use OVERLAPPED offsets).
+* The CPU gate's message box and localized messages (08 §2.1.1) are the bootstrap's job; the core
+  hook prints English text to stderr (message box only when there is no console). The gate's
+  display name is "Helios" until product stamping (08 §2.10) lands.
+* `Process`: POSIX `wait(timeout)` polls `waitpid` with a 50 µs–5 ms backoff (no pidfd yet); a
+  Process destroyed without `wait()` leaves a zombie until the parent exits. Handles listed in
+  `inheritHandles` are made inheritable for the duration of `spawn()` only; third-party code that
+  calls `CreateProcess` with `bInheritHandles` and no handle list at that moment could see them.
+* Async reads block one IO thread per in-flight request until the IORing / io_uring backends land.
 * The job system uses lock-protected deques (short spin locks) rather than lock-free Chase-Lev
   deques; fibers are a Phase 2+ option behind the same API (ADR-011).

@@ -6,8 +6,9 @@ Leaf module (C++20 standard library only; no dependency on `engine/core`). CMake
 
 | Header (`helios/math/…`) | Contents |
 |---|---|
-| `scalar.h` | `f32/f64/i32/u32…` aliases, constants (`kPi`, `kPiD`, `kPiT<T>` …), `lerp/clamp/saturate/smoothstep/remap`, `approxEqual`, `safeRsqrt`, `wrapAngle`, exact cast-based `floorToI32`, integer hashes (`hashU32`, `hashU64`, `hashCombineU32`, `deriveSeed`), deterministic `det::sin/cos/atan2/asin/acos` |
-| `vec.h` | `Vec2/3/4` (f32), `DVec2/3/4` (f64), `IVec*` (i32), `UVec*` (u32); arithmetic, `dot/cross/length/normalize`, component-wise helpers, swizzles, orthonormal basis |
+| `scalar.h` | `f32/f64/i32/u32…` aliases, constants (`kPi`, `kPiD`, `kPiT<T>` …), `lerp/clamp/saturate/smoothstep/remap`, `approxEqual`, `safeRsqrt`, `wrapAngle`, exact cast-based `floorToI32`, integer hashes (`hashU32`, `hashU64`, `hashCombineU32`, `deriveSeed`), deterministic `det::sin/cos/atan2/asin/acos` and `det::exp/ln/pow/asinh` |
+| `fixed.h` | Fixed point: `Q16` (Q16.16), `Q32` (Q32.32), `Fixed64` (2^-10 m); `U128` helpers, exact `isqrt`, integer `rsqrtFixed` / `rsqrtQ30` |
+| `vec.h` | `Vec2/3/4` (f32), `DVec2/3/4` (f64), `IVec*` (i32), `UVec*` (u32); arithmetic, `dot/cross/length/normalize`, `reflectVector`/`refract`, component-wise helpers, swizzles, orthonormal basis |
 | `quat.h` | `Quat` / `DQuat`: axis-angle, Euler, basis, `fromTo`, `lookRotation`, `slerp/nlerp`, rotation vectors, `toEuler`, `integrate` |
 | `mat.h` | `Mat3/Mat4/DMat3/DMat4`: builders, TRS compose/decompose, inverse (general/affine/rigid), `lookAt`, reverse-Z projections, `flipClipY` |
 | `transform.h` | `Transform` (f32) / `DTransform` (f64 position), compose/inverse/relativeTo, camera-relative conversion |
@@ -118,6 +119,19 @@ Deterministic procedural generation (ADR-006) and quantize-on-both-sides network
 * `std::sin/cos/atan2/pow` differ in the last bit between the MSVC CRT and glibc. Use
   `det::sin/cos/sinCos/atan/atan2/asin/acos` in any code whose result must match across machines
   (≤ 2–3 ulp). `wrapAngle` uses IEEE `remainder`, which is exact.
+* `det::exp/ln/pow/asinh` (06's `hmath` built-ins for HXL, `src/det_exp.cpp`) use double-double
+  intermediates built from error-free transformations (TwoSum, Dekker's TwoProduct: no FMA), so they
+  are nearly correctly rounded. Measured against 64-bit-mantissa `long double` references over the
+  test sweeps (`tests/test_det_exp.cpp`): exp ≤ 0.518 ulp, ln ≤ 0.500 ulp, pow ≤ 0.515 ulp,
+  asinh ≤ 0.500 ulp; exp/pow results in the subnormal range ≤ 0.75 ulp (one extra rounding).
+  Special values follow C99 Annex F (std:: semantics); `pow` is exact for y = 1, 2, −1, 0.5.
+  Golden FNV-1a hashes of ~95k outputs pin the bits (GCC 13 and Clang 18 identical; MSVC and
+  clang-cl are checked by CI). Cost on a 2.8 GHz x86-64: exp ~35 ns, ln ~50 ns, asinh ~85 ns,
+  pow ~120 ns (budget ≤ 150 ns per call; std:: versions are 6–17 ns but not reproducible).
+* Fixed point (`fixed.h`) is integer-only and therefore bit-exact everywhere: `Q16`, `Q32`, `Fixed64`
+  wrap on +/−, round-to-nearest (ties up) on ×, round-to-nearest (ties away) and saturate on ÷;
+  `sqrt`/`rsqrt` are exact floors. 128-bit intermediates use the portable `U128` (no `__int128`).
+  A golden hash pins a mixed-operation sweep (`tests/test_fixed.cpp`).
 
 ## Packing (`pack.h`) and colour formats
 
@@ -153,6 +167,18 @@ addresses quadtree tiles (64-bit key `[face:3][level:5][x:28][y:28]`), with pare
 edge neighbours that cross face borders. Latitude is positive towards +Y, longitude is 0 at +Z and
 grows towards +X (east = prograde rotation about +Y).
 
+## Fixed point (`fixed.h`)
+
+| Type | Storage | Resolution | Range | Used for |
+|---|---|---|---|---|
+| `Q16` | i32, 16 fraction bits | 1.5e-5 | ±32768 | `hnoise` fractions; the 32-bit-only GPU twin (02 §5.8, 03 §5.5) |
+| `Q32` | i64, 32 fraction bits | 2.3e-10 | ±2.1e9 | PCG heights in metres (f64-exact below 2^20 m) |
+| `Fixed64` | i64, 10 fraction bits | 2^-10 m ≈ 0.98 mm | ±9.0e15 m | command-replication integrator (04 §5.4), f64-exact to 8.8e12 m |
+
+`rsqrtFixed(x, fracIn, fracOut)` returns floor(2^fracOut / sqrt(x / 2^fracIn)) exactly (integer long
+division plus an exact integer square root); `rsqrtQ30` is the cube-sphere normalization of 02 §5.8
+(|p|² in Q.60 → 1/|p| in Q2.30). `fixedCast<To>(v)` converts between formats.
+
 ## Threading
 
 All types are plain values and all functions are pure (no global mutable state, no lazily built
@@ -167,6 +193,10 @@ tables); everything is safe to call concurrently.
   (deterministic, not accurate).
 * Only the functions listed under *Determinism* are pinned by golden tests; CRT-based helpers
   (listed there) may differ by an ulp between Windows and Linux.
+* `reflect(i, n)` was renamed `reflectVector(i, n)` (WP-0.5) so the name `helios::reflect` cannot
+  clash with a reflection namespace; there is no alias.
+* `det::exp/pow` near the overflow threshold decide overflow from the double-double exponent's high
+  part, so a result within an ulp of DBL_MAX may overflow one ulp early (deterministically).
 * Noise inputs must stay below 2^31 (f32) / 2^52 (f64); the lattice hash wraps every 2^32 cells
   per axis.
 * `PositionQuantizer::fromExtent` returns an invalid quantizer (`isValid() == false`, bits = 0)

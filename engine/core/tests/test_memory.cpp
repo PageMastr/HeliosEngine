@@ -250,3 +250,135 @@ TEST_CASE("memory: virtual memory reserve/commit/decommit/release") {
     CHECK(base[0] == 0); // recommitted pages are zeroed
     CHECK(VirtualMemory::release(base, size));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Sharded tag accounting (WP-0.5 contention fix)
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("memory: peak is exact for a short spike on one thread") {
+    const MemoryTag tag = registerMemoryTag("TestPeakSpike");
+    const MemoryTagStats before = memoryTagStats(tag);
+    // Below the per-shard flush threshold: the spike is never published, yet the peak sees it.
+    trackAllocation(tag, 4096);
+    trackDeallocation(tag, 4096);
+    MemoryTagStats after = memoryTagStats(tag);
+    CHECK(after.liveBytes == before.liveBytes);
+    CHECK(after.peakBytes == std::max<i64>(before.peakBytes, before.liveBytes + 4096));
+    // Above it: the flush path publishes and raises the global peak exactly.
+    trackAllocation(tag, 300 * 1024);
+    trackAllocation(tag, 5);
+    trackDeallocation(tag, 300 * 1024 + 5);
+    after = memoryTagStats(tag);
+    CHECK(after.liveBytes == before.liveBytes);
+    CHECK(after.peakBytes == before.liveBytes + 300 * 1024 + 5);
+    CHECK(after.liveAllocations == before.liveAllocations + 1); // two allocations, one (combined) free
+    trackDeallocations(tag, 0, 1);                              // rebalance the count
+    CHECK(memoryTagStats(tag).liveAllocations == before.liveAllocations);
+}
+
+TEST_CASE("memory: batched accounting keeps counts exact") {
+    const MemoryTag tag = registerMemoryTag("TestBatched");
+    const MemoryTagStats before = memoryTagStats(tag);
+    trackAllocations(tag, 6400, 100);
+    MemoryTagStats mid = memoryTagStats(tag);
+    CHECK(mid.liveBytes - before.liveBytes == 6400);
+    CHECK(mid.liveAllocations - before.liveAllocations == 100);
+    CHECK(mid.totalAllocations - before.totalAllocations == 100);
+    CHECK(mid.peakBytes >= before.liveBytes + 6400);
+    trackDeallocations(tag, 6400, 100);
+    const MemoryTagStats after = memoryTagStats(tag);
+    CHECK(after.liveBytes == before.liveBytes);
+    CHECK(after.liveAllocations == before.liveAllocations);
+    CHECK(after.totalAllocations - before.totalAllocations == 100);
+    // count = 0 adjusts bytes only (a block that grew in place).
+    trackAllocations(tag, 10, 0);
+    CHECK(memoryTagStats(tag).liveAllocations == before.liveAllocations);
+    CHECK(memoryTagStats(tag).liveBytes == before.liveBytes + 10);
+    trackDeallocations(tag, 10, 0);
+}
+
+TEST_CASE("memory: batched accounting honours budgets") {
+    const auto saved = log::level();
+    log::setLevel(log::Level::Error);
+    const MemoryTag tag = registerMemoryTag("TestBatchedBudget", 1000);
+    trackAllocations(tag, 900, 9);
+    CHECK(memoryTagStats(tag).budgetExceededCount == 0);
+    trackAllocations(tag, 200, 2);
+    CHECK(memoryTagStats(tag).budgetExceededCount == 1);
+    trackDeallocations(tag, 1100, 11);
+    trackAllocations(tag, 1001, 1);
+    CHECK(memoryTagStats(tag).budgetExceededCount == 2);
+    trackDeallocations(tag, 1001, 1);
+    setMemoryBudget(tag, 0);
+    log::setLevel(saved);
+}
+
+TEST_CASE("memory: concurrent tracking under one tag balances exactly") {
+    const MemoryTag tag = registerMemoryTag("TestConcurrentTracking");
+    const MemoryTagStats before = memoryTagStats(tag);
+    constexpr int kThreads = 8;
+    constexpr int kOps = 20000;
+    constexpr usize kWindow = 8;
+    constexpr usize kSize = 96;
+    std::vector<std::thread> threads;
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&, t] {
+            // Frees are done on a different thread than the allocations half of the time, so
+            // shard cells go negative and must still sum up exactly.
+            void* window[kWindow] = {};
+            for (int i = 0; i < kOps; ++i) {
+                void*& slot = window[static_cast<usize>(i) % kWindow];
+                alignedFree(slot);
+                slot = alignedAlloc(kSize + static_cast<usize>(t), 16, tag);
+            }
+            for (void* p : window) alignedFree(p);
+        });
+    }
+    for (auto& th : threads) th.join();
+    // Cross-thread frees: allocate here, free on other threads.
+    std::vector<void*> handoff;
+    for (int i = 0; i < 64; ++i) handoff.push_back(alignedAlloc(1000, 16, tag));
+    std::vector<std::thread> freers;
+    for (int t = 0; t < 4; ++t) {
+        freers.emplace_back([&, t] {
+            for (int i = t; i < 64; i += 4) alignedFree(handoff[static_cast<usize>(i)]);
+        });
+    }
+    for (auto& th : freers) th.join();
+
+    const MemoryTagStats after = memoryTagStats(tag);
+    CHECK(after.liveBytes == before.liveBytes);
+    CHECK(after.liveAllocations == before.liveAllocations);
+    CHECK(after.totalAllocations - before.totalAllocations == static_cast<u64>(kThreads * kOps + 64));
+    // Peak: at least what one thread held, at most everything plus the documented slack.
+    const i64 oneThread = static_cast<i64>(kWindow * kSize);
+    i64 everything = 64 * 1000;
+    for (int t = 0; t < kThreads; ++t) everything += static_cast<i64>(kWindow * (kSize + static_cast<usize>(t)));
+    CHECK(after.peakBytes >= before.liveBytes + oneThread);
+    CHECK(after.peakBytes <= std::max<i64>(before.peakBytes, before.liveBytes + everything + 16 * 64 * 1024));
+}
+
+TEST_CASE("memory: a budget crossing on one thread is detected immediately under load") {
+    // Other threads churn the same tag while this thread crosses the budget: its own delta is
+    // part of the estimate, so the crossing is seen on the allocation that causes it.
+    const auto saved = log::level();
+    log::setLevel(log::Level::Error);
+    const MemoryTag tag = registerMemoryTag("TestBudgetUnderLoad", 1 << 20);
+    std::atomic<bool> stop{false};
+    std::vector<std::thread> churn;
+    for (int t = 0; t < 3; ++t) {
+        churn.emplace_back([&] {
+            while (!stop.load(std::memory_order_relaxed)) {
+                void* p = alignedAlloc(64, 16, tag);
+                alignedFree(p);
+            }
+        });
+    }
+    void* big = alignedAlloc((1 << 20) + 4096, 16, tag);
+    CHECK(memoryTagStats(tag).budgetExceededCount == 1);
+    stop.store(true);
+    for (auto& th : churn) th.join();
+    alignedFree(big);
+    setMemoryBudget(tag, 0);
+    log::setLevel(saved);
+}

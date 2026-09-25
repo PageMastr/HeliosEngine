@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Helios executable manifest (ADR-011, 02 §2.1). Embedded into every Windows executable by
+  helios_windows_manifest() in cmake/HeliosWindows.cmake; checked by the CTest lint_windows_manifest.
+  * activeCodePage UTF-8: the process ANSI code page (GetACP, narrow CRT/Win32 "A" APIs) is UTF-8 on
+    Windows 10 1903+, so any narrow path or text that slips past the wide-API rule still round-trips.
+  * dpiAwareness PerMonitorV2 (dpiAware true/pm is the pre-1607 fallback): windows and the editor's
+    viewports scale per monitor without bitmap stretching.
+  * longPathAware: paths beyond MAX_PATH work when LongPathsEnabled is set (Windows 10 1607+).
+  * supportedOS: Windows 10 and 11 (the only supported versions, ADR-001), so version and
+    compatibility shims behave as on Windows 10.
+  * asInvoker: never elevate (installer-detection heuristics would otherwise elevate executables
+    whose names contain "patch", "setup" or "update").
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 and Windows 11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

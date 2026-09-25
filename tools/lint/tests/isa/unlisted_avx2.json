@@ -1,0 +1,38 @@
+[
+{
+  "directory": "/build",
+  "command": "/usr/bin/g++ -I/src/engine/core/include -O2 -Wall -ffp-contract=off -o x/CMakeFiles/helios_core.dir/engine/core/src/memory.cpp.o -c /src/engine/core/src/memory.cpp",
+  "file": "/src/engine/core/src/memory.cpp",
+  "output": "x/CMakeFiles/helios_core.dir/engine/core/src/memory.cpp.o"
+},
+{
+  "directory": "/build",
+  "command": "/usr/bin/gcc -I/src/engine/core/include -O2 -Wall -ffp-contract=off -march=x86-64 -mtune=generic -mno-sse3 -mno-avx -mno-avx2 -mno-fma -mno-bmi -mno-bmi2 -mno-lzcnt -mno-f16c -o x/CMakeFiles/helios_core.dir/engine/core/src/cpugate/cpu_gate.c.o -c /src/engine/core/src/cpugate/cpu_gate.c",
+  "file": "/src/engine/core/src/cpugate/cpu_gate.c",
+  "output": "x/CMakeFiles/helios_core.dir/engine/core/src/cpugate/cpu_gate.c.o"
+},
+{
+  "directory": "/build",
+  "command": "/usr/bin/gcc -I/src/engine/core/include -O2 -Wall -ffp-contract=off -march=x86-64 -mtune=generic -mno-sse3 -mno-avx -mno-avx2 -mno-fma -mno-bmi -mno-bmi2 -mno-lzcnt -mno-f16c -o x/CMakeFiles/helios_core_cpugate_hook.dir/engine/core/src/platform/posix/cpu_gate_hook.c.o -c /src/engine/core/src/platform/posix/cpu_gate_hook.c",
+  "file": "/src/engine/core/src/platform/posix/cpu_gate_hook.c",
+  "output": "x/CMakeFiles/helios_core_cpugate_hook.dir/engine/core/src/platform/posix/cpu_gate_hook.c.o"
+},
+{
+  "directory": "/build",
+  "command": "/usr/bin/g++ -I/src/engine/core/include -O2 -w -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfpmath=sse -ffp-contract=off -o x/CMakeFiles/tp_jolt.dir/third_party/jolt/Jolt/Core/Memory.cpp.o -c /src/third_party/jolt/Jolt/Core/Memory.cpp",
+  "file": "/src/third_party/jolt/Jolt/Core/Memory.cpp",
+  "output": "x/CMakeFiles/tp_jolt.dir/third_party/jolt/Jolt/Core/Memory.cpp.o"
+},
+{
+  "directory": "/build",
+  "command": "/usr/bin/g++ -I/src/engine/core/include -O2 -Wall -mavx2 -mbmi -mbmi2 -mlzcnt -mpopcnt -mf16c -mno-fma -mfpmath=sse -ffp-contract=off -o x/CMakeFiles/helios_pcg.dir/engine/pcg/src/kernels/vm_avx2.cpp.o -c /src/engine/pcg/src/kernels/vm_avx2.cpp",
+  "file": "/src/engine/pcg/src/kernels/vm_avx2.cpp",
+  "output": "x/CMakeFiles/helios_pcg.dir/engine/pcg/src/kernels/vm_avx2.cpp.o"
+},
+{
+  "directory": "/build",
+  "command": "/usr/bin/g++ -I/src/engine/core/include -O2 -Wall -mavx2 -ffp-contract=off -o x/CMakeFiles/helios_world.dir/engine/world/src/grid.cpp.o -c /src/engine/world/src/grid.cpp",
+  "file": "/src/engine/world/src/grid.cpp",
+  "output": "x/CMakeFiles/helios_world.dir/engine/world/src/grid.cpp.o"
+}
+]

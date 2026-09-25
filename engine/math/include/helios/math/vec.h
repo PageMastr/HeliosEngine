@@ -653,9 +653,10 @@ template <FloatVecType V>
     }
     return true;
 }
-/// Reflects incident vector i about the plane with unit normal n.
+/// Reflects incident vector i about the plane with unit normal n (GLSL `reflect`). Named
+/// reflectVector so `helios::reflect` stays free for the reflection module's namespace.
 template <FloatVecType V>
-[[nodiscard]] constexpr V reflect(const V& i, const V& n) noexcept {
+[[nodiscard]] constexpr V reflectVector(const V& i, const V& n) noexcept {
     using T = typename V::ValueType;
     return i - n * (T(2) * dot(n, i));
 }

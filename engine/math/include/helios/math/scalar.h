@@ -404,6 +404,22 @@ void sinCos(f64 x, f64& outSin, f64& outCos) noexcept;
 [[nodiscard]] f64 asin(f64 x) noexcept;
 [[nodiscard]] f64 acos(f64 x) noexcept;
 
+// Exponentials and logarithms (06's `hmath` built-ins for HXL; src/det_exp.cpp). Double-double
+// intermediates make them nearly correctly rounded (measured against 64-bit-mantissa references:
+// exp, ln, asinh < 0.51 ulp, pow < 0.52 ulp; subnormal results of exp/pow <= 1 ulp). Special values
+// follow C99 Annex F like std::exp/log/pow/asinh (pow(x, 0) = 1 even for NaN, pow(-8, 1/3) = NaN,
+// ln(-1) = NaN, ln(0) = -inf, ...). Cost (2.8 GHz x86-64): exp ~35 ns, ln ~50 ns, asinh ~85 ns,
+// pow ~120 ns; budget <= 150 ns per call (HXL formulas, not per-pixel work).
+/// e^x. Overflows to +inf above 709.782712893384, underflows to 0 below -745.1332191019411.
+[[nodiscard]] f64 exp(f64 x) noexcept;
+/// Natural logarithm.
+[[nodiscard]] f64 ln(f64 x) noexcept;
+/// x^y. Exact for y = 1, 2, -1 and 0.5 (x, x*x, 1/x, sqrt(x)); the general case forms y * ln|x|
+/// in double-double, so accuracy does not degrade for large exponents.
+[[nodiscard]] f64 pow(f64 x, f64 y) noexcept;
+/// Inverse hyperbolic sine (odd; accurate near 0 and for huge |x|).
+[[nodiscard]] f64 asinh(f64 x) noexcept;
+
 // f32 overloads evaluate in f64 and round once (still deterministic).
 [[nodiscard]] inline f32 sin(f32 x) noexcept { return static_cast<f32>(sin(static_cast<f64>(x))); }
 [[nodiscard]] inline f32 cos(f32 x) noexcept { return static_cast<f32>(cos(static_cast<f64>(x))); }
@@ -413,6 +429,12 @@ void sinCos(f64 x, f64& outSin, f64& outCos) noexcept;
 }
 [[nodiscard]] inline f32 asin(f32 x) noexcept { return static_cast<f32>(asin(static_cast<f64>(x))); }
 [[nodiscard]] inline f32 acos(f32 x) noexcept { return static_cast<f32>(acos(static_cast<f64>(x))); }
+[[nodiscard]] inline f32 exp(f32 x) noexcept { return static_cast<f32>(exp(static_cast<f64>(x))); }
+[[nodiscard]] inline f32 ln(f32 x) noexcept { return static_cast<f32>(ln(static_cast<f64>(x))); }
+[[nodiscard]] inline f32 pow(f32 x, f32 y) noexcept {
+    return static_cast<f32>(pow(static_cast<f64>(x), static_cast<f64>(y)));
+}
+[[nodiscard]] inline f32 asinh(f32 x) noexcept { return static_cast<f32>(asinh(static_cast<f64>(x))); }
 }  // namespace det
 
 }  // namespace helios

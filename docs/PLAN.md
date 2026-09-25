@@ -5,7 +5,7 @@ in the ten plan sections under [`plan/`](plan/README.md), and the evidence behin
 reports under [`research/`](research/). Where this summary and a section disagree, the section wins, and
 [`plan/00-decisions.md`](plan/00-decisions.md) (the Architecture Decision Record) wins over both.*
 
-**Status:** draft v1, 2026-09-25. Phase 0 (Foundations) is in progress.
+**Status:** draft v5 (round-4 review fixes), 2026-09-25. Phase 0 (Foundations) is in progress.
 
 ---
 
@@ -21,7 +21,8 @@ six parts, and all six share one schema language, one runtime and one content mo
 4. a **launcher/patcher**;
 5. a **C++ server tier** (gateways and headless cell servers);
 6. a **Go backend** (auth, orchestration, item and currency ledger, market, chat, social, persistence,
-   telemetry, GM tools, patch service).
+   telemetry, GM tools, patch service), which studios extend with sandboxed Luau world scripts rather than Go
+   code.
 
 Windows 10/11 x64 is the primary platform for development and play. Linux x64 builds and passes the same tests
 on every commit, and it is the production OS for servers.
@@ -31,7 +32,7 @@ Galaxies, Destiny, Star Citizen", EVE Online or SWTOR. The plan turns that into 
 30–150 people should be able to build and run an original MMO of any of those five classes, or a hybrid of
 them in one shard, by writing records, Luau scripts and domain graphs, never by modifying engine or backend
 source ([01 §1](plan/01-vision-and-scope.md#1-product-vision)). "AAA" is not left as an adjective. It is
-defined as **60 measurable criteria**, the *AAA Scorecard*. The criteria cover rendering performance on named
+defined as **65 measurable criteria**, the *AAA Scorecard*. The criteria cover rendering performance on named
 hardware, server scale, iteration speed, stability, content scale, security, tooling completeness and platform
 parity, and they are measured in six scripted benchmark scenes. The bar is met when every criterion tagged
 Phase ≤ 4 passes on Windows and Linux.
@@ -40,8 +41,12 @@ Phase ≤ 4 passes on Windows and Linux.
 - **Six phases.** Phases 0–4 lead to the AAA bar and Phase 5 goes past it. Each phase ends with a playable
   demo of *Cinder Reach*, an original sample game that proves the five game classes one capability at a time.
 - **An agent build loop.** A team of agents always works the highest-priority failing scorecard criterion.
-  Every change passes adversarial review and a six-configuration CI matrix. Independent auditors must score
-  each phase exit at **≥ 9/10**, and the user validates each milestone on Windows.
+  Every change passes adversarial review and an eight-job CI matrix (both supported Visual Studio toolsets,
+  clang-cl, GCC, Clang, headless and MinGW). Independent auditors must score each phase exit at **≥ 9/10**, and
+  the user validates each milestone on Windows.
+- **Humans judge what bots cannot.** A blinded external panel rates look and feel against current reference
+  titles (AAA-REN-8), and a contracted content team with no engine engineer must build a playable zone with
+  the shipped tools (AAA-TOOL-10). Passing every number while failing either still fails the bar.
 - **Seams first, depth later.** Each hard scaling feature ships on day one as an interface with a trivial
   implementation, then grows. Examples are server meshing, authority handoff and streaming install. This is
   the main lesson of Star Citizen's decade of retrofits.
@@ -57,7 +62,7 @@ rather than a 500-hour game. The agent loop may compress well-specified engineer
 the gates that need people, hardware or lawyers:
 - real GPU and server labs;
 - artists, animators and voice actors;
-- human playtesters;
+- human playtesters, an external look-and-feel panel and a contracted content team;
 - a code-signing certificate;
 - a penetration test;
 - patent counsel.
@@ -65,10 +70,17 @@ the gates that need people, hardware or lawyers:
 Until Phase 0 yields velocity data, any calendar for an agent-built Helios is unknown, and the plan says so
 rather than guessing.
 
-**Where we are.** The plan is drafted (v1) and goes to independent review. The repository has the CMake presets for every toolchain, 25 vendored
-permissive-licence dependencies and CI on Windows and Linux. `engine/core` (133/133 test cases pass) and
-`engine/math` (101/102 pass) have landed. Everything else is specified with work packages, owners, dependencies
-and acceptance tests ([09 §8](plan/09-roadmap-and-process.md#8-current-status-and-next-steps)).
+**Where we are.** The plan is at draft v5: every section has been revised for four independent review
+rounds, and the cross-section fixes are logged in [`plan/CONSISTENCY.md`](plan/CONSISTENCY.md). The repository has the
+CMake presets for every toolchain, 25 vendored permissive-licence dependencies and CI on Windows and Linux.
+`engine/core` (174/174 test cases pass) and `engine/math` (115/115) build and pass on the working tree. The RHI
+(Vulkan and Null), render graph v0 and `helios-rendertest`, `engine/reflect`, the ECS wrapper, `helios-schemac`
+and the first parts of `engine/net` and `engine/script` are in progress in the working tree, not yet reviewed
+or merged. The in-tree ISA and CPU-gate code was written to the per-file design that the ADR-011 amendment
+retired, so it is reworked by WP-0.2r and WP-0.5r before anything builds on it. A Go backend (identity,
+sessions and connect tokens, the orchestrator) runs without Docker; its conformance rework to the current plan
+is work package WP-0.15r. Everything else is specified with work packages, owners, dependencies and
+acceptance tests ([09 §8](plan/09-roadmap-and-process.md#8-current-status-and-next-steps)).
 
 ---
 
@@ -76,22 +88,22 @@ and acceptance tests ([09 §8](plan/09-roadmap-and-process.md#8-current-status-a
 
 | The request | How the plan answers it | Where |
 |---|---|---|
-| "A full modern MMO backend" | **C++:** a gateway tier (encrypted UDP, connect tokens) and headless cell servers (Shard → Zone → Cell), with authority groups and epoch-fenced handoff, interest management, time dilation and overload policy. **Go:** 20 services, including an append-only double-entry **item and currency ledger**, regional order-book markets, durable timers, write-behind persistence, chat, social, activities, telemetry, GM/admin and patch manifests. **Stores and ops:** PostgreSQL, Valkey and NATS JetStream; Kubernetes + Agones fleets; CDC patching from a CDN | [04](plan/04-networking-and-servers.md), [05](plan/05-backend-services.md), [ADR-007/008](plan/00-decisions.md#adr-007-server--network-architecture) |
-| "An editor that contains all tools needed to build a fully functional game" | A UI-less **ToolsFramework** (documents, commands, property-path transactions, crash journal, automation) under an ImGui shell, with **30 tools, T01–T30**. Every record type is editable in the generic inspector from day one. Play-in-Editor runs a real cell server, clients and bots | [07](plan/07-editor-and-tools.md) |
+| "A full modern MMO backend" | **C++:** a gateway tier (encrypted UDP, connect tokens) and headless cell servers (Shard → Zone → Cell), with authority groups and epoch-fenced handoff, bounded co-location of coupled entities that straddle a cell seam (tows, tethers, dogfights), planned region migration so rolling restarts and drains cost a ≤ 1 s hitch per region moved and lose no state (Phase 3), a replicant state tier so a cell crash in any persistent world zone costs ≤ 1 s of state and no disconnect (Phase 4), make-before-break gateway relocation so gateway deploys leave no session linkdead (Phase 4), interest management, time dilation, overload policy and an Opus voice forwarder. **Go:** 23 services, including an append-only double-entry **item and currency ledger** (with housing plots and lots), regional order-book markets, durable timers (including structure upkeep and decay), write-behind persistence with a budgeted fence load, world state (flags, territory and sovereignty), chat, social, activities (parties and player fleets, a matchmaker, group finder, leaderboards, ledger-guarded lockouts), world scripts for studio-defined cross-zone systems (player-city governance is one), telemetry, player reports and support cases with SLA targets, a store API with minors' spending caps, GM/admin and patch manifests. **Stores and ops:** PostgreSQL, Valkey and NATS JetStream; Kubernetes + Agones fleets; failure detection by failure domain, so a host or rack loss is recovered as crashes and never freezes the shard; client and server content parts under a compat epoch, so server hotfixes need no client patch; CDC patching from a CDN; GDPR/CCPA erasure by crypto-shredding, per-store RPO/RTO with regional DR, and on-call runbooks | [04](plan/04-networking-and-servers.md), [05](plan/05-backend-services.md), [ADR-007/008](plan/00-decisions.md#adr-007-server--network-architecture) |
+| "An editor that contains all tools needed to build a fully functional game" | A UI-less **ToolsFramework** (documents, commands, property-path transactions, crash journal, automation) under an ImGui shell, with **30 tools, T01–T30**. Every record type is editable in the generic inspector from day one. Play-in-Editor runs a real cell server, clients and bots. Studios extend the editor through a public, versioned **extension SDK** (panels, documents, importers, cook steps, viewport modes, rules and node libraries in C++ or Luau; ED-19), and designers add their own record, component and view-model types in T08's schema editor with no compiler (ED-22). Teams co-edit live in per-zone sessions plus a project-wide data session for records with no zone. World scripts run in every PIE mode and are debugged and inspected in a World scripts panel (07 §1.6.2, ED-23). At the Phase 4 exit a contracted content team with no engine engineer must build a playable zone with them in ≤ 2 weeks and zero blocking issues (AAA-TOOL-10) | [07](plan/07-editor-and-tools.md) |
 | "Level editors" | T01 World, T02 Prefabs, T03 Blockout, T04 Terrain & Planet (cube-sphere, layer stack), T05 Scatter, T06 Splines, T07 Star System & Galaxy | [07 §2.1](plan/07-editor-and-tools.md#21-world-building) |
-| "Scripting" | **Luau** (typed, sandboxed, hot-reloaded in ≤ 2 s) on client, server and editor. A DAP debugger works in VS Code, and luau-lsp gets generated type definitions. Domain visual graphs compile to Luau, native ability state machines or HXL formulas (T10, T11) | [02 §7.4](plan/02-engine-runtime.md#74-scripting-host-luau-0739-r01-p0-4-r08-ed-p0-10), [06 §11](plan/06-gameplay-framework.md#11-scripting-api-graphs-and-determinism), [07 T10–T11](plan/07-editor-and-tools.md#22-data-and-gameplay) |
-| "Object editors" | T08 Data & Record-Template Editor (inspector plus a 100k-row spreadsheet grid), T09 Gameplay Systems (attributes, effects, abilities, loot, crafting, fitting sandbox), T21 Modular Assembly (ships, vehicles, stations, housing), T22 Character Customization | [07 §2.2–2.4](plan/07-editor-and-tools.md#22-data-and-gameplay) |
-| "Animation" | ozz-animation runtime with anim graphs, IK, cross-species retargeting and crowd LOD. **T15 Animation Suite**, T14 Cinematic Sequencer, and motion matching plus facial lip-sync in Phase 4 | [02 §7.2](plan/02-engine-runtime.md#72-animation-ozz-017-r06-eng-28-r08-ed-p1-08), [07 T14–T15](plan/07-editor-and-tools.md#23-presentation) |
-| "Everything you would need to build an MMO game" | Also: materials (T16), VFX (T17), environment/post (T18), UI designer (T19), audio (T20), AI/navigation/spawns (T23), assets (T24), localization (T25), quests (T12), dialogue with VO workflow (T13), profiling (T26), GM/live-ops (T27), validation (T28), build/cook/deploy (T29), live collaboration (T30) | [07 §2](plan/07-editor-and-tools.md#2-the-tool-suite-t01t30) |
-| "Client" | Engine + RmlUi game UI + netcode. A table-driven state machine, one continuous camera from cockpit to on-foot, data-bound HUD, diegetic cockpit screens, rebindable input (mouse, gamepad, HOTAS, IME), accessibility, crash reporting, sandboxed UI addons | [08 §1](plan/08-client-and-launcher.md#1-client-application) |
-| "Launcher" | A C++ launcher (RmlUi on `SDL_Renderer`). It gates CPU and GPU, logs in, patches content-addressed chunks from a CDN with signed manifests, and supports verify/repair, self-update, play-while-downloading and pre-download, plus a per-user installer with no UAC | [08 §2](plan/08-client-and-launcher.md#2-launcher-and-patcher) |
-| "At a AAA style standard" | The **AAA Scorecard**: 60 criteria on five reference hardware tiers and six benchmark scenes. The Phase 4 exit is the bar | [01 §3](plan/01-vision-and-scope.md#3-the-aaa-bar-measurable-acceptance-criteria), §9 below |
-| "Could build a game like Star Wars Galaxies, Destiny, Star Citizen", EVE, SWTOR | A **51-capability matrix** scored against the five reference game classes, with an owning section and a phase for each capability, and a *Cinder Reach* proof for each class | [01 §2](plan/01-vision-and-scope.md#2-reference-game-archetypes), §7 below |
+| "Scripting" | **Luau** (typed, sandboxed, hot-reloaded in ≤ 2 s) on client, cell server and editor, and in backend world-script hosts for shard-wide systems (05 §1.23), which PIE runs with hot reload and a debugger per partition (07 §1.6.2). A DAP debugger works in VS Code, and luau-lsp gets generated type definitions. Domain visual graphs compile to Luau, native ability state machines or HXL formulas (T10, T11) | [02 §7.4](plan/02-engine-runtime.md#74-scripting-host-luau-0739-r01-p0-4-r08-ed-p0-10), [06 §11](plan/06-gameplay-framework.md#11-scripting-api-graphs-and-determinism), [07 T10–T11](plan/07-editor-and-tools.md#22-data-and-gameplay) |
+| "Object editors" | T08 Data & Record-Template Editor (inspector, a 100k-row spreadsheet grid, and a governed schema editor for new project types and world-script blocks), T09 Gameplay Systems (attributes, effects, abilities, loot, crafting, fitting sandbox), T21 Modular Assembly (ships, vehicles, stations, housing), T22 Character Customization | [07 §2.2–2.4](plan/07-editor-and-tools.md#22-data-and-gameplay) |
+| "Animation" | ozz-animation runtime with anim graphs, IK, cross-species retargeting and crowd LOD. **T15 Animation Suite** (including mount and rider sets), T14 Cinematic Sequencer, and in Phase 4 motion matching plus a FACS facial runtime with viseme lip-sync (RT-22) | [02 §7.2](plan/02-engine-runtime.md#72-animation-ozz-017-r06-eng-28-r08-ed-p1-08), [07 T14–T15](plan/07-editor-and-tools.md#23-presentation) |
+| "Everything you would need to build an MMO game" | Also: materials (T16), VFX (T17), environment/post (T18), UI designer (T19), audio (T20), AI/navigation/spawns (T23), assets (T24), localization (T25), quests and activities (T12, with encounter, lockout and match-rule editors and a queue simulator), dialogue with VO workflow (T13), profiling (T26), GM/live-ops (T27), validation (T28), build/cook/deploy (T29), live collaboration (T30). **Engine as a product:** generated API and record reference, tool manuals and executable tutorials, a Project Browser with five starter templates (one per reference class), a binary SDK and `helios-tool upgrade-project` (AAA-TOOL-7…9) | [07 §2](plan/07-editor-and-tools.md#2-the-tool-suite-t01t30), [09 §2.7](plan/09-roadmap-and-process.md#27-developer-experience-track-helios-as-a-product) |
+| "Client" | Engine + RmlUi game UI + netcode. A table-driven state machine, one continuous camera from cockpit to on-foot, data-bound HUD, diegetic cockpit screens, rebindable input (mouse, gamepad, HOTAS, IME), accessibility, crash reporting, sandboxed UI addons. 27 Foundation UI panels cover every player-facing system, including the store, player reports and support tickets, each with a headless flow test, and reskin by theme with no engine edit (CL-23) | [08 §1](plan/08-client-and-launcher.md#1-client-application) |
+| "Launcher" | A C++ launcher (RmlUi on `SDL_Renderer`). It gates CPU and GPU (the gate itself runs on any x86-64 CPU, CL-17), logs in, patches content-addressed chunks from a CDN with signed manifests, and supports verify/repair, self-update, play-while-downloading and pre-download, plus a per-user installer with no UAC. Every path, URI scheme, registry key and signing key is scoped by the project's product ID, so two Helios games install side by side (CL-24) | [08 §2](plan/08-client-and-launcher.md#2-launcher-and-patcher) |
+| "At a AAA style standard" | The **AAA Scorecard**: 65 criteria on five reference hardware tiers and six benchmark scenes, including a blinded external look-and-feel panel against current reference titles (AAA-REN-8). The Phase 4 exit is the bar | [01 §3](plan/01-vision-and-scope.md#3-the-aaa-bar-measurable-acceptance-criteria), §9 below |
+| "Could build a game like Star Wars Galaxies, Destiny, Star Citizen", EVE, SWTOR | A **52-capability matrix** scored against the five reference game classes, with an owning section and a phase for each capability, and a *Cinder Reach* proof for each class | [01 §2](plan/01-vision-and-scope.md#2-reference-game-archetypes), §7 below |
 | "Deploy a team of agents to research …" | **Ten research reports**: EVE and Carbon, SWG and its emulators, SWTOR and HeroEngine, Star Citizen, Destiny, modern engines (Unreal, Godot, Unity DOTS, O3DE, Bevy, Frostbite, id Tech), MMO backends, editors, sci-fi gameplay and graphics, and technology selection | [`research/`](research/), §3 below |
 | "Put together a plan for how you will build this" | This document, the ADR, and sections 01–09, including a work-package roadmap with owners, dependencies and acceptance tests | §6, §8 below |
 | "Run on a loop until the Engine is at a AAA style standard" | The **build loop**: director, implementers, adversarial reviewers, integrator and auditors, iterating on failing criteria. It terminates at the Phase 4 exit | [09 §5](plan/09-roadmap-and-process.md#5-the-build-loop) |
 | "Have a review agent … rate it a 9 out of 10" | This plan goes to an independent review agent and is not final until it scores ≥ 9/10. The build loop applies the same bar at every phase exit, with two independent auditors | [09 §5.7](plan/09-roadmap-and-process.md#57-termination-condition-and-independent-scoring) |
-| "Run this on Windows or Linux … Windows is the preference … compatible/buildable for both" | Windows-first (MSVC 2022 primary; Visual Studio solution preset), Linux parity (GCC 13+, Clang 17+) and a MinGW portability check. The whole backend runs on Windows **without Docker**. Six scorecard criteria (AAA-PLT-1…6) enforce parity | [ADR-001](plan/00-decisions.md#adr-001-platforms), §11 below |
+| "Run this on Windows or Linux … Windows is the preference … compatible/buildable for both" | Windows-first: VS 2026 is the primary toolset, and VS 2022 17.14 is the tested floor that builds the SDK and every released binary, so both work; Visual Studio solution presets exist for both. Linux parity (GCC 13+, Clang 17+) and a MinGW portability check. The whole backend runs on Windows **without Docker**. Six scorecard criteria (AAA-PLT-1…6) enforce parity | [ADR-001](plan/00-decisions.md#adr-001-platforms), §11 below |
 
 ---
 
@@ -149,13 +161,17 @@ seamlessness rests on four cross-cutting decisions:
 3. entity authority independent of which process simulates the entity;
 4. a replication and persistence layer between servers and clients.
 
-Retrofitting all four onto CryEngine explains most of its decade-long delay. Other lessons: server tick rate
-is the real metric, persistence needs garbage collection, split authority is a programming model, and bugs
-live at seams. The report also shaped the stack: keep the gateway and replication in C++ (not Go), keep NATS
-off the per-tick path, and write entities through a write-behind service.
+Retrofitting all four onto CryEngine explains most of its decade-long delay. SC shipped the replication
+layer (Replicant, Atlas, Scribe and Gateway) with Persistent Entity Streaming in Alpha 3.18 and static server
+meshing on it in Alpha 4.0 (December 2024), so a game-server crash no longer disconnects players; only
+dynamic meshing is still in progress. Other lessons: server tick rate is the real metric, persistence needs
+garbage collection, split authority is a programming model, and bugs live at seams. The report also shaped
+the stack: keep the gateway and replication in C++ (not Go), keep NATS off the per-tick path, and write
+entities through a write-behind service.
 *Adopted:* all four seams from day one ([ADR-005](plan/00-decisions.md#adr-005-world-model-large-worlds),
-[ADR-007](plan/00-decisions.md#adr-007-server--network-architecture)), entity budgets and lifecycle policies,
-bots that cross every boundary type, and master modes as data.
+[ADR-007](plan/00-decisions.md#adr-007-server--network-architecture)), a Phase 4 replicant state tier that
+matches SC's shipped crash recovery, entity budgets and lifecycle policies, bots that cross every boundary
+type, and master modes as data.
 
 **[R05 — Destiny and action MMOs](research/05-destiny-action-mmo.md).** Destiny **splits authority by latency
 tolerance**. Own-avatar feel is local, physics and AI run on a simulation host, activity progress lives in
@@ -165,8 +181,9 @@ rendering N−1. The warnings: client authority is debt (cheating in Destiny, Th
 New World's dupes), sequential RNG seeds biased perk rolls, and an 8-hour map load for a half-second change
 slowed content for years.
 *Adopted:* the Overwatch model (server-authoritative, predicted, lag-compensated) instead of client authority,
-a durable activity service outside the cell, predicted abilities compiled to a rollback-safe native state
-machine, salted and audited RNG with statistical CI tests, and hot reload in ≤ 2 s as a scorecard criterion.
+a durable activity service outside the cell (with matchmaking, checkpoints and ledger-guarded lockouts),
+predicted abilities compiled to a rollback-safe native state machine, salted and audited RNG with statistical
+CI tests, and hot reload in ≤ 2 s as a scorecard criterion.
 
 **[R06 — Modern engines](research/06-modern-engines.md).** Unreal, Godot, Unity DOTS, O3DE, Bevy, Frostbite
 and id Tech converge on a common set of patterns:
@@ -280,14 +297,22 @@ scaffold.
  │ ZoneHost → ZoneInstances: flecs ECS,    │─────────────────────────────────┘ (never per tick)
  │ Jolt grids, Luau VM, ZoneClock (TiDi),  │
  │ replication, authority groups           │◄──► other cells: ghosts, effects, handoff
- └─────────────────────────────────────────┘     (HTP trunk, never the NATS bus)
+ └──────────┬──────────────────────────────┘     (HTP trunk, never the NATS bus)
+            │ HTP trunk: every-audience state stream (persistent world zones, Phase 4)
+ ┌──────────▼──────────────────────────────┐
+ │ Replicants (helios-cell --replicant)    │ latest AG state in RAM; a standby cell resumes a
+ │ one per ≤ 4 cells, no simulation        │ crashed cell's region from it (≤ 1 s of state lost)
+ └─────────────────────────────────────────┘
 
  Data:   PostgreSQL 18 (global · per-shard primary · separate checkpoint cluster) · Valkey (sessions, queue,
          presence; always rebuildable) · NATS JetStream (events, timers, audit) · ClickHouse · S3-compatible
          object storage (backups, CDN origin, crash dumps)
  Fleets: LocalProcessPlacer on a dev PC → VMs (Phases 0–2) → Kubernetes + Agones (Phase 3+)
- Editor: helios-editor ⇄ helios-assetd (import, cook, DDC, hot reload) ⇄ PIE cell + clients + bots
-         ⇄ collab service (edit instances, Phase 3)
+ Voice:  helios-voice forwarders behind the gateways relay Opus over HTP trunks (Phase 3, ADR-015)
+ Script: helios-cell --role world-script hosts run studio world-script partitions and commit through the Go
+         worldscript service (Phase 3, 05 §1.23)
+ Editor: helios-editor ⇄ helios-assetd (import, cook, DDC, hot reload) ⇄ PIE cells + clients + bots
+         (+ a world-script host, Phase 3) ⇄ collab service (edit instances, Phase 3)
 ```
 
 **Invariants** ([04 §0](plan/04-networking-and-servers.md#0-design-rules),
@@ -299,9 +324,19 @@ scaffold.
 
 **Topology stages** ([04 §6.5](plan/04-networking-and-servers.md#65-staging-adr-007)):
 - **v0 (Phases 1–2):** one cell per zone, with the handoff and ghost APIs present from the start.
-- **v1 (Phase 3):** static multi-cell zones with handoff p99 < 100 ms.
-- **v2 (Phase 5):** dynamic split/merge, plus a replication layer in the gateway that makes cell crashes
-  invisible to players.
+- **v1 (Phase 3):** static multi-cell zones with handoff p99 < 100 ms. Each cell replicates its own entities to
+  every session whose view reaches it, and gateways compose the view under one budget, so clients see across
+  cell boundaries with no pop-in (04 §6.6, NS-3.10). Entities coupled across a seam (a tow, a tether, a
+  close dogfight) are co-located on one cell in bounded sets, with effect-only fallbacks when a host is loaded
+  (04 §6.2a, NS-3.12). Any zone's region can move to another process by planned migration, with a ≤ 1 s hitch
+  per region moved and no state loss, which rolling restarts, drains and pre-provisioning use; a zone-wide
+  migration hold is capped at 1 s (04 §6.7, NS-3.11).
+- **v1.5 (Phase 4):** the replicant state tier. Every persistent world zone, single-cell or multi-cell, streams
+  its authority groups' state to replicants, so a cell crash loses ≤ 1 s of state with no disconnect and a
+  ≤ 10 s hitch (AAA-SRV-9/12). Gateway deploys move each session make-before-break to another gateway, with no
+  session linkdead (05 §6.3.1, AAA-STB-6).
+- **v2 (Phase 5):** dynamic split/merge, plus a gateway replication layer on the replicant tier that makes
+  cell crashes invisible to players (≤ 1 s hitch).
 
 On a Windows dev box, `helios-backend.exe` runs every Go service in one process, with embedded PostgreSQL,
 embedded NATS and miniredis, and no Docker.
@@ -309,16 +344,18 @@ embedded NATS and miniredis, and no Docker.
 ### 4.2 Module layering (a strict DAG, enforced at configure time)
 
 ```
-L5 apps       helios-client   helios-editor   helios-cell   helios-gateway   helios-launcher   tools
-              (schemac · shaderc · assetd · cook · pack · fitsim · bot · helios-tool · rendertest)
+L5 apps       helios-client   helios-editor   helios-cell   helios-gateway   helios-voice   helios-launcher
+              tools (schemac · shaderc · assetd · cook · pack · fitsim · bot · helios-tool · rendertest)
                     │               │              │              │                │
 L4 framework  world* · gameplay* · assembly* · replication* · netgame* · authority* · clientcore*
               presentation · assetpipe(ED) · toolsfw(ED) · editorui(ED) · edtools/*(ED)
-L3 servers    physics* · anim* · nav* · pcg* · script* · net*   │   audio · text · ui · rhi · render
-L2 foundation reflect* · hxl* · asset* · records* · ecs* · loc* · telemetry* · patch* · crash*  │  app · input
+L3 servers    physics* · anim* · nav* · pcg* · script* · net*   │   audio · voice · text · ui · rhi · render
+L2 foundation reflect* · hxl* · asset* · records* · ecs* · loc* · telemetry* · replay* · patch* · crash*
+              │  app · input
 L1 core       core* · math*
 
- *  = HEADLESS: linked by cell servers; never reaches app, input, rhi, render, audio, text, ui, presentation
+ *  = HEADLESS: linked by cell servers; never reaches app, input, rhi, render, audio, voice, text, ui,
+      presentation
  ED = EDITOR_ONLY: never linked by client, cell or gateway
 ```
 
@@ -326,8 +363,14 @@ L1 core       core* · math*
 - A module depends only downward, or on a same-layer module it lists explicitly.
 - Configuration fails on a cycle, on a HEADLESS leak or on an EDITOR_ONLY leak.
 - No third-party type appears in a public header, which keeps a custom-ECS fallback possible.
-- Jolt's AVX2 flags stay private to `physics`, so the launcher and the client's CPU gate run on any x86-64
-  CPU and can explain an unsupported one.
+- ISA levels ([02 §1.1](plan/02-engine-runtime.md#11-layering-dag-r06-eng-01)): every runtime image (client,
+  cell, editor, gateway, tools) is built for AVX2 as a whole, except one CPU-gate TU that runs before any other
+  code in the image, third-party pre-`main` hooks such as mimalloc's and Tracy's included: the first TLS
+  callback on Windows, the `.preinit_array` entry on Linux. The SDK holds studios' game modules to the same
+  level (ADR-001a rule 1). The launcher, its bootstrap and the gate TU are built for baseline x86-64-v1 (SSE2),
+  and their disassembly is audited, with wider code allowed only in listed CPUID-dispatched functions. The launcher and
+  the client's CPU gate therefore run on any x86-64 CPU and can explain an unsupported one; emulator runs on
+  pre-SSE4.2 CPUs (Core 2, Phenom) check this ([08 §2.1.1](plan/08-client-and-launcher.md), CL-17).
 
 `render` defines the `RenderScene` packet, and `presentation` fills it at extract. The render thread never
 reads the ECS.
@@ -337,9 +380,10 @@ reads the ECS.
 | Binary | Links |
 |---|---|
 | Client | The runtime plus graphics, audio, UI, `presentation` and `clientcore`. No shader compiler and no ImGui in shipping builds |
-| Editor | The client plus the EDITOR_ONLY modules. It loads Slang at runtime and hot-reloads the game DLL |
-| Cell | Only HEADLESS L1–L4 modules (`HELIOS_BUILD_GRAPHICS=OFF`) |
+| Editor | The client plus the EDITOR_ONLY modules. It loads Slang at runtime and hot-reloads game and editor-extension modules through the dev link model (three engine shared libraries, ADR-016); the SDK's editor, `helios-tool`, `helios-assetd` and `helios-cook` are dev-flavour builds for that reason |
+| Cell | Only HEADLESS L1–L4 modules (`HELIOS_BUILD_GRAPHICS=OFF`). The same binary runs as a world-script host with `--role world-script` (Phase 3) and as a replicant with `--replicant` (Phase 4) |
 | Gateway | Only `core`, `reflect`, `net` and `telemetry` |
+| Voice forwarder | Only `core`, `net` and `telemetry` (Phase 3) |
 
 ---
 
@@ -349,35 +393,51 @@ All decisions are binding. Changing one needs a new ADR entry with its rationale
 
 | ADR | Decision | Main reason |
 |---|---|---|
-| [001 Platforms](plan/00-decisions.md#adr-001-platforms) | Windows 10/11 x64 primary (MSVC 2022, clang-cl); Linux x64 fully supported (GCC 13+, Clang 17+) and the production server OS; MinGW cross-build check; no macOS/consoles yet | User requirement; RHI seam keeps other platforms possible |
+| [001 Platforms](plan/00-decisions.md#adr-001-platforms) | Windows 10/11 x64 primary. MSVC: VS 2026 (v145) is primary, and VS 2022 17.14 (MSVC 14.44) is the CI-tested floor and the release toolset for the SDK and all shipped binaries; the SDK also holds consumers to the `avx2` ISA level. Plus clang-cl. Linux x64 fully supported (GCC 13+, Clang 17+) and the production server OS; MinGW cross-build check; no macOS/consoles yet | User requirement; RHI seam keeps other platforms possible. MSVC's newer-linker rule means only floor-built SDK libraries work with both Visual Studio versions |
 | [002 Languages](plan/00-decisions.md#adr-002-languages) | C++20 for engine, editor, client, launcher, servers and tools; Go 1.27.1 for backend services; **Luau** for gameplay scripting; domain graphs; predicted abilities compile to a native rollback-safe format | Luau: sandboxing, gradual typing, native codegen (R01/R03/R05/R06); Overwatch Statescript lesson (R05) |
 | [003 Rendering](plan/00-decisions.md#adr-003-rendering) | Vulkan 1.3 via volk + VMA; Null backend; D3D12 seam with a Phase 4 gate; render graph; extract → prepare → submit; GPU-driven; clustered forward+; reverse-Z camera-relative; **Slang** shaders | Frostbite, Destiny and id Tech patterns (R05, R06, R09) |
-| [004 Entity model](plan/00-decisions.md#adr-004-entity-model--reflection) | **flecs 4.1.6** archetype ECS everywhere; one `.hschema` generates C++, Go, Luau, SQL, replication and editor metadata; stable 64-bit IDs; "record template", never "archetype", for content | One model and one schema (R06, R08) |
+| [004 Entity model](plan/00-decisions.md#adr-004-entity-model--reflection) | **flecs 4.1.6** archetype ECS everywhere; one `.hschema` generates C++, Go, Luau, SQL, replication and editor metadata; stable 64-bit IDs (runtime IDs from PG-allocated time-prefixed blocks); "record template", never "archetype", for content | One model and one schema (R06, R08) |
 | [005 Large worlds](plan/00-decisions.md#adr-005-world-model-large-worlds) | Nested frames with f64 `WorldPos` and `Reparent()`; Jolt double precision, one `PhysicsSystem` per grid; a 10¹³ m no-jitter test | SC's retrofit lesson (R04) |
 | [006 Content](plan/00-decisions.md#adr-006-content-model) | Object containers (text source, one entity per file); typed record DB with hash IDs; import → cook with a DDC; CDC-chunked paks; deterministic PCG | SC OCS, EVE FSD, Destiny, SWG (R01–R05, R07) |
-| [007 Server/network](plan/00-decisions.md#adr-007-server--network-architecture) | Client ↔ gateway ↔ cells; Shard → Zone → Cell; per-zone 1–60 Hz tick with TiDi; single-writer authority groups with epoch fencing; v0 → v1 → v2; Tribes/Iris replication; five-stage overload policy | R02, R04, R07 |
-| [008 Backend](plan/00-decisions.md#adr-008-backend-services) | Go services; NATS + JetStream; PostgreSQL as system of record and Valkey as cache; one local binary on Windows; reason code on every value movement | R07, R01 |
+| [007 Server/network](plan/00-decisions.md#adr-007-server--network-architecture) | Client ↔ gateway ↔ cells; Shard → Zone → Cell; per-zone 1–60 Hz tick with TiDi; single-writer authority groups with epoch fencing; v0 → v1 (with planned region migration) → **v1.5 replicant state tier for every persistent world zone (Phase 4)** → v2; Tribes/Iris replication; five-stage overload policy | R02, R04, R07; SC's shipped replication layer and static meshing set the Phase 4 crash-recovery bar |
+| [008 Backend](plan/00-decisions.md#adr-008-backend-services) | Go services; NATS + JetStream; PostgreSQL as system of record and Valkey as cache; one local binary on Windows; reason code on every value movement; studios extend the backend with sandboxed Luau **world scripts**, not Go plugins (round-3 amendment) | R07, R01; Go plugins do not work on Windows |
 | [009 Editor](plan/00-decisions.md#adr-009-editor) | ImGui docking over a UI-less ToolsFramework; PIE on a real cell; HeroEngine-style edit instances; T01–T30 | R03, R06, R08 |
 | [010 Client, UI, launcher](plan/00-decisions.md#adr-010-client-game-ui--launcher) | Retained-mode, data-bound game UI (RmlUi); ImGui for editor and debug only; C++ launcher on RmlUi + `SDL_Renderer`; self-installing per-user installer | SWTOR UI lesson (R03), R08 F1, R10 |
-| [011 Core runtime](plan/00-decisions.md#adr-011-core-runtime) | Win32/POSIX platform layer; **SDL3 3.4.16**; job system with helping waits; mimalloc 3.5.3 tagged heaps; static `/MT`, `/Z7`; CMake ≥ 3.28 | R10 |
+| [011 Core runtime](plan/00-decisions.md#adr-011-core-runtime) | Win32/POSIX platform layer; **SDL3 3.4.16**; job system with helping waits; mimalloc 3.5.3 tagged heaps; static `/MT` for shipped binaries (`/MD` in dev builds, ADR-016), `/Z7`; CMake ≥ 3.28; whole-image ISA levels: AVX2 images whose baseline CPU-gate TU runs before any other code in the image (the first TLS callback on Windows), and an x86-64-v1 launcher (round-3 and round-4 amendments) | R10; Jolt's inline AVX headers defeat per-file ISA flags, and mimalloc and Tracy run AVX2 code before `main` |
 | [012 Quality](plan/00-decisions.md#adr-012-quality-bar--process) | CI on every toolchain; tested performance budgets; hot reload ≤ 2 s; IP hygiene | R05 iteration lesson |
 | [013 Runtime libraries](plan/00-decisions.md#adr-013-runtime-libraries-r10-manifest) | Jolt 5.6.0 (deterministic), ozz 0.17, Recast 1.6, miniaudio, RmlUi 6.3 + FreeType/HarfBuzz, JSONC/yyjson, netcode 1.4.8 + reliable 1.4.5, nats.c 3.14, sentry-native 0.17.1, Tracy 0.14.1, libopus | Verified pins and licences (R10) |
 | [014 Backend toolchain](plan/00-decisions.md#adr-014-backend-toolchain-r10-11) | Go 1.27.1, pgx, connect-go, nats.go, goose; **embedded-postgres** + embedded NATS + miniredis for Docker-free Windows dev; no CGO; SQLite only for tools | One SQL dialect (R10) |
+| [015 Voice chat](plan/00-decisions.md#adr-015-voice-chat) | Opus over HTP (VOICE channel on UDP 7777) through a C++ `helios-voice` SFU-style forwarder; party, fleet, org, ship-intercom and proximity channels; server-side blocks; report-only 60 s evidence ring | One transport and crypto stack; proximity comes from cells anyway; libwebrtc rejected for the native client |
+| [016 Dev vs shipping link model](plan/00-decisions.md#adr-016-dev-versus-shipping-link-model-game-module-hot-reload) | Shipping: monolithic static `/MT`. Dev (`HELIOS_MODULAR`, `windows-msvc-dev`/`linux-dev`): three engine shared libraries with `HELIOS_*_API` exports, `/MD` everywhere, incremental linking; reloadable game and editor-extension DLLs (`_edcore`, `_edui`); the SDK's editor and tools are dev-flavour; Phase 0 spike gates RT-14 | Game-DLL hot reload without split singletons or cross-heap frees; ≤ 30 s relink (AAA-ITR-5) |
 
 ---
 
 ## 6. The plan sections
 
-**[00 — Decisions](plan/00-decisions.md).** The fourteen ADRs summarized in §5. Every section and every work
-package must conform.
+**[00 — Decisions](plan/00-decisions.md).** The sixteen ADRs summarized in §5, plus ADR-001a, the Windows
+toolset policy (VS 2026 primary; VS 2022 17.14 as the floor and release toolset, so one SDK serves both), and
+the round-3 amendments: whole-image ISA levels (ADR-011) and world scripts as the studio's backend extension
+surface (ADR-008). Round 4 amended three decisions: the CPU gate runs before any other code in the image,
+third-party pre-`main` hooks included (ADR-011); the SDK holds consumers' game modules to the `avx2` level
+(ADR-001a rule 1); and the replicant tier covers every persistent world zone, not only multi-cell zones
+(ADR-007). Every section and every work package must conform.
 
 **[01 — Vision and scope](plan/01-vision-and-scope.md).**
 - The six product parts, the north star and seven design pillars ("seams first, generality later", "budgets
-  are features").
-- The five reference game classes with their experiences, numbers and lessons, and the **51-capability
-  matrix**.
+  are features"). Dynamic project schema types and backend world scripts keep the north star ("records, Luau
+  and graphs, never engine or backend source") true for new data types and cross-zone systems.
+- The five reference game classes with their experiences, numbers and lessons, and the **52-capability
+  matrix**. The SWG and EVE proofs build settlements, cities and territory through the gameplay rules (GP-16,
+  GP-17), not only as rendering benchmarks.
 - The **AAA Scorecard**: five hardware tiers (MIN, REF, SHOWCASE, DEV, SERVER), six benchmark scenes
-  (BENCH-1…6) and 60 criteria.
+  (BENCH-1…6; BENCH-3 is the client view of the same 2,000-ship battle the server gate measures) and 65
+  criteria with evidence classes. Human-judged criteria include a blinded external look-and-feel panel
+  (AAA-REN-8, at the Ph1, Ph3 and Ph4 exits) and a contracted content team that builds a zone with the shipped
+  tools, declaring its own record, component and view-model types in T08, plus a UI-provenance report of how
+  much content went through the editor UI (AAA-TOOL-10). Rolling restarts are bounded per region moved
+  (AAA-STB-6: migration hitch p99 ≤ 1 s, no state loss), and gateway deploys relocate sessions make-before-break
+  with 0 linkdead sessions. From Phase 4 a cell crash in any persistent world zone loses ≤ 1 s of state
+  (AAA-SRV-9).
 - *Cinder Reach*, the original reference content: five star systems and three factions, from about 150
   assets in Phase 1 to about 2,000 in Phase 5.
 - Non-goals, IP and licence rules (permissive licences only; no Star Wars or other third-party IP; patent
@@ -385,23 +445,44 @@ package must conform.
 
 **[02 — Engine runtime](plan/02-engine-runtime.md).**
 - The L1–L5 module DAG, "gems" (plugins), build targets and memory budgets per hardware tier.
-- The job system, and the client and cell frame pipelines.
+- The dev versus shipping link model (ADR-016): monolithic `/MT` shipping builds, and three engine shared
+  libraries in dev builds so gameplay C++ modules live-reload in the editor and PIE, gated by a Phase 0 spike
+  (RT-18).
+- The job system, and the client and cell frame pipelines, including the three-thread client (OS, game and
+  render threads) with a just-in-time input sample, and per-thread and per-system CPU budgets on REF and MIN
+  at every gated frame rate: 60, 45 (BENCH-3), 30 (MIN BENCH-3/5) and 120 fps (Performance mode). RT-12's MIN
+  and 30/45 fps clauses gate at the Phase 3 exit, and its 120 fps clause at the Phase 4 midpoint.
+- A Phase 4 facial runtime (FACS curves, visemes from VO phoneme alignment, eyes, face LOD; RT-22).
+- Whole-image ISA levels: every runtime image is built for AVX2, and only the CPU-gate TU, the launcher and the
+  bootstrap are baseline. The gate runs before any other code in the image, including mimalloc's and Tracy's
+  pre-`main` hooks (the first TLS callback on Windows), and an audit checks flags, the gate object, every
+  pre-gate entry and the baseline images' instructions. The SDK holds studios' game modules to `avx2`.
 - The normative **`.hschema` grammar** and the `helios-schemac` emitters (C++, replication, Luau, proto, Go,
-  SQL, editor, records, lint).
+  SQL, editor, records, lint, and `.htypes` runtime type bundles). Project packages are dynamic by default:
+  records, `ScriptState` components, events and view-models run from data through generic `TypeOps` and a Go
+  interpreter, so a studio adds types with no C++ and sees them live in ≤ 5 s (RT-21).
 - The flecs wrapper with Iris-style dirty bits.
 - The world model:
   - reference frames and portal graphs;
   - `Reparent()` by the transport theorem;
-  - Jolt grids with bubble and host kinds;
+  - Jolt grids with bubble and host kinds, where bubbles are disjoint clusters whose seams are tested
+    (RT-19);
   - zones;
   - OFPA object containers;
   - streaming with a residency hook;
-  - deterministic fixed-point PCG with a Slang twin.
+  - deterministic fixed-point PCG with a Slang twin, and terrain collision tiles selected from body state,
+    never substituted by a coarser tile, and budgeted at ≤ 1 core for 500 dispersed players (RT-20). A
+    cell's tile builds are capped at 8 core-ms per tick (≤ 1.2 ms wall), and a client past its per-frame cap
+    suspends prediction rather than predict wrong (RT-12's landing fence case).
 - The asset pipeline (DDC, paks, hot reload in ≤ 2 s).
-- Physics, animation with crowd LOD, audio, navigation, the Luau host with its DAP debugger, and the RmlUi
-  game-UI runtime.
-- 17 acceptance criteria. The most important is RT-01, a 50k-entity zone benchmark whose failure reopens the
-  ECS decision.
+- Physics with physics-asset records, ground vehicles on Jolt's `VehicleConstraint` stepped at 60 Hz in their
+  bubbles, and client-only cosmetic ragdolls and cloth; animation with crowd LOD, and hitbox poses that cells
+  and clients sample through the deterministic `det::HitboxSampler`; audio, the client voice pipeline,
+  navigation, the Luau host for cells, clients, the editor and world-script hosts (deterministic fuel budgets
+  that also charge each binding call from a calibrated cost table, a `det-math` patch so Luau math matches on
+  every C runtime, no involuntary yields, DAP debugger) and the RmlUi game-UI runtime.
+- 22 acceptance criteria (RT-01…22). The most important is RT-01, a 50k-entity zone benchmark whose failure
+  reopens the ECS decision.
 
 **[03 — Rendering](plan/03-rendering.md).**
 - A handle-based RHI with bindless descriptors, a Null backend and GPU-crash breadcrumbs, and a D3D12 seam
@@ -411,36 +492,91 @@ package must conform.
 - A render graph with aliasing and async compute.
 - A GPU scene with **two-level transforms**, so a ship moving at 1,500 m/s updates one record.
 - Two-phase HZB culling, fleet impostors and brackets, and a visibility buffer in Phase 4.
-- Clustered forward+ PBR, cascaded and later virtual shadow maps, and DDGI.
+- Clustered forward+ PBR, cascaded and later virtual shadow maps, per-tile horizon maps for far terrain
+  shadows, and DDGI with range-limited acceleration structures.
+- Texture-mip and mesh-LOD streaming from GPU feedback keyed by stable texture IDs and from trajectory
+  prediction, gated at 1,500 m/s (RC-12).
+- Character composites tiered by animation LOD, GPU-encoded to BC formats in a capped cache, with tinted
+  crowd impostors, so 200 unique avatars fit MIN's texture pool. Their geometry twin bakes shapes once per
+  appearance into a capped cache and skins into a tiered output ring that keeps previous positions on every
+  tier, so characters animated at reduced rates still write exact motion vectors. FACS face shapes run for
+  ≤ 8 faces (RC-10, RC-11).
 - The sci-fi set:
   - starfields and nebulae;
   - Hillaire atmosphere;
   - cube-sphere CDLOD planets from fixed-point noise, matched with the server's collision (bit-identical
     target, ≤ 1 cm limit);
-  - Nubis clouds and oceans;
+  - Nubis clouds with a fast mode for 1,500 m/s flight through the layer, weather effects, vegetation and
+    oceans;
   - shields, plumes, warp and GPU particles.
-- HDR, TAA with an `IUpscaler` interface (FSR 2 default), per-pass budgets on REF and MIN, and lavapipe golden
-  images on every commit.
+- HDR, TAA with an `IUpscaler` interface (FSR 2 default), and per-pass GPU budgets for every gated scene, tier
+  and frame rate: six REF columns including 120 fps Performance mode, and five MIN columns with a VRAM check
+  for BENCH-1 and the 2,000-ship BENCH-3. Lavapipe golden images run on every commit, including a walk-away
+  golden through FSR 2 from Phase 2, and crowd captures must pass a temporal-stability check (motion-vector
+  consistency, and limb ꟻLIP against a full-rate control) through the shipping upscaler modes (RC-9, RC-10).
 
 **[04 — Networking and servers](plan/04-networking-and-servers.md).**
-- **HTP**: vendored netcode + reliable, with eight Helios channels and no crypto of our own.
-- Connect tokens, reconnect tickets, AIMD bandwidth budgets and gateway trunks.
-- The cell tick graph, with budgets per zone profile.
+- **HTP**: vendored netcode + reliable, with nine Helios channels (one for voice) and no crypto of our own.
+- Connect tokens, reconnect tickets, AIMD bandwidth budgets, gateway instances and sharded trunks with early
+  throughput gates, a trunk IO pool with a per-box trunk budget and zone-instance affinity for token assignment
+  (NS-4.4), make-before-break gateway relocation for deploys (Phase 4), and gateway boxes sized N+1 across
+  availability zones so losing one at 50k CCU brings
+  ≥ 99 % of its sessions back within 10 s (NS-4.7); two zones hold every session, so an availability-zone
+  loss causes no "full" denial either (12 boxes at 50k CCU; 05 §6.7, BE-A19).
+- Voice chat (ADR-015): Opus over HTP through a C++ forwarder, with party, fleet, org, ship-intercom and
+  proximity channels and server-side moderation.
+- The cell tick graph, with budgets per tick profile, and a zone leader that keeps multi-cell zones on one
+  schedule and one TiDi factor.
 - Iris-style replication: shadow state, serialize-once, deltas against acked baselines, a hierarchical
   interest hash and a priority accumulator, with worked bandwidth math.
 - Prediction and reconciliation, lag compensation with capped rewind, and EVE-style command replication for
   large fleets.
-- Authority groups, ghosts, effects, the handoff protocol and crash recovery.
-- Zones, instances, layers and phasing; the overload ladder; security and anti-cheat; NetSim, deterministic
-  replay and bot swarms.
+- Authority groups and AG trees (parked to dormant fence rows when no cell simulates them), ghosts with margins
+  measured from the receiving cell, exactly-once effects, the handoff protocol, co-location of coupled
+  entities across a seam in bounded sets with a leash and effect-only fallbacks (04 §6.2a), lag compensation
+  across cell boundaries (NS-3.12), planned region migration for rolling restarts, drains and pre-provisioning
+  (hitch ≤ 1 s per region moved, a zone-wide hold capped at 1 s, residuals checked by `sim_abi`, no state
+  loss; NS-3.11), cross-cell view
+  composition (a lost gateway's sessions rebind at every contributing cell), and crash recovery: a warm
+  standby from Phase 2, and from Phase 4 the **replicant state tier**, which caps a world zone's loss at
+  ≤ 1 s of state with no disconnect and restores the region to one consistent tick (NS-4.6).
+- Zones, instances, layers and phasing; the overload ladder; security and anti-cheat; NetSim, a normative
+  deterministic-replay contract (every async input enters through a recorded `SimInbox`, and Luau math, hitbox
+  sampling, sort ties and the FP environment are pinned, so replays match across compilers and across AMD and
+  Intel CPUs; NS-3.8) and bot swarms.
 
 **[05 — Backend services](plan/05-backend-services.md).**
-- A 20-service catalogue built as a **modular monolith until Phase 3**.
-- The double-entry ledger with custody, fences, escrow and idempotency.
-- Market actors, durable timers, persistence and the fence, content publishing and the collab service, live
+- A 23-service catalogue built as a **modular monolith until Phase 3**, including **world scripts**: the
+  studio's backend extension surface (shard-scope sandboxed Luau with declared tables, timers, escrow-only
+  ledger intents and cell-callable RPCs; BE-A20). Player cities run on it as the Foundation `CityGovernance`
+  script.
+- A control plane where safety comes from PG-anchored fences and generations and liveness from heartbeats:
+  two-signal failure detection classified by failure domain (a host or rack loss is recovered as crashes,
+  never as a shard freeze), a warm pool sized to the largest failure domain, a degraded mode that never
+  fences cells on a NATS outage, PG-allocated block IDs, `Drain` and `PreProvision` as planned region
+  migrations committed in one fenced transaction, and `DrainGateway`, which rolls gateway boxes by relocating
+  each session make-before-break (05 §6.3.1, BE-A14).
+- The double-entry ledger with custody, fences, escrow, idempotency, guard rows (`ClaimGuard`) for weekly
+  lockouts, and housing plot rows whose exclusion constraint arbitrates concurrent placements; the fence's
+  write load is budgeted beside the ledger's on the shard primary (BE-A5).
+- Parties and EVE-style **player fleets** (≤ 256 members, fleet → wing → squad, boss and commander roles,
+  adverts, roster fan-out; mechanics and GP-15 in 06 §8.3a), a specified matchmaker (PG-fenced leader per
+  queue partition, role feasibility, rated team splits, capacity per shard), a group finder, leaderboards and
+  activity state (Phase 3; cross-shard federation in Phase 5).
+- Fenced market actors (every order insert, modify, cancel and match), durable timers with the structure
+  upkeep worker (maintenance → decay → condemnation → reclamation), persistence and the fence, world state
+  (flags, meta-events, influence, territory with audited transitions, sovereignty), content publishing with client and server
+  parts under a compat epoch (server hotfixes with no client patch, staged client builds that never split a
+  zone), the collab service with durable journals, tested restores and a project-wide data session, live
   config and kill switches, telemetry and trust, and GM audit with a hash chain.
+- Player support: one case queue for reports, tickets, trust hits and appeals, with P1–P4 SLA targets and
+  chat evidence that carries a keyed server tag, so it cannot be forged (Phase 3); and a store API whose
+  grants come only from the payment provider's webhook, with monthly spending caps and no randomized offers
+  for players aged 13–17 (Phase 4).
 - connect-go for Go and HTTPS; nats.c with generated binary codecs for cells.
-- The data model with partitioning and backups.
+- The data model with partitioning, bounded retention, a Phase 2/4 storage-growth model and backups.
+- Privacy by design: PII only in Identity, crypto-shredding, DSAR export and erasure, age gating and
+  versioned ToS acceptance; per-store RPO/RTO, regional DR, on-call and runbooks.
 - Dupe prevention, exactly-once effects through a transactional outbox, sagas and conservation audits.
 - The Docker-free Windows developer experience, Kubernetes + Agones operations, SLOs, an egress cost model,
   and FastCDC patching with signed manifests.
@@ -448,43 +584,111 @@ package must conform.
 **[06 — Gameplay framework](plan/06-gameplay-framework.md).**
 - A **kernel, not a genre**: tags, Dogma/GAS attributes and modifiers, effects on a TiDi-safe timing wheel,
   abilities with a native predicted state machine (ASM), cues, and the HXL formula language (C++ and Go
-  interpreters, bit-identical).
+  interpreters, bit-identical, with Go multiply-add fusion ruled out by explicit rounding and a lint).
 - Items with ledger custody, sockets and audited RNG.
 - SWG-style resources and crafting, and EVE-style industry.
 - Economy reason codes, vendors and markets.
-- One progression model; quests, missions, public events and group conversations.
+- One progression model covering skills, achievements, collections, codex, legacy and season tracks
+  (account scope stored by the character service); quests, missions, public events and group conversations.
+- Activities: encounters with checkpoints, wipes and revive rules; lockouts enforced by ledger guard rows;
+  difficulty tiers, modifiers, level sync, bolster and solo modes; backfill, AFK and vote-kick policy; PvP
+  match rules with rated matchmaking; opt-in PvP risk zones with extraction; a group finder and
+  leaderboards.
+- Owned NPCs (companions, pets, hirelings, crew, drones) riding the owner's authority group, with a
+  command channel, ledger-backed gear and crew missions on durable timers.
+- Player fleets (Phase 3): fleet warp that lands every eligible ship on one tick in fixed-point formation
+  slots, rate-limited broadcasts, command bursts through a `Fleet` modifier domain, and killmails with fleet
+  damage shares, proven at 500 ships in Phase 3 and inside the 2,000-ship battle in Phase 4 (GP-15).
+- An interaction framework (doors, terminals, loot, pressure), emotes and performances, map data, and
+  weather gameplay.
 - AI with behaviour trees, utility selectors and AI LOD tiers.
-- Six-degree-of-freedom fly-by-wire with thruster allocation, command flight, warp, multi-crew seats, sensors
-  and EWAR, and one damage pipeline.
-- Housing, cities, territory, PvP law and character creation; the Luau API and determinism rules.
+- Six-degree-of-freedom fly-by-wire with a bit-exact thruster allocation (so owned-ship prediction matches
+  the cell on every compiler), EVA with suit thrusters, magboots, grabs and tethers, command flight, warp,
+  multi-crew seats, sensors and EWAR, and one damage pipeline.
+- Ground vehicles and mounts (Phase 2): wheeled vehicles on Jolt's `VehicleConstraint`, hover vehicles on ray
+  suspension and ridden creatures on an animation-driven mount mover, driven through a `Drive` input channel and
+  owner-predicted under the same bit-exact rules (GP-4d).
+- Housing on ledger plots and lots with an exactly-once maintenance → decay → condemnation → reclamation
+  chain; player cities (ranks, citizens, elections, taxes) as the Foundation `CityGovernance` world script;
+  territory with vulnerability windows, capture channels and reinforcement timers that pre-provision the fight,
+  and sovereignty in Phase 4 (GP-16, GP-17).
+- PvP law, character creation with paid restyles and ship liveries; the Luau API
+  and determinism rules, including `Authority.Adopted`, which re-arms scripts after a handoff, a migration or
+  a recovery.
 
 **[07 — Editor and tools](plan/07-editor-and-tools.md).**
 - The ToolsFramework: documents, a command bus, **property-path transactions**, a crash journal, automation
   and headless `helios-tool`.
 - The ImGui shell with role layouts, a shared widget library, and a large-world viewport with a "view as"
   phase debugger.
-- PIE on a real cell; git + LFS source control with a JSONC merge driver; live collaboration in edit
-  instances; web tools for writers.
-- The full **T01–T30** specification, each tool with data flow and MVP and AAA scope.
+- PIE on one real cell, or on N cells with forced handoffs and per-cell debuggers, plus a world-script host in
+  every mode when the project declares world scripts, with a debugger per partition, hot reload and a World
+  scripts panel for tables, invocations and dead letters (07 §1.6.2); git + LFS source control
+  with a JSONC merge driver and 500 GB scale budgets; live collaboration in edit instances with atomic
+  multi-document transactions, one-PR publish, and a journal mirrored to object storage and git with tested
+  restores; web tools for writers. Each document has one home session: its zone's session, or a
+  project-wide data session for records, quests and dialogue with no zone, with fenced checkout between them,
+  so two sessions never accept conflicting edits to one record (ED-20).
+- A public, versioned **editor extension SDK**: gems add panels, documents, importers, cook steps, viewport
+  modes, rules and node libraries in C++ or Luau without engine edits, under the same docs and upgrade
+  guarantees as the game APIs. Edits keep derived data (navmesh, HLOD, impostors, probes) live within budgets.
+- Physics, volume and partition authoring: hitboxes with hit zones, ragdolls and cloth in T15; portal cells,
+  grid volumes and zone partitions in T01; a nightly UI-level test harness for every tool.
+- The full **T01–T30** specification, each tool with data flow and MVP and AAA scope, including T12's
+  Activity mode (encounters, tiers, lockouts, match rules and a queue simulator running the real matchmaker),
+  T08's governed schema editor, with which a designer adds a record type, a `ScriptState` component and a
+  view-model live in PIE in ≤ 5 s with no compiler (ED-22) and edits `worldscript` blocks, T21's ground-vehicle
+  authoring, T15's mount and rider sets, and T27's support case queue. With the editor alone, a designer
+  extends a cross-zone bounty board, debugs it and migrates 100k rows while bots play (ED-23).
 - The asset daemon, DDC, validation engine, editor budgets, UX and accessibility, and a phase-by-phase tool
   delivery table.
 
 **[08 — Client and launcher](plan/08-client-and-launcher.md).**
-- Client startup budgets and state machine, threading (a game thread separate from the OS thread),
-  settings, input, the camera rig, RmlUi panels, diegetic UI, accessibility, localization, and sandboxed
-  addons with protected actions.
+- Client startup budgets and state machine (with an invisible Relocating state that keeps two connections
+  open through a gateway deploy), threading (a game thread separate from the OS thread),
+  settings (including voice chat), input, the camera rig, diegetic UI, accessibility, localization, and
+  sandboxed addons with protected actions.
+- The Foundation UI: 27 RmlUi panels covering every player-facing system of 06 (crafting, survey and
+  harvesters, placement and decoration, trade, mail, vendors, terminals, organizations, fleets, group finder,
+  killmails, the character creator, customization and more), plus the store (with 13–17 spending caps) and
+  player reports and support tickets with verifiable chat and voice evidence. Each panel has a phase, an
+  owning WP, schema view-models and a headless Luau flow, and a theme-token reskin is proven without engine
+  edits (CL-23).
+- An input-latency budget from input to photons: measurement points, just-in-time frame pacing on
+  `present_wait`, same-frame low-latency rendering and a photodiode-validated harness, gated from Phase 2
+  (CL-6: ≤ 40 ms at 60 fps, and ≤ 28 ms at 120 fps in Phase 4).
 - The anti-cheat stance, and the Windows and Linux specifics.
 - The launcher: CPU and GPU gates, login, a signed trust chain, chunk patching, streaming install,
   self-update, the installer and code signing, Linux AppImage packaging, and the crash and symbol pipeline.
+  The launcher is built for x86-64-v1, audited for wider instructions and run under emulated pre-SSE4.2 CPUs,
+  so it can explain an unsupported CPU instead of crashing (CL-17).
+- Product identity: every path, URI scheme, registry key, credential and endpoint is scoped by the project's
+  `productId`; `helios-tool product init` runs an offline key ceremony, prebuilt SDK binaries are stamped
+  with the product's root keys, and T29's *Package & publish* profile outputs a branded, signed installer and
+  AppImage, so two Helios games install side by side on Windows and Linux (CL-24).
 
 **[09 — Roadmap and process](plan/09-roadmap-and-process.md).**
 - Phases 0–5 as work packages (WP-0.1 onward): track, owner section, dependencies, deliverables and acceptance
-  criteria.
-- The critical path, and a reconciliation table for cross-section conflicts.
+  criteria. Every criterion added in review rounds 3 and 4 (RT-20…22, ED-22, ED-23, GP-4d, GP-15…17, BE-A20,
+  NS-3.11/3.12 and RT-12's new clauses) has an owning work package and a phase exit. Phase 0–2 scope over six
+  engineer-weeks is split, so WP-2.16 is ten sub-WPs (WP-2.16a1…f).
+- The critical path, with an ISA-rework lane and a tracked DX schema lane (its tightest slack is 4.5 months to
+  the Phase 2 exit), and a reconciliation table for cross-section conflicts.
 - The staffing and cost reality check, and what the agent loop does and does not change.
 - The build loop: roles, rounds, definition of done, CI tiers, evidence classes, termination and regression
-  ratchets.
-- The test strategy, a 31-entry risk register, current status and the next ten work packages.
+  ratchets; merge methods by branch class (work packages squash, collab content publishes rebase-merge and are
+  validated commit by commit, governed project-schema publishes from T08 ride that tier with a code-owner
+  approval, and a publish that depends on another session's journal waits for its carry PRs); and plan-change
+  propagation (declared plan changes, conformance-rework work packages in the same round, a conformance lint
+  in every PR and round audit, and the same rules for working-tree code and review rounds, D7, which is why
+  the in-tree ISA and gate code has rework WPs WP-0.2r and WP-0.5r).
+- The developer-experience track: docs pipeline (including the world-script API), SDK, `upgrade-project` and
+  five starter templates, each of which declares a dynamic project type through T08.
+- The sponsor budget for the human-supplied inputs H1–H8, agent compute and CI (≈ $2.2–13M to the AAA bar),
+  including the REN-8 panels and the TOOL-10 content team, with funding gates at every phase exit; patent
+  counsel for the Improbable review is funded in Phase 3, ahead of WP-4.3.
+- The test strategy, a 39-entry risk register (K1–K38 plus K5b), current status and the next twelve work
+  packages.
 
 ---
 
@@ -508,7 +712,7 @@ themepark.
 | W08 | Portal-cell interiors | SWG, SC, TOR | 02 | 1 |
 | M01 | Command flight, thousands of ships | EVE | 06 | 3 |
 | M02 | 6-DoF Newtonian flight with assists | SC | 06 | 1 |
-| M03 | Locomotion, mounts, vehicles | SWG, DST, SC, TOR | 02, 06 | 1 |
+| M03 | Locomotion, mounts, vehicles | SWG, DST, SC, TOR | 02, 06 | 1 (vehicles, mounts 2) |
 | M04 | Tab-target combat, telegraphs | SWG, TOR | 06 | 2 |
 | M05 | Predicted gunplay, lag compensation, aim assist | DST, SC | 04, 06 | 1 |
 | M06 | Rollback-safe native ability graphs | DST | 06 | 1 (full 3) |
@@ -526,15 +730,16 @@ themepark.
 | G09 | Chat, mail, guilds/corps, org wallets | SWG, EVE | 04, 05 | 2 |
 | G10 | Quests, procedural missions, public events | DST, TOR | 06 | 2 |
 | G11 | Cinematic and group dialogue, VO, companions | TOR | 06, 07 | 2 |
-| G12 | Activities: fireteams, checkpoints, lockouts | DST, TOR | 04, 05 | 3 |
+| G12 | Activities: fireteams, encounters, checkpoints, lockouts, tiers, level sync | DST, TOR | 04, 05, 06 | 3 |
 | G13 | AI: BT + utility + perception, AI LOD, spawns | SWG, DST, TOR | 06 | 1 |
 | G14 | Death pipeline: wrecks, clones, insurance, killmails | EVE, SC | 06 | 2 |
 | G15 | Character creation: species, morphs, fit | SWG, TOR | 02, 03, 07 | 4 |
 | G16 | Modular ship assembly, fitting, liveries | SWG, EVE, SC | 06, 07 | 3 |
 | G17 | Live-ops calendar, seasons, data hotfixes | DST | 05 | 4 |
 | G18 | Background economy/world simulation | — | 05 | 5 |
+| G19 | PvP match modes and rating, matchmaking, group finder, leaderboards | DST, TOR | 05, 06 | 3 |
 | S01 | Gateway + cells, per-zone tick 1–60 Hz | all five | 04 | 1 |
-| S02 | Static multi-cell zones, fenced handoff | SC | 04 | 3 |
+| S02 | Static multi-cell zones, fenced handoff; replicant crash recovery | SC | 04 | 3 (replicants: 4) |
 | S03 | Dynamic split/merge, gateway replication layer | SC | 04 | 5 |
 | S04 | TiDi zone clock, overload policy | EVE | 04 | 2 |
 | S05 | Battle interest management, 1,000+ participants | EVE | 04 | 4 |
@@ -554,17 +759,33 @@ themepark.
 
 | Class | Proof content and phase | All critical capabilities by |
 |---|---|---|
-| SWG sandbox | Osk crafting and market (Ph2); Saltmarch settlements with 300 structures (Ph3, BENCH-5) | Ph4 (G15 character creation) |
-| EVE economy and fleets | Osk Yard order books (Ph2); Vane territory and reinforcement timers (Ph3); 2,000-ship battle at 10 % TiDi (Ph4, BENCH-3) | Ph4 (S05, R03) |
-| Destiny action | Hollow Vault strike (Ph3, BENCH-4); Lattice Heart 6-player raid and seasons (Ph4) | Ph4 (G17, R07) |
-| Star Citizen seamless | BENCH-2 orbit-to-interior descent with no loading screen (Ph1); Mule multi-crew boarding at 300 m/s (Ph3, BENCH-6); seamless Lattice travel between systems (Ph5) | Ph5 (S03 dynamic meshing) |
-| SWTOR story | "Signal from Saltmarch" quests and dialogue (Ph2); group conversation (Ph3); ~300 auto-staged voiced lines in 2 languages (Ph4) | Ph4 (G15, R04) |
+| SWG sandbox | Osk crafting and market (Ph2); speeders, rovers and creature mounts on Harrow (Ph2, GP-4d); Saltmarch settlements with 300 structures placed through the housing rules, and player cities with citizens, elections and taxes (Ph3, BENCH-5, GP-16); a cross-zone bounty board and a player city as world scripts in `starter-sandbox` (Ph3, BE-A20, GP-16) | Ph4 (G15 character creation) |
+| EVE economy and fleets | Osk Yard order books (Ph2); Vane territory with vulnerability windows, capture and reinforcement timers that pre-provision the fight (Ph3, GP-17), and a 500-ship battle fought in player fleets with fleet warp and command bursts (Ph3, GP-15); 2,000-ship battle at 10 % TiDi as eight player fleets (Ph4, BENCH-3, NS-4.2); sovereignty upgrades (Ph4, GP-17) | Ph4 (S05, R03) |
+| Destiny action | Hollow Vault strike (Ph3, BENCH-4); a matchmade strike and a rated 6v6 match in `starter-shooter` (Ph3, GP-14); Lattice Heart 6-player raid and seasons (Ph4) | Ph4 (G17, R07) |
+| Star Citizen seamless | BENCH-2 orbit-to-interior descent with no loading screen (Ph1); Mule multi-crew boarding at 300 m/s (Ph3, BENCH-6); cell kills in four-cell Harrow orbit and single-cell Harrow High with ≤ 1 s of state lost and no disconnect (Ph4, NS-4.6); seamless Lattice travel between systems (Ph5) | Ph5 (S03 dynamic meshing, which SC has not shipped either) |
+| SWTOR story | "Signal from Saltmarch" quests and dialogue (Ph2); group conversation (Ph3); ~300 auto-staged voiced lines in 2 languages, and a flashpoint with tiers, level sync, a group finder and a solo mode in `starter-story` (Ph4) | Ph4 (G15, R04) |
 
-**One honest caveat.** Four of the five classes have every critical capability by the Phase 4 bar. For the
-Star Citizen class, the Phase 4 bar matches SC's *shipped* architecture: static multi-cell meshing (S02)
-behind a gateway, with a ≤ 10 s hitch when a cell crashes. Dynamic split/merge and the gateway replication
-layer (S03), which SC itself still has in progress, arrive in Phase 5 and take the class past the bar. The
-Phase 5 work also waits on the review of Improbable's patent US 11,792,306.
+**The Star Citizen caveat.** Four of the five classes have every critical capability by the Phase 4 bar. The
+fifth, Star Citizen, has all but S03, dynamic split/merge, and SC has not shipped that either. What SC *has*
+shipped is its replication layer (Replicant, Atlas, Scribe and Gateway), live with Persistent Entity
+Streaming since Alpha 3.18, and static server meshing on top of it since Alpha 4.0 (December 2024). Since
+then a game-server crash no longer disconnects players: a replacement server resumes from state the
+replication layer holds ([R04 §4.1–4.2](research/04-star-citizen-seamless-universe.md#4-replication-layer--server-meshing)).
+
+The Phase 4 bar matches that recovery. Static multi-cell zones behind gateways (S02, Phase 3) gain a
+**replicant state tier** in Phase 4 ([ADR-007](plan/00-decisions.md#adr-007-server--network-architecture),
+[04 §6.4](plan/04-networking-and-servers.md#64-crash-recovery)). It covers every persistent world zone,
+single-cell hubs and stations included, where nearly all players are; activity, phase and housing instances
+keep checkpoints and may opt in. Each cell streams the
+state it already serializes once per tick to a replicant that keeps it in RAM, so after a cell crash the
+standby resumes from memory. The player sees no disconnect, loses ≤ 1 s of non-value state (AAA-SRV-9, down
+from 30 s) and a hitch of ≤ 10 s (AAA-SRV-12); NS-4.6 proves it in four-cell Harrow orbit and in single-cell
+Harrow High. Gateway deploys also leave players connected: sessions move make-before-break to another gateway
+(05 §6.3.1, AAA-STB-6). One structural difference remains, and it
+is recorded rather than hidden: SC's replicants also stream client replication, while Helios keeps client
+replication in cells until the Phase 5 gateway replication layer. That layer and dynamic meshing take the
+class past SC's shipped state, and cut the crash hitch to ≤ 1 s. Counsel reviews Improbable's patent
+US 11,792,306 before WP-4.3 builds the replicant tier, and again before WP-5.2.
 
 ---
 
@@ -574,19 +795,27 @@ Phase 5 work also waits on the review of Improbable's patent US 11,792,306.
 
 | Phase | Goal | Demo milestone (what the user sees) | Human-studio calendar | Key exit gates |
 |---|---|---|---|---|
-| **0 Foundations** | Every part exists as a skeleton on every toolchain | **M0 "Handshake":** the launcher verifies a signed chunked manifest; the client connects through a gateway to a cell ticking a dilatable clock; the editor edits a record with undo; all on Windows without Docker | 9–12 months | AAA-PLT-1/2, REN-7; RC-1; ED-1; the schemac, spike and backend skeleton tests |
-| **1 First Light** | A vertical slice through every layer at 50 players | **M1 "Descent" (BENCH-2):** undock a *Kestrel*, descend from 400 km to Harrow with no loading screen, land, walk into Saltmarch and shoot Hollow drones with prediction beside 49 bots; the editor runs PIE with 2 clients | 12–18 months | REN-5, ITR-1/3/5, SEC-1/4, PLT-3/4, TOOL-1; RT-01 (the ECS gate) |
-| **2 Alpha Sandbox** | Economy, quests, social; 500 per zone; production patching; all P0 tools | **M2 "Osk Yard":** survey, harvest, craft a rifle with rolled perks, sell it on the market to another account, run a quest with dialogue, chat in a guild beside 500 bots; the signed launcher patches by CDC and self-updates | 15–21 months | SRV Ph2, SEC-2/3/6, CNT-7, TOOL-2/6, ITR-2/4/6 |
-| **3 Beta Scale** | Multi-cell zones, instances, 5k CCU, live co-editing | **M3 "Harrow Orbit":** four cells, *Mule* boarding across a boundary (BENCH-6), a 5k-CCU bot shard, the Hollow Vault strike in < 2 s (BENCH-4), three designers co-editing a settlement (BENCH-5), the designer day | 18–24 months | SRV Ph3, STB-5, TOOL-3/5, ITR-7, CNT-2/4/5, SEC-5/7 |
-| **4 Launch Quality** | **The AAA bar** | **M4 "Vane":** 2,000-ship battle at 10 % TiDi (BENCH-3 ≥ 45 fps on REF), 6-player raid, a season, auto-staged VO, a clean 72 h soak at 50k CCU, a clean pentest, every BENCH scene within budget on MIN and REF, 30/30 tools | 18–24 months | Every criterion with Ph ≤ 4 |
+| **0 Foundations** | Every part exists as a skeleton on every toolchain | **M0 "Handshake":** the launcher verifies a signed chunked manifest; the client connects through a gateway to a cell ticking a dilatable clock; the editor edits a record with undo; all on Windows without Docker | 9–12 months | AAA-PLT-1/2, REN-7; RC-1; ED-1; RT-13, RT-18 (link-model spike); the schemac, spike and backend skeleton tests; the conformance lint clean on the full tree (WP-0.15r, WP-0.2r and WP-0.5r merged); funding gate F0 |
+| **1 First Light** | A vertical slice through every layer at 50 players | **M1 "Descent" (BENCH-2):** undock a *Kestrel*, descend from 400 km to Harrow with no loading screen, land, walk into Saltmarch and shoot Hollow drones with prediction beside 49 bots; the editor runs PIE with 2 clients | 12–18 months | REN-5, REN-8 (first look-and-feel panel), ITR-1/3/5, SEC-1/4, PLT-3/4, TOOL-1, TOOL-7 (Ph1); RT-01 (the ECS gate); GP-4a (bit-exact flight); RT-20 (terrain-collision slice) |
+| **2 Alpha Sandbox** | Economy, quests, social; 500 per zone; production patching; all P0 tools | **M2 "Osk Yard":** survey, harvest, craft a rifle with rolled perks, sell it on the market to another account, run a quest with dialogue, chat in a guild beside 500 bots; the signed launcher patches by CDC and self-updates | 15–21 months | SRV Ph2, SEC-2/3/6, CNT-7, TOOL-2/6, TOOL-7/8 (Ph2), ITR-2/4/6; CL-6 (input latency); CL-24 (branded products side by side); ED-19 (Luau editor extensions); RT-21 and ED-22 (project types with no compiler); RT-20 (surface collision load); GP-4d (vehicles and mounts) |
+| **3 Beta Scale** | Multi-cell zones, instances, 5k CCU, live co-editing | **M3 "Harrow Orbit":** four cells, *Mule* boarding across a boundary (BENCH-6), a 5k-CCU bot shard, the Hollow Vault strike in < 2 s (BENCH-4), three designers co-editing a settlement (BENCH-5), the designer day | 18–24 months | SRV Ph3, REN-8 (panel on par), STB-5, TOOL-3/5, TOOL-7/9 (Ph3), ITR-7, CNT-2/4/5, SEC-5/7; NS-3.10 (no pop-in across cells), NS-3.11 (planned migration), NS-3.12 (seam lag compensation); RT-12 (MIN and 30/45 fps CPU); GP-14 (activities, matchmaking); GP-15 (player fleets); GP-16 (housing and cities); GP-17 (territory); BE-A20 (world scripts); ED-19…21, ED-23 (world scripts in the editor) |
+| **4 Launch Quality** | **The AAA bar** | **M4 "Vane":** 2,000-ship battle at 10 % TiDi (BENCH-3 ≥ 45 fps on REF), 6-player raid, a season, auto-staged VO, a killed Harrow-orbit cell resuming from its replicant with ≤ 1 s of state lost, a clean 72 h soak at 50k CCU, a clean pentest, every BENCH scene within budget on MIN and REF, 30/30 tools | 18–24 months | Every criterion with Ph ≤ 4, including SRV-9 ≤ 1 s in persistent world zones (NS-4.6), NS-4.7 (gateway-box loss at 50k CCU), BE-A14 (live hotfixes and gateway rolls with no disconnect), GP-17 (e) (sovereignty), RT-22 (facial runtime), REN-8 (external panel) and TOOL-10 (content-team zone); RT-12's 120 fps clause at the Phase 4 midpoint |
 | **5 Ambition** | Beyond the bar | **M5 "Lattice":** seamless travel between systems, dynamic cell split/merge, a ≤ 1 s cell-crash hitch, a 100k-bot shard, player scripting, RT on SHOWCASE | 18–30 months | SRV Ph5, REN-6 (RT) |
 
 **The critical path to M1** is schema → ECS → world model → replication → prediction → gameplay → content.
-The rendering lane is near-critical because of the GPU-terrain contract for BENCH-2. From Phase 2 the critical
-path is networking scale. The Phase 4 exit is also gated by human-supplied evidence (H1 GPU lab, H6
-playtesters, H7 pentest), which the loop cannot shorten. **The next ten work packages** are listed in
-[09 §8.2](plan/09-roadmap-and-process.md#82-next-10-work-packages-in-execution-order). The first are the CI
-matrix, the layering and licence lints, core/math completion, and `helios-schemac`.
+The rendering lane is near-critical because of the GPU-terrain contract for BENCH-2, and the ISA-rework lane
+(WP-0.2 → 0.2r → 0.5r) must land before WP-0.9's `avx2` kernels and WP-0.17's `base` launcher build on it.
+The DX schema lane (WP-2.16c1 → c3 → e), which carries RT-21, ED-22 and CL-24 to the Phase 2 exit, is tracked
+like a critical chain; its tightest slack is 4.5 months (ED-22's packaging clause, on the short calendar).
+From Phase 2 the critical path is networking scale (2.4 → 3.1 → 4.3), and WP-4.3 also waits on counsel's
+Improbable review, which is therefore funded in Phase 3. The Phase 4 exit is also gated by human-supplied evidence (H1 GPU lab, H6
+playtesters, H7 pentest), which the loop cannot shorten. What those inputs and the loop itself cost a single
+sponsor, about **$2.2M (Lean) to $13M (Full)** through the AAA bar, is itemized per phase in
+[09 §4.3](plan/09-roadmap-and-process.md#43-sponsor-budget-h1h8-and-the-loops-running-costs); every phase exit is also a
+funding gate. **The next twelve work packages** are listed in
+[09 §8.2](plan/09-roadmap-and-process.md#82-next-12-work-packages-in-execution-order). The first are the CI
+matrix, the layering, licence and conformance lints, the conformance rework of the in-tree backend
+(WP-0.15r), core/math completion, the ISA-level rework (WP-0.2r) and `helios-schemac`.
 
 ### 8.2 The build loop ([09 §5](plan/09-roadmap-and-process.md#5-the-build-loop))
 
@@ -603,18 +832,24 @@ matrix, the layering and licence lints, core/math completion, and `helios-schema
   2. Land interface-only PRs first for shared contracts.
   3. Implement and self-check on GCC, Clang, MinGW and ASan.
   4. Adversarial review.
-  5. Run the CI PR tier: MSVC, clang-cl, GCC, Clang, MinGW, headless, Go on Windows and Linux, lavapipe
-     goldens, a 16-bot smoke test.
+  5. Run the CI PR tier: the eight-configuration compiler matrix of ADR-001a (primary, floor and modular
+     MSVC, clang-cl, GCC, Clang, headless, MinGW), the conformance lint on changed paths, Go on Windows and
+     Linux, lavapipe goldens and a 16-bot smoke test.
   6. Rebase and verify in the merge queue.
-  7. Squash-merge.
+  7. Merge by branch class ([09 §5.2a](plan/09-roadmap-and-process.md#52a-merge-policy-by-branch-class)):
+     work packages squash-merge; the collab service's `collab/*` content publishes rebase-merge, are never
+     squashed, and pass validation on every commit, so each author's commits and ED-10's check survive.
+     Governed project-schema edits from T08 ride that content tier with lock, lint and compat checks per
+     commit and a code-owner approval; engine, Foundation and native schema packages stay WP-only.
   8. Score in the nightly run.
 - **Definition of done:**
   - tests that fail without the change (the reviewer checks by reverting);
-  - warning-clean on all five compilers;
+  - warning-clean on all five compiler families (both MSVC toolsets, clang-cl, GCC 13, Clang 17, MinGW);
   - lints pass;
   - budgets are benchmarked;
   - every criterion is registered in `scorecard.jsonc`;
-  - docs and ADRs are updated.
+  - docs and ADRs are updated;
+  - the branch's `Plan-Rev` is current for the paths it touches, and the conformance lint is clean there.
 - **Parallelism:** at most six implementers in flight, one queue, and module locks on public headers. It
   scales up only while review rejection stays below 30 % and the PR tier below 45 min.
 - **Regression control:**
@@ -622,6 +857,15 @@ matrix, the layering and licence lints, core/math completion, and `helios-schema
   - a nightly failure starts a bisect agent;
   - flaky tests count as failing after 7 days;
   - auditors mutation-test samples of merged code to catch test gaming.
+- **When the plan changes** ([09 §5.10](plan/09-roadmap-and-process.md#510-plan-changes-conformance-rework-and-the-conformance-lint)):
+  - every plan PR declares the decisions it changes;
+  - in the same round the Director opens conformance-rework work packages for code that already exists
+    and re-baselines work in flight;
+  - a conformance lint flags banned constructs, such as NATS lease TTLs, node-ID minters, per-file ISA
+    grants or a misplaced CPU gate, in every PR and in every round audit;
+  - the same rules cover working-tree code that has not merged and every review round (D7), which is how the
+    in-tree ISA and gate code got rework WPs WP-0.2r and WP-0.5r;
+  - no phase exits while a finding is open.
 - **Termination:** the loop stops at the **Phase 4 exit**. Every Ph ≤ 4 criterion must be green on Windows and
   Linux, two independent auditors must score ≥ 9/10 on closeness to the user's goal, and the user must accept.
   Phase 5 runs only if the user opts in.
@@ -630,28 +874,28 @@ matrix, the layering and licence lints, core/math completion, and `helios-schema
 
 ## 9. The AAA Scorecard and how progress is measured
 
-The scorecard in [01 §3](plan/01-vision-and-scope.md#3-the-aaa-bar-measurable-acceptance-criteria) holds **60
+The scorecard in [01 §3](plan/01-vision-and-scope.md#3-the-aaa-bar-measurable-acceptance-criteria) holds **65
 criteria in eight families**. Each criterion has a phase, and all of them are measured on named hardware:
 
 | Family | # | Examples (phase) |
 |---|---|---|
-| Rendering (REN) | 7 | REF 1440p High: BENCH-1/2/4/5 ≥ 60 fps with p99 ≤ 20 ms and BENCH-3 ≥ 45 fps (4); MIN 1080p Low upscaled ≥ 60 fps (4); zero PSO hitches > 50 ms in 30 min (3); 10¹³ m jitter test and seamless BENCH-2 (1); goldens every commit (0) |
-| Server scale (SRV) | 12 | Players per cell 50 → 500 → 1,000; CCU per shard 50 → 2k → 5k → 20–50k → 100k+; handoff p99 < 100 ms (3); ledger 2k → 10k → 50k tx/s; 2,000-ship battle at TiDi ≥ 10 % (4); cell-crash hitch ≤ 10 s (3) → ≤ 1 s (5) |
-| Iteration (ITR) | 8 | Save → visible in PIE ≤ 2 s (1–2); editor open ≤ 10 s (2); PIE ≤ 15 s (1); `.cpp` edit → relinked ≤ 30 s (1); clone → in-game ≤ 30 min (2); co-edit ≤ 1 s (3); live hotfix ≤ 15 min (4) |
-| Stability (STB) | 6 | ≤ 1 client crash per 1,000 play-hours (4); journal loses ≤ 1 transaction (2); `kill -9` chaos creates or destroys no value (3); 72 h soak at 50k CCU (4) |
+| Rendering (REN) | 8 | REF 1440p High: BENCH-1/2/4/5 ≥ 60 fps with p99 ≤ 20 ms and BENCH-3, the full 2,000-ship battle, ≥ 45 fps (4); MIN 1080p Low upscaled ≥ 60 fps (4); zero PSO hitches > 50 ms in 30 min (3); 10¹³ m jitter test and seamless BENCH-2 (1); goldens every commit (0); **look and feel**: a blinded external panel rates captures and a firefight on par with current reference titles (1, 3, 4) |
+| Server scale (SRV) | 12 | Players per cell 50 → 500 → 1,000; CCU per shard 50 → 2k → 5k → 50k → 100k; handoff p99 < 100 ms (3); ledger 2k → 10k → 50k tx/s; 2,000-ship battle in a 2 Hz zone at TiDi ≥ 10 % with module response ≤ 1 tick of game time + RTT (4); cell-crash hitch ≤ 10 s (3) → ≤ 1 s (5); state lost on a cell crash 30 s (3) → ≤ 1 s in world zones via replicants (4) |
+| Iteration (ITR) | 8 | Save → visible in PIE ≤ 2 s (1–2); editor open ≤ 10 s (2); PIE ≤ 15 s (1); `.cpp` edit → relinked ≤ 30 s (1); clone → in-game ≤ 30 min (2); co-edit ≤ 1 s (3); live hotfix ≤ 15 min with no client disconnected or re-placed (4) |
+| Stability (STB) | 6 | ≤ 1 client crash per 1,000 play-hours (4); journal loses ≤ 1 transaction (2); `kill -9` chaos creates or destroys no value (3); 72 h soak at 50k CCU (4); rolling restarts with no disconnect, each region migrating with a hitch p99 ≤ 1 s and no state loss, and gateway boxes rolling by make-before-break relocation with 0 linkdead sessions (4) |
 | Content (CNT) | 7 | Systems ≥ 10¹¹ m, planets up to 6,400 km (1/3); game thread never blocks > 1 ms on I/O (3); memory ceilings (3–4); 100k records in ≤ 60 s (3); patch ≤ 1.5× changed bytes (2) |
 | Security (SEC) | 8 | Schema lint on every client message (1); every value move through the idempotent ledger (2); speedhack flagged ≤ 2 s (2); no server-only data in client cooks (1); fuzzing ≥ 24 CPU-h (3); external pentest clean (4) |
-| Tooling (TOOL) | 6 | Tool MVPs (1); P0 tools (2); 26/30 AAA-complete (3); 30/30 (4); **designer day**: a newcomer adds a hull, a weapon, a quest and a vendor in ≤ 1 day without an engineer (3) |
-| Platform (PLT) | 6 | Every commit on MSVC, clang-cl, GCC, Clang and MinGW (0); backend on Windows without Docker (0); smoke tests on Win 10/11 and Ubuntu (1); cross-compiler bit-identical PCG (1); Linux within 10 % of Windows (4); signed installer and AppImage (2–3) |
+| Tooling (TOOL) | 10 | Tool MVPs (1); P0 tools (2); 26/30 AAA-complete (3); 30/30 (4); **designer day**: a newcomer adds a hull, a weapon, a quest and a vendor in ≤ 1 day without an engineer (3); 100 % of public APIs and record types documented, the C++ game-module, editor extension and world-script APIs included (1–3); projects upgrade across an engine release with zero manual edits (2, 4); five starter templates, one per reference class, each proven by a scripted build (3–4); **content-team zone**: 3–5 contracted content developers with no engine engineer build a playable zone in ≤ 2 weeks with zero blocking issues, plus a UI-provenance report (4) |
+| Platform (PLT) | 6 | Every commit on both MSVC toolsets (VS 2026 primary, VS 2022 17.14 floor), clang-cl, GCC, Clang and MinGW (0); backend on Windows without Docker (0); smoke tests on Win 10/11 and Ubuntu (1); cross-compiler bit-identical PCG (1); Linux within 10 % of Windows (4); signed installer and AppImage (2–3) |
 
 **Below the scorecard**, each section defines its own automated criteria, and 09 maps them onto work packages:
-- RT-01…17: runtime;
-- RC-1…11: rendering;
+- RT-01…22: runtime;
+- RC-1…13: rendering;
 - NS-p.k: networking, per phase;
-- BE-A1…A14: backend;
-- GP-1…9: gameplay;
-- ED-1…13: editor;
-- CL-1…22: client and launcher.
+- BE-A1…A20: backend;
+- GP-1…17 (GP-4 as 4a–4d): gameplay;
+- ED-1…23: editor;
+- CL-1…24: client and launcher.
 
 **How progress is measured** ([09 §5.6–5.8](plan/09-roadmap-and-process.md#56-ci-tiers-and-evidence-classes)):
 - **`scorecard.jsonc`** maps every criterion to its tests, evidence class, platforms and threshold. The
@@ -660,50 +904,87 @@ criteria in eight families**. Each criterion has a phase, and all of them are me
   - **N**: three consecutive nightly passes on Windows and Linux.
   - **H**: the same on lab hardware. With no lab, the criterion is *unmeasured*, which counts as failing.
   - **W**: long-running soaks, with two scheduled passes.
-  - **M**: manual or external evidence, such as the designer day, the pentest and legal sign-offs, as a
-    signed record.
+  - **M**: manual or external evidence, such as the designer day, the look-and-feel panel (REN-8), the
+    content-team zone (TOOL-10), the pentest and legal sign-offs, as a signed record.
 - **A phase is complete** when every criterion with Ph ≤ N passes, two independent auditors score **≥ 9/10**,
-  no critical or high risk is open without an accepted mitigation, and the user has validated on Windows.
+  no critical or high risk is open without an accepted mitigation, the full-tree conformance lint has no
+  finding and no conformance-rework work package is open, the user has validated on Windows, and the user has
+  decided the phase's funding gate.
 - **The per-round auditor score** is 60 % the fraction of passing Ph ≤ N criteria and 40 % a rubric: the
-  reference-class proofs are playable, code health, documentation and platform parity. Each report lists the
-  top five failing criteria.
+  reference-class proofs are playable, code health, documentation and tutorials, the human-UI share of content
+  from TOOL-10's provenance report, the internal REN-8 rubric trend, and platform parity. Code health scores 0
+  while a conformance finding has no rework work package or the status in 09 §8.1 is older than the round.
+  Each report lists the top five failing criteria, the open conformance findings and the spend against the
+  approved envelope.
 
 ---
 
 ## 10. Top ten risks
 
-From the 31-entry register in [09 §7](plan/09-roadmap-and-process.md#7-risk-register). L/I is likelihood and
+From the 39-entry register in [09 §7](plan/09-roadmap-and-process.md#7-risk-register). L/I is likelihood and
 impact.
 
 | # | Risk | L/I | Mitigation |
 |---|---|---|---|
 | K1 | Effort exceeds capacity (450–730 person-years to the bar) | H/H | Phase gates, seams first, a thin slice every phase; cut Phase 5 scope first, then polish, never MVP items |
-| K24 | Agent quality drift, test gaming, architectural erosion | H/H | Adversarial review, tests that must fail without the change, mutation-sampled audits, layering lints, auditors at every phase |
+| K24/K37 | Agent quality drift, test gaming, architectural erosion; merged or working-tree code that keeps a superseded plan decision (as the in-tree backend kept draft v1's NATS leases, and the in-tree ISA code the retired per-file AVX2 allowlist) | H/H; H/M | Adversarial review, tests that must fail without the change, mutation-sampled audits, layering lints, auditors at every phase; declared plan changes, conformance-rework work packages in the same round (WP-0.15r, WP-0.2r, WP-0.5r), working-tree code and review rounds under the same rules (D7), and the conformance lint in every PR and round audit (09 §5.10) |
 | K7 | No real GPU or server hardware, so H-class criteria cannot be measured | H/H | The user's Windows PC as a self-hosted GPU runner from Phase 0; lab purchase by mid-Phase 1; "unmeasured" counts as failing |
 | K23 | Art, animation and VO bottleneck (150 → 2,000 assets per phase) | H/H | Procedural and kitbash content, CC0 assets with provenance, contract artists; content scoped to proving capabilities |
 | K29 | Editor widget cost and iteration regressions | H/M | Widget library first under one owner, 25 % reserve, nightly editor-performance CI |
 | K2 | flecs fails the 50k-entity benchmark or fragments | M/H | Phase 0 pre-benchmark; flecs confined to `engine/ecs`; a custom ECS behind the same API |
-| K4 | Cross-compiler determinism drift (physics, PCG, HXL, replay) | M/H | `det::` math, no FP contraction, fixed-point integrators, five-compiler hash tests on every PR |
+| K4 | Cross-compiler and cross-CPU determinism drift (physics, PCG, HXL, Luau math, hitbox sampling, replay) | M/H | `det::` math, no FP contraction, fixed-point integrators, five-compiler hash tests on every PR, AMD/Intel cross-vendor replay nightly (NS-3.8) |
 | K13 | Handoff duplicates or loses authority groups | M/H | Type-enforced `GhostRef`, mutation only through effects, the fence, torture bots, conservation audits |
-| K28 | 2,000-ship fan-out beyond what TiDi absorbs | M/H | Command replication, volley aggregation, fleet proxies, 1k-ship bots from Phase 2 |
-| K17/K18 | SWG terrain patents; Improbable's replication-layer patent | L–M/H | Generic node-graph terrain; counsel review before any Phase 4 release and before WP-5.2; v1 does not need the Phase 5 layer |
+| K28 | 2,000-ship fan-out beyond what TiDi absorbs | M/H | Command replication, volley aggregation, fleet proxies; a nightly 1,000-ship half-load server run from Phase 2 is the early warning (BENCH-3, the client gate, never triggers it) |
+| K17/K18 | SWG terrain patents; Improbable's view-replication patent vs the Phase 4 replicant tier and the Phase 5 gateway layer | L–M/H | Generic node-graph terrain; counsel review before any Phase 4 release, before WP-4.3 (funded in Phase 3) and again before WP-5.2; replicants keep state for recovery only; design-around is a per-zone hot-standby cell on the same stream |
+
+Round 4 added K38: the dynamic project-type path (02 §3.8) could miss its per-type cost targets or slip past
+the Phase 2 exit, failing RT-21, ED-22 and the no-C++ templates. It is M/H and mitigated by byte-identical
+native and dynamic formats (a hot package goes native with one line), CI cost budgets and the split, tracked
+WP-2.16 lane (09 §2.3a, §3.1).
 
 ---
 
 ## 11. Building and running today (Windows and Linux)
 
-**Current state (2026-09-25).**
+**Current state (2026-09-25).** The Director refreshes this list every round
+([09 §5.10.2](plan/09-roadmap-and-process.md#5102-rules-for-the-director), rule D6), and
+[09 §8.1](plan/09-roadmap-and-process.md#81-phase-0-status-repository-on-2026-09-25) has the detail.
 - **Builds today:** the vendored third-party tree, `engine/core` (platform layer, memory, jobs, VFS, CVars,
   crash handling and more) and `engine/math` (vectors, frames, cube-sphere mapping, deterministic noise).
-- **Tests:** a headless GCC 13.3 build of the working tree is warning-free. `core_tests` passes 133/133 test
-  cases. `math_tests` passes 101/102; one noise-statistics check fails in the in-flight working tree.
-- **Not yet present:** no executables, and no `services/` Go module; the Go CI job skips until `go.mod` exists.
-- **CI** (GitHub Actions) builds and tests Windows MSVC and Linux GCC/Clang on every push. WP-0.1 adds
-  clang-cl, MinGW, ASan and nightly jobs, and moves CI from Go 1.24 to 1.27.1.
+- **In the working tree, not yet through review and the merge queue:** `engine/rhi` (Vulkan and Null, with
+  the `rhi_triangle` sample), `engine/render` (render graph v0), `helios-shaderc` and `helios-rendertest`,
+  `engine/reflect`, `engine/ecs`, `tools/schemac`, the first parts of `engine/net` and `engine/script`, and
+  WP-0.2's layering, licence, IP-name and manifest lints.
+- **Backend:** the `services/` Go module builds `helios-backend`. It runs identity, sessions and connect
+  tokens, and the orchestrator in one process on embedded PostgreSQL 18, NATS and miniredis. `go test ./...`
+  passes, using Go 1.27.1 through `go.mod`. It was first written to draft v1's lease and node-ID design and
+  has been largely reworked to the current one. The remaining deltas are work package WP-0.15r
+  ([09 §5.10.4](plan/09-roadmap-and-process.md#5104-applications-on-the-repository-of-2026-09-25-wp-015r-wp-02r-and-wp-05r)).
+- **Tests:** a headless GCC 13.3 build of the working tree has no warnings. `core_tests` passes 174/174 test
+  cases, `math_tests` 115/115, `reflect_tests` 53/53 and `ecs_tests` 90/90, and all 39 `lint` tests pass.
+  `schemac_tests` passes 51/53: two diagnostic-text checks fail on an in-flight edit.
+- **Not yet present:** the launcher, client, editor, cell and gateway executables, and the *Cinder Reach*
+  `content/`.
+- **Known deltas from the plan** (09 §8.1): the vendored SDL3 is built without its renderers and Wayland
+  (WP-0.17). The in-tree ISA and CPU-gate code was written to the per-file AVX2 allowlist that the ADR-011
+  amendment retired, with the Windows gate in `.CRT$XIB`. `tp_jolt` still exports its AVX2 options as PUBLIC,
+  and no image sets the `avx2` or `base` level. Rework WPs WP-0.2r and WP-0.5r move it to whole-image levels,
+  the five-check audit and the `.CRT$XLA0` TLS-callback slot
+  ([09 §5.10.4](plan/09-roadmap-and-process.md#5104-applications-on-the-repository-of-2026-09-25-wp-015r-wp-02r-and-wp-05r)).
+- **CI** (GitHub Actions) runs on every push:
+  - Windows: MSVC with VS 2026 (the primary) and with VS 2022 at MSVC 14.44 (the floor), and clang-cl;
+  - Linux: GCC and Clang (GPU tests on lavapipe), headless, and the MinGW cross-build;
+  - the Go backend on Windows and Linux, plus its integration suite.
 
-**Windows (primary).** Install Visual Studio 2022 with "Desktop development with C++" and "C++ CMake tools".
-These provide CMake and Ninja; the top-level `CMakeLists.txt` needs CMake ≥ 3.28. Also install Git for Windows
-with LFS. Then, in an **x64 Native Tools Command Prompt for VS 2022**:
+  The nightly adds ASan/UBSan and MSBuild builds for VS 2026 and VS 2022. WP-0.1 still adds the modular
+  MSVC job, ccache, SARIF and the merge queue with its merge-policy check.
+
+**Windows (primary).** Install **Visual Studio 2026** (recommended) or **Visual Studio 2022 17.14 or later**,
+with "Desktop development with C++" and "C++ CMake tools"
+([ADR-001a](plan/00-decisions.md#adr-001a-windows-toolset-policy-review-round-2)). These provide CMake and
+Ninja; the top-level `CMakeLists.txt` needs CMake ≥ 3.28. CI tests both: VS 2026 on `windows-latest`, and VS 2022
+at MSVC 14.44 on a pinned `windows-2022` image. The floor also builds the SDK and every released binary. Also
+install Git for Windows with LFS. Then, in the **x64 Native Tools Command Prompt** of that Visual Studio:
 
 ```bat
 cmake --preset windows-msvc-release
@@ -714,12 +995,17 @@ ctest --preset windows-msvc-release -LE gpu
 - **Debug build:** `windows-msvc-debug`.
 - **clang-cl:** `windows-clang-cl` (build preset only; run tests with
   `ctest --test-dir build\windows-clang-cl`).
-- **Visual Studio solution:** `cmake --preset windows-vs2022`, then open the solution under
-  `build\windows-vs2022\`. Run its tests with `ctest --test-dir build\windows-vs2022 -C RelWithDebInfo`.
+- **Visual Studio solution:** `cmake --preset windows-vs2026` (needs CMake ≥ 4.2, the first release with the
+  VS 2026 generator), then open the solution under `build\windows-vs2026\`. Run its tests with
+  `ctest --test-dir build\windows-vs2026 -C RelWithDebInfo`. On VS 2022, use `windows-vs2022` in the same way.
 - **Runtime:** binaries use the static CRT (`/MT`), so no VC++ redistributable is needed.
-- **Later:** once the backend lands, install Go 1.27.1 and run
-  `cd services && go build -o ..\build\go\ ./cmd/...`. Milestones are then validated with
-  `tools\milestone\validate.ps1 -Milestone M<n>` ([09 §5.9](plan/09-roadmap-and-process.md#59-how-the-user-validates-milestones-on-windows)).
+- **Backend (works today):** with any Go ≥ 1.21 installed (`go.mod` fetches the pinned 1.27.1 on first use),
+  run `cd services` and then `go run ./cmd/helios-backend --seed dev`. Log in as `dev1#0001` with password
+  `dev`; [`services/README.md`](../services/README.md) has the API and flags. To build the executable, run
+  `go build -o ..\build\go\ ./cmd/...`.
+- **Later:** milestones are validated with `tools\milestone\validate.ps1 -Milestone M<n>`
+  ([09 §5.9](plan/09-roadmap-and-process.md#59-how-the-user-validates-milestones-on-windows)) once WP-0.3
+  lands. It accepts either Visual Studio version and records the compiler in its report.
 
 **Linux.** You need GCC 13+ or Clang 17+, CMake ≥ 3.28 and Ninja. On Ubuntu 24.04, SDL3 also needs the X11,
 xkbcommon, D-Bus and udev development packages listed in
@@ -751,7 +1037,7 @@ exception: it is a SHA-256-pinned prebuilt, fetched by a bootstrap when the shad
 |---|---|
 | `docs/PLAN.md` (this file) | Entry point and summary |
 | [`plan/README.md`](plan/README.md) | Section index and the **phase vocabulary** used everywhere |
-| [`plan/00-decisions.md`](plan/00-decisions.md) | Binding architecture decisions (ADR-001…014) |
+| [`plan/00-decisions.md`](plan/00-decisions.md) | Binding architecture decisions (ADR-001…016, with ADR-001a) |
 | [`plan/01-vision-and-scope.md`](plan/01-vision-and-scope.md) … [`plan/09-roadmap-and-process.md`](plan/09-roadmap-and-process.md) | The ten plan sections (§6 above) |
 | [`plan/CONSISTENCY.md`](plan/CONSISTENCY.md) | Log of every cross-section consistency fix, plus the out-of-scope follow-ups |
 | [`plan/_integration-notes.md`](plan/_integration-notes.md) | Cross-section issues raised by section authors (all resolved) |
@@ -760,11 +1046,13 @@ exception: it is a SHA-256-pinned prebuilt, fetched by a bootstrap when the shad
 | [`../third_party/MANIFEST.md`](../third_party/MANIFEST.md) | Vendored dependencies, pins and licences |
 | [`../engine/core/README.md`](../engine/core/README.md), [`../engine/math/README.md`](../engine/math/README.md) | APIs and threading rules of the landed modules |
 
-**Glossary.** [01 §6](plan/01-vision-and-scope.md#6-glossary) defines shard, zone, cell, gateway, orchestrator,
-authority group and epoch, ghost, reference frame and grid, `Reparent`, object container, record and record
-template, ECS archetype and reference archetype, edit and play instances, instance, layer and phase, activity,
-ledger, tick profile, Foundation layer, and BENCH/Scorecard.
+**Glossary.** [01 §6](plan/01-vision-and-scope.md#6-glossary) defines shard, zone, cell, gateway, replicant,
+orchestrator, authority group and epoch, ghost, reference frame and grid, `Reparent`, object container, record
+and record template, ECS archetype and reference archetype, edit and play instances, instance, layer and
+phase, activity, ledger, tick profile, Foundation layer, BENCH/Scorecard, evidence class, look-and-feel panel,
+project schema package, world script, planned migration, persistent world zone, gateway relocation, player
+fleet, document home and transaction origin.
 
 **Citations.** R01…R10 are the research reports. `R0n-P0-k` is requirement *k* of report *n* (01 §7). `AAA-*`
 IDs are scorecard criteria. W/M/G/S/R + two digits are capability IDs (01 §2.6). T01–T30 are editor tools
-(07). WP-p.n are work packages, K1–K31 are risks, and H1–H8 are human-gated inputs (09).
+(07). WP-p.n are work packages, K1–K38 are risks, and H1–H8 are human-gated inputs (09).

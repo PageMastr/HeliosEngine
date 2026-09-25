@@ -1,0 +1,8 @@
+[
+{
+  "directory": "/build",
+  "command": "/usr/bin/gcc -I/src/engine/core/src -O2 -Wall -march=x86-64 -mpopcnt -msse4.2 -o x/CMakeFiles/helios_core.dir/engine/core/src/cpugate/cpu_gate.c.o -c /src/engine/core/src/cpugate/cpu_gate.c",
+  "file": "/src/engine/core/src/cpugate/cpu_gate.c",
+  "output": "x/CMakeFiles/helios_core.dir/engine/core/src/cpugate/cpu_gate.c.o"
+}
+]

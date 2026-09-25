@@ -17,12 +17,44 @@ namespace {
 
 constexpr usize kTagNameCapacity = 48;
 
+// ---------------------------------------------------------------------------------------------
+// Accounting layout (WP-0.5 contention fix).
+//
+// Every tracked allocation used to update one set of atomics per tag, so all threads allocating
+// under the same tag (e.g. every job worker allocating ECS memory) bounced a single cache line
+// between cores on every allocation and free. The counters are now sharded: each thread is
+// assigned one of kShardCount shards on first use (round-robin), and each shard holds a cell per
+// tag. The hot path only touches the calling thread's cell:
+//   * liveBytes / liveAllocations / totalAllocations are exact: readers sum the cells.
+//   * The global per-tag slot holds `published`, the sum of what the shards have flushed. A cell
+//     flushes when its unpublished delta reaches +-kFlushBytes, so `published` lags the exact value
+//     by less than kShardCount * kFlushBytes. Budget checks use published + the caller's own delta.
+//   * The peak: each cell remembers the highest unpublished delta it reached since its last flush
+//     (`high`). A flush raises the global peak to published-before-flush + high, and readers report
+//     max(peak, published + sum of highs, live). A CAS happens only when the peak really rises.
+//     This is exact while one thread uses a tag and an upper bound within kShardCount *
+//     kFlushBytes when several do.
+// ---------------------------------------------------------------------------------------------
+constexpr u32 kShardCount = 16;
+constexpr i64 kFlushBytes = 64 * 1024;
+
+struct ShardCell {
+    std::atomic<i64> bytes{0};     // net bytes allocated minus freed through this shard
+    std::atomic<i64> allocs{0};    // allocations through this shard (monotonic)
+    std::atomic<i64> frees{0};     // frees through this shard (monotonic)
+    std::atomic<i64> published{0}; // part of `bytes` already added to TagSlot::published
+    std::atomic<i64> high{0};      // max (bytes - published) since the last flush, >= 0
+};
+
+// One shard: a cell per tag. Aligned so two shards never share a cache line.
+struct alignas(64) Shard {
+    std::array<ShardCell, kMaxMemoryTags> cells{};
+};
+
 // Constant-initialized so tracking works from any static initializer; never destroyed.
 struct TagSlot {
-    std::atomic<i64> liveBytes{0};
+    std::atomic<i64> published{0};
     std::atomic<i64> peakBytes{0};
-    std::atomic<i64> liveCount{0};
-    std::atomic<u64> totalCount{0};
     std::atomic<u64> budget{0};
     std::atomic<u64> exceeded{0};
     std::atomic<bool> overBudget{false};
@@ -30,8 +62,12 @@ struct TagSlot {
     char name[kTagNameCapacity] = {};
 };
 
+constinit std::array<Shard, kShardCount> g_shards{};
 constinit std::array<TagSlot, kMaxMemoryTags> g_tags{};
 constinit std::atomic<u32> g_nextUserTag{static_cast<u32>(MemoryTag::FirstUser)};
+constinit std::atomic<u32> g_nextShard{0};
+// Constant-initialized thread_local (no dynamic TLS initializer; see 02 §1.1's pre-gate rules).
+constinit thread_local u32 t_shard = ~0u;
 
 std::mutex& tagRegistrationMutex() {
     static std::mutex* m = new std::mutex();
@@ -55,9 +91,77 @@ constexpr std::string_view builtinTagName(u32 index) noexcept {
     }
 }
 
-TagSlot& slotFor(MemoryTag tag) noexcept {
+u32 tagIndex(MemoryTag tag) noexcept {
     const u32 index = static_cast<u32>(tag);
-    return g_tags[index < kMaxMemoryTags ? index : 0];
+    return index < kMaxMemoryTags ? index : 0;
+}
+
+TagSlot& slotFor(MemoryTag tag) noexcept { return g_tags[tagIndex(tag)]; }
+
+u32 currentShard() noexcept {
+    u32 shard = t_shard;
+    if (HELIOS_UNLIKELY(shard == ~0u)) {
+        shard = g_nextShard.fetch_add(1, std::memory_order_relaxed) % kShardCount;
+        t_shard = shard;
+    }
+    return shard;
+}
+
+void raisePeak(TagSlot& slot, i64 candidate) noexcept {
+    i64 peak = slot.peakBytes.load(std::memory_order_relaxed);
+    while (candidate > peak &&
+           !slot.peakBytes.compare_exchange_weak(peak, candidate, std::memory_order_relaxed)) {
+    }
+}
+
+// Publishes a cell's unpublished delta to the tag slot. Safe against a concurrent flush of the same
+// cell (threads sharing a shard): only the thread that wins the CAS on `published` publishes.
+void flushCell(ShardCell& cell, TagSlot& slot) noexcept {
+    i64 already = cell.published.load(std::memory_order_relaxed);
+    const i64 now = cell.bytes.load(std::memory_order_relaxed);
+    if (!cell.published.compare_exchange_strong(already, now, std::memory_order_relaxed)) return;
+    const i64 high = cell.high.exchange(0, std::memory_order_relaxed);
+    const i64 delta = now - already;
+    const i64 before = slot.published.fetch_add(delta, std::memory_order_relaxed);
+    raisePeak(slot, before + std::max(high, delta));
+}
+
+// Exact sums over the shards (readers only; O(kShardCount)).
+struct TagTotals {
+    i64 bytes = 0;
+    i64 allocs = 0;
+    i64 frees = 0;
+    i64 highs = 0;
+};
+
+TagTotals sumShards(u32 index) noexcept {
+    TagTotals t;
+    for (const Shard& shard : g_shards) {
+        const ShardCell& c = shard.cells[index];
+        t.bytes += c.bytes.load(std::memory_order_relaxed);
+        t.allocs += c.allocs.load(std::memory_order_relaxed);
+        t.frees += c.frees.load(std::memory_order_relaxed);
+        t.highs += c.high.load(std::memory_order_relaxed);
+    }
+    return t;
+}
+
+void checkBudgetRise(MemoryTag tag, TagSlot& slot, i64 estimate) noexcept {
+    const u64 budget = slot.budget.load(std::memory_order_relaxed);
+    if (budget == 0 || estimate <= static_cast<i64>(budget)) return;
+    if (slot.overBudget.load(std::memory_order_relaxed) || slot.overBudget.exchange(true, std::memory_order_relaxed)) {
+        return;
+    }
+    slot.exceeded.fetch_add(1, std::memory_order_relaxed);
+    HELIOS_LOG_WARN(LogMemory, "Memory tag '{}' over budget: {} bytes live > {} byte budget", memoryTagName(tag),
+                    estimate, budget);
+}
+
+void checkBudgetFall(TagSlot& slot, i64 estimate) noexcept {
+    // Only write when the flag is set, so frees under a tag within budget never dirty the slot.
+    if (!slot.overBudget.load(std::memory_order_relaxed)) return;
+    const u64 budget = slot.budget.load(std::memory_order_relaxed);
+    if (budget == 0 || estimate <= static_cast<i64>(budget)) slot.overBudget.store(false, std::memory_order_relaxed);
 }
 
 // Header stored immediately before every alignedAlloc block.
@@ -114,20 +218,23 @@ std::string_view memoryTagName(MemoryTag tag) noexcept {
 void setMemoryBudget(MemoryTag tag, u64 budgetBytes) noexcept {
     TagSlot& slot = slotFor(tag);
     slot.budget.store(budgetBytes, std::memory_order_relaxed);
-    if (budgetBytes == 0 || slot.liveBytes.load(std::memory_order_relaxed) <= static_cast<i64>(budgetBytes)) {
+    if (budgetBytes == 0 || sumShards(tagIndex(tag)).bytes <= static_cast<i64>(budgetBytes)) {
         slot.overBudget.store(false, std::memory_order_relaxed);
     }
 }
 
 MemoryTagStats memoryTagStats(MemoryTag tag) noexcept {
-    const TagSlot& slot = slotFor(tag);
+    const u32 index = tagIndex(tag);
+    const TagSlot& slot = g_tags[index];
+    const TagTotals totals = sumShards(index);
     MemoryTagStats stats;
     stats.tag = tag;
     stats.name = memoryTagName(tag);
-    stats.liveBytes = slot.liveBytes.load(std::memory_order_relaxed);
-    stats.peakBytes = slot.peakBytes.load(std::memory_order_relaxed);
-    stats.liveAllocations = slot.liveCount.load(std::memory_order_relaxed);
-    stats.totalAllocations = slot.totalCount.load(std::memory_order_relaxed);
+    stats.liveBytes = totals.bytes;
+    stats.peakBytes = std::max({slot.peakBytes.load(std::memory_order_relaxed),
+                                slot.published.load(std::memory_order_relaxed) + totals.highs, totals.bytes});
+    stats.liveAllocations = totals.allocs - totals.frees;
+    stats.totalAllocations = static_cast<u64>(totals.allocs);
     stats.budgetBytes = slot.budget.load(std::memory_order_relaxed);
     stats.budgetExceededCount = slot.exceeded.load(std::memory_order_relaxed);
     return stats;
@@ -141,31 +248,36 @@ std::vector<MemoryTagStats> allMemoryTagStats() {
     return out;
 }
 
-void trackAllocation(MemoryTag tag, usize bytes) noexcept {
-    TagSlot& slot = slotFor(tag);
-    const i64 live = slot.liveBytes.fetch_add(static_cast<i64>(bytes), std::memory_order_relaxed) +
-                     static_cast<i64>(bytes);
-    slot.liveCount.fetch_add(1, std::memory_order_relaxed);
-    slot.totalCount.fetch_add(1, std::memory_order_relaxed);
-    i64 peak = slot.peakBytes.load(std::memory_order_relaxed);
-    while (live > peak && !slot.peakBytes.compare_exchange_weak(peak, live, std::memory_order_relaxed)) {
-    }
-    const u64 budget = slot.budget.load(std::memory_order_relaxed);
-    if (budget != 0 && live > static_cast<i64>(budget) && !slot.overBudget.exchange(true, std::memory_order_relaxed)) {
-        slot.exceeded.fetch_add(1, std::memory_order_relaxed);
-        HELIOS_LOG_WARN(LogMemory, "Memory tag '{}' over budget: {} bytes live > {} byte budget", memoryTagName(tag),
-                        live, budget);
-    }
+void trackAllocations(MemoryTag tag, usize bytes, u64 count) noexcept {
+    const u32 index = tagIndex(tag);
+    ShardCell& cell = g_shards[currentShard()].cells[index];
+    TagSlot& slot = g_tags[index];
+    const i64 live = cell.bytes.fetch_add(static_cast<i64>(bytes), std::memory_order_relaxed) + static_cast<i64>(bytes);
+    if (count != 0) cell.allocs.fetch_add(static_cast<i64>(count), std::memory_order_relaxed);
+    const i64 pending = live - cell.published.load(std::memory_order_relaxed);
+    // Plain store: a thread sharing this shard can only lose an intermediate high, which a flush
+    // or the reader's `live` term still bounds.
+    if (pending > cell.high.load(std::memory_order_relaxed)) cell.high.store(pending, std::memory_order_relaxed);
+    if (pending >= kFlushBytes) flushCell(cell, slot);
+    checkBudgetRise(tag, slot, slot.published.load(std::memory_order_relaxed) +
+                                   (live - cell.published.load(std::memory_order_relaxed)));
 }
 
-void trackDeallocation(MemoryTag tag, usize bytes) noexcept {
-    TagSlot& slot = slotFor(tag);
-    const i64 live = slot.liveBytes.fetch_sub(static_cast<i64>(bytes), std::memory_order_relaxed) -
-                     static_cast<i64>(bytes);
-    slot.liveCount.fetch_sub(1, std::memory_order_relaxed);
-    const u64 budget = slot.budget.load(std::memory_order_relaxed);
-    if (budget == 0 || live <= static_cast<i64>(budget)) slot.overBudget.store(false, std::memory_order_relaxed);
+void trackDeallocations(MemoryTag tag, usize bytes, u64 count) noexcept {
+    const u32 index = tagIndex(tag);
+    ShardCell& cell = g_shards[currentShard()].cells[index];
+    TagSlot& slot = g_tags[index];
+    const i64 live = cell.bytes.fetch_sub(static_cast<i64>(bytes), std::memory_order_relaxed) - static_cast<i64>(bytes);
+    if (count != 0) cell.frees.fetch_add(static_cast<i64>(count), std::memory_order_relaxed);
+    const i64 pending = live - cell.published.load(std::memory_order_relaxed);
+    if (pending <= -kFlushBytes) flushCell(cell, slot);
+    checkBudgetFall(slot, slot.published.load(std::memory_order_relaxed) +
+                              (live - cell.published.load(std::memory_order_relaxed)));
 }
+
+void trackAllocation(MemoryTag tag, usize bytes) noexcept { trackAllocations(tag, bytes, 1); }
+
+void trackDeallocation(MemoryTag tag, usize bytes) noexcept { trackDeallocations(tag, bytes, 1); }
 
 // ---------------------------------------------------------------------------------------------
 // Tracked aligned heap (mimalloc-backed, ADR-011)

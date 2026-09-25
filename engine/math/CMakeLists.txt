@@ -5,7 +5,9 @@
 helios_module(math HEADLESS
   SOURCES
     src/color.cpp
+    src/det_exp.cpp
     src/deterministic.cpp
+    src/fixed.cpp
     src/noise.cpp
     src/pack.cpp
     src/spherical.cpp
@@ -39,5 +41,7 @@ helios_test(math_tests
     tests/test_precision.cpp
     tests/test_minmax_macros.cpp
     tests/test_core_coexistence.cpp
+    tests/test_det_exp.cpp
+    tests/test_fixed.cpp
   DEPS helios::math
 )

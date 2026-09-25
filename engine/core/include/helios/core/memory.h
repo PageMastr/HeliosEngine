@@ -11,7 +11,8 @@
 // * VirtualMemory: reserve/commit/decommit/release address space (VirtualAlloc / mmap).
 //
 // Threading: tag registry, tracking and alignedAlloc/alignedFree are thread-safe and lock-free on
-// the allocation path. Allocator thread-safety is documented per class.
+// the allocation path; tag counters are sharded per thread so concurrent allocation under one tag
+// scales (see trackAllocation). Allocator thread-safety is documented per class.
 
 #include <atomic>
 #include <cstddef>
@@ -71,8 +72,21 @@ MemoryTagStats memoryTagStats(MemoryTag tag) noexcept;
 std::vector<MemoryTagStats> allMemoryTagStats();
 
 /// Manual accounting for memory obtained elsewhere (GPU heaps, third-party allocators, ...).
+/// One allocation (or free) of `bytes`. Thread-safe and lock-free.
+///
+/// Scaling: counters are sharded per thread, so threads allocating under the same tag do not
+/// contend on one cache line (≤ 25 ns per allocate+free pair per thread, flat from 1 to 8
+/// threads; `core_memory_bench`). Live bytes and allocation counts read by memoryTagStats() are
+/// exact. The peak and budget crossings are exact while one thread uses a tag; when several do,
+/// they are evaluated on a per-tag estimate that lags by less than 16 × 64 KiB.
 void trackAllocation(MemoryTag tag, usize bytes) noexcept;
 void trackDeallocation(MemoryTag tag, usize bytes) noexcept;
+/// Batched accounting: `count` allocations (or frees) totalling `bytes` in one call. Allocators
+/// that hand out many blocks at once (pools, arenas, a heap flushing a thread-local tally) use it
+/// so live/total allocation counts stay exact without one call per block. `count` may be 0 to
+/// adjust bytes only (e.g. a block that grew in place).
+void trackAllocations(MemoryTag tag, usize bytes, u64 count) noexcept;
+void trackDeallocations(MemoryTag tag, usize bytes, u64 count) noexcept;
 
 /// Tracked aligned allocation (alignment: power of two <= kMaxAlignedAllocAlignment). Returns
 /// nullptr on failure, size 0 or an invalid alignment.

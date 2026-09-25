@@ -24,6 +24,25 @@ jobs:
       - name: Test
         run: xvfb-run -a ctest --preset linux-debug-asan
 
+  # Timing gates ("perf: ..." doctest cases, ctest label `perf`) run serially on an otherwise idle runner.
+  linux-perf:
+    name: Linux perf gates (GCC RelWithDebInfo)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libxi-dev libxkbcommon-dev libxext-dev libxfixes-dev libxss-dev libxtst-dev libdbus-1-dev \
+            libudev-dev mesa-vulkan-drivers xvfb
+      - name: Configure
+        run: cmake --preset linux-gcc
+      - name: Build
+        run: cmake --build --preset linux-gcc
+      - name: Perf gates
+        run: xvfb-run -a ctest --preset linux-gcc -L perf
+
   windows-msbuild:
     name: Windows MSBuild (${{ matrix.preset }})
     runs-on: ${{ matrix.image }}
@@ -42,4 +61,4 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test (no GPU on hosted runners)
-        run: ctest --test-dir build/${{ matrix.preset }} -C RelWithDebInfo -LE gpu --output-on-failure
+        run: ctest --test-dir build/${{ matrix.preset }} -C RelWithDebInfo -LE "gpu|perf" --output-on-failure

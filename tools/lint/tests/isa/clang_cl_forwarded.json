@@ -1,0 +1,8 @@
+[
+{
+  "directory": "C:\\build",
+  "command": "C:\\LLVM\\bin\\clang-cl.exe /nologo -TP /DWIN32 /O2 /clang:-mavx2 /clang:-mbmi2 /FoCMakeFiles\\helios_world.dir\\src\\world.cpp.obj /FdTARGET_COMPILE_PDB -c -- C:\\src\\engine\\world\\src\\world.cpp",
+  "file": "C:\\src\\engine\\world\\src\\world.cpp",
+  "output": "CMakeFiles\\helios_world.dir\\src\\world.cpp.obj"
+}
+]

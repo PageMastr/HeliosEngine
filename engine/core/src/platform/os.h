@@ -6,12 +6,14 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "helios/core/crash.h"
 #include "helios/core/fs.h"
+#include "helios/core/process.h"
 #include "helios/core/result.h"
 #include "helios/core/thread.h"
 #include "helios/core/types.h"
@@ -103,6 +105,31 @@ bool secureRandomBytes(void* buffer, usize size) noexcept;
 Result<void> installCrashHandler(const std::filesystem::path& dumpDir, const CrashHandlerOptions& options);
 void uninstallCrashHandler() noexcept;
 Result<std::filesystem::path> writeCrashReport(std::string_view reason);
+
+// ---- processes and pipes --------------------------------------------------------------------
+/// Anonymous pipe; both ends non-inheritable (close-on-exec).
+Result<void> pipeCreate(NativeHandle& readEnd, NativeHandle& writeEnd);
+void handleClose(NativeHandle handle) noexcept;
+/// Blocking read; 0 at end of stream (writer closed).
+Result<usize> pipeRead(NativeHandle handle, void* buffer, usize size);
+/// Blocking write of at most `size` bytes; returns bytes written. Never raises SIGPIPE.
+Result<usize> pipeWrite(NativeHandle handle, const void* data, usize size);
+
+struct SpawnedProcess {
+    NativeHandle process = kInvalidNativeHandle; // Windows process HANDLE; unused on POSIX
+    u32 pid = 0;
+    NativeHandle stdinWrite = kInvalidNativeHandle;
+    NativeHandle stdoutRead = kInvalidNativeHandle;
+    NativeHandle stderrRead = kInvalidNativeHandle;
+};
+Result<SpawnedProcess> processSpawn(const ProcessDesc& desc);
+/// timeoutMs < 0 waits forever. Returns the exit code, or an empty optional on timeout.
+Result<std::optional<i32>> processWait(NativeHandle process, u32 pid, i64 timeoutMs);
+Result<void> processKill(NativeHandle process, u32 pid);
+void processClose(NativeHandle process) noexcept;
+bool activeCodePageIsUtf8() noexcept;
+/// 0 = stdin, 1 = stdout, 2 = stderr.
+NativeHandle standardHandle(int which) noexcept;
 
 // ---- errors ---------------------------------------------------------------------------------
 /// Error from the calling thread's last OS error (errno / GetLastError), with `context` prefixed.

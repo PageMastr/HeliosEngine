@@ -1,0 +1,8 @@
+[
+{
+  "directory": "/build",
+  "command": "/usr/bin/cc -I/src/engine/core/src -O2 -march=nehalem -o x/CMakeFiles/helios_core_cpugate_hook.dir/engine/core/src/platform/posix/cpu_gate_hook.c.o -c /src/engine/core/src/platform/posix/cpu_gate_hook.c",
+  "file": "/src/engine/core/src/platform/posix/cpu_gate_hook.c",
+  "output": "x/CMakeFiles/helios_core_cpugate_hook.dir/engine/core/src/platform/posix/cpu_gate_hook.c.o"
+}
+]

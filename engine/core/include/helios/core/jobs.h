@@ -229,7 +229,9 @@ public:
 
     /// Queues `fn`. If `counter` is given it is incremented now and decremented when fn returns.
     /// From a worker of this system the job goes to that worker's deque, otherwise to the global
-    /// queue. Thread-safe.
+    /// queue. Thread-safe. The counter is decremented after `fn` has been destroyed, so it must not
+    /// live in memory that only `fn` keeps alive (e.g. inside a shared state `fn` holds the last
+    /// reference to): release such a counter from inside `fn` instead.
     template <class F>
         requires std::is_invocable_v<std::decay_t<F>&>
     void run(F&& fn, Counter* counter = nullptr, Priority priority = Priority::Normal) {
@@ -351,6 +353,8 @@ public:
     BackgroundPool(const BackgroundPool&) = delete;
     BackgroundPool& operator=(const BackgroundPool&) = delete;
 
+    /// Queues `fn` for a pool thread; `counter` as for JobSystem::run (incremented now, decremented
+    /// after `fn` returned and was destroyed — never let `fn` own the counter's memory).
     template <class F>
         requires std::is_invocable_v<std::decay_t<F>&>
     void run(F&& fn, Counter* counter = nullptr, Priority priority = Priority::Normal) {

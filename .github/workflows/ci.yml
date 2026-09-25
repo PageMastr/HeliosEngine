@@ -88,8 +88,13 @@ jobs:
   linux-headless:
     name: Linux (headless servers + tools)
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@v5
+      - name: Validate lint SARIF converter
+        run: python3 -m unittest discover -s tools/ci -p 'test_ctest_to_sarif.py'
       - name: Install system packages
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Configure
@@ -97,7 +102,23 @@ jobs:
       - name: Build
         run: cmake --build --preset linux-headless
       - name: Test
-        run: ctest --test-dir build/linux-headless -LE perf --output-on-failure
+        run: ctest --test-dir build/linux-headless -LE perf --output-on-failure --output-junit "$GITHUB_WORKSPACE/build/linux-headless/ctest.xml"
+      - name: Convert lint failures to SARIF
+        if: ${{ always() && hashFiles('build/linux-headless/ctest.xml') != '' }}
+        run: python3 tools/ci/ctest_to_sarif.py --junit build/linux-headless/ctest.xml --output build/linux-headless/lints.sarif --source-root .
+      - name: Upload lint SARIF artifact
+        if: ${{ always() && hashFiles('build/linux-headless/lints.sarif') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-sarif
+          path: build/linux-headless/lints.sarif
+      # Fork PR tokens are read-only. They still produce the SARIF artifact above.
+      - name: Publish lint SARIF
+        if: ${{ always() && hashFiles('build/linux-headless/lints.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: build/linux-headless/lints.sarif
+          category: helios-lints
 
   # Win32 code paths compiled and linked with MinGW-w64 (portability signal; binaries are not run).
   mingw-cross:

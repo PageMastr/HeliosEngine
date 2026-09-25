@@ -1,0 +1,126 @@
+RenderGraph "Forward": passes=6 culled=1 batches=3 lists=5 barriers=12 waits=2
+resources:
+  r0 "Output" texture RGBA8Unorm 160x90 mips=1 layers=1 imported initial=Undefined final=CopySource usage=Color versions=2 life=4..4 physical=p11
+  r1 "Mesh0.vertices" buffer 576 bytes imported initial=ShaderResource final=last usage=Storage versions=1 life=2..2 physical=p3
+  r2 "Mesh0.indices" buffer 144 bytes imported initial=IndexBuffer final=last usage=Index versions=1 life=2..2 physical=p4
+  r3 "Mesh1.vertices" buffer 3672 bytes imported initial=ShaderResource final=last usage=Storage versions=1 life=2..2 physical=p5
+  r4 "Mesh1.indices" buffer 2688 bytes imported initial=IndexBuffer final=last usage=Index versions=1 life=2..2 physical=p6
+  r5 "Mesh2.vertices" buffer 96 bytes imported initial=ShaderResource final=last usage=Storage versions=1 life=2..2 physical=p7
+  r6 "Mesh2.indices" buffer 24 bytes imported initial=IndexBuffer final=last usage=Index versions=1 life=2..2 physical=p8
+  r7 "ViewConstants" buffer 112 bytes usage=Storage|TransferDst versions=2 life=0..2 physical=p0 bytes=65536 heap=Buffers@0
+  r8 "Instances" buffer 240 bytes usage=Storage|TransferDst versions=2 life=0..2 physical=p1 bytes=65536 heap=Buffers@65536
+  r9 "SceneColor" texture RGBA16Float 160x90 mips=1 layers=1 usage=Sampled|Color|TransferDst versions=3 life=1..4 physical=p2 bytes=131072 heap=RenderTargets@0
+  r10 "SceneDepth" texture D32Float 160x90 mips=1 layers=1 usage=Depth versions=3 life=2..2 physical=p9 bytes=65536 heap=RenderTargets@131072
+  r11 "DebugNormals" texture RGBA8Unorm 160x90 mips=1 layers=1 usage=Color versions=2 unused
+  r12 "Exposure" buffer 16 bytes usage=Storage versions=2 life=3..4 physical=p10 bytes=65536 heap=Buffers@0
+physicals:
+  p0 buffer 112 bytes usage=Storage|TransferDst residents=[ViewConstants]
+  p1 buffer 240 bytes usage=Storage|TransferDst residents=[Instances]
+  p2 texture RGBA16Float 160x90 mips=1 layers=1 usage=Sampled|Color|TransferDst residents=[SceneColor]
+  p3 imported buffer 576 bytes residents=[Mesh0.vertices]
+  p4 imported buffer 144 bytes residents=[Mesh0.indices]
+  p5 imported buffer 3672 bytes residents=[Mesh1.vertices]
+  p6 imported buffer 2688 bytes residents=[Mesh1.indices]
+  p7 imported buffer 96 bytes residents=[Mesh2.vertices]
+  p8 imported buffer 24 bytes residents=[Mesh2.indices]
+  p9 texture D32Float 160x90 mips=1 layers=1 usage=Depth residents=[SceneDepth]
+  p10 buffer 16 bytes usage=Storage residents=[Exposure]
+  p11 imported texture RGBA8Unorm 160x90 mips=1 layers=1 residents=[Output]
+batches:
+  b0 Graphics#1 passes=[Upload, Clear, Geometry] waits=[] lists=3
+  b1 AsyncCompute#1 passes=[Exposure] waits=[b0] lists=1
+  b2 Graphics#2 passes=[Tonemap] waits=[b1] lists=1
+passes:
+  #0 "Upload" Copy Graphics b0 L0
+    write ViewConstants@1 CopyDest
+    write Instances@1 CopyDest
+    pre  p0:ViewConstants Undefined->CopyDest
+    pre  p1:Instances Undefined->CopyDest
+  #1 "Clear" Copy Graphics b0 L1
+    write SceneColor@1 CopyDest mips=0+1 layers=0+1
+    pre  p2:SceneColor Undefined->CopyDest mips=0+1 layers=0+1
+  #2 "Geometry" Raster Graphics b0 L2
+    write SceneColor@2 RenderTarget mips=0+1 layers=0+1 keeps@1
+    write SceneDepth@1 DepthWrite mips=0+1 layers=0+1
+    read  ViewConstants@1 ShaderResource
+    read  Instances@1 ShaderResource
+    read  Mesh0.vertices@0 ShaderResource
+    read  Mesh0.indices@0 IndexBuffer
+    read  Mesh1.vertices@0 ShaderResource
+    read  Mesh1.indices@0 IndexBuffer
+    read  Mesh2.vertices@0 ShaderResource
+    read  Mesh2.indices@0 IndexBuffer
+    depth store=DontCare
+    pre  p2:SceneColor CopyDest->RenderTarget mips=0+1 layers=0+1
+    pre  p9:SceneDepth Undefined->DepthWrite mips=0+1 layers=0+1
+    pre  p0:ViewConstants CopyDest->ShaderResource
+    pre  p1:Instances CopyDest->ShaderResource
+    post p2:SceneColor RenderTarget->ShaderResource mips=0+1 layers=0+1
+  #3 "Exposure" AsyncCompute AsyncCompute b1 L3
+    read  SceneColor@2 ShaderResource mips=0+1 layers=0+1
+    write Exposure@1 UnorderedAccess
+    pre  p10:Exposure Undefined->UnorderedAccess
+  #4 "Tonemap" Raster Graphics b2 L4
+    read  SceneColor@2 ShaderResource mips=0+1 layers=0+1
+    read  Exposure@1 ShaderResource
+    write Output@1 RenderTarget mips=0+1 layers=0+1
+    pre  p10:Exposure UnorderedAccess->ShaderResource
+    pre  p11:Output Undefined->RenderTarget mips=0+1 layers=0+1
+    post p11:Output RenderTarget->CopySource mips=0+1 layers=0+1
+culled:
+  "DebugNormals" Raster
+memory: transient=393216 pooled=393216 placed=327680 (buffers=131072 rendertargets=196608 textures=0)
+--- Null trace ---
+submit Graphics #10 waits=[]
+  list "Forward:Upload"
+    beginLabel "Upload"
+    barrier buffer "ViewConstants" Undefined->CopyDest
+    barrier buffer "Instances" Undefined->CopyDest
+    updateBuffer "ViewConstants" offset=0 size=112 data=526a793f0000000000000000000000000000000070cfd63f0000000077577dbe000000007b66dbbe00000000a50a78bf0000000000000000cdcccc3d00000000...
+    updateBuffer "Instances" offset=0 size=240 data=0000803f000000000000000000000000000000000000803f000000000000000000000000000000000000803f0000000000000000000000c00000c0c00000803f...
+    endLabel
+  list "Forward:Clear"
+    beginLabel "Clear"
+    barrier texture "SceneColor" Undefined->CopyDest mips=0+1 layers=0+1
+    clearTexture "SceneColor" color=(0.35,0.45,0.65,1) mips=0+1 layers=0+1
+    endLabel
+  list "Forward:Geometry"
+    beginLabel "Geometry"
+    barrier texture "SceneColor" CopyDest->RenderTarget mips=0+1 layers=0+1
+    barrier texture "SceneDepth" Undefined->DepthWrite mips=0+1 layers=0+1
+    barrier buffer "ViewConstants" CopyDest->ShaderResource
+    barrier buffer "Instances" CopyDest->ShaderResource
+    beginRendering area=0,0 160x90 color0="SceneColor" mip=0 layer=0 load=Load store=Store depth="SceneDepth" load=Clear(0) store=DontCare
+    bindPipeline "Forward.Geometry"
+    bindIndexBuffer "Ground.indices" offset=0 type=Uint32
+    pushConstants offset=0 size=32 data=00401000000000000041100000000000003c1000000000000000000000000000
+    drawIndexed indices=6 instances=1 firstIndex=0 vertexOffset=0 firstInstance=0
+    bindIndexBuffer "Cube.indices" offset=0 type=Uint32
+    pushConstants offset=0 size=32 data=0040100000000000004110000000000000001000000000000100000000000000
+    drawIndexed indices=36 instances=1 firstIndex=0 vertexOffset=0 firstInstance=0
+    bindIndexBuffer "Sphere.indices" offset=0 type=Uint32
+    pushConstants offset=0 size=32 data=0040100000000000004110000000000000081000000000000200000000000000
+    drawIndexed indices=672 instances=1 firstIndex=0 vertexOffset=0 firstInstance=0
+    endRendering
+    barrier texture "SceneColor" RenderTarget->ShaderResource mips=0+1 layers=0+1
+    endLabel
+submit AsyncCompute #1 waits=[Graphics:10]
+  list "Forward:Exposure"
+    beginLabel "Exposure"
+    barrier buffer "Exposure" Undefined->UnorderedAccess
+    bindPipeline "Forward.Exposure"
+    pushConstants offset=0 size=24 data=004210000000000001000000a00000005a00000000000000
+    dispatch 1x1x1
+    endLabel
+submit Graphics #11 waits=[AsyncCompute:1]
+  list "Forward:Tonemap"
+    beginLabel "Tonemap"
+    barrier buffer "Exposure" UnorderedAccess->ShaderResource
+    barrier texture "Output" Undefined->RenderTarget mips=0+1 layers=0+1
+    beginRendering area=0,0 160x90 color0="Output" mip=0 layer=0 load=DontCare store=Store
+    bindPipeline "Forward.Tonemap"
+    pushConstants offset=0 size=16 data=00421000000000000100000001000000
+    draw vertices=3 instances=1 firstVertex=0 firstInstance=0
+    endRendering
+    barrier texture "Output" RenderTarget->CopySource mips=0+1 layers=0+1
+    endLabel

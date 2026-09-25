@@ -1,0 +1,89 @@
+RenderGraph "Small": passes=6 culled=1 batches=3 lists=4 barriers=10 waits=2
+resources:
+  r0 "Out" texture RGBA8Unorm 64x64 mips=1 layers=1 imported initial=Undefined final=CopySource usage=TransferDst versions=2 life=3..3 physical=p3
+  r1 "Readback" buffer 256 bytes imported initial=Undefined final=last usage=TransferDst versions=2 life=4..4 physical=p4
+  r2 "SceneColor" texture RGBA16Float 64x64 mips=1 layers=1 usage=Sampled|Color|TransferSrc|TransferDst versions=3 life=0..3 physical=p0 bytes=65536 heap=RenderTargets@0
+  r3 "SceneDepth" texture D32Float 64x64 mips=1 layers=1 usage=Depth versions=2 life=1..1 physical=p1 bytes=65536 heap=RenderTargets@65536
+  r4 "DebugView" texture RGBA8Unorm 64x64 mips=1 layers=1 usage=Storage versions=2 unused
+  r5 "Stats" buffer 256 bytes usage=TransferSrc|TransferDst versions=2 life=2..4 physical=p2 bytes=65536 heap=Buffers@0
+physicals:
+  p0 texture RGBA16Float 64x64 mips=1 layers=1 usage=Sampled|Color|TransferSrc|TransferDst residents=[SceneColor]
+  p1 texture D32Float 64x64 mips=1 layers=1 usage=Depth residents=[SceneDepth]
+  p2 buffer 256 bytes usage=TransferSrc|TransferDst residents=[Stats]
+  p3 imported texture RGBA8Unorm 64x64 mips=1 layers=1 residents=[Out]
+  p4 imported buffer 256 bytes residents=[Readback]
+batches:
+  b0 Graphics#1 passes=[Clear, Geometry] waits=[] lists=2
+  b1 AsyncCompute#1 passes=[Stats] waits=[b0] lists=1
+  b2 Graphics#2 passes=[Composite, Readback] waits=[b1] lists=1
+passes:
+  #0 "Clear" Copy Graphics b0 L0
+    write SceneColor@1 CopyDest mips=0+1 layers=0+1
+    pre  p0:SceneColor Undefined->CopyDest mips=0+1 layers=0+1
+  #1 "Geometry" Raster Graphics b0 L1
+    write SceneColor@2 RenderTarget mips=0+1 layers=0+1 keeps@1
+    write SceneDepth@1 DepthWrite mips=0+1 layers=0+1
+    depth store=DontCare
+    pre  p0:SceneColor CopyDest->RenderTarget mips=0+1 layers=0+1
+    pre  p1:SceneDepth Undefined->DepthWrite mips=0+1 layers=0+1
+    post p0:SceneColor RenderTarget->ShaderResource mips=0+1 layers=0+1
+  #2 "Stats" AsyncCompute AsyncCompute b1 L2
+    read  SceneColor@2 ShaderResource mips=0+1 layers=0+1
+    write Stats@1 CopyDest
+    pre  p2:Stats Undefined->CopyDest
+  #3 "Composite" Copy Graphics b2 L3
+    read  SceneColor@2 CopySource mips=0+1 layers=0+1
+    read  Stats@1 CopySource
+    write Out@1 CopyDest mips=0+1 layers=0+1
+    pre  p0:SceneColor ShaderResource->CopySource mips=0+1 layers=0+1
+    pre  p2:Stats CopyDest->CopySource
+    pre  p3:Out Undefined->CopyDest mips=0+1 layers=0+1
+    post p3:Out CopyDest->CopySource mips=0+1 layers=0+1
+  #4 "Readback" Copy Graphics b2 L3
+    read  Stats@1 CopySource
+    write Readback@1 CopyDest
+    pre  p4:Readback Undefined->CopyDest
+culled:
+  "Debug" Compute
+memory: transient=196608 pooled=196608 placed=196608 (buffers=65536 rendertargets=131072 textures=0)
+--- Null trace ---
+submit Graphics #1 waits=[]
+  list "Small:Clear"
+    beginLabel "Clear"
+    barrier texture "SceneColor" Undefined->CopyDest mips=0+1 layers=0+1
+    clearTexture "SceneColor" color=(0.1,0.2,0.3,1) mips=0+1 layers=0+1
+    endLabel
+  list "Small:Geometry"
+    beginLabel "Geometry"
+    barrier texture "SceneColor" CopyDest->RenderTarget mips=0+1 layers=0+1
+    barrier texture "SceneDepth" Undefined->DepthWrite mips=0+1 layers=0+1
+    beginRendering area=0,0 64x64 color0="SceneColor" mip=0 layer=0 load=Load store=Store depth="SceneDepth" load=Clear(0) store=DontCare
+    endRendering
+    barrier texture "SceneColor" RenderTarget->ShaderResource mips=0+1 layers=0+1
+    endLabel
+submit AsyncCompute #1 waits=[Graphics:1]
+  list "Small:Stats"
+    beginLabel "Stats"
+    barrier buffer "Stats" Undefined->CopyDest
+    fillBuffer "Stats" offset=0 size=256 value=0x00000007
+    endLabel
+submit Graphics #2 waits=[AsyncCompute:1]
+  list "Small:Composite+1"
+    beginLabel "Composite"
+    barrier texture "SceneColor" ShaderResource->CopySource mips=0+1 layers=0+1
+    barrier buffer "Stats" CopyDest->CopySource
+    barrier texture "Out" Undefined->CopyDest mips=0+1 layers=0+1
+    clearTexture "Out" color=(1,0.5,0.25,1) mips=0+1 layers=0+1
+    barrier texture "Out" CopyDest->CopySource mips=0+1 layers=0+1
+    endLabel
+    beginLabel "Readback"
+    barrier buffer "Readback" Undefined->CopyDest
+    copyBuffer "Stats"+0 -> "Readback"+0 size=256
+    endLabel
+submit Graphics #3 waits=[Graphics:2]
+  list "readbackBuffer"
+    barrier buffer "readbackBuffer staging" Undefined->CopyDest
+    barrier buffer "Readback" CopyDest->CopySource
+    copyBuffer "Readback"+0 -> "readbackBuffer staging"+0 size=4
+    barrier buffer "readbackBuffer staging" CopyDest->HostRead
+    barrier buffer "Readback" CopySource->CopyDest

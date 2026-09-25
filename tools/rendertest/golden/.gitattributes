@@ -1,0 +1,3 @@
+# Goldens compare byte for byte: keep LF traces on Windows checkouts and never touch PNGs.
+*.txt text eol=lf
+*.png binary

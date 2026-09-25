@@ -1,13 +1,17 @@
 name: CI
 
+# Pull requests are the gate for main (README "Contributing"); pushes to main re-verify the merged result.
+# Work branches do not trigger CI on push, so WIP snapshots never start or cancel runs.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel verification of main; superseded PR pushes may cancel their older run.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # Primary Windows toolchain: VS 2026 / MSVC 14.5x on windows-latest.

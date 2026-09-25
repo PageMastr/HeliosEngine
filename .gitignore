@@ -16,3 +16,4 @@ __pycache__/
 node_modules/
 /tools/prebuilt/slang/
 /tools/prebuilt/cache/
+*.lock.jsonc.writing/

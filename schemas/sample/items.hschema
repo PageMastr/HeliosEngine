@@ -1,0 +1,73 @@
+/// Items, ledger transactions and the ledger service.
+package sample.items;
+import "sample/common.hschema";
+
+enum Rarity { Common; Uncommon; Rare; Epic; Legendary }
+
+/// Why value moved (06 §4); every ledger transaction names one.
+record ReasonCodeDef @table("reason") {
+  code: Name
+  kind: enum { Faucet, Sink, Transfer }
+}
+
+/// An item template (DataForge-style typed record, 06 §2).
+record ItemTemplateDef @table("itm") {
+  name:         LocString
+  tags:         TagSet
+  stackMax:     u32 = 1 @range(1, 9999)
+  volume:       f32 = 0.1 @unit(m3)
+  mass:         f32 @unit(kg)
+  baseAttrs:    map<Name, f64>
+  icon:         AssetRef<Texture>
+  rarity:       Rarity = Common
+  sockets:      u8[4]
+  bindOnPickup: bool
+  lifetime:     Duration?
+  quality:      i32[3] = [1, 2]
+  guid:         Guid
+}
+
+/// A stack of items owned through the ledger (05 §1.6).
+struct ItemStack @store(ledger) @ledger_policy(batched_consume) {
+  item:         ItemTemplateRef
+  quantity:     u32 = 1
+  owner:        EntityId
+  instanceGuid: Guid
+  rolled:       map<u32, f32>
+  history:      list<list<i16>>
+  notes:        list<string?>
+  labels:       set<string>
+  byRarity:     map<Rarity, list<u64>>
+  pos:          vec3d
+  tint:         color
+  netOwner:     NetHandle
+}
+
+struct LedgerOp {
+  kind:     enum { Mint, Burn, Transfer }
+  amount:   Credits
+  currency: Name
+}
+
+struct LedgerTx {
+  idemKey: Guid
+  reason:  ReasonCodeRef
+  ops:     list<LedgerOp> @keyed
+}
+
+struct LedgerResult {
+  ok:      bool
+  balance: Credits
+  error:   string
+}
+
+service Ledger @scope(shard) {
+  rpc Execute(tx: LedgerTx) -> LedgerResult @idempotent @timeout(500ms) @reason_required;
+  rpc Balance(owner: EntityId, currency: Name) -> LedgerResult @timeout(100ms);
+}
+
+viewmodel InventoryHud @client { slots: u16; credits: Credits; selected: ItemTemplateRef? }
+
+message TradeOffer { from: EntityId; to: EntityId; items: list<ItemStack>; credits: Credits }
+
+formula StackValue(stack) = attr(stack, BasePrice) * stack.quantity;

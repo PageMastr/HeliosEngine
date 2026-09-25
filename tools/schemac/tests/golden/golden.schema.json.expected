@@ -1,0 +1,1077 @@
+{
+  "format": "helios-schema/1",
+  "files": [
+    {
+      "path": "golden.hschema",
+      "package": "golden.all",
+      "imports": []
+    }
+  ],
+  "types": [
+    {
+      "name": "golden.all.Color",
+      "kind": "enum",
+      "file": "golden.hschema",
+      "id": 2113248476,
+      "layoutHash": "3725fce272295003",
+      "underlying": "u8",
+      "values": [
+        {"name": "Red", "value": 0},
+        {"name": "Green", "value": 5, "doc": "Green is 5."},
+        {"name": "Blue", "value": 6}
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.Perm",
+      "kind": "flags",
+      "file": "golden.hschema",
+      "id": 2656619455,
+      "layoutHash": "6324910ecfa5fffc",
+      "underlying": "u8",
+      "values": [
+        {"name": "None", "value": 0},
+        {"name": "Read", "value": 1},
+        {"name": "Write", "value": 2},
+        {"name": "Exec", "value": 4}
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.Scalars",
+      "kind": "struct",
+      "file": "golden.hschema",
+      "doc": "Every scalar and builtin type, with defaults.",
+      "id": 767562990,
+      "layoutHash": "f3ad8cf8ee349b09",
+      "fields": [
+        {
+          "name": "b",
+          "id": 1,
+          "type": "bool",
+          "default": true,
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "i8v",
+          "id": 2,
+          "type": "i8",
+          "default": -8,
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "i16v",
+          "id": 3,
+          "type": "i16",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "i32v",
+          "id": 4,
+          "type": "i32",
+          "default": -32,
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "i64v",
+          "id": 5,
+          "type": "i64",
+          "default": -9223372036854775808,
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "u8v",
+          "id": 6,
+          "type": "u8",
+          "default": 255,
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "u16v",
+          "id": 7,
+          "type": "u16",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "u32v",
+          "id": 8,
+          "type": "u32",
+          "default": 4294967295,
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "u64v",
+          "id": 9,
+          "type": "u64",
+          "default": 18446744073709551615,
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "f32v",
+          "id": 10,
+          "type": "f32",
+          "default": 0.1,
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "f64v",
+          "id": 11,
+          "type": "f64",
+          "default": -2.5e-10,
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "s",
+          "id": 12,
+          "type": "string",
+          "default": "quote\" backslash\\ tab\t é",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "n",
+          "id": 13,
+          "type": "Name",
+          "default": "a.b",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "g",
+          "id": 14,
+          "type": "Guid",
+          "default": "00112233-4455-6677-8899-aabbccddeeff",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "v2",
+          "id": 15,
+          "type": "vec2f",
+          "default": [1,2],
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "v3",
+          "id": 16,
+          "type": "vec3f",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "v4",
+          "id": 17,
+          "type": "vec4f",
+          "default": [0,0,0,1],
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "v3d",
+          "id": 18,
+          "type": "vec3d",
+          "default": [10000000000,0,-1],
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "q",
+          "id": 19,
+          "type": "quatf",
+          "default": [0,0,0,1],
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "qd",
+          "id": 20,
+          "type": "quatd",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "c",
+          "id": 21,
+          "type": "color",
+          "default": [1,0.5,0.25,1],
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "wp",
+          "id": 22,
+          "type": "WorldPos",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "e",
+          "id": 23,
+          "type": "EntityId",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "nh",
+          "id": 24,
+          "type": "NetHandle",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "d",
+          "id": 25,
+          "type": "Duration",
+          "default": "90s",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "t",
+          "id": 26,
+          "type": "Tick",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "loc",
+          "id": 27,
+          "type": "LocString",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "tags",
+          "id": 28,
+          "type": "TagSet",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "tq",
+          "id": 29,
+          "type": "TagQuery",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "hx",
+          "id": 30,
+          "type": "HxlExpr",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "col",
+          "id": 31,
+          "type": "golden.all.Color",
+          "default": "Green",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "perm",
+          "id": 32,
+          "type": "golden.all.Perm",
+          "default": ["Read","Exec"],
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.Containers",
+      "kind": "struct",
+      "file": "golden.hschema",
+      "doc": "Containers of every shape.",
+      "id": 4248913933,
+      "layoutHash": "76add748f0fc60eb",
+      "fields": [
+        {
+          "name": "l",
+          "id": 1,
+          "type": "list<i32>",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "ls",
+          "id": 2,
+          "type": "list<string>",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "ll",
+          "id": 3,
+          "type": "list<list<u8>>",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "lo",
+          "id": 4,
+          "type": "list<f32?>",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "st",
+          "id": 5,
+          "type": "set<Name>",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "m",
+          "id": 6,
+          "type": "map<string,golden.all.Scalars>",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "me",
+          "id": 7,
+          "type": "map<golden.all.Color,list<u64>>",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "arr",
+          "id": 8,
+          "type": "f32[3]",
+          "default": [1,2,0],
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "opt",
+          "id": 9,
+          "type": "golden.all.Scalars?",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "optv",
+          "id": 10,
+          "type": "vec3f?",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "keyed",
+          "id": 11,
+          "type": "keyed<golden.all.Item>",
+          "audience": "shared",
+          "keyed": "$key",
+          "attrs": [
+            {"name": "keyed", "args": []},
+            {"name": "max", "args": [{"value": "8"}]}
+          ]
+        },
+        {
+          "name": "bySlot",
+          "id": 12,
+          "type": "list<golden.all.Item>",
+          "audience": "shared",
+          "keyed": "slot",
+          "attrs": [
+            {"name": "keyed", "args": [{"value": "slot"}]}
+          ]
+        },
+        {
+          "name": "ref",
+          "id": 13,
+          "type": "Ref<golden.all.ThingDef>?",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "refs",
+          "id": 14,
+          "type": "list<Ref<golden.all.ThingDef>>",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "asset",
+          "id": 15,
+          "type": "AssetRef<Mesh>",
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.Early",
+      "kind": "struct",
+      "file": "golden.hschema",
+      "doc": "Lists may reference types declared later and the type itself (C++ order and incomplete types).",
+      "id": 166007320,
+      "layoutHash": "1c0a0a0dd5b1d415",
+      "fields": [
+        {
+          "name": "later",
+          "id": 1,
+          "type": "list<golden.all.Late>",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "keyedLater",
+          "id": 2,
+          "type": "keyed<golden.all.Late>",
+          "audience": "shared",
+          "keyed": "$key",
+          "attrs": [
+            {"name": "keyed", "args": []}
+          ]
+        },
+        {
+          "name": "byName",
+          "id": 3,
+          "type": "map<Name,golden.all.Item>",
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.Late",
+      "kind": "struct",
+      "file": "golden.hschema",
+      "id": 187438317,
+      "layoutHash": "0f844017f918f460",
+      "fields": [
+        {
+          "name": "n",
+          "id": 1,
+          "type": "u8",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "tree",
+          "id": 2,
+          "type": "list<golden.all.Late>",
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.Item",
+      "kind": "struct",
+      "file": "golden.hschema",
+      "id": 1495052146,
+      "layoutHash": "c5b01043aa6abbb2",
+      "fields": [
+        {
+          "name": "slot",
+          "id": 1,
+          "type": "Name",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "count",
+          "id": 2,
+          "type": "u16",
+          "default": 1,
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.ThingDef",
+      "kind": "record",
+      "file": "golden.hschema",
+      "doc": "A record (declares ThingRef).",
+      "id": 991367234,
+      "layoutHash": "8b318572b4d1828d",
+      "fields": [
+        {
+          "name": "label",
+          "id": 1,
+          "type": "LocString",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "shape",
+          "id": 2,
+          "type": "golden.all.ThingDef.Shape",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "mode",
+          "id": 3,
+          "type": "golden.all.ThingDef.Mode",
+          "default": "On",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "inner",
+          "id": 4,
+          "type": "golden.all.ThingDef.Inner",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "secret",
+          "id": 5,
+          "type": "u64",
+          "audience": "server",
+          "attrs": []
+        },
+        {
+          "name": "icon",
+          "id": 6,
+          "type": "AssetRef<Texture>",
+          "audience": "client",
+          "attrs": []
+        }
+      ],
+      "attrs": [
+        {"name": "table", "args": [{"value": "thing", "string": true}]}
+      ]
+    },
+    {
+      "name": "golden.all.Motion",
+      "kind": "component",
+      "file": "golden.hschema",
+      "doc": "Replicated component with a server part.",
+      "id": 1522661283,
+      "layoutHash": "735d1429e1a7fa58",
+      "replicate": "owner",
+      "lod": "core",
+      "serverPart": "golden.all.Motion.Server",
+      "fields": [
+        {
+          "name": "pos",
+          "id": 1,
+          "type": "WorldPos",
+          "audience": "shared",
+          "repIndex": 0,
+          "predicted": true,
+          "attrs": [
+            {"name": "quant", "args": [{"value": "frame_cell"}, {"key": "cell", "value": "4096m"}, {"key": "res", "value": "1/256m"}]},
+            {"name": "predicted", "args": []}
+          ]
+        },
+        {
+          "name": "vel",
+          "id": 2,
+          "type": "vec3f",
+          "audience": "shared",
+          "repIndex": 1,
+          "attrs": [
+            {"name": "quant", "args": [{"key": "range", "value": "±64"}, {"key": "bits", "value": "12"}]}
+          ]
+        },
+        {
+          "name": "hp",
+          "id": 3,
+          "type": "f32",
+          "default": 100,
+          "audience": "shared",
+          "repIndex": 2,
+          "attrs": [
+            {"name": "range", "args": [{"value": "0"}, {"value": "1000"}]},
+            {"name": "editor", "args": [{"key": "category", "value": "Stats", "string": true}, {"key": "order", "value": "2"}]}
+          ]
+        }
+      ],
+      "attrs": [
+        {"name": "replicate", "args": [{"value": "owner"}]},
+        {"name": "lod", "args": [{"value": "core"}]}
+      ]
+    },
+    {
+      "name": "golden.all.Plain",
+      "kind": "component",
+      "file": "golden.hschema",
+      "id": 2651108739,
+      "layoutHash": "e68bee15dd6451ec",
+      "replicate": "none",
+      "fields": [
+        {
+          "name": "value",
+          "id": 1,
+          "type": "i32",
+          "audience": "shared",
+          "was": ["old_value"],
+          "attrs": [
+            {"name": "was", "args": [{"value": "old_value", "string": true}]}
+          ]
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.Exploded",
+      "kind": "event",
+      "file": "golden.hschema",
+      "id": 3370161098,
+      "layoutHash": "a69302c44dc8adfa",
+      "fields": [
+        {
+          "name": "at",
+          "id": 1,
+          "type": "WorldPos",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "radius",
+          "id": 2,
+          "type": "f32",
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": [
+        {"name": "audience", "args": [{"value": "relevant"}]}
+      ]
+    },
+    {
+      "name": "golden.all.Chat",
+      "kind": "message",
+      "file": "golden.hschema",
+      "id": 3681907271,
+      "layoutHash": "921ac5974183a48e",
+      "fields": [
+        {
+          "name": "from",
+          "id": 1,
+          "type": "EntityId",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "text",
+          "id": 2,
+          "type": "string",
+          "audience": "shared",
+          "attrs": [
+            {"name": "max", "args": [{"value": "256"}]}
+          ]
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.Hud",
+      "kind": "viewmodel",
+      "file": "golden.hschema",
+      "id": 1980070194,
+      "layoutHash": "6cbf7eee0c723d31",
+      "fields": [
+        {
+          "name": "hp",
+          "id": 1,
+          "type": "f32",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "target",
+          "id": 2,
+          "type": "Ref<golden.all.ThingDef>?",
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": [
+        {"name": "client", "args": []}
+      ]
+    },
+    {
+      "name": "golden.all.Owns",
+      "kind": "relation",
+      "file": "golden.hschema",
+      "id": 3871244576,
+      "layoutHash": "176e3ee1a1b0c6cc",
+      "fields": [],
+      "attrs": [
+        {"name": "exclusive", "args": []},
+        {"name": "target", "args": [{"value": "golden.all.ThingDef"}]}
+      ]
+    },
+    {
+      "name": "golden.all.Fire",
+      "kind": "rpc",
+      "file": "golden.hschema",
+      "id": 1985107693,
+      "layoutHash": "78062f4517040a28",
+      "rpc": "Fire",
+      "direction": "client->server",
+      "fields": [
+        {
+          "name": "slot",
+          "id": 1,
+          "type": "u8",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "aim",
+          "id": 2,
+          "type": "vec3f",
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": [
+        {"name": "unreliable", "args": []},
+        {"name": "ratelimit", "args": [{"value": "20/s"}]},
+        {"name": "intent", "args": [{"value": "combat"}]}
+      ]
+    },
+    {
+      "name": "golden.all.Req",
+      "kind": "struct",
+      "file": "golden.hschema",
+      "id": 158644087,
+      "layoutHash": "6114023c80ba80cf",
+      "fields": [
+        {
+          "name": "n",
+          "id": 1,
+          "type": "u32",
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.Spellings",
+      "kind": "struct",
+      "file": "golden.hschema",
+      "doc": "Attribute spellings that must still generate valid C++ (digit separators, hex, exponents).",
+      "id": 695112080,
+      "layoutHash": "17f3b830c215de3c",
+      "fields": [
+        {
+          "name": "n",
+          "id": 1,
+          "type": "list<u8>",
+          "audience": "shared",
+          "attrs": [
+            {"name": "max", "args": [{"value": "1_000"}]}
+          ]
+        },
+        {
+          "name": "r",
+          "id": 2,
+          "type": "f32",
+          "default": 0.5,
+          "audience": "shared",
+          "attrs": [
+            {"name": "range", "args": [{"value": "-0x10"}, {"value": "1_000.5"}]},
+            {"name": "step", "args": [{"value": ".25"}]},
+            {"name": "editor", "args": [{"key": "category", "value": "Edge", "string": true}, {"key": "order", "value": "1e1"}]}
+          ]
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.ThingDef.Shape",
+      "kind": "variant",
+      "file": "golden.hschema",
+      "outer": "golden.all.ThingDef",
+      "id": 1916830777,
+      "layoutHash": "9bac6e95541d3a16",
+      "alternatives": [
+        {"name": "Point", "id": 1, "type": "golden.all.ThingDef.Shape.Point"},
+        {"name": "Box", "id": 2, "type": "golden.all.ThingDef.Shape.Box"},
+        {"name": "Sphere", "id": 3, "type": "golden.all.ThingDef.Shape.Sphere"}
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.ThingDef.Shape.Point",
+      "kind": "alternative",
+      "file": "golden.hschema",
+      "outer": "golden.all.ThingDef.Shape",
+      "id": 4157983937,
+      "layoutHash": "9770e7581778c7f3",
+      "fields": [],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.ThingDef.Shape.Box",
+      "kind": "alternative",
+      "file": "golden.hschema",
+      "outer": "golden.all.ThingDef.Shape",
+      "id": 2012584194,
+      "layoutHash": "daf675b17af85fa6",
+      "fields": [
+        {
+          "name": "size",
+          "id": 1,
+          "type": "vec3f",
+          "default": [1,1,1],
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.ThingDef.Shape.Sphere",
+      "kind": "alternative",
+      "file": "golden.hschema",
+      "outer": "golden.all.ThingDef.Shape",
+      "id": 2226873608,
+      "layoutHash": "e14c3d2caf763fd6",
+      "fields": [
+        {
+          "name": "radius",
+          "id": 1,
+          "type": "f32",
+          "default": 0.5,
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.ThingDef.Mode",
+      "kind": "enum",
+      "file": "golden.hschema",
+      "outer": "golden.all.ThingDef",
+      "id": 1079282855,
+      "layoutHash": "71b46affbc6bdb11",
+      "underlying": "u32",
+      "values": [
+        {"name": "Off", "value": 0},
+        {"name": "On", "value": 1}
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.ThingDef.Inner",
+      "kind": "struct",
+      "file": "golden.hschema",
+      "outer": "golden.all.ThingDef",
+      "id": 4145299940,
+      "layoutHash": "6dcc481d5b2a094a",
+      "fields": [
+        {
+          "name": "a",
+          "id": 1,
+          "type": "u8",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "b",
+          "id": 2,
+          "type": "golden.all.ThingDef.Inner.B",
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.ThingDef.Inner.B",
+      "kind": "struct",
+      "file": "golden.hschema",
+      "outer": "golden.all.ThingDef.Inner",
+      "id": 1010620404,
+      "layoutHash": "52793658ea21d41a",
+      "fields": [
+        {
+          "name": "c",
+          "id": 1,
+          "type": "string",
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.StoreBuyRequest",
+      "kind": "rpc",
+      "file": "golden.hschema",
+      "id": 1211075103,
+      "layoutHash": "505a1a874a4a066c",
+      "rpc": "Buy",
+      "service": "golden.all.Store",
+      "result": "golden.all.Containers",
+      "fields": [
+        {
+          "name": "req",
+          "id": 1,
+          "type": "golden.all.Req",
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": [
+        {"name": "idempotent", "args": []},
+        {"name": "timeout", "args": [{"value": "2s"}]}
+      ]
+    },
+    {
+      "name": "golden.all.Pair",
+      "kind": "struct",
+      "file": "golden.hschema",
+      "id": 4217745765,
+      "layoutHash": "c1a799b9e2c4e754",
+      "fields": [
+        {
+          "name": "x",
+          "id": 1,
+          "type": "f32",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "y",
+          "id": 2,
+          "type": "f32",
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.Motion.Server",
+      "kind": "component part",
+      "file": "golden.hschema",
+      "outer": "golden.all.Motion",
+      "id": 1275926668,
+      "layoutHash": "948b51300f83f2b5",
+      "fields": [
+        {
+          "name": "lastTick",
+          "id": 1,
+          "type": "u32",
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": []
+    }
+  ],
+  "services": [
+    {
+      "name": "golden.all.Store",
+      "kind": "service",
+      "file": "golden.hschema",
+      "methods": [
+        {"name": "Buy", "request": "golden.all.StoreBuyRequest", "result": "golden.all.Containers"}
+      ],
+      "attrs": [
+        {"name": "scope", "args": [{"value": "global"}]}
+      ]
+    }
+  ],
+  "constants": [
+    {"name": "golden.all.Limit", "type": "u32", "value": 16},
+    {"name": "golden.all.Pi", "type": "f64", "value": 3.141592653589793},
+    {"name": "golden.all.Greeting", "type": "string", "value": "hi"},
+    {"name": "golden.all.Cooldown", "type": "Duration", "value": "1500ms"}
+  ],
+  "aliases": [
+    {"name": "golden.all.Money", "type": "i64"},
+    {"name": "golden.all.Pair", "type": "golden.all.Pair"}
+  ],
+  "formulas": [
+    {
+      "name": "golden.all.Twice",
+      "kind": "formula",
+      "file": "golden.hschema",
+      "params": ["x"],
+      "body": "x * 2"
+    }
+  ],
+  "scriptlibs": [
+    {
+      "name": "golden.all.Queries",
+      "kind": "scriptlib",
+      "file": "golden.hschema",
+      "doc": "Script-callable functions (their Luau glue comes from `--emit luau`, a later work package).",
+      "fns": [
+        {
+          "name": "nearest",
+          "doc": "Nearest thing within `radius`.",
+          "params": [
+            {"name": "at", "type": "WorldPos", "attrs": []},
+            {"name": "radius", "type": "f32", "attrs": [{"name": "unit", "args": [{"value": "m"}]}]}
+          ],
+          "result": "Ref<golden.all.ThingDef>?",
+          "cost": {"base": 12, "each": 0, "of": ""},
+          "pure": true,
+          "realms": ["server", "client"],
+          "attrs": [
+            {"name": "script", "args": [{"key": "cost", "value": "12"}]},
+            {"name": "pure", "args": []}
+          ]
+        },
+        {
+          "name": "inRadius",
+          "params": [
+            {"name": "at", "type": "WorldPos", "attrs": []},
+            {"name": "radius", "type": "f32", "attrs": []}
+          ],
+          "result": "list<EntityId>",
+          "cost": {"base": 20, "each": 1, "of": "result"},
+          "pure": true,
+          "realms": ["server", "client"],
+          "attrs": [
+            {"name": "max", "args": [{"value": "64"}]},
+            {"name": "script", "args": [{"key": "cost", "value": "20"}, {"key": "each", "value": "1"}, {"key": "of", "value": "result"}]},
+            {"name": "pure", "args": []}
+          ]
+        },
+        {
+          "name": "spawn",
+          "params": [
+            {"name": "thing", "type": "Ref<golden.all.ThingDef>", "attrs": []},
+            {"name": "at", "type": "WorldPos", "attrs": []}
+          ],
+          "result": "EntityId",
+          "cost": {"base": 50, "each": 4, "of": "thing"},
+          "pure": false,
+          "realms": ["server"],
+          "attrs": [
+            {"name": "realm", "args": [{"value": "server"}]},
+            {"name": "script", "args": [{"key": "cost", "value": "50"}, {"key": "each", "value": "4"}, {"key": "of", "value": "thing"}]}
+          ]
+        }
+      ],
+      "attrs": [
+        {"name": "realm", "args": [{"value": "server"}, {"value": "client"}]}
+      ]
+    }
+  ]
+}

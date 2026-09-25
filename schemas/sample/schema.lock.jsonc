@@ -1,0 +1,402 @@
+// helios-schemac schema lock (docs/plan/02-engine-runtime.md §3.4). Generated; append-only.
+// Commit this file. Never edit or delete entries: ids must never be reused. CI runs --check-lock.
+{
+  "format": 1,
+  "types": {
+    "sample.common.Capability": {
+      "id": 277476586,
+      "kind": "flags",
+      "base": "u16",
+      "values": [
+        {"name": "None", "value": 0},
+        {"name": "Fly", "value": 1},
+        {"name": "Dock", "value": 2},
+        {"name": "Mine", "value": 4},
+        {"name": "Scan", "value": 8}
+      ]
+    },
+    "sample.common.Faction": {
+      "id": 2798970404,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Neutral", "value": 0},
+        {"name": "Pilots", "value": 1},
+        {"name": "Syndicate", "value": 2},
+        {"name": "Drones", "value": 10}
+      ]
+    },
+    "sample.common.Health": {
+      "id": 2410699130,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "current", "type": "f32", "default": "100"},
+        {"id": 2, "name": "max", "type": "f32", "default": "100"},
+        {"id": 3, "name": "shieldFraction", "type": "f32"}
+      ]
+    },
+    "sample.common.Health.Server": {
+      "id": 2114115935,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "regenPerSecond", "type": "f32", "default": "1.5"},
+        {"id": 2, "name": "lastDamageTick", "type": "Tick"}
+      ]
+    },
+    "sample.common.Transform": {
+      "id": 3169287176,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "position", "type": "WorldPos"},
+        {"id": 2, "name": "rotation", "type": "quatf"},
+        {"id": 3, "name": "scale", "type": "vec3f", "default": "[1,1,1]"}
+      ]
+    },
+    "sample.items.InventoryHud": {
+      "id": 609895696,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "slots", "type": "u16"},
+        {"id": 2, "name": "credits", "type": "i64"},
+        {"id": 3, "name": "selected", "type": "Ref<sample.items.ItemTemplateDef>?"}
+      ]
+    },
+    "sample.items.ItemStack": {
+      "id": 3182055330,
+      "kind": "struct",
+      "nextField": 13,
+      "fields": [
+        {"id": 1, "name": "item", "type": "Ref<sample.items.ItemTemplateDef>"},
+        {"id": 2, "name": "quantity", "type": "u32", "default": "1"},
+        {"id": 3, "name": "owner", "type": "EntityId"},
+        {"id": 4, "name": "instanceGuid", "type": "Guid"},
+        {"id": 5, "name": "rolled", "type": "map<u32,f32>"},
+        {"id": 6, "name": "history", "type": "list<list<i16>>"},
+        {"id": 7, "name": "notes", "type": "list<string?>"},
+        {"id": 8, "name": "labels", "type": "set<string>"},
+        {"id": 9, "name": "byRarity", "type": "map<sample.items.Rarity,list<u64>>"},
+        {"id": 10, "name": "pos", "type": "vec3d"},
+        {"id": 11, "name": "tint", "type": "color"},
+        {"id": 12, "name": "netOwner", "type": "NetHandle"}
+      ]
+    },
+    "sample.items.ItemTemplateDef": {
+      "id": 710812651,
+      "kind": "struct",
+      "nextField": 14,
+      "fields": [
+        {"id": 1, "name": "name", "type": "LocString"},
+        {"id": 2, "name": "tags", "type": "TagSet"},
+        {"id": 3, "name": "stackMax", "type": "u32", "default": "1"},
+        {"id": 4, "name": "volume", "type": "f32", "default": "0.1"},
+        {"id": 5, "name": "mass", "type": "f32"},
+        {"id": 6, "name": "baseAttrs", "type": "map<Name,f64>"},
+        {"id": 7, "name": "icon", "type": "AssetRef<Texture>"},
+        {"id": 8, "name": "rarity", "type": "sample.items.Rarity", "default": "\"Common\""},
+        {"id": 9, "name": "sockets", "type": "u8[4]"},
+        {"id": 10, "name": "bindOnPickup", "type": "bool"},
+        {"id": 11, "name": "lifetime", "type": "Duration?"},
+        {"id": 12, "name": "quality", "type": "i32[3]", "default": "[1,2,0]"},
+        {"id": 13, "name": "guid", "type": "Guid"}
+      ]
+    },
+    "sample.items.LedgerBalanceRequest": {
+      "id": 3248144325,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "owner", "type": "EntityId"},
+        {"id": 2, "name": "currency", "type": "Name"}
+      ]
+    },
+    "sample.items.LedgerExecuteRequest": {
+      "id": 1281192072,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "tx", "type": "sample.items.LedgerTx"}
+      ]
+    },
+    "sample.items.LedgerOp": {
+      "id": 3542466095,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "kind", "type": "sample.items.LedgerOp.Kind"},
+        {"id": 2, "name": "amount", "type": "i64"},
+        {"id": 3, "name": "currency", "type": "Name"}
+      ]
+    },
+    "sample.items.LedgerOp.Kind": {
+      "id": 3634482745,
+      "kind": "enum",
+      "base": "u32",
+      "values": [
+        {"name": "Mint", "value": 0},
+        {"name": "Burn", "value": 1},
+        {"name": "Transfer", "value": 2}
+      ]
+    },
+    "sample.items.LedgerResult": {
+      "id": 1927445969,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "ok", "type": "bool"},
+        {"id": 2, "name": "balance", "type": "i64"},
+        {"id": 3, "name": "error", "type": "string"}
+      ]
+    },
+    "sample.items.LedgerTx": {
+      "id": 3646530308,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "idemKey", "type": "Guid"},
+        {"id": 2, "name": "reason", "type": "Ref<sample.items.ReasonCodeDef>"},
+        {"id": 3, "name": "ops", "type": "keyed<sample.items.LedgerOp>"}
+      ]
+    },
+    "sample.items.Rarity": {
+      "id": 2646351062,
+      "kind": "enum",
+      "base": "u32",
+      "values": [
+        {"name": "Common", "value": 0},
+        {"name": "Uncommon", "value": 1},
+        {"name": "Rare", "value": 2},
+        {"name": "Epic", "value": 3},
+        {"name": "Legendary", "value": 4}
+      ]
+    },
+    "sample.items.ReasonCodeDef": {
+      "id": 3770507499,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "code", "type": "Name"},
+        {"id": 2, "name": "kind", "type": "sample.items.ReasonCodeDef.Kind"}
+      ]
+    },
+    "sample.items.ReasonCodeDef.Kind": {
+      "id": 1104697909,
+      "kind": "enum",
+      "base": "u32",
+      "values": [
+        {"name": "Faucet", "value": 0},
+        {"name": "Sink", "value": 1},
+        {"name": "Transfer", "value": 2}
+      ]
+    },
+    "sample.items.TradeOffer": {
+      "id": 769788549,
+      "kind": "struct",
+      "nextField": 5,
+      "fields": [
+        {"id": 1, "name": "from", "type": "EntityId"},
+        {"id": 2, "name": "to", "type": "EntityId"},
+        {"id": 3, "name": "items", "type": "list<sample.items.ItemStack>"},
+        {"id": 4, "name": "credits", "type": "i64"}
+      ]
+    },
+    "sample.ship.DockedTo": {
+      "id": 2966054734,
+      "kind": "struct",
+      "nextField": 1,
+      "fields": []
+    },
+    "sample.ship.EffectDef": {
+      "id": 2169926963,
+      "kind": "struct",
+      "nextField": 5,
+      "fields": [
+        {"id": 1, "name": "duration", "type": "sample.ship.EffectDef.Duration"},
+        {"id": 2, "name": "magnitude", "type": "f64"},
+        {"id": 3, "name": "tags", "type": "TagSet"},
+        {"id": 4, "name": "stacking", "type": "sample.ship.EffectDef.Stacking", "default": "\"BySource\""}
+      ]
+    },
+    "sample.ship.EffectDef.Duration": {
+      "id": 2605565395,
+      "kind": "variant",
+      "nextField": 5,
+      "alternatives": [
+        {"id": 1, "name": "Instant"},
+        {"id": 2, "name": "Timed"},
+        {"id": 3, "name": "Infinite"},
+        {"id": 4, "name": "Periodic"}
+      ]
+    },
+    "sample.ship.EffectDef.Duration.Infinite": {
+      "id": 682621651,
+      "kind": "struct",
+      "nextField": 1,
+      "fields": []
+    },
+    "sample.ship.EffectDef.Duration.Instant": {
+      "id": 2565512668,
+      "kind": "struct",
+      "nextField": 1,
+      "fields": []
+    },
+    "sample.ship.EffectDef.Duration.Periodic": {
+      "id": 2481077386,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "period", "type": "Duration", "default": "\"1s\""},
+        {"id": 2, "name": "ticks", "type": "u16"},
+        {"id": 3, "name": "executeOnApply", "type": "bool"}
+      ]
+    },
+    "sample.ship.EffectDef.Duration.Timed": {
+      "id": 2359851350,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "secs", "type": "f32", "default": "1"}
+      ]
+    },
+    "sample.ship.EffectDef.Stacking": {
+      "id": 386164327,
+      "kind": "enum",
+      "base": "u32",
+      "values": [
+        {"name": "None", "value": 0},
+        {"name": "BySource", "value": 1},
+        {"name": "ByTarget", "value": 2}
+      ]
+    },
+    "sample.ship.Hardpoint": {
+      "id": 236907002,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "slot", "type": "Name"},
+        {"id": 2, "name": "size", "type": "sample.ship.ShipSize"},
+        {"id": 3, "name": "offset", "type": "vec3f"}
+      ]
+    },
+    "sample.ship.HullDamage": {
+      "id": 3381868587,
+      "kind": "struct",
+      "version": 2,
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "hp", "type": "f32"},
+        {"id": 2, "name": "breaches", "type": "list<u8>"}
+      ]
+    },
+    "sample.ship.LootEntry": {
+      "id": 88796809,
+      "kind": "struct",
+      "nextField": 5,
+      "fields": [
+        {"id": 1, "name": "itemName", "type": "Name"},
+        {"id": 2, "name": "weight", "type": "f32", "default": "1"},
+        {"id": 3, "name": "minCount", "type": "u16", "default": "1"},
+        {"id": 4, "name": "maxCount", "type": "u16", "default": "1"}
+      ]
+    },
+    "sample.ship.LootTableDef": {
+      "id": 279775688,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "entries", "type": "keyed<sample.ship.LootEntry>"}
+      ]
+    },
+    "sample.ship.RequestDock": {
+      "id": 694264445,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "target", "type": "NetHandle"},
+        {"id": 2, "name": "bay", "type": "u8"}
+      ]
+    },
+    "sample.ship.ShipDestroyed": {
+      "id": 1235370582,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "ship", "type": "EntityId"},
+        {"id": 2, "name": "killer", "type": "EntityId?"},
+        {"id": 3, "name": "at", "type": "Tick"}
+      ]
+    },
+    "sample.ship.ShipHullDef": {
+      "id": 1909238711,
+      "kind": "struct",
+      "nextField": 13,
+      "fields": [
+        {"id": 1, "name": "name", "type": "LocString"},
+        {"id": 2, "name": "size", "type": "sample.ship.ShipSize", "default": "\"Medium\""},
+        {"id": 3, "name": "faction", "type": "sample.common.Faction"},
+        {"id": 4, "name": "mass", "type": "f32"},
+        {"id": 5, "name": "thrusters", "type": "keyed<sample.ship.ThrusterMount>"},
+        {"id": 6, "name": "hardpoints", "type": "list<sample.ship.Hardpoint>"},
+        {"id": 7, "name": "handling", "type": "sample.ship.ShipHullDef.Handling"},
+        {"id": 8, "name": "capabilities", "type": "sample.common.Capability", "default": "[\"Fly\",\"Dock\"]"},
+        {"id": 9, "name": "prefab", "type": "AssetRef<Prefab>"},
+        {"id": 10, "name": "icon", "type": "AssetRef<Texture>"},
+        {"id": 11, "name": "lootTable", "type": "Ref<sample.ship.LootTableDef>?"},
+        {"id": 12, "name": "aiHints", "type": "map<Name,f32>"}
+      ]
+    },
+    "sample.ship.ShipHullDef.Handling": {
+      "id": 70541798,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "pitchRate", "type": "f32"},
+        {"id": 2, "name": "yawRate", "type": "f32"},
+        {"id": 3, "name": "rollRate", "type": "f32"}
+      ]
+    },
+    "sample.ship.ShipMotion": {
+      "id": 2444739437,
+      "kind": "struct",
+      "nextField": 5,
+      "fields": [
+        {"id": 1, "name": "pos", "type": "WorldPos"},
+        {"id": 2, "name": "rot", "type": "quatf"},
+        {"id": 3, "name": "vel", "type": "vec3f"},
+        {"id": 4, "name": "angvel", "type": "vec3f"}
+      ]
+    },
+    "sample.ship.ShipMotion.Server": {
+      "id": 2835666302,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "lastInputTick", "type": "u32"}
+      ]
+    },
+    "sample.ship.ShipSize": {
+      "id": 3990085262,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Small", "value": 0},
+        {"name": "Medium", "value": 1},
+        {"name": "Large", "value": 2},
+        {"name": "Capital", "value": 3}
+      ]
+    },
+    "sample.ship.ThrusterMount": {
+      "id": 419458469,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "bone", "type": "Name"},
+        {"id": 2, "name": "dir", "type": "vec3f", "default": "[0,0,-1]"},
+        {"id": 3, "name": "maxForce", "type": "f32", "default": "50000"}
+      ]
+    }
+  }
+}

@@ -65,7 +65,7 @@ endif()
 # Engine modules, applications, tests. Directories are added only if present so the tree can
 # grow module by module.
 # ---------------------------------------------------------------------------------------------
-foreach(dir engine apps tests)
+foreach(dir engine tools apps tests)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${dir}/CMakeLists.txt)
     add_subdirectory(${dir})
   endif()

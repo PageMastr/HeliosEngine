@@ -44,6 +44,8 @@ if(HELIOS_BUILD_GRAPHICS)
   set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
   add_subdirectory(${TP}/glfw ${CMAKE_CURRENT_BINARY_DIR}/glfw EXCLUDE_FROM_ALL)
   helios_tp_quiet(glfw)
+  # Helios renders with Vulkan only; stop glfw3.h from pulling in GL/gl.h (absent on CI images).
+  target_compile_definitions(glfw INTERFACE GLFW_INCLUDE_NONE)
   add_library(helios::tp::glfw ALIAS glfw)
 
   # --- Dear ImGui (docking) + backends + ImGuizmo + ImPlot ----------------------------------

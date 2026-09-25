@@ -150,14 +150,14 @@ private:
         [](void* s) {
             Fn* fn = std::launder(static_cast<Fn*>(s));
             (*fn)();
-            fn->~Fn();
+            std::destroy_at(fn);
         },
         [](void* dst, void* src) noexcept {
             Fn* from = std::launder(static_cast<Fn*>(src));
             ::new (dst) Fn(std::move(*from));
-            from->~Fn();
+            std::destroy_at(from);
         },
-        [](void* s) noexcept { std::launder(static_cast<Fn*>(s))->~Fn(); },
+        [](void* s) noexcept { std::destroy_at(std::launder(static_cast<Fn*>(s))); },
         true,
     };
 
@@ -173,13 +173,13 @@ private:
         [](void* s) {
             Fn* fn = heapPtr<Fn>(s);
             (*fn)();
-            fn->~Fn();
+            std::destroy_at(fn);
             freeHeapCallable(fn);
         },
         [](void* dst, void* src) noexcept { std::memcpy(dst, src, sizeof(Fn*)); },
         [](void* s) noexcept {
             Fn* fn = heapPtr<Fn>(s);
-            fn->~Fn();
+            std::destroy_at(fn);
             freeHeapCallable(fn);
         },
         false,

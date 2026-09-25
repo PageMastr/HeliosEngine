@@ -125,6 +125,24 @@ Result<std::unique_ptr<SlangCompiler>> SlangCompiler::load(const std::filesystem
     if (SLANG_FAILED(create(SLANG_API_VERSION, impl.global.writeRef())) || !impl.global) {
         return Error{ErrorCode::Unknown, "slang_createGlobalSession failed"};
     }
+    // Slang loads its SPIR-V back ends (glslang, spirv-opt, spirv-dis, spirv-link, all in slang-glslang)
+    // lazily by bare name. Windows resolves that against the executable's directory, not the Slang DLL's,
+    // so point Slang at the directory it was loaded from.
+    const std::filesystem::path libraryDir = impl.library.path().parent_path();
+    if (!libraryDir.empty()) {
+        const std::string dir = fs::pathToUtf8(libraryDir);
+        for (SlangPassThrough backEnd : {SLANG_PASS_THROUGH_GLSLANG, SLANG_PASS_THROUGH_SPIRV_OPT,
+                                         SLANG_PASS_THROUGH_SPIRV_DIS, SLANG_PASS_THROUGH_SPIRV_LINK}) {
+            impl.global->setDownstreamCompilerPath(backEnd, dir.c_str());
+        }
+    }
+    // Without spirv-opt Slang only reports a diagnostic and emits unoptimized SPIR-V, which silently differs
+    // from what the build's slangc produces. Refuse to run instead.
+    if (SLANG_FAILED(impl.global->checkPassThroughSupport(SLANG_PASS_THROUGH_SPIRV_OPT))) {
+        return Error{ErrorCode::NotFound,
+                     std::format("Slang's SPIR-V optimizer (slang-glslang) could not be loaded next to {}",
+                                 fs::pathToUtf8(impl.library.path()))};
+    }
     return compiler;
 }
 

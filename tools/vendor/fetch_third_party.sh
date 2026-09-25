@@ -50,4 +50,8 @@ if want yyjson;     then clone yyjson ibireme/yyjson 0.13.0; fresh yyjson; copy 
 if want ozz;        then clone ozz guillaumeblanc/ozz-animation 0.17.0; fresh ozz; copy ozz include src/base src/animation/runtime src/animation/offline src/geometry LICENSE.md; rm -rf "$TP/ozz/src/animation/offline/fbx" "$TP/ozz/src/animation/offline/gltf" "$TP/ozz/src/animation/offline/tools" "$TP/ozz/include/ozz/animation/offline/fbx" "$TP/ozz/include/ozz/animation/offline/gltf" "$TP/ozz/include/ozz/animation/offline/tools"; find "$TP/ozz" -name CMakeLists.txt -delete; fi
 if want netcode;    then clone netcode mas-bandwidth/netcode v1.4.8; fresh netcode; (cd "$WORK/netcode" && cp netcode.c netcode.h LICENCE "$TP/netcode/" 2>/dev/null || cp netcode.c netcode.h LICENSE "$TP/netcode/"; [ -d sodium ] && cp -r sodium "$TP/netcode/"); fi
 if want reliable;   then clone reliable mas-bandwidth/reliable v1.4.5; fresh reliable; (cd "$WORK/reliable" && cp reliable.c reliable.h "$TP/reliable/" && (cp LICENCE "$TP/reliable/" 2>/dev/null || cp LICENSE "$TP/reliable/")); fi
+# nats.c: the client library only (no NATS Streaming, no libuv/libevent adapters, no TLS/OpenSSL);
+# third_party/CMakeLists.txt compiles it with its own target instead of nats.c's CMake.
+if want natsc;      then clone natsc nats-io/nats.c v3.14.0; fresh nats.c; mkdir -p "$TP/nats.c/src"
+  (cd "$WORK/natsc" && cp LICENSE "$TP/nats.c/" && cp src/*.c src/*.h "$TP/nats.c/src/" && cp -r src/include src/unix src/win src/glib "$TP/nats.c/src/"); fi
 echo "vendored into $TP"

@@ -219,3 +219,29 @@ if(WIN32)
 endif()
 helios_tp_quiet(tp_netcode)
 add_library(helios::tp::netcode ALIAS tp_netcode)
+
+# --- nats.c 3.14 (cells and gateways -> Go services over NATS request/reply; ADR-013) -----------
+# Client library only, built with our own target instead of nats.c's CMake: static, no TLS (no
+# OpenSSL; dev NATS listens on loopback and production links run inside the private network,
+# 05 §6.5), no NATS Streaming, no libsodium (nats.c's built-in ed25519 serves NKeys). nats.h is
+# included only by engine .cpp files, never by public headers (02 §1.1).
+file(GLOB NATSC_SRC ${TP}/nats.c/src/*.c ${TP}/nats.c/src/glib/*.c)
+if(WIN32)
+  file(GLOB NATSC_PLATFORM_SRC ${TP}/nats.c/src/win/*.c)
+else()
+  file(GLOB NATSC_PLATFORM_SRC ${TP}/nats.c/src/unix/*.c)
+endif()
+add_library(tp_natsc STATIC ${NATSC_SRC} ${NATSC_PLATFORM_SRC})
+target_include_directories(tp_natsc SYSTEM PUBLIC ${TP}/nats.c/src
+                                         PRIVATE ${TP}/nats.c/src/include ${TP}/nats.c/src/glib)
+target_compile_definitions(tp_natsc PRIVATE NATS_STATIC _REENTRANT $<$<NOT:$<CONFIG:Debug>>:NDEBUG>)
+if(WIN32)
+  target_compile_definitions(tp_natsc PRIVATE _WIN32_WINNT=0x0A00 _CRT_SECURE_NO_WARNINGS)
+  target_link_libraries(tp_natsc PUBLIC ws2_32)
+else()
+  target_compile_definitions(tp_natsc PRIVATE _GNU_SOURCE $<$<PLATFORM_ID:Linux>:LINUX>)
+  find_package(Threads REQUIRED)
+  target_link_libraries(tp_natsc PUBLIC Threads::Threads)
+endif()
+helios_tp_quiet(tp_natsc)
+add_library(helios::tp::natsc ALIAS tp_natsc)

@@ -1,0 +1,411 @@
+// Copyright 2021-2026 The NATS Authors
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "natsp.h"
+#include "util.h"
+
+#ifdef DEV_MODE
+// For type safety
+
+void js_lock(jsCtx *js);
+void js_unlock(jsCtx *js);
+
+#else
+// We know what we are doing :-)
+
+#define js_lock(js)     (natsMutex_Lock((js)->mu))
+#define js_unlock(js)   (natsMutex_Unlock((js)->mu))
+
+#endif // DEV_MODE
+
+#define NATS_DEFAULT_ASYNC_FETCH_SIZE 128 // messages
+
+extern const char*      jsDefaultAPIPrefix;
+extern const int64_t    jsDefaultRequestWait;
+
+#define jsMsgIdHdr                     "Nats-Msg-Id"
+#define jsMsgTTLHdr                    "Nats-TTL"
+#define jsExpectedStreamHdr            "Nats-Expected-Stream"
+#define jsExpectedLastSeqHdr           "Nats-Expected-Last-Sequence"
+#define jsExpectedLastSubjSeqHdr       "Nats-Expected-Last-Subject-Sequence"
+#define jsExpectedLastSubjSeqSubjHdr   "Nats-Expected-Last-Subject-Sequence-Subject"
+#define jsExpectedLastMsgIdHdr         "Nats-Expected-Last-Msg-Id"
+#define jsConsumerStalledHdr           "Nats-Consumer-Stalled"
+#define jsConsumerPinIDHdr             "Nats-Pin-Id"
+#define jsNatsBatchIdHdr               "Nats-Batch-Id"
+#define jsNatsBatchSequenceHdr         "Nats-Batch-Sequence"
+#define jsNatsBatchCommit              "Nats-Batch-Commit"
+#define jsNatsMarkerReasonHdr          "Nats-Marker-Reason"
+#define jsNatsScheduleHdr              "Nats-Schedule"
+#define jsNatsScheduleTargetHdr        "Nats-Schedule-Target"
+#define jsNatsScheduleSourceHdr        "Nats-Schedule-Source"
+#define jsNatsScheduleTTLHdr           "Nats-Schedule-TTL"
+#define jsNatsScheduleTimeZoneHdr      "Nats-Schedule-Time-Zone"
+#define jsNatsScheduleRollupHdr        "Nats-Schedule-Rollup"
+#define jsNatsSchedulerHdr             "Nats-Scheduler"
+#define jsNatsScheduleNextHdr          "Nats-Schedule-Next"
+
+#define jsErrStreamNameRequired             "stream name is required"
+#define jsErrConsumerNameRequired           "consumer name is required"
+#define jsErrNoStreamMatchesSubject         "no stream matches subject"
+#define jsErrPullSubscribeToPushConsumer    "cannot pull subscribe to push based consumer"
+#define jsErrPullSubscribeRequired          "must use pull subscribe to bind to pull based consumer"
+#define jsErrMsgNotBound                    "message not bound to a subscription"
+#define jsErrMsgNotJS                       "not a JetStream message"
+#define jsErrDurRequired                    "durable name is required"
+#define jsErrNotAPullSubscription           "not a JetStream pull subscription"
+#define jsErrNotAJetStreamSubscription      "not a JetStream subscription"
+#define jsErrNotApplicableToPullSub         "not applicable to JetStream pull subscriptions"
+#define jsErrNoHeartbeatForQueueSub         "a queue subscription cannot be created for a consumer with heartbeat"
+#define jsErrNoFlowControlForQueueSub       "a queue subscription cannot be created for a consumer with flow control"
+#define jsErrConsumerSeqMismatch            "consumer sequence mismatch"
+#define jsErrOrderedConsNoDurable           "durable can not be set for an ordered consumer"
+#define jsErrOrderedConsNoAckPolicy         "ack policy can not be set for an ordered consume"
+#define jsErrOrderedConsNoMaxDeliver        "max deliver can not be set for an ordered consumer"
+#define jsErrOrderedConsNoDeliverSubject    "deliver subject can not be set for an ordered consumer"
+#define jsErrOrderedConsNoQueue             "queue can not be set for an ordered consumer"
+#define jsErrOrderedConsNoBind              "can not bind existing consumer for an ordered consumer"
+#define jsErrOrderedConsNoPullMode          "can not use pull mode for an ordered consumer"
+#define jsErrStreamConfigRequired           "stream configuration required"
+#define jsErrInvalidStreamName              "invalid stream name"
+#define jsErrConsumerConfigRequired         "consumer configuration required"
+#define jsErrInvalidDurableName             "invalid durable name"
+#define jsErrInvalidConsumerName            "invalid consumer name"
+#define jsErrConcurrentFetchNotAllowed      "concurrent fetch request not allowed"
+#define jsErrNoContextIDAvailable           "no context ID available for async publish acknowledgements (too many contexts have been created)"
+
+#define jsCtrlHeartbeat     (1)
+#define jsCtrlFlowControl   (2)
+
+#define jsRetPolicyLimitsStr    "limits"
+#define jsRetPolicyInterestStr  "interest"
+#define jsRetPolicyWorkQueueStr "workqueue"
+
+#define jsDiscardPolicyOldStr   "old"
+#define jsDiscardPolicyNewStr   "new"
+
+#define jsStorageTypeFileStr    "file"
+#define jsStorageTypeMemStr     "memory"
+
+#define jsStorageCompressionNoneStr "none"
+#define jsStorageCompressionS2Str   "s2"
+
+#define jsPersistModeDefaultStr     "default"
+#define jsPersistModeAsyncStr       "async"
+
+#define jsDeliverAllStr             "all"
+#define jsDeliverLastStr            "last"
+#define jsDeliverNewStr             "new"
+#define jsDeliverBySeqStr           "by_start_sequence"
+#define jsDeliverByTimeStr          "by_start_time"
+#define jsDeliverLastPerSubjectStr  "last_per_subject"
+
+#define jsAckNoneStr    "none"
+#define jsAckAllStr     "all"
+#define jsAckExplictStr "explicit"
+
+#define jsReplayOriginalStr "original"
+#define jsReplayInstantStr  "instant"
+
+#define jsPriorityPolicyPinnedClientStr "pinned_client"
+#define jsPriorityPolicyPrioritizedStr  "prioritized"
+#define jsPriorityPolicyOverflowStr     "overflow"
+
+#define jsAgeReasonStr                  "MaxAge"
+#define jsPurgeReasonStr                "Purge"
+#define jsRemoveReasonStr               "Remove"
+
+#define jsAckPrefix         "$JS.ACK."
+#define jsAckPrefixLen      (8)
+
+// Content of ACK messages sent to server
+#define jsAckAck            "+ACK"
+#define jsAckNak            "-NAK"
+#define jsAckInProgress     "+WPI"
+#define jsAckTerm           "+TERM"
+
+// jsExtDomainT is used to create a StreamSource External APIPrefix
+#define jsExtDomainT "$JS.%s.API"
+
+// jsApiAccountInfo is for obtaining general information about JetStream.
+#define jsApiAccountInfo "%.*s.INFO"
+
+// jsApiStreamCreateT is the endpoint to create new streams.
+#define jsApiStreamCreateT "%.*s.STREAM.CREATE.%s"
+
+// jsApiStreamUpdateT is the endpoint to update existing streams.
+#define jsApiStreamUpdateT "%.*s.STREAM.UPDATE.%s"
+
+// jsApiStreamPurgeT is the endpoint to purge streams.
+#define jsApiStreamPurgeT "%.*s.STREAM.PURGE.%s"
+
+// jsApiStreamDeleteT is the endpoint to delete streams.
+#define jsApiStreamDeleteT "%.*s.STREAM.DELETE.%s"
+
+// jsApiStreamInfoT is the endpoint to get information on a stream.
+#define jsApiStreamInfoT "%.*s.STREAM.INFO.%s"
+
+// jsApiConsumerCreateT is used to create consumers.
+#define jsApiConsumerCreateT "%.*s.CONSUMER.CREATE.%s"
+
+// jsApiDurableCreateT is used to create durable consumers.
+#define jsApiDurableCreateT "%.*s.CONSUMER.DURABLE.CREATE.%s.%s"
+
+// jsApiConsumerCreateExT is used to create a named consumer.
+#define jsApiConsumerCreateExT "%.*s.CONSUMER.CREATE.%s.%s"
+
+// jsApiConsumerCreateExWithFilterT is used to create a named consumer with a filter subject.
+#define jsApiConsumerCreateExWithFilterT "%.*s.CONSUMER.CREATE.%s.%s.%s"
+
+// jsApiConsumerInfoT is used to get information about consumers.
+#define jsApiConsumerInfoT "%.*s.CONSUMER.INFO.%s.%s"
+
+// jsApiDeleteConsumerT is used to delete consumers.
+#define jsApiConsumerDeleteT "%.*s.CONSUMER.DELETE.%s.%s"
+
+// jsApiConsumerResetT is used to reset a consumer.
+#define jsApiConsumerResetT "%.*s.CONSUMER.RESET.%s.%s"
+
+// jsApiConsumerUnpinT is used to unpin a consumer.
+#define jsApiConsumerUnpinT "%.*s.CONSUMER.UNPIN.%s.%s"
+
+// jsApiStreams can lookup a stream by subject.
+#define jsApiStreams "%.*s.STREAM.NAMES"
+
+// jsApiRequestNextT is the prefix for the request next message(s) for a consumer in worker/pull mode.
+#define jsApiRequestNextT "%s.CONSUMER.MSG.NEXT.%s.%s"
+
+// jsApiMsgDeleteT is the endpoint to remove a message.
+#define jsApiMsgDeleteT "%.*s.STREAM.MSG.DELETE.%s"
+
+// jsApiMsgGetT is the endpoint to get a message, either by sequence or last per subject.
+#define jsApiMsgGetT "%.*s.STREAM.MSG.GET.%s"
+
+// jsApiMsgGetT is the endpoint to get a message, either by sequence or last per subject.
+#define jsApiDirectMsgGetT "%.*s.DIRECT.GET.%s"
+
+// jsApiDirectMsgGetLastBySubjectT is the endpoint to perform a direct get of a message by subject.
+#define jsApiDirectMsgGetLastBySubjectT "%.*s.DIRECT.GET.%s.%s"
+
+// jsApiStreamListT is the endpoint to get the list of stream infos.
+#define jsApiStreamListT "%.*s.STREAM.LIST"
+
+// jsApiStreamNamesT is the endpoint to get the list of stream names.
+#define jsApiStreamNamesT "%.*s.STREAM.NAMES"
+
+// jsApiConsumerListT is the endpoint to get the list of consumers for a stream.
+#define jsApiConsumerListT "%.*s.CONSUMER.LIST.%s"
+
+// jsApiConsumerNamesT is the endpoint to get the list of consumer names for a stream.
+#define jsApiConsumerNamesT "%.*s.CONSUMER.NAMES.%s"
+
+// jsApiConsumerPauseT is the endpoint to pause a consumer.
+#define jsApiConsumerPauseT "%.*s.CONSUMER.PAUSE.%s.%s"
+
+// Creates a subject based on the option's prefix, the subject format and its values.
+#define js_apiSubj(s, o, f, ...) (nats_asprintf((s), (f), (o)->Prefix, __VA_ARGS__) < 0 ? NATS_NO_MEMORY : NATS_OK)
+
+// Execute the JS API request if status is OK on entry. If the result is NATS_NO_RESPONDERS,
+// and `errCode` is not NULL, set it to JSNotEnabledErr.
+#define IFOK_JSR(s, c)  if (s == NATS_OK) { s = (c); if ((s == NATS_NO_RESPONDERS) && (errCode != NULL)) { *errCode = JSNotEnabledErr; } }
+
+// Returns true if the API response has a Code or ErrCode that is not 0.
+#define js_apiResponseIsErr(ar)	(((ar)->Error.Code != 0) || ((ar)->Error.ErrCode != 0))
+
+// jsApiError is included in all API responses if there was an error.
+typedef struct __jsApiError
+{
+    int         Code;
+    uint16_t    ErrCode;
+    char        *Description;
+
+} jsApiError;
+
+// apiResponse is a standard response from the JetStream JSON API
+typedef struct __jsApiResponse
+{
+    char        *Type;
+    jsApiError 	Error;
+
+} jsApiResponse;
+
+#define JS_EMPTY_API_RESPONSE { NULL, { 0, 0, NULL } }
+
+// Sets the options in `resOpts` based on the given `opts` and defaults to the context
+// own options when some options are not specified.
+// Returns also the NATS connection to be used to send the request.
+// This function will get/release the context's lock.
+natsStatus
+js_setOpts(natsConnection **nc, bool *freePfx, jsCtx *js, jsOptions *opts, jsOptions *resOpts);
+
+int
+js_lenWithoutTrailingDot(const char *str);
+
+natsStatus
+js_unmarshalResponse(jsApiResponse *ar, nats_JSON **new_json, natsMsg *resp);
+
+void
+js_freeApiRespContent(jsApiResponse *ar);
+
+natsStatus
+js_unmarshalAccountInfo(nats_JSON *json, jsAccountInfo **new_ai);
+
+natsStatus
+js_marshalStreamConfig(natsBuffer **new_buf, jsStreamConfig *cfg);
+
+natsStatus
+js_unmarshalStreamConfig(nats_JSON *json, const char *fieldName, jsStreamConfig **new_cfg);
+
+void
+js_destroyStreamConfig(jsStreamConfig *cfg);
+
+natsStatus
+js_unmarshalStreamState(nats_JSON *pjson, const char *fieldName, jsStreamState *state);
+
+natsStatus
+js_unmarshalStreamInfo(nats_JSON *json, jsStreamInfo **new_si);
+
+natsStatus
+js_unmarshalConsumerInfo(nats_JSON *json, jsConsumerInfo **new_ci);
+
+void
+js_cleanStreamState(jsStreamState *state);
+
+natsStatus
+js_checkConsName(const char *cons, bool isDurable);
+
+natsStatus
+js_getMetaData(const char *reply,
+    char **domain,
+    char **stream,
+    char **consumer,
+    uint64_t *numDelivered,
+    uint64_t *sseq,
+    uint64_t *dseq,
+    int64_t *tm,
+    uint64_t *numPending,
+    int asked);
+
+void
+js_retain(jsCtx *js);
+
+void
+js_release(jsCtx *js);
+
+natsStatus
+js_directGetMsgToJSMsg(natsMsg *msg);
+
+natsStatus
+js_cloneConsumerConfig(jsConsumerConfig *org, jsConsumerConfig **clone);
+
+void
+js_destroyConsumerConfig(jsConsumerConfig *cc);
+
+natsStatus
+js_checkFetchedMsg(natsSubscription *sub, natsMsg *msg, uint64_t fetchID, bool checkSts, bool *usrMsg);
+
+natsStatus
+js_maybeFetchMore(natsSubscription *sub, jsFetch *fetch);
+
+void
+js_setOnReleasedCb(jsCtx *js, js_onReleaseCb cb, void *arg);
+
+void
+js_submitRespMsg(jsCtx *js, natsMsg *msg);
+
+void
+js_submitRespDrainMsg(jsCtx *js);
+
+void
+js_initRespDrain(jsCtx *js);
+
+// Sends a request on `subj` and returns without waiting for the response.
+// When the response is received, or the request has failed (`timeout` has
+// elapsed, no responder, etc.), `cb` is invoked from a library thread
+// (possibly before this call returns), so it must not block. That is
+// normally the thread dispatching the context's asynchronous replies, but
+// a timed-out request may be completed from the timer thread instead (when
+// the context uses its own reply subscription and that subscription has
+// been closed, say because the connection was closed or drained), and
+// jsCtx_Destroy() completes the requests still pending from the calling
+// thread: callbacks are not guaranteed to be serialized, so `closure` must
+// be thread-safe.
+//
+// Note that a request timing out after the connection has been closed or
+// drained may only be completed by jsCtx_Destroy(): always when the context
+// uses the connection's reply muxer (jsOptions.PublishAsync.MuxReplies),
+// since its replies are no longer dispatched, and with the context's own
+// reply subscription if the timeout is detected just before that
+// subscription is closed (the timeout message is then discarded along with
+// the subscription's queue).
+//
+// If `timeout` is 0 or less, jsDefaultRequestWait is used.
+//
+// If this function returns anything but NATS_OK, `cb` will not be invoked.
+// Otherwise, it is guaranteed to be invoked exactly once. Note that if the
+// context is destroyed while requests are still pending, their callback is
+// invoked with the NATS_ILLEGAL_STATE status.
+natsStatus
+js_requestAsync(jsCtx *js, const char *subj, const void *data, int dataLen,
+                int64_t timeout, js_asyncReqCb cb, void *closure);
+
+// Callback invoked when the response to an asynchronous "get message" request
+// is available, or when the request has failed (no responder, timeout, etc..).
+//
+// On success, `msg` is a JetStream message ready to be presented to the user
+// and the callback takes ownership of it. Otherwise, `msg` is NULL and `s`
+// (possibly with `jerr`) indicates the reason of the failure.
+//
+// The callback is invoked from a library thread (see js_requestAsync), so it
+// must not block.
+typedef void (*js_getMsgCb)(natsMsg *msg, natsStatus s, jsErrCode jerr, void *closure);
+
+// Parameters of a stream "get message" request, for both the JS API get
+// ($JS.API.STREAM.MSG.GET.<stream>) and the direct get
+// ($JS.API.DIRECT.GET.<stream>).
+//
+// A JS API get takes exactly one of `seq` and `lastBySubject`, and no
+// `nextBySubject` (NATS_INVALID_ARG otherwise). For a direct get, the
+// selectors are not validated: if `lastBySubject` is set, it is the only
+// one sent (`seq` and `nextBySubject` are ignored), otherwise both `seq`
+// and `nextBySubject` are sent as given and left to the server to validate
+// (see js_DirectGetMsg()).
+typedef struct __jsStreamMsgGetReq
+{
+    bool        direct;         // use the direct get API instead of the JS API get
+    uint64_t    seq;            // get the message with this sequence...
+    const char  *lastBySubject; // ...or the last message on this subject...
+    const char  *nextBySubject; // ...or (direct get only) the first message
+                                // with a sequence >= `seq` on this subject.
+
+} jsStreamMsgGetReq;
+
+// Retrieves a message from `stream` per `req`: the common implementation of
+// js_GetMsg(), js_GetLastMsg() and js_DirectGetMsg(). If `errCode` is not
+// NULL, it is set to 0 before anything else.
+natsStatus
+js_getStreamMsg(natsMsg **msg, jsCtx *js, const char *stream, jsOptions *opts,
+                const jsStreamMsgGetReq *req, jsErrCode *errCode);
+
+// Asynchronous version of js_getStreamMsg(). The request is sent and the
+// function returns without waiting for the response, `cb` being invoked
+// when the response (or an error) is available.
+//
+// The `opts` and `req` objects (and the strings they point to) need to
+// remain valid only for the duration of the call.
+//
+// If the function returns anything but NATS_OK, the callback will not be
+// invoked. Otherwise, it is guaranteed to be invoked exactly once.
+natsStatus
+js_getStreamMsgAsync(jsCtx *js, const char *stream, jsOptions *opts,
+                     const jsStreamMsgGetReq *req, js_getMsgCb cb, void *closure);

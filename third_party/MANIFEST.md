@@ -31,10 +31,11 @@ network. Re-vendor with `tools/vendor/fetch_third_party.sh [name...]`. Only perm
 | ozz-animation | guillaumeblanc/ozz-animation | 0.17.0 (744eb9d) | MIT | Skeletal animation runtime + offline builders (FBX/glTF tools excluded) |
 | netcode | mas-bandwidth/netcode | v1.4.8 (47a156b) | BSD-3 (bundled libsodium subset: ISC) | Connect-token secured, encrypted UDP sessions |
 | reliable | mas-bandwidth/reliable | v1.4.5 (e4e7092) | BSD-3 | Packet acks, reliability, fragmentation on top of netcode |
+| nats.c | nats-io/nats.c | v3.14.0 (6cb096a) | Apache-2.0 | Cell/gateway → Go services over NATS request/reply (client library only: static, no TLS/OpenSSL, no Streaming, no libsodium; `helios::tp::natsc`) |
 
 Planned additions (vendored when their phase starts, per docs/research/10-tech-selection.md §13): RmlUi 6.3,
 FreeType VER-2-14-3 (FTL: credit required in product docs), HarfBuzz 14.5.0, SheenBidi v3.0.0, libunibreak 8.0,
-basis_universal v2_50, nats.c v3.14.0, sentry-native 0.17.1; tools-only: bc7enc_rdo, tinyexr v3.2.0, ufbx v0.23.0, msdfgen v1.13.
+basis_universal v2_50, sentry-native 0.17.1; tools-only: bc7enc_rdo, tinyexr v3.2.0, ufbx v0.23.0, msdfgen v1.13.
 
 ## Prebuilt tools (downloaded at configure time, never committed)
 

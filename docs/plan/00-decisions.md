@@ -15,7 +15,7 @@ Research backing lives in `docs/research/01..10-*.md` (cited as R01..R10).
 
 ## ADR-002 Languages
 - **C++20** for engine runtime, editor, client, launcher, zone/cell servers, gateway and tools.
-- **Go 1.24** for control-plane / backend services (no CGO, so they build natively on Windows).
+- **Go 1.27** for control-plane / backend services (no CGO, so they build natively on Windows; see ADR-014).
 - **Luau** (typed, sandboxed Lua dialect, MIT) for gameplay scripting on client, server and editor —
   chosen over LuaJIT by R01/R03/R05/R06 (sandboxing for UGC & server, gradual typing, active
   maintenance, native codegen on x64). One VM per zone/worker; the hot path never goes through
@@ -39,14 +39,23 @@ Research backing lives in `docs/research/01..10-*.md` (cited as R01..R10).
 - Sci-fi feature set (R09): physically based atmosphere (Hillaire 2020 LUTs), cube-sphere
   quadtree planets, volumetric clouds, volumetric nebulae + starfields, HDR/bloom/auto-exposure,
   GPU particles, shields/holograms/engine plumes, TAA + upscaling.
-- Shader toolchain: *open → resolved by R10* (glslang vendored vs Slang). Shaders are compiled
-  offline by a vendored tool at build/cook time and hot-reloaded in the editor; no dependency on
-  an installed Vulkan SDK.
+- **Shader toolchain: Slang** (Apache-2.0 w/ LLVM exception; modules, generics/interfaces for
+  material graphs, built-in reflection). Consumed as a **pinned prebuilt release (v2026.18.2)**
+  fetched by a SHA-256-verified bootstrap into `tools/prebuilt/slang/` (override with
+  `HELIOS_SLANG_ROOT`). `helios-shaderc` (C++, links slang) runs in the asset processor and emits
+  SPIR-V + a Helios reflection blob. The editor loads Slang at runtime for hot reload; the shipped
+  client contains **no** shader compiler (cooked SPIR-V + recorded PSO lists → `VkPipelineCache`).
+  Plan B: vendored glslang + SPIRV-Reflect (R10 §3).
 
 ## ADR-004 Entity model & reflection
-- **Archetype ECS** is the single runtime model on client, server and editor; relationships for
-  parent/child, attachment, ownership, docking. The scene tree is a *view*. *Library choice
-  (in-house vs flecs) open → resolved by R10.*
+- **Archetype ECS = flecs v4.1.6** (MIT) is the single runtime model on client, server and editor;
+  relationships (`ChildOf`, `IsA` prefabs, custom pairs such as `InFrame`, `DockedTo`) for
+  parent/child, attachment, ownership, docking. The scene tree is a *view*. Components come from
+  schema codegen; replication dirty bits live in our components (Iris-style push); network IDs are
+  our own 64-bit IDs mapped to `flecs::entity`; flecs systems run on the Helios job system.
+  A custom ECS is the fallback only if the Phase 1 50k-entity zone benchmark fails (R10 §6).
+- Terminology: "**ECS archetype**" means component storage only; designer-facing content types
+  are "**record templates**" (never "archetype") across all plan sections.
 - **One schema language** (`*.hschema`, compiled by `helios-schemac`, a C++ tool built first in
   the build) generates: C++ types + reflection + binary/text serializers + editor metadata + Luau
   bindings + **replication descriptors** (quantization, audience: all/owner/server-only, R02);
@@ -107,7 +116,7 @@ Research backing lives in `docs/research/01..10-*.md` (cited as R01..R10).
 - **Data**: PostgreSQL = system of record; Valkey (Redis-compatible, BSD) = cache/presence/queues.
   No gameplay logic in SQL.
 - **Local dev on Windows without Docker**: one `helios-backend` binary runs every service
-  in-process with embedded NATS and pure-Go SQLite. Docker Compose (Postgres/Valkey/NATS) for
+  in-process with embedded NATS, embedded-postgres and miniredis (ADR-014). Docker Compose (Postgres/Valkey/NATS) for
   production-like runs; Kubernetes + Agones for fleets later.
 - Every value movement logged with a reason code (faucets/sinks telemetry, R01).
 
@@ -133,12 +142,45 @@ Research backing lives in `docs/research/01..10-*.md` (cited as R01..R10).
   manifests, verification/repair, self-update; code-signing and installer per R10.
 
 ## ADR-011 Core runtime
-- Platform layer with Win32 and POSIX implementations (windowing via GLFW, sockets, file mapping,
-  dynamic libraries, threads, timers, crash handling/minidumps).
-- Job system: task graph with worker pool, priorities, counters, help-while-waiting, separate
-  long-running pools (IO, shader compile, pathfinding); Jolt's JobSystem adapted onto it.
+- Platform layer with Win32 and POSIX implementations (sockets, file mapping, dynamic libraries,
+  threads, timers, crash handling/minidumps). **Windowing & input: SDL3 3.4.16** (zlib) — chosen
+  over GLFW for IME text input (MMO chat), gamepad rumble/gyro, raw mouse and multi-window editor
+  (R10 §8). Windows executables embed a manifest (UTF-8 code page, PerMonitorV2 DPI, long paths).
+- Job system: task graph with worker pool, priorities, **counter-based waits that help execute
+  other jobs**, separate long-running pools (IO, shader compile, pathfinding); Jolt's
+  `JobSystemWithBarrier` and flecs worker threads run on it. Fibers (Win32 fibers / asm context
+  switch on Linux, R10 §6) are a Phase 2+ optimization behind the same API if profiling demands.
+- Memory: **mimalloc v3.5.3** heaps behind the tagged-allocator interface (no global override);
+  Luau, Jolt, flecs and ImGui allocators routed through it.
+- Formatting: `std::format` (all three toolchains support it) behind `HELIOS_LOG_*`.
+- **MSVC runtime: static `/MT`** everywhere (no VC++ redist for players); `/Z7` debug info so
+  compiler caches work; CMake ≥ 3.28.
 - Tagged memory with budgets; frame/tick linear allocators; generational handles across
   subsystem boundaries.
+
+## ADR-013 Runtime libraries (R10 manifest)
+| Area | Choice | Notes |
+|---|---|---|
+| Physics | Jolt **5.6.0**, `JPH_DOUBLE_PRECISION` + **`JPH_CROSS_PLATFORM_DETERMINISTIC`** on client and server, AVX2 baseline (launcher checks CPUID) | CI golden-hash test across MSVC/clang-cl/GCC/Clang |
+| Animation | **ozz-animation 0.17** (runtime sampling/blending/IK + offline builders) | motion matching/IK extensions are Helios code |
+| Navigation | **Recast/Detour 1.6** per physics grid, incl. moving ship interiors | |
+| Audio | **miniaudio** device/mixing + Helios audio event system (banks, buses, 3D attenuation, occlusion); Wwise/FMOD only as optional proprietary plugins | Steam Audio (Apache-2.0) optional later for HRTF |
+| Game UI | **RmlUi 6.x** (HTML/CSS-like, data binding) + FreeType + HarfBuzz (+ SheenBidi, libunibreak) | ImGui stays editor/debug-only |
+| Text content | **JSONC** (canonical key order, one entity per file) parsed with **yyjson** | Go reads via hujson |
+| Transport | **netcode v1.4.8 + reliable v1.4.5** (connect tokens, encrypted UDP, reliability/fragmentation) wrapped by Helios channels/replication | Monocypher 4.0.3 for Ed25519 manifest signing |
+| Cell ↔ services | **nats.c v3.14** from C++; schema-codegen binary payloads | no protobuf/gRPC in C++ |
+| Crash reporting | **sentry-native 0.17 (crashpad)**, self-hostable backend | Phase 2 |
+| Textures | basis_universal (KTX2/UASTC), bc7enc_rdo (tools), tinyexr | |
+| Import | cgltf, **ufbx** (FBX), msdfgen (UI/SDF fonts) | tools only |
+| Profiling | **Tracy 0.14.1** (client+viewer versions must match) | |
+
+## ADR-014 Backend toolchain (R10 §11)
+- **Go 1.27.1** (1.24 is out of support). Libraries: pgx, go-redis (Valkey), nats.go + embedded
+  nats-server, **connect-go** (Go↔Go RPC, protobuf), goose migrations, golang-jwt, argon2id,
+  OpenTelemetry. No CGO.
+- **Local dev on Windows without Docker: embedded-postgres** (real PostgreSQL, one SQL dialect —
+  supersedes the SQLite idea in ADR-008), embedded NATS, **miniredis** for Valkey. SQLite only for
+  tools and offline caches.
 
 ## ADR-012 Quality bar & process
 - CI: Windows MSVC + Linux GCC/Clang build, unit tests, headless server + bot smoke test,

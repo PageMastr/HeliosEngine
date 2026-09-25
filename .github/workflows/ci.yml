@@ -38,7 +38,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
-            libxi-dev libxkbcommon-dev mesa-vulkan-drivers xvfb
+            libxi-dev libxkbcommon-dev libxext-dev libxfixes-dev libxss-dev libxtst-dev libdbus-1-dev \
+            libudev-dev mesa-vulkan-drivers xvfb
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
       - name: Build

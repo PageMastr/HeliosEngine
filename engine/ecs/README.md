@@ -223,8 +223,9 @@ cmake -DECS_BENCH=build/linux-bench/bin/ecs_bench -P engine/ecs/bench/callgrind_
 ## Known limitations
 
 * ADR-004a's indicator M1 (World burst / raw-flecs burst, ≤ 1.6×) is not met on the dev VM after
-  WP-1.1a: 2.05× (worst configuration, median of 7 runs; 1.33× and 1.43× in instructions). The 9k-op
-  burst takes 1.44–1.77 ms per configuration there, against the 1.5 ms of RT-01's structural clause,
+  WP-1.1a: 2.05× (worst configuration, median of 7 runs; 1.33× and 1.43× in instructions; 1.94× with
+  Clang). The 9k-op burst takes 1.44–1.77 ms per configuration there (1.04–1.06 ms with Clang), against
+  the 1.5 ms of RT-01's structural clause,
   whose formal run is on SERVER (ADR-004a M2). SPIKES.md §5 has the numbers and the analysis.
 * Toggles move one entity at a time: flecs 4.1.6 has no public bulk move (SPIKES.md §5.6).
 * No schema compiler yet: replicated components are hand-written with `_dirty` +

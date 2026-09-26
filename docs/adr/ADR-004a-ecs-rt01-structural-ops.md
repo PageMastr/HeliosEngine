@@ -208,8 +208,9 @@ per frame, which is item 4's path for homogeneous spawns; the per-command form i
 | Callgrind beside it (tag / DontFragment toggles) | 2.50× / 2.59× | **1.33× / 1.43×** | 1.68× / 1.78× |
 | 9k-op burst on the VM, medians per configuration (budget 1.5 ms) | 4.8–5.3 ms | 1.44–1.77 ms | 2.24–2.74 ms |
 | Same ops on raw flecs | 0.96 ms | 0.95 ms | 0.94 ms |
+| Clang 18 `Release`: M1 (median of 5 runs) and burst per configuration | — | 1.94×; 1.04–1.06 ms (raw 0.65–0.67) | 2.98×; 1.57–1.76 ms |
 
-**M1 is not met** on the dev VM: 2.05× against ≤ 1.6×. In instructions the World burst is within the
+**M1 is not met** on the dev VM: 2.05× against ≤ 1.6× (1.94× with Clang). In instructions the World burst is within the
 indicator (1.33× and 1.43×). The rest of the wall-clock gap comes from the World's larger cache footprint
 (command buffers, payload arrays, the structural log): under callgrind's cache model the World's extra
 last-level misses disappear between a 16 MB and a 32 MB last level (SPIKES §5.5), and this VM shares its

@@ -486,6 +486,12 @@ other jobs; median [min–max] over the runs):
 | creates / destroys / tag toggles, World (medians over configurations) | 1.42 / 1.97 / 1.59 ms | 0.22 / 0.47 / 1.01 ms | 0.64 / 0.78 / 1.21 ms |
 | the same on raw flecs | 0.02 / 0.24 / 0.69 ms | 0.02 / 0.24 / 0.67 ms | 0.02 / 0.24 / 0.67 ms |
 
+**Clang 18 `Release`** (the same code; 5 runs of each form, interleaved, at a load of 8–10 from other
+jobs): M1 is 1.94× [1.69–2.91] with spawnN creates (per configuration: tag 1.50–1.61×, DontFragment
+1.69–1.76×) and 2.98× [2.67–4.66] with per-command creates. The 9k World burst takes 1.04–1.06 ms per
+configuration (medians; 1.22 ms worst per run), against 0.65–0.67 ms on raw flecs, which Clang also
+compiles faster. The state hash is the same as GCC's.
+
 Two earlier series of 5 runs with earlier builds of this branch (loads about 1.2 and 1.8) gave the
 same picture: 4.56× and 5.16× before, 2.12× and 2.08× with spawnN creates, and per-configuration
 medians of 1.56–1.94×.
@@ -544,9 +550,9 @@ against 1,250. Revisit it if flecs makes non-fragmenting pair changes cheaper or
   5.45× before. The per-configuration medians are 1.59–1.87×. In instructions the World burst is 1.33×
   (tag toggles) and 1.43× (DontFragment toggles) the raw-flecs burst. With per-command creates M1 is
   2.99× (1.68× and 1.78× in instructions).
-* The 9k-op burst takes 1.44–1.77 ms per configuration (median) on this VM, 2.04 ms in the worst
-  configuration of a run, against 4.8–5.9 ms before and the 1.5 ms budget. The formal clause is M2 on
-  SERVER.
+* The 9k-op burst takes 1.44–1.77 ms per configuration (median) on this VM with GCC, 2.04 ms in the
+  worst configuration of a run, against 4.8–5.9 ms before and the 1.5 ms budget. With Clang it takes
+  1.04–1.06 ms (M1 1.94×). The formal clause is M2 on SERVER.
 * ADR-004a's Phase 1 midpoint rule (a scoping spike for option B above 2.5×) is not triggered by
   these numbers.
 * What is left: the World's toggles and destroys run at about 1.1× and 1.5× the raw instructions, and

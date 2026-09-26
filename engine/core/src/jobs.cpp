@@ -1,7 +1,6 @@
 #include "helios/core/jobs.h"
 
 #include <algorithm>
-#include <cstdio> // TEMPORARY CI DIAGNOSTIC
 #include <format>
 #include <queue>
 
@@ -151,11 +150,6 @@ public:
         std::unique_lock lock(m_mutex);
         m_cv.wait(lock, [this] { return m_tokens > 0; });
         --m_tokens;
-    }
-    // TEMPORARY CI DIAGNOSTIC (PR #15): -1 if the lock is busy.
-    i64 diagTokens() {
-        std::unique_lock lock(m_mutex, std::try_to_lock);
-        return lock.owns_lock() ? static_cast<i64>(m_tokens) : -1;
     }
 
 private:
@@ -387,47 +381,8 @@ void JobSystem::Impl::workerMain(u32 index) {
     t_context = ThreadContext{};
 }
 
-// TEMPORARY CI DIAGNOSTIC (PR #15) ------------------------------------------------------------
-namespace {
-std::atomic<JobSystem::Impl*> g_diagImpl{nullptr};
-std::atomic<const void*> g_diagSubmitCtxImpl{nullptr};
-std::atomic<i32> g_diagSubmitCtxIndex{-2};
-std::atomic<u64> g_diagSubmitThread{0};
-std::atomic<u64> g_diagSubmits{0};
-std::atomic<u64> g_diagLocalSubmits{0};
-std::atomic<u64> g_diagDropped{0};
-} // namespace
-
-void diagDumpJobSystem() {
-    JobSystem::Impl* impl = g_diagImpl.load();
-    std::fprintf(stderr, "[diag] jobs: impl=%p submits=%llu local=%llu dropped=%llu lastSubmit: thread=%llu "
-                         "ctx.impl=%p ctx.index=%d\n",
-                 static_cast<void*>(impl), static_cast<unsigned long long>(g_diagSubmits.load()),
-                 static_cast<unsigned long long>(g_diagLocalSubmits.load()),
-                 static_cast<unsigned long long>(g_diagDropped.load()),
-                 static_cast<unsigned long long>(g_diagSubmitThread.load()), g_diagSubmitCtxImpl.load(),
-                 g_diagSubmitCtxIndex.load());
-    if (!impl) return;
-    std::fprintf(stderr, "[diag] jobs: workers=%u running=%d sleepers=%u pending=%lld tokens=%lld global=%lld/%lld/%lld\n",
-                 impl->workerCount, impl->running.load() ? 1 : 0, impl->sleepers.load(),
-                 static_cast<long long>(impl->pending.load()), static_cast<long long>(impl->wake.diagTokens()),
-                 static_cast<long long>(impl->global[0].sizeHint()), static_cast<long long>(impl->global[1].sizeHint()),
-                 static_cast<long long>(impl->global[2].sizeHint()));
-    for (u32 i = 0; i < impl->workerCount; ++i) {
-        const WorkerData& w = impl->workers[i];
-        std::fprintf(stderr, "[diag] jobs: worker %u queues=%lld/%lld/%lld executed=%llu sleeps=%llu\n", i,
-                     static_cast<long long>(w.queues[0].sizeHint()), static_cast<long long>(w.queues[1].sizeHint()),
-                     static_cast<long long>(w.queues[2].sizeHint()),
-                     static_cast<unsigned long long>(w.executed.load()),
-                     static_cast<unsigned long long>(w.sleeps.load()));
-    }
-    std::fflush(stderr);
-}
-// ---------------------------------------------------------------------------------------------
-
 JobSystem::JobSystem(const JobSystemDesc& desc) : m_impl(std::make_unique<Impl>()) {
     Impl& impl = *m_impl;
-    g_diagImpl.store(&impl);
     const u32 hw = hardwareThreadCount();
     impl.workerCount = desc.workerCount != 0 ? desc.workerCount : std::max<u32>(1, hw - 1);
     impl.workers = std::make_unique<WorkerData[]>(impl.workerCount);
@@ -451,10 +406,6 @@ JobSystem::JobSystem(const JobSystemDesc& desc) : m_impl(std::make_unique<Impl>(
 
 JobSystem::~JobSystem() {
     Impl& impl = *m_impl;
-    {
-        JobSystem::Impl* expected = &impl;
-        g_diagImpl.compare_exchange_strong(expected, nullptr);
-    }
     // Background tasks may submit frame jobs, so drain them first; then drain our own queues.
     impl.background.reset();
     waitIdle();
@@ -464,20 +415,12 @@ JobSystem::~JobSystem() {
 }
 
 void JobSystem::submit(Job job, Priority priority) {
-    if (!job) {
-        g_diagDropped.fetch_add(1);
-        return;
-    }
+    if (!job) return;
     Impl& impl = *m_impl;
     if (Counter* counter = job.counter()) counter->add(1);
     impl.pending.fetch_add(1, std::memory_order_relaxed);
     const u32 p = static_cast<u32>(priority) < kPriorityCount ? static_cast<u32>(priority) : 1u;
-    g_diagSubmits.fetch_add(1);
-    g_diagSubmitCtxImpl.store(t_context.impl);
-    g_diagSubmitCtxIndex.store(t_context.index);
-    g_diagSubmitThread.store(currentThreadId());
     if (t_context.impl == &impl) {
-        g_diagLocalSubmits.fetch_add(1);
         impl.workers[t_context.index].queues[p].push(std::move(job));
     } else {
         impl.global[p].push(std::move(job));

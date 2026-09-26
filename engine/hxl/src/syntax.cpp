@@ -9,6 +9,8 @@
 #include <limits>
 #include <system_error>
 
+#include "helios/core/platform.h"
+
 namespace helios::hxl::detail {
 namespace {
 
@@ -241,6 +243,35 @@ bool lex(std::string_view src, std::vector<Token>& out, Diagnostic& diag) {
 
 namespace {
 
+// Binary operators by precedence, loosest first; 0 = not a binary operator. Every level is
+// left-associative: or := and {'||' and}, and := equality {'&&' equality}, and so on down to
+// product := unary {('*'|'/') unary}. `^` binds tighter than the prefix operators and is parsed by
+// parsePower().
+int binaryPrecedence(Tok tok) noexcept {
+    switch (tok) {
+    case Tok::OrOr: return 1;
+    case Tok::AndAnd: return 2;
+    case Tok::EqEq:
+    case Tok::NotEq: return 3;
+    case Tok::Lt:
+    case Tok::Le:
+    case Tok::Gt:
+    case Tok::Ge: return 4;
+    case Tok::Plus:
+    case Tok::Minus: return 5;
+    case Tok::Star:
+    case Tok::Slash: return 6;
+    default: return 0;
+    }
+}
+
+// Stack use: hostile sources nest up to limits::kMaxParseDepth levels, and every level recurses
+// through parseExpr -> parseBinary -> parseUnary -> parsePower -> parsePrimary. Precedence climbing
+// (one parseBinary frame per precedence level actually used, instead of one function per level)
+// and out-of-line node builders and error paths keep those frames small; the README records the
+// measured worst case. The trees, the node order and every diagnostic are exactly those of one
+// recursive-descent function per level (services/pkg/hxl/syntax.go is the same code; the corpus
+// checks error codes and positions).
 class Parser {
 public:
     Parser(const std::vector<Token>& tokens, Ast& ast, Diagnostic& diag) : m_toks(tokens), m_ast(ast), m_diag(diag) {}
@@ -293,18 +324,19 @@ public:
     }
 
 private:
+    // Tokens are never modified while parsing, so references into m_toks stay valid.
     const Token& cur() const { return m_toks[m_pos]; }
     const Token& next() const { return m_toks[m_pos + 1 < m_toks.size() ? m_pos + 1 : m_pos]; }
     void advance() {
         if (m_pos + 1 < m_toks.size()) ++m_pos;
     }
 
-    bool syntaxError(std::string_view what) {
+    HELIOS_NOINLINE bool syntaxError(std::string_view what) {
         fail(m_diag, Status::Syntax, cur().line, cur().column, std::format("{}, found {}", what, tokName(cur().kind)));
         return false;
     }
 
-    bool depthError(const Token& at) {
+    HELIOS_NOINLINE bool depthError(const Token& at) {
         fail(m_diag, Status::Limit, at.line, at.column,
              std::format("expression nested deeper than {} levels", limits::kMaxParseDepth));
         return false;
@@ -328,7 +360,7 @@ private:
         return true;
     }
 
-    bool makeBinary(const Token& opTok, u32 lhs, u32 rhs, u32& out) {
+    HELIOS_NOINLINE bool makeBinary(const Token& opTok, u32 lhs, u32 rhs, u32& out) {
         Node node;
         node.kind = NodeKind::Binary;
         node.op = opTok.kind;
@@ -342,59 +374,77 @@ private:
         return true;
     }
 
+    HELIOS_NOINLINE bool makeUnary(const Token& opTok, u32 child, u32& out) {
+        Node node;
+        node.kind = NodeKind::Unary;
+        node.op = opTok.kind;
+        node.line = opTok.line;
+        node.column = opTok.column;
+        node.startLine = opTok.line;
+        node.startColumn = opTok.column;
+        node.children = {child};
+        if (!finishComposite(node)) return false;
+        out = addNode(std::move(node));
+        return true;
+    }
+
+    HELIOS_NOINLINE bool makeCall(const Token& nameTok, std::vector<u32> args, u32& out) {
+        Node node;
+        node.kind = NodeKind::Call;
+        node.name = std::string(nameTok.text);
+        node.line = node.startLine = nameTok.line;
+        node.column = node.startColumn = nameTok.column;
+        node.children = std::move(args);
+        if (!finishComposite(node)) return false;
+        out = addNode(std::move(node));
+        return true;
+    }
+
+    HELIOS_NOINLINE u32 addLiteral(const Token& tok) {
+        Node node;
+        node.line = node.startLine = tok.line;
+        node.column = node.startColumn = tok.column;
+        if (tok.kind == Tok::Number) {
+            node.kind = NodeKind::Number;
+            node.number = tok.number;
+        } else {
+            node.kind = NodeKind::Bool;
+            node.boolean = tok.kind == Tok::KwTrue;
+        }
+        return addNode(std::move(node));
+    }
+
     bool parseExpr(u32& out) {
         if (++m_depth > limits::kMaxParseDepth) return depthError(cur());
-        const bool ok = parseOr(out);
+        const bool ok = parseBinary(1, out);
         --m_depth;
         return ok;
     }
 
-    template <class Next>
-    bool parseLeftAssoc(u32& out, Next next, std::initializer_list<Tok> ops) {
+    // Parses a chain of binary operators of precedence >= minPrec (precedence climbing).
+    bool parseBinary(int minPrec, u32& out) {
         u32 lhs = 0;
-        if (!(this->*next)(lhs)) return false;
-        while (std::find(ops.begin(), ops.end(), cur().kind) != ops.end()) {
-            const Token opTok = cur();
+        if (!parseUnary(lhs)) return false;
+        for (int prec = binaryPrecedence(cur().kind); prec >= minPrec; prec = binaryPrecedence(cur().kind)) {
+            const Token& opTok = cur();
             advance();
             u32 rhs = 0;
-            if (!(this->*next)(rhs)) return false;
+            if (!parseBinary(prec + 1, rhs)) return false;
             if (!makeBinary(opTok, lhs, rhs, lhs)) return false;
         }
         out = lhs;
         return true;
     }
 
-    bool parseOr(u32& out) { return parseLeftAssoc(out, &Parser::parseAnd, {Tok::OrOr}); }
-    bool parseAnd(u32& out) { return parseLeftAssoc(out, &Parser::parseEquality, {Tok::AndAnd}); }
-    bool parseEquality(u32& out) { return parseLeftAssoc(out, &Parser::parseCompare, {Tok::EqEq, Tok::NotEq}); }
-    bool parseCompare(u32& out) {
-        return parseLeftAssoc(out, &Parser::parseSum, {Tok::Lt, Tok::Le, Tok::Gt, Tok::Ge});
-    }
-    bool parseSum(u32& out) { return parseLeftAssoc(out, &Parser::parseProduct, {Tok::Plus, Tok::Minus}); }
-    bool parseProduct(u32& out) { return parseLeftAssoc(out, &Parser::parseUnary, {Tok::Star, Tok::Slash}); }
-
     bool parseUnary(u32& out) {
-        if (cur().kind == Tok::Minus || cur().kind == Tok::Bang) {
-            const Token opTok = cur();
-            advance();
-            if (++m_depth > limits::kMaxParseDepth) return depthError(opTok);
-            u32 child = 0;
-            const bool ok = parseUnary(child);
-            --m_depth;
-            if (!ok) return false;
-            Node node;
-            node.kind = NodeKind::Unary;
-            node.op = opTok.kind;
-            node.line = opTok.line;
-            node.column = opTok.column;
-            node.startLine = opTok.line;
-            node.startColumn = opTok.column;
-            node.children = {child};
-            if (!finishComposite(node)) return false;
-            out = addNode(std::move(node));
-            return true;
-        }
-        return parsePower(out);
+        const Token& opTok = cur();
+        if (opTok.kind != Tok::Minus && opTok.kind != Tok::Bang) return parsePower(out);
+        advance();
+        if (++m_depth > limits::kMaxParseDepth) return depthError(opTok);
+        u32 child = 0;
+        const bool ok = parseUnary(child);
+        --m_depth;
+        return ok && makeUnary(opTok, child, out);
     }
 
     bool parsePower(u32& out) {
@@ -404,34 +454,23 @@ private:
             out = base;
             return true;
         }
-        const Token opTok = cur();
+        const Token& opTok = cur();
         advance();
         if (++m_depth > limits::kMaxParseDepth) return depthError(opTok);
         u32 exponent = 0;
         const bool ok = parseUnary(exponent);
         --m_depth;
-        if (!ok) return false;
-        return makeBinary(opTok, base, exponent, out);
+        return ok && makeBinary(opTok, base, exponent, out);
     }
 
     bool parsePrimary(u32& out) {
-        const Token tok = cur();
-        Node node;
-        node.line = node.startLine = tok.line;
-        node.column = node.startColumn = tok.column;
+        const Token& tok = cur();
         switch (tok.kind) {
         case Tok::Number:
-            node.kind = NodeKind::Number;
-            node.number = tok.number;
-            advance();
-            out = addNode(std::move(node));
-            return true;
         case Tok::KwTrue:
         case Tok::KwFalse:
-            node.kind = NodeKind::Bool;
-            node.boolean = tok.kind == Tok::KwTrue;
+            out = addLiteral(tok);
             advance();
-            out = addNode(std::move(node));
             return true;
         case Tok::LParen: {
             advance();
@@ -445,42 +484,50 @@ private:
             return true;
         }
         case Tok::Ident:
-            if (next().kind == Tok::LParen) {
-                node.kind = NodeKind::Call;
-                node.name = std::string(tok.text);
-                advance();
-                advance();
-                if (cur().kind != Tok::RParen) {
-                    while (true) {
-                        u32 arg = 0;
-                        if (!parseExpr(arg)) return false;
-                        node.children.push_back(arg);
-                        if (cur().kind == Tok::Comma) {
-                            advance();
-                            continue;
-                        }
-                        break;
-                    }
-                }
-                if (cur().kind != Tok::RParen) return syntaxError("expected ',' or ')' in the argument list");
-                advance();
-                if (!finishComposite(node)) return false;
-                out = addNode(std::move(node));
-                return true;
-            }
-            node.kind = NodeKind::Path;
-            node.segments.emplace_back(tok.text);
-            advance();
-            while (cur().kind == Tok::Dot) {
-                advance();
-                if (cur().kind != Tok::Ident) return syntaxError("expected a name after '.'");
-                node.segments.emplace_back(cur().text);
-                advance();
-            }
-            out = addNode(std::move(node));
-            return true;
+            if (next().kind == Tok::LParen) return parseCall(out);
+            return parsePath(out);
         default: return syntaxError("expected an expression");
         }
+    }
+
+    bool parseCall(u32& out) {
+        const Token& nameTok = cur();
+        advance();
+        advance();
+        std::vector<u32> args;
+        if (cur().kind != Tok::RParen) {
+            while (true) {
+                u32 arg = 0;
+                if (!parseExpr(arg)) return false;
+                args.push_back(arg);
+                if (cur().kind == Tok::Comma) {
+                    advance();
+                    continue;
+                }
+                break;
+            }
+        }
+        if (cur().kind != Tok::RParen) return syntaxError("expected ',' or ')' in the argument list");
+        advance();
+        return makeCall(nameTok, std::move(args), out);
+    }
+
+    HELIOS_NOINLINE bool parsePath(u32& out) {
+        const Token& tok = cur();
+        Node node;
+        node.kind = NodeKind::Path;
+        node.line = node.startLine = tok.line;
+        node.column = node.startColumn = tok.column;
+        node.segments.emplace_back(tok.text);
+        advance();
+        while (cur().kind == Tok::Dot) {
+            advance();
+            if (cur().kind != Tok::Ident) return syntaxError("expected a name after '.'");
+            node.segments.emplace_back(cur().text);
+            advance();
+        }
+        out = addNode(std::move(node));
+        return true;
     }
 
     const std::vector<Token>& m_toks;

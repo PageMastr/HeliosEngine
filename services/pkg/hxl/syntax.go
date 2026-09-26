@@ -425,35 +425,48 @@ func (p *parser) parseSource() *Diagnostic {
 	return nil
 }
 
+// binaryPrecedence ranks the binary operators, loosest first; 0 = not a binary operator. Every
+// level is left-associative (or := and {'||' and}, ..., product := unary {('*'|'/') unary}).
+func binaryPrecedence(k tok) int {
+	switch k {
+	case tOrOr:
+		return 1
+	case tAndAnd:
+		return 2
+	case tEqEq, tNotEq:
+		return 3
+	case tLt, tLe, tGt, tGe:
+		return 4
+	case tPlus, tMinus:
+		return 5
+	case tStar, tSlash:
+		return 6
+	}
+	return 0
+}
+
 func (p *parser) parseExpr() (int, *Diagnostic) {
 	p.depth++
 	if p.depth > MaxParseDepth {
 		return 0, depthError(*p.cur())
 	}
-	n, d := p.parseOr()
+	n, d := p.parseBinary(1)
 	p.depth--
 	return n, d
 }
 
-func (p *parser) parseLeftAssoc(next func() (int, *Diagnostic), ops ...tok) (int, *Diagnostic) {
-	lhs, d := next()
+// parseBinary parses a chain of binary operators of precedence >= minPrec (precedence climbing,
+// as in C++, where it keeps hostile nesting cheap on the stack). It builds exactly the trees, in
+// exactly the node order, of one recursive-descent function per level.
+func (p *parser) parseBinary(minPrec int) (int, *Diagnostic) {
+	lhs, d := p.parseUnary()
 	if d != nil {
 		return 0, d
 	}
-	for {
-		k := p.cur().kind
-		match := false
-		for _, o := range ops {
-			if k == o {
-				match = true
-			}
-		}
-		if !match {
-			return lhs, nil
-		}
+	for prec := binaryPrecedence(p.cur().kind); prec >= minPrec; prec = binaryPrecedence(p.cur().kind) {
 		opTok := *p.cur()
 		p.advance()
-		rhs, d := next()
+		rhs, d := p.parseBinary(prec + 1)
 		if d != nil {
 			return 0, d
 		}
@@ -461,21 +474,7 @@ func (p *parser) parseLeftAssoc(next func() (int, *Diagnostic), ops ...tok) (int
 			return 0, d
 		}
 	}
-}
-
-func (p *parser) parseOr() (int, *Diagnostic)  { return p.parseLeftAssoc(p.parseAnd, tOrOr) }
-func (p *parser) parseAnd() (int, *Diagnostic) { return p.parseLeftAssoc(p.parseEquality, tAndAnd) }
-func (p *parser) parseEquality() (int, *Diagnostic) {
-	return p.parseLeftAssoc(p.parseCompare, tEqEq, tNotEq)
-}
-func (p *parser) parseCompare() (int, *Diagnostic) {
-	return p.parseLeftAssoc(p.parseSum, tLt, tLe, tGt, tGe)
-}
-func (p *parser) parseSum() (int, *Diagnostic) {
-	return p.parseLeftAssoc(p.parseProduct, tPlus, tMinus)
-}
-func (p *parser) parseProduct() (int, *Diagnostic) {
-	return p.parseLeftAssoc(p.parseUnary, tStar, tSlash)
+	return lhs, nil
 }
 
 func (p *parser) parseUnary() (int, *Diagnostic) {

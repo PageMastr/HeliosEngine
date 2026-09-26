@@ -223,6 +223,41 @@ TEST_CASE("hxl compiler: limits") {
     CHECK(errorOf(std::string(limits::kMaxNameBytes + 1, 'a')) == "E_LIMIT 1:1");
 }
 
+// Review regression (WP-0.19): the deepest programs the limits admit, and one level more. Hostile
+// sources recurse through the parser and the code generator once per level; before the parser used
+// precedence climbing and formatted its diagnostics out of line, 127 nested parentheses took
+// ~0.5 MiB of stack with GCC -O2 (engine/hxl/README.md has the measured bound). The Go twin is
+// TestDeepestPrograms in services/pkg/hxl/review_test.go.
+TEST_CASE("hxl compiler: the deepest programs within the limits compile and evaluate") {
+    const u32 nest = limits::kMaxParseDepth - 1; // the top-level expression is nesting level 1
+    auto repeat = [](std::string_view s, u32 n) {
+        std::string out;
+        for (u32 i = 0; i < n; ++i) out += s;
+        return out;
+    };
+    // Parentheses, prefix operators and right-associative powers count as nesting.
+    CHECK(evalNum(repeat("(", nest) + "1" + repeat(")", nest)) == 1.0);
+    CHECK(evalNum(repeat("-", nest) + "1") == -1.0);
+    CHECK(errorOf(repeat("-", nest + 1) + "1") == "E_LIMIT 1:128");
+    CHECK(evalNum("1" + repeat("^1", nest)) == 1.0);
+    CHECK(errorOf("1" + repeat("^1", nest + 1)) == "E_LIMIT 1:256");
+    // Nested calls around a left-associative chain: tree depth exactly kMaxAstDepth (126 calls over
+    // 129 operators over the chain's first leaf), then one level more (reported at the outermost
+    // call).
+    const u32 calls = 126;
+    const u32 links = limits::kMaxAstDepth - calls - 1;
+    auto nestedMin = [&](u32 n) { return repeat("min(1, ", calls) + "1" + repeat("+1", n) + repeat(")", calls); };
+    CHECK(evalNum(nestedMin(links)) == 1.0);
+    CHECK(errorOf(nestedMin(links + 1)) == "E_LIMIT 1:1");
+    CHECK(evalNum(repeat("clamp(1, 0, ", calls) + "1" + repeat("+1", links) + repeat(")", calls)) == 1.0);
+    CHECK(evalBool(repeat("select(true, ", calls) + "true" + repeat("||true", links) + repeat(", false)", calls)));
+    // An operator of every precedence level in front of each nested parenthesis (the deepest
+    // parser recursion per level): 7 tree levels each.
+    const u32 levels = (limits::kMaxAstDepth - 1) / 7;
+    const std::string everyLevel = repeat("select(true || true && true == 1 < 1 + 1 * (", levels) + "1" + repeat("), 1, 0)", levels);
+    CHECK(evalNum(everyLevel) == 1.0);
+}
+
 TEST_CASE("hxl compiler: the static cost bounds every evaluation") {
     auto p = compile("select(1 < 2, exp(1) + ln(2), pow(2, 3))");
     REQUIRE(p.ok());

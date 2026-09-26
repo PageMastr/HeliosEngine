@@ -5,7 +5,10 @@
 
 #include <bit>
 #include <format>
+#include <string>
+#include <utility>
 
+#include "helios/core/platform.h"
 #include "syntax.h"
 
 namespace helios::hxl {
@@ -67,6 +70,9 @@ public:
     std::vector<std::string>& curves() { return m_curves; }
 
 private:
+    // Diagnostics are formatted out of line: emit() recurses once per tree level (up to
+    // limits::kMaxAstDepth), and formatting in those frames would multiply their size (the README
+    // records the measured worst-case stack).
     bool fail(Status status, u32 line, u32 column, std::string message) {
         m_diag.status = status;
         m_diag.line = line;
@@ -74,10 +80,17 @@ private:
         m_diag.message = std::move(message);
         return false;
     }
-    bool failAt(const Node& n, Status status, std::string message) { return fail(status, n.line, n.column, std::move(message)); }
-    bool failAtStart(const Node& n, Status status, std::string message) {
-        return fail(status, n.startLine, n.startColumn, std::move(message));
+    template <class... Args>
+    HELIOS_NOINLINE bool failAt(const Node& n, Status status, std::format_string<Args...> fmt, Args&&... args) {
+        return fail(status, n.line, n.column, std::format(fmt, std::forward<Args>(args)...));
     }
+    template <class... Args>
+    HELIOS_NOINLINE bool failAtStart(const Node& n, Status status, std::format_string<Args...> fmt, Args&&... args) {
+        return fail(status, n.startLine, n.startColumn, std::format(fmt, std::forward<Args>(args)...));
+    }
+
+    // Which operand emitNumber() checks (for its message).
+    enum class Operand : u8 { CurveInput, MinMax, Argument, SoleArgument };
 
     void op(Op o) { m_code.push_back(static_cast<u8>(o)); }
     void u16v(u32 v) {
@@ -108,7 +121,7 @@ private:
 
     bool symbol(std::vector<std::string>& table, const std::string& name, const char* what, const Node& at, u32& out) {
         if (name.size() > limits::kMaxNameBytes) {
-            return failAtStart(at, Status::Limit, std::format("{} name longer than {} bytes", what, limits::kMaxNameBytes));
+            return failAtStart(at, Status::Limit, "{} name longer than {} bytes", what, limits::kMaxNameBytes);
         }
         for (usize i = 0; i < table.size(); ++i) {
             if (table[i] == name) {
@@ -117,7 +130,7 @@ private:
             }
         }
         if (table.size() >= limits::kMaxSymbols) {
-            return failAtStart(at, Status::Limit, std::format("more than {} {} names", limits::kMaxSymbols, what));
+            return failAtStart(at, Status::Limit, "more than {} {} names", limits::kMaxSymbols, what);
         }
         table.push_back(name);
         out = static_cast<u32>(table.size() - 1);
@@ -134,7 +147,7 @@ private:
             }
         }
         if (m_constants.size() >= limits::kMaxConstants) {
-            return failAt(at, Status::Limit, std::format("more than {} distinct constants", limits::kMaxConstants));
+            return failAt(at, Status::Limit, "more than {} distinct constants", limits::kMaxConstants);
         }
         m_constants.push_back(v);
         op(Op::Const);
@@ -142,13 +155,30 @@ private:
         return true;
     }
 
-    bool emitNumber(u32 index, std::string_view what) {
+    // Emits an operand of `call` that must be a number.
+    bool emitNumber(u32 index, Operand what, const Node& call) {
         Type t{};
         if (!emit(index, t)) return false;
-        if (t != Type::Number) {
-            return failAtStart(m_ast.nodes[index], Status::TypeMismatch, std::format("{} must be a number, found bool", what));
-        }
+        if (t != Type::Number) return notANumber(m_ast.nodes[index], what, call);
         return true;
+    }
+    HELIOS_NOINLINE bool notANumber(const Node& operand, Operand what, const Node& call) {
+        switch (what) {
+        case Operand::CurveInput:
+            return failAtStart(operand, Status::TypeMismatch, "the curve input must be a number, found bool");
+        case Operand::MinMax:
+            return failAtStart(operand, Status::TypeMismatch, "an argument of min()/max() must be a number, found bool");
+        case Operand::Argument:
+            return failAtStart(operand, Status::TypeMismatch, "an argument of {}() must be a number, found bool", call.name);
+        case Operand::SoleArgument: break;
+        }
+        return failAtStart(operand, Status::TypeMismatch, "the argument of {}() must be a number, found bool", call.name);
+    }
+    HELIOS_NOINLINE bool arityError(const Node& n, const BuiltinInfo& fn, u32 argc) {
+        const std::string expected = fn.maxArgs == kVariadic      ? std::format("at least {}", fn.minArgs)
+                                     : fn.minArgs == fn.maxArgs ? std::format("{}", fn.minArgs)
+                                                                : std::format("{} to {}", fn.minArgs, fn.maxArgs);
+        return failAt(n, Status::Arity, "{}() takes {} argument(s), got {}", n.name, expected, argc);
     }
 
     bool emitPath(const Node& n, Type& out) {
@@ -156,14 +186,14 @@ private:
         const int p = paramIndex(segs[0]);
         if (segs.size() == 1) {
             if (p >= 0) {
-                return failAt(n, Status::TypeMismatch,
-                              std::format("parameter '{}' is an entity: read a field ({}.name), attr() or tag()", segs[0], segs[0]));
+                return failAt(n, Status::TypeMismatch, "parameter '{}' is an entity: read a field ({}.name), attr() or tag()",
+                              segs[0], segs[0]);
             }
-            return failAt(n, Status::UnknownName, std::format("unknown name '{}'", segs[0]));
+            return failAt(n, Status::UnknownName, "unknown name '{}'", segs[0]);
         }
-        if (p < 0) return failAt(n, Status::UnknownName, std::format("unknown parameter '{}'", segs[0]));
+        if (p < 0) return failAt(n, Status::UnknownName, "unknown parameter '{}'", segs[0]);
         if (segs.size() > 2) {
-            return failAt(n, Status::Syntax, std::format("context fields have one level ('{}.{}')", segs[0], segs[1]));
+            return failAt(n, Status::Syntax, "context fields have one level ('{}.{}')", segs[0], segs[1]);
         }
         u32 sym = 0;
         if (!symbol(m_fields, segs[1], "field", n, sym)) return false;
@@ -177,14 +207,14 @@ private:
     bool emitEntityRef(const Node& call, Op o, const char* fn) {
         const Node& e = m_ast.nodes[call.children[0]];
         if (e.kind != NodeKind::Path || e.segments.size() != 1) {
-            return failAtStart(e, Status::EntityArg, std::format("the first argument of {}() must be a parameter name", fn));
+            return failAtStart(e, Status::EntityArg, "the first argument of {}() must be a parameter name", fn);
         }
         const int p = paramIndex(e.segments[0]);
-        if (p < 0) return failAtStart(e, Status::UnknownName, std::format("unknown parameter '{}'", e.segments[0]));
+        if (p < 0) return failAtStart(e, Status::UnknownName, "unknown parameter '{}'", e.segments[0]);
         const Node& s = m_ast.nodes[call.children[1]];
         if (s.kind != NodeKind::Path) {
-            return failAtStart(s, Status::SymbolArg,
-                               std::format("the second argument of {}() must be a {} name", fn, o == Op::Tag ? "tag" : "attribute"));
+            return failAtStart(s, Status::SymbolArg, "the second argument of {}() must be a {} name", fn,
+                               o == Op::Tag ? "tag" : "attribute");
         }
         u32 sym = 0;
         if (!symbol(o == Op::Tag ? m_tags : m_attrs, joinPath(s.segments), o == Op::Tag ? "tag" : "attribute", s, sym)) {
@@ -198,14 +228,9 @@ private:
 
     bool emitCall(const Node& n, Type& out) {
         const BuiltinInfo* fn = findBuiltin(n.name);
-        if (!fn) return failAt(n, Status::UnknownFunction, std::format("unknown function '{}'", n.name));
+        if (!fn) return failAt(n, Status::UnknownFunction, "unknown function '{}'", n.name);
         const auto argc = static_cast<u32>(n.children.size());
-        if (argc < fn->minArgs || argc > fn->maxArgs) {
-            std::string expected = fn->maxArgs == kVariadic ? std::format("at least {}", fn->minArgs)
-                                   : fn->minArgs == fn->maxArgs ? std::format("{}", fn->minArgs)
-                                                                : std::format("{} to {}", fn->minArgs, fn->maxArgs);
-            return failAt(n, Status::Arity, std::format("{}() takes {} argument(s), got {}", n.name, expected, argc));
-        }
+        if (argc < fn->minArgs || argc > fn->maxArgs) return arityError(n, *fn, argc);
         const auto& args = n.children;
         switch (fn->id) {
         case Builtin::Attr:
@@ -221,7 +246,7 @@ private:
             if (s.kind != NodeKind::Path) {
                 return failAtStart(s, Status::SymbolArg, "the first argument of curve() must be a curve name");
             }
-            if (!emitNumber(args[1], "the curve input")) return false;
+            if (!emitNumber(args[1], Operand::CurveInput, n)) return false;
             u32 sym = 0;
             if (!symbol(m_curves, joinPath(s.segments), "curve", s, sym)) return false;
             op(Op::Curve);
@@ -251,8 +276,8 @@ private:
             Type b{};
             if (!emit(args[2], b)) return false;
             if (b != a) {
-                return failAtStart(m_ast.nodes[args[2]], Status::TypeMismatch,
-                                   std::format("select() branches differ in type ({} and {})", typeName(a), typeName(b)));
+                return failAtStart(m_ast.nodes[args[2]], Status::TypeMismatch, "select() branches differ in type ({} and {})",
+                                   typeName(a), typeName(b));
             }
             patch(endJump);
             out = a;
@@ -261,9 +286,9 @@ private:
         case Builtin::Min:
         case Builtin::Max: {
             const Op o = fn->id == Builtin::Min ? Op::Min : Op::Max;
-            if (!emitNumber(args[0], "an argument of min()/max()")) return false;
+            if (!emitNumber(args[0], Operand::MinMax, n)) return false;
             for (usize i = 1; i < args.size(); ++i) {
-                if (!emitNumber(args[i], "an argument of min()/max()")) return false;
+                if (!emitNumber(args[i], Operand::MinMax, n)) return false;
                 op(o);
             }
             out = Type::Number;
@@ -273,14 +298,14 @@ private:
         case Builtin::Lerp:
         case Builtin::Pow: {
             for (u32 a : args) {
-                if (!emitNumber(a, std::format("an argument of {}()", n.name))) return false;
+                if (!emitNumber(a, Operand::Argument, n)) return false;
             }
             op(fn->id == Builtin::Clamp ? Op::Clamp : fn->id == Builtin::Lerp ? Op::Lerp : Op::Pow);
             out = Type::Number;
             return true;
         }
         default: {
-            if (!emitNumber(args[0], std::format("the argument of {}()", n.name))) return false;
+            if (!emitNumber(args[0], Operand::SoleArgument, n)) return false;
             static constexpr Op kUnary[] = {Op::Sqrt, Op::Exp, Op::Ln, Op::Asinh, Op::Abs, Op::Floor, Op::Ceil};
             op(kUnary[static_cast<u8>(fn->id) - static_cast<u8>(Builtin::Sqrt)]);
             out = Type::Number;
@@ -296,7 +321,7 @@ private:
             const char* opText = n.op == Tok::AndAnd ? "&&" : "||";
             Type tl{};
             if (!emit(l, tl)) return false;
-            if (tl != Type::Bool) return failAt(n, Status::TypeMismatch, std::format("operands of '{}' must be bool", opText));
+            if (tl != Type::Bool) return failAt(n, Status::TypeMismatch, "operands of '{}' must be bool", opText);
             const usize skip = jump(Op::JumpIfFalse);
             if (n.op == Tok::AndAnd) {
                 Type tr{};
@@ -326,8 +351,7 @@ private:
         case Tok::EqEq:
         case Tok::NotEq:
             if (tl != tr) {
-                return failAt(n, Status::TypeMismatch,
-                              std::format("cannot compare {} with {}", typeName(tl), typeName(tr)));
+                return failAt(n, Status::TypeMismatch, "cannot compare {} with {}", typeName(tl), typeName(tr));
             }
             if (tl == Type::Number) {
                 op(n.op == Tok::EqEq ? Op::EqN : Op::NeN);
@@ -339,8 +363,7 @@ private:
         default: break;
         }
         if (tl != Type::Number || tr != Type::Number) {
-            return failAt(n, Status::TypeMismatch,
-                          std::format("operands of {} must be numbers", detail::tokName(n.op)));
+            return failAt(n, Status::TypeMismatch, "operands of {} must be numbers", detail::tokName(n.op));
         }
         switch (n.op) {
         case Tok::Plus: op(Op::Add); out = Type::Number; return true;

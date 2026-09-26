@@ -2,6 +2,7 @@ package hxl
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -106,4 +107,52 @@ func TestRecordFormulasFollowCppRules(t *testing.T) {
 	if err := derived("formula Ehp(ship) = attr(ship, Hull.Hp) * select(tag(ship, T), 2, 1)"); err != nil {
 		t.Errorf("one-parameter derived formula: %v", err)
 	}
+}
+
+// TestDeepestPrograms mirrors the C++ test "hxl compiler: the deepest programs within the limits
+// compile and evaluate": one level below each nesting limit compiles and evaluates, one level more
+// fails at the same position (the parsers use precedence climbing in both languages).
+func TestDeepestPrograms(t *testing.T) {
+	nest := MaxParseDepth - 1          // the top-level expression is nesting level 1
+	eval := func(src string) float64 { // bool results are 0 / 1
+		t.Helper()
+		p := mustCompile(t, src)
+		env := &MapEnv{}
+		env.Bind(p)
+		v, s := p.Eval(env)
+		if s != OK {
+			t.Fatalf("eval: %s", s)
+		}
+		return v.Number
+	}
+	errorOf := func(src string) string {
+		t.Helper()
+		_, err := Compile(src, CompileOptions{})
+		if err == nil {
+			return "OK"
+		}
+		d, _ := AsDiagnostic(err)
+		return fmt.Sprintf("%s %d:%d", d.Status, d.Line, d.Column)
+	}
+	r := strings.Repeat
+	check := func(what string, got, want any) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s: got %v, want %v", what, got, want)
+		}
+	}
+	check("parentheses", eval(r("(", nest)+"1"+r(")", nest)), 1.0)
+	check("prefix", eval(r("-", nest)+"1"), -1.0)
+	check("prefix+1", errorOf(r("-", nest+1)+"1"), "E_LIMIT 1:128")
+	check("power", eval("1"+r("^1", nest)), 1.0)
+	check("power+1", errorOf("1"+r("^1", nest+1)), "E_LIMIT 1:256")
+	const calls = 126
+	links := MaxAstDepth - calls - 1
+	nestedMin := func(n int) string { return r("min(1, ", calls) + "1" + r("+1", n) + r(")", calls) }
+	check("calls", eval(nestedMin(links)), 1.0)
+	check("calls+1", errorOf(nestedMin(links+1)), "E_LIMIT 1:1")
+	check("clamp", eval(r("clamp(1, 0, ", calls)+"1"+r("+1", links)+r(")", calls)), 1.0)
+	check("select", eval(r("select(true, ", calls)+"true"+r("||true", links)+r(", false)", calls)), 1.0) // true
+	levels := (MaxAstDepth - 1) / 7
+	check("every level", eval(r("select(true || true && true == 1 < 1 + 1 * (", levels)+"1"+r("), 1, 0)", levels)), 1.0)
 }

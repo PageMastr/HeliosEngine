@@ -105,6 +105,15 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(failures, ["no WP for it in the tree inventory row (D6; `snapshot.py inventory --write`): "
                                     "tools/newtool"])
 
+    def test_write_keeps_crlf_line_endings(self):
+        self.plan.write_bytes(PLAN.replace("\n", "\r\n").encode("utf-8"))
+        (self.root / "tools" / "newtool").mkdir(parents=True)
+        self.assertTrue(snapshot.write_inventory(self.root))
+        raw = self.plan.read_bytes().decode("utf-8")
+        self.assertIn("`tools/newtool` (?) |\r\n", raw)
+        self.assertEqual(raw.count("\r\n"), PLAN.count("\n"))
+        self.assertNotIn("\r\r", raw)
+
     def test_report_counts_tests_per_module(self):
         inv = {"os": "linux", "doctest": {"net_tests": ["a", "b"], "core_tests": ["c"]},
                "go": {"pkg/clock": ["TestFake"], "pkg/idgen/sub": ["TestX", "TestY"]}}

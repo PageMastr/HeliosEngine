@@ -395,7 +395,21 @@ void EntityRegistry::tryAssignHandles(std::span<const EntityId> ids, const u64* 
     }
 #endif
     m_handles.tryAllocateN(ids, entities, out);
-    for (usize i = 0; i < ids.size(); ++i) recordHandle(ids[i], out[i]);
+    // Record the handles page by page (a batch's ids are consecutive: a new page every 64).
+    const usize n = ids.size();
+    for (usize i = 0; i < n;) {
+        const u64 key = (ids[i].value >> kPageBits) + 1;
+        if (!paged(ids[i]) || !out[i].isValid()) {
+            recordHandle(ids[i], out[i]);
+            ++i;
+            continue;
+        }
+        recordHandle(ids[i], out[i]); // finds the page and makes it the last one used
+        Page* p = m_lastPageKey == key ? m_lastPagePtr : nullptr;
+        for (++i; p && i < n && ((ids[i].value >> kPageBits) + 1) == key; ++i) {
+            p->handle[ids[i].value & (kPageIds - 1)] = out[i].value; // (an invalid handle records 0)
+        }
+    }
 }
 
 Result<NetHandle> EntityRegistry::assignHandleFor(EntityId id, Entity entity, u32 contentIndex) {

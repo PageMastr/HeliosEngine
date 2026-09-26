@@ -83,6 +83,11 @@
      "pattern": "types, \\d+ outputs \\(\\d+ KiB\\) in ([\\d.]+) s", "unit": "s", "better": "lower", "category": "iteration"}
   ],
 
+  // Reviewed acceptances of a new perf level: {"metric", "night": "YYYY-MM-DD", "run"?, "reason"}. The
+  // nightly never moves a baseline on its own; an unfixed regression fails every night until it is fixed
+  // or accepted here (tools/scorecard/README.md, "Perf history").
+  "perf_accept": [],
+
   // ------------------------------------------------------------------------------------------------
   // Phase 0 criteria: every criterion whose plan phase includes 0, plus the IDs named in 09 §2.1's
   // exit (the checker derives both lists from docs/plan and fails if one is missing here).

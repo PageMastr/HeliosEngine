@@ -607,7 +607,8 @@ LUA_API void lua_getcounters(lua_State* L, int funcindex, void* context, lua_Cou
  * These are shared between all coroutines.
  *
  * Note: interrupt is safe to set from an arbitrary thread but all other callbacks
- * can only be changed when the VM is not running any code */
+ * can only be changed when the VM is not running any code (Helios patch fuel-counter: a gc < 0 interrupt
+ * set that way runs only once the fuel counter reaches zero, see lua_fuelcounter) */
 struct lua_Callbacks
 {
     void* userdata; // arbitrary userdata pointer that is never overwritten by Luau
@@ -649,7 +650,8 @@ LUA_API lua_Callbacks* lua_callbacks(lua_State* L);
  * INT64_MIN. The counter is shared between all coroutines of the state and owned by the thread that
  * runs the VM: every decrement is a plain read-modify-write, so no other thread may write it (interrupt
  * may re-arm it). Stopping a script from another thread while the counter is armed needs a flag that
- * the host checks at its own decision points; setting interrupt from another thread is not enough */
+ * the host checks at its own decision points, and a bounded arming distance so that such a point is
+ * reached; setting interrupt from another thread is not enough */
 #define LUA_FUELCOUNTER 1
 LUA_API int64_t* lua_fuelcounter(lua_State* L);
 

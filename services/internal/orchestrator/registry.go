@@ -19,6 +19,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,8 +66,9 @@ type FailureDomain struct {
 const (
 	MaxFDLabel      = 64  // az, rack
 	MaxFDHost       = 255 // a DNS name
-	MaxHeldRegions  = 256 // regions one heartbeat may report (a v1 zone has up to 64)
+	MaxHeldRegions  = 256 // regions a heartbeat's report keeps, and regions one process is placed (a v1 zone has up to 64)
 	maxZones        = 256 // zones one cell may declare
+	maxZoneName     = 64  // bytes per declared zone name
 	maxProcessField = 255 // address, version
 )
 
@@ -188,6 +190,7 @@ type metrics struct {
 	registrations *prometheus.CounterVec
 	ended         *prometheus.CounterVec
 	assignments   prometheus.Counter
+	heldDropped   prometheus.Counter
 }
 
 func newMetrics(reg prometheus.Registerer) *metrics {
@@ -202,9 +205,11 @@ func newMetrics(reg prometheus.Registerer) *metrics {
 			Help: "Registrations ended by reason (lease_expired, superseded, deregistered)."}, []string{"reason"}),
 		assignments: prometheus.NewCounter(prometheus.CounterOpts{Name: "helios_orchestrator_zone_assignments_total",
 			Help: "Zone placements (each bumps the region_lease generation of the zone's region)."}),
+		heldDropped: prometheus.NewCounter(prometheus.CounterOpts{Name: "helios_orchestrator_held_entries_dropped_total",
+			Help: "Held-region entries a heartbeat reported that were not recorded (invalid, duplicate or over the cap)."}),
 	}
 	if reg != nil {
-		reg.MustRegister(m.processes, m.zonesAssigned, m.registrations, m.ended, m.assignments)
+		reg.MustRegister(m.processes, m.zonesAssigned, m.registrations, m.ended, m.assignments, m.heldDropped)
 	}
 	return m
 }
@@ -292,6 +297,13 @@ func validate(info *ProcessInfo) error {
 		return rpc.Errorf(rpc.CodeInvalidArgument, "serverBuild must not be negative")
 	case len(info.Address) > maxProcessField || len(info.Version) > maxProcessField || len(info.Zones) > maxZones:
 		return rpc.Errorf(rpc.CodeInvalidArgument, "address or version too long, or too many zones")
+	case hasNUL(info.Name, info.Address, info.Host, info.Version, info.FD.AZ, info.FD.Rack, info.FD.Host):
+		return rpc.Errorf(rpc.CodeInvalidArgument, "text fields must not contain NUL")
+	}
+	for _, z := range info.Zones {
+		if z == "" || len(z) > maxZoneName || hasNUL(z) {
+			return rpc.Errorf(rpc.CodeInvalidArgument, "zone names are 1-%d bytes without NUL", maxZoneName)
+		}
 	}
 	switch info.Kind {
 	case KindCell:
@@ -306,6 +318,16 @@ func validate(info *ProcessInfo) error {
 		return rpc.Errorf(rpc.CodeInvalidArgument, "kind must be cell or gateway")
 	}
 	return nil
+}
+
+// hasNUL reports whether any s contains a NUL byte (PostgreSQL TEXT cannot store one).
+func hasNUL(s ...string) bool {
+	for _, x := range s {
+		if strings.IndexByte(x, 0) >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // RegisterResult is returned to a registering process.
@@ -435,11 +457,10 @@ type HeartbeatResult struct {
 
 // Heartbeat renews a lease and records the regions the process says it holds. A heartbeat that
 // arrives after the lease lapsed is refused: the zones may already have moved, so the holder is
-// told lease_lost and registers again.
+// told lease_lost and registers again. The held report never blocks the renewal: Phase 0 only
+// records it, so invalid or duplicate entries and those over MaxHeldRegions are dropped (and
+// counted) rather than refused, and lease_lost always wins over a bad report.
 func (r *Registry) Heartbeat(ctx context.Context, id, epoch int64, load Load, held ...HeldRegion) (*HeartbeatResult, error) {
-	if len(held) > MaxHeldRegions {
-		return nil, rpc.Errorf(rpc.CodeInvalidArgument, "at most %d held regions per heartbeat", MaxHeldRegions)
-	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.clk.Now()
@@ -456,9 +477,29 @@ func (r *Registry) Heartbeat(ctx context.Context, id, epoch int64, load Load, he
 	p.LastHeartbeat = now
 	p.LeaseExpires = now.Add(r.cfg.LeaseTTL)
 	p.Load = load
-	p.Held = append([]HeldRegion{}, held...)
-	slices.SortFunc(p.Held, func(a, b HeldRegion) int { return cmp.Compare(a.Region, b.Region) })
+	var dropped int
+	p.Held, dropped = sanitizeHeld(held)
+	if dropped > 0 {
+		r.m.heldDropped.Add(float64(dropped))
+		r.log.Debug("held report entries dropped", "process", p.ID, "dropped", dropped)
+	}
 	return &HeartbeatResult{LeaseExpires: p.LeaseExpires, Assignments: r.assignmentsLocked(id), Mode: ModeNormal}, nil
+}
+
+// sanitizeHeld keeps the valid, distinct entries of a held report (at most MaxHeldRegions, by
+// region) and returns how many it dropped.
+func sanitizeHeld(held []HeldRegion) ([]HeldRegion, int) {
+	out := make([]HeldRegion, 0, min(len(held), MaxHeldRegions))
+	seen := make(map[int64]bool, len(out))
+	for _, h := range held {
+		if h.Region <= 0 || h.LeaseGen < 0 || seen[h.Region] || len(out) == MaxHeldRegions {
+			continue
+		}
+		seen[h.Region] = true
+		out = append(out, h)
+	}
+	slices.SortFunc(out, func(a, b HeldRegion) int { return cmp.Compare(a.Region, b.Region) })
+	return out, len(held) - len(out)
 }
 
 // Deregister ends a registration cleanly (graceful shutdown).
@@ -531,7 +572,8 @@ func (r *Registry) endLocked(ctx context.Context, p *Process, reason string, now
 }
 
 // placeLocked assigns every unowned zone to a live cell: cells that declared the zone first,
-// then cells that accept any zone; the least-loaded candidate wins (ties: lowest process ID).
+// then cells that accept any zone; the least-loaded candidate wins (ties: lowest process ID). No
+// cell gets more than MaxHeldRegions regions, so its whole held report is always recorded.
 func (r *Registry) placeLocked(ctx context.Context, now time.Time) {
 	zoneIDs := make([]int64, 0, len(r.zones))
 	for id := range r.zones {
@@ -553,7 +595,7 @@ func (r *Registry) placeLocked(ctx context.Context, now time.Time) {
 		bestDeclared := false
 		for _, id := range r.sortedIDsLocked() {
 			p := r.procs[id]
-			if p.Info.Kind != KindCell || now.After(p.LeaseExpires) {
+			if p.Info.Kind != KindCell || now.After(p.LeaseExpires) || owned[p.ID] >= MaxHeldRegions {
 				continue
 			}
 			declared := slices.Contains(p.Info.Zones, z.Name)

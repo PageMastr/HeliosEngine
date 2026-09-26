@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -414,6 +415,12 @@ func TestRegistrationRecordsFailureDomainAndServerBuild(t *testing.T) {
 		func(p *ProcessInfo) { p.FD.Host = strings.Repeat("h", MaxFDHost+1) },
 		func(p *ProcessInfo) { p.ServerBuild = -1 },
 		func(p *ProcessInfo) { p.Version = strings.Repeat("v", 256) },
+		func(p *ProcessInfo) { p.Name = "cell\x00c" },
+		func(p *ProcessInfo) { p.FD.Rack = "r\x001" },
+		func(p *ProcessInfo) { p.Version = "1.0\x00" },
+		func(p *ProcessInfo) { p.Zones = []string{strings.Repeat("z", 65)} },
+		func(p *ProcessInfo) { p.Zones = []string{""} },
+		func(p *ProcessInfo) { p.Zones = []string{"a\x00b"} },
 	} {
 		p := cell("cell-c")
 		bad(&p)
@@ -444,14 +451,51 @@ func TestHeartbeatRecordsHeldRegions(t *testing.T) {
 	if got := f.reg.Processes()[0].Held; len(got) != 1 || got[0].Region != 1 {
 		t.Fatalf("second report: %+v", got)
 	}
-	// An oversized report is refused (and renews nothing).
+	// A bad report never blocks the renewal (PR #8 review, blocking 3): invalid, duplicate and
+	// over-cap entries are dropped and counted, the rest is recorded, and the lease renews.
+	big := []HeldRegion{{Region: 0, LeaseGen: 1}, {Region: 5, LeaseGen: -1}, {Region: 1, LeaseGen: 1}, {Region: 1, LeaseGen: 2}}
+	for i := 0; i < MaxHeldRegions+10; i++ {
+		big = append(big, HeldRegion{Region: int64(1000 + i), LeaseGen: 1})
+	}
 	f.clk.Advance(2 * time.Second)
-	if _, err := f.reg.Heartbeat(ctx, a.ProcessID, a.Epoch, Load{}, make([]HeldRegion, MaxHeldRegions+1)...); rpc.CodeOf(err) != rpc.CodeInvalidArgument {
-		t.Fatalf("oversized held list: %v", err)
+	if _, err := f.reg.Heartbeat(ctx, a.ProcessID, a.Epoch, Load{}, big...); err != nil {
+		t.Fatalf("oversized held list must still renew: %v", err)
+	}
+	got := f.reg.Processes()[0].Held
+	if len(got) != MaxHeldRegions || got[0] != (HeldRegion{Region: 1, LeaseGen: 1}) {
+		t.Fatalf("recorded %d entries, first %+v", len(got), got[0])
+	}
+	if d := testutil.ToFloat64(f.reg.m.heldDropped); d != float64(len(big)-MaxHeldRegions) {
+		t.Fatalf("dropped counter %v", d)
 	}
 	f.clk.Advance(1500 * time.Millisecond)
-	if n := f.reg.Sweep(ctx); n != 1 {
-		t.Fatal("a refused heartbeat must not renew the lease")
+	if n := f.reg.Sweep(ctx); n != 0 {
+		t.Fatal("the renewal with an oversized report did not renew the lease")
+	}
+	// A stale registration is told lease_lost whatever it reports, so it never lingers.
+	if _, err := f.reg.Heartbeat(ctx, a.ProcessID, a.Epoch+1, Load{}, big...); err != ErrLeaseLost {
+		t.Fatalf("stale epoch with an oversized report: %v", err)
+	}
+	f.clk.Advance(4 * time.Second)
+	if _, err := f.reg.Heartbeat(ctx, a.ProcessID, a.Epoch, Load{}, big...); err != ErrLeaseLost {
+		t.Fatalf("lapsed lease with an oversized report: %v", err)
+	}
+}
+
+func TestPlacementCapsRegionsPerCell(t *testing.T) {
+	zones := make([]Zone, MaxHeldRegions+5)
+	for i := range zones {
+		zones[i] = Zone{ID: int64(1 + i), Name: fmt.Sprintf("z%d", i)}
+	}
+	f := newReg(t, zones...)
+	ctx := context.Background()
+	a, _ := f.reg.Register(ctx, cell("cell-a"))
+	if len(a.Assignments) != MaxHeldRegions {
+		t.Fatalf("a cell got %d regions, cap %d", len(a.Assignments), MaxHeldRegions)
+	}
+	b, _ := f.reg.Register(ctx, cell("cell-b"))
+	if len(b.Assignments) != 5 {
+		t.Fatalf("the rest goes to the next cell: %d", len(b.Assignments))
 	}
 }
 

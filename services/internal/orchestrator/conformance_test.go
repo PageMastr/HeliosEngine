@@ -28,6 +28,7 @@ const (
 	cpGone               // no subscriber: requests fail with no responders
 	cpSilent             // requests arrive but are never answered: they time out
 	cpUnavailable        // answered with "unavailable", as while leadership changes or PG is down
+	cpLeaseLost          // answered with lease_lost: the leader no longer knows the registration
 )
 
 // scriptedOrchestrator answers RegisterProcess and Heartbeat the way the leader would, except
@@ -76,6 +77,8 @@ func (s *scriptedOrchestrator) subscribe() {
 				return nil, ctx.Err()
 			case cpUnavailable:
 				return nil, unavailable
+			case cpLeaseLost:
+				return nil, rpc.Errorf(rpc.CodeFailedPrecondition, "lease_lost")
 			}
 			return &orchestrator.HeartbeatResult{LeaseExpires: time.Now().Add(600 * time.Millisecond), Assignments: as,
 				Mode: orchestrator.ModeNormal}, nil
@@ -130,14 +133,15 @@ type lostRegion struct {
 // testHolderRule is CONF-03's required test (09 §5.10.3; 05 §1.4.2): with the control plane
 // unreachable for 60 s the Go Agent keeps its regions, and it drops one only after seeing a higher
 // lease_gen for it. The outage covers every way the control plane goes missing: no responders,
-// requests that time out, and "unavailable" answers. -short shortens the outage to 3 s, still five
-// times the 600 ms liveness TTL the agent is given.
+// requests that time out, and "unavailable" answers. A shorter outage would let a holder that
+// self-fences after, say, 30 s pass, so -short skips the test rather than shortening it; CI's Go
+// jobs run without -short.
 func testHolderRule(t *testing.T) {
-	t.Parallel()
-	outage := 60 * time.Second
 	if testing.Short() {
-		outage = 3 * time.Second
+		t.Skip("conformance/holder_rule needs the 60 s outage CONF-03 specifies; run without -short")
 	}
+	t.Parallel()
+	const outage = 60 * time.Second
 	bus := testkit.StartNATS(t)
 	cp := startScripted(t, bus, "t1", []orchestrator.Assignment{
 		{ZoneID: 1001, ZoneName: "alpha", LeaseGen: 3}, {ZoneID: 1002, ZoneName: "beta", LeaseGen: 5}})

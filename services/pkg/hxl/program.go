@@ -221,6 +221,9 @@ type Program struct {
 	usesLevel  bool
 }
 
+// Accessors. The returned slices are the program's own verified tables: callers must not modify
+// them (a Program is shared between goroutines, and Eval trusts the verified code).
+
 func (p *Program) Name() string           { return p.name }
 func (p *Program) Params() []string       { return p.params }
 func (p *Program) ResultType() Type       { return p.resultType }

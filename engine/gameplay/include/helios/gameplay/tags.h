@@ -120,10 +120,13 @@ public:
     static Result<std::shared_ptr<const TagRegistry>> fromRecords(std::span<const TagDef> defs,
                                                                   std::span<const std::string> queries = {});
 
+    /// Number of tags (declared ones and their implied ancestors); valid indices are [0, size()).
     usize size() const noexcept { return m_tags.size(); }
+    /// Number of tags in the hot set (at most kMaxHotTags).
     u32 hotCount() const noexcept { return m_hotCount; }
     /// kInvalidTag if the name is unknown. O(log n).
     TagIndex find(std::string_view name) const noexcept;
+    /// Registry entry of a valid index (< size(); unchecked, like the other index accessors).
     const TagInfo& info(TagIndex tag) const noexcept { return m_tags[tag]; }
     std::string_view name(TagIndex tag) const noexcept { return m_tags[tag].name; }
     /// True if `tag` is `ancestor` or one of its descendants.

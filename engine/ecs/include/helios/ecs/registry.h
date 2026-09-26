@@ -114,7 +114,11 @@ private:
         u8 generation = 1;
         bool live = false;
     };
-    Slot& slot(u32 index);
+    Slot& slot(u32 index) {
+        if (index >= m_slots.size()) grow(index);
+        return m_slots[index];
+    }
+    void grow(u32 index);
 
     std::vector<Slot> m_slots; // index 0 unused
     std::vector<u32> m_freeRing;
@@ -179,7 +183,11 @@ private:
     Page& pageAt(u32 index) const noexcept { return m_chunks[index / kChunkPages].get()[index % kChunkPages]; }
     Page* findPage(EntityId id) const noexcept;
     Page& ensurePage(EntityId id);
-    void mapHandle(u32 index, Entity entity);
+    void mapHandle(u32 index, Entity entity) {
+        if (index >= m_byHandleIndex.size()) growHandleIndex(index);
+        m_byHandleIndex[index] = entity;
+    }
+    void growHandleIndex(u32 index);
 
     MemoryTag m_tag;
     U64Map m_byId;   // content-placed and client-local ids

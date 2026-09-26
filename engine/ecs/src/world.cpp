@@ -1262,8 +1262,9 @@ void World::prepareSpawns(CommandBuffer& buffer) {
     // spawn (the buffer tracked that while recording), the fused ops are the run of commands after
     // each spawn and this pass is skipped; otherwise they are linked per temp here.
     const bool runs = !buffer.m_scatteredFusion;
+    const bool singles = buffer.m_singleSpawns > 0; // else only spawnN batches: no per-spawn state
     if (runs) {
-        impl.runEnd.assign(spawns, 0);
+        if (singles) impl.runEnd.assign(spawns, 0);
     } else {
         impl.fusedHead.assign(spawns, ~0u);
         impl.fusedTail.assign(spawns, ~0u);
@@ -1298,11 +1299,13 @@ void World::prepareSpawns(CommandBuffer& buffer) {
     // grouping: spawns without prefab/parent whose ops are all table-stored World components and
     // that share (frame, op ids) are created together with one ecs_bulk_init at the position of the
     // group's first spawn.
-    impl.spawnOpBegin.assign(spawns + 1, 0);
-    impl.spawnOpEnd.assign(spawns, 0);
+    if (singles) {
+        impl.spawnOpBegin.assign(spawns + 1, 0);
+        impl.spawnOpEnd.assign(spawns, 0);
+        impl.spawnGroup.assign(spawns, ~0u);
+    }
     impl.flatOps.clear();
-    impl.spawnIds.assign(spawns, EntityId());
-    impl.spawnGroup.assign(spawns, ~0u);
+    impl.spawnIds.resize(spawns); // every temp's id is written below (explicit or minted)
     impl.groups.clear();
     impl.groupByKey.clear();
     impl.mintTemps.clear();
@@ -1397,7 +1400,7 @@ void World::prepareSpawns(CommandBuffer& buffer) {
         impl.groups[g].members.push_back(t);
         impl.spawnGroup[t] = g;
     }
-    impl.spawnOpBegin[spawns] = static_cast<u32>(impl.flatOps.size());
+    if (singles) impl.spawnOpBegin[spawns] = static_cast<u32>(impl.flatOps.size());
 
     // EntityIds in command order, reserved in runs from the current block (ADR-004a item 1): the
     // same ids as one allocate() per spawn, since nothing else mints before the buffer applies.
@@ -1491,6 +1494,7 @@ void World::applyOne(CommandBuffer& buffer) {
     buffer.m_spawns.clear();
     buffer.m_batches.clear();
     buffer.m_batchColumns.clear();
+    buffer.m_singleSpawns = 0;
     buffer.m_openSpawn = CommandBuffer::kNoSpawn;
     buffer.m_scatteredFusion = false;
     buffer.m_blockIndex = 0;

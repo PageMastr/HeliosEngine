@@ -259,6 +259,7 @@ private:
     std::vector<Block> m_blocks;
     usize m_blockIndex = 0;
     usize m_blockOffset = 0;
+    u32 m_singleSpawns = 0;         // spawn() calls (the rest of m_spawns are spawnN() entities)
     u32 m_openSpawn = kNoSpawn;     // temp of the last spawn() while only its Set/Add follow it
     bool m_scatteredFusion = false; // a Set/Add on a temp outside its spawn's run: full fusion pass
 };

@@ -30,7 +30,7 @@ CommandBuffer::CommandBuffer(CommandBuffer&& other) noexcept
       m_batches(std::move(other.m_batches)), m_batchColumns(std::move(other.m_batchColumns)),
       m_resolved(std::move(other.m_resolved)), m_blocks(std::move(other.m_blocks)),
       m_blockIndex(std::exchange(other.m_blockIndex, 0)), m_blockOffset(std::exchange(other.m_blockOffset, 0)),
-      m_openSpawn(std::exchange(other.m_openSpawn, kNoSpawn)),
+      m_singleSpawns(std::exchange(other.m_singleSpawns, 0)), m_openSpawn(std::exchange(other.m_openSpawn, kNoSpawn)),
       m_scatteredFusion(std::exchange(other.m_scatteredFusion, false)) {
     other.m_commands.clear();
     other.m_payloadDtors.clear();
@@ -48,6 +48,7 @@ CommandBuffer& CommandBuffer::operator=(CommandBuffer&& other) noexcept {
         m_batches = std::move(other.m_batches);
         m_batchColumns = std::move(other.m_batchColumns);
         m_resolved = std::move(other.m_resolved);
+        m_singleSpawns = std::exchange(other.m_singleSpawns, 0);
         m_openSpawn = std::exchange(other.m_openSpawn, kNoSpawn);
         m_scatteredFusion = std::exchange(other.m_scatteredFusion, false);
         m_blocks = std::move(other.m_blocks);
@@ -65,6 +66,7 @@ TempEntity CommandBuffer::spawn(const SpawnDesc& desc) {
     m_spawns.push_back(desc);
     push(CommandKind::Spawn, EntityRef(TempEntity{index}), index);
     m_openSpawn = index;
+    ++m_singleSpawns;
     return TempEntity{index};
 }
 
@@ -131,6 +133,7 @@ void CommandBuffer::clear() {
     m_batches.clear();
     m_batchColumns.clear();
     m_resolved.clear();
+    m_singleSpawns = 0;
     m_openSpawn = kNoSpawn;
     m_scatteredFusion = false;
     m_blockIndex = 0;

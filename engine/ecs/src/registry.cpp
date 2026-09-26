@@ -162,10 +162,7 @@ NetHandleTable::NetHandleTable(const Desc& desc)
 
 NetHandleTable::NetHandleTable() : NetHandleTable(Desc{}) {}
 
-NetHandleTable::Slot& NetHandleTable::slot(u32 index) {
-    if (index >= m_slots.size()) m_slots.resize(static_cast<usize>(index) + 1);
-    return m_slots[index];
-}
+void NetHandleTable::grow(u32 index) { m_slots.resize(static_cast<usize>(index) + 1); }
 
 Result<NetHandle> NetHandleTable::allocate(EntityId id) {
     const NetHandle h = tryAllocate(id);
@@ -313,9 +310,8 @@ Result<NetHandle> EntityRegistry::assignHandle(EntityId id, u32 contentIndex) {
     return assignHandleFor(id, entity, contentIndex);
 }
 
-void EntityRegistry::mapHandle(u32 index, Entity entity) {
-    if (index >= m_byHandleIndex.size()) m_byHandleIndex.resize(std::max<usize>(index + 1, m_byHandleIndex.size() * 2));
-    m_byHandleIndex[index] = entity;
+void EntityRegistry::growHandleIndex(u32 index) {
+    m_byHandleIndex.resize(std::max<usize>(index + 1, m_byHandleIndex.size() * 2));
 }
 
 NetHandle EntityRegistry::tryAssignHandle(EntityId id, Entity entity) noexcept {

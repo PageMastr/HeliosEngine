@@ -519,7 +519,8 @@ TEST_CASE("ecs bulk paths: a run of destroy commands matches one destroy at a ti
         range(40, 45);
         w.clearStructuralLog();
     };
-    World a, b;
+    const WorldDesc desc{.idClock = [] { return u64{1'000'000}; }}; // the same id block in both worlds
+    World a(desc), b(desc);
     std::vector<Entity> orderA, orderB;
     build(a, orderA);
     build(b, orderB);

@@ -657,3 +657,39 @@ TEST_CASE("attributes: two attributes with one record id are rejected (review re
     a.rid = b.rid = 0; // no record ids (layouts built in code)
     CHECK(AttributeLayout::build(std::vector<AttributeLayout::Input>{a, b}).ok());
 }
+
+TEST_CASE("attributes: Target/Snapshot magnitudes need a target of the context's layout (review regression)") {
+    // The magnitude's slot is resolved in ctx.layout and was read from ctx.target unchecked: a target
+    // of a smaller layout was read out of bounds, one of another layout gave another attribute.
+    std::vector<AttributeDef> defs(2);
+    defs[0].id = Name("Hull.Hp");
+    defs[1].id = Name("Hull.Resist");
+    defs[1].default_ = 0.25;
+    std::vector<AttributeLayout::Record> recs = {{101, &defs[0]}, {102, &defs[1]}};
+    auto layout = AttributeLayout::fromRecords(recs);
+    REQUIRE(layout.ok());
+    auto other = layoutOf({attr("Other", 7.0)});
+    AttributeSet small(other);
+    small.recompute();
+    ModifierContext ctx;
+    ctx.layout = layout->get();
+    ctx.target = &small;
+    ModifierDef d;
+    d.attr = AttributeRef(101);
+    d.op = ModOp::ModAdd;
+    d.magnitude = MagnitudeAttr{AttributeRef(102), MagnitudeSource::Target, CaptureMode::Snapshot, 2.0};
+    CHECK(instantiateModifier(d, ctx).errorCode() == ErrorCode::InvalidArgument);
+    // A set of the same layout, or of an identical one (same hash), is fine.
+    AttributeSet target(*layout);
+    target.recompute();
+    ctx.target = &target;
+    auto m = instantiateModifier(d, ctx);
+    REQUIRE(m.ok());
+    CHECK(m->value == 0.5);
+    auto twin = AttributeLayout::fromRecords(recs);
+    REQUIRE(twin.ok());
+    AttributeSet twinTarget(*twin);
+    twinTarget.recompute();
+    ctx.target = &twinTarget;
+    CHECK(instantiateModifier(d, ctx).ok());
+}

@@ -217,7 +217,7 @@ struct Modifier {
 /// Inputs for turning a ModifierDef record into a Modifier.
 struct ModifierContext {
     const AttributeLayout* layout = nullptr; ///< the target's layout (required)
-    const AttributeSet* target = nullptr;    ///< for Target/Snapshot magnitudes
+    const AttributeSet* target = nullptr;    ///< for Target/Snapshot magnitudes; must use `layout`
     const AttributeSet* source = nullptr;    ///< for Source magnitudes (captured at apply)
     const std::unordered_map<std::string, hxl::Curve>* curves = nullptr; ///< for Curve magnitudes
     f64 stacks = 1.0;

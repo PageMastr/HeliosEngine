@@ -415,6 +415,11 @@ Result<Modifier> instantiateModifier(const ModifierDef& def, const ModifierConte
                 m.value = a->coefficient;
             } else {
                 if (!ctx.target) return Error{ErrorCode::InvalidArgument, "a Target/Snapshot magnitude needs the target set"};
+                // `src` is a slot of ctx.layout: reading it from a set of another layout would read
+                // another attribute, or past the end of a smaller set.
+                if (&ctx.target->layout() != &layout && ctx.target->layout().hash() != layout.hash()) {
+                    return Error{ErrorCode::InvalidArgument, "the target set does not use the modifier context's layout"};
+                }
                 m.value = a->coefficient * ctx.target->value(src);
             }
         } else {

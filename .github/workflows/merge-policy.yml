@@ -1,0 +1,26 @@
+name: Merge policy
+
+# Keep this audit independent of CI's per-ref concurrency group. Every main push
+# must get its own check, even while earlier full-matrix runs are still building.
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  merge-policy:
+    name: merge-policy
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify landed PR history
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 tools/ci/merge_policy.py --event "$GITHUB_EVENT_PATH" --checkout .

@@ -426,6 +426,34 @@ func fused(kind string, in []float64) ([]float64, bool) {
 	return nil, false
 }
 
+func hasAnyKey(obj map[string]any, keys ...string) bool {
+	for _, k := range keys {
+		if _, ok := obj[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// unfused is the IEEE definition of an FMA-sensitive row's expression, one rounding per operation
+// (every product converted, 06 §1.2 rule 1): the expected value must equal it, so a vector cannot
+// pin a wrong result that both VMs happen to share.
+func unfused(kind string, in []float64) (float64, bool) {
+	switch kind {
+	case "mul_add":
+		return float64(in[0]*in[1]) + in[2], true
+	case "mul_sub":
+		return float64(in[0]*in[1]) - in[2], true
+	case "sub_mul":
+		return in[2] - float64(in[0]*in[1]), true
+	case "dot2":
+		return float64(in[0]*in[1]) + float64(in[2]*in[3]), true
+	case "lerp":
+		return in[0] + float64((in[1]-in[0])*in[2]), true
+	}
+	return 0, false
+}
+
 func (r *corpusRunner) runCase(c map[string]any, fileCurves map[string]*Curve) {
 	name, ok := c["name"].(string)
 	if !ok {
@@ -488,6 +516,10 @@ func (r *corpusRunner) runCase(c map[string]any, fileCurves map[string]*Curve) {
 	if err != nil {
 		r.fail("compile failed: %v", err)
 		return
+	}
+	// A case that compiles must check something: a name plus a source would pass vacuously.
+	if !hasAnyKey(c, "bytecode", "expect", "evalError", "rows") {
+		r.fail("the case compiles but checks nothing (add bytecode, expect, evalError or rows)")
 	}
 	encoded := prog.Encode()
 	decoded, err := Decode(encoded)
@@ -594,6 +626,9 @@ func (r *corpusRunner) runRows(rows map[string]any, prog *Program, env *MapEnv, 
 					break
 				}
 			}
+			if ref, _ := unfused(fma, in); math.Float64bits(ref) != math.Float64bits(v.Number) {
+				r.fail("row %d: the expected value %s is not the unfused reference %s", i, describeBits(v.Number), describeBits(ref))
+			}
 		}
 	}
 }
@@ -652,7 +687,10 @@ func TestCorpus(t *testing.T) {
 	}
 	t.Logf("hxl corpus: %d files, %d cases (%d compile errors), %d evaluations, %d FMA-sensitive rows, %d bytecode hashes",
 		stats.files, stats.cases, stats.errorCases, stats.evaluations, stats.fmaRows, stats.bytecodeHashes)
-	if stats.files < 5 || stats.cases < 150 || stats.errorCases < 30 || stats.fmaRows < 1000 || stats.bytecodeHashes < 100 {
+	// Floors just below the current corpus (and the same in C++), so losing a file or a block of cases
+	// is noticed.
+	if stats.files < 10 || stats.cases < 1600 || stats.errorCases < 440 || stats.evaluations < 2350 || stats.fmaRows < 1050 ||
+		stats.bytecodeHashes < 1170 {
 		t.Errorf("corpus too small: %+v", stats)
 	}
 }

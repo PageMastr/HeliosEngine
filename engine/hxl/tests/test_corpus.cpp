@@ -20,11 +20,14 @@ TEST_CASE("hxl corpus: every case matches bit for bit") {
     MESSAGE("hxl corpus: " << stats.files << " files, " << stats.cases << " cases (" << stats.errorCases
                            << " compile errors), " << stats.evaluations << " evaluations, " << stats.fmaRows
                            << " FMA-sensitive rows, " << stats.bytecodeHashes << " bytecode hashes");
-    CHECK(stats.files >= 5);
-    CHECK(stats.cases >= 150);
-    CHECK(stats.errorCases >= 30);
-    CHECK(stats.fmaRows >= 1000);
-    CHECK(stats.bytecodeHashes >= 100);
+    // Floors just below the current corpus (and the same in Go), so losing a file or a block of cases
+    // is noticed.
+    CHECK(stats.files >= 10);
+    CHECK(stats.cases >= 1600);
+    CHECK(stats.errorCases >= 440);
+    CHECK(stats.evaluations >= 2350);
+    CHECK(stats.fmaRows >= 1050);
+    CHECK(stats.bytecodeHashes >= 1170);
 }
 
 TEST_CASE("hxl corpus: number syntax") {

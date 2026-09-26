@@ -300,8 +300,26 @@ private:
         return true;
     }
 
-    // Checks that fusing the row's multiply-add would change the result (06 §1.2 rule 7).
+    // Checks that the expected value is the IEEE (unfused, one rounding per op) value of the row's
+    // expression, so a vector cannot pin a wrong result both VMs share, and that fusing the row's
+    // multiply-add would change it (06 §1.2 rule 7). This file compiles with FP contraction off.
     void checkFmaSensitive(std::string_view kind, const std::vector<f64>& in, f64 expected, usize row) {
+        f64 unfused = 0.0;
+        if (kind == "mul_add") {
+            unfused = in[0] * in[1] + in[2];
+        } else if (kind == "mul_sub") {
+            unfused = in[0] * in[1] - in[2];
+        } else if (kind == "sub_mul") {
+            unfused = in[2] - in[0] * in[1];
+        } else if (kind == "dot2") {
+            unfused = in[0] * in[1] + in[2] * in[3];
+        } else if (kind == "lerp") {
+            unfused = in[0] + (in[1] - in[0]) * in[2];
+        }
+        if (std::bit_cast<u64>(unfused) != std::bit_cast<u64>(expected)) {
+            failure(std::format("row {}: the expected value {} is not the unfused reference {}", row, describeBits(expected),
+                                describeBits(unfused)));
+        }
         std::vector<f64> fused;
         if (kind == "mul_add") {
             fused.push_back(std::fma(in[0], in[1], in[2]));
@@ -377,6 +395,11 @@ private:
         if (!compiled) {
             failure(std::format("compile failed: {}", diag.toString()));
             return;
+        }
+        // A case that compiles must check something: a name plus a source would pass vacuously.
+        if (!yyjson_obj_get(c, "bytecode") && !yyjson_obj_get(c, "expect") && !yyjson_obj_get(c, "evalError") &&
+            !yyjson_obj_get(c, "rows")) {
+            failure("the case compiles but checks nothing (add bytecode, expect, evalError or rows)");
         }
         const Program& prog = *compiled;
         // Canonical bytecode round trip.

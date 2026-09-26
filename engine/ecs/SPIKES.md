@@ -393,9 +393,9 @@ add fewer than 20 tables (`test_regressions.cpp`).
 ## 5. WP-1.1a: wrapper optimization (ADR-004a option A)
 
 WP-1.1a ran in two rounds. The first (commits up to 56497b5) missed M1 at 2.05×. The second fixed two
-more bench asymmetries (§5.3) and took the per-command overhead down until M1 met ≤ 1.6× on the
-median of runs on both compilers, though without much margin (§5.8). The numbers in §5.4 are the
-second round's, from one series of interleaved runs of the pre-WP-1.1a World and the final World.
+more bench asymmetries (§5.3) and cut the per-command overhead further, bringing M1 to about 1.53×
+(GCC) and 1.60× (Clang) as medians over runs. Against ≤ 1.6× that is marginal, and per run, as the ADR
+defines M1, it is not demonstrated on the shared VM (§5.8). The numbers in §5.4 are the second round's.
 
 ### 5.1 What changed
 
@@ -427,9 +427,10 @@ pre-WP-1.1a World (commit f08cf5b, GCC 13 and Clang 18 alike), and the zone's st
    * Add, remove and set of a table-stored component compare the entity's table before and after
      instead of calling `ecs_owns_id`.
    * Sparse and DontFragment ownership is asked of the component's sparse set
-     (`flecs_component_sparse_has`, a flecs 4.1.6 internal declared in `src/flecs_internal.h`), with the
-     component record cached until flecs frees one. A plain DontFragment set uses `ecs_emplace_id`, which
-     says whether the value is new, then `ecs_modified_id` for OnSet.
+     (`flecs_component_sparse_has`, a flecs 4.1.6 internal declared in `src/flecs_internal.h`, which
+     also asserts the flecs version), with the component record cached until flecs frees one. A plain
+     DontFragment set uses `ecs_emplace_id`, which says whether the value is new, then `ecs_modified_id`
+     for OnSet. `registerComponent` creates a DontFragment component's record up front (§5.9).
    * The toggle paths read the entity's identity before their flecs call and log it after, so the load
      of the entity's row overlaps the operation.
    * Consecutive Add, Remove and Set commands on existing entities run in one tight loop
@@ -547,6 +548,16 @@ medians over the runs, shown as the range over the 4 configurations.
 With per-command creates (5 runs each) M1 is 2.33× [2.24–5.82] with GCC and 2.81× [2.67–2.96] with
 Clang: the creates, not the toggles, decide it.
 
+The first review of the PR measured the same binaries in a longer series: 31 interleaved runs per
+compiler, load 1.2–3.8. It found M1 per run at 1.53× [1.41–3.90] with GCC and 1.60× [1.42–3.91] with
+Clang (medians [min–max]), above 1.6× in 9 of 31 GCC runs and 15 of 31 Clang runs. With per-command
+creates it found 2.34× and 2.91×. In the runs at a load below 2 the medians were 1.51× and 1.56×.
+
+`spawnN` is the like-for-like form for this burst: the creates are homogeneous, and the raw floor has
+always been one bulk insert per frame table. But nothing in the tree calls `spawnN` yet outside the
+bench and the tests, and the zone's own `WeaponFire` still records its projectiles per command, so a
+producer today pays the per-command figure.
+
 **The pre-WP-1.1a workload** (`--legacy-burst`, 5 runs each, GCC, the same series of runs):
 
 | | M1 per run | M1 per configuration, tag / DontFragment | callgrind, tag / DontFragment |
@@ -622,20 +633,53 @@ against 1,250. Revisit it if flecs makes non-fragmenting pair changes cheaper or
 
 ### 5.8 Verdict
 
-* **M1 is met on the median of runs, without much margin.** By the ADR's definition (worst of 0/1/2/4
-  workers and both toggle storages, same run, release build) M1 is **1.54×** with GCC (median of 9
-  runs, 1.48–1.73) and **1.59×** with Clang (1.51–1.80), against ≤ 1.6× and 3.98× before. Single runs
-  exceed 1.6× (2 of 9 with GCC, 4 of 9 with Clang), because the per-run value is the worst of eight
-  noisy ratios. The per-configuration medians are 1.24–1.32× with tag toggles and 1.38–1.49× with
-  DontFragment toggles. In instructions the World burst is 1.24–1.30× the raw-flecs burst.
-* DontFragment storage decides it, through the creates and destroys: raw flecs does those in about
-  0.27 ms (GCC) or 0.18 ms (Clang), the World in 0.45 ms or 0.33 ms, which weighs more against the
-  cheap raw DontFragment toggles than against the tag toggles.
+* **M1 is marginal and not demonstrated per run on the shared VM.** The ADR defines M1 per run: the
+  worst of 0/1/2/4 workers and both toggle storages, in the same run, in a release build. It defines
+  no statistic over runs.
+  * Per run it fails in 2 of 9 GCC runs and 4 of 9 Clang runs of the PR's series, and in 9 of 31 and 15
+    of 31 of the review's series.
+  * As a median over runs it is 1.54× and 1.59× in the PR's series and 1.53× and 1.60× in the review's,
+    against ≤ 1.6× and 3.98× before WP-1.1a.
+  * The per-configuration medians are 1.24–1.32× with tag toggles and 1.38–1.49× with DontFragment
+    toggles. In instructions the World burst is 1.24–1.30× the raw-flecs burst.
+  * The per-run value is the worst of eight noisy ratios, which is why it sits above both.
+  * How to judge M1 (per run, a median over N runs, or per run on an idle runner) is for the owner to
+    rule on.
+* DontFragment storage decides it, through the creates and destroys. Raw flecs does those in about
+  0.27 ms (GCC) or 0.18 ms (Clang), the World in 0.45 ms or 0.33 ms. That weighs more against the cheap
+  raw DontFragment toggles than against the tag toggles.
+* With per-command creates M1 is 2.3× (GCC) and 2.8–2.9× (Clang). The Clang figure is above ADR-004a's
+  2.5× midpoint trigger. Which create form the midpoint check and M2 use is open (ADR-004a §7).
 * The 9k-op burst takes 1.26–1.27 ms per configuration on this VM with GCC (1.36 ms in the worst
   configuration of a run) and 0.96–0.98 ms with Clang, against 2.9–3.3 ms before and the 1.5 ms
   budget. The formal clause is M2 on SERVER.
 * The remaining per-op cost is the identity read, the registry and the liveness check (§5.5). More
-  margin needs the identity in a cache line the op touches anyway: a small flecs patch giving
-  `ecs_record_t` a user word (vendored through `third_party/flecs/patches/`), or option B, whose entity
-  record would hold it. An entity-indexed identity cache in the World would win on this bench's
-  sorted-id order but costs every create and destroy a scattered write; it was not built.
+  margin needs the identity in a cache line the op touches anyway:
+  * a small flecs patch giving `ecs_record_t` a user word, vendored through `third_party/flecs/patches/`;
+  * or option B, whose entity record would hold it.
+
+  An entity-indexed identity cache in the World would win on this bench's sorted-id order, but it costs
+  every create and destroy a scattered write, so it was not built.
+
+### 5.9 flecs divergence: a DontFragment remove before the id's first add
+
+Found while testing WP-1.1a, and pre-existing on main. The PR's first description (tags only, after a
+remove from an entity that lacked the tag) was wrong; the PR's first review found the real trigger. It
+is a flecs 4.1.6 behaviour and hits DontFragment components with values (the zone's Status) and
+DontFragment tags alike; Sparse components are not affected.
+
+* **Trigger.** A remove of a DontFragment id made before the id has a component record, that is,
+  before its first add anywhere in the world.
+* **What goes wrong.** flecs caches a remove edge for that table that removes nothing, so later removes
+  of the id from entities of that table do nothing. The World then logged a Remove that did not
+  happen.
+* **Not a trigger.** Once the record exists, a remove from an entity that lacks the id is harmless.
+* **Workaround.** `World::registerComponent` now creates the component record of DontFragment
+  components (`flecs_components_ensure`). The record would be created by the id's first add anyway,
+  and it lives just as long.
+* **Tests** (`tests/test_bulk_paths.cpp`):
+  * one pins the upstream behaviour on the raw C API, so a flecs update that fixes it shows up;
+  * one checks that the divergence no longer reaches the World, on the direct and command-buffer
+    paths.
+
+It should be reported upstream (K10).

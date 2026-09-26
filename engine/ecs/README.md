@@ -181,7 +181,7 @@ counters, and optional batched tag accounting.
 
 ## Tests and benchmark
 
-`ecs_tests` (doctest, 98 cases) covers: block-id layout against the shared Go golden vectors,
+`ecs_tests` (doctest, 105 cases) covers: block-id layout against the shared Go golden vectors,
 the AllocateIdBlocks rule, minting (order, refill at half use, retirement, stalls, failed and async
 sources, concurrency, determinism, restarts, never id 0); U64Map fuzz vs `std::unordered_map`; NetHandle FIFO/reuse delay/
 generations/content slots; registry maps; TaggedHeap accounting, pooling, the mimalloc recycling
@@ -200,7 +200,8 @@ collisions, id-0 commands). WP-1.1a's structural fast paths are pinned by `test_
 recorded with the World before WP-1.1a) and `test_bulk_paths.cpp` (spawnN against the same spawn +
 set commands, `allocateN` and batched NetHandle issue against one call per id, the paged registry
 under churn and its handle releases, destroy runs against one destroy at a time, Sparse/DontFragment
-ownership, fusion runs, the dock-host filter).
+ownership, the flecs DontFragment-remove divergence and the World's workaround, fusion runs, the
+dock-host filter).
 
 ```
 cmake -S . -B build/ecs -G Ninja -DHELIOS_BUILD_GRAPHICS=OFF
@@ -226,18 +227,22 @@ SPIKES.md §3 (Phase 0) and §5 (WP-1.1a).
 
 ## Known limitations
 
-* ADR-004a's indicator M1 (World burst / raw-flecs burst, ≤ 1.6×) is met on the dev VM on the median
-  of runs, without much margin: 1.54× with GCC and 1.59× with Clang (worst configuration and toggle
-  storage per run, medians of 9 runs; single runs up to 1.73× and 1.80×; 1.24–1.30× in instructions).
-  With per-command creates instead of `spawnN` it is 2.3–2.8×. The 9k-op burst takes 1.26–1.27 ms per
-  configuration there (0.96–0.98 ms with Clang), against the 1.5 ms of RT-01's structural clause, whose
-  formal run is on SERVER (ADR-004a M2). SPIKES.md §5 has the numbers and where the rest goes.
+* ADR-004a's indicator M1 (World burst / raw-flecs burst, ≤ 1.6×) is marginal on the dev VM and not
+  demonstrated per run. The median over runs is about 1.53× with GCC and 1.60× with Clang, and a third
+  to a half of single runs are above 1.6×. The per-configuration medians are 1.24–1.49×, and the
+  instruction ratio is 1.24–1.30×. With per-command creates instead of `spawnN`, M1 is 2.3–2.9×. The
+  9k-op burst takes 1.26–1.27 ms per configuration there (0.96–0.98 ms with Clang), against the 1.5 ms
+  of RT-01's structural clause, whose formal run is on SERVER (ADR-004a M2). SPIKES.md §5 has the
+  numbers and where the rest goes.
 * Sparse and DontFragment ownership checks call `flecs_component_sparse_has`, a flecs 4.1.6 internal
-  declared in `src/flecs_internal.h`; a flecs update must re-check it.
-* Observed with flecs 4.1.6 on the raw C API: once `ecs_remove_id` of a DontFragment *tag* has run on
-  an entity that lacked it, later removes of that tag from entities of the same table leave it in
-  place. DontFragment components with a value (the zone's Status) are not affected. Prefer those until
-  it is reported and fixed upstream (K10).
+  declared in `src/flecs_internal.h`. A `static_assert` on the flecs version makes a flecs update
+  re-check it.
+* flecs 4.1.6 divergence (SPIKES.md §5.9, to be reported upstream under K10). A remove of a DontFragment
+  id made before the id's first add anywhere in the world caches a table edge that removes nothing, so
+  later removes from that table silently fail. It affects DontFragment components with values and
+  DontFragment tags alike. `registerComponent` creates the component record of DontFragment components,
+  which avoids it in the World. Components created directly through flecs do not get this, and
+  `test_bulk_paths.cpp` pins the upstream behaviour.
 * Toggles move one entity at a time: flecs 4.1.6 has no public bulk move (SPIKES.md §5.6).
 * No schema compiler yet: replicated components are hand-written with `_dirty` +
   `kReplicatedFields`; the runtime descriptor path is ready for reflection `TypeInfo`.

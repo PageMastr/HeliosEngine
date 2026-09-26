@@ -162,13 +162,17 @@ although every case passed (a sanitizer report at exit).
     too, so it decides nothing on its own: it tells a step (over budget against both) from drift (noted
     "drift against the anchor"). Holding it at the anchor means that a dip (three fast nights) or an
     improvement nobody accepted does not make the normal level fail afterwards; an improvement is
-    protected only once it is accepted, which moves the anchor.
+    protected only once it is accepted, which moves the anchor. While a gated metric is better than its
+    anchor by more than its budget, its row says so ("accept it with perf_accept to protect it"), without
+    failing.
 
   Every verdict, both levels and the applied accept are stored in the history and carried forward, and a
-  missing metric carries its levels too, so nothing heals or expires as old entries leave the history (60
+  missing metric carries its levels too, so no level heals or expires as old entries leave the history (60
   entries, one per nightly run, dispatch runs included): a regression nobody fixes fails every night, and
-  a history that has the metric but no usable level fails (`no-baseline`). Only a reviewed `perf_accept`
-  record in `scorecard.jsonc` moves the levels:
+  a history that has the metric but no usable level fails (`no-baseline`). (The one exception: a metric
+  that goes missing during its calibration keeps only how many calibration nights it had, so after 60
+  entries it calibrates again from its return.) Within a history, only a reviewed `perf_accept` record in
+  `scorecard.jsonc` moves the levels:
   `{"metric": "<id>", "night": "YYYY-MM-DD", "value": <number>, "run": "<run>", "reason": "…"}`.
   - `night` is the UTC date of the nightly (the perf summary prints it at the top) and cannot be in the
     future; `value` is what the reviewer saw that night measure; `run` is required when the metric is read
@@ -176,7 +180,10 @@ although every case passed (a sanitizer report at exit).
   - When the stored value of that night (or tonight's, when `night` is tonight) is within the metric's
     budget of `value`, the record is applied: that value becomes the anchor and starts the rolling
     baseline. It stays applied whether the record is kept or removed, including after its night has left
-    the history. The latest record in force wins.
+    the history. The latest record in force wins; a record older than the applied accept has no effect,
+    and its row says so. Accept a typical night: the anchor is that one night's value (not a median of
+    several), so a noisy night makes a noisy anchor. Anchoring an accept at the median of the accepted
+    night and the nights after it is a follow-up.
   - A record whose night is inside the history but has no stored value for the metric, or measured
     something else, fails the metric as `accept-unmatched` until it is corrected. A record older than the
     whole history (after a restart) cannot be applied and is reported as stale, not failed: remove it.
@@ -193,8 +200,17 @@ although every case passed (a sanitizer report at exit).
   one is listed but cannot be fetched (it expired, for example after a long pause), the perf step fails
   every night (`compare --require-history`) rather than reset every level, until the history is restarted
   on purpose: run the Nightly workflow by hand (Actions → Nightly → Run workflow) with
-  `restart_perf_history` checked. The summary of that run opens with "Perf history restarted on request";
-  every metric then starts again with its calibration nights, and old `perf_accept` records read stale.
+  `restart_perf_history` checked. The restart is honoured only when no history can be fetched, so it never
+  replaces usable levels: while one can be fetched, the fetch step fails ("restart_perf_history refused")
+  and tonight is compared with that history as usual; new levels are accepted with `perf_accept`. An
+  honoured restart shows a warning on the run page and opens that night's summary with "Perf history
+  restarted on request"; every metric then starts again with its calibration nights, and old `perf_accept`
+  records read stale.
+- **The two resets that need no review.** Besides the restart, a history starts afresh only when none of
+  the last 100 completed nightly runs lists a `perf-history` artifact (the very first night, or 100
+  nights on which the perf step crashed before writing one, cancelled runs included). Both show a warning
+  on the run page, and a new history records the night it started and why ("History since …" heads every
+  later perf summary), so a reset stays visible for as long as that history lasts.
 - **Known limitation: hosted-runner noise.** Budgets are per night and hosted runners are noisy. A
   simulation of this comparator (one gated metric at the 5 % budget, Gaussian noise per night, 200 seeded
   years) gives a median of 0 red nights a year at σ = 1.5 % (90th percentile 2, worst 14) and 7 at

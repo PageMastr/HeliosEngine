@@ -434,6 +434,49 @@ class PerfTests(unittest.TestCase):
                                   history=history)
         self.assertEqual([v["t"] for v in verdicts], ["ok", "ok", "regression"])
 
+    def test_an_accept_naming_the_oldest_night_without_the_value_fails(self):
+        # Round 4's nit 3: the oldest retained night has no value for `t`, so the record is unmatched, not stale.
+        nights = [self.night(1, p=2.0)] + [self.night(n, t=100.0, p=2.0) for n in range(2, 8)]
+        history, _ = self.replay(nights)
+        self.assertEqual(history["entries"][0]["date"][:10], self.day(1))
+        _, rows = perf.compare(history, self.night(8, accepted=[self.accept(1, 100.0)], t=100.0, p=2.0), 5)
+        row = next(r for r in rows if r["metric"] == "linux-gcc/t")
+        self.assertEqual(row["verdict"], "accept-unmatched")
+
+    def test_an_applied_accept_anchors_at_the_stored_value_not_the_records(self):
+        # The record's value only has to be within budget of what the night measured; the measurement is the level.
+        nights = [self.night(n, t=100.0) for n in range(1, 6)] + [self.night(n, t=110.0) for n in (6, 7, 8)]
+        history, _ = self.replay(nights)
+        _, rows = perf.compare(history, self.night(9, accepted=[self.accept(7, 108.0)], t=110.0), 5)
+        self.assertEqual((rows[0]["verdict"], rows[0]["anchor"], rows[0]["accepted"]),
+                         ("ok", 110.0, {"night": self.day(7), "value": 110.0}))
+
+    def test_an_improvement_is_noted_and_an_older_record_is_reported(self):
+        nights = [self.night(n, t=100.0) for n in range(1, 6)]
+        history, _ = self.replay(nights)
+        _, rows = perf.compare(history, self.night(6, t=80.0), 5)
+        self.assertEqual(rows[0]["verdict"], "ok")
+        self.assertIn("better than the anchor by 20.0 %: accept it with perf_accept", rows[0]["note"])
+        _, rows = perf.compare(history, self.night(6, t=96.0), 5)
+        self.assertEqual(rows[0]["note"], "")
+        # A record older than the applied accept has no effect, and says so.
+        nights += [self.night(n, t=110.0) for n in (6, 7, 8, 9)] + [self.night(10, accepted=[self.accept(9, 110.0)], t=110.0)]
+        history, _ = self.replay(nights)
+        _, rows = perf.compare(history, self.night(11, accepted=[self.accept(8, 110.0)], t=110.0), 5)
+        self.assertEqual(rows[0]["verdict"], "ok")
+        self.assertIn(f"perf_accept for {self.day(8)} is older than the applied accept of {self.day(9)}", rows[0]["note"])
+
+    def test_a_history_records_when_and_why_it_started(self):
+        history, _ = perf.compare({}, self.night(1, t=1.0), 5, "Perf history restarted on request")
+        self.assertEqual(history["started"], {"night": self.day(1), "note": "Perf history restarted on request"})
+        history, rows = perf.compare(history, self.night(2, t=1.0), 5)
+        self.assertEqual(history["started"]["night"], self.day(1))
+        text = perf.markdown(rows, self.night(2, t=1.0), [], history["started"])
+        self.assertIn(f"History since {self.day(1)} (Perf history restarted on request).", text)
+        self.assertEqual(perf.compare({}, self.night(1, t=1.0), 5)[0]["started"]["note"], "first night")
+        legacy = {"entries": [self.night(3, t=1.0)]}
+        self.assertEqual(perf.compare(legacy, self.night(4, t=1.0), 5)[0]["started"], {"night": self.day(3), "note": ""})
+
     def test_only_an_accepted_night_moves_the_baseline(self):
         record = [self.accept(7, 110.0)]
         nights = [self.night(n, t=100.0) for n in range(1, 6)] + [self.night(n, t=110.0) for n in (6, 7, 8)]

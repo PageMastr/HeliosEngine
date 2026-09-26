@@ -12,7 +12,21 @@
 #include "helios/core/time.h"
 #include "helios/script/script.h"
 
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define HELIOS_SCRIPT_TEST_ASAN 1
+#endif
+#endif
+
 namespace helios::script::test {
+
+/// True in optimized, uninstrumented builds (NDEBUG, no AddressSanitizer), where wall-time thresholds
+/// and tight wall budgets hold; Debug and sanitizer builds run several times slower.
+#if defined(NDEBUG) && !defined(__SANITIZE_ADDRESS__) && !defined(HELIOS_SCRIPT_TEST_ASAN)
+inline constexpr bool kTimingGates = true;
+#else
+inline constexpr bool kTimingGates = false;
+#endif
 
 struct RecordedEvent {
     ScriptEventKind kind = ScriptEventKind::TaskFinished;

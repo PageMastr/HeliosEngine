@@ -1,13 +1,17 @@
 // Fuel metering and kills (RT-13): runaway kill at fuel_kill, sticky kills that pcall cannot
 // swallow, kills inside a metamethod, a table.sort comparator and C++→Luau callbacks (unwinding
 // through RAII with no lock held and the VM usable afterwards), no involuntary yields,
-// task.checkpoint, the lane bound, binding and builtin charges, wall budgets and the three-kills rule.
+// task.checkpoint, the lane bound, binding and builtin charges, wall budgets and the three-kills
+// rule, and the inline fuel counter (the host runs only at decision points, with exact fuel).
 
 #include <algorithm>
 #include <mutex>
+#include <string>
 
 #include "helios/core/time.h"
+#include "luacodegen.h"
 #include "script_test_util.h"
+#include "vm_state.h"
 
 using namespace helios;
 using namespace helios::script;
@@ -92,6 +96,59 @@ u64 totalYields(const VmStats& s) {
     for (u64 y : s.yieldsByReason) n += y;
     return n;
 }
+
+// Counts the host's gc < 0 interrupt calls by forwarding to the VM's own callback (white-box).
+void (*g_hostInterrupt)(lua_State*, int) = nullptr;
+u64 g_hostCalls = 0;
+
+void countHostCalls(lua_State* L, int gc) {
+    if (gc < 0) ++g_hostCalls;
+    g_hostInterrupt(L, gc);
+}
+
+void instrumentInterrupt(ScriptVm& vm) {
+    lua_Callbacks* cb = lua_callbacks(vm.state());
+    g_hostInterrupt = cb->interrupt;
+    cb->interrupt = &countHostCalls;
+    g_hostCalls = 0;
+}
+
+u64 g_safepoints = 0;
+
+void countSafepoints(lua_State*, int gc) {
+    if (gc < 0) ++g_safepoints;
+}
+
+// Safepoints (gc < 0 interrupts) of `source` in a plain Luau state, counted one call at a time.
+u64 rawSafepoints(const char* source, bool native) {
+    const auto bc = compile(source, {}, "raw");
+    REQUIRE(bc.ok());
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+    if (native) luau_codegen_create(L);
+    lua_callbacks(L)->interrupt = &countSafepoints; // counter left at 0: called at every safepoint
+    REQUIRE(luau_load(L, "raw", (*bc)->data.data(), (*bc)->data.size(), 0) == 0);
+    if (native) luau_codegen_compile(L, -1);
+    g_safepoints = 0;
+    REQUIRE(lua_pcall(L, 0, 0, 0) == LUA_OK);
+    lua_close(L);
+    return g_safepoints;
+}
+
+// Only safepoints (no library calls, so no binding or builtin charges and no allocation).
+constexpr const char* kSafepointsOnly = R"(
+    local function f(n) if n < 2 then return n end return f(n - 1) + f(n - 2) end
+    local acc = f(14)
+    for i = 1, 300 do
+        for j = 1, 10 do
+            if j == 6 then break end
+            acc += j
+        end
+    end
+    local n = 0
+    while n < 20000 do n += 1 end
+    acc += n
+)";
 
 } // namespace
 
@@ -657,4 +714,319 @@ TEST_CASE("fuel: every resume pays resumeCost, so trivial resumes cannot flood t
     CHECK(ts.resumed <= b.fuelPerTick / b.resumeCost + 1);
     CHECK(ts.deferred > 0);
     CHECK(ts.fuel >= static_cast<u64>(ts.resumed) * b.resumeCost);
+}
+
+TEST_CASE("fuel: the inline counter counts exactly what per-safepoint counting did") {
+    // Fuel = gc < 0 safepoints + resumeCost, as when the host was called at every safepoint (the
+    // golden counts in test_determinism pin the same for charged builtins). The cell interpreter,
+    // and the editor profile (cells refuse codegen) with the interpreter and native code.
+    struct Mode {
+        HostProfile profile;
+        bool native;
+    };
+    for (const Mode mode : {Mode{HostProfile::Cell, false}, Mode{HostProfile::Editor, false},
+                            Mode{HostProfile::Editor, true}}) {
+        const bool native = mode.native;
+        if (native && !luau_codegen_supported()) continue;
+        CAPTURE(native);
+        CAPTURE(static_cast<int>(mode.profile));
+        const u64 safepoints = rawSafepoints(kSafepointsOnly, native);
+        VmConfig c = Harness::defaultConfig();
+        c.budget.fuelPerResume = 0;
+        c.budget.fuelKill = 0;
+        c.profile = mode.profile;
+        c.enableNativeCodegen = native;
+        Harness h(c);
+        ModuleOptions options;
+        options.native = native;
+        h.load("safepoints", kSafepointsOnly, options);
+        const TaskId id = h.spawn("safepoints");
+        h.step();
+        const RecordedEvent* done = h.eventFor(id, ScriptEventKind::TaskFinished);
+        REQUIRE(done != nullptr);
+        CHECK(done->fuel == safepoints + c.budget.resumeCost);
+    }
+}
+
+TEST_CASE("fuel: the host runs only at decision points (inline fuel counter)") {
+    const u64 safepoints = rawSafepoints(kSafepointsOnly, false);
+    REQUIRE(safepoints > 20'000);
+    SUBCASE("no limits: the host is never called") {
+        VmConfig c = Harness::defaultConfig();
+        c.budget.fuelPerResume = 0;
+        c.budget.fuelKill = 0;
+        Harness h(c);
+        instrumentInterrupt(*h.vm);
+        h.expectRuns("free", kSafepointsOnly);
+        CHECK(g_hostCalls == 0);
+        // No run is active: the counter is parked out of reach.
+        CHECK(*lua_fuelcounter(h.vm->state()) ==
+              static_cast<i64>(helios::script::detail::kMaxCounterDistance));
+    }
+    SUBCASE("soft budget and kill: one call each, at the exact fuel") {
+        VmConfig c = Harness::defaultConfig();
+        c.budget.fuelPerResume = 1'000;
+        c.budget.fuelKill = 5'000;
+        Harness h(c);
+        instrumentInterrupt(*h.vm);
+        const TaskId id = h.run("capped", kSafepointsOnly);
+        h.step();
+        const RecordedEvent& e = requireKilled(h, id);
+        CHECK(e.fuel == 5'000);
+        const RecordedEvent* over = h.last(ScriptEventKind::OverBudget);
+        REQUIRE(over != nullptr);
+        CHECK(over->fuel == 1'000);
+        CHECK(g_hostCalls == 2);
+    }
+    SUBCASE("wall limits: one call per clock read (every 64 fuel)") {
+        VmConfig c = Harness::defaultConfig();
+        c.profile = HostProfile::Client;
+        c.budget = FuelBudget::client();
+        c.budget.wallKillNanos = 0; // a slow CI machine must not kill the run
+        c.budget.wallBackstopNanos = 0;
+        c.budget.wallPerTickNanos = 0;
+        Harness h(c);
+        instrumentInterrupt(*h.vm);
+        const TaskId id = h.run("walled", kSafepointsOnly);
+        h.step();
+        const RecordedEvent* done = h.eventFor(id, ScriptEventKind::TaskFinished);
+        REQUIRE(done != nullptr);
+        CHECK(done->fuel == safepoints + c.budget.resumeCost);
+        // One call per clock read; a GC step may force an early read, which restarts the cadence.
+        const u64 reads = safepoints / helios::script::detail::kWallCheckInterval;
+        CHECK(g_hostCalls + 8 >= reads);
+        CHECK(g_hostCalls <= reads + 8);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Counter bookkeeping (review round 1 of WP-0.10r): every place the host commits or re-arms the
+// inline counter must leave fuel exactly as per-safepoint counting did. The cases run in wall mode
+// (a wall limit makes the host read the clock every 64 fuel, before every binding and after every
+// GC step, as a cell's 20 ms backstop does) and around decision points.
+// ---------------------------------------------------------------------------------------------
+namespace {
+
+u64 g_probeFuel = 0;
+int g_probeCalls = 0;
+
+int tProbe(lua_State* L) {
+    ++g_probeCalls;
+    g_probeFuel = currentFuel(L); // includes this call's charge
+    return 0;
+}
+
+int pCharge(lua_State* L) {
+    chargeFuel(L, static_cast<u64>(luaL_checkinteger(L, 1)));
+    return 0;
+}
+
+int pItems(lua_State* L) {
+    lua_pushnumber(L, static_cast<double>(lua_objlen(L, 1)));
+    return 1;
+}
+
+int pHuge(lua_State* L) {
+    chargeFuel(L, ~u64(0)); // saturates the run's fuel
+    return 0;
+}
+
+ScriptVm::ApiRegistrar counterApi() {
+    return [](Binder& b) {
+        b.function("P", "charge", &pCharge, FuelCost{1, 0, 0});
+        b.function("P", "items", &pItems, FuelCost{1, 1'000, 1});
+        b.function("P", "huge", &pHuge, FuelCost{0, 0, 0});
+    };
+}
+
+// Safepoints, allocation (GC steps), per-item binding charges and host charges of varying size.
+constexpr const char* kMixed = R"lua(
+    local keep = {}
+    for i = 1, 300 do
+        keep[i % 50 + 1] = {i, tostring(i), string.rep("z", i % 40)}
+        P.items(keep)
+        P.charge(i % 7)
+    end
+    local s = "" for i = 1, 100 do s = s .. "x" end
+    print(task.fuel())
+)lua";
+
+u64 finishedFuel(const VmConfig& c, std::string* printed = nullptr) {
+    Harness h(c, counterApi());
+    const TaskId id = h.run("mixed", kMixed);
+    h.steps(5);
+    const RecordedEvent* done = h.eventFor(id, ScriptEventKind::TaskFinished);
+    REQUIRE(done != nullptr);
+    REQUIRE(h.prints.size() == 1);
+    if (printed) *printed = h.prints[0];
+    return done->fuel;
+}
+
+VmConfig unlimited() {
+    VmConfig c = Harness::defaultConfig();
+    c.budget.fuelPerResume = 0;
+    c.budget.fuelKill = 0;
+    c.budget.fuelPerTick = 0;
+    return c;
+}
+
+} // namespace
+
+TEST_CASE("fuel: GC-forced clock reads do not change the fuel count (counter armed at 0)") {
+    constexpr const char* kAllocating = R"(
+        local keep = {}
+        for i = 1, 3000 do
+            keep[i % 16 + 1] = { i, i + 1, i + 2, { i } }
+        end
+    )";
+    auto fuelWith = [&](u64 backstop) {
+        VmConfig c = unlimited();
+        c.budget.wallBackstopNanos = backstop;
+        Harness h(c);
+        const TaskId id = h.run("alloc", kAllocating);
+        h.step();
+        const RecordedEvent* done = h.eventFor(id, ScriptEventKind::TaskFinished);
+        REQUIRE(done != nullptr);
+        return done->fuel;
+    };
+    CHECK(fuelWith(10'000'000'000ull) == fuelWith(0));
+}
+
+TEST_CASE("fuel: a charge landing exactly on fuel_kill kills before the call (counter fast path)") {
+    VmConfig c = unlimited();
+    const ScriptVm::ApiRegistrar api = [](Binder& b) {
+        b.function("Test", "probe", &tProbe, FuelCost{500, 0, 0}, nullptr);
+    };
+    const char* src = "for i = 1, 10 do end\nTest.probe()\nfor i = 1, 10 do end";
+    u64 atCall = 0;
+    {
+        Harness h(c, api);
+        g_probeCalls = 0;
+        h.expectRuns("probe", src);
+        REQUIRE(g_probeCalls == 1);
+        atCall = g_probeFuel;
+    }
+    c.budget.fuelKill = atCall; // the probe's own charge reaches fuel_kill exactly
+    Harness h(c, api);
+    g_probeCalls = 0;
+    const TaskId id = h.run("probe", src);
+    h.steps(3);
+    const RecordedEvent& e = requireKilled(h, id);
+    CHECK(e.fuel == atCall);
+    CHECK(g_probeCalls == 0); // the tripping charge has no side effect
+}
+
+TEST_CASE("fuel: cheap binding calls count the same fuel with and without clock reads") {
+    Fixture f;
+    auto fuelWith = [&](u64 backstop) {
+        VmConfig c = unlimited();
+        c.budget.wallBackstopNanos = backstop;
+        Harness h(c, testApi(f));
+        const TaskId id = h.run("cheap", "local t = {} for i = 1, 500 do Test.items(t) end");
+        h.step();
+        const RecordedEvent* done = h.eventFor(id, ScriptEventKind::TaskFinished);
+        REQUIRE(done != nullptr);
+        return done->fuel;
+    };
+    const u64 walled = fuelWith(10'000'000'000ull);
+    const u64 free = fuelWith(0);
+    CHECK(free > 1'000);
+    CHECK(walled == free);
+}
+
+TEST_CASE("fuel: a top-level run (callExport) reports the fuel the counter counted") {
+    Harness h(unlimited());
+    h.load("m", "return { f = function() local n = 0 while n < 5000 do n += 1 end error('boom') end }");
+    REQUIRE(h.vm->instantiateModule("m").ok());
+    const u64 before = h.vm->stats().fuelTotal;
+    CHECK_FALSE(h.vm->callExport("m", "f", {}, {}, 0).ok());
+    const RecordedEvent* failed = h.last(ScriptEventKind::TaskFailed);
+    REQUIRE(failed != nullptr);
+    CHECK(failed->fuel >= 5'000);
+    CHECK(h.vm->stats().fuelTotal - before == failed->fuel);
+}
+
+TEST_CASE("fuel: a kill swallowed by pcall is re-raised at exactly fuel_kill") {
+    Harness h;
+    const TaskId id = h.run("pk", "for i = 1, 100 do pcall(function() while true do end end) end");
+    h.step();
+    const RecordedEvent& e = requireKilled(h, id);
+    CHECK(e.fuel == Harness::defaultConfig().budget.fuelKill);
+}
+
+TEST_CASE("fuel: wall-clock reads and budget decision points never change fuel") {
+    const VmConfig base = unlimited();
+    std::string refPrint;
+    const u64 ref = finishedFuel(base, &refPrint);
+    VmConfig wall = base; // clock read every 64 fuel, before every binding, after every GC step
+    wall.budget.wallSoftNanos = 1'000'000'000'000ull;
+    wall.budget.wallKillNanos = 2'000'000'000'000ull;
+    wall.budget.wallBackstopNanos = 3'000'000'000'000ull;
+    std::string wallPrint;
+    CHECK(finishedFuel(wall, &wallPrint) == ref);
+    CHECK(wallPrint == refPrint);
+    for (u64 soft = 1; soft <= 200; ++soft) { // some charge lands exactly on the decision point
+        CAPTURE(soft);
+        VmConfig c = base;
+        c.budget.fuelPerResume = soft;
+        CHECK(finishedFuel(c) == ref);
+    }
+}
+
+TEST_CASE("fuel: a saturated charge on a host without fuel_kill never wraps the fuel count") {
+    // A charge that saturates the run's fuel trips the kill even with fuel_kill disabled. Later
+    // safepoints of the killed run (a pcall caught the first raise) must not wrap the count to 0,
+    // and neither may the lane and VM totals.
+    Harness h(unlimited(), counterApi());
+    h.load("huge", "pcall(P.huge) for i = 1, 10 do end");
+    const TaskId a = h.spawn("huge", 1);
+    const TaskId b = h.spawn("huge", 2);
+    const TickStats ts = h.step();
+    for (const TaskId id : {a, b}) {
+        const RecordedEvent& e = requireKilled(h, id);
+        CHECK(e.killReason == KillReason::Fuel);
+        CHECK(e.fuel == ~u64(0));
+    }
+    CHECK(ts.fuel == ~u64(0));
+    CHECK(h.vm->stats().fuelTotal == ~u64(0));
+}
+
+TEST_CASE("fuel: a saturating charge in a killed run keeps the kill's fuel (charge slow path)") {
+    // A pcall swallows a fuel kill. The next instruction reaches a binding through __newindex (no
+    // CALL, so no safepoint re-raises first), and its declared cost saturates (3 fuel per item of the
+    // assigned value, 2^53 items; a string key keeps Luau's number-to-int key conversion out of it).
+    // The sticky kill refuses it, and the killed run's fuel must stay at fuel_kill (before WP-0.10r
+    // the slow path subtracted the whole charge and reported 0).
+    const ScriptVm::ApiRegistrar api = [](Binder& b) {
+        b.function("P", "big", &pItems, FuelCost{0, 3'000, 3});
+    };
+    Harness h(Harness::defaultConfig(), api); // the cell profile
+    const TaskId id = h.run("sat", R"(
+        local t = setmetatable({}, { __newindex = P.big })
+        pcall(function() while true do end end)
+        t.x = 2^53
+    )");
+    const TickStats ts = h.step();
+    const RecordedEvent& e = requireKilled(h, id);
+    CHECK(e.killReason == KillReason::Fuel);
+    CHECK(e.fuel == Harness::defaultConfig().budget.fuelKill);
+    CHECK(ts.fuel == e.fuel); // the lane counts the killed resume
+}
+
+TEST_CASE("fuel: a saturating charge in a killed run without fuel_kill stays saturated") {
+    Harness h(unlimited(), counterApi());
+    const TaskId id =
+        h.run("sat", "local t = setmetatable({}, {__index = P.items})\npcall(P.huge)\nlocal _ = t.x");
+    h.step();
+    const RecordedEvent& e = requireKilled(h, id);
+    CHECK(e.fuel == ~u64(0));
+}
+
+TEST_CASE("fuel: a saturated top-level run never wraps the VM's fuel total") {
+    Harness h(unlimited(), counterApi());
+    h.load("m", "return { f = function() P.huge() end }");
+    REQUIRE(h.vm->instantiateModule("m").ok()); // a top-level run: fuelTotal > 0 afterwards
+    REQUIRE(h.vm->stats().fuelTotal > 0);
+    CHECK_FALSE(h.vm->callExport("m", "f", {}, {}, 0).ok());
+    CHECK(h.vm->stats().fuelTotal == ~u64(0));
 }

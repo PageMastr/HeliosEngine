@@ -46,16 +46,21 @@ LUAU_FASTFLAG(LuauPromoteProto)
 #define VM_PATCH_C(pc, slot) *const_cast<Instruction*>(pc) = ((uint8_t(slot) << 24) | (0x00ffffffu & *(pc)))
 #define VM_PATCH_E(pc, slot) *const_cast<Instruction*>(pc) = ((uint32_t(slot) << 8) | (0x000000ffu & *(pc)))
 
+/* Helios patch fuel-counter: the interrupt runs only when the inline counter reaches zero (see lua_fuelcounter) */
 #define VM_INTERRUPT() \
     { \
-        void (*interrupt)(lua_State*, int) = L->global->cb.interrupt; \
-        if (LUAU_UNLIKELY(!!interrupt)) \
-        { /* the interrupt hook is called right before we advance pc */ \
-            VM_PROTECT(L->ci->savedpc++; interrupt(L, -1)); \
-            if (L->status != 0) \
-            { \
-                L->ci->savedpc--; \
-                return NULL; \
+        if (LUAU_UNLIKELY(--L->global->fuelcounter <= 0)) \
+        { \
+            L->global->fuelcounter = 0; \
+            void (*interrupt)(lua_State*, int) = L->global->cb.interrupt; \
+            if (interrupt) \
+            { /* the interrupt hook is called right before we advance pc */ \
+                VM_PROTECT(L->ci->savedpc++; interrupt(L, -1)); \
+                if (L->status != 0) \
+                { \
+                    L->ci->savedpc--; \
+                    return NULL; \
+                } \
             } \
         } \
     }

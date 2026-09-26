@@ -1,0 +1,14 @@
+Fixture patch: a deletion section without its --- line.
+
+diff --git a/f.c b/f.c
+index 1111111..2222222 100644
+--- a/f.c
++++ b/f.c
+@@ -1 +1 @@
+-a
++b
+diff --git a/g.c b/g.c
+deleted file mode 100644
++++ /dev/null
+@@ -1 +0,0 @@
+-g

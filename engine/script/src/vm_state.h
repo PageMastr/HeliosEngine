@@ -10,6 +10,7 @@
 #include <atomic>
 #include <functional>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -38,8 +39,13 @@ inline constexpr int kFirstObjectTag = 32;
 inline constexpr int kLastObjectTag = 127;
 
 inline constexpr u64 kNoLimit = ~u64(0);
+/// Fuel and deadlines saturate at kNoLimit instead of wrapping (a saturated charge must stay a kill).
+constexpr u64 saturatingAdd(u64 a, u64 b) noexcept { return b > kNoLimit - a ? kNoLimit : a + b; }
 /// Interpreter safepoints between wall-clock reads when a wall limit is active.
 inline constexpr u64 kWallCheckInterval = 64;
+/// Longest distance the VM's inline fuel counter is armed with (fuel-counter patch). Also the value
+/// it holds while no run is active, so host-side setup and GC never reach the interrupt at gc < 0.
+inline constexpr u64 kMaxCounterDistance = static_cast<u64>(std::numeric_limits<i64>::max());
 /// Cells cap the subject of pattern functions (02 §7.4).
 inline constexpr usize kCellPatternSubjectLimit = 64u << 10;
 /// print() keeps at most this many bytes per call (the rest is summarized as truncated).
@@ -119,16 +125,25 @@ struct AsyncOp {
 struct VmState;
 
 /// Budget accounting of one resume (or one top-level callback / module load).
+///
+/// Fuel metering uses the vendored `fuel-counter` Luau patch (third_party/MANIFEST.md): while a run
+/// is the VM's active run (`armed`), the VM decrements its inline counter at every gc < 0 safepoint
+/// and binding charges subtract from it, so `fuel` is exact only as of the last arm; read it through
+/// VmState::fuelOf(). The counter is armed with the distance from `fuel` to `nextCheck`, the next
+/// decision point, and the interrupt runs only when it reaches zero, so the fuel counted is the same
+/// as calling the host at every safepoint.
 struct RunContext {
-    VmState* vm = nullptr;
     /// Fuel value at which the slow path must run (min of kill, soft, wall-check points; 0 once
-    /// killed). The interrupt's hot path is one increment and one compare against it.
+    /// killed).
     u64 nextCheck = kNoLimit;
     TaskHandle task;
     u32 module = 0;
     u64 owner = 0;
     lua_State* thread = nullptr; ///< The task's own coroutine (explicit yields must happen here).
     u64 fuel = 0;
+    u64 armedFuel = 0;     ///< `fuel` when the counter was last armed.
+    u64 armedDistance = 0; ///< Counter value then: fuel to `nextCheck` (0 = due at the next safepoint).
+    bool armed = false;    ///< This run owns the VM counter (it is the VM's active run).
     u64 softFuel = kNoLimit;
     u64 killFuel = kNoLimit;
     u64 wallStart = 0;
@@ -208,6 +223,9 @@ struct VmState {
     std::unordered_map<std::string, u32> moduleIndex;
     u32 nextMemcat = 1;
 
+    /// The VM's inline fuel counter (lua_fuelcounter, fuel-counter patch). Armed by the active run.
+    i64* fuelCounter = nullptr;
+
     // Scheduler.
     HandlePool<Task, TaskTag> tasks;
     HandlePool<AsyncOp, AsyncTag> asyncOps;
@@ -239,11 +257,43 @@ struct VmState {
 
     // ---- budgets (vm.cpp) ------------------------------------------------------------------------
     void beginRun(RunContext& run, TaskHandle task, u32 module, u64 owner, lua_State* thread);
-    /// Charges `fuel` (binding/builtin charges); raises the sticky kill at fuel_kill.
-    void chargeRun(lua_State* L, RunContext& r, u64 fuel) {
-        r.fuel = fuel > kNoLimit - r.fuel ? kNoLimit : r.fuel + fuel;
-        if (r.fuel >= r.nextCheck) chargeSlow(L, r, fuel);
+    /// Fuel spent by `r` so far: its committed fuel plus what the VM counted since the counter was
+    /// armed. The counter only moves down between arms and stops at 0 (the VM resets it there before
+    /// calling the interrupt), so it stays within [0, armedDistance].
+    u64 fuelOf(const RunContext& r) const noexcept {
+        if (!r.armed) return r.fuel;
+        const u64 left = static_cast<u64>(std::max<i64>(*fuelCounter, 0));
+        return r.armedFuel + (r.armedDistance - std::min(left, r.armedDistance));
     }
+    /// Arms the VM counter for `r` (the active run) with the distance from its fuel to nextCheck.
+    void armCounter(RunContext& r) noexcept {
+        const u64 distance =
+            r.nextCheck > r.fuel ? std::min(r.nextCheck - r.fuel, kMaxCounterDistance) : 0;
+        r.armedFuel = r.fuel;
+        r.armedDistance = distance;
+        r.armed = true;
+        *fuelCounter = static_cast<i64>(distance);
+    }
+    /// Commits the counted fuel into r.fuel and releases the counter (no run is active afterwards).
+    void disarmCounter(RunContext& r) noexcept {
+        r.fuel = fuelOf(r);
+        r.armed = false;
+        *fuelCounter = static_cast<i64>(kMaxCounterDistance);
+    }
+    /// Charges `fuel` (binding/builtin charges); raises the sticky kill at fuel_kill. The hot path
+    /// only moves the VM counter: a charge that stops short of the next decision point needs no check.
+    void chargeRun(lua_State* L, RunContext& r, u64 fuel) {
+        const i64 left = *fuelCounter;
+        if (r.armed && left > 0 && fuel < static_cast<u64>(left)) {
+            *fuelCounter = left - static_cast<i64>(fuel);
+            return;
+        }
+        const u64 now = fuelOf(r);
+        r.fuel = saturatingAdd(now, fuel);
+        chargeSlow(L, r, r.fuel - now); // what was actually added (less once saturated)
+    }
+    /// Slow path of a charge or safepoint: r.fuel is current (`fuel` is what was just added). Handles
+    /// the sticky kill, fuel_kill, the soft budget and the wall-clock read, then re-arms the counter.
     void chargeSlow(lua_State* L, RunContext& run, u64 fuel);
     static void updateNextCheck(RunContext& run) noexcept;
     void wallCheck(lua_State* L, RunContext& run);
@@ -298,10 +348,6 @@ struct VmState {
     bool cancelTaskInternal(TaskHandle h);
 };
 
-/// The run whose Luau code executes on this OS thread (set around every resume and top-level run;
-/// read by the interrupt callback without touching the Luau state).
-extern thread_local RunContext* t_activeRun;
-
 /// VmState owning a Luau state (set as lua_callbacks()->userdata).
 inline VmState* stateOf(lua_State* L) noexcept { return static_cast<VmState*>(lua_callbacks(L)->userdata); }
 
@@ -345,7 +391,6 @@ private:
     VmState& m_state;
     RunContext m_run;
     RunContext* m_prev;
-    RunContext* m_prevActive;
     u8 m_prevMemcat;
 };
 

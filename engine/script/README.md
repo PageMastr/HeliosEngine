@@ -6,7 +6,8 @@ It implements the normative parts of 02 §7.4, 04 §3.1 / §10.2 and 06 §11: fu
 **no involuntary yields**, sticky kills, `task.checkpoint`, typed `StaleHandle` errors, heap caps,
 a coroutine scheduler on the dilatable zone clock, modules with hot reload, and the Phase 0
 hand-written binding layer (schema-generated `@script` bindings replace the registration code in
-WP-1.6). Depends on `helios::core`, `helios::math` and `helios::tp::luau`.
+WP-1.6). Depends on `helios::core`, `helios::math` and `helios::tp::luau`, including two vendored Luau
+patches that fuel metering needs (below; `third_party/MANIFEST.md`, "Patches").
 
 | Header (`helios/script/…`) | Contents |
 |---|---|
@@ -53,11 +54,16 @@ TickStats ts = vm->tick();            // wakes waits, resumes tasks while lane f
 
 ## Budgets and kills (RT-13)
 
-* **Fuel.** The `interrupt` callback charges 1 fuel per `gc < 0` safepoint (loop back-edges, calls,
-  returns, pattern-matcher steps); its hot path is a thread-local load, an increment and a compare.
-  Every resume and top-level run starts at `FuelBudget::resumeCost` (16 fuel, ≈ the measured
-  ~200 ns of a trivial resume), so a lane of tasks that only yield cannot resume far more tasks per
-  tick than its fuel pays for.
+* **Fuel.** Each `gc < 0` safepoint (loop back-edges, calls, returns, pattern-matcher steps) costs
+  1 fuel. The VM counts them itself, through the vendored `fuel-counter` patch: an inline counter
+  (`lua_fuelcounter`) that every safepoint decrements, in the interpreter and in native code, and that
+  calls the `interrupt` callback only when it reaches zero. The host arms it with the fuel left until its
+  next decision point (the kill, the soft budget, the next wall-clock read), re-arms it after each one,
+  and binding charges subtract from it, so the fuel counted is exactly what calling the host at every
+  safepoint counted, at a decrement and a branch per safepoint. With no limit the host is never called;
+  with wall limits, once per 64 fuel. Every resume and top-level run starts at
+  `FuelBudget::resumeCost` (16 fuel, ≈ the measured ~200 ns of a trivial resume), so a lane of tasks
+  that only yield cannot resume far more tasks per tick than its fuel pays for.
   Every Luau-callable C++ function registered through `Binder` runs behind a trampoline that
   charges its `FuelCost` (`base + ceil(items × perItemMilli / 1000)`) **before** the call. The
   sandbox wraps the builtins whose C work grows with their input: 02 §7.4's list
@@ -89,7 +95,11 @@ TickStats ts = vm->tick();            // wakes waits, resumes tasks while lane f
   cannot swallow it. Luau is built with C++ exceptions, so binding frames unwind through RAII (no
   lock stays held). When the resume returns the scheduler closes the coroutine
   (`lua_resetthread`) and emits `TaskKilled` (ScriptKilled telemetry). The resume is charged exactly
-  `fuelKill`; a charge that trips the kill has no side effect. Three kills of a module within
+  `fuelKill`; a charge that trips the kill has no side effect, and a charge the sticky kill refuses
+  leaves the run's fuel unchanged, even when it saturates (a `pcall` that swallowed the kill, then a
+  binding reached through `__index` with no safepoint in between: WP-0.10 subtracted the whole
+  saturated charge and reported 0 fuel for such a cell kill). Fuel and the lane and VM totals saturate
+  instead of wrapping. Three kills of a module within
   `killWindowNanos` of zone time disable it (tasks cancelled, spawns refused) until
   `enableModule`/`reloadModule`.
 * **Wall time.** Cells: a 20 ms backstop (fault path, `KillReason::WallBackstop`). Clients/editor
@@ -97,7 +107,8 @@ TickStats ts = vm->tick();            // wakes waits, resumes tasks while lane f
   counted for the profiler. The clock is read every 64 fuel, before every binding call, and at the
   first safepoint after every GC step: a single slow operation (a multi-MB concatenation costs one
   safepoint) is therefore caught at the next safepoint, not 64 safepoints later. The GC-step hook
-  only schedules the read; it never raises and never changes fuel.
+  only schedules the read (it re-arms the counter at distance 0); it never raises and never changes
+  fuel.
 * **Lane.** `tick()` resumes ready tasks while lane fuel `< fuelPerTick`, so a tick spends at most
   `fuelPerTick + fuelKill`; the rest are deferred with their original wake tick.
 
@@ -165,9 +176,29 @@ Shrinks never fail.
 
 `compile()` wraps `luau_compile` (optimization/debug/type-info/coverage levels, the disabled
 builtin list); `BytecodeCache` (thread-safe, shareable between VMs of one content version) keys
-bytecode by the XXH3-128 of the source plus the options fingerprint. Native codegen is opt-in:
-`VmConfig::enableNativeCodegen` (off by default, keep it off on servers) and gated by
-`luau_codegen_supported()`, then per module with `ModuleOptions::native`.
+bytecode by the XXH3-128 of the source plus the options fingerprint. Native codegen is opt-in on
+clients and editors: `VmConfig::enableNativeCodegen` (off by default), gated by
+`luau_codegen_supported()`, then per module with `ModuleOptions::native`. **Cells and world-script
+hosts (`HostProfile::Cell`) refuse it**: `create()` fails with `InvalidArgument` on every target (02 §7.4).
+Native code counts the same fuel as the interpreter and a kill stops it at the same program point,
+because the vendored `codegen-fornloop-fuel` patch emits the numeric-`for` interrupt in `FORNLOOP` as the
+interpreter does (stock Luau 0.739 put it at the top of the loop body, one body earlier, so a loop left by
+`break` or `return` cost one extra fuel). That patch is the precondition for native code on cells, not
+the permission: lifting the refusal is 02 §8.1's P3 "codegen opt-in on cells" item, behind 04 §10.2's
+interpreter-versus-native run over the script corpus.
+
+### Vendored Luau patches
+
+`third_party/luau/patches/` (applied by `tools/vendor/fetch_third_party.sh`, checked by the
+`lint_vendor_patches` CTest; `src/vm.cpp` also fails to compile without `LUA_FUELCOUNTER`):
+
+| Patch | Effect here | Tests |
+|---|---|---|
+| `0001-codegen-fornloop-fuel` | Native code reaches the interpreter's safepoints at the same program points, so fuel and kill positions are identical in both (RT-13) | `determinism: numeric for loops left early count the same fuel in native code` (stock 0.739: +80 fuel), `luau patches: codegen-fornloop-fuel …` (safepoint counts; a kill at every safepoint k stops both modes at one point) |
+| `0002-fuel-counter` | The inline counter above: the host runs only at decision points | `luau patches: fuel-counter …` (one decrement per safepoint in the VM, pattern matcher and native code), `fuel: the inline counter counts exactly what per-safepoint counting did`, `fuel: the host runs only at decision points`, `perf: fuel metering overhead and ns per fuel` (≤ 10 %) |
+
+Both are inputs of `sim_abi.script` (04 §6.7) with the planned `det-math` patch; `sim_abi` is computed by
+WP-3.1, from the patch list in `third_party/MANIFEST.md`. They are rebased on every Luau bump (K10).
 
 ## Threading rules
 
@@ -189,20 +220,26 @@ bytecode by the XXH3-128 of the source plus the options fingerprint. Native code
 
 ## Tests
 
-`script_tests` (doctest, `tests/*.cpp`, 79 cases): sandbox escapes; kills at `fuelKill` inside a
+`script_tests` (doctest, `tests/*.cpp`, 97 cases): sandbox escapes; kills at `fuelKill` inside a
 metamethod, a `table.sort` comparator and C++→Luau callbacks (RAII/lock release, VM usable
 afterwards); sticky kills through `pcall`/`xpcall`/coroutines/bindings; instrumented yields;
 `task.checkpoint`; lane bound; binding and builtin charges; wall budgets and backstop; the
 three-kills rule; scheduler ordering; zone-time `wait` under dilation; async calls; cancellation;
 10k tasks in 16 MB; `StaleHandle` across a `wait` and slot recycling; `WorldPos` precision at
 10¹³ m; heap and module caps; hot reload; stack traces; determinism (golden fuel count, fuel
-independent of GC pacing, interpreter vs native fuel); `.d.luau` parse + API coverage; fuel-metering
-overhead. Review regressions: synchronous async completion, callbacks from async bindings cannot
-yield, charges of every input-proportional builtin, prompt wall kills on allocation-heavy loops,
-module categories of `task.spawn` children and resumed coroutines, `require` of a disabled module,
-bounded `print` and error messages, charges independent of heap addresses, queue compaction after
-cancelled waits, `resumeCost` bounding trivial resumes per tick, clean failure of unbounded
-binding↔Luau recursion.
+independent of GC pacing, interpreter vs native fuel, including loops left early); `.d.luau` parse + API
+coverage; the vendored Luau patches at the API level (one decrement per safepoint, host calls only at
+zero, the helpers' counter reset, kill positions interpreter vs native); the inline counter's
+bookkeeping (fuel identical with and without clock reads, around GC-forced reads, cheap bindings,
+charges landing exactly on a decision point, top-level runs, sticky re-raises, and saturating charges
+before and after a kill, in the safepoint and charge slow paths and the task, lane and VM totals; and
+the golden count under the production cell budgets); the refused cell codegen config; fuel-metering
+overhead (≤ 10 %, `perf:`). Review regressions: synchronous async completion, callbacks from async
+bindings cannot yield, charges of every input-proportional builtin, prompt wall kills on
+allocation-heavy loops, module categories of `task.spawn` children and resumed coroutines, `require`
+of a disabled module, bounded `print` and error messages, charges independent of heap addresses,
+queue compaction after cancelled waits, `resumeCost` bounding trivial resumes per tick, clean failure
+of unbounded binding↔Luau recursion.
 
 ```
 cmake -S . -B build/script -G Ninja -DHELIOS_BUILD_GRAPHICS=OFF
@@ -211,14 +248,17 @@ ninja -C build/script helios_script script_tests && ./build/script/bin/script_te
 
 ## Known limitations (Phase 0)
 
-* **Native codegen and fuel.** Luau 0.739's code generator places the numeric-`for` interrupt at the
-  start of the loop body instead of in `FORNLOOP`, so every iteration left by `break`/`return` costs
-  one extra fuel in native code (pinned by a test). Native codegen must stay off on cells until the
-  vendored CodeGen patch lands (emit the loop interrupt in `FORNLOOP` like the interpreter, in
-  `CodeGen/src/IrTranslation.cpp`).
-* **Interrupt overhead.** The minimal interrupt hook alone costs ≈ 8–14 % on the perf workload and
-  Helios metering ≈ 12–17 % (budget: ≤ 10 %, 04 §10.2); the planned fallback is a small vendored VM
-  patch that decrements an inline counter. ≈ 13 ns per fuel on the dev container.
+* **Metering cost** (perf workload, interpreter, dev container, GCC 13 and Clang 18, RelWithDebInfo;
+  budget ≤ 10 %, asserted by the `perf:` case in optimized builds). The Helios host, reading the clock
+  every 64 fuel as on cells, runs ≈ 2–8 % slower than unmetered plain Luau, where calling the host at
+  every safepoint cost ≈ 25–28 % before `fuel-counter`. In plain Luau on the patched VM, a callback
+  every 64 safepoints costs ≈ 0–3 % and one at every safepoint (counter unarmed) ≈ 12–20 %. The
+  decrement itself is free: a standalone A/B against stock 0.739 measured stock unmetered 2.82 ms,
+  stock with a callback at every safepoint 3.19 ms (≈ +13 %), the patched VM unmetered 2.76–2.79 ms and
+  with the host every 64 safepoints 2.81–2.84 ms. ≈ 11 ns per fuel. Native code is not in the perf case:
+  it calls an out-of-line helper when the counter reaches zero, so a host that never arms the counter
+  pays that call at every native safepoint (Helios always arms it). The A64 native-code half of
+  `fuel-counter` is compiled on every target but runs only on arm64 hosts, which CI does not have.
 * Weak tables are rejected at `setmetatable` time only; adding `__mode` to a metatable after it is
   attached is left to the planned `simdet` Luau analyzer rule, as is iteration over tables keyed by
   tables/userdata/functions.
@@ -230,18 +270,25 @@ ninja -C build/script helios_script script_tests && ./build/script/bin/script_te
   operands (one safepoint per concatenation), and `table.clear`/`table.clone`/`table.maxn` are
   charged by the array length only (hash parts are invisible through the API). The heap cap bounds
   each such operation, and the GC-step clock read catches allocation-heavy loops within one
-  iteration of the wall limit; a VM-side charge (the inline-counter patch) would close the gap.
+  iteration of the wall limit. The inline counter could carry such a VM-side charge (02 §7.4); no
+  charge is added yet.
 * Fuel costs of bindings and wrapped builtins are placeholders until `--calibrate-fuel` (WP-1.6);
   there is no replay recording of wall-backstop kills yet (the event carries what the recorder
   needs), and no DAP adapter yet (WP-1.6).
 * Wrapping `coroutine.resume` with a plain call means a debugger break inside a nested coroutine
   cannot propagate through it; the DAP adapter must re-add a continuation.
+* `wallCheck` tests the 20 ms backstop before the 5 ms client budget, so a client resume preempted for
+  more than ≈ 15 ms between two clock reads is reported as `WallBackstop` rather than `WallBudget`. That
+  makes `fuel: client profile kills at the wall-time budget …` flaky under heavy load (≈ 1 in 12 runs at
+  load 12–15). Follow-up: report `WallBudget` when both limits are past at one read.
 
 ## Plan conformance
 
-Plan-Rev: 5
+Plan-Rev: 8
 
-Written to plan revision 5. Revision 6 (the round-5 minor revisions) changed 02 §7.4: `VmConfig` must
-refuse native codegen on cells and world-script hosts (today `create()` warns), and the `fuel-counter` and
-`codegen-fornloop-fuel` Luau patches are required. The rework is WP-0.10r (09 §5.10.4 (c)), which raises this
-line to 6.
+Written to plan revision 8, which is WP-0.10r's own `Plan-Change` to 02 §7.4 and 04 §10.2 (the
+Integrator raised this line from 6 when it merged, 09 §5.10.2 D1): WP-0.10r added the `codegen-fornloop-fuel` and `fuel-counter` Luau patches
+and made `create()` refuse native codegen on cells and world-script hosts. 02 §7.4 and 04 §10.2, as WP-0.10r
+amended them, say the refusal stays after the patch: the patch is its precondition, and lifting it is
+02 §8.1's P3 "codegen opt-in on cells" item. World-script hosts run the cell profile; a dedicated profile,
+if 05 §1.23 needs one, must keep the refusal.

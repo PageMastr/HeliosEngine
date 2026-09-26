@@ -1,0 +1,14 @@
+Fixture patch: its context reaches the unterminated last line.
+
+diff --git a/f.c b/f.c
+index fa2d79e..251af51 100644
+--- a/f.c
++++ b/f.c
+@@ -1,5 +1,5 @@
+ one
+ two
+-three
++THREE
+ four
+ last
+\ No newline at end of file

@@ -194,8 +194,8 @@
       "title": "Script kills, sticky kills, clean unwinding, no involuntary yields, StaleHandle, heap caps, 10k coroutines (all but the Phase 1 binding-heavy case)",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Runaway killed at `fuel_kill` on cells (replay kills at the identical fuel count) and ≤ 5 ms wall on the client; `pcall` cannot swallow a kill. A kill inside a metamethod, inside a `table.sort` comparator and inside a Luau callback invoked from C++ unwinds cleanly: ASan-clean, no engine lock held, VM usable afterwards. An instrumented `lua_yield` shows no yield except at explicit calls, including when budgets run out inside those three places. A handle whose entity is destroyed across a `wait` raises `StaleHandle`. Heap caps; 10k coroutines per zone. […] Fuel counts are identical between interpreter and codegen",
-      "notes": "The binding-heavy case (Ph1, WP-1.6) is elided. The replay clause is evidenced by re-running (identical output and fuel across runs); the 04 §10.2 replay itself comes later. The ≤ 10 % overhead is 02 §7.4's, closed with RT-13 by WP-0.10r",
-      "status": "partial",
+      "notes": "The binding-heavy case (Ph1, WP-1.6) is elided. The replay clause is evidenced by re-running (identical output and fuel across runs); the 04 §10.2 replay itself comes later. The ≤ 10 % overhead is 02 §7.4's; WP-0.10r closed it with RT-13, and its perf case asserts it in optimized builds without sanitizers (the nightly linux-gcc run)",
+      "status": "measured",
       "tests": [
         {"doctest": "script_tests", "case": "fuel: a runaway loop is killed at exactly fuel_kill and the VM stays usable"},
         {"doctest": "script_tests", "case": "fuel: client profile kills at the wall-time budget and still counts fuel"},
@@ -211,12 +211,9 @@
         {"doctest": "script_tests", "case": "memory: exceeding the VM heap cap raises a memory error and the VM recovers"},
         {"doctest": "script_tests", "case": "scheduler: 10k coroutines per zone fit a 16 MB VM heap"},
         {"doctest": "script_tests", "case": "determinism: a pure script gives identical output and fuel across runs"},
-        {"doctest": "script_tests", "case": "determinism: native codegen counts the same fuel as the interpreter"}
-      ],
-      "gaps": [
-        {"clause": "Fuel counts differ between interpreter and native codegen for numeric for loops left by break or return (patch codegen-fornloop-fuel)", "state": "failing", "owner": "WP-0.10r",
-         "pinned_by": {"doctest": "script_tests", "case": "determinism: known codegen divergence — numeric for loops left early"}},
-        {"clause": "Fuel metering overhead ≤ 10 % on the perf workload (02 §7.4; measured ≈ 12–15 % without the fuel-counter patch)", "state": "failing", "owner": "WP-0.10r"}
+        {"doctest": "script_tests", "case": "determinism: native codegen counts the same fuel as the interpreter"},
+        {"doctest": "script_tests", "case": "determinism: numeric for loops left early count the same fuel in native code"},
+        {"doctest": "script_tests", "case": "perf: fuel metering overhead and ns per fuel", "run": "linux-gcc", "platforms": ["linux"]}
       ]
     },
     {

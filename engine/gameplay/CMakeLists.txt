@@ -72,6 +72,15 @@ helios_test(gameplay_tests
     tests/test_records.cpp
     tests/test_tags.cpp
   DEPS helios::gameplay)
+# The 8-worker budget of GP-1 as its own CTest entry, so machines with fewer than 8 hardware threads
+# (where doctest skips the case, and "test cases: 0" is printed) report it as Skipped rather than
+# Passed. gameplay_tests_perf runs it too where it is not skipped.
+if(TARGET gameplay_tests)
+  add_test(NAME gameplay_tests_perf_8workers
+    COMMAND gameplay_tests "--test-case=perf: 10k entities x 40 attributes at 5 % dirty <= 1 ms on 8 workers")
+  set_tests_properties(gameplay_tests_perf_8workers PROPERTIES
+    LABELS perf RUN_SERIAL TRUE SKIP_REGULAR_EXPRESSION "test cases: +0 \\|")
+endif()
 # The tests compute reference values with a*b+c too: same contraction rule as the library
 # (clang-cl included, whose /fp:precise means contract=on).
 if(TARGET gameplay_tests)

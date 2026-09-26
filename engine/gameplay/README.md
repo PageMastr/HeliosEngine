@@ -113,14 +113,15 @@ best of N; PR CI skips them and the nightly `linux-perf` job runs them):
 |---|---|
 | 300-modifier ship recompute ≤ 50 µs | ~5.4 µs |
 | one incremental change ≤ 5 µs | ~0.2 µs |
-| 10k entities × 40 attributes at 5 % dirty ≤ 1 ms on 8 workers | **Not measured yet**: ~1.35 ms on 4 threads, ~3.5 ms on 1 thread |
+| 10k entities × 40 attributes at 5 % dirty ≤ 1 ms on 8 workers | **Not measured yet** (Skipped here): ~1.35–2.2 ms on 4 threads, ~3.5–6.3 ms on 1 thread, depending on the container's load |
 
-The last test resolves on 8 threads (7 job workers plus the calling thread, which runs chunks inside
-`parallelFor`) and asserts the 1 ms budget only on a machine with at least 8 hardware threads.
-Elsewhere it resolves on min(8, cores) threads and reports the time, and asserts only a proxy, 1
-thread ≤ 8 ms, which is necessary for the budget but not sufficient (it assumes perfect scaling).
-This container and the nightly runner have fewer than 8 vCPUs, so the budget itself still needs a
-run on 8-core hardware (09 §8.1).
+The last budget is two test cases. `perf: … <= 1 ms on 8 workers` resolves on 8 threads (7 job workers
+plus the calling thread, which runs chunks inside `parallelFor`) and asserts 1 ms; it runs only on
+machines with at least 8 hardware threads, and its CTest entry `gameplay_tests_perf_8workers` reports
+Skipped elsewhere. `perf: … 1 thread <= 8 ms (proxy)` runs everywhere: one thread doing at most 8 ms
+of work is necessary for the budget but not sufficient (it assumes perfect scaling); it also reports,
+unasserted, the time on min(8, cores) threads. This container and the nightly runner have fewer than
+8 vCPUs, so the budget itself still needs a run on 8-core hardware (09 §8.1).
 
 **Determinism.** `test_attributes.cpp` builds 200 random ships and checks each final value against an
 independent `long double` reference within 1e-9. It pins an FNV-1a hash of all final bits,

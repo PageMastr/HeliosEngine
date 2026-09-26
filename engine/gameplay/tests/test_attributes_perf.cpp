@@ -1,7 +1,7 @@
 // GP-1 performance budgets (06 §12.2): a 300-modifier ship recompute <= 50 us, one incremental change
 // <= 5 us, 10k entities x 40 attributes at 5 % dirty <= 1 ms on 8 workers. Timings are reported
 // always and asserted only in optimized builds without sanitizers (like tools/schemac's perf test);
-// the 8-worker budget only on machines with 8 hardware threads (see that test).
+// the 8-worker budget runs only on machines with 8 hardware threads (see those tests).
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -90,64 +90,87 @@ TEST_CASE("perf: 300-modifier ship: full recompute <= 50 us, incremental change 
 #endif
 }
 
-// The budget is 1 ms on 8 workers: 8 threads resolving (7 job workers plus the calling thread,
-// which runs chunks inside parallelFor). It is asserted only where it can be measured, on a machine
-// with at least 8 hardware threads; elsewhere the parallel time is reported on min(8, cores) threads
-// and only the single-thread proxy is asserted. The proxy (1 thread <= 8 ms) is necessary for the
-// budget but not sufficient: it assumes perfect scaling to 8 workers. PR CI skips `perf` tests, and
-// the nightly runner has 4 vCPUs, so the budget itself still needs a run on 8-core hardware (09 §8.1).
-TEST_CASE("perf: 10k entities x 40 attributes at 5 % dirty <= 1 ms on 8 workers") {
-    auto layout = shipLayout();
-    constexpr int kEntities = 10000;
-    constexpr u32 kBudgetThreads = 8;
+// The 10k-entity budget is 1 ms on 8 workers: 8 threads resolving (7 job workers plus the calling
+// thread, which runs chunks inside parallelFor). It is two test cases:
+//  * the budget itself, which runs only on machines with at least 8 hardware threads (doctest skips
+//    it elsewhere, and the CTest entry gameplay_tests_perf_8workers then reports Skipped);
+//  * a single-thread proxy that runs everywhere: 1 thread <= 8 ms of work is necessary for the
+//    budget but not sufficient (it assumes perfect scaling). It also reports the time on
+//    min(8, cores) threads, unasserted.
+// PR CI skips `perf` tests and the nightly runner has fewer than 8 vCPUs, so the budget itself still
+// needs a run on 8-core hardware (09 §8.1).
+namespace {
+
+constexpr u32 kBudgetThreads = 8;
+
+struct TenThousandShips {
     std::vector<std::unique_ptr<AttributeSet>> sets;
     std::vector<AttributeSet*> ptrs;
-    sets.reserve(kEntities);
-    for (int e = 0; e < kEntities; ++e) {
-        sets.push_back(std::make_unique<AttributeSet>(layout));
-        addShipModifiers(*sets.back(), 20, static_cast<u32>(e));
-        ptrs.push_back(sets.back().get());
+    std::mt19937 rng{3};
+
+    TenThousandShips() {
+        auto layout = shipLayout();
+        constexpr int kEntities = 10000;
+        sets.reserve(kEntities);
+        for (int e = 0; e < kEntities; ++e) {
+            sets.push_back(std::make_unique<AttributeSet>(layout));
+            addShipModifiers(*sets.back(), 20, static_cast<u32>(e));
+            ptrs.push_back(sets.back().get());
+        }
+        resolveAttributes(ptrs, {}, nullptr);
     }
-    const u32 hw = hardwareThreadCount();
-    const u32 threads = std::max(2u, std::min(kBudgetThreads, hw));
-    jobs::JobSystemDesc desc;
-    desc.workerCount = threads - 1;
-    desc.name = "AttrPerf";
-    jobs::JobSystem js(desc);
-    REQUIRE(js.workerCount() + 1 == threads);
-    resolveAttributes(ptrs, {}, &js);
-    std::mt19937 rng(3);
-    auto dirty5 = [&] {
+    void dirty5() {
         for (auto* s : ptrs) {
             for (int k = 0; k < 2; ++k) { // 2/40 = 5 %
                 const auto slot = static_cast<AttrSlot>(rng() % 40);
                 s->setBase(slot, 10.0 + (rng() % 1000));
             }
         }
-    };
+    }
     // Best of N rounds: the minimum is robust against other processes on a shared CI machine.
-    constexpr int kRounds = 30;
-    f64 seqMs = 1e30, parMs = 1e30;
-    for (int r = 0; r < kRounds; ++r) {
-        dirty5();
-        auto t0 = Clock::now();
-        resolveAttributes(ptrs, {}, nullptr);
-        seqMs = std::min(seqMs, std::chrono::duration<f64, std::milli>(Clock::now() - t0).count());
-        dirty5();
-        t0 = Clock::now();
-        resolveAttributes(ptrs, {}, &js);
-        parMs = std::min(parMs, std::chrono::duration<f64, std::milli>(Clock::now() - t0).count());
+    f64 bestMs(jobs::JobSystem* js) {
+        f64 best = 1e30;
+        for (int r = 0; r < 30; ++r) {
+            dirty5();
+            const auto t0 = Clock::now();
+            resolveAttributes(ptrs, {}, js);
+            best = std::min(best, std::chrono::duration<f64, std::milli>(Clock::now() - t0).count());
+        }
+        return best;
     }
-    MESSAGE("10k x 40 at 5 % dirty: 1 thread " << seqMs << " ms, " << threads << " threads " << parMs << " ms on "
-                                               << hw << " hardware threads (budget: 1 ms on " << kBudgetThreads
-                                               << " threads)");
+};
+
+std::unique_ptr<jobs::JobSystem> resolveJobs(u32 threads) {
+    jobs::JobSystemDesc desc;
+    desc.workerCount = threads - 1; // the calling thread resolves chunks too
+    desc.name = "AttrPerf";
+    auto js = std::make_unique<jobs::JobSystem>(desc);
+    REQUIRE(js->workerCount() + 1 == threads);
+    return js;
+}
+
+} // namespace
+
+TEST_CASE("perf: 10k entities x 40 attributes at 5 % dirty <= 1 ms on 8 workers" *
+          doctest::skip(hardwareThreadCount() < kBudgetThreads)) {
+    TenThousandShips ships;
+    auto js = resolveJobs(kBudgetThreads);
+    const f64 ms = ships.bestMs(js.get());
+    MESSAGE("10k x 40 at 5 % dirty: " << kBudgetThreads << " threads " << ms << " ms (budget 1 ms)");
 #if HELIOS_GAMEPLAY_ASSERT_BUDGETS
-    CHECK(seqMs <= 8.0); // proxy: the single-thread work fits 8 workers x 1 ms
-    if (hw >= kBudgetThreads) {
-        CHECK(parMs <= 1.0); // the budget itself
-    } else {
-        MESSAGE("the 1 ms budget itself is not measured here: it needs >= " << kBudgetThreads
-                                                                            << " hardware threads");
-    }
+    CHECK(ms <= 1.0);
+#endif
+}
+
+TEST_CASE("perf: 10k entities x 40 attributes at 5 % dirty: 1 thread <= 8 ms (proxy)") {
+    TenThousandShips ships;
+    const f64 seqMs = ships.bestMs(nullptr);
+    const u32 threads = std::max(2u, std::min(kBudgetThreads, hardwareThreadCount()));
+    auto js = resolveJobs(threads);
+    const f64 parMs = ships.bestMs(js.get());
+    MESSAGE("10k x 40 at 5 % dirty: 1 thread " << seqMs << " ms (proxy budget 8 ms), " << threads << " threads "
+                                               << parMs << " ms (reported only)");
+#if HELIOS_GAMEPLAY_ASSERT_BUDGETS
+    CHECK(seqMs <= 8.0); // 8 workers x 1 ms of single-thread work
 #endif
 }

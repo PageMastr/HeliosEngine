@@ -109,7 +109,8 @@ v = PostAssign ? PostAssign.highestPriority : v;   final = clamp(v, minClamp, ma
 
 **HXL (Helios eXpression Language).** HXL is pure, deterministic stack bytecode compiled by
 schemac. Formulas are data, not C++ (R09-A0).
-- **Built-ins:** arithmetic, `min max clamp lerp select`, `pow exp ln sqrt asinh` from the
+- **Built-ins:** arithmetic, comparisons, short-circuit `&& || !`, `min max clamp lerp select`,
+  `abs floor ceil` (exact IEEE operations), `pow exp ln sqrt asinh` from the
   deterministic `hmath` library (not libm), `curve(t, x)`, `attr(e, A)`, `tag(e, T)`, `stacks()`,
   `level()`, and context fields.
 - **Interpreters.** There are two, each about 1.5k lines: C++ (`engine/hxl`) and Go (`pkg/hxl`, 05 §8,

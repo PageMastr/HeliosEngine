@@ -46,9 +46,8 @@ Values are numbers (f64) and booleans. A source is an expression over host-decla
 | `select(c, a, b)` | lazy conditional (the untaken branch never reads inputs) |
 | `min max` (2+ args), `clamp lerp pow exp ln sqrt asinh abs floor ceil` | built-ins |
 
-06's built-in list is `min max clamp lerp select pow exp ln sqrt asinh curve attr tag stacks level`;
-`abs`, `floor` and `ceil` are added because they are exact IEEE operations (06 §1.2 rule 3 allows
-them in Go) and designers need rounding. Comments are `//` to the end of the line.
+This is 06 §1.2's built-in list. `abs`, `floor` and `ceil` were added to it in WP-0.19: they are
+exact IEEE operations (06 §1.2 rule 3 allows them in Go), and designers need rounding. Comments are `//` to the end of the line.
 
 ## Determinism (06 §1.2 cross-language float rules)
 

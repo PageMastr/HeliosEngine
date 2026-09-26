@@ -183,6 +183,7 @@ struct BenchZone::Impl {
     std::unique_ptr<Query> iterQuery;
     std::vector<ChunkData> iterChunks;
     std::vector<Entity> burstCreated; // projectiles spawned by the last structuralBurst()
+    std::vector<ecs_entity_t> rawCreated; // unregistered projectiles of the last rawFlecsBurst()
 };
 
 BenchZone::BenchZone(World& world, const ZoneConfig& config)
@@ -774,16 +775,44 @@ BurstResult BenchZone::structuralBurst(u32 round, bool profiled) {
 
     CommandBuffer creates(&w), destroys(&w), toggles(&w), statuses(&w);
     const Stopwatch record;
-    for (u32 i = 0; i < 3000; ++i) {
-        const u64 h = h64(0xB0057 + round, i);
-        const TempEntity t = creates.spawn({.frame = im.frames[i % im.frames.size()]});
-        creates.set(t, c::Position{DVec3(unit(h) * 1000.0, 0.0, 0.0)});
-        creates.set(t, c::Velocity{{100, 0, 0}, {}});
-        creates.set(t, c::Projectile{im.targets[i % im.targets.size()], 5});
-        creates.set(t, c::Lifetime{2});
-        creates.set(t, c::Faction{1});
-        creates.set(t, c::Bounds{0.2f});
-        creates.set(t, c::SpatialCell{});
+    const u32 frameCount = static_cast<u32>(im.frames.size());
+    std::vector<TempEntity> createdTemps(3000);
+    if (m_config.perCommandCreates) {
+        // One spawn() and seven set() commands per projectile (fused at apply time).
+        for (u32 i = 0; i < 3000; ++i) {
+            const u64 h = h64(0xB0057 + round, i);
+            const TempEntity t = creates.spawn({.frame = im.frames[i % frameCount]});
+            creates.set(t, c::Position{DVec3(unit(h) * 1000.0, 0.0, 0.0)});
+            creates.set(t, c::Velocity{{100, 0, 0}, {}});
+            creates.set(t, c::Projectile{im.targets[i % im.targets.size()], 5});
+            creates.set(t, c::Lifetime{2});
+            creates.set(t, c::Faction{1});
+            creates.set(t, c::Bounds{0.2f});
+            creates.set(t, c::SpatialCell{});
+            createdTemps[i] = t;
+        }
+    } else {
+        // The same projectiles as one spawnN() batch per frame, values in column arrays: how a
+        // system records a volley (ADR-004a item 4).
+        std::vector<c::Position> pos;
+        std::vector<c::Projectile> proj;
+        const std::vector<c::Velocity> vel(3000 / frameCount + 1, c::Velocity{{100, 0, 0}, {}});
+        const std::vector<c::Lifetime> life(vel.size(), c::Lifetime{2});
+        const std::vector<c::Faction> fac(vel.size(), c::Faction{1});
+        const std::vector<c::Bounds> bounds(vel.size(), c::Bounds{0.2f});
+        const std::vector<c::SpatialCell> cells(vel.size(), c::SpatialCell{});
+        for (u32 f = 0; f < frameCount; ++f) {
+            pos.clear();
+            proj.clear();
+            for (u32 i = f; i < 3000; i += frameCount) {
+                pos.push_back(c::Position{DVec3(unit(h64(0xB0057 + round, i)) * 1000.0, 0.0, 0.0)});
+                proj.push_back(c::Projectile{im.targets[i % im.targets.size()], 5});
+            }
+            const u32 n = static_cast<u32>(pos.size());
+            const TempEntity first = creates.spawnN({.frame = im.frames[f]}, n, pos.data(), vel.data(), proj.data(),
+                                                    life.data(), fac.data(), bounds.data(), cells.data());
+            for (u32 k = 0; k < n; ++k) createdTemps[f + k * frameCount] = TempEntity{first.index + k};
+        }
     }
     for (const Entity e : victims) destroys.destroy(e);
     for (usize i = 0; i < npcs.size(); ++i) {
@@ -819,7 +848,7 @@ BurstResult BenchZone::structuralBurst(u32 round, bool profiled) {
     profiled ? timed::worldCreates(w, creates) : w.apply(creates);
     res.createMs = sw.elapsedMillis();
     im.burstCreated.clear();
-    for (u32 i = 0; i < 3000; ++i) im.burstCreated.push_back(creates.resolved(TempEntity{i}));
+    for (const TempEntity t : createdTemps) im.burstCreated.push_back(creates.resolved(t));
     sw.reset();
     profiled ? timed::worldDestroys(w, destroys) : w.apply(destroys);
     res.destroyMs = sw.elapsedMillis();
@@ -990,9 +1019,12 @@ BurstResult BenchZone::rawFlecsBurst(u32 round, bool profiled) {
     profiled ? timed::rawCreates(fw, tables, perFrame, columns, created) : ops::rawCreates(fw, tables, perFrame, columns, created);
     res.createMs = sw.elapsedMillis();
 
+    // Like the World burst, delete the previous burst's creates while this burst's sit at the ends
+    // of the tables (so every delete moves a row into the hole, as it does for the World).
     sw.reset();
-    profiled ? timed::rawDestroys(fw, created) : ops::rawDestroys(fw, created);
+    profiled ? timed::rawDestroys(fw, im.rawCreated) : ops::rawDestroys(fw, im.rawCreated);
     res.destroyMs = sw.elapsedMillis();
+    im.rawCreated = std::move(created);
 
     const bool apply = round % 2 == 0;
     std::vector<ecs_id_t> species{im.tags[8], im.tags[9], im.tags[10]};

@@ -16,6 +16,9 @@
 //
 // Usage: ecs_bench [--ticks=N] [--warmup=N] [--quick] [--workers=0,1,2,4] [--no-spikes]
 //                  [--spikes-only] [--seed=N] [--inframe-dontfragment] [--no-warmup-pass] [--m1-gate]
+//                  [--per-command-creates]
+// The burst's 3,000 creates are 12 spawnN() batches (one per frame) unless --per-command-creates
+// records them as spawn() + 7 set() commands each.
 // Exit code: 0 = RT-01 PASS, 1 = FAIL. With --m1-gate: 0 = M1 PASS, 1 = FAIL (RT-01 still printed).
 
 #include <mimalloc.h>
@@ -104,7 +107,8 @@ struct RunResult {
     f64 syncMs[ecs::kStageCount] = {};
 };
 
-RunResult runZone(u32 workers, u32 ticks, u32 warmup, u64 seed, bool inFrameDontFragment, bool verbose) {
+RunResult runZone(u32 workers, u32 ticks, u32 warmup, u64 seed, bool inFrameDontFragment, bool perCommandCreates,
+                  bool verbose) {
     RunResult r;
     r.workers = workers;
     std::unique_ptr<jobs::JobSystem> js;
@@ -123,6 +127,7 @@ RunResult runZone(u32 workers, u32 ticks, u32 warmup, u64 seed, bool inFrameDont
         ecs::World world(desc);
         bench::ZoneConfig cfg;
         cfg.seed = seed;
+        cfg.perCommandCreates = perCommandCreates;
         bench::BenchZone zone(world, cfg);
         const Stopwatch build;
         zone.build();
@@ -288,10 +293,13 @@ int main(int argc, char** argv) {
     const bool spikesOnly = cmd.has("spikes-only");
     const bool spikes = !cmd.has("no-spikes");
     const bool inFrameDontFragment = cmd.has("inframe-dontfragment");
+    const bool perCommandCreates = cmd.has("per-command-creates");
 
     ecs::installFlecsOsApi();
-    out(std::format("ecs_bench — RT-01 50k-entity zone on flecs {} ({} hardware threads; InFrame {})\n", "4.1.6",
-                    hardwareThreadCount(), inFrameDontFragment ? "DontFragment" : "fragmenting"));
+    out(std::format("ecs_bench — RT-01 50k-entity zone on flecs {} ({} hardware threads; InFrame {}; burst creates {}; "
+                    "asserts {})\n",
+                    "4.1.6", hardwareThreadCount(), inFrameDontFragment ? "DontFragment" : "fragmenting",
+                    perCommandCreates ? "per command" : "spawnN", HELIOS_ENABLE_ASSERTS ? "on" : "off"));
 
     bool pass = true;
     bool m1Pass = true;
@@ -301,13 +309,13 @@ int main(int argc, char** argv) {
         // long-running cell has already paid. Without it the first configuration is not comparable.
         if (!cmd.has("no-warmup-pass")) {
             out("\n(warm-up pass: one discarded zone run)\n");
-            (void)runZone(0, std::min(ticks, 20u), 5, seed, inFrameDontFragment, false);
+            (void)runZone(0, std::min(ticks, 20u), 5, seed, inFrameDontFragment, perCommandCreates, false);
         }
         std::vector<RunResult> results;
         for (u32 w : workerList) {
             out(std::format("\n-- configuration: {} --\n", w == 0 ? std::string("single-threaded (no JobSystem)")
                                                              : std::format("{} job worker(s) + main thread", w)));
-            results.push_back(runZone(w, ticks, warmup, seed, inFrameDontFragment, false));
+            results.push_back(runZone(w, ticks, warmup, seed, inFrameDontFragment, perCommandCreates, false));
             const RunResult& r = results.back();
             out(std::format("  zone: {} entities ({} replicated, {} placed), {} archetypes, {} tables, {} bodies, "
                             "built in {:.0f} ms\n",

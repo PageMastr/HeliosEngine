@@ -35,6 +35,9 @@ public:
 
     /// Inserts or overwrites. `key` must not be 0. Returns true if the key was new.
     bool insert(u64 key, u64 value);
+    /// Inserts only if `key` is absent (one probe sequence). `key` must not be 0. Returns false,
+    /// leaving the map unchanged, if the key exists.
+    bool insertNew(u64 key, u64 value);
     /// Returns the value or `missing`.
     u64 find(u64 key, u64 missing = 0) const noexcept;
     bool contains(u64 key) const noexcept;
@@ -85,10 +88,14 @@ public:
 
     /// Issues a dynamic handle (FIFO slot reuse). Fails with LimitExceeded when the table is full.
     Result<NetHandle> allocate(EntityId id);
+    /// allocate() without the error object (bulk spawn paths): an invalid handle when full.
+    NetHandle tryAllocate(EntityId id) noexcept;
     /// Issues the content-placed slot `index` (1..reservedCount). Fails if out of range or in use.
     Result<NetHandle> allocateAt(u32 index, EntityId id);
     /// Frees a live handle (bumps the slot generation). Returns false for stale/invalid handles.
     bool release(NetHandle handle);
+    /// release() only if `handle` is live and was issued to `id` (one validation for both checks).
+    bool releaseIssuedTo(NetHandle handle, EntityId id);
 
     /// EntityId of a live handle, or an invalid id for stale/invalid handles.
     EntityId resolve(NetHandle handle) const noexcept;
@@ -125,8 +132,18 @@ public:
 
     /// Registers `entity` under `id` (which must be unused). Returns AlreadyExists otherwise.
     Result<void> add(EntityId id, Entity entity);
+    /// add() for the bulk spawn paths: one probe and no error object. Returns false, registering
+    /// nothing, if `id` or `entity` is invalid or `id` is taken.
+    bool addNew(EntityId id, Entity entity);
+    /// Reserves capacity for `additional` more ids (one rehash for a whole spawn group).
+    void reserve(usize additional) { m_byId.reserve(m_byId.size() + additional); }
     /// Issues a NetHandle for a registered id. `contentIndex` != 0 uses allocateAt().
     Result<NetHandle> assignHandle(EntityId id, u32 contentIndex = 0);
+    /// assignHandle() for an id the caller has just registered for `entity` (skips the lookup).
+    Result<NetHandle> assignHandleFor(EntityId id, Entity entity, u32 contentIndex = 0);
+    /// assignHandleFor() of a dynamic handle without the error object (bulk spawn paths): an
+    /// invalid handle when the table is full.
+    NetHandle tryAssignHandle(EntityId id, Entity entity) noexcept;
     /// Removes id (and releases `handle` if valid). Returns false if id was unknown.
     bool remove(EntityId id, NetHandle handle);
 
@@ -140,6 +157,8 @@ public:
     usize memoryBytes() const noexcept;
 
 private:
+    void mapHandle(u32 index, Entity entity);
+
     U64Map m_byId;
     NetHandleTable m_handles;
     std::vector<Entity> m_byHandleIndex;

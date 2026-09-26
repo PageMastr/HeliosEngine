@@ -76,6 +76,23 @@ bool U64Map::insert(u64 key, u64 value) {
     }
 }
 
+bool U64Map::insertNew(u64 key, u64 value) {
+    HELIOS_ASSERT(key != 0, "U64Map: key 0 is reserved");
+    if ((m_size + 1) * 2 > m_capacity) rehash(m_capacity * 2);
+    usize i = slotOf(key);
+    for (;;) {
+        Slot& s = m_slots[i];
+        if (s.key == key) return false;
+        if (s.key == 0) {
+            s.key = key;
+            s.value = value;
+            ++m_size;
+            return true;
+        }
+        i = (i + 1) & (m_capacity - 1);
+    }
+}
+
 u64 U64Map::find(u64 key, u64 missing) const noexcept {
     if (key == 0) return missing;
     usize i = slotOf(key);
@@ -151,6 +168,12 @@ NetHandleTable::Slot& NetHandleTable::slot(u32 index) {
 }
 
 Result<NetHandle> NetHandleTable::allocate(EntityId id) {
+    const NetHandle h = tryAllocate(id);
+    if (!h.isValid()) return Error{ErrorCode::LimitExceeded, "NetHandleTable is full"};
+    return h;
+}
+
+NetHandle NetHandleTable::tryAllocate(EntityId id) noexcept {
     u32 index = 0;
     const usize waiting = m_freeRing.size() - m_freeHead;
     const bool freshLeft = m_nextFresh <= m_max && m_nextFresh > m_reserved;
@@ -163,7 +186,7 @@ Result<NetHandle> NetHandleTable::allocate(EntityId id) {
     } else if (freshLeft) {
         index = m_nextFresh++;
     } else {
-        return Error{ErrorCode::LimitExceeded, "NetHandleTable is full"};
+        return NetHandle();
     }
     Slot& s = slot(index);
     HELIOS_ASSERT(!s.live);
@@ -185,11 +208,13 @@ Result<NetHandle> NetHandleTable::allocateAt(u32 index, EntityId id) {
     return NetHandle::make(index, s.generation);
 }
 
-bool NetHandleTable::release(NetHandle handle) {
+bool NetHandleTable::release(NetHandle handle) { return releaseIssuedTo(handle, resolve(handle)); }
+
+bool NetHandleTable::releaseIssuedTo(NetHandle handle, EntityId id) {
     const u32 index = handle.index();
     if (index == 0 || index >= m_slots.size()) return false;
     Slot& s = m_slots[index];
-    if (!s.live || s.generation != handle.generation()) return false;
+    if (!s.live || s.generation != handle.generation() || s.id != id) return false;
     s.live = false;
     s.id = EntityId();
     s.generation = static_cast<u8>(s.generation + 1);
@@ -225,23 +250,38 @@ Result<void> EntityRegistry::add(EntityId id, Entity entity) {
     return {};
 }
 
+bool EntityRegistry::addNew(EntityId id, Entity entity) {
+    return id.isValid() && entity.isValid() && m_byId.insertNew(id.value, entity.id);
+}
+
 Result<NetHandle> EntityRegistry::assignHandle(EntityId id, u32 contentIndex) {
     const Entity entity = find(id);
     if (!entity) return Error{ErrorCode::NotFound, "assignHandle: unknown EntityId"};
-    Result<NetHandle> handle = contentIndex != 0 ? m_handles.allocateAt(contentIndex, id) : m_handles.allocate(id);
-    if (!handle) return handle;
-    const u32 index = handle->index();
+    return assignHandleFor(id, entity, contentIndex);
+}
+
+void EntityRegistry::mapHandle(u32 index, Entity entity) {
     if (index >= m_byHandleIndex.size()) m_byHandleIndex.resize(std::max<usize>(index + 1, m_byHandleIndex.size() * 2));
     m_byHandleIndex[index] = entity;
+}
+
+NetHandle EntityRegistry::tryAssignHandle(EntityId id, Entity entity) noexcept {
+    HELIOS_ASSERT(find(id) == entity, "tryAssignHandle: id is not registered for this entity");
+    const NetHandle handle = m_handles.tryAllocate(id);
+    if (handle.isValid()) mapHandle(handle.index(), entity);
+    return handle;
+}
+
+Result<NetHandle> EntityRegistry::assignHandleFor(EntityId id, Entity entity, u32 contentIndex) {
+    HELIOS_ASSERT(find(id) == entity, "assignHandleFor: id is not registered for this entity");
+    Result<NetHandle> handle = contentIndex != 0 ? m_handles.allocateAt(contentIndex, id) : m_handles.allocate(id);
+    if (handle) mapHandle(handle->index(), entity);
     return handle;
 }
 
 bool EntityRegistry::remove(EntityId id, NetHandle handle) {
     if (!m_byId.erase(id.value)) return false;
-    if (handle.isValid() && m_handles.resolve(handle) == id) {
-        m_handles.release(handle);
-        m_byHandleIndex[handle.index()] = Entity();
-    }
+    if (handle.isValid() && m_handles.releaseIssuedTo(handle, id)) m_byHandleIndex[handle.index()] = Entity();
     return true;
 }
 

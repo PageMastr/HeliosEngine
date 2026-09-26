@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
+#include <type_traits>
 
 #include "helios/core/assert.h"
 #include "helios/core/jobs.h"
@@ -39,6 +40,44 @@ void collectRelated(ecs_world_t* w, ecs_entity_t rel, ecs_entity_t target, std::
     }
     std::sort(out.begin() + static_cast<isize>(first), out.end());
 }
+
+// NetIdentity of the entity at `r`, read from its table (nullptr: not spawned through the World).
+const NetIdentity* netIdentityAt(const ecs_world_t* w, ComponentId netIdentity, const ecs_record_t* r) {
+    const int32_t col = ecs_table_get_column_index(w, r->table, netIdentity);
+    if (col < 0) return nullptr;
+    return static_cast<const NetIdentity*>(ecs_table_get_column(r->table, col, ECS_RECORD_TO_ROW(r->row)));
+}
+
+// Structural log entry for the entity at `r` (World::logEvent without the entity lookup).
+void logAt(std::vector<StructuralEvent>& log, const ecs_world_t* w, ComponentId netIdentity, StructuralOp op,
+           const ecs_record_t* r, u64 arg) {
+    const NetIdentity* ni = netIdentityAt(w, netIdentity, r);
+    log.push_back(ni ? StructuralEvent{op, ni->id, ni->handle, arg}
+                     : StructuralEvent{op, EntityId(), NetHandle(), arg});
+}
+
+// flecs sets EcsEntityIsTarget on an entity's record the first time a pair targets it (ChildOf and
+// Parent children, InFrame members, DockedTo pairs, IsA) and never clears it; ecs_delete relies on
+// the same flag to decide whether pairs targeting the entity need cleaning up. Without it, nothing
+// is related to the entity.
+bool isPairTarget(const ecs_record_t* r) noexcept {
+    return (ECS_RECORD_TO_ROW_FLAGS(r->row) & EcsEntityIsTarget) != 0;
+}
+
+// One component value, sizes known at run time: the common small sizes are copied inline.
+inline void copyValue(void* dst, const void* src, u32 size) noexcept {
+    switch (size) {
+    case 4: std::memcpy(dst, src, 4); return;
+    case 8: std::memcpy(dst, src, 8); return;
+    case 12: std::memcpy(dst, src, 12); return;
+    case 16: std::memcpy(dst, src, 16); return;
+    case 24: std::memcpy(dst, src, 24); return;
+    case 32: std::memcpy(dst, src, 32); return;
+    default: std::memcpy(dst, src, size); return;
+    }
+}
+
+constexpr ComponentFlags kNotInTable = ComponentFlags::Sparse | ComponentFlags::DontFragment;
 
 std::string sanitizeName(std::string_view name) {
     std::string out(name);
@@ -267,14 +306,19 @@ Result<ComponentId> World::registerComponent(const ComponentDesc& desc) {
         // (With, RepDirty) trait would leave it uninitialized: RepDirty has no flecs ctor).
     }
     info.defaultValue = defaultValue;
+    info.hooks = &hooks;
     m_impl->components.push_back(std::move(info));
+    if (ent < kDirectInfoIds) {
+        if (ent >= m_infoByLowId.size()) m_infoByLowId.resize(static_cast<usize>(ent) + 1, nullptr);
+        m_infoByLowId[ent] = &m_impl->components.back();
+    }
     m_impl->slotOfComponent.push_back(~0u);
     m_impl->indexById.insert(ent, index + 1);
     m_impl->indexByName.emplace(name, index);
     return ComponentId(ent);
 }
 
-const ComponentInfo* World::componentInfo(ComponentId cid) const noexcept {
+const ComponentInfo* World::componentInfoSlow(ComponentId cid) const noexcept {
     const u64 index = m_impl->indexById.find(cid);
     return index ? &m_impl->components[index - 1] : nullptr;
 }
@@ -301,12 +345,7 @@ NetIdentity World::identityOf(Entity e) const noexcept {
 
 void World::logEvent(StructuralOp op, Entity e, u64 arg) {
     const NetIdentity ni = identityOf(e);
-    StructuralEvent ev;
-    ev.op = op;
-    ev.entity = ni.id;
-    ev.handle = ni.handle;
-    ev.arg = arg;
-    m_log.push_back(ev);
+    m_log.push_back(StructuralEvent{op, ni.id, ni.handle, arg});
 }
 
 Entity World::spawn(const SpawnDesc& desc) { return spawnImpl(desc, {}, EntityId()); }
@@ -357,16 +396,14 @@ Entity World::spawnImpl(const SpawnDesc& desc, std::span<const SpawnOp> ops, Ent
     impl.lateOps.clear();
     impl.opIndex.clear();
     for (usize i = 0; i < ops.size(); ++i) {
-        const u64 index = impl.indexById.find(ops[i].id);
-        const ComponentInfo* info = index ? &impl.components[index - 1] : nullptr;
-        const bool sparse = info && hasFlag(info->flags, ComponentFlags::Sparse | ComponentFlags::DontFragment);
+        const ComponentInfo* info = ops[i].info;
         // Values of foreign (non-World) components go through ecs_set_id so their hooks run.
-        if (sparse || (!info && ops[i].value)) {
+        if ((info && hasFlag(info->flags, kNotInTable)) || (!info && ops[i].value)) {
             impl.lateOps.push_back(static_cast<u32>(i));
             impl.opIndex.push_back(0);
         } else {
             impl.typeScratch.push_back(ops[i].id);
-            impl.opIndex.push_back(static_cast<u32>(index));
+            impl.opIndex.push_back(info ? 1u : 0u); // 1 = a World component stored in the table
         }
     }
     ecs_table_t* table = findTable(impl.typeScratch);
@@ -397,21 +434,18 @@ Entity World::spawnImpl(const SpawnDesc& desc, std::span<const SpawnOp> ops, Ent
     };
     std::memcpy(columnOf(m_netIdentityId), &ni, sizeof(NetIdentity));
     for (usize i = 0; i < ops.size(); ++i) {
-        const u32 index = impl.opIndex[i];
-        if (index == 0 || !ops[i].value) continue; // tags (plain components carry their default)
+        if (impl.opIndex[i] == 0 || !ops[i].value) continue; // tags (plain components carry their default)
+        const ComponentInfo& info = *ops[i].info;
         void* dst = columnOf(ops[i].id);
         if (!dst) {
             ecs_set_id(m_flecs, e, ops[i].id, ops[i].size, ops[i].value);
             dst = ecs_get_mut_id(m_flecs, e, ops[i].id);
+        } else if (info.hooks->copy) {
+            info.hooks->copy(dst, ops[i].value, 1);
         } else {
-            const ComponentHooks& hooks = impl.hooks[index - 1];
-            if (hooks.copy) {
-                hooks.copy(dst, ops[i].value, 1);
-            } else {
-                std::memcpy(dst, ops[i].value, ops[i].size);
-            }
+            copyValue(dst, ops[i].value, ops[i].size);
         }
-        clearDirtyMask(dst, impl.components[index - 1]); // the Create event carries the full value
+        clearDirtyMask(dst, info); // the Create event carries the full value
     }
     for (const u32 i : impl.lateOps) {
         if (ops[i].value) {
@@ -419,7 +453,7 @@ Entity World::spawnImpl(const SpawnDesc& desc, std::span<const SpawnOp> ops, Ent
         } else {
             ecs_add_id(m_flecs, e, ops[i].id);
         }
-        if (const ComponentInfo* info = componentInfo(ops[i].id)) clearDirtyMask(ecs_get_mut_id(m_flecs, e, ops[i].id), *info);
+        if (ops[i].info) clearDirtyMask(ecs_get_mut_id(m_flecs, e, ops[i].id), *ops[i].info);
     }
     if (desc.parent && !childOfInTable) {
         EcsParent p = {fe(desc.parent)};
@@ -487,23 +521,28 @@ void World::spawnGroup(CommandBuffer& buffer, u32 groupIndex) {
         // Resolved for every op: members share the op ids but not whether they carry a value (one
         // may add<T>() a non-trivial component while another sets it).
         impl.groupColumns[k] = column(repOps[k].id, impl.groupSizes[k]);
-        const u64 index = impl.indexById.find(repOps[k].id);
-        if (index && impl.hooks[index - 1].copy) impl.groupHooks[k] = &impl.hooks[index - 1];
-        if (index && impl.components[index - 1].isReplicated()) impl.groupDirtyOffsets[k] = impl.components[index - 1].dirtyOffset;
+        const ComponentInfo* info = repOps[k].info;
+        if (info && info->hooks->copy) impl.groupHooks[k] = info->hooks;
+        if (info && info->isReplicated()) impl.groupDirtyOffsets[k] = info->dirtyOffset;
     }
     const int32_t firstRow = ECS_RECORD_TO_ROW(ecs_record_find(m_flecs, impl.bulkEntities[0])->row);
 
+    // Identity for the whole group in one pass (ADR-004a item 1): registry capacity reserved once,
+    // one probe per insert, NetHandles in member order, and the NetIdentity column written in place.
+    m_registry.reserve(count);
+    impl.groupMemberOps.resize(count);
     for (u32 m = 0; m < count; ++m) {
         const u32 t = grp.members[m];
         const SpawnDesc& desc = buffer.m_spawns[t];
         const ecs_entity_t e = impl.bulkEntities[m];
         const usize row = static_cast<usize>(firstRow) + m;
         const EntityId id = impl.spawnIds[t];
-        if (!id.isValid() || !m_registry.add(id, he(e))) {
+        if (!m_registry.addNew(id, he(e))) {
             // No id could be minted, or two spawns of one buffer carried the same explicit id: the
             // entity is dropped after the loop (deleting now would swap rows under the remaining writes).
             HELIOS_LOG_ERROR(LogEcs, "spawn refused: EntityId {:#x} is {}", id.value, id.isValid() ? "already registered" : "invalid");
             impl.bulkDropped.push_back(e);
+            impl.groupMemberOps[m] = nullptr;
             ++impl.discarded;
             continue;
         }
@@ -511,34 +550,179 @@ void World::spawnGroup(CommandBuffer& buffer, u32 groupIndex) {
         ni.id = id;
         ni.ag = desc.ag;
         if (desc.netHandle) {
-            Result<NetHandle> h = m_registry.assignHandle(id, desc.contentHandleIndex);
-            if (h) ni.handle = *h;
+            if (desc.contentHandleIndex != 0) {
+                Result<NetHandle> h = m_registry.assignHandleFor(id, he(e), desc.contentHandleIndex);
+                if (h) ni.handle = *h;
+            } else {
+                ni.handle = m_registry.tryAssignHandle(id, he(e));
+            }
         }
         std::memcpy(netColumn + row * netSize, &ni, sizeof(NetIdentity));
-        const SpawnOp* ops = impl.flatOps.data() + impl.spawnOpBegin[t];
-        for (u32 k = 0; k < grp.opCount; ++k) {
-            std::byte* base = impl.groupColumns[k];
-            if (!base || !ops[k].value) continue;
-            std::byte* dst = base + row * impl.groupSizes[k];
-            if (impl.groupHooks[k]) {
-                impl.groupHooks[k]->copy(dst, ops[k].value, 1);
-            } else {
-                std::memcpy(dst, ops[k].value, ops[k].size);
-            }
-            if (impl.groupDirtyOffsets[k] != ~0u) {
-                const FieldMask clean = 0; // the Create event carries the full value
-                std::memcpy(dst + impl.groupDirtyOffsets[k], &clean, sizeof clean);
-            }
-        }
+        impl.groupMemberOps[m] = impl.flatOps.data() + impl.spawnOpBegin[t];
         buffer.m_resolved[t] = he(e);
-        StructuralEvent ev;
-        ev.op = StructuralOp::Create;
-        ev.entity = id;
-        ev.handle = ni.handle;
-        m_log.push_back(ev);
+        m_log.push_back(StructuralEvent{StructuralOp::Create, id, ni.handle, 0});
+    }
+
+    // Values column by column: one destination column at a time, the copy specialized per size.
+    for (u32 k = 0; k < grp.opCount; ++k) {
+        if (!impl.groupColumns[k]) continue;
+        const usize stride = impl.groupSizes[k];
+        std::byte* const base = impl.groupColumns[k] + static_cast<usize>(firstRow) * stride;
+        const ComponentHooks* hooks = impl.groupHooks[k];
+        const u32 dirty = impl.groupDirtyOffsets[k];
+        auto copyColumn = [&](auto sizeTag) {
+            constexpr usize kSize = decltype(sizeTag)::value;
+            for (u32 m = 0; m < count; ++m) {
+                const SpawnOp* ops = impl.groupMemberOps[m];
+                if (!ops || !ops[k].value) continue;
+                std::byte* dst = base + m * stride;
+                if (hooks) {
+                    hooks->copy(dst, ops[k].value, 1);
+                } else if (kSize != 0 && ops[k].size == kSize) {
+                    std::memcpy(dst, ops[k].value, kSize);
+                } else { // (a setRaw() value of the wrong size never writes past the element)
+                    std::memcpy(dst, ops[k].value, std::min<usize>(ops[k].size, stride));
+                }
+                if (dirty != ~0u) {
+                    const FieldMask clean = 0; // the Create event carries the full value
+                    std::memcpy(dst + dirty, &clean, sizeof clean);
+                }
+            }
+        };
+        // Members of a group share op ids, so a value's size is normally the column's.
+        switch (hooks ? 0 : stride) {
+        case 4: copyColumn(std::integral_constant<usize, 4>{}); break;
+        case 8: copyColumn(std::integral_constant<usize, 8>{}); break;
+        case 16: copyColumn(std::integral_constant<usize, 16>{}); break;
+        case 24: copyColumn(std::integral_constant<usize, 24>{}); break;
+        case 32: copyColumn(std::integral_constant<usize, 32>{}); break;
+        default: copyColumn(std::integral_constant<usize, 0>{}); break;
+        }
     }
     impl.structuralOps += count - static_cast<u32>(impl.bulkDropped.size());
-    for (const ecs_entity_t e : impl.bulkDropped) ecs_delete(m_flecs, e); // default NetIdentity: hook ignores it
+    for (const ecs_entity_t e : impl.bulkDropped) ecs_delete(m_flecs, e); // unregistered: nothing to undo
+    impl.bulkDropped.clear();
+}
+
+void World::spawnBatch(CommandBuffer& buffer, u32 batchIndex) {
+    Impl& impl = *m_impl;
+    const CommandBuffer::Batch& batch = buffer.m_batches[batchIndex];
+    const SpawnDesc& desc = buffer.m_spawns[batch.firstTemp];
+    const std::span<const SpawnColumn> columns(buffer.m_batchColumns.data() + batch.firstColumn, batch.columnCount);
+    const u32 count = batch.count;
+    auto refuse = [&](const char* why) {
+        HELIOS_LOG_WARN(LogEcs, "spawnN of {} entities refused: {}", count, why);
+        impl.discarded += count;
+    };
+    if (desc.prefab || desc.parent) return refuse("prefab and parent spawns go through spawn()");
+    if (desc.id.isValid() || desc.contentHandleIndex != 0) {
+        return refuse("explicit ids and handle slots go through spawn()");
+    }
+    if (desc.frame && !isAlive(desc.frame)) return refuse("its frame is not alive");
+
+    // Final table: identity, frame, the table-stored columns, and RepDirty next to replicated ones.
+    const bool frameInTable = desc.frame && !m_desc.relations.inFrameDontFragment;
+    impl.typeScratch.clear();
+    impl.typeScratch.push_back(m_netIdentityId);
+    if (frameInTable) impl.typeScratch.push_back(ecs_pair(fe(m_inFrame), fe(desc.frame)));
+    bool replicated = false;
+    bool late = desc.frame && !frameInTable;
+    for (const SpawnColumn& c : columns) {
+        const ComponentInfo* info = componentInfo(c.id);
+        if (!info) return refuse("a column is not a World component");
+        const bool plain = !info->hooks->copy && !info->hooks->move && !info->hooks->destruct;
+        if (c.values && (c.size != info->size || !plain)) {
+            return refuse("a column's values are not trivially copyable values of its component");
+        }
+        replicated = replicated || info->isReplicated();
+        if (hasFlag(info->flags, kNotInTable)) {
+            late = true;
+        } else {
+            impl.typeScratch.push_back(c.id);
+        }
+    }
+    const ComponentInfo& repDirty = *componentInfo(m_repDirtyId);
+    if (replicated) impl.typeScratch.push_back(m_repDirtyId);
+    ecs_table_t* table = findTable(impl.typeScratch);
+
+    ecs_bulk_desc_t bd = {};
+    bd.count = static_cast<int32_t>(count);
+    bd.table = table;
+    const ecs_entity_t* created = ecs_bulk_init(m_flecs, &bd); // rows appended + constructed at once
+    impl.bulkEntities.assign(created, created + count);
+    const int32_t firstRow = ECS_RECORD_TO_ROW(ecs_record_find(m_flecs, impl.bulkEntities[0])->row);
+    auto columnAt = [&](ComponentId cid) {
+        const int32_t col = ecs_table_get_column_index(m_flecs, table, cid);
+        return static_cast<std::byte*>(ecs_table_get_column(table, col, firstRow));
+    };
+
+    // Values column by column (plain components without values get their default), clean dirty masks.
+    auto fill = [&](const ComponentInfo& info, const void* values) {
+        std::byte* base = columnAt(info.id);
+        const usize size = info.size;
+        if (values) {
+            std::memcpy(base, values, size * count);
+        } else if (info.defaultValue) {
+            for (u32 r = 0; r < count; ++r) copyValue(base + r * size, info.defaultValue, info.size);
+        } // else: flecs constructed it (a component with hooks)
+        if (info.isReplicated()) {
+            const FieldMask clean = 0; // the Create event carries the full value
+            for (u32 r = 0; r < count; ++r) std::memcpy(base + r * size + info.dirtyOffset, &clean, sizeof clean);
+        }
+    };
+    for (const SpawnColumn& c : columns) {
+        const ComponentInfo& info = *componentInfo(c.id);
+        if (!info.isTag() && !hasFlag(info.flags, kNotInTable)) fill(info, c.values);
+    }
+    if (replicated) fill(repDirty, nullptr);
+
+    // Identity in one pass (ADR-004a item 1): EntityIds were minted in command order, registry
+    // capacity is reserved once, NetHandles follow row order, NetIdentity is written in place.
+    auto* net = reinterpret_cast<NetIdentity*>(columnAt(m_netIdentityId));
+    m_registry.reserve(count);
+    for (u32 r = 0; r < count; ++r) {
+        const u32 t = batch.firstTemp + r;
+        const EntityId id = impl.spawnIds[t];
+        const ecs_entity_t e = impl.bulkEntities[r];
+        NetIdentity ni;
+        if (!m_registry.addNew(id, he(e))) {
+            HELIOS_LOG_ERROR(LogEcs, "spawn refused: EntityId {:#x} is {}", id.value,
+                             id.isValid() ? "already registered" : "invalid");
+            std::memcpy(net + r, &ni, sizeof ni);
+            impl.bulkDropped.push_back(e);
+            ++impl.discarded;
+            continue;
+        }
+        ni.id = id;
+        ni.ag = desc.ag;
+        if (desc.netHandle) ni.handle = m_registry.tryAssignHandle(id, he(e));
+        std::memcpy(net + r, &ni, sizeof ni);
+        buffer.m_resolved[t] = he(e);
+        m_log.push_back(StructuralEvent{StructuralOp::Create, id, ni.handle, 0});
+    }
+
+    // Sparse and DontFragment columns, and a DontFragment frame, per entity (no table moves).
+    if (late) {
+        for (u32 r = 0; r < count; ++r) {
+            const Entity e = buffer.m_resolved[batch.firstTemp + r];
+            if (!e) continue;
+            for (const SpawnColumn& c : columns) {
+                const ComponentInfo& info = *componentInfo(c.id);
+                if (!hasFlag(info.flags, kNotInTable)) continue;
+                const void* value = info.defaultValue;
+                if (c.values) value = static_cast<const std::byte*>(c.values) + static_cast<usize>(r) * info.size;
+                if (value) {
+                    ecs_set_id(m_flecs, fe(e), c.id, info.size, value);
+                } else {
+                    ecs_add_id(m_flecs, fe(e), c.id);
+                }
+                if (info.isReplicated()) clearDirtyMask(ecs_get_mut_id(m_flecs, fe(e), c.id), info);
+            }
+            if (desc.frame && !frameInTable) ecs_add_pair(m_flecs, fe(e), fe(m_inFrame), fe(desc.frame));
+        }
+    }
+    impl.structuralOps += count - static_cast<u32>(impl.bulkDropped.size());
+    for (const ecs_entity_t e : impl.bulkDropped) ecs_delete(m_flecs, e); // unregistered: nothing to undo
     impl.bulkDropped.clear();
 }
 
@@ -566,16 +750,18 @@ void World::assignChildIdentities(Entity root, bool netHandles, AgId ag) {
     }
 }
 
-void World::releaseRelationTargets(Entity e) {
+void World::releaseRelationTargets(Entity e, bool isTarget) {
     // Entities in frame `e` or docked at host `e` lose that relation when `e` dies (flecs removes the
     // (InFrame, e) / (DockedTo, e) pairs; DockRef is cleared here). Log it: replication and
-    // presentation would otherwise never learn about the implicit change.
-    if (ecs_owns_id(m_flecs, fe(e), m_frameRefId)) {
+    // presentation would otherwise never learn about the implicit change. Pairs can only target `e`
+    // if flecs flagged it as a target.
+    if (isTarget && ecs_owns_id(m_flecs, fe(e), m_frameRefId)) {
         std::vector<Entity> members;
         collectRelated(m_flecs, fe(m_inFrame), fe(e), members);
         for (const Entity x : members) logEvent(StructuralOp::SetFrame, x, 0);
     }
     if (m_desc.relations.docking == DockStorage::Field) {
+        if (m_impl->dockIndex.empty()) return;
         auto it = m_impl->dockIndex.find(e.id);
         if (it == m_impl->dockIndex.end()) return;
         std::vector<u64> docked = std::move(it->second);
@@ -588,8 +774,8 @@ void World::releaseRelationTargets(Entity e) {
             ref->host = Entity();
             logEvent(StructuralOp::Undock, Entity(id), 0);
         }
-    } else if (m_desc.relations.docking == DockStorage::PairDontFragment ||
-               ecs_id_in_use(m_flecs, ecs_pair(fe(m_dockedTo), fe(e)))) { // (in_use misses non-fragmenting pairs)
+    } else if (isTarget && (m_desc.relations.docking == DockStorage::PairDontFragment || // (in_use misses those)
+                            ecs_id_in_use(m_flecs, ecs_pair(fe(m_dockedTo), fe(e))))) {
         std::vector<Entity> docked;
         collectRelated(m_flecs, fe(m_dockedTo), fe(e), docked);
         for (const Entity x : docked) logEvent(StructuralOp::Undock, x, 0);
@@ -597,16 +783,15 @@ void World::releaseRelationTargets(Entity e) {
 }
 
 void World::unregisterSubtree(Entity e) {
-    releaseRelationTargets(e);
-    if (const auto* ni = static_cast<const NetIdentity*>(ecs_get_id(m_flecs, fe(e), m_netIdentityId));
-        ni && ni->id.isValid()) {
+    const ecs_record_t* r = ecs_record_find(m_flecs, fe(e));
+    // No children walk, frame or docking lookups for an entity nothing targets (ADR-004a item 3).
+    const bool isTarget = isPairTarget(r);
+    releaseRelationTargets(e, isTarget);
+    if (const NetIdentity* ni = netIdentityAt(m_flecs, m_netIdentityId, r); ni && ni->id.isValid()) {
         m_registry.remove(ni->id, ni->handle);
-        StructuralEvent ev;
-        ev.op = StructuralOp::Destroy;
-        ev.entity = ni->id;
-        ev.handle = ni->handle;
-        m_log.push_back(ev);
+        m_log.push_back(StructuralEvent{StructuralOp::Destroy, ni->id, ni->handle, 0});
     }
+    if (!isTarget) return;
     // flecs deletes the hierarchy below `e` with it (ChildOf / Parent cascade).
     const usize first = m_impl->destroyScratch.size();
     collectRelated(m_flecs, EcsChildOf, fe(e), m_impl->destroyScratch);
@@ -618,6 +803,10 @@ void World::unregisterSubtree(Entity e) {
 void World::destroy(Entity e) {
     assertNotInStage();
     if (!isAlive(e)) return;
+    destroyAlive(e);
+}
+
+void World::destroyAlive(Entity e) {
     // Unregister first (depth-first, parents before children), then let flecs cascade. Entities
     // must be deleted through World::destroy for the identity maps to stay consistent.
     unregisterSubtree(e);
@@ -658,27 +847,62 @@ void World::ensureRepDirty(Entity e) {
 void World::addId(Entity e, ComponentId cid) {
     assertNotInStage();
     if (cid == 0 || !isAlive(e)) return;
+    addIdAlive(e, cid);
+}
+
+void World::addIdAlive(Entity e, ComponentId cid) {
     const ComponentInfo* info = componentInfo(cid);
+    ++m_impl->structuralOps;
+    if (!info) {
+        ecs_add_id(m_flecs, fe(e), cid); // pairs and ids of other modules: not logged
+        return;
+    }
+    if (!info->isReplicated() && !info->defaultValue && !hasFlag(info->flags, kNotInTable)) {
+        // Tags and components flecs constructs: the add changed something iff the entity moved to
+        // another table (ADR-004a item 3: no ecs_owns_id).
+        ecs_record_t* r = ecs_record_find(m_flecs, fe(e));
+        const ecs_table_t* before = r->table;
+        ecs_add_id(m_flecs, fe(e), cid);
+        if (r->table != before) logAt(m_log, m_flecs, m_netIdentityId, StructuralOp::Add, r, cid);
+        return;
+    }
     const bool fresh = !ecs_owns_id(m_flecs, fe(e), cid);
-    if (info && info->isReplicated() && fresh) ensureRepDirty(e);
-    if (info && info->defaultValue && fresh) {
+    if (info->isReplicated() && fresh) ensureRepDirty(e);
+    if (info->defaultValue && fresh) {
         // Plain components have no flecs ctor: add them with their default value.
         ecs_set_id(m_flecs, fe(e), cid, info->size, info->defaultValue);
     } else {
         ecs_add_id(m_flecs, fe(e), cid);
     }
-    ++m_impl->structuralOps;
-    if (info && fresh) logEvent(StructuralOp::Add, e, cid);
+    if (fresh) logEvent(StructuralOp::Add, e, cid);
 }
 
 void World::removeId(Entity e, ComponentId cid) {
     assertNotInStage();
     if (cid == 0 || !isAlive(e)) return;
+    removeIdAlive(e, cid);
+}
+
+void World::removeIdAlive(Entity e, ComponentId cid) {
     HELIOS_ASSERT(cid != m_netIdentityId, "NetIdentity cannot be removed; destroy the entity instead");
-    const bool log = componentInfo(cid) != nullptr && ecs_owns_id(m_flecs, fe(e), cid);
-    ecs_remove_id(m_flecs, fe(e), cid);
+    const ComponentInfo* info = componentInfo(cid);
     ++m_impl->structuralOps;
-    if (log) logEvent(StructuralOp::Remove, e, cid);
+    if (info && !hasFlag(info->flags, kNotInTable)) {
+        // The component was owned iff the entity moved to another table (no ecs_owns_id).
+        ecs_record_t* r = ecs_record_find(m_flecs, fe(e));
+        const ecs_table_t* before = r->table;
+        ecs_remove_id(m_flecs, fe(e), cid);
+        if (r->table != before) logAt(m_log, m_flecs, m_netIdentityId, StructuralOp::Remove, r, cid);
+        return;
+    }
+    if (!info) {
+        ecs_remove_id(m_flecs, fe(e), cid); // pairs and ids of other modules: not logged
+        return;
+    }
+    // Sparse and DontFragment components never move the entity: ask flecs whether it owns one.
+    const bool log = ecs_owns_id(m_flecs, fe(e), cid);
+    ecs_remove_id(m_flecs, fe(e), cid);
+    if (log) logAt(m_log, m_flecs, m_netIdentityId, StructuralOp::Remove, ecs_record_find(m_flecs, fe(e)), cid);
 }
 
 bool World::hasId(Entity e, ComponentId cid) const noexcept {
@@ -702,10 +926,29 @@ void* World::getMutRaw(Entity e, ComponentId cid) noexcept {
 void World::setRaw(Entity e, ComponentId cid, const void* value, usize size) {
     assertNotInStage();
     if (cid == 0 || !value || !isAlive(e)) return;
+    setRawAlive(e, cid, value, size);
+}
+
+void World::setRawAlive(Entity e, ComponentId cid, const void* value, usize size) {
     const ComponentInfo* info = componentInfo(cid);
     HELIOS_ASSERT(info == nullptr || info->size == size, "setRaw: size mismatch");
+    if (!info) {
+        ecs_set_id(m_flecs, fe(e), cid, size, value); // ids of other modules: not logged
+        return;
+    }
+    ecs_record_t* r = ecs_record_find(m_flecs, fe(e));
+    const bool replicated = info->isReplicated();
+    if (!replicated && !hasFlag(info->flags, kNotInTable)) {
+        // The value was not owned iff the set moved the entity to another table (no ecs_owns_id).
+        const ecs_table_t* before = r->table;
+        ecs_set_id(m_flecs, fe(e), cid, size, value);
+        if (r->table != before) {
+            ++m_impl->structuralOps;
+            logAt(m_log, m_flecs, m_netIdentityId, StructuralOp::Add, r, cid);
+        }
+        return;
+    }
     const bool owned = ecs_owns_id(m_flecs, fe(e), cid);
-    const bool replicated = info != nullptr && info->isReplicated();
     FieldMask pending = 0;
     if (replicated) {
         if (owned) {
@@ -731,9 +974,9 @@ void World::setRaw(Entity e, ComponentId cid, const void* value, usize size) {
             clearDirtyMask(stored, *info); // the Add event carries the full value
         }
     }
-    if (info && !owned) {
+    if (!owned) {
         ++m_impl->structuralOps;
-        logEvent(StructuralOp::Add, e, cid);
+        logAt(m_log, m_flecs, m_netIdentityId, StructuralOp::Add, r, cid);
     }
 }
 
@@ -1001,26 +1244,35 @@ void World::initReplicatedState(Entity e) {
 // Command buffers
 // ---------------------------------------------------------------------------------------------
 
-void World::applyOne(CommandBuffer& buffer) {
+void World::prepareSpawns(CommandBuffer& buffer) {
     Impl& impl = *m_impl;
-    // Typed commands carry this world's component ids; a buffer recorded for another world would
-    // apply foreign ids.
-    HELIOS_VERIFY(buffer.m_world == nullptr || buffer.m_world == this, "CommandBuffer recorded for another World");
-    std::vector<CommandBuffer::Command>& cmds = buffer.m_commands;
+    const std::vector<CommandBuffer::Command>& cmds = buffer.m_commands;
     const u32 n = static_cast<u32>(cmds.size());
     const u32 spawns = static_cast<u32>(buffer.m_spawns.size());
-    buffer.m_resolved.assign(spawns, Entity());
 
     // Fusion: Set/Add commands on a temp entity join its spawn (one table insertion) until another
     // kind of command targets that temp; later commands then apply in place, preserving order.
-    impl.fusedHead.assign(spawns, ~0u);
-    impl.fusedTail.assign(spawns, ~0u);
-    impl.fusedNext.assign(n, ~0u);
-    impl.fusedClosed.assign(spawns, 0);
-    impl.fused.assign(n, 0);
-    for (u32 i = 0; i < n; ++i) {
+    // Entities of spawnN batches never fuse. When every Set/Add on a temp directly follows its
+    // spawn (the buffer tracked that while recording), the fused ops are the run of commands after
+    // each spawn and this pass is skipped; otherwise they are linked per temp here.
+    const bool runs = !buffer.m_scatteredFusion;
+    if (runs) {
+        impl.runEnd.assign(spawns, 0);
+    } else {
+        impl.fusedHead.assign(spawns, ~0u);
+        impl.fusedTail.assign(spawns, ~0u);
+        impl.fusedNext.assign(n, ~0u);
+        impl.fusedClosed.assign(spawns, 0);
+        impl.fused.assign(n, 0);
+    }
+    for (u32 i = 0; !runs && i < n; ++i) {
         const CommandBuffer::Command& cmd = cmds[i];
         if (!cmd.target.isTemp() || cmd.kind == CommandKind::Spawn) continue;
+        if (cmd.kind == CommandKind::SpawnN) {
+            const CommandBuffer::Batch& b = buffer.m_batches[cmd.arg];
+            std::fill_n(impl.fusedClosed.begin() + b.firstTemp, b.count, u8{1});
+            continue;
+        }
         const u32 t = cmd.target.tempIndex();
         if (t >= spawns) continue;
         if ((cmd.kind == CommandKind::Set || cmd.kind == CommandKind::Add) && !impl.fusedClosed[t]) {
@@ -1036,9 +1288,10 @@ void World::applyOne(CommandBuffer& buffer) {
         }
     }
 
-    // Per-spawn fused op lists (flat), EntityIds in command order, and grouping: spawns without
-    // prefab/parent whose ops are all table-stored World components and that share (frame, op ids)
-    // are created together with one ecs_bulk_init at the position of the group's first spawn.
+    // Per-spawn fused op lists (flat, with their ComponentInfo), EntityIds in command order, and
+    // grouping: spawns without prefab/parent whose ops are all table-stored World components and
+    // that share (frame, op ids) are created together with one ecs_bulk_init at the position of the
+    // group's first spawn.
     impl.spawnOpBegin.assign(spawns + 1, 0);
     impl.spawnOpEnd.assign(spawns, 0);
     impl.flatOps.clear();
@@ -1046,45 +1299,74 @@ void World::applyOne(CommandBuffer& buffer) {
     impl.spawnGroup.assign(spawns, ~0u);
     impl.groups.clear();
     impl.groupByKey.clear();
+    impl.mintTemps.clear();
+    const ComponentInfo* repDirty = componentInfo(m_repDirtyId);
     for (u32 i = 0; i < n; ++i) {
         const CommandBuffer::Command& cmd = cmds[i];
+        if (cmd.kind == CommandKind::SpawnN) {
+            const CommandBuffer::Batch& b = buffer.m_batches[cmd.arg];
+            const EntityId explicitId = buffer.m_spawns[b.firstTemp].id;
+            for (u32 k = 0; k < b.count; ++k) {
+                if (explicitId.isValid()) {
+                    impl.spawnIds[b.firstTemp + k] = explicitId; // refused at apply
+                } else {
+                    impl.mintTemps.push_back(b.firstTemp + k);
+                }
+            }
+            continue;
+        }
         if (cmd.kind != CommandKind::Spawn) continue;
         const u32 t = static_cast<u32>(cmd.arg);
         const SpawnDesc& desc = buffer.m_spawns[t];
         impl.spawnOpBegin[t] = static_cast<u32>(impl.flatOps.size());
         bool groupable = !desc.prefab && !desc.parent && !(desc.frame && m_desc.relations.inFrameDontFragment) &&
                          !(desc.id.isValid() && m_registry.contains(desc.id));
-        u64 key = hashCombine(0x5A11u, desc.frame.id);
+        // The key only narrows the group search (members are compared op by op), so a cheap
+        // multiplicative hash does; U64Map mixes it again.
+        u64 key = (desc.frame.id + 1) * 0x9E3779B97F4A7C15ull;
         bool replicated = false;
-        for (u32 j = impl.fusedHead[t]; j != ~0u; j = impl.fusedNext[j]) {
-            const CommandBuffer::Command& op = cmds[j];
+        auto addOp = [&](const CommandBuffer::Command& op) {
             if (op.arg == 0) { // unregistered type (asserted at record time in dev builds)
                 ++impl.discarded;
-                continue;
+                return;
             }
             const ComponentInfo* info = componentInfo(op.arg);
-            SpawnOp flat{op.arg, op.kind == CommandKind::Set ? op.payload : nullptr, op.payloadSize};
+            SpawnOp flat{op.arg, op.kind == CommandKind::Set ? op.payload : nullptr, op.payloadSize, info};
             if (!flat.value && info && info->defaultValue) { // plain component added without a value
                 flat.value = info->defaultValue;
                 flat.size = info->size;
             }
             impl.flatOps.push_back(flat);
-            if (!info || hasFlag(info->flags, ComponentFlags::Sparse | ComponentFlags::DontFragment)) groupable = false;
+            if (!info || hasFlag(info->flags, kNotInTable)) groupable = false;
             replicated = replicated || (info && info->isReplicated());
-            key = hashCombine(key, op.arg);
+            key = (key ^ op.arg) * 0x100000001B3ull;
+        };
+        if (runs) {
+            u32 j = i + 1;
+            for (; j < n && cmds[j].target.isTemp() && cmds[j].target.tempIndex() == t &&
+                   (cmds[j].kind == CommandKind::Set || cmds[j].kind == CommandKind::Add);
+                 ++j) {
+                addOp(cmds[j]);
+            }
+            impl.runEnd[t] = j;
+        } else {
+            for (u32 j = impl.fusedHead[t]; j != ~0u; j = impl.fusedNext[j]) addOp(cmds[j]);
         }
         if (replicated) {
-            const ComponentInfo* rep = componentInfo(m_repDirtyId);
-            impl.flatOps.push_back(SpawnOp{m_repDirtyId, rep->defaultValue, rep->size});
-            key = hashCombine(key, m_repDirtyId);
+            impl.flatOps.push_back(SpawnOp{m_repDirtyId, repDirty->defaultValue, repDirty->size, repDirty});
+            key = (key ^ m_repDirtyId) * 0x100000001B3ull;
         }
         const u32 opCount = static_cast<u32>(impl.flatOps.size()) - impl.spawnOpBegin[t];
         impl.spawnOpEnd[t] = static_cast<u32>(impl.flatOps.size());
         if (opCount + 2 >= FLECS_ID_DESC_MAX) groupable = false;
-        impl.spawnIds[t] = desc.id.isValid() ? desc.id : m_ids.allocate();
+        if (desc.id.isValid()) {
+            impl.spawnIds[t] = desc.id;
+        } else {
+            impl.mintTemps.push_back(t);
+        }
         if (!groupable) continue;
         // Find a group with the same (frame, op id sequence); the hash only narrows the search.
-        key = hashCombine(key, opCount) | 1; // U64Map keys must be non-zero
+        key = ((key ^ opCount) * 0x100000001B3ull) | 1; // U64Map keys must be non-zero
         u32 g = ~0u;
         for (u64 cand = impl.groupByKey.find(key, ~0ull); cand != ~0ull;) {
             Impl::SpawnGroupData& grp = impl.groups[cand];
@@ -1111,16 +1393,41 @@ void World::applyOne(CommandBuffer& buffer) {
     }
     impl.spawnOpBegin[spawns] = static_cast<u32>(impl.flatOps.size());
 
+    // EntityIds in command order, reserved in runs from the current block (ADR-004a item 1): the
+    // same ids as one allocate() per spawn, since nothing else mints before the buffer applies.
+    impl.mintedIds.resize(impl.mintTemps.size());
+    m_ids.allocateN(impl.mintedIds);
+    for (usize k = 0; k < impl.mintTemps.size(); ++k) impl.spawnIds[impl.mintTemps[k]] = impl.mintedIds[k];
+}
+
+void World::applyOne(CommandBuffer& buffer) {
+    Impl& impl = *m_impl;
+    // Typed commands carry this world's component ids; a buffer recorded for another world would
+    // apply foreign ids.
+    HELIOS_VERIFY(buffer.m_world == nullptr || buffer.m_world == this, "CommandBuffer recorded for another World");
+    std::vector<CommandBuffer::Command>& cmds = buffer.m_commands;
+    const u32 n = static_cast<u32>(cmds.size());
+    const u32 spawns = static_cast<u32>(buffer.m_spawns.size());
+    buffer.m_resolved.assign(spawns, Entity());
+    // Buffers without spawns (destroys, toggles, value writes) need no fusion or grouping.
+    const u8* fused = nullptr;
+    const bool runs = spawns > 0 && !buffer.m_scatteredFusion;
+    if (spawns > 0) {
+        prepareSpawns(buffer);
+        if (!runs) fused = impl.fused.data();
+    }
+
     auto resolve = [&](EntityRef ref) -> Entity {
         if (!ref.isTemp()) return ref.entity();
         const u32 i = ref.tempIndex();
         return i < buffer.m_resolved.size() ? buffer.m_resolved[i] : Entity();
     };
     for (u32 i = 0; i < n; ++i) {
-        if (impl.fused[i]) continue;
+        if (fused && fused[i]) continue;
         CommandBuffer::Command& cmd = cmds[i];
         if (cmd.kind == CommandKind::Spawn) {
             const u32 t = static_cast<u32>(cmd.arg);
+            if (runs) i = impl.runEnd[t] - 1; // its fused run follows it
             const u32 g = impl.spawnGroup[t];
             if (g != ~0u) {
                 if (!impl.groups[g].created) spawnGroup(buffer, g);
@@ -1134,6 +1441,10 @@ void World::applyOne(CommandBuffer& buffer) {
                                              impl.spawnIds[t]);
             continue;
         }
+        if (cmd.kind == CommandKind::SpawnN) {
+            spawnBatch(buffer, static_cast<u32>(cmd.arg));
+            continue;
+        }
         const Entity target = resolve(cmd.target);
         // flecs recycles ids with a new generation, so a stale Entity is never "alive". Component id
         // 0 comes from a type that was not registered (asserted at record time in dev builds).
@@ -1144,12 +1455,12 @@ void World::applyOne(CommandBuffer& buffer) {
             continue;
         }
         switch (cmd.kind) {
-        case CommandKind::Destroy: destroy(target); break;
-        case CommandKind::Add: addId(target, cmd.arg); break;
-        case CommandKind::Remove: removeId(target, cmd.arg); break;
-        case CommandKind::Set: setRaw(target, cmd.arg, cmd.payload, cmd.payloadSize); break;
+        case CommandKind::Destroy: destroyAlive(target); break;
+        case CommandKind::Add: addIdAlive(target, cmd.arg); break;
+        case CommandKind::Remove: removeIdAlive(target, cmd.arg); break;
+        case CommandKind::Set: setRawAlive(target, cmd.arg, cmd.payload, cmd.payloadSize); break;
         case CommandKind::SetParent: {
-            const Entity parent = resolve(cmd.other);
+            const Entity parent = resolve(EntityRef::fromBits(cmd.arg));
             if (!setParent(target, parent)) ++impl.discarded;
             break;
         }
@@ -1159,19 +1470,23 @@ void World::applyOne(CommandBuffer& buffer) {
             break;
         }
         case CommandKind::Dock: {
-            if (!dock(target, resolve(cmd.other))) ++impl.discarded;
+            if (!dock(target, resolve(EntityRef::fromBits(cmd.arg)))) ++impl.discarded;
             break;
         }
         case CommandKind::Undock: undock(target); break;
-        case CommandKind::Spawn: break;
+        case CommandKind::Spawn:
+        case CommandKind::SpawnN: break;
         }
     }
     // Run payload destructors, drop commands; resolved temps stay readable until the next record.
-    for (CommandBuffer::Command& cmd : cmds) {
-        if (cmd.destroyPayload) cmd.destroyPayload(cmd.payload);
-    }
+    for (const CommandBuffer::PayloadDtor& d : buffer.m_payloadDtors) d.destroy(d.payload);
+    buffer.m_payloadDtors.clear();
     cmds.clear();
     buffer.m_spawns.clear();
+    buffer.m_batches.clear();
+    buffer.m_batchColumns.clear();
+    buffer.m_openSpawn = CommandBuffer::kNoSpawn;
+    buffer.m_scatteredFusion = false;
     buffer.m_blockIndex = 0;
     buffer.m_blockOffset = 0;
 }

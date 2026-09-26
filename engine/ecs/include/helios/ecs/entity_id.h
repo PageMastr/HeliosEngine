@@ -177,6 +177,11 @@ public:
     /// current block is spent. Returns an invalid EntityId (and counts Stats::exhausted) when no
     /// block can be obtained. Thread-safe.
     EntityId allocate() noexcept;
+    /// Fills `out` with the ids out.size() calls of allocate() would return, reserving each run
+    /// within the current block with one CAS (the spawn-group path, ADR-004a item 1). Ids that
+    /// cannot be obtained are invalid, as from allocate(). Thread-safe; a concurrent allocate() may
+    /// interleave at block boundaries only.
+    void allocateN(std::span<EntityId> out) noexcept;
 
     /// Fetches the held blocks synchronously, so a start-up failure surfaces at start.
     Result<void> prime();

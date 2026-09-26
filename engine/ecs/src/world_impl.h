@@ -99,8 +99,11 @@ struct World::Impl {
     std::vector<u64> typeScratch;
     std::vector<u32> spawnOpBegin;           // per spawn: first index into flatOps
     std::vector<u32> spawnOpEnd;             // per spawn: one past its last op
+    std::vector<u32> runEnd;                 // per spawn: one past its fused run (contiguous fusion)
     std::vector<World::SpawnOp> flatOps;      // fused ops of every spawn, grouped per spawn
     std::vector<EntityId> spawnIds;           // allocated in command order
+    std::vector<u32> mintTemps;               // temps whose EntityId is minted, in command order
+    std::vector<EntityId> mintedIds;
     std::vector<u32> spawnGroup;              // per spawn: group index or ~0
     struct SpawnGroupData {
         std::vector<u32> members; // spawn indices in command order
@@ -116,6 +119,7 @@ struct World::Impl {
     std::vector<u32> groupSizes;
     std::vector<const ComponentHooks*> groupHooks;
     std::vector<u32> groupDirtyOffsets; // ~0u = not replicated
+    std::vector<const World::SpawnOp*> groupMemberOps; // per member: its first flat op
 
     // Systems.
     std::vector<std::unique_ptr<SystemRuntime>> systems;

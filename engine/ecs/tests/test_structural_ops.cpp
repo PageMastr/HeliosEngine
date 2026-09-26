@@ -261,6 +261,15 @@ u64 runWorkload(const RelationConfig& relations) {
             if (i % 8 == 4) tb.remove<Mark>(e);
             if (i % 10 == 0) tb.addId(e, World::pair(w.inFrameRelation(), f3));
         }
+        if (round == 0) {
+            // Shared (prefab-inherited) components: removing one that is only inherited changes
+            // nothing, adding or setting one overrides it; Health is already an own copy.
+            tb.remove<HullSpec>(shipEs[1]);
+            tb.add<HullSpec>(shipEs[2]);
+            tb.set(shipEs[3], HullSpec{1.0f, 2.0f});
+            tb.add<Health>(shipEs[4]);
+            tb.remove<Health>(shipEs[5]);
+        }
         tb.add<Tagged>(dead);
         tb.remove<Counter>(dead);
         tb.remove<Status>(sparseE);
@@ -313,10 +322,10 @@ TEST_CASE("ecs structural ops: the WP-1.1a paths leave the pre-WP-1.1a state, lo
     fragmenting.docking = DockStorage::PairDontFragment;
     RelationConfig inFrameDf;
     inFrameDf.inFrameDontFragment = true;
-    const Variant variants[] = {{"defaults", defaults, 0x4f389e5d9e792602ull},
-                                {"docking pairs", pairs, 0x15bb14fcd2ddf841ull},
-                                {"ChildOf + DontFragment docking", fragmenting, 0xe551c637e88a98c4ull},
-                                {"InFrame DontFragment", inFrameDf, 0xebc3aebc44b4b98aull}};
+    const Variant variants[] = {{"defaults", defaults, 0x1f7d7fd7395e78f4ull},
+                                {"docking pairs", pairs, 0xbcb2a747c872444full},
+                                {"ChildOf + DontFragment docking", fragmenting, 0x2b7768115671757aull},
+                                {"InFrame DontFragment", inFrameDf, 0xdec015dc027efe97ull}};
     for (const Variant& v : variants) {
         CAPTURE(std::string(v.name));
         const u64 digest = runWorkload(v.relations);

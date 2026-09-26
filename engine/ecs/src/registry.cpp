@@ -241,17 +241,63 @@ NetHandle NetHandleTable::handleAt(u32 index) const noexcept {
 // ---------------------------------------------------------------------------------------------
 
 EntityRegistry::EntityRegistry(const NetHandleTable::Desc& handles, MemoryTag tag)
-    : m_byId(tag, 1024), m_handles(handles) {}
+    : m_tag(tag), m_byId(tag, 1024), m_pageOf(tag, 64), m_handles(handles) {}
+
+void EntityRegistry::ChunkFree::operator()(Page* chunk) const noexcept { alignedFree(chunk); }
+
+EntityRegistry::Page* EntityRegistry::findPage(EntityId id) const noexcept {
+    const u64 page = m_pageOf.find((id.value >> kPageBits) + 1);
+    return page != 0 ? &pageAt(static_cast<u32>(page - 1)) : nullptr;
+}
+
+EntityRegistry::Page& EntityRegistry::ensurePage(EntityId id) {
+    const u64 key = (id.value >> kPageBits) + 1;
+    if (const u64 page = m_pageOf.find(key); page != 0) return pageAt(static_cast<u32>(page - 1));
+    u32 index = 0;
+    if (!m_freePages.empty()) {
+        index = m_freePages.back();
+        m_freePages.pop_back();
+    } else {
+        index = m_pageCount++;
+        if (index / kChunkPages >= m_chunks.size()) {
+            auto* chunk = static_cast<Page*>(alignedAlloc(sizeof(Page) * kChunkPages, alignof(Page), m_tag));
+            HELIOS_VERIFY(chunk != nullptr, "EntityRegistry: out of memory");
+            m_chunks.emplace_back(chunk);
+        }
+    }
+    Page& p = pageAt(index);
+    std::memset(static_cast<void*>(&p), 0, sizeof(Page));
+    m_pageOf.insert(key, index + 1);
+    return p;
+}
+
+void EntityRegistry::reserve(usize additional) {
+    m_byId.reserve(m_byId.size() + additional);
+    m_pageOf.reserve(m_pageOf.size() + additional / kPageIds + 2);
+}
 
 Result<void> EntityRegistry::add(EntityId id, Entity entity) {
     if (!id.isValid() || !entity.isValid()) return Error{ErrorCode::InvalidArgument, "invalid id or entity"};
-    if (m_byId.contains(id.value)) return makeError(ErrorCode::AlreadyExists, "EntityId {:#x} already registered", id.value);
-    m_byId.insert(id.value, entity.id);
+    if (!addNew(id, entity)) return makeError(ErrorCode::AlreadyExists, "EntityId {:#x} already registered", id.value);
     return {};
 }
 
 bool EntityRegistry::addNew(EntityId id, Entity entity) {
-    return id.isValid() && entity.isValid() && m_byId.insertNew(id.value, entity.id);
+    if (!id.isValid() || !entity.isValid()) return false;
+    if (!paged(id)) return m_byId.insertNew(id.value, entity.id);
+    Page& p = ensurePage(id);
+    u64& slot = p.entity[id.value & (kPageIds - 1)];
+    if (slot != 0) return false;
+    slot = entity.id;
+    ++p.live;
+    ++m_pagedCount;
+    return true;
+}
+
+Entity EntityRegistry::find(EntityId id) const noexcept {
+    if (!paged(id)) return Entity(m_byId.find(id.value));
+    const Page* p = findPage(id);
+    return p ? Entity(p->entity[id.value & (kPageIds - 1)]) : Entity();
 }
 
 Result<NetHandle> EntityRegistry::assignHandle(EntityId id, u32 contentIndex) {
@@ -280,7 +326,20 @@ Result<NetHandle> EntityRegistry::assignHandleFor(EntityId id, Entity entity, u3
 }
 
 bool EntityRegistry::remove(EntityId id, NetHandle handle) {
-    if (!m_byId.erase(id.value)) return false;
+    if (!paged(id)) {
+        if (!m_byId.erase(id.value)) return false;
+    } else {
+        Page* p = findPage(id);
+        u64* slot = p ? &p->entity[id.value & (kPageIds - 1)] : nullptr;
+        if (!slot || *slot == 0) return false;
+        *slot = 0;
+        --m_pagedCount;
+        if (--p->live == 0) { // recycle the page
+            const u64 key = (id.value >> kPageBits) + 1;
+            m_freePages.push_back(static_cast<u32>(m_pageOf.find(key) - 1));
+            m_pageOf.erase(key);
+        }
+    }
     if (handle.isValid() && m_handles.releaseIssuedTo(handle, id)) m_byHandleIndex[handle.index()] = Entity();
     return true;
 }
@@ -292,7 +351,8 @@ Entity EntityRegistry::find(NetHandle handle) const noexcept {
 }
 
 usize EntityRegistry::memoryBytes() const noexcept {
-    return m_byId.memoryBytes() + m_byHandleIndex.capacity() * sizeof(Entity);
+    return m_byId.memoryBytes() + m_pageOf.memoryBytes() + m_chunks.size() * kChunkPages * sizeof(Page) +
+           m_byHandleIndex.capacity() * sizeof(Entity);
 }
 
 } // namespace helios::ecs

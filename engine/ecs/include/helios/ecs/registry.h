@@ -15,6 +15,7 @@
 // Threading: none of these are internally synchronized. The World mutates them only at sync
 // points (main thread); concurrent const lookups from parallel stages are safe.
 
+#include <memory>
 #include <vector>
 
 #include "helios/core/memory.h"
@@ -126,17 +127,24 @@ private:
 };
 
 /// EntityId <-> Entity and NetHandle <-> Entity maps plus the handle table.
+///
+/// Runtime (block) ids are minted consecutively, so they are kept in pages of 64 consecutive ids
+/// (a small U64Map finds the page): a spawn or destroy burst of consecutive ids then touches a few
+/// cache lines instead of one random line per id in a large hash table, which evicted the tables
+/// that the rest of a sync point works on (ADR-004a, SPIKES.md §5). Content-placed and client-local
+/// ids are hashes and stay in a U64Map. A page is recycled once its last id is removed, so ids
+/// scattered over many blocks (restored entities) cost at most one 520-byte page each.
 class EntityRegistry {
 public:
     explicit EntityRegistry(const NetHandleTable::Desc& handles = {}, MemoryTag tag = MemoryTag::Unknown);
 
     /// Registers `entity` under `id` (which must be unused). Returns AlreadyExists otherwise.
     Result<void> add(EntityId id, Entity entity);
-    /// add() for the bulk spawn paths: one probe and no error object. Returns false, registering
+    /// add() for the bulk spawn paths: one lookup and no error object. Returns false, registering
     /// nothing, if `id` or `entity` is invalid or `id` is taken.
     bool addNew(EntityId id, Entity entity);
     /// Reserves capacity for `additional` more ids (one rehash for a whole spawn group).
-    void reserve(usize additional) { m_byId.reserve(m_byId.size() + additional); }
+    void reserve(usize additional);
     /// Issues a NetHandle for a registered id. `contentIndex` != 0 uses allocateAt().
     Result<NetHandle> assignHandle(EntityId id, u32 contentIndex = 0);
     /// assignHandle() for an id the caller has just registered for `entity` (skips the lookup).
@@ -147,19 +155,39 @@ public:
     /// Removes id (and releases `handle` if valid). Returns false if id was unknown.
     bool remove(EntityId id, NetHandle handle);
 
-    Entity find(EntityId id) const noexcept { return Entity(m_byId.find(id.value)); }
+    Entity find(EntityId id) const noexcept;
     Entity find(NetHandle handle) const noexcept;
     EntityId resolve(NetHandle handle) const noexcept { return m_handles.resolve(handle); }
-    bool contains(EntityId id) const noexcept { return m_byId.contains(id.value); }
+    bool contains(EntityId id) const noexcept { return find(id).isValid(); }
 
-    usize size() const noexcept { return m_byId.size(); }
+    usize size() const noexcept { return m_byId.size() + m_pagedCount; }
     const NetHandleTable& handles() const noexcept { return m_handles; }
     usize memoryBytes() const noexcept;
 
 private:
+    static constexpr u32 kPageBits = 6;
+    static constexpr u32 kPageIds = 1u << kPageBits;
+    static constexpr u32 kChunkPages = 64;
+    struct Page {
+        u64 entity[kPageIds]; // Entity ids by offset within the page; 0 = free
+        u32 live;
+    };
+    struct ChunkFree {
+        void operator()(Page* chunk) const noexcept;
+    };
+    static bool paged(EntityId id) noexcept { return id.kind() == EntityIdKind::Runtime; }
+    Page& pageAt(u32 index) const noexcept { return m_chunks[index / kChunkPages].get()[index % kChunkPages]; }
+    Page* findPage(EntityId id) const noexcept;
+    Page& ensurePage(EntityId id);
     void mapHandle(u32 index, Entity entity);
 
-    U64Map m_byId;
+    MemoryTag m_tag;
+    U64Map m_byId;   // content-placed and client-local ids
+    U64Map m_pageOf; // (runtime id >> kPageBits) + 1 -> page index + 1
+    std::vector<std::unique_ptr<Page, ChunkFree>> m_chunks; // kChunkPages pages each (stable addresses)
+    std::vector<u32> m_freePages;
+    u32 m_pageCount = 0; // pages handed out from the chunks so far
+    usize m_pagedCount = 0;
     NetHandleTable m_handles;
     std::vector<Entity> m_byHandleIndex;
 };

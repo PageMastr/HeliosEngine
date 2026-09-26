@@ -7,6 +7,7 @@
 
 #include <bit>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "flecs_internal.h"
@@ -255,6 +256,45 @@ TEST_CASE("ecs bulk paths: allocateN mints what allocate() mints, across block b
     }
     CHECK(a.stats().allocated == b.stats().allocated);
     CHECK(a.remaining() == b.remaining());
+}
+
+TEST_CASE("ecs bulk paths: the paged registry matches a hash map under churn") {
+    // Runtime ids in runs (paged), runtime ids scattered over many blocks (one page each), and
+    // content-placed ids (hashed); pages empty out and are recycled.
+    EntityRegistry reg;
+    std::unordered_map<u64, u64> ref;
+    u64 rng = 0x1234;
+    auto next = [&] { return rng = mix64(rng + 0x9E3779B97F4A7C15ull); };
+    std::vector<EntityId> ids;
+    for (u32 i = 0; i < 3000; ++i) ids.push_back(composeBlockId(1000 + i / 1500, 3, i % 1500 + 1));
+    for (u32 i = 0; i < 300; ++i) ids.push_back(composeBlockId(5000 + next() % 100000, next() % 32, next() % 131072));
+    for (u32 i = 0; i < 300; ++i) ids.push_back(EntityId::contentPlaced(next()));
+    u64 serial = 1;
+    for (int round = 0; round < 40; ++round) {
+        for (const EntityId id : ids) {
+            const bool present = ref.count(id.value) != 0;
+            if (next() % 3 == 0) {
+                CHECK(reg.remove(id, NetHandle()) == present);
+                ref.erase(id.value);
+            } else if (!present && next() % 2 == 0) {
+                const Entity e(serial++);
+                CHECK(reg.addNew(id, e));
+                ref.emplace(id.value, e.id);
+            } else if (present) {
+                CHECK_FALSE(reg.addNew(id, Entity(serial++)));
+            }
+        }
+        REQUIRE(reg.size() == ref.size());
+        for (const EntityId id : ids) {
+            const auto it = ref.find(id.value);
+            CHECK(reg.find(id).id == (it == ref.end() ? 0 : it->second));
+            CHECK(reg.contains(id) == (it != ref.end()));
+        }
+    }
+    for (const EntityId id : ids) (void)reg.remove(id, NetHandle());
+    CHECK(reg.size() == 0);
+    CHECK_FALSE(reg.find(ids.front()).isValid());
+    CHECK(reg.memoryBytes() > 0);
 }
 
 TEST_CASE("ecs bulk paths: registry fast paths match the checked ones") {

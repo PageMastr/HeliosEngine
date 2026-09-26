@@ -184,6 +184,8 @@ struct BenchZone::Impl {
     std::vector<ChunkData> iterChunks;
     std::vector<Entity> burstCreated; // projectiles spawned by the last structuralBurst()
     std::vector<ecs_entity_t> rawCreated; // unregistered projectiles of the last rawFlecsBurst()
+    // The burst's buffers are kept across rounds, as the scheduler keeps its per-job buffers.
+    CommandBuffer creates, destroys, toggles, statuses;
 };
 
 BenchZone::BenchZone(World& world, const ZoneConfig& config)
@@ -773,7 +775,11 @@ BurstResult BenchZone::structuralBurst(u32 round, bool profiled) {
     }
     npcs = burstNpcs();
 
-    CommandBuffer creates(&w), destroys(&w), toggles(&w), statuses(&w);
+    CommandBuffer& creates = im.creates;
+    CommandBuffer& destroys = im.destroys;
+    CommandBuffer& toggles = im.toggles;
+    CommandBuffer& statuses = im.statuses;
+    for (CommandBuffer* b : {&creates, &destroys, &toggles, &statuses}) b->setWorld(&w);
     const Stopwatch record;
     const u32 frameCount = static_cast<u32>(im.frames.size());
     std::vector<TempEntity> createdTemps(3000);

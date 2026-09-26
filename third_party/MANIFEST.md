@@ -25,7 +25,7 @@ Vendored code is never edited in place: the few changes Helios needs are patches
 | Recast/Detour | recastnavigation/recastnavigation | v1.6.0 (6dc1667) | zlib | Navmesh generation, pathfinding, crowds |
 | Monocypher | LoupVaillant/Monocypher | 4.0.3 (ab2b16d) | BSD-2 / CC0 | Ed25519 manifest signing, X25519/XChaCha20 utilities (4.0.3 fixes an EdDSA timing leak) |
 | Tracy | wolfpld/tracy | v0.14.1 (30997d5) | BSD-3 | Frame/zone profiler (enabled with `HELIOS_PROFILE=ON`; viewer must match 0.14.1) |
-| Luau | luau-lang/luau | 0.739 (a62362a) | MIT | Gameplay scripting VM + compiler + native codegen + type analysis (editor) |
+| Luau | luau-lang/luau | 0.739 (a62362a) + 1 Helios patch | MIT | Gameplay scripting VM + compiler + native codegen + type analysis (editor) |
 | SDL3 | libsdl-org/SDL | release-3.4.16 (fa2c02b) | zlib | Windowing, input (IME, gamepads w/ rumble, raw mouse), replaces GLFW |
 | flecs | SanderMertens/flecs | v4.1.6 (fb55f3c) | MIT | Archetype ECS with relationships (single-file distr build) |
 | mimalloc | microsoft/mimalloc | v3.5.3 (d4881d3) | MIT | Heaps behind the tagged allocators (no global override) |
@@ -52,6 +52,16 @@ the rest of Helios.
 **On every bump of a patched dependency (K10)** the patches are rebased onto the new upstream in the same
 change (the script stops at the first patch that no longer applies), the dependency's table below is
 updated, and the tests named in its last column must pass. A patch that upstream has absorbed is deleted.
+
+### Luau (`third_party/luau/patches/`)
+
+| Patch | What it changes | Why | Upstream | Tests; `sim_abi` |
+|---|---|---|---|---|
+| `0001-codegen-fornloop-fuel.patch` | `CodeGen/src/IrTranslation.cpp`: native code emits the numeric-`for` interrupt in `FORNLOOP`, where the interpreter has it, instead of at the top of the loop body | Native code reached one more safepoint than the interpreter for every numeric loop left by `break` or `return`, so it counted different fuel (RT-13's fuel identity, K39; 02 §7.4, 04 §10.2) | not submitted | `script_tests` (`determinism: numeric for loops left early …`); `sim_abi.script` |
+
+The Luau patches, with the planned `det-math` patch (04 §10.2), are inputs of `sim_abi.script` (04 §6.7):
+the component covers Luau's bytecode version range and the ordered list of these patches. `sim_abi` itself is
+computed by WP-3.1 (planned region migration); until then this list is the record of what it must cover.
 
 ## Prebuilt tools (downloaded at configure time, never committed)
 

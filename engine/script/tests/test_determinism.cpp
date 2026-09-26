@@ -1,6 +1,6 @@
 // Determinism: a pure script produces identical output and identical fuel counts across runs and
 // VMs (fuel counts are what replay and the lane budget rely on, 04 §10.2), and native codegen hits
-// the same safepoints as the interpreter.
+// the same safepoints as the interpreter (RT-13; the vendored codegen-fornloop-fuel patch).
 
 #include "luacodegen.h"
 #include "script_test_util.h"
@@ -46,8 +46,11 @@ struct RunResult {
     u64 fuel = 0;
 };
 
+// Native runs use the editor profile: cells refuse codegen (02 §7.4). The profile changes neither the
+// bytecode nor the safepoints, and the budgets below are fuel on every profile.
 RunResult runSource(const char* source, bool native) {
     VmConfig c = Harness::defaultConfig();
+    if (native) c.profile = HostProfile::Editor;
     c.budget.fuelPerResume = 0;
     c.budget.fuelKill = 50'000'000;
     c.budget.fuelPerTick = 50'000'000;
@@ -90,15 +93,19 @@ TEST_CASE("determinism: native codegen counts the same fuel as the interpreter")
     const RunResult native = runPure(true);
     CHECK(native.output == interp.output);
     CHECK(native.fuel == interp.fuel);
+    CHECK(native.fuel == kGoldenPureFuel);
 }
 
-TEST_CASE("determinism: known codegen divergence — numeric for loops left early") {
-    // Luau 0.739's code generator places the numeric-for interrupt at the start of the loop body,
-    // the interpreter in FORNLOOP (IrTranslation.cpp translateInstForNPrep). Counts agree for loops
-    // that run to completion, but every iteration left by `break`/`return` costs one extra fuel in
-    // native code. This pins the divergence so the pending vendored patch (or an upstream fix) is
-    // noticed; until then native codegen stays off on cells (VmConfig default).
-    if (!luau_codegen_supported()) return;
+TEST_CASE("determinism: numeric for loops left early count the same fuel in native code") {
+    // Stock Luau 0.739's code generator places the numeric-for interrupt at the start of the loop
+    // body, the interpreter in FORNLOOP, so every loop left by `break` or `return` cost one extra
+    // fuel in native code (K39). The vendored codegen-fornloop-fuel patch emits it in FORNLOOP
+    // (third_party/luau/patches/0001); this case pinned the divergence (+50) before the patch and
+    // fails again if a Luau bump loses it.
+    if (!luau_codegen_supported()) {
+        MESSAGE("native codegen not supported on this target; skipped");
+        return;
+    }
     constexpr const char* kEarlyExit = R"(
         local exits = 0
         for i = 1, 50 do
@@ -106,13 +113,20 @@ TEST_CASE("determinism: known codegen divergence — numeric for loops left earl
                 if j == 3 then exits += 1 break end
             end
         end
+        local function firstOver(limit)
+            for k = 1, 100 do
+                if k * k > limit then return k end
+            end
+            return 0
+        end
+        for i = 1, 30 do exits += firstOver(i) end
         print(exits)
     )";
     const RunResult interp = runSource(kEarlyExit, false);
     const RunResult native = runSource(kEarlyExit, true);
-    CHECK(interp.output == "50");
-    CHECK(native.output == "50");
-    CHECK(native.fuel == interp.fuel + 50); // one extra safepoint per early exit
+    CHECK(interp.output == native.output);
+    CHECK(interp.output == "180");
+    CHECK(native.fuel == interp.fuel); // stock 0.739: + 50 (break) + 30 (return)
 }
 
 TEST_CASE("determinism: charges never depend on the printed length of heap addresses") {

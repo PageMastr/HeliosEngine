@@ -1,0 +1,45 @@
+Helios patch 0001 codegen-fornloop-fuel (Luau 0.739; 02 §7.4, 04 §10.2; WP-0.10r, K39)
+
+Native code must reach the same `interrupt` safepoints as the interpreter, because Helios charges one
+fuel per safepoint and replays kills at the identical fuel count (RT-13). Upstream's code generator puts
+the numeric-for interrupt at the top of the loop body instead of in FORNLOOP (to avoid a spill point), so
+every loop left by `break` or `return` reaches one more safepoint in native code. This patch emits the
+interrupt in FORNLOOP, where the VM has it. In native code that can add a register spill to short numeric
+loops that use the loop index.
+
+Upstream status: not submitted. Rebase on every Luau bump (K10); engine/script's determinism tests fail
+if the divergence comes back. Licence: MIT (Helios, like Luau).
+
+diff --git a/CodeGen/src/IrTranslation.cpp b/CodeGen/src/IrTranslation.cpp
+index 3089e9d..8114eee 100644
+--- a/CodeGen/src/IrTranslation.cpp
++++ b/CodeGen/src/IrTranslation.cpp
+@@ -1399,10 +1399,9 @@ void translateInstForNPrep(IrBuilder& build, const Instruction* pc, int pcpos)
+     if (build.isInternalBlock(loopStart))
+         build.beginBlock(loopStart);
+ 
+-    // VM places interrupt in FORNLOOP, but that creates a likely spill point for short loops that use loop index as INTERRUPT always spills
+-    // We place the interrupt at the beginning of the loop body instead; VM uses FORNLOOP because it doesn't want to waste an extra instruction.
+-    // Because loop block may not have been started yet (as it's started when lowering the first instruction!), we need to defer INTERRUPT placement.
+-    build.interruptRequested = true;
++    // Helios patch codegen-fornloop-fuel: the loop interrupt is emitted in FORNLOOP, where the VM has it (see translateInstForNLoop).
++    // Upstream places it at the beginning of the loop body to avoid a likely spill point, but then native code reaches one more
++    // safepoint than the interpreter for every loop left by break or return, and hosts that count safepoints need both to agree.
+ }
+ 
+ void translateInstForNLoop(IrBuilder& build, const Instruction* pc, int pcpos)
+@@ -1416,11 +1415,9 @@ void translateInstForNLoop(IrBuilder& build, const Instruction* pc, int pcpos)
+     CODEGEN_ASSERT(!build.numericLoopStack.empty());
+     IrBuilder::LoopInfo loopInfo = build.numericLoopStack.back();
+ 
+-    // normally, the interrupt is placed at the beginning of the loop body by FORNPREP translation
+-    // however, there are rare cases where FORNLOOP might not jump directly to the first loop instruction
+-    // we detect this by checking the starting instruction of the loop body from loop information stack
+-    if (repeatJumpTarget != loopInfo.startpc)
+-        build.inst(IrCmd::INTERRUPT, build.constUint(pcpos));
++    // Helios patch codegen-fornloop-fuel: the interrupt is always placed here, as in the VM's FORNLOOP, so that native code and the
++    // interpreter reach the same safepoints (upstream places it at the beginning of the loop body)
++    build.inst(IrCmd::INTERRUPT, build.constUint(pcpos));
+ 
+     if (FFlag::LuauBackedgeHeapCheck)
+         build.inst(IrCmd::CHECK_GC);

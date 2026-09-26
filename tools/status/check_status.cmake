@@ -2,105 +2,28 @@
 #
 #   cmake -P tools/status/check_status.cmake        # from anywhere; exits non-zero on a stale status
 #
-# Fails when:
-#   * a module directory under engine/, apps/, tools/, services/cmd/, services/internal/ or services/pkg/
-#     is not named in 09 §8.1 (the Phase 0 status table), or
-#   * a module README in those directories (or services/README.md) has no "Plan-Rev: <n>" line, or
-#     records a revision above docs/plan/PLAN-REV (D7).
-# Directories without a README (tools/ci, apps/samples, ...) must still be named in §8.1, but need no
-# Plan-Rev. The Director runs this at every round audit until WP-0.3's tools/status/snapshot absorbs it.
-# It needs no build and no network.
+# WP-0.3's tools/status/snapshot.py absorbed this check; this entry point delegates to
+# `snapshot.py check` so the round-audit command in the plan keeps working. It fails when a module
+# directory under engine/, apps/, tools/, services/cmd/, services/internal/ or services/pkg/ is not named
+# in 09 §8.1 (or has no WP in its tree inventory row), or a module README has no "Plan-Rev: <n>" line or
+# one above docs/plan/PLAN-REV. It needs Python 3, no build and no network.
 
 cmake_minimum_required(VERSION 3.28)
 get_filename_component(root "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 
-set(plan "${root}/docs/plan/09-roadmap-and-process.md")
-if(NOT EXISTS "${plan}")
-  message(FATAL_ERROR "check_status: ${plan} not found")
+find_program(HELIOS_STATUS_PYTHON NAMES python3 python py)
+if(NOT HELIOS_STATUS_PYTHON)
+  message(FATAL_ERROR "check_status: Python 3 is required (tools/status/snapshot.py)")
 endif()
-file(READ "${plan}" text)
-string(FIND "${text}" "### 8.1 " begin)
-string(FIND "${text}" "### 8.2 " end)
-if(begin EQUAL -1 OR end EQUAL -1 OR end LESS begin)
-  message(FATAL_ERROR "check_status: cannot find 09 §8.1 (### 8.1 … ### 8.2)")
+set(launcher "")
+get_filename_component(exe "${HELIOS_STATUS_PYTHON}" NAME_WE)
+if(exe STREQUAL "py")
+  set(launcher -3)  # the Windows launcher
 endif()
-math(EXPR len "${end} - ${begin}")
-string(SUBSTRING "${text}" ${begin} ${len} status)
-
-set(planRev 0)
-if(EXISTS "${root}/docs/plan/PLAN-REV")
-  file(STRINGS "${root}/docs/plan/PLAN-REV" revLines REGEX "^[0-9]+")
-  list(GET revLines 0 planRev)
-  string(STRIP "${planRev}" planRev)
-else()
-  message(FATAL_ERROR "check_status: docs/plan/PLAN-REV is missing (09 §5.10.2 D1)")
+execute_process(COMMAND "${HELIOS_STATUS_PYTHON}" ${launcher} "${root}/tools/status/snapshot.py" check
+                RESULT_VARIABLE rc)
+if(rc EQUAL 9009)
+  message(FATAL_ERROR "check_status: ${HELIOS_STATUS_PYTHON} is not a Python 3 (the Windows Store alias?)")
+elseif(NOT rc EQUAL 0)
+  message(FATAL_ERROR "check_status: the status in 09 §8.1 or a module README is stale (snapshot.py exit ${rc})")
 endif()
-
-set(modules "")
-foreach(parent engine apps tools services/cmd services/internal services/pkg)
-  file(GLOB children LIST_DIRECTORIES true RELATIVE "${root}" "${root}/${parent}/*")
-  foreach(child IN LISTS children)
-    if(IS_DIRECTORY "${root}/${child}")
-      list(APPEND modules "${child}")
-    endif()
-  endforeach()
-endforeach()
-list(SORT modules)
-
-set(missing "")
-set(noRev "")
-set(badRev "")
-set(noReadme "")
-set(checked 0)
-foreach(m IN LISTS modules ITEMS services)
-  math(EXPR checked "${checked} + 1")
-  if(NOT m STREQUAL "services")
-    # Named in §8.1: the path followed by a character that cannot continue a path segment.
-    string(REGEX REPLACE "([][+.*()^$?|\\\\])" "\\\\\\1" pattern "${m}")
-    string(REGEX MATCH "${pattern}([^A-Za-z0-9_./-]|$)" hit "${status}")
-    if(hit STREQUAL "")
-      list(APPEND missing "${m}")
-    endif()
-  endif()
-  if(EXISTS "${root}/${m}/README.md")
-    file(STRINGS "${root}/${m}/README.md" revs REGEX "^Plan-Rev: [0-9]+")
-    if(revs STREQUAL "")
-      list(APPEND noRev "${m}/README.md")
-    else()
-      list(GET revs 0 first)
-      string(REGEX MATCH "[0-9]+" n "${first}")
-      if(n GREATER planRev)
-        list(APPEND badRev "${m}/README.md (Plan-Rev ${n} > PLAN-REV ${planRev})")
-      endif()
-    endif()
-  elseif(NOT m STREQUAL "services")
-    list(APPEND noReadme "${m}")
-  endif()
-endforeach()
-
-list(LENGTH modules count)
-message("check_status: ${count} module directories, PLAN-REV ${planRev}")
-if(noReadme)
-  string(REPLACE ";" ", " s "${noReadme}")
-  message("  note: no README, so no Plan-Rev required: ${s}")
-endif()
-set(failed OFF)
-if(missing)
-  string(REPLACE ";" "\n    " s "${missing}")
-  message("  FAIL: not named in 09 §8.1 (D6):\n    ${s}")
-  set(failed ON)
-endif()
-if(noRev)
-  string(REPLACE ";" "\n    " s "${noRev}")
-  message("  FAIL: README without a 'Plan-Rev: <n>' line (D7):\n    ${s}")
-  set(failed ON)
-endif()
-if(badRev)
-  string(REPLACE ";" "\n    " s "${badRev}")
-  message("  FAIL: Plan-Rev above the plan's revision:\n    ${s}")
-  set(failed ON)
-endif()
-if(failed)
-  message(FATAL_ERROR "check_status: the status in 09 §8.1 or a module README is stale")
-endif()
-message("check_status: OK")

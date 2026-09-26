@@ -3,12 +3,16 @@
 #
 #   cmake -DTHIRD_PARTY_DIR=<dir> -DMANIFEST=<MANIFEST.md> -P vendor_patches.cmake
 #
-# For every third_party/<dep>/patches/*.patch (a git diff relative to third_party/<dep>):
-#  1. the file is named NNNN-<slug>.patch (applied in that order) and is named in MANIFEST.md;
+# For every third_party/<dep>/patches/* (each a git diff relative to third_party/<dep>):
+#  1. the file is named NNNN-<slug>.patch (applied in that order), has at least one hunk, and is the
+#     first cell of a row of the table under MANIFEST.md's "### ... (`third_party/<dep>/patches/`)"
+#     heading; every patch that table lists exists;
 #  2. every hunk is applied to the committed tree: its post-image (context and added lines) appears
 #     in the target file, hunks in order; a file the patch deletes is absent.
 # No network, git or build is needed, and CRLF checkouts pass (line endings are normalized). A tree
-# re-vendored without its patches, or edited so that a patch no longer describes it, fails.
+# re-vendored without its patches, or edited inside a patched hunk, fails. An in-place edit outside
+# every hunk is not detected: re-running fetch_third_party.sh and diffing third_party/ is the full
+# proof that the tree is upstream plus its patches (third_party/MANIFEST.md, "Patches").
 # Exits non-zero with one line per finding.
 
 cmake_minimum_required(VERSION 3.28)
@@ -16,13 +20,6 @@ if(NOT IS_DIRECTORY "${THIRD_PARTY_DIR}")
   message(FATAL_ERROR "vendor-patches: THIRD_PARTY_DIR is not a directory: '${THIRD_PARTY_DIR}'")
 endif()
 get_filename_component(THIRD_PARTY_DIR "${THIRD_PARTY_DIR}" ABSOLUTE)
-set(manifestText "")
-if(MANIFEST)
-  if(NOT EXISTS "${MANIFEST}")
-    message(FATAL_ERROR "vendor-patches: MANIFEST not found: '${MANIFEST}'")
-  endif()
-  file(READ "${MANIFEST}" manifestText)
-endif()
 
 # CMake lists split on ';' (not after '\', not inside [...]), so text is escaped before it is split
 # into lines: ';', '\', '[' and ']' become control characters that sources do not contain.
@@ -52,6 +49,29 @@ set(findings "")
 set(patchCount 0)
 set(hunkCount 0)
 
+# MANIFEST.md: "<dep>/<patch>" for every table row whose first cell is `NNNN-....patch`, inside a
+# "### ... (`third_party/<dep>/patches/`)" section (which ends at the next heading).
+set(listedPatches "")
+if(MANIFEST)
+  if(NOT EXISTS "${MANIFEST}")
+    message(FATAL_ERROR "vendor-patches: MANIFEST not found: '${MANIFEST}'")
+  endif()
+  file(READ "${MANIFEST}" manifestText)
+  _vp_escape("${manifestText}" manifestText)
+  string(REPLACE "\n" ";" manifestLines "${manifestText}")
+  set(section "")
+  foreach(line IN LISTS manifestLines)
+    if(line MATCHES "^#")
+      set(section "")
+      if(line MATCHES "^### .*\\(`third_party/([^/`]+)/patches/?`\\)")
+        set(section "${CMAKE_MATCH_1}")
+      endif()
+    elseif(NOT section STREQUAL "" AND line MATCHES "^\\| *`([0-9][0-9][0-9][0-9]-[^`|]*\\.patch)` *\\|")
+      list(APPEND listedPatches "${section}/${CMAKE_MATCH_1}")
+    endif()
+  endforeach()
+endif()
+
 file(GLOB deps LIST_DIRECTORIES true RELATIVE "${THIRD_PARTY_DIR}" "${THIRD_PARTY_DIR}/*")
 list(SORT deps)
 foreach(dep IN LISTS deps)
@@ -68,18 +88,15 @@ foreach(dep IN LISTS deps)
       continue()
     endif()
     math(EXPR patchCount "${patchCount} + 1")
-    if(MANIFEST)
-      string(FIND "${manifestText}" "${patch}" listed)
-      if(listed EQUAL -1)
-        list(APPEND findings "${rel}: not listed in third_party/MANIFEST.md (Patches: what, why, upstream status)")
-      endif()
+    if(MANIFEST AND NOT "${dep}/${patch}" IN_LIST listedPatches)
+      list(APPEND findings "${rel}: not listed in the table under MANIFEST.md's \"### ... (`third_party/${dep}/patches/`)\" heading (what, why, upstream status)")
     endif()
 
     file(READ "${depRoot}/patches/${patch}" patchText)
     _vp_escape("${patchText}" patchText)
     string(REPLACE "\n" ";" lines "${patchText}")
     set(target "")        # file the current hunks apply to ("" before the first +++ line)
-    set(skipFile FALSE)   # its hunks are not checked (the file is missing, already reported)
+    set(skipFile FALSE)   # its hunks are not checked (missing or deleted file, reported with +++)
     set(deleted "")
     set(targetText "")    # its escaped, normalized content
     set(searchFrom 0)     # offset after the previous hunk of this file
@@ -90,6 +107,7 @@ foreach(dep IN LISTS deps)
     set(lineNo 0)
     set(hunkLine 0)
     set(fileHunks 0)
+    set(patchHunks 0)
     foreach(line IN LISTS lines)
       math(EXPR lineNo "${lineNo} + 1")
       if(inHunk)
@@ -122,7 +140,7 @@ foreach(dep IN LISTS deps)
           math(EXPR hunkCount "${hunkCount} + 1")
           math(EXPR fileHunks "${fileHunks} + 1")
           if(skipFile)
-            # reported with the +++ line
+            # reported with the +++ line (missing file), or nothing to find (deleted file)
           elseif(target STREQUAL "")
             list(APPEND findings "${rel}:${hunkLine}: hunk before any +++ line")
           elseif(NOT post STREQUAL "")
@@ -141,6 +159,7 @@ foreach(dep IN LISTS deps)
 
       if(line MATCHES "^diff --git ")
         set(target "")
+        set(skipFile FALSE)
       elseif(line MATCHES "^\\+\\+\\+ (.*)$")
         set(path "${CMAKE_MATCH_1}")
         string(REGEX REPLACE "\t.*$" "" path "${path}")
@@ -148,8 +167,12 @@ foreach(dep IN LISTS deps)
         set(searchFrom 0)
         set(skipFile FALSE)
         if(path STREQUAL "/dev/null")
+          # A deleted file: it must be absent, and its hunks have no post-image to find.
           set(target "")
-          if(deleted AND EXISTS "${depRoot}/${deleted}")
+          set(skipFile TRUE)
+          if(deleted STREQUAL "" OR deleted STREQUAL "/dev/null")
+            list(APPEND findings "${rel}:${lineNo}: +++ /dev/null without a --- a/<file> line")
+          elseif(EXISTS "${depRoot}/${deleted}")
             list(APPEND findings "${rel}:${lineNo}: third_party/${dep}/${deleted} should be deleted by this patch but exists")
           endif()
         else()
@@ -180,12 +203,24 @@ foreach(dep IN LISTS deps)
         set(post "")
         set(hunkLine ${lineNo})
         set(inHunk TRUE)
+        math(EXPR patchHunks "${patchHunks} + 1")
       endif()
     endforeach()
     if(inHunk)
       list(APPEND findings "${rel}:${hunkLine}: truncated hunk")
+    elseif(patchHunks EQUAL 0)
+      list(APPEND findings "${rel}: has no hunks (git apply rejects an empty patch)")
     endif()
   endforeach()
+endforeach()
+
+# Every patch the manifest lists exists.
+foreach(entry IN LISTS listedPatches)
+  string(REGEX REPLACE "/[^/]*$" "" dep "${entry}")
+  string(REGEX REPLACE "^.*/" "" patch "${entry}")
+  if(NOT EXISTS "${THIRD_PARTY_DIR}/${dep}/patches/${patch}")
+    list(APPEND findings "MANIFEST.md lists third_party/${dep}/patches/${patch}, which does not exist")
+  endif()
 endforeach()
 
 list(LENGTH findings n)

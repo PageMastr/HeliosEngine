@@ -6,6 +6,8 @@
 
 | Patch | What | Why |
 |---|---|---|
+| `0001-greeting.patch` | fixture | fixture |
+| `0002-ghost.patch` | fixture | fixture |
 
 ## Other section
 

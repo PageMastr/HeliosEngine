@@ -6,6 +6,7 @@
 
 | Patch | What | Why |
 |---|---|---|
+| `0001-two-hunks.patch` | fixture | fixture |
 
 ## Other section
 

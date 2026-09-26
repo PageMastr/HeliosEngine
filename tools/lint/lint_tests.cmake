@@ -148,17 +148,26 @@ endforeach()
 
 # ---------------------------------------------------------------------------------------------
 # Vendored patches (CLAUDE.md; third_party/MANIFEST.md "Patches"): every third_party/<dep>/patches/
-# NNNN-<slug>.patch is listed in the manifest and applied to the committed tree.
+# NNNN-<slug>.patch is listed in the manifest and applied to the committed tree. The fixtures with an
+# empty expectation must pass (a correctly applied patch, a CRLF checkout, a deleted file).
 # ---------------------------------------------------------------------------------------------
 helios_lint_test(lint_vendor_patches COMMAND ${CMAKE_COMMAND}
   -DTHIRD_PARTY_DIR=${PROJECT_SOURCE_DIR}/third_party -DMANIFEST=${PROJECT_SOURCE_DIR}/third_party/MANIFEST.md
   -P ${LINT}/vendor_patches.cmake)
 foreach(case
     "applied|"
+    "crlf|"
+    "deleted|"
     "unapplied|hunk 1 of third_party/demo/greeting.c is not applied"
-    "unlisted|0001-greeting.patch: not listed in third_party/MANIFEST.md"
+    "reordered|hunk 2 of third_party/demo/order.c is not applied"
+    "unlisted|0001-greeting.patch: not listed in the table under MANIFEST.md"
+    "manifest_ghost|MANIFEST.md lists third_party/demo/patches/0002-ghost.patch, which does not exist"
     "badname|greeting.patch: not named NNNN-<slug>.patch"
-    "missing_file|patched file third_party/demo/greeting.c does not exist")
+    "hunkless|0002-nothing.patch: has no hunks"
+    "missing_file|patched file third_party/demo/greeting.c does not exist"
+    "deleted_exists|third_party/demo/gone.c should be deleted by this patch but exists"
+    "truncated|0001-greeting.patch:7: truncated hunk"
+    "malformed|0001-greeting.patch:9: malformed hunk line")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)
   list(LENGTH parts n)

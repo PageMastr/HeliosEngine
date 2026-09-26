@@ -6,6 +6,7 @@
 
 | Patch | What | Why |
 |---|---|---|
+| `0001-delete-gone.patch` | fixture | fixture |
 
 ## Other section
 

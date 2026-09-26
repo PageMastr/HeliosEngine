@@ -103,13 +103,15 @@ std::string_view structuralOpName(StructuralOp op) noexcept;
 /// entity's EntityId; SetFrame = the frame's FrameId value (or its flecs id without a FrameRef; 0 =
 /// no frame). Destroying a frame or docking host logs SetFrame(0) / Undock for the entities that
 /// were in it or docked at it.
+/// 24 bytes (x64): a burst logs one per structural op, so the fields are ordered to pack.
 struct StructuralEvent {
-    StructuralOp op = StructuralOp::Create;
     EntityId entity;
-    NetHandle handle;
     u64 arg = 0;
+    NetHandle handle;
+    StructuralOp op = StructuralOp::Create;
     friend bool operator==(const StructuralEvent&, const StructuralEvent&) = default;
 };
+static_assert(sizeof(StructuralEvent) == 24, "keep structural events at 24 bytes (x64)");
 
 /// Called while applying an InFrame change (before the pair changes) so the world module can
 /// convert the entity's frame-local state (02 §5.3). `from` is invalid when the entity had no frame.
@@ -189,7 +191,13 @@ public:
         const u32 slot = typeSlot<T>();
         return slot < m_typeReplBits.size() ? m_typeReplBits[slot] : 0;
     }
-    const ComponentInfo* componentInfo(ComponentId id) const noexcept;
+    /// Registered component `id`, or nullptr (pairs, unregistered ids). O(1): a direct array for ids
+    /// below kDirectInfoIds (every component registered early in a world's life), a hash map above.
+    /// Lock-free; callable from systems (registration happens outside stages).
+    const ComponentInfo* componentInfo(ComponentId id) const noexcept {
+        if (id < m_infoByLowId.size()) return m_infoByLowId[id];
+        return id < kDirectInfoIds ? nullptr : componentInfoSlow(id);
+    }
     const ComponentInfo* findComponent(std::string_view name) const noexcept;
     /// Replicated component with RepDirty bit `replIndex` (nullptr if none).
     const ComponentInfo* replicatedComponent(u32 replIndex) const noexcept;
@@ -355,17 +363,34 @@ private:
     void assignChildIdentities(Entity root, bool netHandles, AgId ag);
     static constexpr u32 kMaxHierarchyDepth = 4096;
     bool isAncestor(Entity ancestor, Entity e) const noexcept;
-    /// A component set/added together with a spawn (value == nullptr: add only).
+    /// Component ids below this have a direct componentInfo() slot (ADR-004a item 2).
+    static constexpr ComponentId kDirectInfoIds = 1u << 16;
+    const ComponentInfo* componentInfoSlow(ComponentId id) const noexcept;
+    /// A component set/added together with a spawn (value == nullptr: add only), with its
+    /// ComponentInfo resolved once (nullptr: not a World component).
     struct SpawnOp {
         ComponentId id = 0;
         const void* value = nullptr;
         u32 size = 0;
+        const ComponentInfo* info = nullptr;
     };
     Entity spawnImpl(const SpawnDesc& desc, std::span<const SpawnOp> ops, EntityId preallocated);
+    void prepareSpawns(CommandBuffer& buffer);
     void spawnGroup(CommandBuffer& buffer, u32 groupIndex);
+    void spawnBatch(CommandBuffer& buffer, u32 batchIndex);
     void pruneDockList(Entity host, std::vector<u64>& list);
+    /// destroy() / addId() / removeId() / setRaw() for an entity known to be alive (the command
+    /// buffer path checks liveness once per command).
+    void destroyAlive(Entity e);
+    void addIdAlive(Entity e, ComponentId id);
+    void removeIdAlive(Entity e, ComponentId id);
+    void setRawAlive(Entity e, ComponentId id, const void* value, usize size);
+    u32 destroyRun(CommandBuffer& buffer, u32 first);
+    u32 componentRun(CommandBuffer& buffer, u32 first);
     void unregisterSubtree(Entity e);
-    void releaseRelationTargets(Entity e);
+    void unregisterOne(const ::ecs_record_t* r);
+    inline bool mayHostDockRefs(Entity e) const noexcept; // (world.cpp)
+    void releaseRelationTargets(Entity e, bool isTarget);
     ::ecs_table_t* findTable(std::vector<u64>& ids);
     void ensureRepDirty(Entity e);
     /// Freshly instantiated entity: owned replicated components start with a clean _dirty mask and
@@ -382,6 +407,7 @@ private:
     WorldDesc m_desc;
     ecs_world_t* m_flecs = nullptr;
     jobs::JobSystem* m_jobs = nullptr;
+    std::vector<const ComponentInfo*> m_infoByLowId; // ComponentId < kDirectInfoIds -> info (stable addresses)
     std::vector<ComponentId> m_typeIds; // typeSlot -> ComponentId
     std::vector<u64> m_typeReplBits;    // typeSlot -> RepDirty bit (0 = not replicated)
     std::unique_ptr<LocalIdBlockSource> m_localIdBlocks;

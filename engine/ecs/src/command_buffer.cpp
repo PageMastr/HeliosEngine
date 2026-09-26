@@ -25,10 +25,15 @@ CommandBuffer::~CommandBuffer() {
 }
 
 CommandBuffer::CommandBuffer(CommandBuffer&& other) noexcept
-    : m_world(other.m_world), m_commands(std::move(other.m_commands)), m_spawns(std::move(other.m_spawns)),
+    : m_world(other.m_world), m_commands(std::move(other.m_commands)),
+      m_payloadDtors(std::move(other.m_payloadDtors)), m_spawns(std::move(other.m_spawns)),
+      m_batches(std::move(other.m_batches)), m_batchColumns(std::move(other.m_batchColumns)),
       m_resolved(std::move(other.m_resolved)), m_blocks(std::move(other.m_blocks)),
-      m_blockIndex(std::exchange(other.m_blockIndex, 0)), m_blockOffset(std::exchange(other.m_blockOffset, 0)) {
+      m_blockIndex(std::exchange(other.m_blockIndex, 0)), m_blockOffset(std::exchange(other.m_blockOffset, 0)),
+      m_singleSpawns(std::exchange(other.m_singleSpawns, 0)), m_openSpawn(std::exchange(other.m_openSpawn, kNoSpawn)),
+      m_scatteredFusion(std::exchange(other.m_scatteredFusion, false)) {
     other.m_commands.clear();
+    other.m_payloadDtors.clear();
     other.m_blocks.clear();
 }
 
@@ -38,12 +43,19 @@ CommandBuffer& CommandBuffer::operator=(CommandBuffer&& other) noexcept {
         releaseBlocks();
         m_world = other.m_world;
         m_commands = std::move(other.m_commands);
+        m_payloadDtors = std::move(other.m_payloadDtors);
         m_spawns = std::move(other.m_spawns);
+        m_batches = std::move(other.m_batches);
+        m_batchColumns = std::move(other.m_batchColumns);
         m_resolved = std::move(other.m_resolved);
+        m_singleSpawns = std::exchange(other.m_singleSpawns, 0);
+        m_openSpawn = std::exchange(other.m_openSpawn, kNoSpawn);
+        m_scatteredFusion = std::exchange(other.m_scatteredFusion, false);
         m_blocks = std::move(other.m_blocks);
         m_blockIndex = std::exchange(other.m_blockIndex, 0);
         m_blockOffset = std::exchange(other.m_blockOffset, 0);
         other.m_commands.clear();
+        other.m_payloadDtors.clear();
         other.m_blocks.clear();
     }
     return *this;
@@ -53,7 +65,33 @@ TempEntity CommandBuffer::spawn(const SpawnDesc& desc) {
     const u32 index = static_cast<u32>(m_spawns.size());
     m_spawns.push_back(desc);
     push(CommandKind::Spawn, EntityRef(TempEntity{index}), index);
+    m_openSpawn = index;
+    ++m_singleSpawns;
     return TempEntity{index};
+}
+
+TempEntity CommandBuffer::spawnN(const SpawnDesc& desc, u32 count, std::span<const SpawnColumn> columns) {
+    if (count == 0) return TempEntity{};
+    const u32 first = static_cast<u32>(m_spawns.size());
+    m_spawns.insert(m_spawns.end(), count, desc);
+    Batch& batch = m_batches.emplace_back();
+    batch.firstTemp = first;
+    batch.count = count;
+    batch.firstColumn = static_cast<u32>(m_batchColumns.size());
+    batch.columnCount = static_cast<u32>(columns.size());
+    for (const SpawnColumn& c : columns) {
+        SpawnColumn& copy = m_batchColumns.emplace_back(c);
+        if (c.values && c.size != 0) {
+            const usize bytes = static_cast<usize>(c.size) * count;
+            void* mem = allocatePayload(bytes, alignof(std::max_align_t));
+            std::memcpy(mem, c.values, bytes);
+            copy.values = mem;
+        } else {
+            copy.values = nullptr;
+        }
+    }
+    push(CommandKind::SpawnN, EntityRef(TempEntity{first}), static_cast<u64>(m_batches.size() - 1));
+    return TempEntity{first};
 }
 
 void CommandBuffer::setRaw(EntityRef e, ComponentId id, const void* value, u32 size) {
@@ -88,12 +126,16 @@ void* CommandBuffer::allocatePayload(usize size, usize alignment) {
 }
 
 void CommandBuffer::clear() {
-    for (Command& cmd : m_commands) {
-        if (cmd.destroyPayload) cmd.destroyPayload(cmd.payload);
-    }
+    for (const PayloadDtor& d : m_payloadDtors) d.destroy(d.payload);
+    m_payloadDtors.clear();
     m_commands.clear();
     m_spawns.clear();
+    m_batches.clear();
+    m_batchColumns.clear();
     m_resolved.clear();
+    m_singleSpawns = 0;
+    m_openSpawn = kNoSpawn;
+    m_scatteredFusion = false;
     m_blockIndex = 0;
     m_blockOffset = 0;
 }

@@ -96,6 +96,8 @@ struct ComponentInfo {
     /// this value wherever it adds one without an explicit value. nullptr for tags and for
     /// components with lifecycle hooks (flecs constructs those).
     const std::byte* defaultValue = nullptr;
+    /// The hooks it was registered with (owned by the World, stable for its lifetime).
+    const ComponentHooks* hooks = nullptr;
 
     bool isTag() const noexcept { return size == 0; }
     bool isReplicated() const noexcept { return hasFlag(flags, ComponentFlags::Replicated); }

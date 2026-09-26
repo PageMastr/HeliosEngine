@@ -140,6 +140,36 @@ u64 cellKey(const DVec3& p) noexcept {
 
 } // namespace
 
+// The timed parts of the 9k-op burst, out of line so that callgrind counts exactly the measured
+// work (SPIKES.md §5.2):  valgrind --tool=callgrind --toggle-collect='bench::timed::*' ecs_bench ...
+// Each writes its own marker so identical-code folding cannot merge the World phases, and
+// writes it again after the call so that it is not a tail call.
+namespace timed {
+namespace {
+volatile u32 g_phase = 0;
+} // namespace
+HELIOS_NOINLINE void worldCreates(World& w, CommandBuffer& cb) {
+    g_phase = 1;
+    w.apply(cb);
+    g_phase = 0; // not a tail call, so callgrind sees the function return
+}
+HELIOS_NOINLINE void worldDestroys(World& w, CommandBuffer& cb) {
+    g_phase = 2;
+    w.apply(cb);
+    g_phase = 0; // not a tail call, so callgrind sees the function return
+}
+HELIOS_NOINLINE void worldToggles(World& w, CommandBuffer& cb) {
+    g_phase = 3;
+    w.apply(cb);
+    g_phase = 0; // not a tail call, so callgrind sees the function return
+}
+HELIOS_NOINLINE void worldStatuses(World& w, CommandBuffer& cb) {
+    g_phase = 4;
+    w.apply(cb);
+    g_phase = 0; // not a tail call, so callgrind sees the function return
+}
+} // namespace timed
+
 struct BenchZone::Impl {
     std::vector<ComponentId> tags; // runtime-registered variant tags
     std::vector<Entity> frames;
@@ -153,6 +183,9 @@ struct BenchZone::Impl {
     std::unique_ptr<Query> iterQuery;
     std::vector<ChunkData> iterChunks;
     std::vector<Entity> burstCreated; // projectiles spawned by the last structuralBurst()
+    std::vector<ecs_entity_t> rawCreated; // unregistered projectiles of the last rawFlecsBurst()
+    // The burst's buffers are kept across rounds, as the scheduler keeps its per-job buffers.
+    CommandBuffer creates, destroys, toggles, statuses;
 };
 
 BenchZone::BenchZone(World& world, const ZoneConfig& config)
@@ -718,7 +751,7 @@ u32 BenchZone::iterate3(u64* collectNs, u32* chunkCount) {
     return visited;
 }
 
-BurstResult BenchZone::structuralBurst(u32 round) {
+BurstResult BenchZone::structuralBurst(u32 round, bool profiled) {
     World& w = m_world;
     Impl& im = *m_impl;
     BurstResult res;
@@ -726,25 +759,75 @@ BurstResult BenchZone::structuralBurst(u32 round) {
     // the new tag-combination tables: "cold"); later rounds destroy the projectiles the previous
     // round created and alternately revert / re-apply the tag changes (all tables exist: "warm",
     // the steady state of a running zone).
+    const bool legacy = m_config.legacyBurst;
     std::vector<Entity> victims, npcs;
-    Query vq(w, {Term{round == 0 ? w.id<c::Loot>() : w.id<c::Projectile>(), TermAccess::Read}});
-    vq.forEachChunk([&](ChunkView& ch) {
-        for (u32 r = 0; r < ch.count() && victims.size() < 3000; ++r) victims.push_back(ch.entity(r));
-    });
+    if (legacy) {
+        // Pre-WP-1.1a: loot in round 0, then the first 3,000 projectiles in query order.
+        Query vq(w, {Term{round == 0 ? w.id<c::Loot>() : w.id<c::Projectile>(), TermAccess::Read}});
+        vq.forEachChunk([&](ChunkView& ch) {
+            for (u32 r = 0; r < ch.count() && victims.size() < 3000; ++r) victims.push_back(ch.entity(r));
+        });
+    } else if (round == 0 || im.burstCreated.empty()) {
+        Query vq(w, {Term{w.id<c::Loot>(), TermAccess::Read}});
+        vq.forEachChunk([&](ChunkView& ch) {
+            for (u32 r = 0; r < ch.count() && victims.size() < 3000; ++r) victims.push_back(ch.entity(r));
+        });
+    } else {
+        // The previous round's projectiles, as the raw-flecs burst deletes its own creates. (Taking
+        // the first 3,000 projectiles in query order instead picked the zone's older ones and let
+        // the burst tables grow every round, a table-growth cost the raw burst never pays.)
+        for (const Entity e : im.burstCreated) {
+            if (w.isAlive(e)) victims.push_back(e);
+        }
+    }
     npcs = burstNpcs();
 
-    CommandBuffer creates(&w), destroys(&w), toggles(&w), statuses(&w);
+    CommandBuffer fresh[4]; // the legacy burst records into new buffers every round
+    CommandBuffer& creates = legacy ? fresh[0] : im.creates;
+    CommandBuffer& destroys = legacy ? fresh[1] : im.destroys;
+    CommandBuffer& toggles = legacy ? fresh[2] : im.toggles;
+    CommandBuffer& statuses = legacy ? fresh[3] : im.statuses;
+    for (CommandBuffer* b : {&creates, &destroys, &toggles, &statuses}) b->setWorld(&w);
     const Stopwatch record;
-    for (u32 i = 0; i < 3000; ++i) {
-        const u64 h = h64(0xB0057 + round, i);
-        const TempEntity t = creates.spawn({.frame = im.frames[i % im.frames.size()]});
-        creates.set(t, c::Position{DVec3(unit(h) * 1000.0, 0.0, 0.0)});
-        creates.set(t, c::Velocity{{100, 0, 0}, {}});
-        creates.set(t, c::Projectile{im.targets[i % im.targets.size()], 5});
-        creates.set(t, c::Lifetime{2});
-        creates.set(t, c::Faction{1});
-        creates.set(t, c::Bounds{0.2f});
-        creates.set(t, c::SpatialCell{});
+    const u32 frameCount = static_cast<u32>(im.frames.size());
+    std::vector<TempEntity> createdTemps; // creation order (the next round destroys them in it)
+    createdTemps.reserve(3000);
+    if (m_config.perCommandCreates || legacy) {
+        // One spawn() and seven set() commands per projectile (fused at apply time).
+        for (u32 i = 0; i < 3000; ++i) {
+            const u64 h = h64(0xB0057 + round, i);
+            const TempEntity t = creates.spawn({.frame = im.frames[i % frameCount]});
+            creates.set(t, c::Position{DVec3(unit(h) * 1000.0, 0.0, 0.0)});
+            creates.set(t, c::Velocity{{100, 0, 0}, {}});
+            creates.set(t, c::Projectile{im.targets[i % im.targets.size()], 5});
+            creates.set(t, c::Lifetime{2});
+            creates.set(t, c::Faction{1});
+            creates.set(t, c::Bounds{0.2f});
+            creates.set(t, c::SpatialCell{});
+            createdTemps.push_back(t);
+        }
+    } else {
+        // The same projectiles as one spawnN() batch per frame, values in column arrays: how a
+        // system records a volley (ADR-004a item 4).
+        std::vector<c::Position> pos;
+        std::vector<c::Projectile> proj;
+        const std::vector<c::Velocity> vel(3000 / frameCount + 1, c::Velocity{{100, 0, 0}, {}});
+        const std::vector<c::Lifetime> life(vel.size(), c::Lifetime{2});
+        const std::vector<c::Faction> fac(vel.size(), c::Faction{1});
+        const std::vector<c::Bounds> bounds(vel.size(), c::Bounds{0.2f});
+        const std::vector<c::SpatialCell> cells(vel.size(), c::SpatialCell{});
+        for (u32 f = 0; f < frameCount; ++f) {
+            pos.clear();
+            proj.clear();
+            for (u32 i = f; i < 3000; i += frameCount) {
+                pos.push_back(c::Position{DVec3(unit(h64(0xB0057 + round, i)) * 1000.0, 0.0, 0.0)});
+                proj.push_back(c::Projectile{im.targets[i % im.targets.size()], 5});
+            }
+            const u32 n = static_cast<u32>(pos.size());
+            const TempEntity first = creates.spawnN({.frame = im.frames[f]}, n, pos.data(), vel.data(), proj.data(),
+                                                    life.data(), fac.data(), bounds.data(), cells.data());
+            for (u32 k = 0; k < n; ++k) createdTemps.push_back(TempEntity{first.index + k});
+        }
     }
     for (const Entity e : victims) destroys.destroy(e);
     for (usize i = 0; i < npcs.size(); ++i) {
@@ -777,18 +860,18 @@ BurstResult BenchZone::structuralBurst(u32 round) {
     res.recordMs = record.elapsedMillis();
     res.commands = static_cast<u32>(creates.size() + destroys.size() + toggles.size());
     Stopwatch sw;
-    w.apply(creates);
+    profiled ? timed::worldCreates(w, creates) : w.apply(creates);
     res.createMs = sw.elapsedMillis();
     im.burstCreated.clear();
-    for (u32 i = 0; i < 3000; ++i) im.burstCreated.push_back(creates.resolved(TempEntity{i}));
+    for (const TempEntity t : createdTemps) im.burstCreated.push_back(creates.resolved(t));
     sw.reset();
-    w.apply(destroys);
+    profiled ? timed::worldDestroys(w, destroys) : w.apply(destroys);
     res.destroyMs = sw.elapsedMillis();
     sw.reset();
-    w.apply(toggles);
+    profiled ? timed::worldToggles(w, toggles) : w.apply(toggles);
     res.toggleMs = sw.elapsedMillis();
     sw.reset();
-    w.apply(statuses);
+    profiled ? timed::worldStatuses(w, statuses) : w.apply(statuses);
     res.toggleDontFragmentMs = sw.elapsedMillis();
     w.clearStructuralLog();
     return res;
@@ -805,7 +888,131 @@ std::vector<Entity> BenchZone::burstNpcs() {
     return npcs;
 }
 
-BurstResult BenchZone::rawFlecsBurst(u32 round) {
+namespace ops {
+
+/// Column arrays of the creates plus zeros for NetIdentity and RepDirty. Frame f reads elements
+/// [f * frameStride, ...): the burst's 3,000 distinct values, or (legacy burst) the same 250 for
+/// every frame.
+struct RawColumns {
+    struct Column {
+        ecs_id_t id;
+        const std::byte* data;
+        usize size;
+    };
+    Column columns[7];
+    void* zeros;
+    usize frameStride;
+    /// Pass the table type as ecs_bulk_desc_t::ids. ecs_bulk_init copies bd.data only for the ids
+    /// listed there (with a table and no ids it copies nothing), so without it the "values" are
+    /// never written: the pre-WP-1.1a raw burst's bug, kept for the legacy burst.
+    bool writeValues;
+};
+
+// 3,000 creates: one ecs_bulk_init with values per frame table.
+void rawCreates(ecs_world_t* fw, const std::vector<ecs_table_t*>& tables, u32 perFrame,
+                                const RawColumns& c, std::vector<ecs_entity_t>& created) {
+    u32 remaining = 3000;
+    for (usize f = 0; f < tables.size() && remaining > 0; ++f) {
+        const u32 count = std::min(perFrame, remaining);
+        remaining -= count;
+        const ecs_type_t* type = ecs_table_get_type(tables[f]);
+        HELIOS_VERIFY(type->count < FLECS_ID_DESC_MAX);
+        ecs_bulk_desc_t bd{};
+        std::vector<void*> data(static_cast<usize>(type->count), nullptr);
+        for (i32 k = 0; k < type->count; ++k) {
+            const ecs_id_t id = type->array[k];
+            if (c.writeValues) bd.ids[k] = id;
+            if (ecs_get_typeid(fw, id) != 0) data[k] = c.zeros; // NetIdentity, RepDirty
+            for (const RawColumns::Column& col : c.columns) {
+                if (col.id == id) data[k] = const_cast<std::byte*>(col.data + f * c.frameStride * col.size);
+            }
+        }
+        bd.count = static_cast<i32>(count);
+        bd.table = tables[f];
+        bd.data = data.data();
+        const ecs_entity_t* es = ecs_bulk_init(fw, &bd);
+        created.insert(created.end(), es, es + count);
+    }
+}
+
+void rawDestroys(ecs_world_t* fw, const std::vector<ecs_entity_t>& created) {
+    for (const ecs_entity_t e : created) ecs_delete(fw, e);
+}
+
+// The NPC tag toggles of structuralBurst(): even NPCs toggle the cloak tag, odd ones lose or regain
+// a species tag. ids[i] is NPC i's tag (0: none), found before the timed loop as the World burst
+// finds it while recording its commands; apply rounds add the cloak and remove the species.
+void rawToggles(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply, const std::vector<ecs_id_t>& ids) {
+    for (usize i = 0; i < npcs.size(); ++i) {
+        if (ids[i] == 0) continue;
+        if ((i % 2 == 0) == apply) {
+            ecs_add_id(fw, npcs[i].id, ids[i]);
+        } else {
+            ecs_remove_id(fw, npcs[i].id, ids[i]);
+        }
+    }
+}
+
+// The pre-WP-1.1a raw toggles (--legacy-burst): the species an odd NPC loses is searched with
+// ecs_has_id() inside the timed loop, work the World burst does while recording.
+void rawTogglesLegacy(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply, ecs_id_t cloak,
+                                const std::vector<ecs_id_t>& species) {
+    for (usize i = 0; i < npcs.size(); ++i) {
+        const ecs_entity_t e = npcs[i].id;
+        if (i % 2 == 0) {
+            if (apply) {
+                ecs_add_id(fw, e, cloak);
+            } else {
+                ecs_remove_id(fw, e, cloak);
+            }
+        } else if (apply) {
+            for (const ecs_id_t sp : species) {
+                if (ecs_has_id(fw, e, sp)) {
+                    ecs_remove_id(fw, e, sp);
+                    break;
+                }
+            }
+        } else {
+            ecs_add_id(fw, e, species[static_cast<usize>(mix64(i) % species.size())]);
+        }
+    }
+}
+
+void rawStatuses(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply, ecs_id_t status) {
+    for (usize i = 0; i < npcs.size(); ++i) {
+        if (apply) {
+            const c::Status value{static_cast<u32>(i)};
+            ecs_set_id(fw, npcs[i].id, status, sizeof value, &value);
+        } else {
+            ecs_remove_id(fw, npcs[i].id, status);
+        }
+    }
+}
+
+} // namespace ops
+
+namespace timed {
+HELIOS_NOINLINE void rawCreates(ecs_world_t* fw, const std::vector<ecs_table_t*>& tables, u32 perFrame,
+                                const ops::RawColumns& c, std::vector<ecs_entity_t>& created) {
+    ops::rawCreates(fw, tables, perFrame, c, created);
+}
+HELIOS_NOINLINE void rawDestroys(ecs_world_t* fw, const std::vector<ecs_entity_t>& created) {
+    ops::rawDestroys(fw, created);
+}
+HELIOS_NOINLINE void rawToggles(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply,
+                                const std::vector<ecs_id_t>& ids) {
+    ops::rawToggles(fw, npcs, apply, ids);
+}
+HELIOS_NOINLINE void rawTogglesLegacy(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply, ecs_id_t cloak,
+                                      const std::vector<ecs_id_t>& species) {
+    ops::rawTogglesLegacy(fw, npcs, apply, cloak, species);
+}
+HELIOS_NOINLINE void rawStatuses(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply, ecs_id_t status) {
+    ops::rawStatuses(fw, npcs, apply, status);
+}
+} // namespace timed
+
+BurstResult BenchZone::rawFlecsBurst(u32 round, bool profiled) {
     World& w = m_world;
     Impl& im = *m_impl;
     ecs_world_t* fw = w.flecsWorld();
@@ -831,89 +1038,77 @@ BurstResult BenchZone::rawFlecsBurst(u32 round) {
     }
 
     // Values in column order (per frame group), as the World writes them.
+    const bool legacy = m_config.legacyBurst;
     const u32 perFrame = (3000 + frameCount - 1) / frameCount;
     const ecs_id_t idPos = w.id<c::Position>(), idVel = w.id<c::Velocity>(), idProj = w.id<c::Projectile>(),
                    idLife = w.id<c::Lifetime>(), idFac = w.id<c::Faction>(), idBounds = w.id<c::Bounds>(),
                    idCell = w.id<c::SpatialCell>();
-    std::vector<c::Position> pos(perFrame);
-    std::vector<c::Velocity> vel(perFrame, c::Velocity{{100, 0, 0}, {}});
-    std::vector<c::Projectile> proj(perFrame);
-    std::vector<c::Lifetime> life(perFrame, c::Lifetime{2});
-    std::vector<c::Faction> fac(perFrame, c::Faction{1});
-    std::vector<c::Bounds> bounds(perFrame, c::Bounds{0.2f});
-    std::vector<c::SpatialCell> cells(perFrame);
+    const usize total = static_cast<usize>(perFrame) * (legacy ? 1 : frameCount);
+    std::vector<c::Position> pos(total);
+    std::vector<c::Velocity> vel(total, c::Velocity{{100, 0, 0}, {}});
+    std::vector<c::Projectile> proj(total);
+    std::vector<c::Lifetime> life(total, c::Lifetime{2});
+    std::vector<c::Faction> fac(total, c::Faction{1});
+    std::vector<c::Bounds> bounds(total, c::Bounds{0.2f});
+    std::vector<c::SpatialCell> cells(total);
     std::vector<std::byte> zeros(perFrame * 64);
-    for (u32 i = 0; i < perFrame; ++i) {
+    for (u32 i = 0; i < total; ++i) {
         pos[i].p = DVec3(unit(h64(0xFA57 + round, i)) * 1000.0, 0.0, 0.0);
         proj[i] = c::Projectile{im.targets[i % im.targets.size()], 5};
     }
     std::vector<ecs_entity_t> created;
     created.reserve(3000);
+    auto col = [](ecs_id_t id, const auto& v) {
+        return ops::RawColumns::Column{id, reinterpret_cast<const std::byte*>(v.data()), sizeof(v[0])};
+    };
+    const ops::RawColumns columns{{col(idPos, pos), col(idVel, vel), col(idProj, proj), col(idLife, life),
+                                   col(idFac, fac), col(idBounds, bounds), col(idCell, cells)},
+                                  zeros.data(), legacy ? 0 : perFrame, !legacy};
     Stopwatch sw;
-    u32 remaining = 3000;
-    for (u32 f = 0; f < frameCount && remaining > 0; ++f) {
-        const u32 count = std::min(perFrame, remaining);
-        remaining -= count;
-        const ecs_type_t* type = ecs_table_get_type(tables[f]);
-        std::vector<void*> data(static_cast<usize>(type->count), nullptr);
-        for (i32 k = 0; k < type->count; ++k) {
-            const ecs_id_t id = type->array[k];
-            if (id == idPos) data[k] = pos.data();
-            else if (id == idVel) data[k] = vel.data();
-            else if (id == idProj) data[k] = proj.data();
-            else if (id == idLife) data[k] = life.data();
-            else if (id == idFac) data[k] = fac.data();
-            else if (id == idBounds) data[k] = bounds.data();
-            else if (id == idCell) data[k] = cells.data();
-            else if (ecs_get_typeid(fw, id) != 0) data[k] = zeros.data(); // NetIdentity, RepDirty
-        }
-        ecs_bulk_desc_t bd{};
-        bd.count = static_cast<i32>(count);
-        bd.table = tables[f];
-        bd.data = data.data();
-        const ecs_entity_t* es = ecs_bulk_init(fw, &bd);
-        created.insert(created.end(), es, es + count);
-    }
+    profiled ? timed::rawCreates(fw, tables, perFrame, columns, created) : ops::rawCreates(fw, tables, perFrame, columns, created);
     res.createMs = sw.elapsedMillis();
 
+    // Like the World burst, delete the previous burst's creates while this burst's sit at the ends
+    // of the tables (so every delete moves a row into the hole, as it does for the World). The
+    // legacy burst deletes this burst's own creates instead.
+    std::vector<ecs_entity_t>& victims = legacy ? created : im.rawCreated;
     sw.reset();
-    for (const ecs_entity_t e : created) ecs_delete(fw, e);
+    profiled ? timed::rawDestroys(fw, victims) : ops::rawDestroys(fw, victims);
     res.destroyMs = sw.elapsedMillis();
+    if (!legacy) im.rawCreated = std::move(created);
 
     const bool apply = round % 2 == 0;
-    const ecs_id_t cloak = im.tags[5];
-    sw.reset();
-    for (usize i = 0; i < npcs.size(); ++i) {
-        const ecs_entity_t e = npcs[i].id;
-        if (i % 2 == 0) {
-            if (apply) {
-                ecs_add_id(fw, e, cloak);
-            } else {
-                ecs_remove_id(fw, e, cloak);
-            }
-        } else if (apply) {
-            for (u32 sp = 8; sp <= 10; ++sp) {
-                if (ecs_has_id(fw, e, im.tags[sp])) {
-                    ecs_remove_id(fw, e, im.tags[sp]);
-                    break;
+    std::vector<ecs_id_t> species{im.tags[8], im.tags[9], im.tags[10]};
+    if (legacy) {
+        sw.reset();
+        profiled ? timed::rawTogglesLegacy(fw, npcs, apply, im.tags[5], species)
+                 : ops::rawTogglesLegacy(fw, npcs, apply, im.tags[5], species);
+        res.toggleMs = sw.elapsedMillis();
+    } else {
+        // Which tag each NPC toggles, decided before timing like the World burst's recording.
+        std::vector<ecs_id_t> ids(npcs.size(), 0);
+        for (usize i = 0; i < npcs.size(); ++i) {
+            if (i % 2 == 0) {
+                ids[i] = im.tags[5];
+            } else if (apply) {
+                for (const ecs_id_t sp : species) {
+                    if (ecs_has_id(fw, npcs[i].id, sp)) {
+                        ids[i] = sp;
+                        break;
+                    }
                 }
+            } else {
+                ids[i] = species[static_cast<usize>(mix64(i) % species.size())];
             }
-        } else {
-            ecs_add_id(fw, e, im.tags[8 + static_cast<u32>(mix64(i) % 3)]);
         }
+        sw.reset();
+        profiled ? timed::rawToggles(fw, npcs, apply, ids) : ops::rawToggles(fw, npcs, apply, ids);
+        res.toggleMs = sw.elapsedMillis();
     }
-    res.toggleMs = sw.elapsedMillis();
 
-    const ecs_id_t status = w.id<c::Status>();
     sw.reset();
-    for (usize i = 0; i < npcs.size(); ++i) {
-        if (apply) {
-            const c::Status value{static_cast<u32>(i)};
-            ecs_set_id(fw, npcs[i].id, status, sizeof value, &value);
-        } else {
-            ecs_remove_id(fw, npcs[i].id, status);
-        }
-    }
+    const ecs_id_t status = w.id<c::Status>();
+    profiled ? timed::rawStatuses(fw, npcs, apply, status) : ops::rawStatuses(fw, npcs, apply, status);
     res.toggleDontFragmentMs = sw.elapsedMillis();
     res.commands = 9000;
     return res;

@@ -153,8 +153,9 @@ u64 runWorkload(const RelationConfig& relations) {
     w.set(host, Counter{1});
     Digest d(w);
 
-    // 1. Creates: groups by (frame, signature), fusion with interleaved temps, prefab instances with
-    //    children, hierarchy, content-placed ids and handle slots, sparse values, a closed fusion.
+    // 1. Creates: groups by (frame, signature), prefab instances with children, hierarchy,
+    //    content-placed ids and handle slots, sparse values. Every Set/Add follows its spawn, so
+    //    the World fuses runs (CommandBuffer::trackFusion); the next buffer interleaves temps.
     CommandBuffer cb(&w);
     std::vector<TempEntity> grouped;
     for (u32 i = 0; i < 240; ++i) {
@@ -167,11 +168,6 @@ u64 runWorkload(const RelationConfig& relations) {
         if (i % 11 == 0) cb.set(t, Label{"label-" + std::to_string(i) + "-long-enough-to-allocate"});
         grouped.push_back(t);
     }
-    const TempEntity a = cb.spawn(), b = cb.spawn({.frame = f3});
-    cb.set(a, Counter{5});
-    cb.set(b, Counter{6});
-    cb.set(a, Position{{1.0, 2.0, 3.0}});
-    cb.add<Frozen>(b);
     std::vector<TempEntity> ships;
     for (u32 i = 0; i < 12; ++i) {
         ships.push_back(cb.spawn({.prefab = prefab, .frame = i % 2 ? f1 : f3, .ag = 7}));
@@ -192,13 +188,32 @@ u64 runWorkload(const RelationConfig& relations) {
     cb.set(sparse, Status{3});
     cb.set(sparse, Mark{4});
     cb.set(sparse, Health{});
-    const TempEntity closed = cb.spawn();
-    cb.set(closed, Counter{1});
-    cb.remove<Counter>(closed);
-    cb.set(closed, Counter{2});
     const TempEntity quiet = cb.spawn({.netHandle = false});
     cb.set(quiet, Counter{3});
     w.apply(cb);
+    d.events();
+    d.state();
+
+    // 1b. Interleaved temps (fused through the per-temp lists), a closed fusion, and groups that
+    //     continue across other spawns.
+    CommandBuffer ib(&w);
+    const TempEntity a = ib.spawn(), b = ib.spawn({.frame = f3});
+    ib.set(a, Counter{5});
+    ib.set(b, Counter{6});
+    ib.set(a, Position{{1.0, 2.0, 3.0}});
+    ib.add<Frozen>(b);
+    const TempEntity closed = ib.spawn();
+    ib.set(closed, Counter{1});
+    ib.remove<Counter>(closed);
+    ib.set(closed, Counter{2});
+    std::vector<TempEntity> late;
+    for (u32 i = 0; i < 30; ++i) late.push_back(ib.spawn({.frame = i % 3 ? f1 : f2}));
+    for (u32 i = 0; i < 30; ++i) {
+        ib.set(late[i], Position{{static_cast<f64>(i) * 0.5, 1.0, 0.0}});
+        ib.set(late[i], Counter{i});
+        if (i % 4 == 0) ib.add<Tagged>(late[i]);
+    }
+    w.apply(ib);
     d.events();
     d.state();
 
@@ -298,12 +313,12 @@ TEST_CASE("ecs structural ops: the WP-1.1a paths leave the pre-WP-1.1a state, lo
     fragmenting.docking = DockStorage::PairDontFragment;
     RelationConfig inFrameDf;
     inFrameDf.inFrameDontFragment = true;
-    const Variant variants[] = {{"defaults", defaults, 0xd34850398735e256ull},
-                                {"docking pairs", pairs, 0xf3470141e590810full},
-                                {"ChildOf + DontFragment docking", fragmenting, 0x9f5879e7bfb307c6ull},
-                                {"InFrame DontFragment", inFrameDf, 0x38e90a3b4f2d164aull}};
+    const Variant variants[] = {{"defaults", defaults, 0x4f389e5d9e792602ull},
+                                {"docking pairs", pairs, 0x15bb14fcd2ddf841ull},
+                                {"ChildOf + DontFragment docking", fragmenting, 0xe551c637e88a98c4ull},
+                                {"InFrame DontFragment", inFrameDf, 0xebc3aebc44b4b98aull}};
     for (const Variant& v : variants) {
-        CAPTURE(v.name);
+        CAPTURE(std::string(v.name));
         const u64 digest = runWorkload(v.relations);
         CAPTURE(std::format("{:#018x}", digest));
         CHECK(digest == v.golden);

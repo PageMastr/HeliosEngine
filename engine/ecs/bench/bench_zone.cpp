@@ -757,10 +757,19 @@ BurstResult BenchZone::structuralBurst(u32 round, bool profiled) {
     // round created and alternately revert / re-apply the tag changes (all tables exist: "warm",
     // the steady state of a running zone).
     std::vector<Entity> victims, npcs;
-    Query vq(w, {Term{round == 0 ? w.id<c::Loot>() : w.id<c::Projectile>(), TermAccess::Read}});
-    vq.forEachChunk([&](ChunkView& ch) {
-        for (u32 r = 0; r < ch.count() && victims.size() < 3000; ++r) victims.push_back(ch.entity(r));
-    });
+    if (round == 0 || im.burstCreated.empty()) {
+        Query vq(w, {Term{w.id<c::Loot>(), TermAccess::Read}});
+        vq.forEachChunk([&](ChunkView& ch) {
+            for (u32 r = 0; r < ch.count() && victims.size() < 3000; ++r) victims.push_back(ch.entity(r));
+        });
+    } else {
+        // The previous round's projectiles, as the raw-flecs burst deletes its own creates. (Taking
+        // the first 3,000 projectiles in query order instead picked the zone's older ones and let
+        // the burst tables grow every round, a table-growth cost the raw burst never pays.)
+        for (const Entity e : im.burstCreated) {
+            if (w.isAlive(e)) victims.push_back(e);
+        }
+    }
     npcs = burstNpcs();
 
     CommandBuffer creates(&w), destroys(&w), toggles(&w), statuses(&w);

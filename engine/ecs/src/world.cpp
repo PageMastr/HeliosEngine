@@ -710,7 +710,7 @@ void World::spawnBatch(CommandBuffer& buffer, u32 batchIndex) {
                 const ComponentInfo& info = *componentInfo(c.id);
                 if (!hasFlag(info.flags, kNotInTable)) continue;
                 const void* value = info.defaultValue;
-                if (c.values) value = static_cast<const std::byte*>(c.values) + static_cast<usize>(r) * info.size;
+                if (c.values && info.size != 0) value = static_cast<const std::byte*>(c.values) + usize{r} * info.size;
                 if (value) {
                     ecs_set_id(m_flecs, fe(e), c.id, info.size, value);
                 } else {

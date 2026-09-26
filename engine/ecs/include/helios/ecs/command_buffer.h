@@ -200,7 +200,7 @@ private:
         u64 arg = 0; // ComponentId, frame entity, spawn or batch index, or the other EntityRef's bits
         void* payload = nullptr;
     };
-    static_assert(sizeof(EntityRef) == 8 && sizeof(void*) == 8, "x64 layout");
+    static_assert(sizeof(Command) == 32, "keep commands at 32 bytes (x64)");
     struct PayloadDtor {
         void* payload;
         void (*destroy)(void*);

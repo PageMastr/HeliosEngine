@@ -47,7 +47,8 @@ def status_section(root: Path) -> tuple[str, int, int]:
     path = root / PLAN
     if not path.is_file():
         raise StatusError(f"{PLAN.as_posix()} not found")
-    text = path.read_text(encoding="utf-8")
+    with open(path, encoding="utf-8", newline="") as f:  # keep CRLF checkouts byte-exact for --write
+        text = f.read()
     begin, end = text.find("### 8.1 "), text.find("### 8.2 ")
     if begin < 0 or end < begin:
         raise StatusError("cannot find 09 §8.1 (### 8.1 … ### 8.2)")
@@ -173,7 +174,8 @@ def write_inventory(root: Path) -> bool:
     if new == line:
         return False
     start = text.index(line, begin)
-    (root / PLAN).write_text(text[:start] + new + text[start + len(line):], encoding="utf-8")
+    with open(root / PLAN, "w", encoding="utf-8", newline="") as f:
+        f.write(text[:start] + new + text[start + len(line):])
     return True
 
 

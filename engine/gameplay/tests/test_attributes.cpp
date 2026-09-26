@@ -427,8 +427,10 @@ TEST_CASE("attributes: ModifierDef records instantiate against a layout") {
 
 namespace {
 
-// Deterministic random "ships": a 40-attribute layout with derived attributes and clamps, and
-// ~300 modifiers of every kind.
+// Deterministic random "ships": a 40-attribute layout (stacking-penalised, AdditiveBonus, derived and
+// max-clamped attributes) and constant Pre/Mod/Post arithmetic modifiers in two penalty groups, some
+// exempt, with every 50th a live attribute read. No assignments, formulas, requirements or min clamps
+// (the tests above check those by value).
 struct Build {
     std::shared_ptr<const AttributeLayout> layout;
     std::vector<Modifier> mods;

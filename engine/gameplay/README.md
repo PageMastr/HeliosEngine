@@ -122,11 +122,17 @@ thread ≤ 8 ms, which is necessary for the budget but not sufficient (it assume
 This container and the nightly runner have fewer than 8 vCPUs, so the budget itself still needs a
 run on 8-core hardware (09 §8.1).
 
-**Determinism.** `test_attributes.cpp` builds 200 random ships (40 attributes with derived values,
-clamps and ~150 modifiers of every kind), checks each final value against an independent
-`long double` reference within 1e-9 and pins an FNV-1a hash of all final bits (`0x1243442c7d350ee5`,
-GCC 13 and Clang 18 identical; MSVC and clang-cl are checked by CI). If it fails on one toolchain
-only, fix the build flags (FP contraction), never the constant.
+**Determinism.** `test_attributes.cpp` builds 200 random ships and checks each final value against an
+independent `long double` reference within 1e-9. It pins an FNV-1a hash of all final bits,
+`0x06ab742cc6907032`, identical on GCC 13 and Clang 18 (MSVC and clang-cl are checked by CI). If it
+fails on one toolchain only, fix the build flags (FP contraction), never the constant.
+
+What the golden builds cover: 40 attributes per ship, a third of them stacking-penalised, some in
+`AdditiveBonus` mode, some derived (HXL over two other attributes) and some max-clamped by another
+attribute; 150 constant `PreMul`, `PreDiv`, `ModAdd`, `ModSub`, `PostMul`, `PostDiv` and
+`PostPercent` modifiers in two penalty groups, a sixth of them exempt, with every 50th replaced by a
+live attribute read. They do not cover `PreAssign`/`PostAssign` and priorities, HXL magnitudes, tag
+requirements or min clamps; the unit tests in the same file check those by value.
 
 ## Items (06 §2) and reason codes (06 §4)
 

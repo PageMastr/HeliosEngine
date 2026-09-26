@@ -13,6 +13,13 @@
 
 using namespace helios;
 
+// Everything in this file, the test cases included, lives in an unnamed namespace. doctest names each
+// test function DOCTEST_ANON_FUNC_<__COUNTER__> with internal linkage, so other test files have
+// functions of the same names. MSVC (cl, not clang-cl) mangles a lambda local to such a function
+// without anything unique to the file, so templates instantiated with it (Job, std::function, the
+// lambda's operator()) become COMDATs that the linker merges across files: once this file's 8th test
+// and test_jobs.cpp's 7th both passed a `[&] {...}` to a job, one of them ran the other's lambda and
+// "jobs: higher priorities run first" hung. Unnamed-namespace names are unique per file on MSVC.
 namespace {
 
 struct TempFile {
@@ -28,8 +35,6 @@ struct TempFile {
     }
     ~TempFile() { (void)fs::removeAll(dir); }
 };
-
-} // namespace
 
 TEST_CASE("async io: whole-file and ranged reads match the synchronous read") {
     TempFile file(1 << 20);
@@ -325,3 +330,5 @@ TEST_CASE("async io: onComplete may take the result (no self-deadlock on the IO 
     CHECK(got == file.bytes);
     CHECK(read.take().errorCode() == ErrorCode::InvalidState); // already taken inside the callback
 }
+
+} // namespace

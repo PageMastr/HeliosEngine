@@ -1,9 +1,14 @@
 -- Identity schema (05 §1.1): accounts, refresh-token families, hash-chained audit log.
 -- Expand/contract rule (05 §3.3): later migrations only add; contraction happens two releases on.
+--
+-- Historical: databases created before WP-0.15r applied this file, so its statements stay as they
+-- were. They use the schema's old name "identity"; migrations.Up renames it to svc_identity right
+-- after this file (05 §1.4, §3), and 00002-00004 replace the plain-text e-mail columns with
+-- email_ct and email_bidx under per-account DEKs (05 §6.6).
 
 -- +goose Up
 CREATE TABLE identity.account (
-    account_id     BIGINT PRIMARY KEY,               -- Snowflake
+    account_id     BIGINT PRIMARY KEY,               -- time-prefixed block ID (05 §1.4.5)
     email          TEXT        NOT NULL,             -- as entered, for display and mail
     email_norm     TEXT        NOT NULL UNIQUE,      -- lowercased, trimmed: the login key
     handle         TEXT        NOT NULL,             -- display name, case preserved

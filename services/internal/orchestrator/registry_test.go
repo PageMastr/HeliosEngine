@@ -383,3 +383,27 @@ func TestResetForgetsEverything(t *testing.T) {
 		t.Fatalf("register on a standby registry: %v", err)
 	}
 }
+
+func TestPlacementWritesRegionLeases(t *testing.T) {
+	f := newReg(t)
+	ctx := context.Background()
+	rs, _ := f.store.ListRegions(ctx)
+	if len(rs) != 1 || rs[0] != (Region{ID: WholeRegion(1001), InstanceID: 1001}) {
+		t.Fatalf("a v0 zone has exactly one region_lease row: %+v", rs)
+	}
+	a, _ := f.reg.Register(ctx, cell("cell-a"))
+	rs, _ = f.store.ListRegions(ctx)
+	if rs[0].Holder != a.ProcessID || rs[0].LeaseGen != 1 || a.Assignments[0].LeaseGen != rs[0].LeaseGen {
+		t.Fatalf("assignment: %+v %+v", rs, a.Assignments)
+	}
+	_ = f.reg.Deregister(ctx, a.ProcessID, a.Epoch)
+	rs, _ = f.store.ListRegions(ctx)
+	if rs[0].Holder != 0 || rs[0].LeaseGen != 1 {
+		t.Fatalf("release keeps the generation: %+v", rs)
+	}
+	b, _ := f.reg.Register(ctx, cell("cell-b"))
+	rs, _ = f.store.ListRegions(ctx)
+	if rs[0].Holder != b.ProcessID || rs[0].LeaseGen != 2 || b.Assignments[0].LeaseGen != 2 {
+		t.Fatalf("reassignment bumps region_lease.lease_gen: %+v", rs)
+	}
+}

@@ -3,6 +3,7 @@ package identity
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 type MemStore struct {
 	mu       sync.Mutex
 	accounts map[int64]*Account
+	keys     map[int64]*SubjectKey
 	tokens   map[string]*RefreshToken
 	audit    []AuditEntry
 	head     [32]byte
@@ -20,11 +22,12 @@ type MemStore struct {
 
 // NewMemStore returns an empty store.
 func NewMemStore() *MemStore {
-	return &MemStore{accounts: map[int64]*Account{}, tokens: map[string]*RefreshToken{}}
+	return &MemStore{accounts: map[int64]*Account{}, keys: map[int64]*SubjectKey{}, tokens: map[string]*RefreshToken{}}
 }
 
 func cloneAccount(a *Account) *Account {
 	c := *a
+	c.EmailCT, c.EmailBidx = bytes.Clone(a.EmailCT), bytes.Clone(a.EmailBidx)
 	if a.BannedUntil != nil {
 		t := *a.BannedUntil
 		c.BannedUntil = &t
@@ -48,11 +51,14 @@ func (m *MemStore) appendAuditLocked(e *AuditEntry) {
 }
 
 // CreateAccount implements Store.
-func (m *MemStore) CreateAccount(_ context.Context, a *Account, audit *AuditEntry) error {
+func (m *MemStore) CreateAccount(_ context.Context, a *Account, key *SubjectKey, audit *AuditEntry) error {
+	if key == nil || key.AccountID != a.ID {
+		return errors.New("identity: an account needs its own subject key")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, x := range m.accounts {
-		if x.EmailNorm == a.EmailNorm {
+		if bytes.Equal(x.EmailBidx, a.EmailBidx) {
 			return ErrEmailTaken
 		}
 		if x.HandleNorm == a.HandleNorm && x.Discriminator == a.Discriminator {
@@ -60,6 +66,7 @@ func (m *MemStore) CreateAccount(_ context.Context, a *Account, audit *AuditEntr
 		}
 	}
 	m.accounts[a.ID] = cloneAccount(a)
+	m.keys[a.ID] = &SubjectKey{AccountID: key.AccountID, WrappedDEK: bytes.Clone(key.WrappedDEK), KEKVersion: key.KEKVersion}
 	m.appendAuditLocked(audit)
 	return nil
 }
@@ -80,9 +87,25 @@ func (m *MemStore) AccountByID(_ context.Context, id int64) (*Account, error) {
 	return m.find(func(a *Account) bool { return a.ID == id })
 }
 
-// AccountByEmail implements Store.
-func (m *MemStore) AccountByEmail(_ context.Context, emailNorm string) (*Account, error) {
-	return m.find(func(a *Account) bool { return a.EmailNorm == emailNorm })
+// AccountByEmailIndex implements Store.
+func (m *MemStore) AccountByEmailIndex(_ context.Context, bidx []byte) (*Account, error) {
+	if len(bidx) == 0 {
+		return nil, ErrNotFound
+	}
+	return m.find(func(a *Account) bool { return bytes.Equal(a.EmailBidx, bidx) })
+}
+
+// SubjectKey implements Store.
+func (m *MemStore) SubjectKey(_ context.Context, accountID int64) (*SubjectKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k, ok := m.keys[accountID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	c := *k
+	c.WrappedDEK = bytes.Clone(k.WrappedDEK)
+	return &c, nil
 }
 
 // AccountByTag implements Store.

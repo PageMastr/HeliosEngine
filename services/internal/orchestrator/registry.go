@@ -2,9 +2,9 @@
 // leader per shard, anchored in PostgreSQL with term-fenced writes (§1.4.1); processes (cells and
 // gateways) register over NATS and prove liveness with a 1 Hz heartbeat; every registration gets
 // a per-name epoch, and minting processes get time-prefixed ID blocks (§1.4.5); zones are placed on
-// cells (v0: one cell per zone) under lease generations allocated in PostgreSQL before the holder
-// is told; the world directory answers "which cell owns zone X"; and a local supervisor spawns and
-// restarts configured executables.
+// cells (v0: one cell per zone, one region per zone) under region_lease generations allocated in
+// PostgreSQL before the holder is told (§1.4.2); the world directory answers "which cell owns zone
+// X"; and a local supervisor spawns and restarts configured executables.
 package orchestrator
 
 import (
@@ -64,7 +64,8 @@ type Process struct {
 	LeaseExpires  time.Time   `json:"leaseExpires"`
 }
 
-// Assignment is a zone placed on a process under a lease generation.
+// Assignment is a zone placed on a process under its region's lease generation (v0: the zone's
+// Whole region, so ZoneID also names the region).
 type Assignment struct {
 	ZoneID   int64  `json:"zoneId,string"`
 	ZoneName string `json:"zoneName"`
@@ -166,7 +167,7 @@ func newMetrics(reg prometheus.Registerer) *metrics {
 		ended: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "helios_orchestrator_processes_ended_total",
 			Help: "Registrations ended by reason (lease_expired, superseded, deregistered)."}, []string{"reason"}),
 		assignments: prometheus.NewCounter(prometheus.CounterOpts{Name: "helios_orchestrator_zone_assignments_total",
-			Help: "Zone placements (each bumps the zone's lease generation)."}),
+			Help: "Zone placements (each bumps the region_lease generation of the zone's region)."}),
 	}
 	if reg != nil {
 		reg.MustRegister(m.processes, m.zonesAssigned, m.registrations, m.ended, m.assignments)
@@ -457,7 +458,7 @@ func (r *Registry) endLocked(ctx context.Context, p *Process, reason string, now
 	delete(r.procs, p.ID)
 	for _, z := range r.zones {
 		if z.Owner == p.ID {
-			if err := r.store.ReleaseZone(ctx, r.fence, z.ID, p.ID, now); err != nil {
+			if err := r.store.ReleaseRegion(ctx, r.fence, WholeRegion(z.ID), p.ID, now); err != nil {
 				r.log.Error("zone release failed", "zone", z.ID, "err", err)
 				_ = r.storeErr(err)
 			}
@@ -515,7 +516,7 @@ func (r *Registry) placeLocked(ctx context.Context, now time.Time) {
 		if best == nil {
 			continue
 		}
-		gen, err := r.store.AssignZone(ctx, r.fence, z.ID, best.ID, now)
+		gen, err := r.store.AssignRegion(ctx, r.fence, WholeRegion(z.ID), best.ID, now)
 		if err != nil {
 			r.log.Error("zone assignment failed", "zone", z.ID, "process", best.ID, "err", err)
 			_ = r.storeErr(err)

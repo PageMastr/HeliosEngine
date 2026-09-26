@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/PageMastr/scifi-test/services/internal/backend"
+	"github.com/PageMastr/scifi-test/services/internal/identity"
 	"github.com/PageMastr/scifi-test/services/internal/platform"
 	"github.com/PageMastr/scifi-test/services/internal/stack"
 	"github.com/PageMastr/scifi-test/services/migrations"
@@ -171,7 +172,9 @@ func runMigrate(ctx context.Context, cfg *platform.Config, log *slog.Logger) int
 	defer pg.Close()
 	db := pg.SQLDB()
 	defer db.Close()
-	if _, err := migrations.Up(ctx, db, log); err != nil {
+	// The PII keys are loaded only if pre-WP-0.15r plain-text e-mail rows must be encrypted.
+	piiKeys := func() (*identity.PIIKeys, error) { return backend.LoadPIIKeys(cfg, log) }
+	if _, err := migrations.Up(ctx, db, log, migrations.Options{PIIKeys: piiKeys}); err != nil {
 		log.Error("migrate", "err", err)
 		return 1
 	}

@@ -1,7 +1,8 @@
 // Package identity is the Identity/Auth service (05 §1.1): accounts with a global
 // handle#discriminator registry, argon2id passwords, EdDSA access JWTs, rotating refresh-token
 // families with reuse detection, one-time launch codes, bans, per-IP/per-account rate limits and
-// a hash-chained audit log.
+// a hash-chained audit log. It is the only store of direct PII, which it keeps encrypted under
+// per-account data keys and finds by blind index (05 §6.6, Phase 0 rule).
 package identity
 
 import (
@@ -53,6 +54,7 @@ const (
 type Deps struct {
 	Config  platform.IdentityConfig
 	Store   Store
+	PII     *PIIKeys // the KEK and blind-index pepper that protect e-mail addresses (05 §6.6)
 	Hasher  *Hasher
 	Issuer  *authn.Issuer
 	Keys    *authn.KeySet
@@ -71,6 +73,7 @@ type Deps struct {
 type Service struct {
 	cfg      platform.IdentityConfig
 	store    Store
+	pii      *PIIKeys
 	hasher   *Hasher
 	issuer   *authn.Issuer
 	keys     *authn.KeySet
@@ -113,7 +116,7 @@ func newMetrics(reg prometheus.Registerer) *metrics {
 
 // New builds the service.
 func New(d Deps) (*Service, error) {
-	if d.Store == nil || d.Hasher == nil || d.Issuer == nil || d.Keys == nil || d.Limiter == nil || d.Cache == nil || d.IDs == nil {
+	if d.Store == nil || d.PII == nil || d.Hasher == nil || d.Issuer == nil || d.Keys == nil || d.Limiter == nil || d.Cache == nil || d.IDs == nil {
 		return nil, errors.New("identity: missing dependency")
 	}
 	if d.Clock == nil {
@@ -123,7 +126,7 @@ func New(d Deps) (*Service, error) {
 		d.Log = slog.Default()
 	}
 	s := &Service{
-		cfg: d.Config, store: d.Store, hasher: d.Hasher, issuer: d.Issuer, keys: d.Keys, limiter: d.Limiter,
+		cfg: d.Config, store: d.Store, pii: d.PII, hasher: d.Hasher, issuer: d.Issuer, keys: d.Keys, limiter: d.Limiter,
 		cache: d.Cache, ids: d.IDs, clk: d.Clock, log: d.Log, m: newMetrics(d.Metrics), onBan: d.OnBan,
 		verifier: authn.NewVerifier(d.Keys, d.Config.Issuer, d.Config.Audience, d.Clock),
 	}
@@ -355,7 +358,11 @@ func (s *Service) register(ctx context.Context, meta Meta, req *RegisterRequest,
 		return nil, rpc.Internal(err)
 	}
 	now := s.clk.Now().UTC()
-	acct := &Account{ID: id, Email: email, EmailNorm: NormalizeEmail(email), Handle: handle, HandleNorm: strings.ToLower(handle),
+	emailCT, emailBidx, key, err := s.pii.EncryptEmail(id, email)
+	if err != nil {
+		return nil, rpc.Internal(err)
+	}
+	acct := &Account{ID: id, EmailCT: emailCT, EmailBidx: emailBidx, Handle: handle, HandleNorm: strings.ToLower(handle),
 		PasswordHash: hash, CreatedAt: now, UpdatedAt: now}
 	// Random discriminators; with 9,999 per handle, 20 tries fail only for nearly full handles.
 	for attempt := 0; attempt < 20; attempt++ {
@@ -365,7 +372,7 @@ func (s *Service) register(ctx context.Context, meta Meta, req *RegisterRequest,
 			return nil, rpc.Internal(err)
 		}
 		audit := NewAudit(now, id, id, ActionRegister, meta.ClientIP, map[string]any{"tag": acct.Tag(), "seed": seed})
-		err = s.store.CreateAccount(ctx, acct, audit)
+		err = s.store.CreateAccount(ctx, acct, key, audit)
 		switch {
 		case err == nil:
 			s.log.InfoContext(ctx, "account registered", "account", id, "tag", acct.Tag())
@@ -396,22 +403,25 @@ func (s *Service) login(ctx context.Context, meta Meta, req *LoginRequest) (*Tok
 	if err != nil {
 		return nil, "invalid", err
 	}
-	loginKey := email
-	if isTag {
-		loginKey = fmt.Sprintf("%s#%d", handleNorm, disc)
-	}
+	// unknownKey names a login that matches no account, for its rate-limit bucket and audit row.
+	// An e-mail is looked up, and named, only by its keyed blind index, so neither the address
+	// nor an unkeyed hash of it reaches Valkey or the audit log (05 §6.6).
 	var acct *Account
+	var unknownKey string
 	if isTag {
 		acct, err = s.store.AccountByTag(ctx, handleNorm, disc)
+		unknownKey = hashKey(fmt.Sprintf("%s#%d", handleNorm, disc))
 	} else {
-		acct, err = s.store.AccountByEmail(ctx, email)
+		bidx := s.pii.EmailIndex(email)
+		acct, err = s.store.AccountByEmailIndex(ctx, bidx)
+		unknownKey = hex.EncodeToString(bidx[:12])
 	}
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, "error", rpc.Internal(err)
 	}
 	// The per-account bucket is keyed by the resolved account, so alternating between the email
 	// and the tag does not double an attacker's guesses; unknown logins get a bucket of their own.
-	bucket := "login:acct:" + hashKey(loginKey)
+	bucket := "login:acct:" + unknownKey
 	if acct != nil {
 		bucket = "login:acct:" + strconv.FormatInt(acct.ID, 10)
 	}
@@ -423,7 +433,7 @@ func (s *Service) login(ctx context.Context, meta Meta, req *LoginRequest) (*Tok
 		if derr := s.hasher.DummyVerify(ctx, req.Password); errors.Is(derr, ErrHasherBusy) {
 			return nil, "busy", errBusy
 		}
-		s.audit(ctx, NewAudit(now, 0, 0, ActionLoginFailed, meta.ClientIP, map[string]any{"reason": "unknown_login", "login": hashKey(loginKey)}))
+		s.audit(ctx, NewAudit(now, 0, 0, ActionLoginFailed, meta.ClientIP, map[string]any{"reason": "unknown_login", "login": unknownKey}))
 		return nil, "unknown", errInvalidCredentials
 	}
 	ok, rehash, err := s.hasher.Verify(ctx, req.Password, acct.PasswordHash)
@@ -597,7 +607,15 @@ func (s *Service) GetAccount(ctx context.Context, p *authn.Principal) (*AccountI
 	if err != nil {
 		return nil, rpc.Internal(err)
 	}
-	return &AccountInfo{AccountID: acct.ID, Email: acct.Email, Tag: acct.Tag(), CreatedAt: acct.CreatedAt, LastLoginAt: acct.LastLoginAt}, nil
+	key, err := s.store.SubjectKey(ctx, acct.ID)
+	if err != nil {
+		return nil, rpc.Internal(err)
+	}
+	email, err := s.pii.DecryptEmail(acct, key)
+	if err != nil && !errors.Is(err, ErrShredded) {
+		return nil, rpc.Internal(err)
+	}
+	return &AccountInfo{AccountID: acct.ID, Email: email, Tag: acct.Tag(), CreatedAt: acct.CreatedAt, LastLoginAt: acct.LastLoginAt}, nil
 }
 
 type launchCodeRecord struct {
@@ -734,7 +752,7 @@ func (s *Service) JWKS() authn.JWKS { return s.keys.JWKS() }
 func (s *Service) SeedDev(ctx context.Context) (created int, err error) {
 	for i := 1; i <= 10; i++ {
 		email := fmt.Sprintf("dev%d@helios.test", i)
-		if _, err := s.store.AccountByEmail(ctx, email); err == nil {
+		if _, err := s.store.AccountByEmailIndex(ctx, s.pii.EmailIndex(email)); err == nil {
 			continue
 		}
 		_, err := s.register(ctx, Meta{ClientIP: "seed"}, &RegisterRequest{Email: email, Handle: fmt.Sprintf("dev%d", i), Password: "dev"}, true)

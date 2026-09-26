@@ -20,9 +20,15 @@ type Factory func(t *testing.T) identity.Store
 
 var base = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 
+// account builds a row as the service would, with stand-ins for the sealed address and its
+// blind index (the store never sees plain-text e-mail).
 func account(id int64, email, handle string, disc int16) *identity.Account {
-	return &identity.Account{ID: id, Email: email, EmailNorm: email, Handle: handle, HandleNorm: handle,
-		Discriminator: disc, PasswordHash: "$argon2id$x", CreatedAt: base, UpdatedAt: base}
+	return &identity.Account{ID: id, EmailCT: []byte("sealed:" + email), EmailBidx: hash(email), Handle: handle,
+		HandleNorm: handle, Discriminator: disc, PasswordHash: "$argon2id$x", CreatedAt: base, UpdatedAt: base}
+}
+
+func subjectKey(id int64) *identity.SubjectKey {
+	return &identity.SubjectKey{AccountID: id, WrappedDEK: hash(fmt.Sprint("dek", id)), KEKVersion: 1}
 }
 
 func hash(s string) []byte {
@@ -37,30 +43,51 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("accounts", func(t *testing.T) {
 		s := newStore(t)
 		a := account(1, "a@x.io", "ada", 42)
-		if err := s.CreateAccount(ctx, a, identity.NewAudit(base, 1, 1, identity.ActionRegister, "1.2.3.4", nil)); err != nil {
+		if err := s.CreateAccount(ctx, a, subjectKey(1), identity.NewAudit(base, 1, 1, identity.ActionRegister, "1.2.3.4", nil)); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.CreateAccount(ctx, account(2, "a@x.io", "bob", 1), nil); !errors.Is(err, identity.ErrEmailTaken) {
+		if err := s.CreateAccount(ctx, account(2, "a@x.io", "bob", 1), subjectKey(2), nil); !errors.Is(err, identity.ErrEmailTaken) {
 			t.Fatalf("duplicate email: %v", err)
 		}
-		if err := s.CreateAccount(ctx, account(3, "c@x.io", "ada", 42), nil); !errors.Is(err, identity.ErrTagTaken) {
+		if err := s.CreateAccount(ctx, account(3, "c@x.io", "ada", 42), subjectKey(3), nil); !errors.Is(err, identity.ErrTagTaken) {
 			t.Fatalf("duplicate tag: %v", err)
 		}
-		if err := s.CreateAccount(ctx, account(4, "d@x.io", "ada", 43), nil); err != nil {
+		if err := s.CreateAccount(ctx, account(4, "d@x.io", "ada", 43), subjectKey(4), nil); err != nil {
 			t.Fatalf("same handle, other discriminator: %v", err)
 		}
 		for name, get := range map[string]func() (*identity.Account, error){
 			"id":    func() (*identity.Account, error) { return s.AccountByID(ctx, 1) },
-			"email": func() (*identity.Account, error) { return s.AccountByEmail(ctx, "a@x.io") },
+			"email": func() (*identity.Account, error) { return s.AccountByEmailIndex(ctx, hash("a@x.io")) },
 			"tag":   func() (*identity.Account, error) { return s.AccountByTag(ctx, "ada", 42) },
 		} {
 			got, err := get()
-			if err != nil || got.ID != 1 || got.Handle != "ada" || !got.CreatedAt.Equal(base) || got.BannedUntil != nil {
+			if err != nil || got.ID != 1 || got.Handle != "ada" || !got.CreatedAt.Equal(base) || got.BannedUntil != nil ||
+				!bytes.Equal(got.EmailCT, a.EmailCT) || !bytes.Equal(got.EmailBidx, a.EmailBidx) {
 				t.Fatalf("lookup by %s: %+v %v", name, got, err)
 			}
 		}
 		if _, err := s.AccountByID(ctx, 99); !errors.Is(err, identity.ErrNotFound) {
 			t.Fatalf("missing: %v", err)
+		}
+		for _, bidx := range [][]byte{hash("nobody@x.io"), nil} {
+			if _, err := s.AccountByEmailIndex(ctx, bidx); !errors.Is(err, identity.ErrNotFound) {
+				t.Fatalf("unknown blind index %x: %v", bidx, err)
+			}
+		}
+		// The subject key is stored with the account, and only when the account is.
+		if k, err := s.SubjectKey(ctx, 1); err != nil || k.AccountID != 1 || k.KEKVersion != 1 ||
+			!bytes.Equal(k.WrappedDEK, subjectKey(1).WrappedDEK) {
+			t.Fatalf("subject key: %+v %v", k, err)
+		}
+		for _, id := range []int64{2, 3, 99} {
+			if _, err := s.SubjectKey(ctx, id); !errors.Is(err, identity.ErrNotFound) {
+				t.Fatalf("subject key of a rejected or missing account %d: %v", id, err)
+			}
+		}
+		for _, key := range []*identity.SubjectKey{nil, subjectKey(6)} {
+			if err := s.CreateAccount(ctx, account(5, "e@x.io", "eve", 1), key, nil); err == nil {
+				t.Fatalf("account created with subject key %+v", key)
+			}
 		}
 		if _, err := s.AccountByTag(ctx, "ada", 44); !errors.Is(err, identity.ErrNotFound) {
 			t.Fatalf("missing tag: %v", err)
@@ -82,7 +109,7 @@ func Run(t *testing.T, newStore Factory) {
 
 	t.Run("refresh rotation and reuse", func(t *testing.T) {
 		s := newStore(t)
-		if err := s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), nil); err != nil {
+		if err := s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), subjectKey(1), nil); err != nil {
 			t.Fatal(err)
 		}
 		t0 := &identity.RefreshToken{Hash: hash("t0"), FamilyID: 500, AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour)}
@@ -135,7 +162,7 @@ func Run(t *testing.T, newStore Factory) {
 
 	t.Run("concurrent rotation has one winner", func(t *testing.T) {
 		s := newStore(t)
-		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), nil)
+		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), subjectKey(1), nil)
 		_ = s.InsertRefreshToken(ctx, &identity.RefreshToken{Hash: hash("c0"), FamilyID: 9, AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour)})
 		var wg sync.WaitGroup
 		results := make(chan error, 8)
@@ -165,8 +192,8 @@ func Run(t *testing.T, newStore Factory) {
 
 	t.Run("family branches and liveness", func(t *testing.T) {
 		s := newStore(t)
-		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), nil)
-		_ = s.CreateAccount(ctx, account(2, "b@x.io", "bob", 1), nil)
+		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), subjectKey(1), nil)
+		_ = s.CreateAccount(ctx, account(2, "b@x.io", "bob", 1), subjectKey(2), nil)
 		_ = s.InsertRefreshToken(ctx, &identity.RefreshToken{Hash: hash("f0"), FamilyID: 40, AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour)})
 		if acct, err := s.ActiveFamily(ctx, 40, base); err != nil || acct != 1 {
 			t.Fatalf("active family: %d %v", acct, err)
@@ -224,7 +251,7 @@ func Run(t *testing.T, newStore Factory) {
 		// rotation's successor survive the revocation. Each round races both kinds across
 		// several families at once, then requires every family to be dead.
 		s := newStore(t)
-		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), nil)
+		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), subjectKey(1), nil)
 		const families = 8
 		for round := 0; round < 25; round++ {
 			type fam struct {
@@ -277,7 +304,7 @@ func Run(t *testing.T, newStore Factory) {
 
 	t.Run("ban revokes tokens", func(t *testing.T) {
 		s := newStore(t)
-		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), nil)
+		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), subjectKey(1), nil)
 		_ = s.InsertRefreshToken(ctx, &identity.RefreshToken{Hash: hash("b0"), FamilyID: 1, AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour)})
 		until := base.Add(24 * time.Hour)
 		if err := s.SetBan(ctx, 1, &until, "botting", base, identity.NewAudit(base, 7, 1, identity.ActionBan, "", nil)); err != nil {

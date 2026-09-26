@@ -35,8 +35,8 @@ const (
 	queueGroup             = "orchestrator"
 	// ServicePath is the Connect-style HTTP prefix on the ops listener.
 	ServicePath = "/helios.orchestrator.v1.Orchestrator/"
-	// BucketDirectory is the KV read projection of zone ownership for gateways and cells
-	// (05 §1.4, §2.3). It is never the authority: PostgreSQL is.
+	// BucketDirectory is the KV read projection of region_lease (zone ownership, v0) for
+	// gateways and cells (05 §1.4, §2.3). It is never the authority: PostgreSQL is.
 	BucketDirectory = "DIRECTORY"
 )
 

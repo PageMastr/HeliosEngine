@@ -45,6 +45,12 @@ const (
 	// KeyFileNATS holds the embedded NATS fleet password (cells and gateways): the standard
 	// base64 of the current secret, i.e. the "secret" string in the file as written.
 	KeyFileNATS = "nats-fleet.json"
+	// KeyFileSubjectKEK wraps every account's data key and KeyFileEmailPepper keys the e-mail
+	// blind index (05 §6.6: dev uses local key files, prod the secret store until KMS). Losing
+	// them makes every stored e-mail address unreadable and unfindable; never prune a KEK
+	// generation that still wraps a DEK.
+	KeyFileSubjectKEK  = "subject-kek.json"
+	KeyFileEmailPepper = "email-bidx-pepper.json"
 )
 
 // Options tune Start for tests.
@@ -80,6 +86,7 @@ type Backend struct {
 	runner    *app.Runner
 	telemetry *platform.Telemetry
 	lock      *stack.DataDirLock
+	pii       *identity.PIIKeys // see piiKeys
 }
 
 // KeyPath returns the path of a key file (cfg.KeysDir, default <data>/keys).
@@ -110,6 +117,20 @@ func LoadKeys(cfg *platform.Config, name, purpose string, log *slog.Logger) (*ke
 		log.Info("generated key file", "purpose", purpose, "file", path)
 	}
 	return ring, nil
+}
+
+// LoadPIIKeys opens the keys that protect Identity's direct PII (05 §6.6); dev generates missing
+// files, prod requires them (LoadKeys).
+func LoadPIIKeys(cfg *platform.Config, log *slog.Logger) (*identity.PIIKeys, error) {
+	kek, err := LoadKeys(cfg, KeyFileSubjectKEK, "subject-kek", log)
+	if err != nil {
+		return nil, err
+	}
+	pepper, err := LoadKeys(cfg, KeyFileEmailPepper, "email-bidx-pepper", log)
+	if err != nil {
+		return nil, err
+	}
+	return identity.NewPIIKeys(kek, pepper)
 }
 
 // Start brings up everything. On error, whatever was started is torn down again.
@@ -148,7 +169,7 @@ func Start(ctx context.Context, cfg *platform.Config, log *slog.Logger, opts Opt
 			return b, err
 		}
 		db := b.PG.SQLDB()
-		_, err = migrations.Up(ctx, db, log)
+		_, err = migrations.Up(ctx, db, log, migrations.Options{PIIKeys: b.piiKeys})
 		_ = db.Close()
 		if err != nil {
 			return b, err
@@ -275,9 +296,25 @@ func leaderHolder(cfg *platform.Config) (string, error) {
 	return host + ":" + dir, nil
 }
 
+// piiKeys loads the PII keys once; migrations (to encrypt pre-WP-0.15r rows) and identity share them.
+func (b *Backend) piiKeys() (*identity.PIIKeys, error) {
+	if b.pii == nil {
+		k, err := LoadPIIKeys(b.Cfg, b.Log)
+		if err != nil {
+			return nil, err
+		}
+		b.pii = k
+	}
+	return b.pii, nil
+}
+
 func (b *Backend) newIdentity(cfg *platform.Config, log *slog.Logger, limiter *ratelimit.Limiter, ids *idgen.Minter,
 	clk clock.Clock, opts Options) (*identity.Service, error) {
 	ring, err := LoadKeys(cfg, KeyFileJWT, "jwt-ed25519", log)
+	if err != nil {
+		return nil, err
+	}
+	piiKeys, err := b.piiKeys()
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +329,7 @@ func (b *Backend) newIdentity(cfg *platform.Config, log *slog.Logger, limiter *r
 		params = *opts.HashParams
 	}
 	return identity.New(identity.Deps{
-		Config: cfg.Identity, Store: identity.NewPGStore(b.PG.Pool),
+		Config: cfg.Identity, Store: identity.NewPGStore(b.PG.Pool), PII: piiKeys,
 		Hasher:  identity.NewHasher(params, cfg.Identity.Argon2.MaxConcurrent),
 		Issuer:  authn.NewIssuer(signing, cfg.Identity.Issuer, cfg.Identity.Audience, cfg.Identity.AccessTTL.D(), clk),
 		Keys:    authn.NewKeySet(pubs...),

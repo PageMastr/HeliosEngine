@@ -136,3 +136,32 @@ func TestLoadKeysDevGeneratesProdRequires(t *testing.T) {
 		t.Fatalf("prod with provisioned key: %v", err)
 	}
 }
+
+func TestLoadPIIKeys(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := platform.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.Env = "prod"
+	if _, err := LoadPIIKeys(cfg, log); err == nil {
+		t.Fatal("prod generated missing PII keys")
+	}
+	cfg.Env = "dev"
+	k1, err := LoadPIIKeys(cfg, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{KeyFileSubjectKEK, KeyFileEmailPepper} {
+		if _, err := os.Stat(KeyPath(cfg, name)); err != nil {
+			t.Fatalf("%s not written: %v", name, err)
+		}
+	}
+	// A restart reads the same files: the same address has the same blind index.
+	k2, _ := LoadPIIKeys(cfg, log)
+	if !bytes.Equal(k1.EmailIndex("a@b.io"), k2.EmailIndex("A@B.io")) {
+		t.Fatal("PII keys changed across loads")
+	}
+	cfg.Env = "prod"
+	if _, err := LoadPIIKeys(cfg, log); err != nil {
+		t.Fatalf("prod with provisioned keys: %v", err)
+	}
+}

@@ -11,11 +11,14 @@ import (
 	"golang.org/x/crypto/blake2b"
 )
 
-// Account is a player (or bot) account.
+// Account is a player (or bot) account. It holds no plain-text PII: the e-mail address is
+// sealed under the account's DEK and found by its blind index (05 §3.2, §6.6 Phase 0 rule).
 type Account struct {
-	ID            int64
-	Email         string
-	EmailNorm     string
+	ID int64
+	// EmailCT is the address as entered, sealed with EmailAAD under the account's DEK.
+	EmailCT []byte
+	// EmailBidx is PIIKeys.EmailIndex of the address: the unique login key.
+	EmailBidx     []byte
 	Handle        string
 	HandleNorm    string
 	Discriminator int16
@@ -34,6 +37,15 @@ func (a *Account) Tag() string { return fmt.Sprintf("%s#%04d", a.Handle, a.Discr
 // BannedAt reports whether the account is banned at time now.
 func (a *Account) BannedAt(now time.Time) bool {
 	return a.BannedUntil != nil && a.BannedUntil.After(now)
+}
+
+// SubjectKey is an account's data key (DEK) as stored: wrapped by the KEK generation
+// KEKVersion. WrappedDEK is nil once the key has been shredded (erasure, Phase 3), which makes
+// every copy of the account's ciphertext unreadable.
+type SubjectKey struct {
+	AccountID  int64
+	WrappedDEK []byte
+	KEKVersion int32
 }
 
 // RefreshToken is one link of a rotating refresh-token family. Only the SHA-256 of the token
@@ -125,10 +137,14 @@ var (
 // appended in the same transaction, so the audit log never disagrees with the data. All
 // methods are safe for concurrent use.
 type Store interface {
-	// CreateAccount inserts a; ErrEmailTaken / ErrTagTaken on conflicts.
-	CreateAccount(ctx context.Context, a *Account, audit *AuditEntry) error
+	// CreateAccount inserts a and its subject key in one transaction; ErrEmailTaken (same
+	// EmailBidx) / ErrTagTaken on conflicts.
+	CreateAccount(ctx context.Context, a *Account, key *SubjectKey, audit *AuditEntry) error
 	AccountByID(ctx context.Context, id int64) (*Account, error)
-	AccountByEmail(ctx context.Context, emailNorm string) (*Account, error)
+	// AccountByEmailIndex finds an account by its e-mail blind index (login, 05 §6.6).
+	AccountByEmailIndex(ctx context.Context, bidx []byte) (*Account, error)
+	// SubjectKey returns the account's wrapped DEK; ErrNotFound if it has none.
+	SubjectKey(ctx context.Context, accountID int64) (*SubjectKey, error)
 	AccountByTag(ctx context.Context, handleNorm string, discriminator int16) (*Account, error)
 	SetPasswordHash(ctx context.Context, id int64, hash string, now time.Time) error
 	RecordLogin(ctx context.Context, id int64, now time.Time, audit *AuditEntry) error

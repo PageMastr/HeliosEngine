@@ -766,9 +766,7 @@ void World::spawnBatch(CommandBuffer& buffer, u32 batchIndex) {
             if (impl.bulkRegistered[r]) handles[r] = m_registry.tryAssignHandle(ids[r], he(created[r]));
         }
     }
-    const usize logBase = m_log.size();
-    m_log.resize(logBase + registered);
-    StructuralEvent* ev = m_log.data() + logBase;
+    m_log.reserve(m_log.size() + registered);
     const AgId ag = desc.ag;
     for (u32 r = 0; r < count; ++r) {
         // Dropped entities keep an empty identity until they are deleted below.
@@ -781,11 +779,7 @@ void World::spawnBatch(CommandBuffer& buffer, u32 batchIndex) {
         net[r].ag = keep ? ag : 0;
         if (!keep) continue;
         resolved[r] = he(created[r]);
-        ev->entity = id;
-        ev->arg = 0;
-        ev->handle = handle;
-        ev->op = StructuralOp::Create;
-        ++ev;
+        m_log.push_back(StructuralEvent{id, 0, handle, StructuralOp::Create});
     }
 
     // Sparse and DontFragment columns, and a DontFragment frame, per entity (no table moves).
@@ -901,52 +895,49 @@ void World::unregisterOne(const ecs_record_t* r) {
 }
 
 HELIOS_ECS_FLATTEN u32 World::destroyRun(CommandBuffer& buffer, u32 first) {
-    // Consecutive Destroy commands (ADR-004a item 3) in passes over the run: find the live targets,
-    // fetch their identity rows, release the identities and log the Destroy events, then let flecs
-    // delete the entities back to back. Each pass keeps the command order; only a run's registry
-    // updates move ahead of its flecs deletes. The passes overlap their cache misses across
-    // entities (a victim's row and its NetHandle slot are cold: flecs itself only writes the row)
-    // instead of stalling behind every delete. The run ends before a pair target or DockRef host
-    // (relations and cascade need the per-entity path), an entity without identity, or a repeat of
-    // an entity of the run; that command is applied after the run's deletes.
+    // Consecutive Destroy commands (ADR-004a item 3), up to kDestroyChunk at a time, in passes: read
+    // the live targets' identities, release them and log the Destroy events, then let flecs delete
+    // the entities back to back. Each pass keeps the command order; only a chunk's registry updates
+    // move ahead of its flecs deletes. The light passes overlap their cache misses across entities
+    // (a victim's row and its NetHandle slot are cold) instead of stalling behind every delete. A
+    // chunk ends before a pair target or DockRef host (relations and cascade need the per-entity
+    // path), an entity without identity, or a repeat of one of its entities; that command then
+    // takes the per-entity path (a chunk that would start with it returns `first`).
     Impl& impl = *m_impl;
-    const std::vector<CommandBuffer::Command>& cmds = buffer.m_commands;
-    const u32 n = static_cast<u32>(cmds.size());
-    std::vector<Impl::PendingDestroy>& run = impl.destroyRun;
-    run.clear();
+    const CommandBuffer::Command* cmds = buffer.m_commands.data();
+    const u32 n = std::min(static_cast<u32>(buffer.m_commands.size()), first + Impl::kDestroyChunk);
+    Impl::PendingDestroy* run = impl.destroyRun.data();
     const bool dockRefs = m_desc.relations.docking == DockStorage::Field && !impl.dockIndex.empty();
+    u32 count = 0;
     u32 end = first;
     for (; end < n && cmds[end].kind == CommandKind::Destroy; ++end) {
         const EntityRef ref = cmds[end].target;
         const u32 t = ref.tempIndex();
         const Entity e = !ref.isTemp() ? ref.entity() : t < buffer.m_resolved.size() ? buffer.m_resolved[t] : Entity();
         if (!e || !ecs_is_alive(m_flecs, fe(e))) {
-            run.push_back(Impl::PendingDestroy{end, 0, nullptr}); // discarded
+            run[count++] = Impl::PendingDestroy{end, 0, EntityId(), NetHandle()}; // discarded
             continue;
         }
         const ecs_record_t* r = ecs_record_find(m_flecs, fe(e));
         if (isPairTarget(r) || (dockRefs && impl.mayHostDocks(e.id))) break;
         const NetIdentity* ni = netIdentityAt(m_flecs, m_netIdentityId, r);
-        if (!ni) break;
-        detail::prefetch(ni);
-        run.push_back(Impl::PendingDestroy{end, fe(e), ni});
+        if (!ni || !ni->id.isValid()) break;
+        run[count++] = Impl::PendingDestroy{end, fe(e), ni->id, ni->handle};
     }
-    usize count = run.size();
-    for (usize k = 0; k < count; ++k) {
+    m_log.reserve(m_log.size() + count);
+    for (u32 k = 0; k < count; ++k) {
         const Impl::PendingDestroy& d = run[k];
         if (d.entity == 0) {
             ++impl.discarded;
-            continue;
-        }
-        const NetIdentity ni = *d.identity;
-        if (!ni.id.isValid() || !m_registry.remove(ni.id, ni.handle)) { // no identity, or a repeat
+        } else if (m_registry.remove(d.id, d.handle)) {
+            m_log.push_back(StructuralEvent{d.id, 0, d.handle, StructuralOp::Destroy});
+        } else { // a repeat: released by this chunk already
             end = d.command;
             count = k;
             break;
         }
-        m_log.push_back(StructuralEvent{ni.id, 0, ni.handle, StructuralOp::Destroy});
     }
-    for (usize k = 0; k < count; ++k) {
+    for (u32 k = 0; k < count; ++k) {
         if (run[k].entity == 0) continue;
         ecs_delete(m_flecs, run[k].entity);
         ++impl.structuralOps;

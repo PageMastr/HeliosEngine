@@ -131,11 +131,13 @@ struct World::Impl {
     std::vector<u32> lateOps, opIndex;
     std::vector<Entity> destroyScratch;
     struct PendingDestroy {
-        u32 command;                 // index in the buffer
-        ecs_entity_t entity;         // 0: the target was dead (discarded)
-        const NetIdentity* identity; // its row (read once every row of the run is fetched)
+        u32 command;         // index in the buffer
+        ecs_entity_t entity; // 0: the target was dead (discarded)
+        EntityId id;
+        NetHandle handle;
     };
-    std::vector<PendingDestroy> destroyRun; // World::destroyRun() scratch
+    static constexpr u32 kDestroyChunk = 256;
+    std::array<PendingDestroy, kDestroyChunk> destroyRun; // World::destroyRun() scratch
     std::vector<u64> typeScratch;
     std::vector<u32> spawnOpBegin;           // per spawn: first index into flatOps
     std::vector<u32> spawnOpEnd;             // per spawn: one past its last op

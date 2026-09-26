@@ -1,6 +1,7 @@
 // GP-1 performance budgets (06 §12.2): a 300-modifier ship recompute <= 50 us, one incremental change
 // <= 5 us, 10k entities x 40 attributes at 5 % dirty <= 1 ms on 8 workers. Timings are reported
-// always and asserted only in optimized builds without sanitizers (like tools/schemac's perf test).
+// always and asserted only in optimized builds without sanitizers (like tools/schemac's perf test);
+// the 8-worker budget only on machines with 8 hardware threads (see that test).
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -11,6 +12,7 @@
 #include <vector>
 
 #include "helios/core/jobs.h"
+#include "helios/core/thread.h"
 #include "helios/gameplay/attributes.h"
 
 using namespace helios;
@@ -88,9 +90,16 @@ TEST_CASE("perf: 300-modifier ship: full recompute <= 50 us, incremental change 
 #endif
 }
 
-TEST_CASE("perf: 10k entities x 40 attributes at 5 % dirty") {
+// The budget is 1 ms on 8 workers: 8 threads resolving (7 job workers plus the calling thread,
+// which runs chunks inside parallelFor). It is asserted only where it can be measured, on a machine
+// with at least 8 hardware threads; elsewhere the parallel time is reported on min(8, cores) threads
+// and only the single-thread proxy is asserted. The proxy (1 thread <= 8 ms) is necessary for the
+// budget but not sufficient: it assumes perfect scaling to 8 workers. PR CI skips `perf` tests, and
+// the nightly runner has 4 vCPUs, so the budget itself still needs a run on 8-core hardware (09 §8.1).
+TEST_CASE("perf: 10k entities x 40 attributes at 5 % dirty <= 1 ms on 8 workers") {
     auto layout = shipLayout();
     constexpr int kEntities = 10000;
+    constexpr u32 kBudgetThreads = 8;
     std::vector<std::unique_ptr<AttributeSet>> sets;
     std::vector<AttributeSet*> ptrs;
     sets.reserve(kEntities);
@@ -99,7 +108,13 @@ TEST_CASE("perf: 10k entities x 40 attributes at 5 % dirty") {
         addShipModifiers(*sets.back(), 20, static_cast<u32>(e));
         ptrs.push_back(sets.back().get());
     }
-    jobs::JobSystem js(jobs::JobSystemDesc{});
+    const u32 hw = hardwareThreadCount();
+    const u32 threads = std::max(2u, std::min(kBudgetThreads, hw));
+    jobs::JobSystemDesc desc;
+    desc.workerCount = threads - 1;
+    desc.name = "AttrPerf";
+    jobs::JobSystem js(desc);
+    REQUIRE(js.workerCount() + 1 == threads);
     resolveAttributes(ptrs, {}, &js);
     std::mt19937 rng(3);
     auto dirty5 = [&] {
@@ -123,10 +138,16 @@ TEST_CASE("perf: 10k entities x 40 attributes at 5 % dirty") {
         resolveAttributes(ptrs, {}, &js);
         parMs = std::min(parMs, std::chrono::duration<f64, std::milli>(Clock::now() - t0).count());
     }
-    const u32 threads = js.workerCount() + 1;
-    MESSAGE("10k x 40 at 5 % dirty: 1 thread " << seqMs << " ms, " << threads << " threads " << parMs
-                                               << " ms (budget 1 ms on 8 workers = 8 ms of single-thread work)");
+    MESSAGE("10k x 40 at 5 % dirty: 1 thread " << seqMs << " ms, " << threads << " threads " << parMs << " ms on "
+                                               << hw << " hardware threads (budget: 1 ms on " << kBudgetThreads
+                                               << " threads)");
 #if HELIOS_GAMEPLAY_ASSERT_BUDGETS
-    CHECK(seqMs <= 8.0); // 1 ms x 8 workers of single-thread work, independent of this machine's core count
+    CHECK(seqMs <= 8.0); // proxy: the single-thread work fits 8 workers x 1 ms
+    if (hw >= kBudgetThreads) {
+        CHECK(parMs <= 1.0); // the budget itself
+    } else {
+        MESSAGE("the 1 ms budget itself is not measured here: it needs >= " << kBudgetThreads
+                                                                            << " hardware threads");
+    }
 #endif
 }

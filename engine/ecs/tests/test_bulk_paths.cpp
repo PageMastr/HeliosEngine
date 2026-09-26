@@ -1,7 +1,9 @@
-// WP-1.1a bulk structural paths (ADR-004a items 1 and 4): CommandBuffer::spawnN() must leave exactly
-// the state `count` spawn() + set()/add() commands leave (identities, log, tables and row order,
-// values, dirty bits), EntityIdMinter::allocateN() must mint what allocate() mints, and the registry
-// fast paths must behave like the checked ones.
+// WP-1.1a bulk structural paths (ADR-004a items 1, 3 and 4): CommandBuffer::spawnN() must leave
+// exactly the state `count` spawn() + set()/add() commands leave (identities, log, tables and row
+// order, values, dirty bits), EntityIdMinter::allocateN() must mint what allocate() mints, batched
+// NetHandle issue must issue what one tryAllocate() per id issues, a run of destroy commands must
+// end where one destroy at a time ends, the registry fast paths must behave like the checked ones,
+// and Sparse/DontFragment ownership must match ecs_owns_id().
 
 #include <doctest/doctest.h>
 
@@ -395,4 +397,204 @@ TEST_CASE("ecs bulk paths: destroying docking hosts logs undocks across host-fil
             CHECK(w.structuralLog().size() == 2);
         }
     }
+}
+
+TEST_CASE("ecs bulk paths: batched handle issue matches one tryAllocate() per id") {
+    // Twin tables with the same history: FIFO slots (reuse delay), fresh slots, the ring compaction
+    // after thousands of pops, invalid ids and a full table.
+    const NetHandleTable::Desc desc{.maxHandles = 9000, .reservedCount = 10, .reuseDelay = 16};
+    NetHandleTable bulk(desc), single(desc);
+    std::vector<NetHandle> live;
+    u64 serial = 1, rng = 7;
+    auto next = [&] { return rng = mix64(rng + 0x9E3779B97F4A7C15ull); };
+    std::vector<EntityId> ids;
+    std::vector<u64> owners;
+    std::vector<NetHandle> out;
+    for (int round = 0; round < 60; ++round) {
+        const usize n = next() % 400;
+        ids.clear();
+        owners.clear();
+        for (usize i = 0; i < n; ++i) {
+            ids.push_back(next() % 97 == 0 ? EntityId() : EntityId(serial++)); // now and then invalid
+            owners.push_back(next());
+        }
+        out.assign(n, NetHandle());
+        bulk.tryAllocateN(ids, owners.data(), out.data());
+        for (usize i = 0; i < n; ++i) {
+            const NetHandle h = single.tryAllocate(ids[i], owners[i]);
+            REQUIRE(out[i] == h);
+            CHECK(bulk.resolve(h) == ids[i]);
+            CHECK(bulk.ownerOf(h) == (h.isValid() ? owners[i] : 0));
+            if (h.isValid()) live.push_back(h);
+        }
+        // Release a scattered part (issue order stays a function of the call sequence).
+        for (usize i = 0; i < live.size();) {
+            if (next() % 3 == 0) {
+                CHECK(bulk.release(live[i]));
+                CHECK(single.release(live[i]));
+                live[i] = live.back();
+                live.pop_back();
+            } else {
+                ++i;
+            }
+        }
+        REQUIRE(bulk.liveCount() == single.liveCount());
+    }
+    // Fill the table: the rest of a batch gets invalid handles, as tryAllocate() gives.
+    ids.assign(desc.maxHandles, EntityId());
+    owners.assign(ids.size(), 1);
+    for (EntityId& id : ids) id = EntityId(serial++);
+    out.assign(ids.size(), NetHandle());
+    bulk.tryAllocateN(ids, owners.data(), out.data());
+    for (usize i = 0; i < ids.size(); ++i) REQUIRE(out[i] == single.tryAllocate(ids[i], 1));
+    CHECK_FALSE(out.back().isValid());
+    CHECK(bulk.liveCount() == desc.maxHandles - desc.reservedCount);
+    CHECK(bulk.memoryBytes() > 0);
+}
+
+TEST_CASE("ecs bulk paths: a NetHandle slot keeps its id and owner until released") {
+    NetHandleTable table({.maxHandles = 8, .reservedCount = 2, .reuseDelay = 0});
+    CHECK_FALSE(table.tryAllocate(EntityId()).isValid());
+    CHECK(table.allocate(EntityId()).errorCode() == ErrorCode::InvalidArgument);
+    CHECK(table.allocateAt(1, EntityId()).errorCode() == ErrorCode::InvalidArgument);
+    const NetHandle a = table.tryAllocate(EntityId(11), 111);
+    const NetHandle c = *table.allocateAt(2, EntityId(12), 222);
+    CHECK(table.ownerOf(a) == 111);
+    CHECK(table.ownerOf(c) == 222);
+    CHECK(table.handleAt(a.index()) == a);
+    CHECK(table.release(a));
+    CHECK(table.ownerOf(a) == 0);
+    CHECK_FALSE(table.handleAt(a.index()).isValid());
+    const NetHandle again = table.tryAllocate(EntityId(13), 333); // reuse delay 0: the same slot
+    CHECK(again.index() == a.index());
+    CHECK(table.ownerOf(a) == 0); // the stale handle stays stale
+    CHECK(table.ownerOf(again) == 333);
+    CHECK(table.resolve(again) == EntityId(13));
+
+    EntityRegistry reg;
+    CHECK(reg.addNew(EntityId(0x40), Entity(77)));
+    const NetHandle h = reg.tryAssignHandle(EntityId(0x40), Entity(77));
+    CHECK(reg.find(h) == Entity(77));
+    CHECK(reg.remove(EntityId(0x40), h));
+    CHECK_FALSE(reg.find(h).isValid());
+}
+
+TEST_CASE("ecs bulk paths: a run of destroy commands matches one destroy at a time") {
+    // Plain entities, a parent with children, a DockRef host, a frame with members and an entity
+    // made by flecs directly (no identity), destroyed in one buffer with repeats and dead targets.
+    auto build = [](World& w, std::vector<Entity>& order) {
+        registerCommon(w);
+        std::vector<Entity> plain;
+        for (u32 i = 0; i < 60; ++i) {
+            plain.push_back(w.spawn());
+            w.set(plain.back(), Counter{i});
+        }
+        const Entity parent = w.spawn(), child1 = w.spawn(), child2 = w.spawn();
+        REQUIRE(w.setParent(child1, parent).hasValue());
+        REQUIRE(w.setParent(child2, parent).hasValue());
+        const Entity host = w.spawn(), ship = w.spawn();
+        REQUIRE(w.dock(ship, host).hasValue());
+        const Entity frame = w.createFrame(FrameId(4));
+        const Entity member = w.spawn();
+        REQUIRE(w.setFrame(member, frame).hasValue());
+        const Entity foreign = helios::ecs::detail::he(ecs_new(w.flecsWorld()));
+        const Entity dead = w.spawn();
+        w.destroy(dead);
+        auto range = [&](u32 a, u32 b) {
+            for (u32 i = a; i < b; ++i) order.push_back(plain[i]);
+        };
+        range(0, 10);
+        order.push_back(parent);
+        range(10, 20);
+        order.push_back(plain[5]); // repeat
+        order.push_back(dead);
+        order.push_back(host);
+        range(20, 30);
+        order.push_back(frame);
+        order.push_back(foreign);
+        range(30, 40);
+        order.push_back(child1); // died with its parent
+        order.push_back(ship);
+        order.push_back(plain[39]); // repeat at the end of a run
+        range(40, 45);
+        w.clearStructuralLog();
+    };
+    World a, b;
+    std::vector<Entity> orderA, orderB;
+    build(a, orderA);
+    build(b, orderB);
+    REQUIRE(orderA == orderB);
+    CommandBuffer cb(&a);
+    for (const Entity e : orderA) cb.destroy(e);
+    const u64 discardedBefore = a.stats().commandsDiscarded;
+    const u64 opsBefore = a.stats().structuralOpsApplied;
+    a.apply(cb);
+    u64 destroyed = 0;
+    for (const Entity e : orderB) {
+        if (!b.isAlive(e)) continue;
+        b.destroy(e);
+        ++destroyed;
+    }
+    CHECK(a.structuralLog() == b.structuralLog());
+    CHECK(a.stats().commandsDiscarded - discardedBefore == orderA.size() - destroyed); // repeats, dead
+    CHECK(a.stats().structuralOpsApplied - opsBefore == destroyed);
+    CHECK(a.stats().entityCount == b.stats().entityCount);
+    CHECK(a.registry().handles().liveCount() == b.registry().handles().liveCount());
+    for (usize i = 0; i < orderA.size(); ++i) CHECK(a.isAlive(orderA[i]) == b.isAlive(orderB[i]));
+    // Handles issued next come out of the same FIFO (releases kept their order).
+    for (u32 i = 0; i < 5; ++i) CHECK(a.netHandle(a.spawn()) == b.netHandle(b.spawn()));
+}
+
+TEST_CASE("ecs bulk paths: Sparse and DontFragment ownership comes from the sparse set") {
+    // Every Add/Remove is logged exactly when ownership changes, as ecs_owns_id() reports it, for
+    // DontFragment and Sparse components. (Not DontFragment tags: in flecs 4.1.6 a first
+    // ecs_remove_id() of such a tag from an entity that lacks it caches a remove edge without the
+    // tag, and later removes from that table do nothing; SPIKES.md §5.)
+    World w;
+    registerCommon(w);
+    const ComponentId status = w.registerComponent<Status>(ComponentFlags::DontFragment);
+    const ComponentId mark = w.registerComponent<Mark>(ComponentFlags::Sparse);
+    const Entity e = w.spawn();
+    const Entity other = w.spawn();
+    w.set(other, Status{9}); // another entity owns the component too
+    ecs_world_t* fw = w.flecsWorld();
+    struct Step {
+        CommandKind kind;
+        ComponentId id;
+    };
+    for (const ComponentId cid : {status, mark}) {
+        CAPTURE(cid);
+        const std::vector<Step> steps = {{CommandKind::Set, cid},    {CommandKind::Set, cid},
+                                         {CommandKind::Remove, cid}, {CommandKind::Remove, cid},
+                                         {CommandKind::Add, cid},    {CommandKind::Add, cid},
+                                         {CommandKind::Set, cid},    {CommandKind::Remove, cid}};
+        for (usize si = 0; si < steps.size(); ++si) {
+            const Step& step = steps[si];
+            CAPTURE(si);
+            const bool ownedBefore = ecs_owns_id(fw, e.id, cid);
+            CommandBuffer cb(&w);
+            const u32 v = 5;
+            if (step.kind == CommandKind::Set) cb.setRaw(e, cid, &v, 4);
+            if (step.kind == CommandKind::Add) cb.addId(e, cid);
+            if (step.kind == CommandKind::Remove) cb.removeId(e, cid);
+            w.clearStructuralLog();
+            w.apply(cb);
+            const bool ownedAfter = ecs_owns_id(fw, e.id, cid);
+            CHECK(ownedAfter == (step.kind != CommandKind::Remove));
+            if (ownedBefore == ownedAfter) {
+                CHECK(w.structuralLog().empty());
+            } else {
+                REQUIRE(w.structuralLog().size() == 1);
+                const StructuralEvent& ev = w.structuralLog().front();
+                CHECK(ev.op == (ownedAfter ? StructuralOp::Add : StructuralOp::Remove));
+                CHECK(ev.entity == w.entityId(e));
+                CHECK(ev.handle == w.netHandle(e));
+                CHECK(ev.arg == cid);
+            }
+            if (ownedAfter && step.kind == CommandKind::Set) {
+                CHECK(*static_cast<const u32*>(w.getRaw(e, cid)) == 5);
+            }
+        }
+    }
+    CHECK(w.get<Status>(other)->flags == 9);
 }

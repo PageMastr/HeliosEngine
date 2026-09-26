@@ -368,11 +368,19 @@
       "title": "Gameplay kernel corpus clauses",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "200 golden ship and character builds match reference values within 1e-9, and are bit-identical on MSVC, GCC and Clang. C++ and Go HXL agree on 100% of the corpus, including the ≥ 1,000 FMA-sensitive vectors, on `windows/amd64`, `linux/amd64` at `GOAMD64=v1` and `v3`, and `linux/arm64`. The `hxlfloat` lint reports zero findings and catches 100% of its planted violations",
-      "notes": "09 §2.1's exit names GP-1's corpus clauses for Phase 0 (WP-0.19); the recompute budgets are Phase 1",
-      "status": "unmeasured",
-      "tests": [],
+      "notes": "09 §2.1's exit names GP-1's corpus clauses for Phase 0 (WP-0.19); the recompute budgets are Phase 1. The golden-build hash and the C++ corpus run in every native C++ job (MSVC, clang-cl, GCC, Clang); the Go corpus runs at GOAMD64=v1 on linux/amd64 and windows/amd64, and at v3 through TestCorpusAtGOAMD64v3 (which skips on a CPU without x86-64-v3)",
+      "status": "partial",
+      "tests": [
+        {"doctest": "gameplay_tests", "case": "attributes: 200 golden builds match a reference within 1e-9 and pin a golden hash"},
+        {"doctest": "hxl_tests", "case": "hxl corpus: every case matches bit for bit"},
+        {"go": "pkg/hxl", "test": "TestCorpus"},
+        {"go": "pkg/hxl", "test": "TestCorpusAtGOAMD64v3"},
+        {"go": "pkg/hxl", "test": "TestNoFusedMultiplyAddInMachineCode"},
+        {"go": "pkg/hxl/hxlfloat", "test": "TestHXLPackagesClean"},
+        {"go": "pkg/hxl/hxlfloat", "test": "TestPlantedViolations"}
+      ],
       "gaps": [
-        {"clause": "engine/gameplay, engine/hxl and services/pkg/hxl are not on main", "state": "unmeasured", "owner": "WP-0.19"}
+        {"clause": "linux/arm64: no runner runs the corpus there; only the arm64 machine-code listing is checked (TestNoFusedMultiplyAddInMachineCode)", "state": "unmeasured", "owner": "WP-0.1"}
       ]
     }
   ],

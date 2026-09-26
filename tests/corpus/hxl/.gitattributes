@@ -1,0 +1,3 @@
+# The Go runner compares differential.jsonc with its generator byte for byte (after normalising line
+# endings as well), and the corpus is shared by every platform: keep LF on Windows checkouts.
+* text eol=lf

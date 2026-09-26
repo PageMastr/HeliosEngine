@@ -1,0 +1,629 @@
+// helios-schemac schema lock (docs/plan/02-engine-runtime.md §3.4). Generated; append-only.
+// Commit this file. Never edit or delete entries: ids must never be reused. CI runs --check-lock.
+{
+  "format": 1,
+  "types": {
+    "helios.gameplay.AttrMinimum": {
+      "id": 719356952,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "attr", "type": "Ref<helios.gameplay.AttributeDef>"},
+        {"id": 2, "name": "min", "type": "f64"}
+      ]
+    },
+    "helios.gameplay.AttrOrConst": {
+      "id": 2615285344,
+      "kind": "variant",
+      "nextField": 3,
+      "alternatives": [
+        {"id": 1, "name": "Const"},
+        {"id": 2, "name": "Attr"}
+      ]
+    },
+    "helios.gameplay.AttrOrConst.Attr": {
+      "id": 3789326169,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "attr", "type": "Ref<helios.gameplay.AttributeDef>"}
+      ]
+    },
+    "helios.gameplay.AttrOrConst.Const": {
+      "id": 495024641,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "value", "type": "f64"}
+      ]
+    },
+    "helios.gameplay.AttributeDef": {
+      "id": 796187872,
+      "kind": "struct",
+      "nextField": 13,
+      "fields": [
+        {"id": 1, "name": "id", "type": "Name"},
+        {"id": 2, "name": "name", "type": "LocString"},
+        {"id": 3, "name": "unit", "type": "Name"},
+        {"id": 4, "name": "default", "type": "f64"},
+        {"id": 5, "name": "minClamp", "type": "helios.gameplay.AttrOrConst?"},
+        {"id": 6, "name": "maxClamp", "type": "helios.gameplay.AttrOrConst?"},
+        {"id": 7, "name": "derived", "type": "HxlExpr?"},
+        {"id": 8, "name": "multiplierMode", "type": "helios.gameplay.MultiplierMode", "default": "\"Product\""},
+        {"id": 9, "name": "stackingPenalised", "type": "bool"},
+        {"id": 10, "name": "replicate", "type": "helios.gameplay.Audience", "default": "\"Server\""},
+        {"id": 11, "name": "quant", "type": "helios.gameplay.Quantization?"},
+        {"id": 12, "name": "persistBase", "type": "bool"}
+      ]
+    },
+    "helios.gameplay.AttributeSetDef": {
+      "id": 735639118,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "attrs", "type": "list<Ref<helios.gameplay.AttributeDef>>"}
+      ]
+    },
+    "helios.gameplay.Audience": {
+      "id": 3910304001,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Server", "value": 0},
+        {"name": "Owner", "value": 1},
+        {"name": "All", "value": 2}
+      ]
+    },
+    "helios.gameplay.BindRule": {
+      "id": 4248992802,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "None", "value": 0},
+        {"name": "OnPickup", "value": 1},
+        {"name": "OnEquip", "value": 2},
+        {"name": "Account", "value": 3}
+      ]
+    },
+    "helios.gameplay.CaptureMode": {
+      "id": 1242473460,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Snapshot", "value": 0},
+        {"name": "Live", "value": 1}
+      ]
+    },
+    "helios.gameplay.ContainerSpec": {
+      "id": 3487437945,
+      "kind": "struct",
+      "nextField": 6,
+      "fields": [
+        {"id": 1, "name": "maxVolume", "type": "f32"},
+        {"id": 2, "name": "maxCount", "type": "u32"},
+        {"id": 3, "name": "allowed", "type": "TagQuery?"},
+        {"id": 4, "name": "slots", "type": "list<helios.gameplay.SlotDescriptor>"},
+        {"id": 5, "name": "access", "type": "Name"}
+      ]
+    },
+    "helios.gameplay.CraftStamp": {
+      "id": 1558308998,
+      "kind": "struct",
+      "nextField": 5,
+      "fields": [
+        {"id": 1, "name": "crafterId", "type": "u64"},
+        {"id": 2, "name": "schematic", "type": "Name"},
+        {"id": 3, "name": "quality", "type": "f32"},
+        {"id": 4, "name": "serial", "type": "u64"}
+      ]
+    },
+    "helios.gameplay.CueBinding": {
+      "id": 3091763731,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "cue", "type": "Name"},
+        {"id": 2, "name": "event", "type": "helios.gameplay.CueEvent", "default": "\"Execute\""}
+      ]
+    },
+    "helios.gameplay.CueEvent": {
+      "id": 3537392282,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Execute", "value": 0},
+        {"name": "Add", "value": 1},
+        {"name": "Remove", "value": 2},
+        {"name": "Burst", "value": 3}
+      ]
+    },
+    "helios.gameplay.DecaySpec": {
+      "id": 2997055460,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "maxDurability", "type": "f32", "default": "1"},
+        {"id": 2, "name": "perUse", "type": "f32"},
+        {"id": 3, "name": "perHour", "type": "f32"}
+      ]
+    },
+    "helios.gameplay.EffectClock": {
+      "id": 1890202792,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Zone", "value": 0},
+        {"name": "Wall", "value": 1}
+      ]
+    },
+    "helios.gameplay.EffectDef": {
+      "id": 1622258717,
+      "kind": "struct",
+      "nextField": 16,
+      "fields": [
+        {"id": 1, "name": "duration", "type": "helios.gameplay.EffectDef.Duration"},
+        {"id": 2, "name": "clock", "type": "helios.gameplay.EffectClock", "default": "\"Zone\""},
+        {"id": 3, "name": "modifiers", "type": "list<helios.gameplay.ModifierDef>"},
+        {"id": 4, "name": "executions", "type": "list<helios.gameplay.ExecutionRef>"},
+        {"id": 5, "name": "grantedTags", "type": "TagSet"},
+        {"id": 6, "name": "grantedAbilities", "type": "list<Name>"},
+        {"id": 7, "name": "applicationReq", "type": "TagQuery"},
+        {"id": 8, "name": "ongoingReq", "type": "TagQuery"},
+        {"id": 9, "name": "removeEffectsWithTags", "type": "TagSet"},
+        {"id": 10, "name": "immunityTags", "type": "TagSet"},
+        {"id": 11, "name": "stacking", "type": "helios.gameplay.EffectStacking"},
+        {"id": 12, "name": "cues", "type": "list<helios.gameplay.CueBinding>"},
+        {"id": 13, "name": "predictable", "type": "bool"},
+        {"id": 14, "name": "persist", "type": "bool"},
+        {"id": 15, "name": "publicIcon", "type": "bool"}
+      ]
+    },
+    "helios.gameplay.EffectDef.Duration": {
+      "id": 1816677289,
+      "kind": "variant",
+      "nextField": 5,
+      "alternatives": [
+        {"id": 1, "name": "Instant"},
+        {"id": 2, "name": "Duration"},
+        {"id": 3, "name": "Infinite"},
+        {"id": 4, "name": "Periodic"}
+      ]
+    },
+    "helios.gameplay.EffectDef.Duration.Duration": {
+      "id": 4047186413,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "secs", "type": "helios.gameplay.Magnitude"}
+      ]
+    },
+    "helios.gameplay.EffectDef.Duration.Infinite": {
+      "id": 1180198765,
+      "kind": "struct",
+      "nextField": 1,
+      "fields": []
+    },
+    "helios.gameplay.EffectDef.Duration.Instant": {
+      "id": 3454360082,
+      "kind": "struct",
+      "nextField": 1,
+      "fields": []
+    },
+    "helios.gameplay.EffectDef.Duration.Periodic": {
+      "id": 2569369852,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "period", "type": "helios.gameplay.Magnitude"},
+        {"id": 2, "name": "secs", "type": "helios.gameplay.Magnitude?"},
+        {"id": 3, "name": "executeOnApply", "type": "bool"}
+      ]
+    },
+    "helios.gameplay.EffectStacking": {
+      "id": 3356738826,
+      "kind": "struct",
+      "nextField": 8,
+      "fields": [
+        {"id": 1, "name": "policy", "type": "helios.gameplay.StackingPolicy", "default": "\"None\""},
+        {"id": 2, "name": "limit", "type": "u16"},
+        {"id": 3, "name": "refreshDuration", "type": "bool"},
+        {"id": 4, "name": "resetPeriod", "type": "bool"},
+        {"id": 5, "name": "onExpire", "type": "helios.gameplay.StackExpiry", "default": "\"ClearAll\""},
+        {"id": 6, "name": "overflow", "type": "Ref<helios.gameplay.EffectDef>?"},
+        {"id": 7, "name": "keep", "type": "helios.gameplay.StackKeep", "default": "\"Newest\""}
+      ]
+    },
+    "helios.gameplay.ExecutionRef": {
+      "id": 2768832556,
+      "kind": "variant",
+      "nextField": 3,
+      "alternatives": [
+        {"id": 1, "name": "Native"},
+        {"id": 2, "name": "Hxl"}
+      ]
+    },
+    "helios.gameplay.ExecutionRef.Hxl": {
+      "id": 875573518,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "expr", "type": "HxlExpr"}
+      ]
+    },
+    "helios.gameplay.ExecutionRef.Native": {
+      "id": 4018185089,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "id", "type": "Name"}
+      ]
+    },
+    "helios.gameplay.FaucetCap": {
+      "id": 1926564465,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "dailyCap", "type": "i64"}
+      ]
+    },
+    "helios.gameplay.ItemDef": {
+      "id": 2793921227,
+      "kind": "struct",
+      "nextField": 19,
+      "fields": [
+        {"id": 1, "name": "name", "type": "LocString"},
+        {"id": 2, "name": "tags", "type": "TagSet"},
+        {"id": 3, "name": "stackMax", "type": "u32", "default": "1"},
+        {"id": 4, "name": "volume", "type": "f32"},
+        {"id": 5, "name": "mass", "type": "f32"},
+        {"id": 6, "name": "baseAttrs", "type": "map<Ref<helios.gameplay.AttributeDef>,f64>"},
+        {"id": 7, "name": "stateEffects", "type": "map<helios.gameplay.ItemState,list<Ref<helios.gameplay.EffectDef>>>"},
+        {"id": 8, "name": "arrangements", "type": "list<list<Name>>"},
+        {"id": 9, "name": "sockets", "type": "list<helios.gameplay.SocketEntry>"},
+        {"id": 10, "name": "equipReq", "type": "helios.gameplay.Requirement"},
+        {"id": 11, "name": "container", "type": "helios.gameplay.ContainerSpec?"},
+        {"id": 12, "name": "port", "type": "helios.gameplay.ItemPortSpec?"},
+        {"id": 13, "name": "bind", "type": "helios.gameplay.BindRule", "default": "\"None\""},
+        {"id": 14, "name": "decay", "type": "helios.gameplay.DecaySpec?"},
+        {"id": 15, "name": "insurance", "type": "Name"},
+        {"id": 16, "name": "lifetime", "type": "Name"},
+        {"id": 17, "name": "appearance", "type": "AssetRef<Prefab>"},
+        {"id": 18, "name": "icon", "type": "AssetRef<Texture>"}
+      ]
+    },
+    "helios.gameplay.ItemInstance": {
+      "id": 126053967,
+      "kind": "struct",
+      "nextField": 10,
+      "fields": [
+        {"id": 1, "name": "itemId", "type": "u64"},
+        {"id": 2, "name": "def", "type": "Ref<helios.gameplay.ItemDef>"},
+        {"id": 3, "name": "owner", "type": "helios.gameplay.OwnerRef"},
+        {"id": 4, "name": "location", "type": "helios.gameplay.LocationRef"},
+        {"id": 5, "name": "flag", "type": "u16"},
+        {"id": 6, "name": "quantity", "type": "u32", "default": "1"},
+        {"id": 7, "name": "version", "type": "u64"},
+        {"id": 8, "name": "fenceEpoch", "type": "u64"},
+        {"id": 9, "name": "payload", "type": "helios.gameplay.ItemPayload"}
+      ]
+    },
+    "helios.gameplay.ItemPayload": {
+      "id": 580089122,
+      "kind": "struct",
+      "nextField": 8,
+      "fields": [
+        {"id": 1, "name": "plugs", "type": "list<Ref<helios.gameplay.ItemDef>>"},
+        {"id": 2, "name": "rolled", "type": "map<Ref<helios.gameplay.AttributeDef>,f64>"},
+        {"id": 3, "name": "crafted", "type": "helios.gameplay.CraftStamp?"},
+        {"id": 4, "name": "rollAudit", "type": "u64?"},
+        {"id": 5, "name": "durability", "type": "f32", "default": "1"},
+        {"id": 6, "name": "customName", "type": "string?"},
+        {"id": 7, "name": "transform", "type": "helios.gameplay.Xform?"}
+      ]
+    },
+    "helios.gameplay.ItemPortSpec": {
+      "id": 3424135656,
+      "kind": "struct",
+      "nextField": 5,
+      "fields": [
+        {"id": 1, "name": "portType", "type": "Name"},
+        {"id": 2, "name": "minSize", "type": "u8"},
+        {"id": 3, "name": "maxSize", "type": "u8"},
+        {"id": 4, "name": "accepts", "type": "TagQuery?"}
+      ]
+    },
+    "helios.gameplay.ItemState": {
+      "id": 2298199881,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Offline", "value": 0},
+        {"name": "Online", "value": 1},
+        {"name": "Active", "value": 2},
+        {"name": "Overloaded", "value": 3}
+      ]
+    },
+    "helios.gameplay.LocationKind": {
+      "id": 2515862070,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Item", "value": 0},
+        {"name": "Entity", "value": 1},
+        {"name": "Hangar", "value": 2},
+        {"name": "Space", "value": 3}
+      ]
+    },
+    "helios.gameplay.LocationRef": {
+      "id": 1025830009,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "kind", "type": "helios.gameplay.LocationKind"},
+        {"id": 2, "name": "id", "type": "u64"}
+      ]
+    },
+    "helios.gameplay.Magnitude": {
+      "id": 3221908687,
+      "kind": "variant",
+      "nextField": 5,
+      "alternatives": [
+        {"id": 1, "name": "Const"},
+        {"id": 2, "name": "Curve"},
+        {"id": 3, "name": "Attr"},
+        {"id": 4, "name": "Hxl"}
+      ]
+    },
+    "helios.gameplay.Magnitude.Attr": {
+      "id": 3383894636,
+      "kind": "struct",
+      "nextField": 5,
+      "fields": [
+        {"id": 1, "name": "attr", "type": "Ref<helios.gameplay.AttributeDef>"},
+        {"id": 2, "name": "from", "type": "helios.gameplay.MagnitudeSource", "default": "\"Source\""},
+        {"id": 3, "name": "capture", "type": "helios.gameplay.CaptureMode", "default": "\"Snapshot\""},
+        {"id": 4, "name": "coefficient", "type": "f64", "default": "1"}
+      ]
+    },
+    "helios.gameplay.Magnitude.Const": {
+      "id": 4153560830,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "value", "type": "f64"}
+      ]
+    },
+    "helios.gameplay.Magnitude.Curve": {
+      "id": 2852775938,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "curve", "type": "Name"},
+        {"id": 2, "name": "input", "type": "helios.gameplay.MagnitudeInput", "default": "\"Level\""},
+        {"id": 3, "name": "scale", "type": "f64", "default": "1"}
+      ]
+    },
+    "helios.gameplay.Magnitude.Hxl": {
+      "id": 3046530773,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "expr", "type": "HxlExpr"}
+      ]
+    },
+    "helios.gameplay.MagnitudeInput": {
+      "id": 3588273789,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Level", "value": 0},
+        {"name": "Stacks", "value": 1}
+      ]
+    },
+    "helios.gameplay.MagnitudeSource": {
+      "id": 3351250730,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Source", "value": 0},
+        {"name": "Target", "value": 1}
+      ]
+    },
+    "helios.gameplay.ModDomain": {
+      "id": 2614171437,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Self", "value": 0},
+        {"name": "Owner", "value": 1},
+        {"name": "Pilot", "value": 2},
+        {"name": "Ship", "value": 3},
+        {"name": "ShipModules", "value": 4},
+        {"name": "Fleet", "value": 5},
+        {"name": "Grid", "value": 6},
+        {"name": "AreaVolume", "value": 7},
+        {"name": "Followers", "value": 8}
+      ]
+    },
+    "helios.gameplay.ModOp": {
+      "id": 25958014,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "PreAssign", "value": 0},
+        {"name": "PreMul", "value": 1},
+        {"name": "PreDiv", "value": 2},
+        {"name": "ModAdd", "value": 3},
+        {"name": "ModSub", "value": 4},
+        {"name": "PostMul", "value": 5},
+        {"name": "PostDiv", "value": 6},
+        {"name": "PostPercent", "value": 7},
+        {"name": "PostAssign", "value": 8}
+      ]
+    },
+    "helios.gameplay.ModifierDef": {
+      "id": 4223508153,
+      "kind": "struct",
+      "nextField": 9,
+      "fields": [
+        {"id": 1, "name": "attr", "type": "Ref<helios.gameplay.AttributeDef>"},
+        {"id": 2, "name": "op", "type": "helios.gameplay.ModOp"},
+        {"id": 3, "name": "magnitude", "type": "helios.gameplay.Magnitude"},
+        {"id": 4, "name": "priority", "type": "i32"},
+        {"id": 5, "name": "penaltyGroup", "type": "u16"},
+        {"id": 6, "name": "exempt", "type": "bool"},
+        {"id": 7, "name": "requirement", "type": "TagQuery?"},
+        {"id": 8, "name": "target", "type": "helios.gameplay.ModifierTarget"}
+      ]
+    },
+    "helios.gameplay.ModifierTarget": {
+      "id": 3099409555,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "domain", "type": "helios.gameplay.ModDomain", "default": "\"Self\""},
+        {"id": 2, "name": "filter", "type": "TagQuery?"}
+      ]
+    },
+    "helios.gameplay.MultiplierMode": {
+      "id": 1596519003,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Product", "value": 0},
+        {"name": "AdditiveBonus", "value": 1}
+      ]
+    },
+    "helios.gameplay.OwnerKind": {
+      "id": 3455353768,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Character", "value": 0},
+        {"name": "Corporation", "value": 1},
+        {"name": "Account", "value": 2},
+        {"name": "System", "value": 3},
+        {"name": "Escrow", "value": 4}
+      ]
+    },
+    "helios.gameplay.OwnerRef": {
+      "id": 2895781287,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "kind", "type": "helios.gameplay.OwnerKind"},
+        {"id": 2, "name": "id", "type": "u64"}
+      ]
+    },
+    "helios.gameplay.Quantization": {
+      "id": 1326243002,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "bits", "type": "u8", "default": "16"},
+        {"id": 2, "name": "min", "type": "f64"},
+        {"id": 3, "name": "max", "type": "f64"}
+      ]
+    },
+    "helios.gameplay.ReasonCodeDef": {
+      "id": 1126375037,
+      "kind": "struct",
+      "nextField": 8,
+      "fields": [
+        {"id": 1, "name": "code", "type": "Name"},
+        {"id": 2, "name": "kind", "type": "helios.gameplay.ReasonKind"},
+        {"id": 3, "name": "faucet", "type": "helios.gameplay.FaucetCap?"},
+        {"id": 4, "name": "maxTxPerHour", "type": "i64"},
+        {"id": 5, "name": "maxAmountPerTx", "type": "i64"},
+        {"id": 6, "name": "killSwitch", "type": "Name"},
+        {"id": 7, "name": "description", "type": "LocString"}
+      ]
+    },
+    "helios.gameplay.ReasonKind": {
+      "id": 815159229,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Faucet", "value": 0},
+        {"name": "Sink", "value": 1},
+        {"name": "Transfer", "value": 2}
+      ]
+    },
+    "helios.gameplay.Requirement": {
+      "id": 523078590,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "tags", "type": "TagQuery?"},
+        {"id": 2, "name": "attrs", "type": "list<helios.gameplay.AttrMinimum>"}
+      ]
+    },
+    "helios.gameplay.SlotDescriptor": {
+      "id": 1754328046,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "slot", "type": "Name"},
+        {"id": 2, "name": "accepts", "type": "TagQuery?"}
+      ]
+    },
+    "helios.gameplay.SocketEntry": {
+      "id": 4225359066,
+      "kind": "struct",
+      "nextField": 6,
+      "fields": [
+        {"id": 1, "name": "type", "type": "Name"},
+        {"id": 2, "name": "initialPlug", "type": "Ref<helios.gameplay.ItemDef>?"},
+        {"id": 3, "name": "randomizedPlugSet", "type": "Name"},
+        {"id": 4, "name": "reusablePlugSet", "type": "Name"},
+        {"id": 5, "name": "rollCount", "type": "u8"}
+      ]
+    },
+    "helios.gameplay.StackExpiry": {
+      "id": 1177388222,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "ClearAll", "value": 0},
+        {"name": "RemoveOneAndRefresh", "value": 1}
+      ]
+    },
+    "helios.gameplay.StackKeep": {
+      "id": 1053337544,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Newest", "value": 0},
+        {"name": "Strongest", "value": 1}
+      ]
+    },
+    "helios.gameplay.StackingPolicy": {
+      "id": 4259926269,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "None", "value": 0},
+        {"name": "BySource", "value": 1},
+        {"name": "ByTarget", "value": 2}
+      ]
+    },
+    "helios.gameplay.TagDef": {
+      "id": 2628985864,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "tag", "type": "Name"},
+        {"id": 2, "name": "replicate", "type": "helios.gameplay.Audience", "default": "\"Server\""}
+      ]
+    },
+    "helios.gameplay.Xform": {
+      "id": 257869243,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "position", "type": "vec3d"},
+        {"id": 2, "name": "rotation", "type": "quatf"}
+      ]
+    }
+  }
+}

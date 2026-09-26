@@ -58,37 +58,69 @@ type RefreshToken struct {
 	ExpiresAt time.Time
 	UsedAt    *time.Time
 	RevokedAt *time.Time
-	ClientIP  string
+	// ClientIPCT is the issuing client's IP address sealed under the account's DEK and bound to
+	// this token row (RefreshIPAAD); nil when unknown or the key is shredded (05 §6.6).
+	ClientIPCT []byte
 }
 
-// AuditEntry is one row of the hash-chained audit log (05 §1.17). Detail is canonical JSON.
+// AuditEntry is one row of the hash-chained audit log (05 §1.17). Rows hold only pseudonymous
+// IDs: no IP address (that goes to the login history) and no free text outside Detail's
+// structured fields. Detail is canonical JSON.
 type AuditEntry struct {
-	Seq      int64
-	At       time.Time
-	Actor    int64 // account that acted (0 = system / anonymous)
-	Subject  int64 // account acted upon (0 = none)
-	Action   string
-	ClientIP string
-	Detail   string
-	PrevHash [32]byte
-	Hash     [32]byte
+	Seq     int64
+	At      time.Time
+	Actor   int64 // account that acted (0 = system / anonymous)
+	Subject int64 // account acted upon (0 = none)
+	Action  string
+	Detail  string
+	// NoteDigest is BLAKE2b-256 of the entry's sealed audit_note, so crypto-shredding the note
+	// leaves the chain verifiable (05 §1.17); nil without a note. Phase 0 writes no notes yet.
+	NoteDigest []byte
+	PrevHash   [32]byte
+	Hash       [32]byte
 }
 
 // NewAudit builds an entry; detail is marshalled with sorted keys so the stored text is
 // canonical and the chain can be re-verified from the table alone.
-func NewAudit(at time.Time, actor, subject int64, action, ip string, detail map[string]any) *AuditEntry {
+func NewAudit(at time.Time, actor, subject int64, action string, detail map[string]any) *AuditEntry {
 	d := "{}"
 	if len(detail) > 0 {
 		if b, err := json.Marshal(detail); err == nil {
 			d = string(b)
 		}
 	}
-	return &AuditEntry{At: at.UTC().Truncate(time.Microsecond), Actor: actor, Subject: subject, Action: action, ClientIP: ip, Detail: d}
+	return &AuditEntry{At: at.UTC().Truncate(time.Microsecond), Actor: actor, Subject: subject, Action: action, Detail: d}
 }
 
-// ChainHash computes BLAKE2b-256(prev ‖ canonical row). The row encoding is fixed-width
-// integers followed by length-prefixed strings, so no two rows share an encoding.
+// auditRowFormat is the row encoding version ChainHash writes; WP-0.15r introduced 2, which
+// dropped the client IP of format 1 and added the note digest.
+const auditRowFormat = 2
+
+// ChainHash computes BLAKE2b-256(prev ‖ canonical row) in row format 2: the format byte,
+// fixed-width integers, then length-prefixed action, detail and note digest, so no two rows
+// share an encoding.
 func ChainHash(prev [32]byte, e *AuditEntry) [32]byte {
+	h, _ := blake2b.New256(nil)
+	h.Write(prev[:])
+	h.Write([]byte{auditRowFormat})
+	var buf [8]byte
+	for _, v := range []int64{e.Seq, e.At.UTC().UnixMicro(), e.Actor, e.Subject} {
+		binary.LittleEndian.PutUint64(buf[:], uint64(v))
+		h.Write(buf[:])
+	}
+	for _, s := range [][]byte{[]byte(e.Action), []byte(e.Detail), e.NoteDigest} {
+		binary.LittleEndian.PutUint32(buf[:4], uint32(len(s)))
+		h.Write(buf[:4])
+		h.Write(s)
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+// LegacyChainHashV1 is the pre-WP-0.15r row format 1, which also covered the client IP. Only
+// the migration that verifies the old chain before re-chaining it without IPs uses it.
+func LegacyChainHashV1(prev [32]byte, e *AuditEntry, clientIP string) [32]byte {
 	h, _ := blake2b.New256(nil)
 	h.Write(prev[:])
 	var buf [8]byte
@@ -96,7 +128,7 @@ func ChainHash(prev [32]byte, e *AuditEntry) [32]byte {
 		binary.LittleEndian.PutUint64(buf[:], uint64(v))
 		h.Write(buf[:])
 	}
-	for _, s := range []string{e.Action, e.ClientIP, e.Detail} {
+	for _, s := range []string{e.Action, clientIP, e.Detail} {
 		binary.LittleEndian.PutUint32(buf[:4], uint32(len(s)))
 		h.Write(buf[:4])
 		h.Write([]byte(s))
@@ -104,6 +136,20 @@ func ChainHash(prev [32]byte, e *AuditEntry) [32]byte {
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
 	return out
+}
+
+// LoginHistoryRetention is how long login and IP history is kept (05 §6.6 retention schedule).
+const LoginHistoryRetention = 90 * 24 * time.Hour
+
+// LoginEvent is one row of the login and IP history: an IP address seen for an account,
+// sealed under the account's DEK and bound to the row (LoginIPAAD). Unknown logins have no
+// subject, so their IP is never stored.
+type LoginEvent struct {
+	ID         int64 // block ID
+	AccountID  int64
+	Action     string // the audit action it accompanies
+	At         time.Time
+	ClientIPCT []byte
 }
 
 // ErrAuditChainBroken is returned by VerifyAuditChain on the first inconsistent row.
@@ -145,6 +191,13 @@ type Store interface {
 	AccountByEmailIndex(ctx context.Context, bidx []byte) (*Account, error)
 	// SubjectKey returns the account's wrapped DEK; ErrNotFound if it has none.
 	SubjectKey(ctx context.Context, accountID int64) (*SubjectKey, error)
+
+	// AppendLoginEvent records one login-history row.
+	AppendLoginEvent(ctx context.Context, e *LoginEvent) error
+	// LoginHistory returns an account's login-history rows, oldest first.
+	LoginHistory(ctx context.Context, accountID int64) ([]LoginEvent, error)
+	// PurgeLoginHistory deletes rows older than before and returns how many went.
+	PurgeLoginHistory(ctx context.Context, before time.Time) (int64, error)
 	AccountByTag(ctx context.Context, handleNorm string, discriminator int16) (*Account, error)
 	SetPasswordHash(ctx context.Context, id int64, hash string, now time.Time) error
 	RecordLogin(ctx context.Context, id int64, now time.Time, audit *AuditEntry) error
@@ -152,6 +205,8 @@ type Store interface {
 	SetBan(ctx context.Context, id int64, until *time.Time, reason string, now time.Time, audit *AuditEntry) error
 
 	InsertRefreshToken(ctx context.Context, t *RefreshToken) error
+	// RefreshTokenOwner returns the account of the token with hash; ErrTokenInvalid if unknown.
+	RefreshTokenOwner(ctx context.Context, hash []byte) (int64, error)
 	// ActiveFamily returns the account of a refresh-token family that is still live (it holds a
 	// token that is unused, unrevoked and unexpired at now); ErrTokenInvalid otherwise.
 	ActiveFamily(ctx context.Context, familyID int64, now time.Time) (accountID int64, err error)
@@ -161,7 +216,8 @@ type Store interface {
 	// uses it, so logging out of the launcher also logs out the game client it launched.
 	ExtendFamily(ctx context.Context, t *RefreshToken, now time.Time) error
 	// RotateRefreshToken consumes the token with oldHash and inserts next in the same family
-	// (FamilyID and AccountID are filled in). A token that was already used revokes the whole
+	// (FamilyID and AccountID are filled in; a non-zero next.AccountID must match the family's,
+	// or ErrTokenInvalid). A token that was already used revokes the whole
 	// family and returns ErrTokenReused (with reuseAudit appended); unknown, expired or
 	// revoked tokens return ErrTokenInvalid. It returns the consumed token. Rotation and
 	// revocation of one family are serialized, so a token rotated concurrently with a logout

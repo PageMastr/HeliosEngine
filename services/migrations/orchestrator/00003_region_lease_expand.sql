@@ -31,9 +31,8 @@ ALTER TABLE svc_orch.placement_log ADD COLUMN region_id BIGINT;
 UPDATE svc_orch.placement_log SET region_id = zone_id;
 
 -- +goose Down
-ALTER TABLE svc_orch.placement_log DROP COLUMN IF EXISTS region_id;
-ALTER TABLE svc_orch.process
-    DROP COLUMN IF EXISTS server_build,
-    DROP COLUMN IF EXISTS rack,
-    DROP COLUMN IF EXISTS az;
-DROP TABLE IF EXISTS svc_orch.region_lease;
+-- Below this point lies the rename of schema orchestrator, which goose cannot undo: restore a
+-- backup. (00004's down is reversible and restores zone's owner and generation.)
+-- +goose StatementBegin
+DO $$ BEGIN RAISE EXCEPTION 'svc_orch 00003 is irreversible (it follows the schema rename): restore a backup'; END $$;
+-- +goose StatementEnd

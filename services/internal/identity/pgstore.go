@@ -73,9 +73,9 @@ func appendAuditTx(ctx context.Context, tx pgx.Tx, e *AuditEntry) error {
 	copy(e.PrevHash[:], head)
 	e.Hash = ChainHash(e.PrevHash, e)
 	if _, err := tx.Exec(ctx, `INSERT INTO svc_identity.audit_log
-		(seq, at, actor_account, subject_account, action, client_ip, detail, prev_hash, hash)
+		(seq, at, actor_account, subject_account, action, detail, note_digest, prev_hash, hash)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		e.Seq, e.At, e.Actor, e.Subject, e.Action, e.ClientIP, e.Detail, e.PrevHash[:], e.Hash[:]); err != nil {
+		e.Seq, e.At, e.Actor, e.Subject, e.Action, e.Detail, e.NoteDigest, e.PrevHash[:], e.Hash[:]); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `UPDATE svc_identity.audit_head SET seq = $1, hash = $2 WHERE id = 1`, e.Seq, e.Hash[:])
@@ -194,9 +194,46 @@ func (s *PGStore) SetBan(ctx context.Context, id int64, until *time.Time, reason
 // InsertRefreshToken implements Store.
 func (s *PGStore) InsertRefreshToken(ctx context.Context, t *RefreshToken) error {
 	_, err := s.pool.Exec(ctx, `INSERT INTO svc_identity.refresh_token
-		(token_hash, family_id, account_id, issued_at, expires_at, client_ip) VALUES ($1, $2, $3, $4, $5, $6)`,
-		t.Hash, t.FamilyID, t.AccountID, t.IssuedAt, t.ExpiresAt, t.ClientIP)
+		(token_hash, family_id, account_id, issued_at, expires_at, client_ip_ct) VALUES ($1, $2, $3, $4, $5, $6)`,
+		t.Hash, t.FamilyID, t.AccountID, t.IssuedAt, t.ExpiresAt, t.ClientIPCT)
 	return err
+}
+
+// RefreshTokenOwner implements Store.
+func (s *PGStore) RefreshTokenOwner(ctx context.Context, hash []byte) (int64, error) {
+	var acct int64
+	err := s.pool.QueryRow(ctx, `SELECT account_id FROM svc_identity.refresh_token WHERE token_hash = $1`, hash).Scan(&acct)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrTokenInvalid
+	}
+	return acct, err
+}
+
+// AppendLoginEvent implements Store.
+func (s *PGStore) AppendLoginEvent(ctx context.Context, e *LoginEvent) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO svc_identity.login_history (event_id, account_id, action, at, client_ip_ct)
+		VALUES ($1, $2, $3, $4, $5)`, e.ID, e.AccountID, e.Action, e.At, e.ClientIPCT)
+	return err
+}
+
+// LoginHistory implements Store.
+func (s *PGStore) LoginHistory(ctx context.Context, accountID int64) ([]LoginEvent, error) {
+	rows, err := s.pool.Query(ctx, `SELECT event_id, account_id, action, at, client_ip_ct FROM svc_identity.login_history
+		WHERE account_id = $1 ORDER BY at, event_id`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (LoginEvent, error) {
+		var e LoginEvent
+		err := row.Scan(&e.ID, &e.AccountID, &e.Action, &e.At, &e.ClientIPCT)
+		return e, err
+	})
+}
+
+// PurgeLoginHistory implements Store.
+func (s *PGStore) PurgeLoginHistory(ctx context.Context, before time.Time) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM svc_identity.login_history WHERE at < $1`, before)
+	return tag.RowsAffected(), err
 }
 
 // lockFamilyOf serializes every change to the family of the token with hash (rotation,
@@ -256,8 +293,8 @@ func (s *PGStore) ExtendFamily(ctx context.Context, t *RefreshToken, now time.Ti
 			return ErrTokenInvalid
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO svc_identity.refresh_token
-			(token_hash, family_id, account_id, issued_at, expires_at, client_ip) VALUES ($1, $2, $3, $4, $5, $6)`,
-			t.Hash, t.FamilyID, t.AccountID, t.IssuedAt, t.ExpiresAt, t.ClientIP)
+			(token_hash, family_id, account_id, issued_at, expires_at, client_ip_ct) VALUES ($1, $2, $3, $4, $5, $6)`,
+			t.Hash, t.FamilyID, t.AccountID, t.IssuedAt, t.ExpiresAt, t.ClientIPCT)
 		return err
 	})
 }
@@ -265,8 +302,8 @@ func (s *PGStore) ExtendFamily(ctx context.Context, t *RefreshToken, now time.Ti
 func lockToken(ctx context.Context, tx pgx.Tx, hash []byte) (*RefreshToken, error) {
 	var t RefreshToken
 	err := tx.QueryRow(ctx, `SELECT token_hash, family_id, account_id, issued_at, expires_at, used_at, revoked_at,
-		COALESCE(client_ip, '') FROM svc_identity.refresh_token WHERE token_hash = $1 FOR UPDATE`, hash).
-		Scan(&t.Hash, &t.FamilyID, &t.AccountID, &t.IssuedAt, &t.ExpiresAt, &t.UsedAt, &t.RevokedAt, &t.ClientIP)
+		client_ip_ct FROM svc_identity.refresh_token WHERE token_hash = $1 FOR UPDATE`, hash).
+		Scan(&t.Hash, &t.FamilyID, &t.AccountID, &t.IssuedAt, &t.ExpiresAt, &t.UsedAt, &t.RevokedAt, &t.ClientIPCT)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrTokenInvalid
 	}
@@ -307,7 +344,7 @@ func (s *PGStore) RotateRefreshToken(ctx context.Context, oldHash []byte, next *
 			reused = true
 			return appendAuditTx(ctx, tx, reuseAudit)
 		}
-		if !old.ExpiresAt.After(now) {
+		if !old.ExpiresAt.After(now) || (next.AccountID != 0 && next.AccountID != old.AccountID) {
 			return ErrTokenInvalid
 		}
 		if _, err := tx.Exec(ctx, `UPDATE svc_identity.refresh_token SET used_at = $2 WHERE token_hash = $1`, oldHash, now); err != nil {
@@ -315,8 +352,8 @@ func (s *PGStore) RotateRefreshToken(ctx context.Context, oldHash []byte, next *
 		}
 		next.FamilyID, next.AccountID = old.FamilyID, old.AccountID
 		_, err = tx.Exec(ctx, `INSERT INTO svc_identity.refresh_token
-			(token_hash, family_id, account_id, issued_at, expires_at, client_ip) VALUES ($1, $2, $3, $4, $5, $6)`,
-			next.Hash, next.FamilyID, next.AccountID, next.IssuedAt, next.ExpiresAt, next.ClientIP)
+			(token_hash, family_id, account_id, issued_at, expires_at, client_ip_ct) VALUES ($1, $2, $3, $4, $5, $6)`,
+			next.Hash, next.FamilyID, next.AccountID, next.IssuedAt, next.ExpiresAt, next.ClientIPCT)
 		return err
 	})
 	if err != nil {
@@ -360,7 +397,7 @@ func (s *PGStore) ListAudit(ctx context.Context, afterSeq int64, limit int) ([]A
 	if limit <= 0 {
 		limit = 1000
 	}
-	rows, err := s.pool.Query(ctx, `SELECT seq, at, actor_account, subject_account, action, client_ip, detail, prev_hash, hash
+	rows, err := s.pool.Query(ctx, `SELECT seq, at, actor_account, subject_account, action, detail, note_digest, prev_hash, hash
 		FROM svc_identity.audit_log WHERE seq > $1 ORDER BY seq LIMIT $2`, afterSeq, limit)
 	if err != nil {
 		return nil, err
@@ -370,7 +407,7 @@ func (s *PGStore) ListAudit(ctx context.Context, afterSeq int64, limit int) ([]A
 	for rows.Next() {
 		var e AuditEntry
 		var prev, h []byte
-		if err := rows.Scan(&e.Seq, &e.At, &e.Actor, &e.Subject, &e.Action, &e.ClientIP, &e.Detail, &prev, &h); err != nil {
+		if err := rows.Scan(&e.Seq, &e.At, &e.Actor, &e.Subject, &e.Action, &e.Detail, &e.NoteDigest, &prev, &h); err != nil {
 			return nil, err
 		}
 		copy(e.PrevHash[:], prev)

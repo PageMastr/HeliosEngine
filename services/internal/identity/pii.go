@@ -12,10 +12,13 @@ import (
 // Where Identity's encrypted columns live; part of every sealed value's AAD (05 §6.6), so a
 // value copied to another row or column does not decrypt.
 const (
-	TableAccount    = "svc_identity.account"
-	TableSubjectKey = "svc_identity.subject_key"
-	ColumnEmailCT   = "email_ct"
-	ColumnDEK       = "wrapped_dek"
+	TableAccount      = "svc_identity.account"
+	TableSubjectKey   = "svc_identity.subject_key"
+	TableRefreshToken = "svc_identity.refresh_token"
+	TableLoginHistory = "svc_identity.login_history"
+	ColumnEmailCT     = "email_ct"
+	ColumnDEK         = "wrapped_dek"
+	ColumnClientIPCT  = "client_ip_ct"
 )
 
 // ErrShredded is returned when an account's DEK has been deleted: its PII is gone for good.
@@ -49,6 +52,42 @@ func (k *PIIKeys) EmailIndex(email string) []byte { return k.email.Sum(Normalize
 func EmailAAD(accountID int64) []byte { return pii.AAD(TableAccount, ColumnEmailCT, accountID) }
 
 func dekAAD(accountID int64) []byte { return pii.AAD(TableSubjectKey, ColumnDEK, accountID) }
+
+// RefreshIPAAD binds a refresh token's client_ip_ct to its row (the token hash).
+func RefreshIPAAD(tokenHash []byte) []byte {
+	return pii.AADKey(TableRefreshToken, ColumnClientIPCT, tokenHash)
+}
+
+// LoginIPAAD binds a login-history row's client_ip_ct to its row.
+func LoginIPAAD(eventID int64) []byte { return pii.AAD(TableLoginHistory, ColumnClientIPCT, eventID) }
+
+// Seal encrypts value under the account's DEK (sk) for the location aad. A shredded key yields
+// (nil, nil): there is nothing left to encrypt under, so the value is not stored.
+func (k *PIIKeys) Seal(sk *SubjectKey, aad []byte, value string) ([]byte, error) {
+	dek, err := k.UnwrapSubjectKey(sk)
+	if errors.Is(err, ErrShredded) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer dek.Clear()
+	return pii.Seal(&dek, aad, []byte(value))
+}
+
+// Open decrypts a value Seal wrote for the location aad.
+func (k *PIIKeys) Open(sk *SubjectKey, aad, sealed []byte) (string, error) {
+	dek, err := k.UnwrapSubjectKey(sk)
+	if err != nil {
+		return "", err
+	}
+	defer dek.Clear()
+	pt, err := pii.Open(&dek, aad, sealed)
+	if err != nil {
+		return "", err
+	}
+	return string(pt), nil
+}
 
 // NewSubjectKey creates a fresh DEK for an account and returns it with its wrapped form for
 // storage. The caller clears the DEK when done.

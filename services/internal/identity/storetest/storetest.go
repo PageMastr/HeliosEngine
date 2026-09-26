@@ -43,7 +43,7 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("accounts", func(t *testing.T) {
 		s := newStore(t)
 		a := account(1, "a@x.io", "ada", 42)
-		if err := s.CreateAccount(ctx, a, subjectKey(1), identity.NewAudit(base, 1, 1, identity.ActionRegister, "1.2.3.4", nil)); err != nil {
+		if err := s.CreateAccount(ctx, a, subjectKey(1), identity.NewAudit(base, 1, 1, identity.ActionRegister, nil)); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.CreateAccount(ctx, account(2, "a@x.io", "bob", 1), subjectKey(2), nil); !errors.Is(err, identity.ErrEmailTaken) {
@@ -89,6 +89,14 @@ func Run(t *testing.T, newStore Factory) {
 				t.Fatalf("account created with subject key %+v", key)
 			}
 		}
+		// A duplicate account ID is refused and leaves the first account's key alone.
+		dup := &identity.SubjectKey{AccountID: 1, WrappedDEK: hash("other dek"), KEKVersion: 2}
+		if err := s.CreateAccount(ctx, account(1, "f@x.io", "fay", 1), dup, nil); err == nil {
+			t.Fatal("duplicate account id accepted")
+		}
+		if k, _ := s.SubjectKey(ctx, 1); k == nil || !bytes.Equal(k.WrappedDEK, subjectKey(1).WrappedDEK) {
+			t.Fatalf("a rejected duplicate replaced the subject key: %+v", k)
+		}
 		if _, err := s.AccountByTag(ctx, "ada", 44); !errors.Is(err, identity.ErrNotFound) {
 			t.Fatalf("missing tag: %v", err)
 		}
@@ -112,17 +120,31 @@ func Run(t *testing.T, newStore Factory) {
 		if err := s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), subjectKey(1), nil); err != nil {
 			t.Fatal(err)
 		}
-		t0 := &identity.RefreshToken{Hash: hash("t0"), FamilyID: 500, AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour)}
+		t0 := &identity.RefreshToken{Hash: hash("t0"), FamilyID: 500, AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour),
+			ClientIPCT: []byte("sealed ip t0")}
 		if err := s.InsertRefreshToken(ctx, t0); err != nil {
 			t.Fatal(err)
 		}
-		t1 := &identity.RefreshToken{Hash: hash("t1"), IssuedAt: base, ExpiresAt: base.Add(time.Hour)}
+		if acct, err := s.RefreshTokenOwner(ctx, hash("t0")); err != nil || acct != 1 {
+			t.Fatalf("owner: %d %v", acct, err)
+		}
+		if _, err := s.RefreshTokenOwner(ctx, hash("nope")); !errors.Is(err, identity.ErrTokenInvalid) {
+			t.Fatalf("owner of an unknown token: %v", err)
+		}
+		// A successor claimed for another account is refused, and the token stays unused.
+		if _, err := s.RotateRefreshToken(ctx, hash("t0"), &identity.RefreshToken{Hash: hash("tx"), AccountID: 2, IssuedAt: base,
+			ExpiresAt: base.Add(time.Hour)}, base.Add(time.Minute), nil); !errors.Is(err, identity.ErrTokenInvalid) {
+			t.Fatalf("successor for another account: %v", err)
+		}
+		t1 := &identity.RefreshToken{Hash: hash("t1"), AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour),
+			ClientIPCT: []byte("sealed ip t1")}
 		old, err := s.RotateRefreshToken(ctx, hash("t0"), t1, base.Add(time.Minute), nil)
-		if err != nil || old.AccountID != 1 || old.FamilyID != 500 || t1.FamilyID != 500 || t1.AccountID != 1 {
+		if err != nil || old.AccountID != 1 || old.FamilyID != 500 || t1.FamilyID != 500 || t1.AccountID != 1 ||
+			!bytes.Equal(old.ClientIPCT, t0.ClientIPCT) {
 			t.Fatalf("rotate: %+v %+v %v", old, t1, err)
 		}
 		// Reusing t0 revokes the family, including the live t1.
-		reuse := identity.NewAudit(base, 0, 0, identity.ActionRefreshReuse, "", nil)
+		reuse := identity.NewAudit(base, 0, 0, identity.ActionRefreshReuse, nil)
 		if _, err := s.RotateRefreshToken(ctx, hash("t0"), &identity.RefreshToken{Hash: hash("t2"), IssuedAt: base,
 			ExpiresAt: base.Add(time.Hour)}, base.Add(2*time.Minute), reuse); !errors.Is(err, identity.ErrTokenReused) {
 			t.Fatalf("reuse: %v", err)
@@ -147,7 +169,7 @@ func Run(t *testing.T, newStore Factory) {
 		// Logout revokes the family.
 		l0 := &identity.RefreshToken{Hash: hash("l0"), FamilyID: 700, AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour)}
 		_ = s.InsertRefreshToken(ctx, l0)
-		got, err := s.RevokeFamilyOf(ctx, hash("l0"), base, identity.NewAudit(base, 0, 0, identity.ActionLogout, "", nil))
+		got, err := s.RevokeFamilyOf(ctx, hash("l0"), base, identity.NewAudit(base, 0, 0, identity.ActionLogout, nil))
 		if err != nil || got.FamilyID != 700 {
 			t.Fatalf("logout: %v", err)
 		}
@@ -307,7 +329,7 @@ func Run(t *testing.T, newStore Factory) {
 		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), subjectKey(1), nil)
 		_ = s.InsertRefreshToken(ctx, &identity.RefreshToken{Hash: hash("b0"), FamilyID: 1, AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour)})
 		until := base.Add(24 * time.Hour)
-		if err := s.SetBan(ctx, 1, &until, "botting", base, identity.NewAudit(base, 7, 1, identity.ActionBan, "", nil)); err != nil {
+		if err := s.SetBan(ctx, 1, &until, "botting", base, identity.NewAudit(base, 7, 1, identity.ActionBan, nil)); err != nil {
 			t.Fatal(err)
 		}
 		a, _ := s.AccountByID(ctx, 1)
@@ -333,7 +355,7 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("audit chain", func(t *testing.T) {
 		s := newStore(t)
 		for i := 0; i < 25; i++ {
-			e := identity.NewAudit(base.Add(time.Duration(i)*time.Second), int64(i), int64(i+1), "test.action", "10.0.0.1",
+			e := identity.NewAudit(base.Add(time.Duration(i)*time.Second), int64(i), int64(i+1), "test.action",
 				map[string]any{"i": i, "z": "last", "a": "first"})
 			if err := s.AppendAudit(ctx, e); err != nil {
 				t.Fatal(err)
@@ -365,7 +387,7 @@ func Run(t *testing.T, newStore Factory) {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
-				if err := s.AppendAudit(ctx, identity.NewAudit(base, 0, 0, "concurrent", "", map[string]any{"i": i})); err != nil {
+				if err := s.AppendAudit(ctx, identity.NewAudit(base, 0, 0, "concurrent", map[string]any{"i": i})); err != nil {
 					t.Error(err)
 				}
 			}(i)
@@ -380,6 +402,58 @@ func Run(t *testing.T, newStore Factory) {
 		}
 		if !bytes.Equal(all[34].PrevHash[:], all[33].Hash[:]) {
 			t.Fatal("tail link")
+		}
+	})
+
+	t.Run("login history", func(t *testing.T) {
+		s := newStore(t)
+		for i, at := range []time.Time{base.Add(-100 * 24 * time.Hour), base, base.Add(-time.Hour)} {
+			e := &identity.LoginEvent{ID: int64(10 + i), AccountID: 1, Action: identity.ActionLogin, At: at,
+				ClientIPCT: []byte(fmt.Sprint("sealed ", i))}
+			if err := s.AppendLoginEvent(ctx, e); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_ = s.AppendLoginEvent(ctx, &identity.LoginEvent{ID: 20, AccountID: 2, Action: identity.ActionLogin, At: base,
+			ClientIPCT: []byte("other")})
+		if err := s.AppendLoginEvent(ctx, &identity.LoginEvent{ID: 10, AccountID: 1, Action: identity.ActionLogin, At: base,
+			ClientIPCT: []byte("dup")}); err == nil {
+			t.Fatal("duplicate event id accepted")
+		}
+		h, err := s.LoginHistory(ctx, 1)
+		if err != nil || len(h) != 3 || h[0].ID != 10 || h[1].ID != 12 || h[2].ID != 11 || string(h[2].ClientIPCT) != "sealed 1" {
+			t.Fatalf("history, oldest first: %+v %v", h, err)
+		}
+		// Retention (05 §6.6: 90 days) drops what is older, and only that.
+		n, err := s.PurgeLoginHistory(ctx, base.Add(-identity.LoginHistoryRetention))
+		if err != nil || n != 1 {
+			t.Fatalf("purge: %d %v", n, err)
+		}
+		if h, _ := s.LoginHistory(ctx, 1); len(h) != 2 || h[0].ID != 12 {
+			t.Fatalf("after purge: %+v", h)
+		}
+		if h, _ := s.LoginHistory(ctx, 2); len(h) != 1 {
+			t.Fatalf("other account: %+v", h)
+		}
+	})
+
+	t.Run("audit note digest is chained", func(t *testing.T) {
+		s := newStore(t)
+		e := identity.NewAudit(base, 1, 2, "test.note", nil)
+		e.NoteDigest = hash("note ciphertext")
+		if err := s.AppendAudit(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+		all, err := s.ListAudit(ctx, 0, 0)
+		if err != nil || len(all) != 1 || !bytes.Equal(all[0].NoteDigest, e.NoteDigest) {
+			t.Fatalf("list: %+v %v", all, err)
+		}
+		if err := identity.VerifyAuditChain([32]byte{}, all); err != nil {
+			t.Fatal(err)
+		}
+		all[0].NoteDigest = hash("another note")
+		if err := identity.VerifyAuditChain([32]byte{}, all); !errors.Is(err, identity.ErrAuditChainBroken) {
+			t.Fatalf("a swapped note digest must break the chain: %v", err)
 		}
 	})
 

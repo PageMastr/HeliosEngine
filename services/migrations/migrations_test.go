@@ -141,3 +141,21 @@ func TestQualifiedMatchesWholeSchemaNames(t *testing.T) {
 		}
 	}
 }
+
+func TestDropDetailKey(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{`{"login":"a1b2","reason":"unknown_login"}`, `{"reason":"unknown_login"}`},
+		{`{"login":"a1b2"}`, `{}`},
+		{`{"reason":"bad_password"}`, `{"reason":"bad_password"}`},
+		// A 64-bit ID must survive the re-encoding exactly (float64 would round it).
+		{`{"account":97260790809100298,"login":"x"}`, `{"account":97260790809100298}`},
+	} {
+		got, err := dropDetailKey(c.in, "login")
+		if err != nil || got != c.want {
+			t.Errorf("dropDetailKey(%s) = %s, %v; want %s", c.in, got, err, c.want)
+		}
+	}
+	if _, err := dropDetailKey(`not json`, "login"); err == nil {
+		t.Error("invalid detail accepted")
+	}
+}

@@ -1,5 +1,6 @@
 -- Identity schema (05 §1.1): accounts, refresh-token families, hash-chained audit log.
--- Expand/contract rule (05 §3.3): later migrations only add; contraction happens two releases on.
+-- Expand/contract rule (05 §3.3): later migrations only add; contraction happens two releases on
+-- (WP-0.15r's one-time exception is recorded in services/README.md, "Plan conformance").
 --
 -- Historical: databases created before WP-0.15r applied this file, so its statements stay as they
 -- were. They use the schema's old name "identity"; migrations.Up renames it to svc_identity right

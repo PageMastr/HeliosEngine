@@ -45,6 +45,7 @@ const (
 	ActionLaunchCode    = "auth.launch_code.exchange"
 	ActionBan           = "account.ban"
 	ActionUnban         = "account.unban"
+	ActionAuditRechain  = "audit.rechain" // WP-0.15r's one-time move to row format 2
 	refreshTokenPrefix  = "hrt1_"
 	launchCodePrefix    = "hlc1_"
 	launchCodeKeyPrefix = "identity:lc:"
@@ -85,6 +86,9 @@ type Service struct {
 	log      *slog.Logger
 	m        *metrics
 	onBan    func(ctx context.Context, accountID int64)
+
+	stopPurge context.CancelFunc
+	purgeDone chan struct{}
 }
 
 type metrics struct {
@@ -140,11 +144,85 @@ func New(d Deps) (*Service, error) {
 // Name implements app.Service.
 func (s *Service) Name() string { return platform.ServiceIdentity }
 
-// Start implements app.Service.
-func (s *Service) Start(context.Context) error { return nil }
+// loginHistoryPurgeEvery is how often Start's job deletes login history past its retention.
+const loginHistoryPurgeEvery = time.Hour
+
+// Start implements app.Service: it runs the login-history retention job (05 §6.6: 90 days) now
+// and then hourly until Stop.
+func (s *Service) Start(context.Context) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	s.stopPurge, s.purgeDone = cancel, make(chan struct{})
+	go func() {
+		defer close(s.purgeDone)
+		t := time.NewTicker(loginHistoryPurgeEvery)
+		defer t.Stop()
+		for {
+			if n, err := s.PurgeLoginHistory(ctx); err != nil && ctx.Err() == nil {
+				s.log.WarnContext(ctx, "login history purge failed", "err", err)
+			} else if n > 0 {
+				s.log.InfoContext(ctx, "login history purged", "rows", n)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+	return nil
+}
 
 // Stop implements app.Service.
-func (s *Service) Stop(context.Context) error { return nil }
+func (s *Service) Stop(context.Context) error {
+	if s.stopPurge != nil {
+		s.stopPurge()
+		<-s.purgeDone
+	}
+	return nil
+}
+
+// PurgeLoginHistory deletes login history older than LoginHistoryRetention (the retention job;
+// ops and tests may call it directly).
+func (s *Service) PurgeLoginHistory(ctx context.Context) (int64, error) {
+	return s.store.PurgeLoginHistory(ctx, s.clk.Now().UTC().Add(-LoginHistoryRetention))
+}
+
+// sealIP seals a client IP for storage under the account's DEK at the location aad. No IP, or a
+// shredded key, stores nothing.
+func (s *Service) sealIP(ctx context.Context, accountID int64, aad []byte, ip string) ([]byte, error) {
+	if ip == "" {
+		return nil, nil
+	}
+	key, err := s.store.SubjectKey(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	return s.pii.Seal(key, aad, ip)
+}
+
+// recordIP appends the IP an account's event came from to the login history, sealed under the
+// account's DEK (05 §6.6); the audit row itself holds only pseudonymous IDs (05 §1.17). Events
+// without a subject (an unknown login) keep no IP at all. Failures are logged, never surfaced.
+func (s *Service) recordIP(ctx context.Context, accountID int64, action, ip string, at time.Time) {
+	if accountID == 0 || ip == "" {
+		return
+	}
+	err := func() error {
+		id, err := s.ids.Next()
+		if err != nil {
+			return err
+		}
+		ct, err := s.sealIP(ctx, accountID, LoginIPAAD(id), ip)
+		if err != nil || ct == nil {
+			return err
+		}
+		return s.store.AppendLoginEvent(ctx, &LoginEvent{ID: id, AccountID: accountID, Action: action,
+			At: at.UTC().Truncate(time.Microsecond), ClientIPCT: ct})
+	}()
+	if err != nil {
+		s.log.ErrorContext(ctx, "login history append failed", "action", action, "account", accountID, "err", err)
+	}
+}
 
 // Health implements app.Service.
 func (s *Service) Health(ctx context.Context) error { return s.store.Ping(ctx) }
@@ -371,11 +449,12 @@ func (s *Service) register(ctx context.Context, meta Meta, req *RegisterRequest,
 		} else if acct.Discriminator, err = randomDiscriminator(); err != nil {
 			return nil, rpc.Internal(err)
 		}
-		audit := NewAudit(now, id, id, ActionRegister, meta.ClientIP, map[string]any{"tag": acct.Tag(), "seed": seed})
+		audit := NewAudit(now, id, id, ActionRegister, map[string]any{"tag": acct.Tag(), "seed": seed})
 		err = s.store.CreateAccount(ctx, acct, key, audit)
 		switch {
 		case err == nil:
 			s.log.InfoContext(ctx, "account registered", "account", id, "tag", acct.Tag())
+			s.recordIP(ctx, id, ActionRegister, meta.ClientIP, now)
 			return &RegisterResponse{AccountID: id, Handle: handle, Discriminator: int(acct.Discriminator), Tag: acct.Tag()}, nil
 		case errors.Is(err, ErrEmailTaken):
 			return nil, rpc.Errorf(rpc.CodeAlreadyExists, "an account with this email already exists")
@@ -403,9 +482,9 @@ func (s *Service) login(ctx context.Context, meta Meta, req *LoginRequest) (*Tok
 	if err != nil {
 		return nil, "invalid", err
 	}
-	// unknownKey names a login that matches no account, for its rate-limit bucket and audit row.
+	// unknownKey names a login that matches no account for its rate-limit bucket (Valkey, TTL'd).
 	// An e-mail is looked up, and named, only by its keyed blind index, so neither the address
-	// nor an unkeyed hash of it reaches Valkey or the audit log (05 §6.6).
+	// nor an unkeyed hash of it reaches Valkey; the audit row names neither (05 §1.17, §6.6).
 	var acct *Account
 	var unknownKey string
 	if isTag {
@@ -433,7 +512,7 @@ func (s *Service) login(ctx context.Context, meta Meta, req *LoginRequest) (*Tok
 		if derr := s.hasher.DummyVerify(ctx, req.Password); errors.Is(derr, ErrHasherBusy) {
 			return nil, "busy", errBusy
 		}
-		s.audit(ctx, NewAudit(now, 0, 0, ActionLoginFailed, meta.ClientIP, map[string]any{"reason": "unknown_login", "login": unknownKey}))
+		s.audit(ctx, NewAudit(now, 0, 0, ActionLoginFailed, map[string]any{"reason": "unknown_login"}))
 		return nil, "unknown", errInvalidCredentials
 	}
 	ok, rehash, err := s.hasher.Verify(ctx, req.Password, acct.PasswordHash)
@@ -444,11 +523,13 @@ func (s *Service) login(ctx context.Context, meta Meta, req *LoginRequest) (*Tok
 		return nil, "error", rpc.Internal(err)
 	}
 	if !ok {
-		s.audit(ctx, NewAudit(now, 0, acct.ID, ActionLoginFailed, meta.ClientIP, map[string]any{"reason": "bad_password"}))
+		s.audit(ctx, NewAudit(now, 0, acct.ID, ActionLoginFailed, map[string]any{"reason": "bad_password"}))
+		s.recordIP(ctx, acct.ID, ActionLoginFailed, meta.ClientIP, now)
 		return nil, "bad_password", errInvalidCredentials
 	}
 	if acct.BannedAt(now) {
-		s.audit(ctx, NewAudit(now, acct.ID, acct.ID, ActionLoginDenied, meta.ClientIP, map[string]any{"reason": "banned"}))
+		s.audit(ctx, NewAudit(now, acct.ID, acct.ID, ActionLoginDenied, map[string]any{"reason": "banned"}))
+		s.recordIP(ctx, acct.ID, ActionLoginDenied, meta.ClientIP, now)
 		return nil, "banned", bannedError(acct)
 	}
 	if rehash {
@@ -463,9 +544,10 @@ func (s *Service) login(ctx context.Context, meta Meta, req *LoginRequest) (*Tok
 		return nil, "error", err
 	}
 	if err := s.store.RecordLogin(ctx, acct.ID, now,
-		NewAudit(now, acct.ID, acct.ID, ActionLogin, meta.ClientIP, map[string]any{"ua": truncate(meta.UserAgent, 128)})); err != nil {
+		NewAudit(now, acct.ID, acct.ID, ActionLogin, map[string]any{"ua": truncate(meta.UserAgent, 128)})); err != nil {
 		return nil, "error", rpc.Internal(err)
 	}
+	s.recordIP(ctx, acct.ID, ActionLogin, meta.ClientIP, now)
 	return pair, "ok", nil
 }
 
@@ -520,7 +602,10 @@ func (s *Service) issuePair(ctx context.Context, acct *Account, family int64, me
 		return nil, rpc.Internal(err)
 	}
 	rt := &RefreshToken{Hash: refreshHash, AccountID: acct.ID, FamilyID: family, IssuedAt: now,
-		ExpiresAt: now.Add(s.cfg.RefreshTTL.D()), ClientIP: meta.ClientIP}
+		ExpiresAt: now.Add(s.cfg.RefreshTTL.D())}
+	if rt.ClientIPCT, err = s.sealIP(ctx, acct.ID, RefreshIPAAD(refreshHash), meta.ClientIP); err != nil {
+		return nil, rpc.Internal(err)
+	}
 	if family == 0 {
 		if rt.FamilyID, err = s.ids.Next(); err != nil {
 			return nil, rpc.Internal(err)
@@ -561,12 +646,25 @@ func (s *Service) refresh(ctx context.Context, meta Meta, req *RefreshRequest) (
 	if err != nil {
 		return nil, "error", rpc.Internal(err)
 	}
-	rt := &RefreshToken{Hash: nextHash, IssuedAt: now, ExpiresAt: now.Add(s.cfg.RefreshTTL.D()), ClientIP: meta.ClientIP}
-	_, err = s.store.RotateRefreshToken(ctx, hashOpaque(req.RefreshToken), rt, now,
-		NewAudit(now, 0, 0, ActionRefreshReuse, meta.ClientIP, nil))
+	// The successor's IP is sealed under the family's account DEK, so the owner is looked up
+	// first; the rotation re-checks it inside its transaction.
+	oldHash := hashOpaque(req.RefreshToken)
+	owner, err := s.store.RefreshTokenOwner(ctx, oldHash)
+	if errors.Is(err, ErrTokenInvalid) {
+		return nil, "invalid", rpc.Errorf(rpc.CodeUnauthenticated, "invalid or expired refresh token")
+	}
+	if err != nil {
+		return nil, "error", rpc.Internal(err)
+	}
+	rt := &RefreshToken{Hash: nextHash, AccountID: owner, IssuedAt: now, ExpiresAt: now.Add(s.cfg.RefreshTTL.D())}
+	if rt.ClientIPCT, err = s.sealIP(ctx, owner, RefreshIPAAD(nextHash), meta.ClientIP); err != nil {
+		return nil, "error", rpc.Internal(err)
+	}
+	_, err = s.store.RotateRefreshToken(ctx, oldHash, rt, now, NewAudit(now, 0, 0, ActionRefreshReuse, nil))
 	switch {
 	case errors.Is(err, ErrTokenReused):
-		s.log.WarnContext(ctx, "refresh token reuse detected; family revoked", "ip", meta.ClientIP)
+		s.log.WarnContext(ctx, "refresh token reuse detected; family revoked", "account", owner)
+		s.recordIP(ctx, owner, ActionRefreshReuse, meta.ClientIP, now)
 		return nil, "reused", rpc.Errorf(rpc.CodeUnauthenticated, "refresh token was already used; log in again")
 	case errors.Is(err, ErrTokenInvalid):
 		return nil, "invalid", rpc.Errorf(rpc.CodeUnauthenticated, "invalid or expired refresh token")
@@ -591,9 +689,12 @@ func (s *Service) refresh(ctx context.Context, meta Meta, req *RefreshRequest) (
 // Logout revokes the refresh-token family. Unknown tokens succeed (logout is idempotent).
 func (s *Service) Logout(ctx context.Context, meta Meta, req *LogoutRequest) (*Empty, error) {
 	now := s.clk.Now().UTC()
-	_, err := s.store.RevokeFamilyOf(ctx, hashOpaque(req.RefreshToken), now, NewAudit(now, 0, 0, ActionLogout, meta.ClientIP, nil))
+	t, err := s.store.RevokeFamilyOf(ctx, hashOpaque(req.RefreshToken), now, NewAudit(now, 0, 0, ActionLogout, nil))
 	if err != nil && !errors.Is(err, ErrTokenInvalid) {
 		return nil, rpc.Internal(err)
+	}
+	if err == nil {
+		s.recordIP(ctx, t.AccountID, ActionLogout, meta.ClientIP, now)
 	}
 	return &Empty{}, nil
 }
@@ -688,7 +789,10 @@ func (s *Service) ExchangeLaunchCode(ctx context.Context, meta Meta, req *Exchan
 		return nil, rpc.Internal(err)
 	}
 	rt := &RefreshToken{Hash: refreshHash, AccountID: acct.ID, FamilyID: rec.FamilyID, IssuedAt: now,
-		ExpiresAt: now.Add(s.cfg.RefreshTTL.D()), ClientIP: meta.ClientIP}
+		ExpiresAt: now.Add(s.cfg.RefreshTTL.D())}
+	if rt.ClientIPCT, err = s.sealIP(ctx, acct.ID, RefreshIPAAD(refreshHash), meta.ClientIP); err != nil {
+		return nil, rpc.Internal(err)
+	}
 	switch err := s.store.ExtendFamily(ctx, rt, now); {
 	case errors.Is(err, ErrTokenInvalid):
 		return nil, rpc.Errorf(rpc.CodeUnauthenticated, "login has ended; log in again")
@@ -699,7 +803,8 @@ func (s *Service) ExchangeLaunchCode(ctx context.Context, meta Meta, req *Exchan
 	if err != nil {
 		return nil, err
 	}
-	s.audit(ctx, NewAudit(now, acct.ID, acct.ID, ActionLaunchCode, meta.ClientIP, nil))
+	s.audit(ctx, NewAudit(now, acct.ID, acct.ID, ActionLaunchCode, nil))
+	s.recordIP(ctx, acct.ID, ActionLaunchCode, meta.ClientIP, now)
 	return pair, nil
 }
 
@@ -732,7 +837,7 @@ func (s *Service) Ban(ctx context.Context, actor, accountID int64, until *time.T
 	if until != nil {
 		action, detail = ActionBan, map[string]any{"until": until.UTC().Format(time.RFC3339), "reason": reason}
 	}
-	err := s.store.SetBan(ctx, accountID, until, reason, now, NewAudit(now, actor, accountID, action, "", detail))
+	err := s.store.SetBan(ctx, accountID, until, reason, now, NewAudit(now, actor, accountID, action, detail))
 	if errors.Is(err, ErrNotFound) {
 		return rpc.Errorf(rpc.CodeNotFound, "no such account")
 	}

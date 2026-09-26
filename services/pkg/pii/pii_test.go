@@ -51,7 +51,9 @@ func TestSealOpenBindsTheLocation(t *testing.T) {
 	}{
 		"row":      {&dek, pii.AAD("svc_identity.account", "email_ct", 43), ct},
 		"column":   {&dek, pii.AAD("svc_identity.account", "dob_ct", 42), ct},
-		"table":    {&dek, pii.AAD("svc_identity.accoun", "temail_ct", 42), ct},
+		"table":    {&dek, pii.AAD("svc_identity.subject_key", "email_ct", 42), ct},
+		"prefixes": {&dek, pii.AAD("svc_identity.accoun", "temail_ct", 42), ct},
+		"keyed":    {&dek, pii.AADKey("svc_identity.account", "email_ct", []byte{0, 0, 0, 0, 0, 0, 0, 42}), ct},
 		"key":      {&other, aad, ct},
 		"tampered": {&dek, aad, append(append([]byte{}, ct[:len(ct)-1]...), ct[len(ct)-1]^1)},
 		"format":   {&dek, aad, append([]byte{2}, ct[1:]...)},
@@ -153,10 +155,24 @@ func TestBlindIndexIsKeyed(t *testing.T) {
 	if _, err := pii.NewBlindIndex(nil); err == nil {
 		t.Fatal("nil pepper ring accepted")
 	}
+	// A second generation would change every index: refused, not silently used.
+	if _, err := pepper.Add(nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pii.NewBlindIndex(pepper); err == nil {
+		t.Fatal("a pepper ring with two generations accepted")
+	}
 }
 
 func TestAADIsUnambiguous(t *testing.T) {
 	if bytes.Equal(pii.AAD("ab", "c", 1), pii.AAD("a", "bc", 1)) || bytes.Equal(pii.AAD("a", "b", 1), pii.AAD("a", "b", 2)) {
 		t.Fatal("AAD encodings collide")
+	}
+	key := []byte("token-hash")
+	if bytes.Equal(pii.AADKey("t", "c", key), pii.AADKey("t", "c", []byte("token-hasH"))) ||
+		bytes.Equal(pii.AADKey("t", "c", []byte{0, 0, 0, 0, 0, 0, 0, 1}), pii.AAD("t", "c", 1)) ||
+		bytes.Equal(pii.AADKey("t", "c", []byte{0, 0, 0, 1}), pii.AAD("t", "c", 4<<32|1)) || // same length
+		bytes.Equal(pii.AADKey("tc", "", nil), pii.AADKey("t", "c", nil)) {
+		t.Fatal("AADKey encodings collide")
 	}
 }

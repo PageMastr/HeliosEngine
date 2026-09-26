@@ -10,15 +10,19 @@
 package migrations
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
@@ -37,26 +41,30 @@ type Schema struct {
 	// against that name. Every later file uses Name.
 	Legacy        string
 	LegacyVersion int64
+	// Markers are tables the legacy files create; a legacy-named schema without all of them is
+	// not helios-backend's and is never adopted.
+	Markers []string
 }
 
 // Schemas lists the service schemas in apply order. Each has its own goose version table
 // (<schema>.goose_db_version) so services can later migrate independently.
 var Schemas = []Schema{
-	{Name: "svc_identity", Dir: "identity", Legacy: "identity", LegacyVersion: 1},
-	{Name: "svc_orch", Dir: "orchestrator", Legacy: "orchestrator", LegacyVersion: 2},
+	{Name: "svc_identity", Dir: "identity", Legacy: "identity", LegacyVersion: 1, Markers: []string{"account", "audit_head"}},
+	{Name: "svc_orch", Dir: "orchestrator", Legacy: "orchestrator", LegacyVersion: 2, Markers: []string{"zone", "process"}},
 }
 
 // Go migrations (no .sql file). Their versions fill the gaps between the SQL files.
 const (
-	// identityEncryptEmails encrypts the e-mail addresses that pre-WP-0.15r databases stored in
-	// plain text, between svc_identity's expand (00002) and contract (00004) steps.
-	identityEncryptEmails = 3
+	// identityEncryptPII encrypts the direct PII that pre-WP-0.15r databases stored in plain text
+	// (e-mail addresses, client IPs) and re-chains the audit log without IPs, between
+	// svc_identity's expand (00002) and contract (00004) steps.
+	identityEncryptPII = 3
 )
 
 // Options configure Up.
 type Options struct {
-	// PIIKeys supplies the keys that encrypt pre-WP-0.15r plain-text e-mail addresses. Up calls
-	// it only when such rows exist, so a fresh or already migrated database needs none; without
+	// PIIKeys supplies the keys that encrypt pre-WP-0.15r plain-text PII. Up calls it only when
+	// there is something to encrypt, so a fresh or already migrated database needs none; without
 	// it such a database stops at svc_identity version 2 with ErrNeedPIIKeys.
 	PIIKeys func() (*identity.PIIKeys, error)
 }
@@ -108,6 +116,9 @@ const adoptLock = `SELECT pg_advisory_xact_lock(hashtextextended('helios.migrati
 // are applied under the old name, then the schema is renamed, which moves every table, index,
 // sequence, function and the goose version table with it (ALTER SCHEMA is atomic). The rename
 // cannot be undone with goose down; restore from a backup instead.
+//
+// The checks against foreign schemas (ErrForeignSchema) guard against accidents on a shared
+// database, not against an attacker who can create schemas in it.
 func adoptLegacy(ctx context.Context, db *sql.DB, s Schema, log *slog.Logger) error {
 	if s.Legacy == "" {
 		return nil
@@ -115,23 +126,47 @@ func adoptLegacy(ctx context.Context, db *sql.DB, s Schema, log *slog.Logger) er
 	// The legacy schema is only ever created while s.Name is absent, and the rename happens under
 	// the same lock, so a concurrent starter can never leave a stray legacy schema behind.
 	adopted, err := inAdoptTx(ctx, db, func(tx *sql.Tx) (bool, error) {
-		if ok, err := schemaExists(ctx, tx, s.Name); ok || err != nil {
-			return ok, err
-		}
-		// On a shared database a schema of that name may belong to something else: adopt it only
-		// if helios-backend created it (it has goose's version table) or it is still empty.
-		var ours, empty bool
-		if err := tx.QueryRowContext(ctx, `SELECT
-				EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-				        WHERE n.nspname = $1 AND c.relname = 'goose_db_version'),
-				NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1)`,
-			s.Legacy).Scan(&ours, &empty); err != nil {
+		cur, err := inspect(ctx, tx, s.Name, nil)
+		if err != nil {
 			return false, err
 		}
-		if !ours && !empty {
-			return false, fmt.Errorf("%w: %s holds objects helios-backend did not create", ErrForeignSchema, s.Legacy)
+		switch {
+		case cur.goose:
+			// Already adopted. An older helios-backend started on this database afterwards would
+			// have created the legacy schema again and written plain text into it.
+			if old, err := inspect(ctx, tx, s.Legacy, s.Markers); err == nil && old.goose {
+				log.Error("stray legacy schema next to an adopted one: an older helios-backend ran on this upgraded database "+
+					"and may have stored plain-text PII there; check it and drop it (the upgrade is one-way)",
+					"legacy", s.Legacy, "schema", s.Name)
+			}
+			return true, nil
+		case cur.exists && cur.empty && cur.owned:
+			// Pre-created and empty: adopt as fresh (the rename needs the name free).
+			if _, err := tx.ExecContext(ctx, "DROP SCHEMA "+s.Name); err != nil {
+				return false, err
+			}
+		case cur.exists:
+			return false, fmt.Errorf("%w: %s exists but was not created by helios-backend (no goose version table)", ErrForeignSchema, s.Name)
 		}
-		_, err := tx.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+s.Legacy)
+		old, err := inspect(ctx, tx, s.Legacy, s.Markers)
+		if err != nil {
+			return false, err
+		}
+		switch {
+		case !old.exists:
+		case !old.owned:
+			return false, fmt.Errorf("%w: %s belongs to another role", ErrForeignSchema, s.Legacy)
+		case old.empty:
+		case old.gooseOnly && old.versions == 1 && old.maxVersion == 0:
+			// Another starter's goose run has created its version table and not yet applied the
+			// first file (or crashed right there): ours, in progress.
+		case !old.goose || !old.markers:
+			return false, fmt.Errorf("%w: %s holds objects helios-backend did not create", ErrForeignSchema, s.Legacy)
+		case old.maxVersion > s.LegacyVersion:
+			return false, fmt.Errorf("%w: %s is at version %d, newer than any legacy file (%d)", ErrForeignSchema, s.Legacy,
+				old.maxVersion, s.LegacyVersion)
+		}
+		_, err = tx.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+s.Legacy)
 		return false, err
 	})
 	if err != nil || adopted {
@@ -166,6 +201,35 @@ func adoptLegacy(ctx context.Context, db *sql.DB, s Schema, log *slog.Logger) er
 		log.Info("schema renamed (WP-0.15r, 05 §3)", "from", s.Legacy, "to", s.Name)
 	}
 	return nil
+}
+
+// schemaState is what adoption needs to know about one schema.
+type schemaState struct {
+	exists, owned, empty, goose bool
+	gooseOnly                   bool  // it holds nothing but goose's version table
+	markers                     bool  // every marker table exists
+	versions, maxVersion        int64 // rows in, and highest version of, goose's table
+}
+
+// inspect reads name's state. name is one of the constant schema names above, never input.
+func inspect(ctx context.Context, tx *sql.Tx, name string, markers []string) (schemaState, error) {
+	var st schemaState
+	err := tx.QueryRowContext(ctx, `SELECT n.oid IS NOT NULL,
+			COALESCE(pg_get_userbyid(n.nspowner) = current_user, false),
+			NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = n.oid),
+			EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = n.oid AND c.relname = 'goose_db_version'),
+			NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = n.oid
+			   AND c.relname NOT IN ('goose_db_version', 'goose_db_version_pkey', 'goose_db_version_id_seq')),
+			(SELECT count(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'r'
+			   AND c.relname = ANY (string_to_array($2, ','))) = cardinality(string_to_array($2, ','))
+		FROM (SELECT $1::name AS want) w LEFT JOIN pg_namespace n ON n.nspname = w.want`,
+		name, strings.Join(markers, ",")).Scan(&st.exists, &st.owned, &st.empty, &st.goose, &st.gooseOnly, &st.markers)
+	if err != nil || !st.goose {
+		return st, err
+	}
+	err = tx.QueryRowContext(ctx, "SELECT count(*), COALESCE(max(version_id), 0) FROM "+name+".goose_db_version").
+		Scan(&st.versions, &st.maxVersion)
+	return st, err
 }
 
 func inAdoptTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) (bool, error)) (bool, error) {
@@ -268,26 +332,84 @@ func goMigrations(s Schema, o Options, log *slog.Logger) []*goose.Migration {
 	if s.Name != "svc_identity" {
 		return nil
 	}
-	up := &goose.GoFunc{RunTx: func(ctx context.Context, tx *sql.Tx) error { return encryptLegacyEmails(ctx, tx, o, log) }}
-	return []*goose.Migration{goose.NewGoMigration(identityEncryptEmails, up, nil)}
+	up := &goose.GoFunc{RunTx: func(ctx context.Context, tx *sql.Tx) error { return encryptLegacyPII(ctx, tx, o, log) }}
+	down := &goose.GoFunc{RunTx: func(context.Context, *sql.Tx) error { return errIrreversible }}
+	return []*goose.Migration{goose.NewGoMigration(identityEncryptPII, up, down)}
 }
 
-// ErrForeignSchema is returned when a schema with a legacy name exists but was not created by
-// helios-backend; Up then renames nothing and applies nothing to it.
+var errIrreversible = errors.New("migrations: svc_identity 3 is irreversible (the plain text is gone): restore a backup")
+
+// ErrForeignSchema is returned when a schema with a service's name or legacy name exists but
+// was not created by helios-backend; Up then renames nothing and applies nothing to it.
 var ErrForeignSchema = errors.New("migrations: refusing to adopt a schema")
 
-// ErrNeedPIIKeys is returned when plain-text e-mail rows exist but Options.PIIKeys is nil.
-var ErrNeedPIIKeys = errors.New("migrations: plain-text e-mail rows need the identity keys (subject KEK and blind-index pepper)")
+// ErrNeedPIIKeys is returned when plain-text PII rows exist but Options.PIIKeys is nil.
+var ErrNeedPIIKeys = errors.New("migrations: plain-text PII needs the identity keys (subject KEK and blind-index pepper)")
 
-// encryptLegacyEmails is svc_identity migration 3: every account without email_ct gets a subject
-// key, its address sealed under it and the address's blind index, exactly as Register writes
-// them; 00004 then drops the plain-text columns. It runs in goose's transaction, so a failure
-// leaves the database at version 2 with nothing half-encrypted. Addresses are never logged.
-func encryptLegacyEmails(ctx context.Context, tx *sql.Tx, o Options, log *slog.Logger) error {
-	rows, err := tx.QueryContext(ctx, `SELECT account_id, email FROM svc_identity.account
-		WHERE email_ct IS NULL ORDER BY account_id FOR UPDATE`)
+// ErrAuditChainBroken is returned when the pre-WP-0.15r audit chain does not verify: migration 3
+// refuses to re-chain (and so launder) a chain that was already broken.
+var ErrAuditChainBroken = errors.New("migrations: the audit chain does not verify; refusing to re-chain it")
+
+// keySource loads the PII keys on first use and says what needed them if there are none.
+type keySource struct {
+	o    Options
+	keys *identity.PIIKeys
+}
+
+func (k *keySource) get(what string, n int) (*identity.PIIKeys, error) {
+	if k.keys != nil {
+		return k.keys, nil
+	}
+	if k.o.PIIKeys == nil {
+		return nil, fmt.Errorf("%w (%d %s)", ErrNeedPIIKeys, n, what)
+	}
+	keys, err := k.o.PIIKeys()
+	if err != nil {
+		return nil, err
+	}
+	k.keys = keys
+	return keys, nil
+}
+
+// encryptLegacyPII is svc_identity migration 3. It writes what Register and the token paths now
+// write for the rows the old schema stored in plain text, and nulls the plain-text copies:
+//   - every account without email_ct gets a subject key, its address sealed under it and the
+//     address's blind index;
+//   - every refresh token's client IP is sealed into client_ip_ct for its row;
+//   - the audit chain is verified in its old row format, its IPs of the last 90 days move to the
+//     sealed login history (subject-less rows keep none), unknown-login rows lose the unkeyed
+//     address digest they carried, and the chain is recomputed in row format 2 with a closing
+//     "audit.rechain" row that records the old head.
+//
+// It runs in goose's transaction, so a failure leaves the database at version 2 with nothing
+// half-done. It is sized for dev databases (≤ 10k accounts, a few seconds): it holds the rows in
+// memory and makes a few round trips per row. No address or IP is ever logged.
+func encryptLegacyPII(ctx context.Context, tx *sql.Tx, o Options, log *slog.Logger) error {
+	ks := &keySource{o: o}
+	emails, err := encryptLegacyEmails(ctx, tx, ks)
 	if err != nil {
 		return err
+	}
+	ips, err := encryptLegacyTokenIPs(ctx, tx, ks)
+	if err != nil {
+		return err
+	}
+	rows, moved, err := rechainAuditLog(ctx, tx, ks, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	if emails+ips+rows > 0 {
+		log.Info("encrypted plain-text PII (WP-0.15r)", "accounts", emails, "refresh_token_ips", ips,
+			"audit_rows_rechained", rows, "ips_to_login_history", moved)
+	}
+	return nil
+}
+
+func encryptLegacyEmails(ctx context.Context, tx *sql.Tx, ks *keySource) (int, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT account_id, email FROM svc_identity.account
+		WHERE email_ct IS NULL AND email IS NOT NULL ORDER BY account_id FOR UPDATE`)
+	if err != nil {
+		return 0, err
 	}
 	type legacy struct {
 		id    int64
@@ -298,38 +420,230 @@ func encryptLegacyEmails(ctx context.Context, tx *sql.Tx, o Options, log *slog.L
 		var l legacy
 		if err := rows.Scan(&l.id, &l.email); err != nil {
 			rows.Close()
-			return err
+			return 0, err
+		}
+		todo = append(todo, l)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || len(todo) == 0 {
+		return 0, err
+	}
+	keys, err := ks.get("accounts with a plain-text e-mail address", len(todo))
+	if err != nil {
+		return 0, err
+	}
+	for _, l := range todo {
+		ct, bidx, key, err := keys.EncryptEmail(l.id, l.email)
+		if err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE svc_identity.account
+			SET email_ct = $2, email_bidx = $3, email = NULL, email_norm = NULL WHERE account_id = $1`, l.id, ct, bidx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO svc_identity.subject_key (account_id, wrapped_dek, kek_version)
+			VALUES ($1, $2, $3)`, key.AccountID, key.WrappedDEK, key.KEKVersion); err != nil {
+			return 0, err
+		}
+	}
+	return len(todo), nil
+}
+
+// subjectKeyTx reads an account's subject key inside the migration; nil if it has none.
+func subjectKeyTx(ctx context.Context, tx *sql.Tx, accountID int64) (*identity.SubjectKey, error) {
+	k := identity.SubjectKey{AccountID: accountID}
+	err := tx.QueryRowContext(ctx, `SELECT wrapped_dek, kek_version FROM svc_identity.subject_key WHERE account_id = $1`,
+		accountID).Scan(&k.WrappedDEK, &k.KEKVersion)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return &k, err
+}
+
+func encryptLegacyTokenIPs(ctx context.Context, tx *sql.Tx, ks *keySource) (int, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT token_hash, account_id, client_ip FROM svc_identity.refresh_token
+		WHERE client_ip IS NOT NULL ORDER BY token_hash FOR UPDATE`)
+	if err != nil {
+		return 0, err
+	}
+	type legacy struct {
+		hash    []byte
+		account int64
+		ip      string
+	}
+	var todo []legacy
+	for rows.Next() {
+		var l legacy
+		if err := rows.Scan(&l.hash, &l.account, &l.ip); err != nil {
+			rows.Close()
+			return 0, err
 		}
 		todo = append(todo, l)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return err
+		return 0, err
 	}
-	if len(todo) == 0 {
-		return nil
-	}
-	if o.PIIKeys == nil {
-		return fmt.Errorf("%w (%d accounts)", ErrNeedPIIKeys, len(todo))
-	}
-	keys, err := o.PIIKeys()
-	if err != nil {
-		return err
-	}
+	sealed := 0
 	for _, l := range todo {
-		ct, bidx, key, err := keys.EncryptEmail(l.id, l.email)
-		if err != nil {
-			return err
+		var ct []byte
+		if l.ip != "" {
+			sk, err := subjectKeyTx(ctx, tx, l.account)
+			if err != nil {
+				return 0, err
+			}
+			if sk != nil {
+				keys, err := ks.get("refresh tokens with a plain-text client IP", len(todo))
+				if err != nil {
+					return 0, err
+				}
+				if ct, err = keys.Seal(sk, identity.RefreshIPAAD(l.hash), l.ip); err != nil {
+					return 0, err
+				}
+				sealed++
+			}
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE svc_identity.account SET email_ct = $2, email_bidx = $3 WHERE account_id = $1`,
-			l.id, ct, bidx); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO svc_identity.subject_key (account_id, wrapped_dek, kek_version)
-			VALUES ($1, $2, $3)`, key.AccountID, key.WrappedDEK, key.KEKVersion); err != nil {
-			return err
+		if _, err := tx.ExecContext(ctx, `UPDATE svc_identity.refresh_token SET client_ip_ct = $2, client_ip = NULL
+			WHERE token_hash = $1`, l.hash, ct); err != nil {
+			return 0, err
 		}
 	}
-	log.Info("encrypted plain-text e-mail addresses", "accounts", len(todo))
-	return nil
+	return sealed, nil
+}
+
+// rechainAuditLog verifies the row-format-1 chain, moves its IPs out and recomputes it in row
+// format 2. It returns the rows re-chained and the IPs moved to the login history.
+func rechainAuditLog(ctx context.Context, tx *sql.Tx, ks *keySource, now time.Time) (int, int, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT seq, at, actor_account, subject_account, action, COALESCE(client_ip, ''),
+		detail, prev_hash, hash FROM svc_identity.audit_log ORDER BY seq FOR UPDATE`)
+	if err != nil {
+		return 0, 0, err
+	}
+	type legacy struct {
+		e  identity.AuditEntry
+		ip string
+	}
+	var todo []legacy
+	for rows.Next() {
+		var l legacy
+		var prev, h []byte
+		if err := rows.Scan(&l.e.Seq, &l.e.At, &l.e.Actor, &l.e.Subject, &l.e.Action, &l.ip, &l.e.Detail, &prev, &h); err != nil {
+			rows.Close()
+			return 0, 0, err
+		}
+		copy(l.e.PrevHash[:], prev)
+		copy(l.e.Hash[:], h)
+		todo = append(todo, l)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || len(todo) == 0 {
+		return 0, 0, err
+	}
+
+	// Verify the old chain first, against its head: re-chaining must never launder a broken one.
+	var prev [32]byte
+	for i, l := range todo {
+		if l.e.Seq != int64(i+1) || l.e.PrevHash != prev || identity.LegacyChainHashV1(prev, &l.e, l.ip) != l.e.Hash {
+			return 0, 0, fmt.Errorf("%w (at seq %d)", ErrAuditChainBroken, l.e.Seq)
+		}
+		prev = l.e.Hash
+	}
+	oldHead := prev
+	var headSeq int64
+	var headHash []byte
+	if err := tx.QueryRowContext(ctx, `SELECT seq, hash FROM svc_identity.audit_head WHERE id = 1 FOR UPDATE`).
+		Scan(&headSeq, &headHash); err != nil {
+		return 0, 0, err
+	}
+	if headSeq != int64(len(todo)) || !bytes.Equal(headHash, oldHead[:]) {
+		return 0, 0, fmt.Errorf("%w (audit_head is at seq %d, the log at %d)", ErrAuditChainBroken, headSeq, len(todo))
+	}
+
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE svc_identity.audit_log DISABLE TRIGGER audit_log_append_only`); err != nil {
+		return 0, 0, err
+	}
+	cutoff := now.Add(-identity.LoginHistoryRetention)
+	moved := 0
+	keysOf := map[int64]*identity.SubjectKey{}
+	prev = [32]byte{}
+	for _, l := range todo {
+		e := l.e
+		if l.ip != "" && e.Subject != 0 && !e.At.Before(cutoff) {
+			sk, ok := keysOf[e.Subject]
+			if !ok {
+				if sk, err = subjectKeyTx(ctx, tx, e.Subject); err != nil {
+					return 0, 0, err
+				}
+				keysOf[e.Subject] = sk
+			}
+			if sk != nil {
+				keys, err := ks.get("audit rows with a plain-text client IP", len(todo))
+				if err != nil {
+					return 0, 0, err
+				}
+				// Negative event IDs never collide with the block IDs new rows get.
+				ct, err := keys.Seal(sk, identity.LoginIPAAD(-e.Seq), l.ip)
+				if err != nil {
+					return 0, 0, err
+				}
+				if ct != nil {
+					if _, err := tx.ExecContext(ctx, `INSERT INTO svc_identity.login_history
+						(event_id, account_id, action, at, client_ip_ct) VALUES ($1, $2, $3, $4, $5)`,
+						-e.Seq, e.Subject, e.Action, e.At, ct); err != nil {
+						return 0, 0, err
+					}
+					moved++
+				}
+			}
+		}
+		if e.Action == identity.ActionLoginFailed {
+			if e.Detail, err = dropDetailKey(e.Detail, "login"); err != nil {
+				return 0, 0, fmt.Errorf("migrations: audit seq %d detail: %w", e.Seq, err)
+			}
+		}
+		e.PrevHash = prev
+		e.Hash = identity.ChainHash(prev, &e)
+		if _, err := tx.ExecContext(ctx, `UPDATE svc_identity.audit_log SET client_ip = NULL, detail = $2, prev_hash = $3,
+			hash = $4 WHERE seq = $1`, e.Seq, e.Detail, e.PrevHash[:], e.Hash[:]); err != nil {
+			return 0, 0, err
+		}
+		prev = e.Hash
+	}
+	marker := identity.NewAudit(now, 0, 0, identity.ActionAuditRechain, map[string]any{"from_format": 1, "to_format": 2,
+		"rows": len(todo), "old_head": hex.EncodeToString(oldHead[:]), "reason": "client IPs left the chain (05 §1.17, §6.6; WP-0.15r)"})
+	marker.Seq, marker.PrevHash = int64(len(todo))+1, prev
+	marker.Hash = identity.ChainHash(prev, marker)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO svc_identity.audit_log
+		(seq, at, actor_account, subject_account, action, detail, prev_hash, hash) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		marker.Seq, marker.At, marker.Actor, marker.Subject, marker.Action, marker.Detail, marker.PrevHash[:], marker.Hash[:]); err != nil {
+		return 0, 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE svc_identity.audit_head SET seq = $1, hash = $2 WHERE id = 1`,
+		marker.Seq, marker.Hash[:]); err != nil {
+		return 0, 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE svc_identity.audit_log ENABLE TRIGGER audit_log_append_only`); err != nil {
+		return 0, 0, err
+	}
+	return len(todo), moved, nil
+}
+
+// dropDetailKey removes key from a canonical JSON detail and re-encodes it canonically (sorted
+// keys, as NewAudit writes it). Numbers stay json.Number, so no 64-bit ID is rounded.
+func dropDetailKey(detail, key string) (string, error) {
+	var m map[string]any
+	dec := json.NewDecoder(strings.NewReader(detail))
+	dec.UseNumber()
+	if err := dec.Decode(&m); err != nil {
+		return "", err
+	}
+	if _, ok := m[key]; !ok {
+		return detail, nil
+	}
+	delete(m, key)
+	if len(m) == 0 {
+		return "{}", nil
+	}
+	b, err := json.Marshal(m)
+	return string(b), err
 }

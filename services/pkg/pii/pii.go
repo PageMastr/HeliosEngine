@@ -5,7 +5,8 @@
 // Deleting a subject's wrapped DEK makes every copy of its ciphertext unreadable (crypto-shredding),
 // so callers must never persist or log an unwrapped DEK. Dev keeps the KEK and the blind-index
 // pepper in local keyring files; staging and prod mount them from the secret store until the KMS
-// integration replaces the file-backed KEK and BlindIndex (05 §6.5).
+// integration replaces the file-backed KEK and BlindIndex. That is a Phase 0 deviation: 05 §6.5
+// keeps the KEKs in KMS and says the pepper never leaves it.
 //
 // Everything here is safe for concurrent use.
 package pii
@@ -60,6 +61,9 @@ var (
 	ErrUnknownKEK = errors.New("pii: unknown kek version")
 )
 
+// aadKeyed marks AADKey's encoding in the table's length prefix.
+const aadKeyed = 1 << 31
+
 // AAD builds the associated data that binds a sealed value to where it is stored: table,
 // column and row ID (05 §6.6). The encoding is length-prefixed, so no two locations share it.
 func AAD(table, column string, rowID int64) []byte {
@@ -69,6 +73,19 @@ func AAD(table, column string, rowID int64) []byte {
 	b = binary.BigEndian.AppendUint32(b, uint32(len(column)))
 	b = append(b, column...)
 	return binary.BigEndian.AppendUint64(b, uint64(rowID))
+}
+
+// AADKey is AAD for a row whose key is not a 64-bit ID (a token hash, for example). The key is
+// length-prefixed too, and the table's length prefix has its top bit set, so AADKey never equals
+// an AAD (whose table is shorter than 2 GiB) whatever the key's length.
+func AADKey(table, column string, rowKey []byte) []byte {
+	b := make([]byte, 0, 4+len(table)+4+len(column)+4+len(rowKey))
+	b = binary.BigEndian.AppendUint32(b, uint32(len(table))|aadKeyed)
+	b = append(b, table...)
+	b = binary.BigEndian.AppendUint32(b, uint32(len(column)))
+	b = append(b, column...)
+	b = binary.BigEndian.AppendUint32(b, uint32(len(rowKey)))
+	return append(b, rowKey...)
 }
 
 func seal(key []byte, aad, plaintext []byte) ([]byte, error) {
@@ -169,11 +186,15 @@ type BlindIndex struct {
 	pepper []byte
 }
 
-// NewBlindIndex uses the current generation of ring as the pepper. The index has no version
-// column, so the pepper cannot rotate without re-indexing every row.
+// NewBlindIndex uses ring's only generation as the pepper. The index has no version column, so
+// the pepper cannot rotate without re-indexing every row; a ring with a second generation is
+// refused rather than silently breaking every stored index.
 func NewBlindIndex(ring *keyring.Ring) (*BlindIndex, error) {
 	if ring == nil || len(ring.Keys) == 0 {
 		return nil, errors.New("pii: pepper keyring is empty")
+	}
+	if len(ring.Keys) != 1 {
+		return nil, fmt.Errorf("pii: pepper keyring has %d generations; a blind-index pepper cannot rotate without a re-index", len(ring.Keys))
 	}
 	return &BlindIndex{pepper: ring.Current().Secret}, nil
 }

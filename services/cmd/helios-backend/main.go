@@ -172,8 +172,8 @@ func runMigrate(ctx context.Context, cfg *platform.Config, log *slog.Logger) int
 	defer pg.Close()
 	db := pg.SQLDB()
 	defer db.Close()
-	// The PII keys are loaded only if pre-WP-0.15r plain-text e-mail rows must be encrypted.
-	piiKeys := func() (*identity.PIIKeys, error) { return backend.LoadPIIKeys(cfg, log) }
+	// The PII keys are loaded only if pre-WP-0.15r plain-text rows must be encrypted.
+	piiKeys := func() (*identity.PIIKeys, error) { return backend.OpenPIIKeys(ctx, cfg, log, pg.Pool) }
 	if _, err := migrations.Up(ctx, db, log, migrations.Options{PIIKeys: piiKeys}); err != nil {
 		log.Error("migrate", "err", err)
 		return 1

@@ -73,7 +73,9 @@ and source size (64 KiB) are limited (`E_LIMIT`). Number literals longer than 10
 C++ and Go must compile every accepted source to the same constants. The parser (precedence climbing) and the code
 generator recurse once per nesting level, so those limits bound their stack: the deepest programs the
 limits admit, in every nesting shape, compile in at most 72 KiB of stack at `-O2` and 160 KiB at `-O0`
-(GCC 13 and Clang 18, measured with `ulimit -s` probes; MSVC not measured). Before WP-0.19's review
+(GCC 13 and Clang 18, measured with `ulimit -s` probes; MSVC not measured). The CTest
+`hxl_tests_stack` (Linux and macOS) enforces it: it runs those programs under `ulimit -s 256`
+(1 MiB in sanitizer builds), where the pre-review parser crashed. Before WP-0.19's review
 they needed up to 512 KiB (GCC `-O2`). `Program::decode()` verifies untrusted bytecode
 completely: opcodes and operand ranges, stack depth and types at every op and jump target, forward
 jumps onto instruction boundaries, the header (result type, stack, cost) and canonical form

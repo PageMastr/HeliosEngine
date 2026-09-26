@@ -177,4 +177,10 @@ Plan-Rev: 6
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
 `docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked against 06 §1.1–1.2, §2 and §4 in
 WP-0.19's review on 2026-09-26. The two fields 06's snippets lacked are adopted there by the WP's own
-`Plan-Change: 06 §1.2`; no conformance delta is open (§5.10.4 (c)).
+`Plan-Change: 06 §1.2`. No D7 conformance delta is open (§5.10.4 (c)), meaning no plan change since
+Plan-Rev 6 contradicts this code; the 8-worker budget is still unmeasured (09 §8.1).
+
+Deviation: 02 §3.1 puts engine schemas in `engine/<module>/schema/`, but these live in
+`schemas/gameplay/`, as CLAUDE.md's layout ("`schemas/` … the single source of truth for data
+types") says. 09 §5.2a treats `schemas/<pkg>/**` as project-dynamic, which `helios.gameplay` is not.
+WP-0.19 raised the conflict with the Director instead of moving the package on its own.

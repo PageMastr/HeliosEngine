@@ -34,12 +34,13 @@ clean fixture. It skips test files and generated files (marker before the packag
 `helios_runtime.go`) is not HXL arithmetic and is still covered by the machine-code FMA check. Services should still build with
 `GOAMD64=v1` and call `hxl.CheckGOAMD64(production)` at start (defence in depth, rule 6).
 
-Two deviations from 06 §1.2's tooling: the `det` constants are copied from
-`engine/math/src/det_exp.cpp` by hand and pinned by `TestConstantsMatchCpp`, as there is no
-`helios-tool hxl-gen-consts` yet (rule 2); and `hxlfloat` is a standard-library analyzer that runs
-as a unit test (`TestHXLPackagesClean`, so every `go test ./...` enforces it) and through
-`go run`, not a `go/analysis` pass under `go vet -vettool`, and there is no pre-commit hook yet
-(rule 5).
+Open items against 06 §1.2's tooling, each with a proposed owner (the Director assigns them):
+
+| Rule | Open item | Proposed owner |
+|---|---|---|
+| 2 | The `det` constants are typed hex literals copied from `engine/math/src/det_exp.cpp` by hand and pinned by `TestConstantsMatchCpp`; there is no `helios-tool hxl-gen-consts` | The tools WP that creates `helios-tool` (WP-0.7b or later) |
+| 5 | `hxlfloat` is a standard-library analyzer that runs as a unit test (`TestHXLPackagesClean`, so every `go test ./...` enforces it) and through `go run`, not a `go/analysis` pass under `go vet -vettool`; there is no pre-commit hook | WP-0.1 (CI and hooks) |
+| 6 | `hxl.CheckGOAMD64` exists, but `helios-backend` does not call it and log the level at start (05 §8) | The backend WP that owns `services/cmd/helios-backend` (WP-0.15r) |
 
 ## GP-1 coverage
 
@@ -71,5 +72,6 @@ Plan-Rev: 6
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
 `docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked against 06 §1.2 in WP-0.19's review
-on 2026-09-26. No conformance delta is open (§5.10.4 (c)); the tooling deviations above are recorded
-in WP-0.19's PR.
+on 2026-09-26. No D7 conformance delta is open (§5.10.4 (c)), meaning no plan change since Plan-Rev 6
+contradicts this code. That does not mean nothing is open: the GP-1 gaps (the `linux/arm64` run) and
+the tooling items above are open WP-0.19 follow-ups.

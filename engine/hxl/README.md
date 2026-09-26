@@ -101,11 +101,13 @@ corpus pins, so both compilers must emit identical bytes.
 
 ## Tests
 
-`hxl_tests` (25 test cases): compiler (precedence, every diagnostic with its position, limits and
-the deepest programs within them), VM semantics (IEEE edge cases, laziness, missing inputs, curves,
-det built-ins, the EVE turret formula), bytecode (pinned encoding, verifier rejections,
-30,000-mutant fuzz) and the shared corpus: 10 files, 1,612 cases (441 of them compile errors),
-2,356 evaluations including 1,050 FMA-sensitive vectors, and 1,171 bytecode hashes.
+`hxl_tests` (27 test cases): compiler (precedence, every diagnostic with its position, limits and
+the deepest programs within them, arity messages), VM semantics (IEEE edge cases, laziness, missing
+inputs, curves, det built-ins, the EVE turret formula), bytecode (pinned encoding, verifier
+rejections, the stack bound at exactly 256 slots, a 30,000-mutant fuzz whose accepted count and
+hash are pinned to the same values in Go) and the shared corpus: 10 files, 1,619 cases (446 of them
+compile errors), 2,358 evaluations including 1,050 FMA-sensitive vectors, and 1,173 bytecode hashes.
+`hxl_tests_stack` runs the deepest programs under `ulimit -s 256` (see "Safety and cost").
 
 ## Known limitations
 
@@ -122,4 +124,5 @@ Plan-Rev: 6
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
 `docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked against 06 §1.2 in WP-0.19's review
-on 2026-09-26. No conformance delta is open; see §5.10.4 (c) there.
+on 2026-09-26. No D7 conformance delta is open (§5.10.4 (c)), meaning no plan change since Plan-Rev 6
+contradicts this code. GP-1's open items are listed in `services/pkg/hxl/README.md` and 09 §8.1.

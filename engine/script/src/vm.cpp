@@ -1,6 +1,6 @@
 // ScriptVm core: creation and sandboxing, the tagged/capped allocator, fuel metering through the
-// interrupt callback, kill semantics, error extraction with stack traces, and modules (require,
-// instantiation, hot reload).
+// VM's inline fuel counter and the interrupt callback, kill semantics, error extraction with stack
+// traces, and modules (require, instantiation, hot reload).
 
 #include <algorithm>
 #include <cstring>
@@ -10,6 +10,12 @@
 
 #include "helios/core/assert.h"
 #include "vm_state.h"
+
+// Fuel metering needs the vendored Luau patches (third_party/luau/patches, listed in
+// third_party/MANIFEST.md; rebased on every Luau bump). `lint_vendor_patches` checks all of them.
+#if !defined(LUA_FUELCOUNTER)
+#error "engine/script needs Luau with the vendored fuel-counter patch (third_party/luau/patches)"
+#endif
 
 namespace helios::script {
 
@@ -103,8 +109,6 @@ std::string ScriptError::toString() const {
 
 namespace detail {
 
-thread_local RunContext* t_activeRun = nullptr;
-
 namespace {
 
 // ---------------------------------------------------------------------------------------------
@@ -153,25 +157,37 @@ void* luauAlloc(void* ud, void* ptr, size_t osize, size_t nsize) {
     return block;
 }
 
-// Every VM safepoint with gc < 0 costs one fuel. The callback never yields (02 §7.4): it either
-// returns or raises the (sticky) kill.
+// Every VM safepoint with gc < 0 costs one fuel. The VM counts them itself (the vendored
+// `fuel-counter` patch): it decrements an inline counter armed with the fuel left until the next
+// decision point (kill, soft budget, wall-clock read) and calls this only when the counter reaches
+// zero, so the per-safepoint cost is a decrement and a branch instead of a call (RT-13's <= 10 %).
+// The callback never yields (02 §7.4): it either returns or raises the (sticky) kill.
 void luauInterrupt(lua_State* L, int gc) {
-    RunContext* run = t_activeRun;
+    VmState* s = stateOf(L);
+    RunContext* run = s->run;
     if (gc >= 0) {
         // GC-step invocations are not safepoints (04 §10.2): no fuel, and never raise here. But a
         // GC step means the script allocated, and one large allocation (a multi-MB concat or
         // string.upper) can take longer than the whole wall budget while costing a single
         // safepoint, so the periodic clock read (every kWallCheckInterval fuel) could land far past
-        // the 20 ms backstop. Force a clock read at the next real safepoint instead.
-        if (run && run->nextWallCheck != kNoLimit && !run->killed && run->vm == stateOf(L)) {
+        // the 20 ms backstop. Force a clock read at the next real safepoint instead: re-armed at
+        // distance 0, the counter takes the slow path there.
+        if (run && run->armed && run->nextWallCheck != kNoLimit && !run->killed) {
+            run->fuel = s->fuelOf(*run);
             run->nextWallCheck = run->fuel;
             run->nextCheck = run->fuel;
+            s->armCounter(*run);
         }
         return;
     }
-    if (!run) return; // host-side setup: unmetered
-    if (++run->fuel < run->nextCheck) return;
-    run->vm->chargeSlow(L, *run, 1);
+    if (!run || !run->armed) { // host-side setup: unmetered
+        *s->fuelCounter = static_cast<i64>(kMaxCounterDistance);
+        return;
+    }
+    // The counter reached zero at this safepoint, the armedDistance-th since it was armed (the first
+    // when it was armed at 0, i.e. due).
+    run->fuel = run->armedFuel + std::max<u64>(run->armedDistance, 1);
+    s->chargeSlow(L, *run, 1);
 }
 
 struct ProtectCall {
@@ -271,10 +287,11 @@ MemcatScope::~MemcatScope() {
 }
 
 RunScope::RunScope(VmState& s, u32 module) noexcept
-    : m_state(s), m_prev(s.run), m_prevActive(t_activeRun), m_prevMemcat(s.activeMemcat) {
+    : m_state(s), m_prev(s.run), m_prevMemcat(s.activeMemcat) {
+    if (m_prev) s.disarmCounter(*m_prev); // the VM counter belongs to the active run only
     s.beginRun(m_run, TaskHandle{}, module, 0, nullptr);
     s.run = &m_run;
-    t_activeRun = &m_run;
+    s.armCounter(m_run);
     // Top-level runs execute on the main thread: attribute their allocations to the module.
     const u8 memcat = module < s.modules.size() ? s.modules[module]->memcat : 0;
     lua_setmemcat(s.mainL, memcat);
@@ -282,8 +299,9 @@ RunScope::RunScope(VmState& s, u32 module) noexcept
 }
 
 RunScope::~RunScope() {
+    m_state.disarmCounter(m_run);
     m_state.run = m_prev;
-    t_activeRun = m_prevActive;
+    if (m_prev) m_state.armCounter(*m_prev);
     lua_setmemcat(m_state.mainL, m_prevMemcat);
     m_state.activeMemcat = m_prevMemcat;
 }
@@ -298,7 +316,6 @@ bool VmState::hasWallLimits() const noexcept {
 
 void VmState::beginRun(RunContext& r, TaskHandle task, u32 module, u64 owner, lua_State* thread) {
     r = RunContext{};
-    r.vm = this;
     r.task = task;
     r.module = module;
     r.owner = owner;
@@ -325,10 +342,12 @@ void VmState::updateNextCheck(RunContext& r) noexcept {
         r.killed ? 0 : std::min({r.killFuel, r.nextWallCheck, r.overBudget ? kNoLimit : r.softFuel});
 }
 
-// Slow path of a charge (the fuel is already added): sticky kill, fuel_kill, soft budget, wall.
+// Slow path of a charge or safepoint (the fuel is already added): sticky kill, fuel_kill, soft
+// budget, wall. Every exit re-arms the VM counter, including the raising ones.
 void VmState::chargeSlow(lua_State* L, RunContext& r, u64 fuel) {
     if (r.killed) {
         r.fuel -= std::min(fuel, r.fuel); // a killed run spends nothing more
+        armCounter(r);                    // at distance 0 (nextCheck is 0 once killed)
         raiseKill(L, r);                  // sticky: every later safepoint and charge raises again
     }
     if (r.fuel >= r.killFuel) {
@@ -341,8 +360,10 @@ void VmState::chargeSlow(lua_State* L, RunContext& r, u64 fuel) {
     if (!r.overBudget && r.fuel >= r.softFuel) markOverBudget(r);
     if (r.fuel >= r.nextWallCheck) wallCheck(L, r);
     updateNextCheck(r);
+    armCounter(r);
 }
 
+// Reads the clock (r.fuel must be current) and re-arms the counter.
 void VmState::wallCheck(lua_State* L, RunContext& r) {
     if (r.nextWallCheck == kNoLimit) return;
     r.nextWallCheck = r.fuel + kWallCheckInterval;
@@ -351,6 +372,7 @@ void VmState::wallCheck(lua_State* L, RunContext& r) {
     if (t >= r.wallKillAt) kill(L, r, KillReason::WallBudget);
     if (!r.overBudget && t >= r.wallSoftAt) markOverBudget(r);
     updateNextCheck(r);
+    armCounter(r);
 }
 
 void VmState::markOverBudget(RunContext& r) {
@@ -370,6 +392,7 @@ void VmState::kill(lua_State* L, RunContext& r, KillReason reason) {
     r.killed = true;
     r.killReason = reason;
     r.nextCheck = 0;
+    armCounter(r); // due: the next safepoint or charge takes the slow path and raises again
     ++stats.killsByReason[static_cast<usize>(reason)];
     raiseKill(L, r);
 }
@@ -390,8 +413,11 @@ int VmState::invokeBinding(lua_State* L, BindingInfo& info) {
     RunContext* r = run;
     if (r) {
         const u64 items = info.cost.itemsArg > 0 ? itemsOfArg(L, info.cost.itemsArg) : 0;
-        chargeRun(L, *r, info.cost.charge(items));          // before any side effect
-        if (r->nextWallCheck != kNoLimit) wallCheck(L, *r); // bindings may be slow: always read the clock
+        chargeRun(L, *r, info.cost.charge(items)); // before any side effect
+        if (r->nextWallCheck != kNoLimit) {        // bindings may be slow: always read the clock
+            r->fuel = fuelOf(*r);
+            wallCheck(L, *r);
+        }
     }
     struct BindingScope {
         VmState& s;
@@ -589,6 +615,10 @@ void VmState::collectAfterOom() {
 }
 
 Result<void> VmState::finishTopLevel(RunContext& r, u32 module, bool failed, ScriptError& err) {
+    if (r.armed) { // still the active run (RunScope releases the counter afterwards)
+        r.fuel = fuelOf(r);
+        armCounter(r);
+    }
     ++stats.resumes;
     stats.fuelTotal += r.fuel;
     if (allocFailures != r.allocFailuresAtStart) collectAfterOom();
@@ -668,6 +698,9 @@ Result<std::unique_ptr<ScriptVm>> ScriptVm::create(const VmConfig& config, const
     lua_Callbacks* callbacks = lua_callbacks(L);
     callbacks->userdata = newState.get();
     callbacks->interrupt = &detail::luauInterrupt;
+    // No run is active: host-side setup runs unmetered and never reaches the interrupt at gc < 0.
+    newState->fuelCounter = lua_fuelcounter(L);
+    *newState->fuelCounter = static_cast<i64>(detail::kMaxCounterDistance);
     lua_setthreaddata(L, &newState->taskThreadMarker); // scripts may never resume the main thread
     if (config.enableNativeCodegen && luau_codegen_supported()) {
         luau_codegen_create(L);

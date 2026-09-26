@@ -639,6 +639,17 @@ typedef struct lua_Callbacks lua_Callbacks;
 
 LUA_API lua_Callbacks* lua_callbacks(lua_State* L);
 
+/* Helios patch fuel-counter: an inline counter in front of the gc < 0 `interrupt` calls.
+ * Every safepoint that would call interrupt(L, -1) (loop back edges, calls, returns and pattern-matcher
+ * steps, in the interpreter and in native code) first decrements the counter, and calls interrupt only
+ * when the result is <= 0, after resetting the counter to 0. A host that arms the counter with the
+ * number of safepoints until its next decision is called only then; a host that never writes it keeps
+ * the per-safepoint calls. The counter is shared between all coroutines of the state and is written
+ * by the thread that runs the VM (interrupt may re-arm it). A host that arms it and sets interrupt from
+ * another thread to stop a script must also store 0 into the counter, or the stop waits for it */
+#define LUA_FUELCOUNTER 1
+LUA_API int64_t* lua_fuelcounter(lua_State* L);
+
 // Must be called after lua_newstate and before the state creates any buffers
 // The VM makes no assumptions about the layout or structure of the caged heap
 // The VM does assume that the embedder will free any memory allocated if the lua_State the cage is associated with is closed

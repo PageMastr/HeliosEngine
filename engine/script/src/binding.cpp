@@ -273,7 +273,7 @@ void chargeFuel(lua_State* L, u64 fuel) {
 
 u64 currentFuel(lua_State* L) noexcept {
     const VmState* s = stateOf(L);
-    return s->run ? s->run->fuel : 0;
+    return s->run ? s->fuelOf(*s->run) : 0;
 }
 
 TaskId currentTask(lua_State* L) noexcept {

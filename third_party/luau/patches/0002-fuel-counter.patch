@@ -1,0 +1,249 @@
+Helios patch 0002 fuel-counter (Luau 0.739; 02 §7.4, 04 §10.2; WP-0.10r, K39)
+
+Helios charges one fuel per gc < 0 `interrupt` safepoint (loop back edges, calls, returns, pattern-matcher
+steps). Calling the host's interrupt at every safepoint cost 12-17 % of script time against RT-13's
+<= 10 %. This patch puts an inline counter (global_State::fuelcounter, reached through the new
+lua_fuelcounter) in front of every gc < 0 interrupt call, in the interpreter (VM_INTERRUPT), the pattern
+matcher and native code (x64 and A64 INTERRUPT lowering and the shared interrupt helper): the safepoint
+decrements the counter and calls interrupt only when the result is <= 0, after resetting it to 0. The host
+arms the counter with the fuel left until its next decision point (kill, soft budget, wall-clock read), so
+it is called only there and counts exactly the same fuel. The counter starts at 0, so a host that never
+arms it keeps stock behaviour (interrupt at every safepoint). GC-step interrupts (gc >= 0) are unchanged.
+The host can also subtract charges from the counter (binding and builtin fuel costs).
+
+Upstream status: not submitted. Rebase on every Luau bump (K10): every caller of cb.interrupt with
+gc < 0 must go through the counter. Licence: MIT (Helios, like Luau).
+
+diff --git a/CodeGen/src/CodeGenA64.cpp b/CodeGen/src/CodeGenA64.cpp
+index 89e2bb4..4d10c8d 100644
+--- a/CodeGen/src/CodeGenA64.cpp
++++ b/CodeGen/src/CodeGenA64.cpp
+@@ -72,6 +72,8 @@ static void emitInterrupt(AssemblyBuilderA64& build)
+ 
+     // Load interrupt handler; it may be nullptr in case the update raced with the check before we got here
+     build.ldr(x2, mem(rState, offsetof(lua_State, global)));
++    // Helios patch fuel-counter: the inline counter reached zero or below; reset it to zero as the VM does
++    build.str(xzr, mem(x2, offsetof(global_State, fuelcounter)));
+     build.ldr(x2, mem(x2, offsetof(global_State, cb.interrupt)));
+     build.cbz(x2, skip);
+ 
+diff --git a/CodeGen/src/CodeGenUtils.cpp b/CodeGen/src/CodeGenUtils.cpp
+index d180e72..a05ee21 100644
+--- a/CodeGen/src/CodeGenUtils.cpp
++++ b/CodeGen/src/CodeGenUtils.cpp
+@@ -46,16 +46,21 @@ LUAU_FASTFLAG(LuauPromoteProto)
+ #define VM_PATCH_C(pc, slot) *const_cast<Instruction*>(pc) = ((uint8_t(slot) << 24) | (0x00ffffffu & *(pc)))
+ #define VM_PATCH_E(pc, slot) *const_cast<Instruction*>(pc) = ((uint32_t(slot) << 8) | (0x000000ffu & *(pc)))
+ 
++/* Helios patch fuel-counter: the interrupt runs only when the inline counter reaches zero (see lua_fuelcounter) */
+ #define VM_INTERRUPT() \
+     { \
+-        void (*interrupt)(lua_State*, int) = L->global->cb.interrupt; \
+-        if (LUAU_UNLIKELY(!!interrupt)) \
+-        { /* the interrupt hook is called right before we advance pc */ \
+-            VM_PROTECT(L->ci->savedpc++; interrupt(L, -1)); \
+-            if (L->status != 0) \
+-            { \
+-                L->ci->savedpc--; \
+-                return NULL; \
++        if (LUAU_UNLIKELY(--L->global->fuelcounter <= 0)) \
++        { \
++            L->global->fuelcounter = 0; \
++            void (*interrupt)(lua_State*, int) = L->global->cb.interrupt; \
++            if (interrupt) \
++            { /* the interrupt hook is called right before we advance pc */ \
++                VM_PROTECT(L->ci->savedpc++; interrupt(L, -1)); \
++                if (L->status != 0) \
++                { \
++                    L->ci->savedpc--; \
++                    return NULL; \
++                } \
+             } \
+         } \
+     }
+diff --git a/CodeGen/src/EmitCommonX64.cpp b/CodeGen/src/EmitCommonX64.cpp
+index 1e84d9f..fbb0f6b 100644
+--- a/CodeGen/src/EmitCommonX64.cpp
++++ b/CodeGen/src/EmitCommonX64.cpp
+@@ -390,6 +390,8 @@ void emitInterrupt(AssemblyBuilderX64& build)
+ 
+     // Load interrupt handler; it may be nullptr in case the update raced with the check before we got here
+     build.mov(rax, qword[rState + offsetof(lua_State, global)]);
++    // Helios patch fuel-counter: the inline counter reached zero or below; reset it to zero as the VM does
++    build.mov(qword[rax + offsetof(global_State, fuelcounter)], 0);
+     build.mov(rax, qword[rax + offsetof(global_State, cb.interrupt)]);
+     build.test(rax, rax);
+     build.jcc(ConditionX64::Zero, skip);
+diff --git a/CodeGen/src/IrLoweringA64.cpp b/CodeGen/src/IrLoweringA64.cpp
+index 13b23d4..62b2b7c 100644
+--- a/CodeGen/src/IrLoweringA64.cpp
++++ b/CodeGen/src/IrLoweringA64.cpp
+@@ -2821,8 +2821,12 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
+ 
+         Label self;
+ 
+-        build.ldr(x0, mem(rGlobalState, offsetof(global_State, cb.interrupt)));
+-        build.cbnz(x0, self);
++        // Helios patch fuel-counter: decrement the inline counter; the handler runs only when it reaches zero
++        build.ldr(x0, mem(rGlobalState, offsetof(global_State, fuelcounter)));
++        build.sub(x0, x0, uint16_t(1));
++        build.str(x0, mem(rGlobalState, offsetof(global_State, fuelcounter)));
++        build.cmp(x0, uint16_t(0));
++        build.b(ConditionA64::LessEqual, self);
+ 
+         Label next = build.setLabel();
+ 
+diff --git a/CodeGen/src/IrLoweringX64.cpp b/CodeGen/src/IrLoweringX64.cpp
+index 5ccd80c..bda7b0a 100644
+--- a/CodeGen/src/IrLoweringX64.cpp
++++ b/CodeGen/src/IrLoweringX64.cpp
+@@ -2608,9 +2608,10 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
+ 
+         Label self;
+ 
++        // Helios patch fuel-counter: decrement the inline counter; the handler runs only when it reaches zero
+         build.mov(tmp.reg, qword[rState + offsetof(lua_State, global)]);
+-        build.cmp(qword[tmp.reg + offsetof(global_State, cb.interrupt)], 0);
+-        build.jcc(ConditionX64::NotEqual, self);
++        build.sub(qword[tmp.reg + offsetof(global_State, fuelcounter)], 1);
++        build.jcc(ConditionX64::LessEqual, self);
+ 
+         Label next = build.setLabel();
+ 
+diff --git a/VM/include/lua.h b/VM/include/lua.h
+index ed6f1a0..8fabc32 100644
+--- a/VM/include/lua.h
++++ b/VM/include/lua.h
+@@ -639,6 +639,17 @@ typedef struct lua_Callbacks lua_Callbacks;
+ 
+ LUA_API lua_Callbacks* lua_callbacks(lua_State* L);
+ 
++/* Helios patch fuel-counter: an inline counter in front of the gc < 0 `interrupt` calls.
++ * Every safepoint that would call interrupt(L, -1) (loop back edges, calls, returns and pattern-matcher
++ * steps, in the interpreter and in native code) first decrements the counter, and calls interrupt only
++ * when the result is <= 0, after resetting the counter to 0. A host that arms the counter with the
++ * number of safepoints until its next decision is called only then; a host that never writes it keeps
++ * the per-safepoint calls. The counter is shared between all coroutines of the state and is written
++ * by the thread that runs the VM (interrupt may re-arm it). A host that arms it and sets interrupt from
++ * another thread to stop a script must also store 0 into the counter, or the stop waits for it */
++#define LUA_FUELCOUNTER 1
++LUA_API int64_t* lua_fuelcounter(lua_State* L);
++
+ // Must be called after lua_newstate and before the state creates any buffers
+ // The VM makes no assumptions about the layout or structure of the caged heap
+ // The VM does assume that the embedder will free any memory allocated if the lua_State the cage is associated with is closed
+diff --git a/VM/src/lapi.cpp b/VM/src/lapi.cpp
+index 7af229b..c7c4149 100644
+--- a/VM/src/lapi.cpp
++++ b/VM/src/lapi.cpp
+@@ -2165,6 +2165,12 @@ lua_Callbacks* lua_callbacks(lua_State* L)
+     return &L->global->cb;
+ }
+ 
++// Helios patch fuel-counter
++int64_t* lua_fuelcounter(lua_State* L)
++{
++    return &L->global->fuelcounter;
++}
++
+ void lua_setmemcat(lua_State* L, int category)
+ {
+     api_check(L, unsigned(category) < LUA_MEMORY_CATEGORIES);
+diff --git a/VM/src/lstate.cpp b/VM/src/lstate.cpp
+index 366344f..7cae6f1 100644
+--- a/VM/src/lstate.cpp
++++ b/VM/src/lstate.cpp
+@@ -247,6 +247,7 @@ lua_State* lua_newstate(lua_Alloc allocator, void* ud)
+         g->gcstepsize = LUAI_GCSTEPSIZE << 10;
+ 
+         g->cb = lua_Callbacks();
++        g->fuelcounter = 0; // Helios patch fuel-counter
+         g->ecb = lua_ExecutionCallbacks();
+         g->gcstats = GCStats();
+ 
+@@ -361,6 +362,7 @@ lua_State* lua_newstate(lua_Alloc allocator, void* ud)
+         g->memcatbytes[0] = sizeof(LG);
+ 
+         g->cb = lua_Callbacks();
++        g->fuelcounter = 0; // Helios patch fuel-counter
+ 
+         g->ecb = lua_ExecutionCallbacks();
+ 
+diff --git a/VM/src/lstate.h b/VM/src/lstate.h
+index cde8536..2f5a4b1 100644
+--- a/VM/src/lstate.h
++++ b/VM/src/lstate.h
+@@ -236,6 +236,8 @@ typedef struct global_State
+     uint64_t rngstate; // PCG random number generator state
+     uint64_t ptrenckey[4]; // pointer encoding key for display (remove when unreferenced)
+ 
++    int64_t fuelcounter; // Helios patch fuel-counter: safepoints left before interrupt(L, -1) is called (see lua_fuelcounter)
++
+     lua_Callbacks cb;
+ 
+     lua_ExecutionCallbacks ecb;
+diff --git a/VM/src/lstrlib.cpp b/VM/src/lstrlib.cpp
+index 3ac5aff..e5cbc3a 100644
+--- a/VM/src/lstrlib.cpp
++++ b/VM/src/lstrlib.cpp
+@@ -431,14 +431,20 @@ static const char* match(MatchState* ms, const char* s, const char* p)
+         luaL_error(ms->L, "pattern too complex");
+ 
+     lua_State* L = ms->L;
+-    void (*interrupt)(lua_State*, int) = L->global->cb.interrupt;
+ 
+-    if (LUAU_UNLIKELY(!!interrupt))
++    // Helios patch fuel-counter: the interrupt runs only when the inline counter reaches zero (see lua_fuelcounter)
++    if (LUAU_UNLIKELY(--L->global->fuelcounter <= 0))
+     {
+-        // this interrupt is not yieldable
+-        L->nCcalls++;
+-        interrupt(L, -1);
+-        L->nCcalls--;
++        L->global->fuelcounter = 0;
++        void (*interrupt)(lua_State*, int) = L->global->cb.interrupt;
++
++        if (interrupt)
++        {
++            // this interrupt is not yieldable
++            L->nCcalls++;
++            interrupt(L, -1);
++            L->nCcalls--;
++        }
+     }
+ 
+ init: // using goto's to optimize tail recursion
+diff --git a/VM/src/lvmexecute.cpp b/VM/src/lvmexecute.cpp
+index 5c573d5..2a17245 100644
+--- a/VM/src/lvmexecute.cpp
++++ b/VM/src/lvmexecute.cpp
+@@ -93,16 +93,21 @@ LUAU_FASTFLAGVARIABLE(LuauFastpcallInterrupt)
+ #define VM_PATCH_AUX(pc, slot) *const_cast<Instruction*>(pc) = uint32_t(slot)
+ #define VM_PATCH_AUX_SLOT(pc, k, slot) *const_cast<Instruction*>(pc) = ((k) | (uint32_t(slot) << 16))
+ 
++/* Helios patch fuel-counter: the interrupt runs only when the inline counter reaches zero (see lua_fuelcounter) */
+ #define VM_INTERRUPT() \
+     { \
+-        void (*interrupt)(lua_State*, int) = L->global->cb.interrupt; \
+-        if (LUAU_UNLIKELY(!!interrupt)) \
+-        { /* the interrupt hook is called right before we advance pc */ \
+-            VM_PROTECT(L->ci->savedpc++; interrupt(L, -1)); \
+-            if (L->status != 0) \
+-            { \
+-                L->ci->savedpc--; \
+-                goto exit; \
++        if (LUAU_UNLIKELY(--L->global->fuelcounter <= 0)) \
++        { \
++            L->global->fuelcounter = 0; \
++            void (*interrupt)(lua_State*, int) = L->global->cb.interrupt; \
++            if (interrupt) \
++            { /* the interrupt hook is called right before we advance pc */ \
++                VM_PROTECT(L->ci->savedpc++; interrupt(L, -1)); \
++                if (L->status != 0) \
++                { \
++                    L->ci->savedpc--; \
++                    goto exit; \
++                } \
+             } \
+         } \
+     }

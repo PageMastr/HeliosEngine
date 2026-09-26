@@ -15,12 +15,12 @@
 // `collectgarbage`, which Luau 0.739 lacks) are removed and `setmetatable` rejects `__mode`, so GC
 // timing stays unobservable.
 //
-// Budgets (FuelBudget): fuel is counted by the interrupt callback at every gc < 0 safepoint and by
-// binding charges. The interrupt NEVER yields: past the soft budget the resume is flagged and an
-// explicit task.checkpoint() yields; at the hard budget the resume is killed with a sticky error
-// that pcall cannot swallow (every later safepoint and binding call raises again). The scheduler
-// then closes the coroutine (lua_resetthread). Three kills of a module within 60 s of zone time
-// disable it.
+// Budgets (FuelBudget): fuel is counted at every gc < 0 safepoint (by the VM's inline fuel counter,
+// which calls the host only at its next decision point) and by binding charges. The interrupt NEVER
+// yields: past the soft budget the resume is flagged and an explicit task.checkpoint() yields; at
+// the hard budget the resume is killed with a sticky error that pcall cannot swallow (every later
+// safepoint and binding call raises again). The scheduler then closes the coroutine
+// (lua_resetthread). Three kills of a module within 60 s of zone time disable it.
 //
 // Threading: a ScriptVm is owned by one job at a time. It is not thread-safe; every member must
 // be called by the current owner, never concurrently (checked by an assert in development

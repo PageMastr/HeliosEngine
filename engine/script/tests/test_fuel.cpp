@@ -1,13 +1,16 @@
 // Fuel metering and kills (RT-13): runaway kill at fuel_kill, sticky kills that pcall cannot
 // swallow, kills inside a metamethod, a table.sort comparator and C++→Luau callbacks (unwinding
 // through RAII with no lock held and the VM usable afterwards), no involuntary yields,
-// task.checkpoint, the lane bound, binding and builtin charges, wall budgets and the three-kills rule.
+// task.checkpoint, the lane bound, binding and builtin charges, wall budgets and the three-kills
+// rule, and the inline fuel counter (the host runs only at decision points, with exact fuel).
 
 #include <algorithm>
 #include <mutex>
 
 #include "helios/core/time.h"
+#include "luacodegen.h"
 #include "script_test_util.h"
+#include "vm_state.h"
 
 using namespace helios;
 using namespace helios::script;
@@ -92,6 +95,59 @@ u64 totalYields(const VmStats& s) {
     for (u64 y : s.yieldsByReason) n += y;
     return n;
 }
+
+// Counts the host's gc < 0 interrupt calls by forwarding to the VM's own callback (white-box).
+void (*g_hostInterrupt)(lua_State*, int) = nullptr;
+u64 g_hostCalls = 0;
+
+void countHostCalls(lua_State* L, int gc) {
+    if (gc < 0) ++g_hostCalls;
+    g_hostInterrupt(L, gc);
+}
+
+void instrumentInterrupt(ScriptVm& vm) {
+    lua_Callbacks* cb = lua_callbacks(vm.state());
+    g_hostInterrupt = cb->interrupt;
+    cb->interrupt = &countHostCalls;
+    g_hostCalls = 0;
+}
+
+u64 g_safepoints = 0;
+
+void countSafepoints(lua_State*, int gc) {
+    if (gc < 0) ++g_safepoints;
+}
+
+// Safepoints (gc < 0 interrupts) of `source` in a plain Luau state, counted one call at a time.
+u64 rawSafepoints(const char* source, bool native) {
+    const auto bc = compile(source, {}, "raw");
+    REQUIRE(bc.ok());
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+    if (native) luau_codegen_create(L);
+    lua_callbacks(L)->interrupt = &countSafepoints; // counter left at 0: called at every safepoint
+    REQUIRE(luau_load(L, "raw", (*bc)->data.data(), (*bc)->data.size(), 0) == 0);
+    if (native) luau_codegen_compile(L, -1);
+    g_safepoints = 0;
+    REQUIRE(lua_pcall(L, 0, 0, 0) == LUA_OK);
+    lua_close(L);
+    return g_safepoints;
+}
+
+// Only safepoints (no library calls, so no binding or builtin charges and no allocation).
+constexpr const char* kSafepointsOnly = R"(
+    local function f(n) if n < 2 then return n end return f(n - 1) + f(n - 2) end
+    local acc = f(14)
+    for i = 1, 300 do
+        for j = 1, 10 do
+            if j == 6 then break end
+            acc += j
+        end
+    end
+    local n = 0
+    while n < 20000 do n += 1 end
+    acc += n
+)";
 
 } // namespace
 
@@ -657,4 +713,79 @@ TEST_CASE("fuel: every resume pays resumeCost, so trivial resumes cannot flood t
     CHECK(ts.resumed <= b.fuelPerTick / b.resumeCost + 1);
     CHECK(ts.deferred > 0);
     CHECK(ts.fuel >= static_cast<u64>(ts.resumed) * b.resumeCost);
+}
+
+TEST_CASE("fuel: the inline counter counts exactly what per-safepoint counting did") {
+    // Fuel = gc < 0 safepoints + resumeCost, as when the host was called at every safepoint (the
+    // golden counts in test_determinism pin the same for charged builtins). Interpreter and native.
+    for (const bool native : {false, true}) {
+        if (native && !luau_codegen_supported()) continue;
+        CAPTURE(native);
+        const u64 safepoints = rawSafepoints(kSafepointsOnly, native);
+        VmConfig c = Harness::defaultConfig();
+        c.budget.fuelPerResume = 0;
+        c.budget.fuelKill = 0;
+        if (native) c.profile = HostProfile::Editor; // cells refuse codegen
+        c.enableNativeCodegen = native;
+        Harness h(c);
+        ModuleOptions options;
+        options.native = native;
+        h.load("safepoints", kSafepointsOnly, options);
+        const TaskId id = h.spawn("safepoints");
+        h.step();
+        const RecordedEvent* done = h.eventFor(id, ScriptEventKind::TaskFinished);
+        REQUIRE(done != nullptr);
+        CHECK(done->fuel == safepoints + c.budget.resumeCost);
+    }
+}
+
+TEST_CASE("fuel: the host runs only at decision points (inline fuel counter)") {
+    const u64 safepoints = rawSafepoints(kSafepointsOnly, false);
+    REQUIRE(safepoints > 20'000);
+    SUBCASE("no limits: the host is never called") {
+        VmConfig c = Harness::defaultConfig();
+        c.budget.fuelPerResume = 0;
+        c.budget.fuelKill = 0;
+        Harness h(c);
+        instrumentInterrupt(*h.vm);
+        h.expectRuns("free", kSafepointsOnly);
+        CHECK(g_hostCalls == 0);
+        // No run is active: the counter is parked out of reach.
+        CHECK(*lua_fuelcounter(h.vm->state()) ==
+              static_cast<i64>(helios::script::detail::kMaxCounterDistance));
+    }
+    SUBCASE("soft budget and kill: one call each, at the exact fuel") {
+        VmConfig c = Harness::defaultConfig();
+        c.budget.fuelPerResume = 1'000;
+        c.budget.fuelKill = 5'000;
+        Harness h(c);
+        instrumentInterrupt(*h.vm);
+        const TaskId id = h.run("capped", kSafepointsOnly);
+        h.step();
+        const RecordedEvent& e = requireKilled(h, id);
+        CHECK(e.fuel == 5'000);
+        const RecordedEvent* over = h.last(ScriptEventKind::OverBudget);
+        REQUIRE(over != nullptr);
+        CHECK(over->fuel == 1'000);
+        CHECK(g_hostCalls == 2);
+    }
+    SUBCASE("wall limits: one call per clock read (every 64 fuel)") {
+        VmConfig c = Harness::defaultConfig();
+        c.profile = HostProfile::Client;
+        c.budget = FuelBudget::client();
+        c.budget.wallKillNanos = 0; // a slow CI machine must not kill the run
+        c.budget.wallBackstopNanos = 0;
+        c.budget.wallPerTickNanos = 0;
+        Harness h(c);
+        instrumentInterrupt(*h.vm);
+        const TaskId id = h.run("walled", kSafepointsOnly);
+        h.step();
+        const RecordedEvent* done = h.eventFor(id, ScriptEventKind::TaskFinished);
+        REQUIRE(done != nullptr);
+        CHECK(done->fuel == safepoints + c.budget.resumeCost);
+        // One call per clock read; a GC step may force an early read, which restarts the cadence.
+        const u64 reads = safepoints / helios::script::detail::kWallCheckInterval;
+        CHECK(g_hostCalls + 8 >= reads);
+        CHECK(g_hostCalls <= reads + 8);
+    }
 }

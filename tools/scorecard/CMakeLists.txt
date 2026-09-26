@@ -3,13 +3,16 @@
 #                            with graphics against this build's CTest and doctest inventory (so a renamed
 #                            or deleted test that the scorecard cites fails the PR);
 #   lint_scorecard_unittest  the checker's seeded-fixture tests.
-# Python 3 is optional: without it the tests are not registered.
+# Python 3.10+ is optional locally (the tests are not registered without it) and required in CI.
 if(NOT HELIOS_BUILD_TESTS)
   return()
 endif()
-find_package(Python3 COMPONENTS Interpreter QUIET)
+find_package(Python3 3.10 COMPONENTS Interpreter QUIET)
+if(NOT Python3_Interpreter_FOUND AND DEFINED ENV{CI})
+  message(FATAL_ERROR "scorecard: Python 3.10+ is required in CI (lint_scorecard would silently disappear)")
+endif()
 if(NOT Python3_Interpreter_FOUND)
-  message(STATUS "tools/scorecard: Python 3 not found; lint_scorecard is not registered")
+  message(STATUS "tools/scorecard: Python 3.10+ not found; lint_scorecard is not registered")
   return()
 endif()
 

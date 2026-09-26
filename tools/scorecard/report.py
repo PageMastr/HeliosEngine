@@ -165,9 +165,11 @@ def eval_ref(ref: dict, os_name: str, entry: dict, data: dict, runs: list[Result
             why = "package failed" if not hit and hits else ""
         else:  # gate
             gate = r.gates.get(ref["gate"])
-            need = (data.get("gates") or {}).get(ref["gate"], {}).get("min_seconds", 0)
+            need = ((data.get("gates") or {}).get(ref["gate"]) or {}).get("min_seconds")
             hits = []
-            if gate:
+            if gate and not (scorecard.is_int(need) and need > 0):  # never a silent 0: the check rejects it too
+                hits, why = ["fail"], "the gate declares no positive min_seconds"
+            elif gate:
                 short = gate[0] == "pass" and gate[1] < need
                 hits = ["fail" if short else gate[0]]
                 why = f"ran {gate[1]:.0f} s of the required {need} s" if short else ""

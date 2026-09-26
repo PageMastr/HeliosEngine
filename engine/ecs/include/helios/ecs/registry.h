@@ -131,8 +131,6 @@ public:
     bool isLive(NetHandle handle) const noexcept { return liveSlot(handle) != nullptr; }
     /// Handle currently issued for slot `index` (invalid if the slot is free).
     NetHandle handleAt(u32 index) const noexcept;
-    /// Fetches the cache line of `handle`'s slot (a release or lookup soon after hits it).
-    void prefetch(NetHandle handle) const noexcept;
 
     u32 liveCount() const noexcept { return m_live; }
     u32 reservedCount() const noexcept { return m_reserved; }
@@ -230,8 +228,6 @@ public:
 
     Entity find(EntityId id) const noexcept;
     Entity find(NetHandle handle) const noexcept { return Entity(m_handles.ownerOf(handle)); }
-    /// Hints that `handle` will be released soon (fetches its slot's cache line).
-    void prefetchHandle(NetHandle handle) const noexcept { m_handles.prefetch(handle); }
     EntityId resolve(NetHandle handle) const noexcept { return m_handles.resolve(handle); }
     bool contains(EntityId id) const noexcept { return find(id).isValid(); }
 

@@ -386,6 +386,7 @@ private:
     void removeIdAlive(Entity e, ComponentId id);
     void setRawAlive(Entity e, ComponentId id, const void* value, usize size);
     u32 destroyRun(CommandBuffer& buffer, u32 first);
+    u32 componentRun(CommandBuffer& buffer, u32 first);
     void unregisterSubtree(Entity e);
     void unregisterOne(const ::ecs_record_t* r);
     inline bool mayHostDockRefs(Entity e) const noexcept; // (world.cpp)

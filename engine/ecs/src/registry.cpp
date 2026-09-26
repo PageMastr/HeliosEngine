@@ -285,10 +285,6 @@ void NetHandleTable::growRing() {
     m_freeRing.resize(std::max<usize>(64, m_freeRing.size() * 2));
 }
 
-void NetHandleTable::prefetch(NetHandle handle) const noexcept {
-    if (handle.index() < m_slots.size()) detail::prefetch(&m_slots[handle.index()]);
-}
-
 NetHandle NetHandleTable::handleAt(u32 index) const noexcept {
     if (index == 0 || index >= m_slots.size() || !m_slots[index].id.isValid()) return NetHandle();
     return NetHandle::make(index, m_generations[index]);

@@ -122,6 +122,10 @@ void clearDirtyMasks(std::byte* mask, usize stride, u32 count) noexcept {
 
 constexpr ComponentFlags kNotInTable = ComponentFlags::Sparse | ComponentFlags::DontFragment;
 
+constexpr bool isComponentOp(CommandKind k) noexcept {
+    return k == CommandKind::Add || k == CommandKind::Remove || k == CommandKind::Set;
+}
+
 // The per-command structural ops inline their small helpers (log append, lookups) whole: the
 // command loop runs them thousands of times per sync point.
 #if defined(HELIOS_COMPILER_GCC) || defined(HELIOS_COMPILER_CLANG)
@@ -896,7 +900,7 @@ void World::unregisterOne(const ecs_record_t* r) {
     m_log.push_back(StructuralEvent{ni->id, 0, ni->handle, StructuralOp::Destroy});
 }
 
-u32 World::destroyRun(CommandBuffer& buffer, u32 first) {
+HELIOS_ECS_FLATTEN u32 World::destroyRun(CommandBuffer& buffer, u32 first) {
     // Consecutive Destroy commands (ADR-004a item 3) in passes over the run: find the live targets,
     // fetch their identity rows, release the identities and log the Destroy events, then let flecs
     // delete the entities back to back. Each pass keeps the command order; only a run's registry
@@ -910,6 +914,7 @@ u32 World::destroyRun(CommandBuffer& buffer, u32 first) {
     const u32 n = static_cast<u32>(cmds.size());
     std::vector<Impl::PendingDestroy>& run = impl.destroyRun;
     run.clear();
+    const bool dockRefs = m_desc.relations.docking == DockStorage::Field && !impl.dockIndex.empty();
     u32 end = first;
     for (; end < n && cmds[end].kind == CommandKind::Destroy; ++end) {
         const EntityRef ref = cmds[end].target;
@@ -920,7 +925,7 @@ u32 World::destroyRun(CommandBuffer& buffer, u32 first) {
             continue;
         }
         const ecs_record_t* r = ecs_record_find(m_flecs, fe(e));
-        if (isPairTarget(r) || mayHostDockRefs(e)) break;
+        if (isPairTarget(r) || (dockRefs && impl.mayHostDocks(e.id))) break;
         const NetIdentity* ni = netIdentityAt(m_flecs, m_netIdentityId, r);
         if (!ni) break;
         detail::prefetch(ni);
@@ -928,10 +933,6 @@ u32 World::destroyRun(CommandBuffer& buffer, u32 first) {
     }
     usize count = run.size();
     for (usize k = 0; k < count; ++k) {
-        // The NetHandle slots are scattered (FIFO issue order): fetch a few releases ahead.
-        if (constexpr usize kAhead = 8; k + kAhead < count && run[k + kAhead].entity != 0) {
-            m_registry.prefetchHandle(run[k + kAhead].identity->handle);
-        }
         const Impl::PendingDestroy& d = run[k];
         if (d.entity == 0) {
             ++impl.discarded;
@@ -951,6 +952,31 @@ u32 World::destroyRun(CommandBuffer& buffer, u32 first) {
         ++impl.structuralOps;
     }
     return end;
+}
+
+HELIOS_ECS_FLATTEN u32 World::componentRun(CommandBuffer& buffer, u32 first) {
+    // Consecutive Add, Remove and Set commands on existing entities (the toggles of a sync point):
+    // applyOne()'s liveness check and dispatch in one tight loop, with the per-op paths inlined.
+    Impl& impl = *m_impl;
+    const CommandBuffer::Command* cmds = buffer.m_commands.data();
+    const u32 n = static_cast<u32>(buffer.m_commands.size());
+    u32 i = first;
+    for (; i < n; ++i) {
+        const CommandBuffer::Command& cmd = cmds[i];
+        if (!isComponentOp(cmd.kind) || cmd.target.isTemp()) break;
+        const Entity e = cmd.target.entity();
+        // Component id 0 comes from a type that was not registered (asserted at record time).
+        if (!e || cmd.arg == 0 || !ecs_is_alive(m_flecs, fe(e))) {
+            ++impl.discarded;
+            continue;
+        }
+        switch (cmd.kind) {
+        case CommandKind::Add: addIdAlive(e, cmd.arg); break;
+        case CommandKind::Remove: removeIdAlive(e, cmd.arg); break;
+        default: setRawAlive(e, cmd.arg, cmd.payload, cmd.payloadSize); break;
+        }
+    }
+    return i;
 }
 
 void World::destroy(Entity e) {
@@ -1647,6 +1673,10 @@ void World::applyOne(CommandBuffer& buffer) {
                 continue;
             }
             // Command i destroys a pair target, DockRef host or an entity without identity: below.
+        }
+        if (isComponentOp(cmd.kind) && !cmd.target.isTemp()) {
+            i = componentRun(buffer, i) - 1; // commands [i, returned) are applied
+            continue;
         }
         const Entity target = resolve(cmd.target);
         // flecs recycles ids with a new generation, so a stale Entity is never "alive". Component id

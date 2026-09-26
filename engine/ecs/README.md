@@ -198,7 +198,9 @@ children fragmentation, staggered `once`, frame/host destruction in the log, com
 collisions, id-0 commands). WP-1.1a's structural fast paths are pinned by `test_structural_ops.cpp`
 (a digest of a scripted workload over every structural command kind in four relation configurations,
 recorded with the World before WP-1.1a) and `test_bulk_paths.cpp` (spawnN against the same spawn +
-set commands, `allocateN`, the paged registry under churn, fusion runs, the dock-host filter).
+set commands, `allocateN` and batched NetHandle issue against one call per id, the paged registry
+under churn and its handle releases, destroy runs against one destroy at a time, Sparse/DontFragment
+ownership, fusion runs, the dock-host filter).
 
 ```
 cmake -S . -B build/ecs -G Ninja -DHELIOS_BUILD_GRAPHICS=OFF
@@ -215,18 +217,27 @@ indicator M1 needs a release build with asserts off, the `linux-bench` preset:
 cmake --preset linux-bench && cmake --build --preset linux-bench
 ./build/linux-bench/bin/ecs_bench --no-spikes                  # RT-01 verdict and "ADR-004a M1"
 ./build/linux-bench/bin/ecs_bench --no-spikes --per-command-creates   # burst creates as spawn() + set()
+./build/linux-bench/bin/ecs_bench --no-spikes --legacy-burst   # the pre-WP-1.1a burst, bugs included
 cmake -DECS_BENCH=build/linux-bench/bin/ecs_bench -P engine/ecs/bench/callgrind_burst.cmake
 ```
 
-`--m1-gate` makes the exit code the M1 verdict. Results are in SPIKES.md §3 (Phase 0) and §5 (WP-1.1a).
+`--m1-gate` makes the exit code the M1 verdict and `--rounds` prints every measured burst. Results are in
+SPIKES.md §3 (Phase 0) and §5 (WP-1.1a).
 
 ## Known limitations
 
-* ADR-004a's indicator M1 (World burst / raw-flecs burst, ≤ 1.6×) is not met on the dev VM after
-  WP-1.1a: 2.05× (worst configuration, median of 7 runs; 1.33× and 1.43× in instructions; 1.94× with
-  Clang). The 9k-op burst takes 1.44–1.77 ms per configuration there (1.04–1.06 ms with Clang), against
-  the 1.5 ms of RT-01's structural clause,
-  whose formal run is on SERVER (ADR-004a M2). SPIKES.md §5 has the numbers and the analysis.
+* ADR-004a's indicator M1 (World burst / raw-flecs burst, ≤ 1.6×) is met on the dev VM on the median
+  of runs, without much margin: 1.54× with GCC and 1.59× with Clang (worst configuration and toggle
+  storage per run, medians of 9 runs; single runs up to 1.73× and 1.80×; 1.24–1.30× in instructions).
+  With per-command creates instead of `spawnN` it is 2.3–2.8×. The 9k-op burst takes 1.26–1.27 ms per
+  configuration there (0.96–0.98 ms with Clang), against the 1.5 ms of RT-01's structural clause, whose
+  formal run is on SERVER (ADR-004a M2). SPIKES.md §5 has the numbers and where the rest goes.
+* Sparse and DontFragment ownership checks call `flecs_component_sparse_has`, a flecs 4.1.6 internal
+  declared in `src/flecs_internal.h`; a flecs update must re-check it.
+* Observed with flecs 4.1.6 on the raw C API: once `ecs_remove_id` of a DontFragment *tag* has run on
+  an entity that lacked it, later removes of that tag from entities of the same table leave it in
+  place. DontFragment components with a value (the zone's Status) are not affected. Prefer those until
+  it is reported and fixed upstream (K10).
 * Toggles move one entity at a time: flecs 4.1.6 has no public bulk move (SPIKES.md §5.6).
 * No schema compiler yet: replicated components are hand-written with `_dirty` +
   `kReplicatedFields`; the runtime descriptor path is ready for reflection `TypeInfo`.

@@ -33,9 +33,9 @@ namespace {
 
 using State = detail::AsyncReadState;
 
-// The request whose onComplete is running on this thread. Its result is already stored, so here (and
-// only here) it counts as ready before its counter is released: take()/bytesRead() inside the callback
-// must not wait for the callback itself.
+// The request whose onComplete is running (or being destroyed) on this thread. Its result is already
+// stored, so here (and only here) it counts as ready before its counter is released: take()/bytesRead()
+// inside the callback must not wait for the callback itself.
 constinit thread_local const State* t_completing = nullptr;
 
 // True once the result may be read on this thread: the request is complete, or we are inside its
@@ -71,8 +71,8 @@ void finish(const std::shared_ptr<State>& st) {
             AsyncRead handle(st);
             onComplete(handle);
         }
+        onComplete = nullptr; // captures die before the request completes (still "inside" it)
         t_completing = outer;
-        onComplete = nullptr; // captures die before the request completes
     }
     st->counter.decrement();
 }

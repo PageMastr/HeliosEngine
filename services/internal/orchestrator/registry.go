@@ -25,6 +25,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/PageMastr/scifi-test/services/internal/platform"
 	"github.com/PageMastr/scifi-test/services/pkg/clock"
 	"github.com/PageMastr/scifi-test/services/pkg/idgen"
 	"github.com/PageMastr/scifi-test/services/pkg/rpc"
@@ -64,12 +65,12 @@ type FailureDomain struct {
 // Input bounds for registrations and heartbeats (hostile or broken clients must not grow the
 // registry without limit).
 const (
-	MaxFDLabel      = 64  // az, rack
-	MaxFDHost       = 255 // a DNS name
-	MaxHeldRegions  = 256 // regions a heartbeat's report keeps, and regions one process is placed (a v1 zone has up to 64)
-	maxZones        = 256 // zones one cell may declare
-	maxZoneName     = 64  // bytes per declared zone name
-	maxProcessField = 255 // address, version
+	MaxFDLabel      = 64                   // az, rack
+	MaxFDHost       = 255                  // a DNS name
+	MaxHeldRegions  = 256                  // regions a heartbeat's report keeps, and regions one process is placed (a v1 zone has up to 64)
+	maxZones        = 256                  // zones one cell may declare
+	maxZoneName     = platform.MaxZoneName // bytes per declared zone name
+	maxProcessField = 255                  // address, version
 )
 
 // HeldRegion is a region a process holds and the lease generation it holds it under, as its
@@ -187,6 +188,7 @@ type Registry struct {
 type metrics struct {
 	processes     *prometheus.GaugeVec
 	zonesAssigned prometheus.Gauge
+	zonesUnplaced prometheus.Gauge
 	registrations *prometheus.CounterVec
 	ended         *prometheus.CounterVec
 	assignments   prometheus.Counter
@@ -199,6 +201,8 @@ func newMetrics(reg prometheus.Registerer) *metrics {
 			Help: "Live registered processes by kind."}, []string{"kind"}),
 		zonesAssigned: prometheus.NewGauge(prometheus.GaugeOpts{Name: "helios_orchestrator_zones_assigned",
 			Help: "Zones currently placed on a live cell."}),
+		zonesUnplaced: prometheus.NewGauge(prometheus.GaugeOpts{Name: "helios_orchestrator_zones_unplaced",
+			Help: "Zones with no live cell: none is registered for them, or every candidate holds MaxHeldRegions."}),
 		registrations: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "helios_orchestrator_registrations_total",
 			Help: "Process registrations by kind."}, []string{"kind"}),
 		ended: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "helios_orchestrator_processes_ended_total",
@@ -209,7 +213,7 @@ func newMetrics(reg prometheus.Registerer) *metrics {
 			Help: "Held-region entries a heartbeat reported that were not recorded (invalid, duplicate or over the cap)."}),
 	}
 	if reg != nil {
-		reg.MustRegister(m.processes, m.zonesAssigned, m.registrations, m.ended, m.assignments, m.heldDropped)
+		reg.MustRegister(m.processes, m.zonesAssigned, m.zonesUnplaced, m.registrations, m.ended, m.assignments, m.heldDropped)
 	}
 	return m
 }
@@ -457,9 +461,11 @@ type HeartbeatResult struct {
 
 // Heartbeat renews a lease and records the regions the process says it holds. A heartbeat that
 // arrives after the lease lapsed is refused: the zones may already have moved, so the holder is
-// told lease_lost and registers again. The held report never blocks the renewal: Phase 0 only
-// records it, so invalid or duplicate entries and those over MaxHeldRegions are dropped (and
-// counted) rather than refused, and lease_lost always wins over a bad report.
+// told lease_lost and registers again. A well-formed held report never blocks the renewal: Phase
+// 0 only records it, so invalid or duplicate entries and those over MaxHeldRegions are dropped
+// (and counted) rather than refused, and lease_lost always wins over a bad report. A report that
+// does not decode (a region that is not a decimal string, say) is refused by the transport before
+// Heartbeat runs, so senders must encode it as the contract vectors do.
 func (r *Registry) Heartbeat(ctx context.Context, id, epoch int64, load Load, held ...HeldRegion) (*HeartbeatResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -486,20 +492,25 @@ func (r *Registry) Heartbeat(ctx context.Context, id, epoch int64, load Load, he
 	return &HeartbeatResult{LeaseExpires: p.LeaseExpires, Assignments: r.assignmentsLocked(id), Mode: ModeNormal}, nil
 }
 
-// sanitizeHeld keeps the valid, distinct entries of a held report (at most MaxHeldRegions, by
-// region) and returns how many it dropped.
+// sanitizeHeld keeps the valid entries of a held report (region > 0, leaseGen >= 0), one per
+// region (the highest generation reported), at most MaxHeldRegions of them (the lowest region
+// IDs), sorted by region; the result does not depend on the report's order. It also returns how
+// many entries it dropped.
 func sanitizeHeld(held []HeldRegion) ([]HeldRegion, int) {
-	out := make([]HeldRegion, 0, min(len(held), MaxHeldRegions))
-	seen := make(map[int64]bool, len(out))
+	out := make([]HeldRegion, 0, len(held))
 	for _, h := range held {
-		if h.Region <= 0 || h.LeaseGen < 0 || seen[h.Region] || len(out) == MaxHeldRegions {
-			continue
+		if h.Region > 0 && h.LeaseGen >= 0 {
+			out = append(out, h)
 		}
-		seen[h.Region] = true
-		out = append(out, h)
 	}
-	slices.SortFunc(out, func(a, b HeldRegion) int { return cmp.Compare(a.Region, b.Region) })
-	return out, len(held) - len(out)
+	slices.SortFunc(out, func(a, b HeldRegion) int {
+		return cmp.Or(cmp.Compare(a.Region, b.Region), cmp.Compare(b.LeaseGen, a.LeaseGen))
+	})
+	out = slices.CompactFunc(out, func(a, b HeldRegion) bool { return a.Region == b.Region })
+	if len(out) > MaxHeldRegions {
+		out = out[:MaxHeldRegions]
+	}
+	return slices.Clip(out), len(held) - len(out)
 }
 
 // Deregister ends a registration cleanly (graceful shutdown).
@@ -651,6 +662,7 @@ func (r *Registry) updateGaugesLocked() {
 		}
 	}
 	r.m.zonesAssigned.Set(float64(assigned))
+	r.m.zonesUnplaced.Set(float64(len(r.zones) - assigned))
 }
 
 // ResolveZone answers the world-directory query by zone ID or name.
@@ -669,7 +681,7 @@ func (r *Registry) ResolveZone(zoneID int64, name string) (*Route, error) {
 	}
 	p, ok := r.procs[z.Owner]
 	if z.Owner == 0 || !ok {
-		return nil, rpc.Errorf(rpc.CodeUnavailable, "zone %s has no live cell", z.Name)
+		return nil, rpc.Errorf(rpc.CodeUnavailable, "zone %s has no live cell with capacity for it", z.Name)
 	}
 	return &Route{ZoneID: z.ID, ZoneName: z.Name, LeaseGen: z.LeaseGen, ProcessID: p.ID, Process: p.Info.Name,
 		Epoch: p.Epoch, Address: p.Info.Address}, nil

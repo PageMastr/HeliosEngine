@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -416,6 +417,9 @@ func TestRegistrationRecordsFailureDomainAndServerBuild(t *testing.T) {
 		func(p *ProcessInfo) { p.ServerBuild = -1 },
 		func(p *ProcessInfo) { p.Version = strings.Repeat("v", 256) },
 		func(p *ProcessInfo) { p.Name = "cell\x00c" },
+		func(p *ProcessInfo) { p.Host, p.FD.Host = "h\x00", "h" }, // an explicit fd.host does not hide it
+		func(p *ProcessInfo) { p.FD.Host = "h\x00" },
+		func(p *ProcessInfo) { p.Address = "127.0.0.1\x00:1" },
 		func(p *ProcessInfo) { p.FD.Rack = "r\x001" },
 		func(p *ProcessInfo) { p.Version = "1.0\x00" },
 		func(p *ProcessInfo) { p.Zones = []string{strings.Repeat("z", 65)} },
@@ -462,7 +466,7 @@ func TestHeartbeatRecordsHeldRegions(t *testing.T) {
 		t.Fatalf("oversized held list must still renew: %v", err)
 	}
 	got := f.reg.Processes()[0].Held
-	if len(got) != MaxHeldRegions || got[0] != (HeldRegion{Region: 1, LeaseGen: 1}) {
+	if len(got) != MaxHeldRegions || got[0] != (HeldRegion{Region: 1, LeaseGen: 2}) { // a duplicate keeps its highest generation
 		t.Fatalf("recorded %d entries, first %+v", len(got), got[0])
 	}
 	if d := testutil.ToFloat64(f.reg.m.heldDropped); d != float64(len(big)-MaxHeldRegions) {
@@ -493,9 +497,15 @@ func TestPlacementCapsRegionsPerCell(t *testing.T) {
 	if len(a.Assignments) != MaxHeldRegions {
 		t.Fatalf("a cell got %d regions, cap %d", len(a.Assignments), MaxHeldRegions)
 	}
+	if n := testutil.ToFloat64(f.reg.m.zonesUnplaced); n != 5 {
+		t.Fatalf("zones left unplaced by the cap: gauge %v, want 5", n)
+	}
 	b, _ := f.reg.Register(ctx, cell("cell-b"))
 	if len(b.Assignments) != 5 {
 		t.Fatalf("the rest goes to the next cell: %d", len(b.Assignments))
+	}
+	if n := testutil.ToFloat64(f.reg.m.zonesUnplaced); n != 0 {
+		t.Fatalf("unplaced gauge %v after the second cell", n)
 	}
 }
 
@@ -520,5 +530,25 @@ func TestPlacementWritesRegionLeases(t *testing.T) {
 	rs, _ = f.store.ListRegions(ctx)
 	if rs[0].Holder != b.ProcessID || rs[0].LeaseGen != 2 || b.Assignments[0].LeaseGen != 2 {
 		t.Fatalf("reassignment bumps region_lease.lease_gen: %+v", rs)
+	}
+}
+
+func TestSanitizeHeldDropsInvalidAndDuplicateEntries(t *testing.T) {
+	got, dropped := sanitizeHeld([]HeldRegion{{Region: 7, LeaseGen: 2}, {Region: 0, LeaseGen: 1},
+		{Region: 5, LeaseGen: -1}, {Region: 3, LeaseGen: 0}, {Region: 7, LeaseGen: 9}})
+	if want := []HeldRegion{{Region: 3, LeaseGen: 0}, {Region: 7, LeaseGen: 9}}; !slices.Equal(got, want) || dropped != 3 {
+		t.Fatalf("got %v, dropped %d", got, dropped)
+	}
+	// Over the cap, the lowest regions stay, whatever the order of the report.
+	var asc, desc []HeldRegion
+	for i := int64(1); i <= MaxHeldRegions+4; i++ {
+		asc = append(asc, HeldRegion{Region: i, LeaseGen: 1})
+		desc = append([]HeldRegion{{Region: i, LeaseGen: 1}}, desc...)
+	}
+	a, da := sanitizeHeld(asc)
+	d, dd := sanitizeHeld(desc)
+	if !slices.Equal(a, d) || da != 4 || dd != 4 || a[0].Region != 1 || a[len(a)-1].Region != MaxHeldRegions {
+		t.Fatalf("order-dependent: %d..%d (%d dropped) vs %d..%d (%d dropped)", a[0].Region, a[len(a)-1].Region, da,
+			d[0].Region, d[len(d)-1].Region, dd)
 	}
 }

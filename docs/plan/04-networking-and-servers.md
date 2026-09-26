@@ -1710,9 +1710,10 @@ table-order and removed-API checks to scripts. CI also runs the script corpus th
 counts**. Stock Luau 0.739 fails that: its code generator emits the numeric-`for` interrupt at the top of the
 loop body instead of in `FORNLOOP`, so every numeric `for` left by `break` or `return` costs one extra fuel in
 native code (WP-0.10 pins the case in a test). The vendored patch **`third_party/luau/patches/codegen-fornloop-fuel`**
-emits it in `FORNLOOP`, as the interpreter does (`CodeGen/src/IrTranslation.cpp`). Until that patch lands,
-cells and world-script hosts run the interpreter only, and `VmConfig` refuses native codegen on them (today it
-only warns). The `interrupt` hook's overhead must stay ≤ 10 % of script time (RT-13). WP-0.10 measured
+emits it in `FORNLOOP`, as the interpreter does (`CodeGen/src/IrTranslation.cpp`). Cells and world-script
+hosts run the interpreter only, and `VmConfig` refuses native codegen on them. The patch is the precondition
+for lifting that, and lifting it is 02 §8.1's P3 "codegen opt-in on cells" item, behind this
+interpreter-versus-native corpus run. The `interrupt` hook's overhead must stay ≤ 10 % of script time (RT-13). WP-0.10 measured
 12–17 % with the callback, so the second vendored patch, **`third_party/luau/patches/fuel-counter`** (an
 inline counter decremented at each `gc < 0` safepoint, which calls the host only when it reaches zero), is
 required rather than a fallback. Both patches, and `det-math`, are in `sim_abi.script` (§6.7); 09 names their
@@ -1787,7 +1788,7 @@ neighbours injected from the log and migrations chained by `MigratedFrom`.
 - **Phase 3:** cross-compiler (GCC-record/MSVC-replay and the reverse) and **cross-vendor** (AMD-record/
   Intel-replay and the reverse), and multi-cell zones through handoffs, co-location, migration holds and
   rejoins, NS-3.8. This needs identical fuel counts, which hold because bytecode and
-  safepoints are compiler-independent (and, once `codegen-fornloop-fuel` is in, identical in native code), and it is why Luau math, hitbox
+  safepoints are compiler-independent (and, with `codegen-fornloop-fuel`, identical in native code), and it is why Luau math, hitbox
   sampling, sorting, MXCSR and Jolt's solver order are covered above: Linux production logs replay on Windows
   dev boxes with either CPU vendor.
 

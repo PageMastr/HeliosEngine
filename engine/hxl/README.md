@@ -68,7 +68,11 @@ Bytecode jumps only forward and has no calls, so each op runs at most once and t
 `Program::cost()` bounds every evaluation (default budget `limits::kMaxCost` = 4096 units; `pow`,
 `exp`, `ln`, `asinh` cost 8, `curve` 4, input reads 2, everything else 1). Parse depth (128), tree
 depth (256), ops (4096), code size (16 KiB), constants (1024), symbols (256 per table), stack (256)
-and source size (64 KiB) are limited (`E_LIMIT`). `Program::decode()` verifies untrusted bytecode
+and source size (64 KiB) are limited (`E_LIMIT`). The parser (precedence climbing) and the code
+generator recurse once per nesting level, so those limits bound their stack: the deepest programs the
+limits admit, in every nesting shape, compile in at most 72 KiB of stack at `-O2` and 160 KiB at `-O0`
+(GCC 13 and Clang 18, measured with `ulimit -s` probes; MSVC not measured). Before WP-0.19's review
+they needed up to 512 KiB (GCC `-O2`). `Program::decode()` verifies untrusted bytecode
 completely: opcodes and operand ranges, stack depth and types at every op and jump target, forward
 jumps onto instruction boundaries, the header (result type, stack, cost) and canonical form
 (constants and symbols in first-use order, no unused or duplicate entries), so decoded programs are
@@ -94,10 +98,11 @@ corpus pins, so both compilers must emit identical bytes.
 
 ## Tests
 
-`hxl_tests`: compiler (precedence, every diagnostic with its position, limits), VM semantics (IEEE
-edge cases, laziness, missing inputs, curves, det built-ins, the EVE turret formula), bytecode
-(pinned encoding, verifier rejections, 30,000-mutant fuzz) and the shared corpus: 9 files, 406
-cases, 1,497 evaluations including 1,050 FMA-sensitive vectors and 312 bytecode hashes.
+`hxl_tests` (25 test cases): compiler (precedence, every diagnostic with its position, limits and
+the deepest programs within them), VM semantics (IEEE edge cases, laziness, missing inputs, curves,
+det built-ins, the EVE turret formula), bytecode (pinned encoding, verifier rejections,
+30,000-mutant fuzz) and the shared corpus: 10 files, 1,612 cases (441 of them compile errors),
+2,356 evaluations including 1,050 FMA-sensitive vectors, and 1,171 bytecode hashes.
 
 ## Known limitations
 
@@ -105,11 +110,13 @@ cases, 1,497 evaluations including 1,050 FMA-sensitive vectors and 312 bytecode 
   emitter); hosts compile the source with this module until then.
 - Only one level of context fields (`p.field`); no user functions or formula-to-formula calls.
 - MSVC and clang-cl are verified only in CI (09 §5.4); locally the corpus runs on GCC and Clang
-  (MinGW is compile/link only).
+  (MinGW is compile/link only). The Go side of GP-1's matrix is in
+  [`services/pkg/hxl`](../../services/pkg/hxl/README.md).
 
 ## Plan conformance
 
 Plan-Rev: 6
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
-`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.
+`docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked against 06 §1.2 in WP-0.19's review
+on 2026-09-26. No conformance delta is open; see §5.10.4 (c) there.

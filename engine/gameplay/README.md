@@ -28,10 +28,11 @@ namespace `helios::gameplay`) and Go (`services/pkg/hxl/gamedef`); the lock is
 | `items.hschema` | `ItemDef`, `ItemInstance` (`@store(ledger)`), sockets, containers, ports, decay, owner and location refs |
 | `economy.hschema` | `ReasonCodeDef`, `ReasonKind`, `FaucetCap` |
 
-Differences from 06's illustrative snippets: `AttributeDef.id` (the HXL/modifier identifier; 06 only
-has the display `name`), `ModifierDef.priority` (06's formula says "highestPriority" but the record
-had no priority), and `Name` placeholders where the referenced record type does not exist yet
-(`UnitRef`, `AbilityRef`, `SlotRef`, `InsuranceClassRef`, `LifetimePolicyRef`, plug sets).
+`AttributeDef.id` (the identifier HXL and slot constants use; the display `name` is a `LocString`)
+and `ModifierDef.priority` (which picks the `PreAssign`/`PostAssign` winner) were missing from 06's
+illustrative snippets; WP-0.19 adopted both into 06 §1.2 (`Plan-Change: 06 §1.2`). The remaining
+difference is `Name` placeholders where the referenced record type does not exist yet (`UnitRef`,
+`AbilityRef`, `SlotRef`, `InsuranceClassRef`, `LifetimePolicyRef`, plug sets).
 
 ## Tags (06 §1.1)
 
@@ -82,7 +83,8 @@ through. `S(i)` uses `helios::det::exp` and is bit-identical with HXL's
 - **Magnitudes.** Constants; live reads of another attribute of the entity (× coefficient); live HXL
   formulas over `self` (with the modifier's `stacks`/`level`). `instantiateModifier()` turns a
   `ModifierDef` into a `Modifier`, capturing curve, `Source` and `Target/Snapshot` magnitudes and
-  compiling tag requirements. Only the `Self` domain is resolved in Phase 0.
+  compiling tag requirements; a `Target/Snapshot` magnitude needs a target set of the context's layout.
+  Only the `Self` domain is resolved in Phase 0.
 - **Derived attributes** (`AttributeDef.derived`) compute the base from other attributes and tags of
   `self`; they cannot use context fields, curves, `stacks()` or `level()`.
 - **Dependencies.** Derived formulas and attribute clamps are static edges (cycles fail
@@ -96,13 +98,21 @@ through. `S(i)` uses `helios::det::exp` and is bit-identical with HXL's
   job system; the result is identical to a sequential resolve (tested).
 - NaN magnitudes disable their modifier (`nanMagnitudes()`); NaN finals are canonical.
 
-**Budgets (06 §12.2 GP-1)**, asserted in optimized builds (`test_attributes_perf.cpp`, best of N):
+**Budgets (06 §12.2 GP-1)**, asserted in optimized builds (`test_attributes_perf.cpp`, `perf:` tests,
+best of N; PR CI skips them and the nightly `linux-perf` job runs them):
 
-| Budget | Measured (GCC 13 Release, shared 4-core container) |
+| Budget | Measured (GCC 13 RelWithDebInfo, shared 4-vCPU container) |
 |---|---|
-| 300-modifier ship recompute ≤ 50 µs | ~5.5 µs |
-| one incremental change ≤ 5 µs | ~0.05 µs |
-| 10k entities × 40 attributes at 5 % dirty ≤ 1 ms on 8 workers | ~5 ms on 1 thread (asserted ≤ 8 ms = 8 workers × 1 ms), ~1.4 ms on 4 threads |
+| 300-modifier ship recompute ≤ 50 µs | ~5.4 µs |
+| one incremental change ≤ 5 µs | ~0.2 µs |
+| 10k entities × 40 attributes at 5 % dirty ≤ 1 ms on 8 workers | **Not measured yet**: ~1.35 ms on 4 threads, ~3.5 ms on 1 thread |
+
+The last test resolves on 8 threads (7 job workers plus the calling thread, which runs chunks inside
+`parallelFor`) and asserts the 1 ms budget only on a machine with at least 8 hardware threads.
+Elsewhere it resolves on min(8, cores) threads and reports the time, and asserts only a proxy, 1
+thread ≤ 8 ms, which is necessary for the budget but not sufficient (it assumes perfect scaling).
+This container and the nightly runner have fewer than 8 vCPUs, so the budget itself still needs a
+run on 8-core hardware (09 §8.1).
 
 **Determinism.** `test_attributes.cpp` builds 200 random ships (40 attributes with derived values,
 clamps and ~150 modifiers of every kind), checks each final value against an independent
@@ -139,4 +149,6 @@ different sets can be recomputed concurrently.
 Plan-Rev: 6
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
-`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.
+`docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked against 06 §1.1–1.2, §2 and §4 in
+WP-0.19's review on 2026-09-26. The two fields 06's snippets lacked are adopted there by the WP's own
+`Plan-Change: 06 §1.2`; no conformance delta is open (§5.10.4 (c)).

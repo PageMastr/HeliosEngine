@@ -8,8 +8,9 @@ both interpreters:
 
 A case passes only if the compile outcome (status code **and** position), the bytecode hash and every
 result match **bit for bit**. Both runners reject unknown keys, so a typo cannot silently skip a check.
-CI runs the Go side on `windows/amd64`, `linux/amd64` at `GOAMD64=v1` and `v3`, and `linux/arm64`, and
-the C++ side on MSVC (both toolsets), clang-cl, GCC, Clang and MinGW.
+GP-1 requires the Go side on `windows/amd64`, `linux/amd64` at `GOAMD64=v1` and `v3`, and `linux/arm64`,
+and the C++ side on MSVC (both toolsets), clang-cl, GCC and Clang (MinGW builds but does not run). CI
+covers all of these except `GOAMD64=v3` and `linux/arm64` (see `services/pkg/hxl/README.md`).
 
 ## Files
 
@@ -24,6 +25,7 @@ the C++ side on MSVC (both toolsets), clang-cl, GCC, Clang and MinGW.
 | `formulas.jsonc` | gameplay formulas from the plan (EVE turret hit chance, stacking penalties, capacitor recharge, …) |
 | `errors.jsonc` | compile errors: every status code with its position, and the limits |
 | `fma_sensitive.jsonc` | ≥ 1,000 generated vectors where fusing a multiply-add into an FMA changes the result (06 §1.2 rule 7) |
+| `differential.jsonc` | generated (`HXL_CORPUS_GEN_DIFF=1 go test ./pkg/hxl/ -run TestGenerateDifferentialCorpus`): seeded random well-typed and ill-typed programs and byte-level mutations of both, with random inputs; outcomes come from Go and C++ must reproduce them bit for bit |
 
 ## Format
 

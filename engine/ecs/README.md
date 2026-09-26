@@ -228,12 +228,12 @@ SPIKES.md §3 (Phase 0) and §5 (WP-1.1a).
 ## Known limitations
 
 * ADR-004a's indicator M1 (World burst / raw-flecs burst, ≤ 1.6×) is marginal on the dev VM and not
-  demonstrated per run. The median over runs is about 1.53× with GCC and 1.60× with Clang, and a third
-  to a half of single runs are above 1.6×. The per-configuration medians are 1.24–1.49×, and the
-  instruction ratio is 1.24–1.30×. With per-command creates instead of `spawnN`, M1 is 2.3–2.9×. The
-  9k-op burst takes 1.26–1.27 ms per configuration there (0.96–0.98 ms with Clang), against the 1.5 ms
-  of RT-01's structural clause, whose formal run is on SERVER (ADR-004a M2). SPIKES.md §5 has the
-  numbers and where the rest goes.
+  demonstrated per run. The median over runs is about 1.53× with GCC and 1.57–1.60× with Clang. About a
+  quarter of single GCC runs and nearly half of single Clang runs are above 1.6×. The per-configuration
+  medians are 1.24–1.49×, and the instruction ratio is 1.24–1.30×. With per-command creates instead of
+  `spawnN`, M1 is 2.3–2.9×. The 9k-op burst takes 1.26–1.27 ms per configuration there (0.96–0.98 ms
+  with Clang), against the 1.5 ms of RT-01's structural clause, whose formal run is on SERVER (ADR-004a
+  M2). SPIKES.md §5 has the numbers and where the rest goes.
 * Sparse and DontFragment ownership checks call `flecs_component_sparse_has`, a flecs 4.1.6 internal
   declared in `src/flecs_internal.h`. A `static_assert` on the flecs version makes a flecs update
   re-check it.

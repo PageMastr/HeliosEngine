@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **Open.** Opened 2026-09-25, in the round-5 minor revisions. Decision so far: option A, time-boxed, re-evaluated at the Phase 1 RT-01 gate. WP-1.1a brought M1 to about 1.53× (GCC) and 1.60× (Clang) as medians over runs on the shared dev VM, against ≤ 1.6×: marginal, and not demonstrated per run (§7). It recorded M5 |
+| **Status** | **Open.** Opened 2026-09-25, in the round-5 minor revisions. Decision so far: option A, time-boxed, re-evaluated at the Phase 1 RT-01 gate. WP-1.1a brought M1 to about 1.53× (GCC) and 1.57–1.60× (Clang) as medians over runs on the shared dev VM, against ≤ 1.6×: marginal, and not demonstrated per run (§7). It recorded M5 |
 | **Amends** | [ADR-004](../plan/00-decisions.md#adr-004-entity-model--reflection): "A custom ECS is the fallback only if the Phase 1 50k-entity zone benchmark fails". ADR-004 stands unchanged while this ADR is open |
 | **Trigger** | Risk K2 ([09 §7](../plan/09-roadmap-and-process.md#7-risk-register)) fired. Its trigger is a pre-bench above 2× the budget, and WP-0.6's acceptance opens this ADR in that case |
 | **Owner** | Runtime lead. The work is WP-1.1a ([09 §2.2](../plan/09-roadmap-and-process.md#22-phase-1--first-light)), and WP-1.1 runs the formal RT-01 gate |
@@ -206,23 +206,26 @@ on the corrected one); `--legacy-burst` keeps the old burst runnable. The burst'
 `spawnN()` batch per frame, which is item 4's path for homogeneous spawns; the per-command form is
 reported next to it.
 
-Two series of interleaved runs, each a full `ecs_bench --no-spikes` run, measured M1 as `ecs_bench`
+Three series of interleaved runs, each a full `ecs_bench --no-spikes` run, measured M1 as `ecs_bench`
 prints it: per run, the worst of 0/1/2/4 workers and both toggle storages. The PR's series has 9 runs of
-each binary (load 0.3–2.2). The first review's series has 31 runs per compiler (load 1.2–3.8).
+each binary (load 0.3–2.2). The first review's series has 31 runs per compiler (load 1.2–3.8). A third
+series ran after the review's fixes, with 15 runs per compiler (load 1.6–2.9).
 
 | | Before WP-1.1a (GCC) | spawnN creates, GCC | spawnN creates, Clang | Per-command creates, GCC / Clang |
 |---|---|---|---|---|
 | **M1 per run, median over runs [min–max]**, PR series | 3.98× [3.71–4.65] | 1.54× [1.48–1.73] | 1.59× [1.51–1.80] | 2.33× / 2.81× (5 runs) |
 | **the same, review series** | — | 1.53× [1.41–3.90] | 1.60× [1.42–3.91] | 2.34× / 2.91× (5 runs) |
-| **runs with M1 above 1.6×** (PR / review series) | all | 2 of 9 / 9 of 31 | 4 of 9 / 15 of 31 | all |
+| **the same, after the review's fixes** | — | 1.53× [1.42–1.80] | 1.57× [1.49–2.09] | — |
+| **runs with M1 above 1.6×** (PR / review / after-fixes series) | all | 2 of 9 / 9 of 31 / 2 of 15 | 4 of 9 / 15 of 31 / 5 of 15 | all |
 | M1 per configuration, tag / DontFragment (medians, PR series) | 3.1–3.3× / 3.6–3.8× | 1.28–1.32× / 1.40–1.47× | 1.24–1.32× / 1.38–1.49× | 1.9–2.0× / 2.1–2.2× (GCC) |
 | Callgrind beside it (tag / DontFragment toggles) | 2.52× / 2.58× | 1.24× / 1.29× | 1.29× / 1.30× | 1.65× / 1.69× (GCC), 2.02× / 2.03× (Clang) |
 | 9k-op burst on the VM, per configuration (budget 1.5 ms) | 2.9–3.3 ms | 1.26–1.27 ms | 0.96–0.98 ms | 1.7–1.9 ms (GCC) |
 | Same ops on raw flecs | 0.94–0.98 ms | 0.96–0.99 ms | 0.75–0.79 ms | 0.94–0.99 ms (GCC) |
 
 **M1 is marginal and not demonstrated per run on the shared VM.** The ADR defines M1 per run and no
-statistic over runs. Per run, M1 fails in about a third of the GCC runs and about half of the Clang
-runs. As a median over runs it is about 1.53× with GCC and 1.60× with Clang, which is at the threshold.
+statistic over runs. Per run, M1 fails in about a quarter of the GCC runs (13 of 55 over the three
+series) and in nearly half of the Clang runs (24 of 55). As a median over runs it is about 1.53× with GCC
+and 1.57–1.60× with Clang, which is at the threshold.
 Each run's M1 is the worst of eight noisy ratios, so it sits above the per-configuration medians
 (1.24–1.49×) and above the instruction ratio (1.24–1.30×), both of which are below 1.6×. DontFragment
 storage decides it: its raw toggles are cheap, so the World's create and destroy bookkeeping weighs

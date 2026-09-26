@@ -394,7 +394,7 @@ add fewer than 20 tables (`test_regressions.cpp`).
 
 WP-1.1a ran in two rounds. The first (commits up to 56497b5) missed M1 at 2.05×. The second fixed two
 more bench asymmetries (§5.3) and cut the per-command overhead further, bringing M1 to about 1.53×
-(GCC) and 1.60× (Clang) as medians over runs. Against ≤ 1.6× that is marginal, and per run, as the ADR
+(GCC) and 1.57–1.60× (Clang) as medians over runs. Against ≤ 1.6× that is marginal, and per run, as the ADR
 defines M1, it is not demonstrated on the shared VM (§5.8). The numbers in §5.4 are the second round's.
 
 ### 5.1 What changed
@@ -553,6 +553,12 @@ compiler, load 1.2–3.8. It found M1 per run at 1.53× [1.41–3.90] with GCC a
 Clang (medians [min–max]), above 1.6× in 9 of 31 GCC runs and 15 of 31 Clang runs. With per-command
 creates it found 2.34× and 2.91×. In the runs at a load below 2 the medians were 1.51× and 1.56×.
 
+After the review's fixes (§5.9, the log reserves, the raw creates' type lookup), a third series ran 15
+interleaved runs per compiler of the new binaries and of the previous head's, at load 1.6–2.9. It found
+M1 at 1.53× [1.42–1.80] with GCC and 1.57× [1.49–2.09] with Clang, above 1.6× in 2 of 15 and 5 of 15
+runs. The previous head, in the same runs, measured 1.52× and 1.55×, so the fixes moved M1 by no more
+than the noise. The state hash stayed `e099e42eb09fc124`.
+
 `spawnN` is the like-for-like form for this burst: the creates are homogeneous, and the raw floor has
 always been one bulk insert per frame table. But nothing in the tree calls `spawnN` yet outside the
 bench and the tests, and the zone's own `WeaponFire` still records its projectiles per command, so a
@@ -636,10 +642,10 @@ against 1,250. Revisit it if flecs makes non-fragmenting pair changes cheaper or
 * **M1 is marginal and not demonstrated per run on the shared VM.** The ADR defines M1 per run: the
   worst of 0/1/2/4 workers and both toggle storages, in the same run, in a release build. It defines
   no statistic over runs.
-  * Per run it fails in 2 of 9 GCC runs and 4 of 9 Clang runs of the PR's series, and in 9 of 31 and 15
-    of 31 of the review's series.
-  * As a median over runs it is 1.54× and 1.59× in the PR's series and 1.53× and 1.60× in the review's,
-    against ≤ 1.6× and 3.98× before WP-1.1a.
+  * Per run it fails in 2 of 9 GCC runs and 4 of 9 Clang runs of the PR's series, in 9 of 31 and 15
+    of 31 of the review's series, and in 2 of 15 and 5 of 15 after the review's fixes.
+  * As a median over runs it is 1.54× and 1.59× in the PR's series, 1.53× and 1.60× in the review's,
+    and 1.53× and 1.57× after the fixes, against ≤ 1.6× and 3.98× before WP-1.1a.
   * The per-configuration medians are 1.24–1.32× with tag toggles and 1.38–1.49× with DontFragment
     toggles. In instructions the World burst is 1.24–1.30× the raw-flecs burst.
   * The per-run value is the worst of eight noisy ratios, which is why it sits above both.

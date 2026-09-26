@@ -224,6 +224,26 @@ class MergePolicyTests(unittest.TestCase):
             merge_policy.landed_commits(after, self.run_git("rev-parse", "HEAD"),
                                         self.checkout)
 
+    def test_force_push_that_drops_previous_head_is_violation(self):
+        dropped = self.commit("dropped", "Dropped main head")
+        self.run_git("reset", "-q", "--hard", self.before)
+        after = self.commit("rewritten", "Rewritten main head")
+        # A full checkout fetches commits reachable from refs, not the dropped head.
+        self.run_git("reflog", "expire", "--expire=now", "--all")
+        self.run_git("gc", "-q", "--prune=now")
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.run_git("cat-file", "-e", f"{dropped}^{{commit}}")
+        event = {**self.event(after), "before": dropped, "forced": True}
+        with patch.object(merge_policy, "api_get") as get:
+            with self.assertViolation("forced; its history was rewritten"):
+                merge_policy.audit(event, "owner/repo", self.checkout, "test-token")
+        get.assert_not_called()
+
+    def test_git_failure_is_unverified(self):
+        after = self.commit("next", "Next")
+        with self.assertRaisesRegex(merge_policy.VerificationError, "git rev-list failed"):
+            merge_policy.git("rev-list", "--no-such-option", after, checkout=self.checkout)
+
     def test_audit_rejects_direct_push_without_associated_pr(self):
         after = self.commit("next", "Next")
         with patch.object(merge_policy, "api_get", return_value=[]) as get, \
@@ -300,11 +320,13 @@ class MergePolicyTests(unittest.TestCase):
                 raise http.client.IncompleteRead(b"[", 10)
 
         dropped = http.client.RemoteDisconnected("Remote end closed connection without response")
+        failures = [dropped, TimeoutError("read timed out"), io.BytesIO(b"[]")]
         with patch.object(merge_policy.urllib.request, "urlopen",
-                          side_effect=[dropped, TimeoutError("read timed out"), io.BytesIO(b"[]")]) as open_url, \
-                patch.object(merge_policy.time, "sleep"):
+                          side_effect=failures) as open_url, \
+                patch.object(merge_policy.time, "sleep") as sleep:
             self.assertEqual(merge_policy.api_get("repos/owner/repo/pulls/7", "t"), [])
         self.assertEqual(open_url.call_count, 3)
+        self.assertEqual(sleep.call_args_list, [call(1), call(2)])
         for failure in (dropped, ConnectionResetError(104, "reset"), Truncated(b"")):
             with self.subTest(failure=type(failure).__name__):
                 with patch.object(merge_policy.urllib.request, "urlopen", side_effect=[failure] * 3), \

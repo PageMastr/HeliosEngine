@@ -194,7 +194,9 @@ def merged_pr(repository: str, after: str, token: str) -> dict:
 
 def all_pr_commits(repository: str, number: int, expected_count: int, token: str) -> list[dict]:
     if expected_count > 250:
-        raise VerificationError(f"PR #{number} has {expected_count} commits; GitHub's PR API caps this at 250")
+        raise VerificationError(
+            f"PR #{number} has {expected_count} commits; GitHub's PR API caps this at 250"
+        )
     found = []
     for page in range(1, 4):
         data = api_get(f"repos/{repository}/pulls/{number}/commits?per_page=100&page={page}", token)
@@ -220,6 +222,8 @@ def audit(event: dict, repository: str, checkout: Path, token: str) -> str:
         raise PolicyError("push event has an invalid before or after SHA")
     if not token:
         raise PolicyError("GITHUB_TOKEN is required to inspect the merged PR")
+    if event.get("forced"):
+        raise PolicyError("push to main was forced; its history was rewritten")
     landed = landed_commits(before, after, checkout)
     pr = merged_pr(repository, after, token)
     number = pr["number"]

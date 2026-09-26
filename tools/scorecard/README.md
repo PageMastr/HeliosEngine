@@ -52,7 +52,12 @@ into annotations.
   run (with their `//go:build integration` constraint) and against the inventory's `go` section when it
   has one (the nightly's). `gate` references must be declared and run on the reference's platforms.
   `ci_job` names must be jobs of `.github/workflows/ci.yml` (matrix names expanded); a missing ci.yml is
-  a finding.
+  a finding. Every declared run and gate must be produced by `.github/workflows/nightly.yml`.
+- **Perf metrics.** Each has one source (a gate, or a doctest binary and case, named exactly), a pattern with
+  exactly one group, a unit, `better` (`lower` or `higher`) and a budget category. Every doctest source must
+  exist in each inventory of its run's OS (every OS without a `run`), whether or not the metric names a
+  criterion. `perf_accept` records name a declared metric, a valid `night`, a declared `run` if any, and a
+  `reason`.
 
 ## Entry format
 
@@ -106,6 +111,80 @@ accepted in either.
 **Gaps** are clauses without a passing test: `state` is `unmeasured` (no test yet) or `failing` (measured
 and red), with the `owner` WP. `pinned_by` names a test that pins a known divergence (such a test
 *passes* while the clause fails), so it is never evidence of a pass. An entry with a gap is never green.
+
+## The nightly report
+
+`.github/workflows/nightly.yml` builds and tests on Linux (GCC, Clang, ASan/UBSan), Windows (VS 2026, VS 2022,
+clang-cl) and Go (Linux, Windows), runs `net_bench --gate` on GCC and VS 2026, and runs each engine/net fuzz
+target under libFuzzer for 1 h (NS-0.4). Each job uploads a result set; the `scorecard` job evaluates them:
+
+```
+python3 tools/scorecard/runners.py doctest --build-dir B [--config C] [--perf] --out R/doctest   # per-case XML
+python3 tools/scorecard/runners.py gate --name net_bench_gate --build-dir B --out R/gates -- net_bench --gate
+python3 tools/scorecard/report.py --results results --ci-jobs ci-jobs.json --previous last/scorecard-report.json \
+        [--scheduled] --out scorecard-report.json --markdown scorecard.md
+python3 tools/scorecard/perf.py extract --results results --sha SHA --out perf-entry.json
+python3 tools/scorecard/perf.py compare --entry perf-entry.json --history last/perf-history.json --out perf-history.json
+```
+
+A result set is a directory with `run.json` (`{"run": "<a declared run>"}`) and any of `ctest*.xml`
+(`ctest --output-junit`), `doctest/<binary>[.perf].xml` with its `.status.json`, `go*.json` (`go test -json`)
+and `gates/<gate>.xml`. The runner uses the working directory, environment and timeout that CTest would. A
+doctest binary whose XML is unreadable (a crash) fails every case it cites. So does one that exits non-zero
+although every case passed (a sanitizer report at exit).
+
+- **Per criterion.** On each platform, a reference passes when it has results in the runs that count for it
+  and none failed. A missing result or a skip is *unmeasured*. A gate that ran shorter than its
+  `min_seconds` fails, and so does a gate without one. The criterion passes when every reference passes on
+  every platform and it has no gap.
+  A broken pin (a `pinned_by` test that now fails) is reported so that the registry is updated.
+- **Green (09 §5.6).** The report keeps a streak per criterion from last night's report: consecutive passing
+  *scheduled* nightlies. A manual run never extends it, and a failure resets it. A scheduled report more than
+  36 h after the previous scheduled one restarts every streak, because the night in between left no report
+  (the report says so). N and H criteria are green at 3 and W at 2; an M record is green once it exists.
+  09 §5.6's further W rule ("the latest within 14 days of the exit streak") is not enforced yet; no Phase 0
+  criterion is W. The summary gives the green fraction of the phase, the 60 % part of the round score (§5.7).
+  It is written to the job summary and the `scorecard-report` artifact.
+- **Perf history (09 §5.8).** `perf_metrics` name the numbers the perf gates print (a regex over a doctest
+  case's MESSAGE lines or a gate's output; the case by its exact name). `compare` fails a gated metric that
+  is worse by more than its category's budget (render and runtime 5 %, 02 §8.3 for runtime benchmarks;
+  backend, editor and iteration 10 %) than either of two levels:
+  - the **rolling baseline**, the median of its last 5 values that were not regressions. It catches a step,
+    ignores one noisy night, and follows any change it does not flag;
+  - the **anchor**, which does not follow: the median of the metric's first 5 clean values, or the value of
+    the night a `perf_accept` record accepts. Drift the rolling baseline follows fails once it is over
+    budget against the anchor: a creep of 1.5 % a night at the 5 % budget fails on its 4th night, 3 % a
+    night at 10 % also on its 4th, and two sub-budget steps of 4 % fail together (all tested). Only the
+    worse direction counts, so an improvement leaves the anchor where it was; a later return to the old
+    level is judged by the rolling baseline.
+
+  Every verdict, rolling baseline and anchor is stored in the history and carried forward, so a
+  regression nobody fixes fails every night, including after its last clean night leaves the 60-night
+  history; a metric reads `new` only on its first night, and a history that has the metric but no usable
+  level fails (`no-baseline`). Only a reviewed `perf_accept` record in `scorecard.jsonc` moves the levels:
+  `{"metric": "<id>", "night": "YYYY-MM-DD", "value": <number>, "run": "<optional run>", "reason": "…"}`.
+  `night` is the UTC date of the nightly (the perf summary prints it at the top) and cannot be in the
+  future; `value` is what the reviewer saw that night measure. When the stored value of that night (or
+  tonight's, when `night` is tonight) is within the metric's budget of `value`, it becomes the anchor and
+  starts the rolling baseline; when that night has no stored value for the metric or measured something
+  else, the metric fails as `accept-unmatched` until the record is corrected. The latest record in force
+  wins, and a `run` may be named only when the metric is read from that run or from every run. A declared
+  gated metric that had a value and stops being produced (a renamed case, a changed message) is `missing`
+  every night until it comes back or the registry drops the metric, drops its run or moves it to another
+  run; a declared metric that has never produced a value is listed as `never measured`, not failed (the
+  PR tier's source check is what catches a wrong case name). Wall times of every `perf:` case are recorded
+  but not gated. The history is the `perf-history` artifact (90-day retention), fetched from the newest
+  earlier nightly that has one, separately from the report; after the first night the perf step fails
+  (`compare --require-history`) when no history can be fetched, rather than reset every level. Hosted
+  runners are noisy, and the binding per-commit measurements move to the fixed runner and the lab (WP-0.4).
+- **Expected red today.** `pcg_tests_perf` fails by design (K5b, armed by WP-0.9c's red outcome; 09 §8.1),
+  so the GCC job's perf step is red every night, and `script_tests` is reported to abort under `linux-asan`
+  (a mimalloc use-after-poison that predates the nightly; see #9). Both are real results, reported as such;
+  look for anything else first.
+
+The scorecard job also checks the registry against tonight's inventories, Go tests included. It uses the
+workflow's read-only token to read the previous nightly's artifacts and the jobs of the latest `ci.yml` run
+on `main` (for `ci_job` references). The workflow uses no secret and has no write permission.
 
 ## Adding or changing a criterion
 

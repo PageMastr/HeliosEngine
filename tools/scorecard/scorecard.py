@@ -25,6 +25,7 @@ import json
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
 
@@ -40,9 +41,12 @@ TEST_KINDS = {"ctest", "doctest", "go", "gate"}  # references that run on a plat
 ENTRY_REQUIRED = {"id", "phase", "source", "owner", "title", "class", "platforms", "threshold", "status", "tests"}
 ENTRY_OPTIONAL = {"gaps", "notes"}
 GAP_KEYS = {"clause", "state", "owner", "pinned_by"}
-TOP_KEYS = {"version", "plan_rev", "covers", "runs", "gates", "criteria", "exit"}
+TOP_KEYS = {"version", "plan_rev", "covers", "runs", "gates", "criteria", "exit", "perf_metrics", "perf_accept"}
 RUN_KEYS = {"os", "default", "description"}
 GATE_KEYS = {"runs", "min_seconds", "description"}
+METRIC_FIELDS = {"id", "criterion", "doctest", "case", "gate", "pattern", "unit", "better", "category", "run", "note"}
+METRIC_CATEGORIES = {"render", "runtime", "backend", "editor", "iteration"}
+ACCEPT_FIELDS = {"metric", "night", "value", "run", "reason"}
 OWNER = re.compile(r"^(?:WP-\d+\.\d+[a-z0-9]*|User|Director)(?:, (?:WP-\d+\.\d+[a-z0-9]*|User|Director))*$")
 SOURCE = re.compile(r"^0\d §\d+(?:\.\d+)*[a-z]?$")
 EXIT_ID = re.compile(r"^EXIT-(\d)\.[a-z0-9][a-z0-9-]*$")
@@ -374,9 +378,15 @@ def workflow_jobs(path: Path) -> list[str]:
     `include` entries. A line-based reader for this repository's 2-space YAML, not a YAML parser."""
     jobs: list[dict] = []
     in_jobs = in_strategy = False
+    pending = ""  # a flow list continued on the next lines: `axis: [a, b,\n c]`
     for line in Path(path).read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
+        if pending:
+            pending += " " + line.strip()
+            if "]" not in line:
+                continue
+            line, pending = pending, ""
         if re.match(r"^\S", line):
             in_jobs = line.rstrip() == "jobs:"
             continue
@@ -393,6 +403,8 @@ def workflow_jobs(path: Path) -> list[str]:
             in_strategy = m[1] == "strategy"
             if m[1] == "name":
                 job["name"] = m[2].strip("'\"")
+        elif in_strategy and re.match(r"^        [\w-]+:\s*\[[^\]]*$", line):
+            pending = line
         elif in_strategy and (m := re.match(r"^        ([\w-]+):\s*\[(.*)\]\s*$", line)):
             job["axes"][m[1]] = [v.strip().strip("'\"") for v in m[2].split(",") if v.strip()]
         elif in_strategy and (m := re.match(r"^          - ([\w-]+):\s*(.+?)\s*$", line)):
@@ -640,6 +652,7 @@ def validate(data: dict, text: str, path: Path, plan: Plan | None = None, ci_job
     if not isinstance(data, dict):
         return [f"{name}:1: the registry must be a JSON object"], notes
     covers = _check_top(name, data, errors)
+    _check_metrics(name, data, errors)
     known, exits = (plan.criteria, plan.exits) if plan else ({}, {})
     ctx = {"ci_jobs": ci_jobs, "repo": repo, "go_sources": go_sources}
     items = entries(data)
@@ -737,6 +750,105 @@ def validate(data: dict, text: str, path: Path, plan: Plan | None = None, ci_job
     return errors, notes
 
 
+def _check_metrics(name: str, data: dict, errors: list[str]) -> None:
+    """perf_metrics: numbers perf.py reads from a doctest case's MESSAGE lines or a gate's output."""
+    criteria = data.get("criteria") if isinstance(data.get("criteria"), list) else []
+    ids = {e["id"] for e in criteria if isinstance(e, dict) and isinstance(e.get("id"), str)}
+    metrics = data.get("perf_metrics", [])
+    if not isinstance(metrics, list):
+        errors.append(f"{name}:1: 'perf_metrics' must be a list")
+        return
+    seen = set()
+    for m in metrics:
+        ident = m.get("id") if isinstance(m, dict) else None
+        if not isinstance(m, dict) or not isinstance(ident, str) or not re.fullmatch(r"[a-z0-9_.-]+", ident):
+            errors.append(f"{name}:1: every perf metric needs an 'id' of [a-z0-9_.-]")
+            continue
+        where = f"{name}:1: perf metric '{ident}'"
+        if ident in seen:
+            errors.append(f"{where} is declared twice")
+        seen.add(ident)
+        for key in sorted(set(m) - METRIC_FIELDS):
+            errors.append(f"{where}: unknown field '{key}'")
+        bad = [k for k in ("criterion", "doctest", "case", "gate", "run", "note") if k in m and not isinstance(m[k], str)]
+        if bad:
+            errors.append(f"{where}: {', '.join(bad)} must be strings")
+            continue
+        if ("gate" in m) == ("doctest" in m) or ("doctest" in m) != ("case" in m):
+            errors.append(f"{where}: needs either 'gate' or 'doctest' with 'case'")
+        if "*" in m.get("case", "") + m.get("doctest", ""):
+            errors.append(f"{where}: perf.py reads the case by its exact name, so 'doctest' and 'case' take no '*'")
+        if "gate" in m and m["gate"] not in (data.get("gates") or {}):
+            errors.append(f"{where}: gate '{m['gate']}' is not declared")
+        if "run" in m and m["run"] not in (data.get("runs") or {}):
+            errors.append(f"{where}: unknown run '{m['run']}'")
+        if "criterion" in m and m["criterion"] not in ids:
+            errors.append(f"{where}: criterion '{m['criterion']}' is not registered")
+        if m.get("better") not in ("lower", "higher") or m.get("category") not in METRIC_CATEGORIES or \
+                not isinstance(m.get("unit"), str):
+            errors.append(f"{where}: needs 'unit', 'better' (lower or higher) and 'category' "
+                          f"({', '.join(sorted(METRIC_CATEGORIES))})")
+        try:
+            if re.compile(str(m.get("pattern"))).groups != 1:
+                errors.append(f"{where}: 'pattern' must have exactly one group (the number)")
+        except re.error as e:
+            errors.append(f"{where}: bad 'pattern': {e}")
+    _check_accepts(name, data, seen, errors)
+
+
+def _check_accepts(name: str, data: dict, metric_ids: set, errors: list[str], today: str | None = None) -> None:
+    """perf_accept: the reviewed record that makes one night's value a metric's new baseline and anchor
+    (perf.py). `today` (UTC, YYYY-MM-DD) bounds `night`: a reviewer accepts a level that was measured."""
+    accepts = data.get("perf_accept", [])
+    if not isinstance(accepts, list):
+        errors.append(f"{name}:1: 'perf_accept' must be a list")
+        return
+    today = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    runs = data.get("runs") if isinstance(data.get("runs"), dict) else {}
+    metric_runs = {m["id"]: m.get("run") for m in data.get("perf_metrics") or []
+                   if isinstance(m, dict) and isinstance(m.get("id"), str)}
+    for a in accepts:
+        if not isinstance(a, dict):
+            errors.append(f"{name}:1: every perf_accept item must be an object")
+            continue
+        where = f"{name}:1: perf_accept '{a.get('metric')}' ({a.get('night')})"
+        for key in sorted(set(a) - ACCEPT_FIELDS):
+            errors.append(f"{where}: unknown field '{key}'")
+        if a.get("metric") not in metric_ids:
+            errors.append(f"{where}: 'metric' must name a declared perf metric")
+        night = a.get("night")
+        try:
+            ok = isinstance(night, str) and datetime.strptime(night, "%Y-%m-%d").strftime("%Y-%m-%d") == night
+        except ValueError:
+            ok = False
+        if not ok:
+            errors.append(f"{where}: 'night' must be the YYYY-MM-DD date (UTC) of the nightly whose value is accepted")
+        elif night > today:
+            errors.append(f"{where}: 'night' is after today ({today}); accept a night that has been measured")
+        value = a.get("value")
+        if not (isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0):
+            errors.append(f"{where}: needs the positive 'value' that night measured (the level being accepted)")
+        if "run" in a:
+            if a["run"] not in runs:
+                errors.append(f"{where}: unknown run '{a['run']}'")
+            elif metric_runs.get(a.get("metric")) not in (None, a["run"]):
+                errors.append(f"{where}: the metric is read only from run '{metric_runs[a['metric']]}', "
+                              f"so a record for '{a['run']}' could never match")
+        if not isinstance(a.get("reason"), str) or not a["reason"].strip():
+            errors.append(f"{where}: needs a 'reason' (why the new level is accepted, and who accepted it)")
+
+
+def check_workflow(data: dict, path: Path, workflow: Path) -> list[str]:
+    """Every declared run and gate is produced by the nightly workflow (it names each one)."""
+    text = workflow.read_text(encoding="utf-8")
+    errors = []
+    for kind, names in (("run", data.get("runs") or {}), ("gate", data.get("gates") or {})):
+        for n in names:
+            if not re.search(r"(?<![\w-])" + re.escape(n) + r"(?![\w-])", text):
+                errors.append(f"{display(path)}:1: {kind} '{n}' is never produced by {display(workflow)}")
+    return errors
+
+
 def check_inventory(data: dict, text: str, path: Path, inventory: dict) -> list[str]:
     """Errors for references that do not exist in an inventory of one OS. Only the sections the inventory
     has ("ctest", "doctest", "go") are checked, so a Go-only inventory says nothing about CTests."""
@@ -768,6 +880,20 @@ def check_inventory(data: dict, text: str, path: Path, inventory: dict) -> list[
             if target:
                 errors.append(f"{name}:{line}: {entry.get('id')}: {target} {ref_label(ref)} does not exist "
                               f"in the {inv_os} inventory")
+    # Every perf metric's doctest source, whether or not it names a criterion: a renamed case would
+    # otherwise drop its metric from the history without the PR tier noticing.
+    metrics = [m for m in (data.get("perf_metrics") if isinstance(data.get("perf_metrics"), list) else [])
+               if isinstance(m, dict) and isinstance(m.get("doctest"), str) and isinstance(m.get("case"), str)]
+    runs = data.get("runs") if isinstance(data.get("runs"), dict) else {}
+    for m, line in zip(metrics, entry_lines(text, metrics)):
+        run = runs.get(m["run"]) if isinstance(m.get("run"), str) else None
+        oses = [run.get("os")] if isinstance(run, dict) else [] if "run" in m else list(OSES)
+        if doctest is None or inv_os not in oses:
+            continue
+        if m["case"] not in (doctest.get(m["doctest"]) or []):
+            what = "doctest case" if m["doctest"] in doctest else "doctest binary"
+            errors.append(f"{name}:{line}: perf metric '{m.get('id')}': {what} doctest {m['doctest']} / {m['case']} "
+                          f"does not exist in the {inv_os} inventory")
     return errors
 
 
@@ -793,6 +919,9 @@ def cmd_check(args) -> int:
     errors, notes = validate(data, text, args.scorecard, plan, workflow_jobs(ci) if ci.is_file() else None,
                              Path(args.repo), go_sources)
     errors = pre + errors
+    nightly = Path(args.workflows) / "nightly.yml"
+    if nightly.is_file():
+        errors += check_workflow(data, args.scorecard, nightly)
     rev_file = plan_dir / "PLAN-REV"
     rev = re.match(r"\s*(\d+)", rev_file.read_text(encoding="utf-8-sig")) if rev_file.is_file() else None
     if rev is None:

@@ -120,6 +120,12 @@ jobs:
       - run: echo hi
   plain:
     runs-on: ubuntu-24.04
+  wrapped:
+    name: Fuzz ${{ matrix.gate }}
+    strategy:
+      matrix:
+        gate: [one,
+               two]
 """
 
 
@@ -308,6 +314,44 @@ class RegistryTests(Fixture):
         self.assertFinding(self.run_check(data), "EXIT-<phase>.<slug>")
 
 
+class PerfMetricTests(Fixture):
+    METRIC = {"id": "net.pps", "criterion": "NS-0.1", "doctest": "net_tests", "case": "NS-0.1: handshake",
+              "pattern": r"-> (\d+) pps", "unit": "pps", "better": "higher", "category": "runtime"}
+
+    def with_metric(self, **fields):
+        data = copy.deepcopy(VALID)
+        data["perf_metrics"] = [dict(self.METRIC, **fields)]
+        return data
+
+    def test_valid_metric_passes(self):
+        self.assertEqual(self.run_check(self.with_metric(), [INVENTORY]), [])
+
+    def test_metric_fields_are_checked(self):
+        self.assertFinding(self.run_check(self.with_metric(pattern=r"\d+ pps")), "exactly one group")
+        self.assertFinding(self.run_check(self.with_metric(pattern="(")), "bad 'pattern'")
+        self.assertFinding(self.run_check(self.with_metric(gate="net_bench_gate")), "either 'gate' or 'doctest'")
+        self.assertFinding(self.run_check(self.with_metric(category="speed")), "'category'")
+        self.assertFinding(self.run_check(self.with_metric(criterion="NS-0.9")), "'NS-0.9' is not registered")
+        self.assertFinding(self.run_check(self.with_metric(budgett="5 %")), "unknown field 'budgett'")
+        data = self.with_metric()
+        del data["perf_metrics"][0]["case"]
+        data["perf_metrics"][0].pop("doctest")
+        data["perf_metrics"][0]["gate"] = "nope"
+        self.assertFinding(self.run_check(data), "gate 'nope' is not declared")
+
+    def test_metric_case_must_exist(self):
+        self.assertFinding(self.run_check(self.with_metric(case="NS-0.1: renamed"), [INVENTORY]),
+                           "doctest case doctest net_tests / NS-0.1: renamed does not exist")
+
+    def test_nightly_must_produce_every_run_and_gate(self):
+        workflow = self.root / "nightly.yml"
+        workflow.write_text("jobs:\n  a:\n    steps:\n      - run: echo linux-gcc linux-asan windows-vs2026 "
+                            "net_bench_gate\n", encoding="utf-8")
+        errors = sc.check_workflow(VALID, self.root / "scorecard.jsonc", workflow)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("gate 'fuzz_linux' is never produced", errors[0])
+
+
 class InventoryTests(Fixture):
     def test_missing_ctest_fails(self):
         inv = dict(INVENTORY, ctest=["net_tests"])
@@ -365,7 +409,8 @@ class FormatTests(unittest.TestCase):
             path = Path(d) / "ci.yml"
             path.write_text(CI_YML, encoding="utf-8")
             self.assertEqual(sc.workflow_jobs(path),
-                             ["Build (linux-gcc)", "Build (linux-clang)", "MSBuild (vs2026)", "plain"])
+                             ["Build (linux-gcc)", "Build (linux-clang)", "MSBuild (vs2026)", "plain", "Fuzz one",
+                              "Fuzz two"])
 
     def test_go_list_and_doctest_list_parsing(self):
         listing = ("TestA\nTestB\nok  \tm/x/pkg/a\t0.01s\n?   \tm/x/pkg/none\t[no test files]\n"

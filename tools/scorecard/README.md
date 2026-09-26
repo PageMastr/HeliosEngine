@@ -38,7 +38,10 @@ into annotations.
 - **Tests exist.** Every `ctest`, `doctest` (and `pinned_by`) reference must exist in each inventory whose
   OS it is evaluated on. `go` references are checked when the inventory has a `go` section (the nightly
   one does). `gate` references must be declared and run on the reference's platforms. `ci_job` names
-  must be jobs of `.github/workflows/ci.yml` (matrix names expanded).
+  must be jobs of `.github/workflows/ci.yml` (matrix names expanded). Every declared run and gate must be
+  produced by `.github/workflows/nightly.yml`.
+- **Perf metrics.** Each has one source (a gate, or a doctest binary and case), a pattern with exactly one
+  group, a unit, `better` (`lower` or `higher`) and a budget category; a doctest source must exist.
 
 ## Entry format
 
@@ -81,6 +84,50 @@ reference without `run` counts in every `default` run of its OS, and fails if an
 **Gaps** are clauses without a passing test: `state` is `unmeasured` (no test yet) or `failing` (measured
 and red), with the `owner` WP. `pinned_by` names a test that pins a known divergence (such a test
 *passes* while the clause fails), so it is never evidence of a pass. An entry with a gap is never green.
+
+## The nightly report
+
+`.github/workflows/nightly.yml` builds and tests on Linux (GCC, Clang, ASan/UBSan), Windows (VS 2026, VS 2022,
+clang-cl) and Go (Linux, Windows), runs `net_bench --gate` on GCC and VS 2026, and runs each engine/net fuzz
+target under libFuzzer for 1 h (NS-0.4). Each job uploads a result set; the `scorecard` job evaluates them:
+
+```
+python3 tools/scorecard/runners.py doctest --build-dir B [--config C] [--perf] --out R/doctest   # per-case XML
+python3 tools/scorecard/runners.py gate --name net_bench_gate --build-dir B --out R/gates -- net_bench --gate
+python3 tools/scorecard/report.py --results results --ci-jobs ci-jobs.json --previous last/scorecard-report.json \
+        [--scheduled] --out scorecard-report.json --markdown scorecard.md
+python3 tools/scorecard/perf.py extract --results results --sha SHA --out perf-entry.json
+python3 tools/scorecard/perf.py compare --entry perf-entry.json --history last/perf-history.json --out perf-history.json
+```
+
+A result set is a directory with `run.json` (`{"run": "<a declared run>"}`) and any of `ctest*.xml`
+(`ctest --output-junit`), `doctest/<binary>[.perf].xml` with its `.status.json`, `go*.json` (`go test -json`)
+and `gates/<gate>.xml`. The runner uses the working directory, environment and timeout that CTest would. A
+doctest binary whose XML is unreadable (a crash) fails every case it cites. So does one that exits non-zero
+although every case passed (a sanitizer report at exit).
+
+- **Per criterion.** On each platform, a reference passes when it has results in the runs that count for it
+  and none failed. A missing result or a skip is *unmeasured*. A gate that ran shorter than its
+  `min_seconds` fails. The criterion passes when every reference passes on every platform and it has no gap.
+  A broken pin (a `pinned_by` test that now fails) is reported so that the registry is updated.
+- **Green (09 §5.6).** The report keeps a streak per criterion from last night's report: consecutive passing
+  *scheduled* nightlies. A manual run never extends it, and a failure resets it. N and H criteria are green
+  at 3 and W at 2; an M record is green once it exists. The summary gives the green fraction of the phase,
+  the 60 % part of the round score (§5.7). It is written to the job summary and the `scorecard-report`
+  artifact.
+- **Perf history (09 §5.8).** `perf_metrics` name the numbers the perf gates print (a regex over a doctest
+  case's MESSAGE lines or a gate's output). `compare` flags a metric that is worse than the median of its
+  last 5 nights by more than its category's budget: render and runtime 5 % (02 §8.3 for runtime
+  benchmarks), backend, editor and iteration 10 %. The median keeps one noisy night from moving the
+  baseline, and a creep of a few percent a night still fails once it passes the budget against the older
+  values. A declared metric that disappears fails too. Wall times of every `perf:` case are recorded but not
+  gated. The history is the `perf-history` artifact, carried forward from the previous nightly (90-day
+  retention). Hosted runners are noisy, and the binding per-commit measurements move to the fixed runner
+  and the lab (WP-0.4).
+
+The scorecard job also checks the registry against tonight's inventories, Go tests included. It uses the
+workflow's read-only token to read the previous nightly's artifacts and the jobs of the latest `ci.yml` run
+on `main` (for `ci_job` references). The workflow uses no secret and has no write permission.
 
 ## Adding or changing a criterion
 

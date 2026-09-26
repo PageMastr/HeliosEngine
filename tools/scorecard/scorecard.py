@@ -39,7 +39,9 @@ REF_KINDS = {"ctest": set(), "doctest": {"case"}, "go": {"test"}, "gate": set(),
 REF_OPTIONAL = {"platforms", "run", "note", "tags"}
 ENTRY_REQUIRED = {"id", "phase", "source", "owner", "title", "class", "platforms", "threshold", "status", "tests"}
 ENTRY_OPTIONAL = {"gaps", "notes"}
-TOP_KEYS = {"version", "plan_rev", "covers", "runs", "gates", "criteria", "exit"}
+TOP_KEYS = {"version", "plan_rev", "covers", "runs", "gates", "criteria", "exit", "perf_metrics"}
+METRIC_FIELDS = {"id", "criterion", "doctest", "case", "gate", "pattern", "unit", "better", "category", "run", "note"}
+METRIC_CATEGORIES = {"render", "runtime", "backend", "editor", "iteration"}
 OWNER = re.compile(r"^(?:WP-\d+\.\d+[a-z0-9]*|User|Director)(?:, (?:WP-\d+\.\d+[a-z0-9]*|User|Director))*$")
 SOURCE = re.compile(r"^0\d §\d+(?:\.\d+)*[a-z]?$")
 EXIT_ID = re.compile(r"^EXIT-(\d)\.[a-z0-9][a-z0-9-]*$")
@@ -146,6 +148,11 @@ def ref_label(ref: dict) -> str:
     kind = ref_kind(ref) or "?"
     extra = ref.get("case") or ref.get("test")
     return f"{kind} {ref.get(kind)}" + (f" / {extra}" if extra else "")
+
+
+def matches(name: str, pattern: str) -> bool:
+    """A test name against a reference: exact, or a `*` wildcard (`[` in a name stays literal)."""
+    return name == pattern or ("*" in pattern and fnmatch.fnmatchcase(name, pattern.replace("[", "[[]")))
 
 
 def ref_platforms(entry: dict, ref: dict) -> list[str]:
@@ -296,9 +303,15 @@ def workflow_jobs(path: Path) -> list[str]:
     `include` entries. A line-based reader for this repository's 2-space YAML, not a YAML parser."""
     jobs: list[dict] = []
     in_jobs = in_strategy = False
+    pending = ""  # a flow list continued on the next lines: `axis: [a, b,\n c]`
     for line in Path(path).read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
+        if pending:
+            pending += " " + line.strip()
+            if "]" not in line:
+                continue
+            line, pending = pending, ""
         if re.match(r"^\S", line):
             in_jobs = line.rstrip() == "jobs:"
             continue
@@ -315,6 +328,8 @@ def workflow_jobs(path: Path) -> list[str]:
             in_strategy = m[1] == "strategy"
             if m[1] == "name":
                 job["name"] = m[2].strip("'\"")
+        elif in_strategy and re.match(r"^        [\w-]+:\s*\[[^\]]*$", line):
+            pending = line
         elif in_strategy and (m := re.match(r"^        ([\w-]+):\s*\[(.*)\]\s*$", line)):
             job["axes"][m[1]] = [v.strip().strip("'\"") for v in m[2].split(",") if v.strip()]
         elif in_strategy and (m := re.match(r"^          - ([\w-]+):\s*(.+?)\s*$", line)):
@@ -473,6 +488,7 @@ def validate(data: dict, text: str, path: Path, plan: tuple[dict, dict] | None =
             isinstance(gate.get("min_seconds", 0), int) and isinstance(gate.get("description", ""), str)
         if not ok:
             errors.append(f"{name}:1: gate '{gate_name}' needs 'runs' naming declared runs and an integer 'min_seconds'")
+    _check_metrics(name, data, errors)
     known, exits = plan if plan else ({}, {})
     items = entries(data)
     lines = entry_lines(text, items)
@@ -555,6 +571,51 @@ def validate(data: dict, text: str, path: Path, plan: tuple[dict, dict] | None =
     return errors, notes
 
 
+def _check_metrics(name: str, data: dict, errors: list[str]) -> None:
+    """perf_metrics: numbers perf.py reads from a doctest case's MESSAGE lines or a gate's output."""
+    ids = {e.get("id") for e in data.get("criteria") or [] if isinstance(e, dict)}
+    seen = set()
+    for m in data.get("perf_metrics") or []:
+        ident = m.get("id") if isinstance(m, dict) else None
+        where = f"{name}:1: perf metric '{ident}'"
+        if not isinstance(m, dict) or not isinstance(ident, str) or not re.fullmatch(r"[a-z0-9_.-]+", ident):
+            errors.append(f"{name}:1: every perf metric needs an 'id' of [a-z0-9_.-]")
+            continue
+        if ident in seen:
+            errors.append(f"{where} is declared twice")
+        seen.add(ident)
+        for key in sorted(set(m) - METRIC_FIELDS):
+            errors.append(f"{where}: unknown field '{key}'")
+        if ("gate" in m) == ("doctest" in m) or ("doctest" in m) != ("case" in m):
+            errors.append(f"{where}: needs either 'gate' or 'doctest' with 'case'")
+        if "gate" in m and m["gate"] not in (data.get("gates") or {}):
+            errors.append(f"{where}: gate '{m['gate']}' is not declared")
+        if "run" in m and m["run"] not in (data.get("runs") or {}):
+            errors.append(f"{where}: unknown run '{m['run']}'")
+        if "criterion" in m and m["criterion"] not in ids:
+            errors.append(f"{where}: criterion '{m['criterion']}' is not registered")
+        if m.get("better") not in ("lower", "higher") or m.get("category") not in METRIC_CATEGORIES or \
+                not isinstance(m.get("unit"), str):
+            errors.append(f"{where}: needs 'unit', 'better' (lower or higher) and 'category' "
+                          f"({', '.join(sorted(METRIC_CATEGORIES))})")
+        try:
+            if re.compile(str(m.get("pattern"))).groups != 1:
+                errors.append(f"{where}: 'pattern' must have exactly one group (the number)")
+        except re.error as e:
+            errors.append(f"{where}: bad 'pattern': {e}")
+
+
+def check_workflow(data: dict, path: Path, workflow: Path) -> list[str]:
+    """Every declared run and gate is produced by the nightly workflow (it names each one)."""
+    text = workflow.read_text(encoding="utf-8")
+    errors = []
+    for kind, names in (("run", data.get("runs") or {}), ("gate", data.get("gates") or {})):
+        for n in names:
+            if not re.search(r"(?<![\w-])" + re.escape(n) + r"(?![\w-])", text):
+                errors.append(f"{display(path)}:1: {kind} '{n}' is never produced by {display(workflow)}")
+    return errors
+
+
 def check_inventory(data: dict, text: str, path: Path, inventory: dict) -> list[str]:
     """Errors for references that do not exist in an inventory of one OS. Only the sections the inventory
     has ("ctest", "doctest", "go") are checked, so a Go-only inventory says nothing about CTests."""
@@ -568,15 +629,18 @@ def check_inventory(data: dict, text: str, path: Path, inventory: dict) -> list[
     for entry, line in zip(items, entry_lines(text, items)):
         refs = [r for r in entry.get("tests") or [] if isinstance(r, dict)]
         refs += [g["pinned_by"] for g in entry.get("gaps") or [] if isinstance(g, dict) and isinstance(g.get("pinned_by"), dict)]
+        refs += [{"doctest": m["doctest"], "case": m["case"], **({"run": m["run"]} if "run" in m else {})}
+                 for m in data.get("perf_metrics") or [] if isinstance(m, dict) and "doctest" in m and "case" in m
+                 and m.get("criterion") == entry.get("id")]
         for ref in refs:
             if inv_os not in ref_oses(entry, ref, data):
                 continue
             kind, target = ref_kind(ref), None
-            if kind == "ctest" and ctests is not None and not any(fnmatch.fnmatchcase(t, ref["ctest"]) for t in ctests):
+            if kind == "ctest" and ctests is not None and not any(matches(t, ref["ctest"]) for t in ctests):
                 target = "CTest"
             elif kind == "doctest" and doctest is not None and (
                     ref["doctest"] not in doctest or
-                    not any(fnmatch.fnmatchcase(c, ref["case"]) for c in doctest[ref["doctest"]])):
+                    not any(matches(c, ref["case"]) for c in doctest[ref["doctest"]])):
                 target = "doctest case"
             elif kind == "go" and go is not None and ref["test"] not in go.get(ref["go"], []):
                 target = "Go test"
@@ -601,6 +665,9 @@ def cmd_check(args) -> int:
     plan = plan_criteria(plan_dir)
     ci = Path(args.workflows) / "ci.yml"
     errors, notes = validate(data, text, args.scorecard, plan, workflow_jobs(ci) if ci.is_file() else None)
+    nightly = Path(args.workflows) / "nightly.yml"
+    if nightly.is_file():
+        errors += check_workflow(data, args.scorecard, nightly)
     rev_file = plan_dir / "PLAN-REV"
     if rev_file.is_file() and isinstance(data.get("plan_rev"), int):
         rev = int(re.match(r"\s*(\d+)", rev_file.read_text(encoding="utf-8"))[1])

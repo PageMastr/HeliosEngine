@@ -54,6 +54,11 @@ func ddMul(a, b dd) dd {
 	return fastTwoSum(p.hi, p.lo)
 }
 
+// quietNaN is the NaN helios::det returns for invalid arguments (std::numeric_limits<f64>::quiet_NaN,
+// bits 0x7ff8000000000000). math.NaN() has other bits (0x7ff8000000000001), which would break the
+// bit-identity with C++ for callers that inspect NaN payloads.
+func quietNaN() float64 { return math.Float64frombits(0x7ff8000000000000) }
+
 // pow2i returns 2^k for -1022 <= k <= 1023 exactly.
 func pow2i(k int) float64 {
 	return math.Float64frombits(uint64(k+1023) << 52)
@@ -173,7 +178,7 @@ func Ln(x float64) float64 {
 		return x + x
 	}
 	if x < 0 {
-		return math.NaN()
+		return quietNaN()
 	}
 	if x == 0 {
 		return math.Inf(-1)
@@ -241,7 +246,7 @@ func Pow(x, y float64) float64 {
 	sign := 1.0
 	if x < 0 {
 		if !yInt {
-			return math.NaN()
+			return quietNaN()
 		}
 		if yOdd {
 			sign = -1.0

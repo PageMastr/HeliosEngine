@@ -197,6 +197,13 @@ func TestSpecialValues(t *testing.T) {
 		{"asinh(-0)", Asinh(negZero), negZero},
 		{"asinh(-inf)", Asinh(-inf), -inf},
 	}
+	// Invalid arguments give C++'s quiet NaN bit for bit (review regression, WP-0.19 round 1:
+	// math.NaN() is 0x7ff8000000000001).
+	for name, v := range map[string]float64{"ln(-1)": Ln(-1), "pow(-8,1/3)": Pow(-8, 1.0/3.0)} {
+		if bits := math.Float64bits(v); bits != 0x7ff8000000000000 {
+			t.Errorf("%s: NaN bits %#016x, want 0x7ff8000000000000", name, bits)
+		}
+	}
 	for _, c := range cases {
 		if !same(c.got, c.want) {
 			t.Errorf("%s = %v (%#x), want %v", c.name, c.got, math.Float64bits(c.got), c.want)

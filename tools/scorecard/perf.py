@@ -9,23 +9,28 @@
 (a regex over the MESSAGE lines of a doctest case or the output of a gate) in every result set that has
 it, plus the wall time of every `perf:` doctest case, which is recorded but not gated.
 
-`compare` appends the entry to the history (the previous night's perf-history artifact) and flags a
-regression when a gated metric is worse by more than its category's budget (5 % for render passes and
-engine runtime benchmarks, 10 % for backend, editor and iteration; 09 §5.8, 02 §8.3) than either of two
-levels:
-  - the rolling baseline, the median of its last --window values that were not regressions, which
-    catches a step and ignores one noisy night; it follows any change it does not flag;
-  - the anchor, which does not follow: the median of the metric's first --window clean values, or the
-    value of the night a `perf_accept` record accepts. Drift that the rolling baseline follows (a slow
-    creep, or sub-budget steps that stack) fails once it is over budget against the anchor.
-Every verdict, baseline and anchor is stored in the history and carried forward, so neither heals as old
-nights leave it; a metric is `new` only on its first night. Only a reviewed `perf_accept` record in
-scorecard.jsonc moves both levels: it names a night and the value accepted, and fails (`accept-unmatched`)
-when that night has no stored value for the metric or measured something else. A declared gated metric
-that had a value and stops being produced is `missing` until it comes back or the registry drops the
-metric, its run or its run assignment; a declared metric that never had a value is listed, not failed.
-It exits 1 on any failing verdict, and 2 under --require-history when there is no history to compare
-with (so a lost artifact cannot reset every baseline). Standard library only.
+`compare` appends the entry to the history (the previous night's perf-history artifact) and fails a gated
+metric that is worse than its anchor by more than its category's budget (5 % for render passes and engine
+runtime benchmarks, 10 % for backend, editor and iteration; 09 §5.8, 02 §8.3). The anchor does not follow:
+it is the median of the metric's first --window values (its calibration nights, recorded but not gated,
+so one outlier among them does not set it), or the value of the night a `perf_accept` record accepted. A
+step, a slow creep and sub-budget steps that stack therefore all fail once they are over budget. The
+rolling baseline, the median of the last --window values that were not regressions, is held so that it is
+never better than the anchor (a dip or an improvement nobody accepted must not make the normal level fail
+later); a night over budget against it is then also over budget against the anchor, so it decides
+nothing on its own and is reported to tell a step (over budget against both) from drift (only against
+the anchor).
+Every verdict, both levels and the applied accept are stored in the history and carried forward (a
+missing metric carries them too), so none of them heals or expires as old entries leave it. Only a
+reviewed `perf_accept` record in scorecard.jsonc moves the levels: it names a night and the value
+accepted, is applied once, and then stays applied whether or not the record is kept. A record whose night
+is inside the history but has no stored value for the metric, or measured something else, fails
+(`accept-unmatched`); one older than the whole history is reported as stale, not failed. A declared gated
+metric that had a value and stops being produced is `missing` until it comes back or the registry drops
+the metric, its run or its run assignment; a declared metric that never had a value is listed, not failed.
+It exits 1 on any failing verdict, and 2 under --require-history when there is no history to compare with
+(so a lost artifact cannot reset every level); --note lines head the summary (a first night, a restart).
+Standard library only.
 """
 
 from __future__ import annotations
@@ -127,12 +132,15 @@ def _change(value: float, level: float, better: str) -> tuple[float, float]:
     return change, (change if better == "lower" else -change)
 
 
-def _last(past: list[dict], key: str, field: str) -> dict | None:
-    """The newest stored metric `key` that has `field`."""
+LEVELS = ("baseline", "anchor", "anchor_n", "accepted")
+
+
+def _levels(past: list[dict], key: str) -> dict | None:
+    """The newest stored levels of `key`: from its metric entry, or from a night it was missing."""
     for e in reversed(past):
-        m = (e.get("metrics") or {}).get(key)
-        if m is not None and m.get(field) is not None:
-            return m
+        for m in ((e.get("metrics") or {}).get(key), (e.get("missing_levels") or {}).get(key)):
+            if isinstance(m, dict) and any(m.get(f) is not None for f in LEVELS):
+                return m
     return None
 
 
@@ -140,56 +148,75 @@ def _evaluate(past: list[dict], entry: dict, key: str, m: dict, window: int) -> 
     limit = BUDGET_PERCENT[m["category"]]
     row = {"metric": key, "value": m["value"], "unit": m["unit"], "gate": m["gate"], "baseline": None,
            "change": None, "anchor": None, "anchor_change": None, "limit": limit, "verdict": "new", "note": "",
-           "anchor_n": 1}
+           "anchor_n": 1, "accepted": None}
     seen = [e for e in past if key in (e.get("metrics") or {})]
-    last_base, last_anchor = _last(past, key, "baseline"), _last(past, key, "anchor")
-    carried = {"baseline": last_base["baseline"] if last_base else None,
-               "anchor": last_anchor["anchor"] if last_anchor else None,
-               "anchor_n": last_anchor.get("anchor_n", window) if last_anchor else 0}
+    levels = _levels(past, key) or {}
+    carried = {f: levels.get(f) for f in LEVELS}
+    carried["anchor_n"] = carried["anchor_n"] or 0
+    applied = carried["accepted"] if isinstance(carried["accepted"], dict) else None
     record = _accept_for(entry, key) if m["gate"] else None
-    accepted_night = accepted_value = None
-    if record is not None:
-        night, want = record["night"], record.get("value")
-        if night == _night(entry):
+    notes = []
+    if record is not None and (applied is None or record["night"] > applied.get("night", "")):
+        night, want, tonight = record["night"], record.get("value"), _night(entry)
+        if night == tonight:
             measured = m["value"]
         else:
             on_night = [e["metrics"][key]["value"] for e in seen if _night(e) == night]
             measured = on_night[-1] if on_night else None
+        oldest = min((_night(e) for e in past), default=None)
         ok_want = isinstance(want, (int, float)) and not isinstance(want, bool) and want > 0
-        if measured is None or not ok_want or abs(100.0 * (measured - want) / want) > limit:
-            row.update(carried, verdict="accept-unmatched",
-                       note=f"perf_accept for {night} " + ("names a night with no stored value for this metric"
-                                                          if measured is None else
-                                                          f"accepts {want!r}, but that night measured {measured:.4g}"))
+        if measured is None and night != tonight and (oldest is None or night < oldest):
+            notes.append(f"stale perf_accept for {night}: older than the whole history, nothing to apply; "
+                         f"remove it")
+        elif measured is None or not ok_want or abs(100.0 * (measured - want) / want) > limit:
+            why = ("names a night with no stored value for this metric" if measured is None else
+                   f"accepts {want!r}, but that night measured {measured:.4g}")
+            row.update(carried, verdict="accept-unmatched", note=f"perf_accept for {night} {why}")
             return row
-        if night == _night(entry):
+        elif night == tonight:
             row.update(verdict="accepted", baseline=m["value"], anchor=m["value"], anchor_n=window,
+                       accepted={"night": night, "value": m["value"]},
                        note=f"perf_accept for {night}: {record.get('reason', '')}")
             return row
-        accepted_night, accepted_value = night, measured
-    if not seen:
-        row.update(baseline=m["value"], anchor=m["value"], anchor_n=1)
+        else:
+            applied = {"night": night, "value": measured}
+    if not seen and not levels:
+        row.update(baseline=m["value"], anchor=m["value"], anchor_n=1, accepted=applied, note="; ".join(notes))
         return row
-    values = baseline_values(past, key, m["gate"], accepted_night, window)
+    values = baseline_values(past, key, m["gate"], applied["night"] if applied else None, window)
     base = statistics.median(values) if values else carried["baseline"]
-    if accepted_night is not None:
-        anchor, n = accepted_value, window
+    clean = [e["metrics"][key]["value"] for e in seen
+             if not (m["gate"] and e["metrics"][key].get("verdict") == "regression")][:window]
+    if applied is not None:
+        anchor, n = applied["value"], window
     elif carried["anchor"] is not None and carried["anchor_n"] >= window:
         anchor, n = carried["anchor"], window
-    else:  # the first --window clean values, until there are that many
-        clean = [e["metrics"][key]["value"] for e in seen
-                 if not (m["gate"] and e["metrics"][key].get("verdict") == "regression")][:window]
-        anchor, n = (statistics.median(clean), len(clean)) if clean else (carried["anchor"], carried["anchor_n"])
+    elif len(clean) >= window:
+        anchor, n = statistics.median(clean), window
+    elif len(clean) == len(seen) and carried["anchor_n"] < window:
+        # A calibration night: the anchor is the median of the metric's first --window values, so one
+        # outlier among them does not set it. Recorded, not gated.
+        first = clean + [m["value"]]
+        row.update(verdict="calibrating", baseline=statistics.median(first), anchor=statistics.median(first),
+                   anchor_n=len(first), note="; ".join(notes + [f"calibration night {len(first)} of {window}"]))
+        return row
+    else:
+        anchor, n = carried["anchor"], carried["anchor_n"]
     if base is None or anchor is None:
         row.update(carried, verdict="no-baseline" if m["gate"] else "new",
                    note="history without a usable baseline" if m["gate"] else "")
         return row
+    # The rolling baseline is never better than the anchor: after a dip or an improvement nobody accepted,
+    # the normal level must not fail; an accepted improvement moved the anchor and stays protected.
+    base = max(base, anchor) if m["better"] == "lower" else min(base, anchor)
     change, worse = _change(m["value"], base, m["better"])
     anchor_change, anchor_worse = _change(m["value"], anchor, m["better"])
     flagged = worse > limit or anchor_worse > limit
+    if anchor_worse > limit and worse <= limit:
+        notes.append("drift against the anchor")
     row.update(baseline=base, change=change, anchor=anchor, anchor_change=anchor_change, anchor_n=n,
-               verdict=("regression" if m["gate"] else "slower") if flagged else "ok",
-               note="drift against the anchor" if anchor_worse > limit and worse <= limit else "")
+               accepted=applied, verdict=("regression" if m["gate"] else "slower") if flagged else "ok",
+               note="; ".join(notes))
     return row
 
 
@@ -201,7 +228,7 @@ def compare(history: dict, entry: dict, window: int) -> tuple[dict, list[dict]]:
     for key, m in sorted(entry["metrics"].items()):
         row = _evaluate(past, entry, key, m, window)
         stored["metrics"][key].update(verdict=row["verdict"], baseline=row["baseline"], anchor=row["anchor"],
-                                      anchor_n=row["anchor_n"])
+                                      anchor_n=row["anchor_n"], accepted=row["accepted"])
         rows.append(row)
     # A gated metric that had a value last night, or was already missing, is missing until it is produced
     # again or the registry drops the metric, its run, or (for a metric read from one run) moves it to
@@ -218,6 +245,9 @@ def compare(history: dict, entry: dict, window: int) -> tuple[dict, list[dict]]:
     carried = {k for k, v in (last.get("metrics") or {}).items() if v.get("gate")} | set(last.get("missing") or [])
     missing = sorted(k for k in carried - set(entry["metrics"]) if still_declared(k))
     stored["missing"] = missing
+    # A missing metric keeps its levels, so it does not come back as `new` after 60 entries.
+    stored["missing_levels"] = {k: {f: v for f, v in (_levels(past, k) or {}).items() if f in LEVELS}
+                                for k in missing}
     blank = {"value": None, "unit": "", "gate": True, "baseline": None, "change": None, "anchor": None,
              "anchor_change": None, "limit": None, "note": ""}
     rows += [dict(blank, metric=k, verdict="missing") for k in missing]
@@ -228,14 +258,14 @@ def compare(history: dict, entry: dict, window: int) -> tuple[dict, list[dict]]:
     return new, rows
 
 
-def markdown(rows: list[dict], entry: dict) -> str:
+def markdown(rows: list[dict], entry: dict, notes: list[str] = ()) -> str:
     bad = [r for r in rows if r["verdict"] in FAILING]
-    lines = ["## Perf history", "",
+    lines = ["## Perf history", ""] + [f"**{n}**" for n in notes] + ([""] if notes else []) + [
              f"Night {_night(entry)} (UTC, the `night` a `perf_accept` record names), commit `{entry['sha'][:12]}`: "
              f"{len(bad)} gated metric(s) failing. Budgets are 5 % (render, runtime) and 10 % (backend, editor, "
-             f"iteration), against both the rolling baseline (median of the last nights that were not regressions) "
-             f"and the anchor (the first clean nights, or the last accepted night); only a `perf_accept` record "
-             f"moves the anchor (09 §5.8).",
+             f"iteration), against the anchor (the median of a metric's first nights, or its last accepted "
+             f"night), which only a `perf_accept` record moves (09 §5.8). Baseline is the rolling median of recent "
+             f"nights that were not regressions, never better than the anchor; Change against it shows a step.",
              "", "| Metric | Tonight | Baseline | Change | Anchor | Drift | Budget | Verdict |",
              "|---|---|---|---|---|---|---|---|"]
     fmt = (lambda v: "—" if v is None else f"{v:,.0f}" if abs(v) >= 1000 else f"{v:.4g}")
@@ -266,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
     cmp_.add_argument("--window", type=int, default=5)
     cmp_.add_argument("--out", type=Path, required=True)
     cmp_.add_argument("--markdown", type=Path)
+    cmp_.add_argument("--note", action="append", default=[], help="a line for the top of the summary")
     cmp_.add_argument("--require-history", action="store_true",
                       help="fail (exit 2) without a history: after the first night, a lost artifact would reset "
                            "every baseline and missing marker")
@@ -281,11 +312,12 @@ def main(argv: list[str] | None = None) -> int:
     history = json.loads(args.history.read_text(encoding="utf-8")) if args.history and args.history.is_file() else {}
     if args.require_history and not history.get("entries"):
         print(f"perf: error: perf history not found ({args.history}); comparing without it would reset every "
-              f"baseline, anchor and missing marker")
+              f"baseline, anchor and missing marker. To start a new history on purpose, dispatch the nightly "
+              f"with restart_perf_history (tools/scorecard/README.md)")
         return 2
     new, rows = compare(history, entry, args.window)
     args.out.write_text(json.dumps(new, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    text = markdown(rows, entry)
+    text = markdown(rows, entry, args.note)
     if args.markdown:
         args.markdown.write_text(text, encoding="utf-8")
     print(text)

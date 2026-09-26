@@ -12,6 +12,11 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      restart_perf_history:
+        description: "Start a new perf history tonight: every perf baseline, anchor and missing marker resets (the summary says so)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -267,29 +272,44 @@ jobs:
           pattern: results-*
           path: results
       - name: Fetch last night's report and perf history and the latest CI run on main
+        env:
+          RESTART_PERF_HISTORY: ${{ inputs.restart_perf_history }}
         run: |
           mkdir -p previous out
-          # The newest earlier nightly that has each artifact, looked for separately: a night whose perf step
-          # failed still uploads its report, and its perf history then comes from an older night. A listed
-          # artifact that fails to download, or an API error, fails this step instead of passing for a first
-          # night, and without previous/first-night the perf step requires a history (perf.py
-          # --require-history), so a lost artifact cannot reset every baseline.
-          for id in $(gh run list -R "$GITHUB_REPOSITORY" --workflow nightly.yml --branch main --status completed \
-                        --limit 30 --json databaseId --jq '.[].databaseId'); do
+          # Each artifact comes from the newest earlier nightly that has it, looked for separately: a night
+          # whose perf step failed still uploads its report. The run list is assigned first so that an API
+          # error fails this step (a `for` over a failed substitution would not), as does a failed download.
+          # The perf history starts without a predecessor (previous/first-night) only when no earlier run
+          # lists a perf-history artifact at all, expired or not. One that is listed but cannot be fetched
+          # leaves the perf step failing (perf.py --require-history) until the history is restarted on
+          # purpose: dispatch this workflow with restart_perf_history (tools/scorecard/README.md).
+          ids=$(gh run list -R "$GITHUB_REPOSITORY" --workflow nightly.yml --branch main --status completed \
+                  --limit 100 --json databaseId --jq '.[].databaseId')
+          listed=0
+          for id in $ids; do
             [ "$id" = "$GITHUB_RUN_ID" ] && continue
-            names=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?per_page=100" \
-                      --jq '.artifacts[] | select(.expired | not) | .name')
+            artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?per_page=100" \
+                          --jq '.artifacts[] | "\(.name) \(.expired)"')
+            if grep -q '^perf-history ' <<<"$artifacts"; then listed=1; fi
             for want in scorecard-report perf-history; do
-              if [ ! -f "previous/$want.json" ] && grep -qx "$want" <<<"$names"; then
+              if [ ! -f "previous/$want.json" ] && grep -qx "$want false" <<<"$artifacts"; then
                 gh run download "$id" -R "$GITHUB_REPOSITORY" -n "$want" -D previous
                 echo "previous $want: run $id"
               fi
             done
             if [ -f previous/scorecard-report.json ] && [ -f previous/perf-history.json ]; then break; fi
           done
-          if [ ! -f previous/scorecard-report.json ] && [ ! -f previous/perf-history.json ]; then
-            echo "no earlier nightly left a report or a perf history: first night"
-            touch previous/first-night
+          if [ "$RESTART_PERF_HISTORY" = true ]; then
+            echo "restart_perf_history: the perf history starts again tonight"
+            touch previous/perf-restart
+          elif [ ! -f previous/perf-history.json ]; then
+            if [ "$listed" = 0 ]; then
+              echo "no earlier nightly lists a perf-history artifact: first night of the perf history"
+              touch previous/first-night
+            else
+              echo "::error::an earlier nightly lists a perf-history artifact, but none could be fetched (expired?);" \
+                   "dispatch the nightly with restart_perf_history to start a new one"
+            fi
           fi
           ci=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --status completed \
                  --limit 1 --json databaseId --jq '.[0].databaseId // empty')
@@ -314,11 +334,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           status=0
-          require=--require-history
-          if [ -f previous/first-night ]; then require=; fi
+          args=(--history previous/perf-history.json --require-history)
+          if [ -f previous/perf-restart ]; then
+            args=(--note "Perf history restarted on request (workflow_dispatch input restart_perf_history): every metric starts again tonight.")
+          elif [ -f previous/first-night ]; then
+            args=(--note "First night of the perf history: no earlier nightly lists a perf-history artifact, so every metric starts new.")
+          fi
           python3 tools/scorecard/perf.py extract --results results --sha "$GITHUB_SHA" --out out/perf-entry.json
-          python3 tools/scorecard/perf.py compare --entry out/perf-entry.json --history previous/perf-history.json \
-            $require --out out/perf-history.json --markdown out/perf.md > perf-compare.log || status=$?
+          python3 tools/scorecard/perf.py compare --entry out/perf-entry.json "${args[@]}" \
+            --out out/perf-history.json --markdown out/perf.md > perf-compare.log || status=$?
           if [ -f out/perf.md ]; then cat out/perf.md; else cat perf-compare.log; fi >> "$GITHUB_STEP_SUMMARY"
           exit $status
       - uses: actions/upload-artifact@v4

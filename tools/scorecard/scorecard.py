@@ -837,6 +837,9 @@ def _check_accepts(name: str, data: dict, metric_ids: set, errors: list[str], to
             elif metric_runs.get(a.get("metric")) not in (None, a["run"]):
                 errors.append(f"{where}: the metric is read only from run '{metric_runs[a['metric']]}', "
                               f"so a record for '{a['run']}' could never match")
+        elif a.get("metric") in metric_runs and metric_runs[a["metric"]] is None:
+            errors.append(f"{where}: the metric is read from every run, and each run has its own level: "
+                          f"name the 'run' this value was measured on")
         if not isinstance(a.get("reason"), str) or not a["reason"].strip():
             errors.append(f"{where}: needs a 'reason' (why the new level is accepted, and who accepted it)")
 

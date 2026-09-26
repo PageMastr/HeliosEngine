@@ -618,8 +618,13 @@ class PerfMetricTests(Fixture):
         data = self.with_metric(run="linux-gcc")
         data["perf_accept"] = [dict(good, run="windows-vs2026")]
         self.assertFinding(self.run_check(data), "read only from run 'linux-gcc'")
-        data = self.with_metric()  # read from every run: any declared run may be named
+        data = self.with_metric()  # read from every run: any declared run may be named, and one must be
         data["perf_accept"] = [dict(good, run="windows-vs2026")]
+        self.assertEqual(self.run_check(data), [])
+        data["perf_accept"] = [{k: v for k, v in good.items() if k != "run"}]
+        self.assertFinding(self.run_check(data), "name the 'run' this value was measured on")
+        data = self.with_metric(run="linux-gcc")  # read from one run: the record may leave it out
+        data["perf_accept"] = [{k: v for k, v in good.items() if k != "run"}]
         self.assertEqual(self.run_check(data), [])
         errors = []
         tomorrow = {k: v for k, v in good.items() if k != "run"}

@@ -761,11 +761,16 @@ void World::releaseRelationTargets(Entity e, bool isTarget) {
         for (const Entity x : members) logEvent(StructuralOp::SetFrame, x, 0);
     }
     if (m_desc.relations.docking == DockStorage::Field) {
-        if (m_impl->dockIndex.empty()) return;
+        if (m_impl->dockIndex.empty() || !m_impl->mayHostDocks(e.id)) return;
         auto it = m_impl->dockIndex.find(e.id);
         if (it == m_impl->dockIndex.end()) return;
         std::vector<u64> docked = std::move(it->second);
         m_impl->dockIndex.erase(it);
+        if (++m_impl->dockHostsErased >= Impl::kDockFilterRebuild) {
+            m_impl->dockHostsErased = 0;
+            m_impl->dockHostFilter.fill(0);
+            for (const auto& [host, list] : m_impl->dockIndex) m_impl->addDockHost(host);
+        }
         std::sort(docked.begin(), docked.end());
         docked.erase(std::unique(docked.begin(), docked.end()), docked.end());
         for (const u64 id : docked) {
@@ -1100,6 +1105,7 @@ Result<void> World::dock(Entity e, Entity host) {
             ecs_set_id(m_flecs, fe(e), m_dockRefId, sizeof(DockRef), &value); // first dock: one table move
         }
         std::vector<u64>& list = m_impl->dockIndex[host.id];
+        m_impl->addDockHost(host.id);
         list.push_back(e.id);
         // Amortized pruning of stale entries (re-docked elsewhere, undocked or dead).
         if (list.size() >= 16 && isPowerOfTwo(list.size())) pruneDockList(host, list);

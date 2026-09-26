@@ -252,7 +252,12 @@ EntityRegistry::Page* EntityRegistry::findPage(EntityId id) const noexcept {
 
 EntityRegistry::Page& EntityRegistry::ensurePage(EntityId id) {
     const u64 key = (id.value >> kPageBits) + 1;
-    if (const u64 page = m_pageOf.find(key); page != 0) return pageAt(static_cast<u32>(page - 1));
+    if (key == m_lastPageKey) return pageAt(m_lastPage);
+    if (const u64 page = m_pageOf.find(key); page != 0) {
+        m_lastPageKey = key;
+        m_lastPage = static_cast<u32>(page - 1);
+        return pageAt(m_lastPage);
+    }
     u32 index = 0;
     if (!m_freePages.empty()) {
         index = m_freePages.back();
@@ -268,6 +273,8 @@ EntityRegistry::Page& EntityRegistry::ensurePage(EntityId id) {
     Page& p = pageAt(index);
     std::memset(static_cast<void*>(&p), 0, sizeof(Page));
     m_pageOf.insert(key, index + 1);
+    m_lastPageKey = key;
+    m_lastPage = index;
     return p;
 }
 
@@ -329,15 +336,24 @@ bool EntityRegistry::remove(EntityId id, NetHandle handle) {
     if (!paged(id)) {
         if (!m_byId.erase(id.value)) return false;
     } else {
-        Page* p = findPage(id);
-        u64* slot = p ? &p->entity[id.value & (kPageIds - 1)] : nullptr;
-        if (!slot || *slot == 0) return false;
-        *slot = 0;
+        const u64 key = (id.value >> kPageBits) + 1;
+        u32 index = m_lastPage;
+        if (key != m_lastPageKey) {
+            const u64 page = m_pageOf.find(key);
+            if (page == 0) return false;
+            index = static_cast<u32>(page - 1);
+            m_lastPageKey = key;
+            m_lastPage = index;
+        }
+        Page& p = pageAt(index);
+        u64& slot = p.entity[id.value & (kPageIds - 1)];
+        if (slot == 0) return false;
+        slot = 0;
         --m_pagedCount;
-        if (--p->live == 0) { // recycle the page
-            const u64 key = (id.value >> kPageBits) + 1;
-            m_freePages.push_back(static_cast<u32>(m_pageOf.find(key) - 1));
+        if (--p.live == 0) { // recycle the page
+            m_freePages.push_back(index);
             m_pageOf.erase(key);
+            m_lastPageKey = 0;
         }
     }
     if (handle.isValid() && m_handles.releaseIssuedTo(handle, id)) m_byHandleIndex[handle.index()] = Entity();

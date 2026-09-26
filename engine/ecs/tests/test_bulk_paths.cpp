@@ -367,3 +367,32 @@ TEST_CASE("ecs bulk paths: Set and Add after their spawn fuse; scattered ones ta
     const u64 contiguous = run(false);
     CHECK(contiguous == run(true));
 }
+
+TEST_CASE("ecs bulk paths: destroying docking hosts logs undocks across host-filter rebuilds") {
+    // DockStorage::Field keeps a host filter so that destroys skip the reverse-index lookup; it is
+    // rebuilt every 1,024 host removals and must never hide a host.
+    World w;
+    std::vector<Entity> hosts, ships;
+    for (u32 i = 0; i < 1100; ++i) {
+        hosts.push_back(w.spawn());
+        ships.push_back(w.spawn());
+        REQUIRE(w.dock(ships.back(), hosts.back()).hasValue());
+    }
+    for (u32 i = 0; i < 1100; ++i) {
+        w.clearStructuralLog();
+        w.destroy(hosts[i]);
+        REQUIRE(w.structuralLog().size() == 2);
+        CHECK(w.structuralLog()[0].op == StructuralOp::Undock);
+        CHECK(w.structuralLog()[0].entity == w.entityId(ships[i]));
+        CHECK(w.structuralLog()[1].op == StructuralOp::Destroy);
+        CHECK_FALSE(w.dockedTo(ships[i]).isValid());
+        if (i % 100 == 0) { // a new host after a rebuild is found too
+            const Entity h = w.spawn();
+            const Entity s = w.spawn();
+            REQUIRE(w.dock(s, h).hasValue());
+            w.clearStructuralLog();
+            w.destroy(h);
+            CHECK(w.structuralLog().size() == 2);
+        }
+    }
+}

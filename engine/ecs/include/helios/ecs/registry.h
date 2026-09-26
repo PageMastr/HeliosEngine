@@ -188,6 +188,10 @@ private:
     std::vector<u32> m_freePages;
     u32 m_pageCount = 0; // pages handed out from the chunks so far
     usize m_pagedCount = 0;
+    // The page last used by addNew()/remove() (bursts touch consecutive ids); const lookups do not
+    // use it, so they stay safe to run concurrently.
+    u64 m_lastPageKey = 0;
+    u32 m_lastPage = 0;
     NetHandleTable m_handles;
     std::vector<Entity> m_byHandleIndex;
 };

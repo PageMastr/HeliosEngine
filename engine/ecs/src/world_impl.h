@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "flecs_internal.h"
+#include "helios/core/hash.h"
 #include "helios/core/jobs.h"
 #include "helios/ecs/world.h"
 
@@ -90,6 +91,20 @@ struct World::Impl {
     /// DockStorage::Field reverse index: host -> docked entities. Entries are validated (alive and
     /// DockRef still pointing at the host) and pruned lazily in dockedAt().
     std::unordered_map<u64, std::vector<u64>> dockIndex;
+    /// Bloom filter over dockIndex's hosts: destroys skip the lookup for entities that never hosted
+    /// a dock (bits are only set; rebuilt from dockIndex every kDockFilterRebuild host removals).
+    std::array<u64, 64> dockHostFilter{};
+    u32 dockHostsErased = 0;
+    static constexpr u32 kDockFilterRebuild = 1024;
+    static u64 dockFilterBit(u64 host) noexcept { return mix64(host) & 4095; }
+    bool mayHostDocks(u64 host) const noexcept {
+        const u64 b = dockFilterBit(host);
+        return (dockHostFilter[b >> 6] >> (b & 63)) & 1;
+    }
+    void addDockHost(u64 host) noexcept {
+        const u64 b = dockFilterBit(host);
+        dockHostFilter[b >> 6] |= u64(1) << (b & 63);
+    }
 
     // Command application scratch (reused; main thread only).
     std::vector<u32> fusedHead, fusedTail, fusedNext;

@@ -284,9 +284,10 @@ ninja -C build/script helios_script script_tests && ./build/script/bin/script_te
 
 ## Plan conformance
 
-Plan-Rev: 6
+Plan-Rev: 8
 
-Written to plan revision 6: WP-0.10r added the `codegen-fornloop-fuel` and `fuel-counter` Luau patches
+Written to plan revision 8, which is WP-0.10r's own `Plan-Change` to 02 §7.4 and 04 §10.2 (the
+Integrator raised this line from 6 when it merged, 09 §5.10.2 D1): WP-0.10r added the `codegen-fornloop-fuel` and `fuel-counter` Luau patches
 and made `create()` refuse native codegen on cells and world-script hosts. 02 §7.4 and 04 §10.2, as WP-0.10r
 amended them, say the refusal stays after the patch: the patch is its precondition, and lifting it is
 02 §8.1's P3 "codegen opt-in on cells" item. World-script hosts run the cell profile; a dedicated profile,

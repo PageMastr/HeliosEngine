@@ -159,24 +159,23 @@ NetHandleTable::NetHandleTable(const Desc& desc)
       m_reserved(std::min(desc.reservedCount, NetHandle::kMaxIndex)), m_reuseDelay(desc.reuseDelay) {
     m_nextFresh = m_reserved + 1;
     m_slots.resize(1); // slot 0 is never issued
-    m_generations.resize(1, u8{1});
+    m_state.resize(1, u16{1});
 }
 
 NetHandleTable::NetHandleTable() : NetHandleTable(Desc{}) {}
 
 void NetHandleTable::grow(u32 index) {
     m_slots.resize(static_cast<usize>(index) + 1);
-    m_generations.resize(static_cast<usize>(index) + 1, u8{1});
+    m_state.resize(static_cast<usize>(index) + 1, u16{1});
 }
 
 NetHandle NetHandleTable::issue(u32 index, EntityId id, u64 owner) noexcept {
     if (index >= m_slots.size()) grow(index);
-    Slot& s = m_slots[index];
-    HELIOS_ASSERT(!s.id.isValid());
-    s.id = id;
-    s.owner = owner;
+    HELIOS_ASSERT(!(m_state[index] & kLive));
+    m_slots[index] = Slot{id, owner};
+    m_state[index] |= kLive;
     ++m_live;
-    return NetHandle::make(index, m_generations[index]);
+    return NetHandle::make(index, static_cast<u8>(m_state[index]));
 }
 
 Result<NetHandle> NetHandleTable::allocate(EntityId id, u64 owner) {
@@ -235,11 +234,10 @@ void NetHandleTable::tryAllocateN(std::span<const EntityId> ids, const u64* owne
             for (usize k = 0; k < run; ++k, ++i) {
                 if (k + ahead < waiting) detail::prefetch(&m_slots[ring[k + ahead]]);
                 const u32 index = ring[k];
-                Slot& s = m_slots[index];
-                HELIOS_ASSERT(!s.id.isValid());
-                s.id = ids[i];
-                s.owner = owners[i];
-                out[i] = NetHandle::make(index, m_generations[index]);
+                HELIOS_ASSERT(!(m_state[index] & kLive));
+                m_slots[index] = Slot{ids[i], owners[i]};
+                m_state[index] |= kLive;
+                out[i] = NetHandle::make(index, static_cast<u8>(m_state[index]));
             }
             m_freeHead += run;
             m_live += static_cast<u32>(run);
@@ -251,7 +249,8 @@ void NetHandleTable::tryAllocateN(std::span<const EntityId> ids, const u64* owne
             for (usize k = 0; k < run; ++k, ++i) {
                 const u32 index = first + static_cast<u32>(k);
                 m_slots[index] = Slot{ids[i], owners[i]};
-                out[i] = NetHandle::make(index, m_generations[index]);
+                m_state[index] |= kLive;
+                out[i] = NetHandle::make(index, static_cast<u8>(m_state[index]));
             }
             m_nextFresh += static_cast<u32>(run);
             m_live += static_cast<u32>(run);
@@ -266,7 +265,7 @@ Result<NetHandle> NetHandleTable::allocateAt(u32 index, EntityId id, u64 owner) 
         return makeError(ErrorCode::OutOfRange, "content handle index {} outside [1, {}]", index, m_reserved);
     }
     if (!id.isValid()) return Error{ErrorCode::InvalidArgument, "NetHandleTable: invalid EntityId"};
-    if (index < m_slots.size() && m_slots[index].id.isValid()) {
+    if (index < m_state.size() && (m_state[index] & kLive)) {
         return makeError(ErrorCode::AlreadyExists, "content handle index {} in use", index);
     }
     return issue(index, id, owner);
@@ -286,8 +285,8 @@ void NetHandleTable::growRing() {
 }
 
 NetHandle NetHandleTable::handleAt(u32 index) const noexcept {
-    if (index == 0 || index >= m_slots.size() || !m_slots[index].id.isValid()) return NetHandle();
-    return NetHandle::make(index, m_generations[index]);
+    if (index == 0 || index >= m_state.size() || !(m_state[index] & kLive)) return NetHandle();
+    return NetHandle::make(index, static_cast<u8>(m_state[index]));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -369,9 +368,24 @@ Result<NetHandle> EntityRegistry::assignHandle(EntityId id, u32 contentIndex) {
     return assignHandleFor(id, entity, contentIndex);
 }
 
+void EntityRegistry::recordHandle(EntityId id, NetHandle handle) {
+    if (!handle.isValid() || !paged(id)) return; // other ids release through the checked path
+    const u64 key = (id.value >> kPageBits) + 1;
+    if (key != m_lastPageKey) { // (a batch records consecutive ids: the page changes every 64)
+        const u64 page = m_pageOf.find(key);
+        if (page == 0) return;
+        m_lastPageKey = key;
+        m_lastPage = static_cast<u32>(page - 1);
+        m_lastPagePtr = &pageAt(m_lastPage);
+    }
+    m_lastPagePtr->handle[id.value & (kPageIds - 1)] = handle.value;
+}
+
 NetHandle EntityRegistry::tryAssignHandle(EntityId id, Entity entity) noexcept {
     HELIOS_ASSERT(find(id) == entity, "tryAssignHandle: id is not registered for this entity");
-    return m_handles.tryAllocate(id, entity.id);
+    const NetHandle handle = m_handles.tryAllocate(id, entity.id);
+    recordHandle(id, handle);
+    return handle;
 }
 
 void EntityRegistry::tryAssignHandles(std::span<const EntityId> ids, const u64* entities, NetHandle* out) noexcept {
@@ -381,11 +395,15 @@ void EntityRegistry::tryAssignHandles(std::span<const EntityId> ids, const u64* 
     }
 #endif
     m_handles.tryAllocateN(ids, entities, out);
+    for (usize i = 0; i < ids.size(); ++i) recordHandle(ids[i], out[i]);
 }
 
 Result<NetHandle> EntityRegistry::assignHandleFor(EntityId id, Entity entity, u32 contentIndex) {
     HELIOS_ASSERT(find(id) == entity, "assignHandleFor: id is not registered for this entity");
-    return contentIndex != 0 ? m_handles.allocateAt(contentIndex, id, entity.id) : m_handles.allocate(id, entity.id);
+    Result<NetHandle> handle =
+        contentIndex != 0 ? m_handles.allocateAt(contentIndex, id, entity.id) : m_handles.allocate(id, entity.id);
+    if (handle) recordHandle(id, *handle);
+    return handle;
 }
 
 bool EntityRegistry::removeSlow(EntityId id, NetHandle handle) {
@@ -403,15 +421,18 @@ bool EntityRegistry::removeSlow(EntityId id, NetHandle handle) {
             m_lastPagePtr = &pageAt(index);
         }
         Page& p = pageAt(index);
-        u64& slot = p.entity[id.value & (kPageIds - 1)];
+        const u32 offset = static_cast<u32>(id.value & (kPageIds - 1));
+        u64& slot = p.entity[offset];
         if (slot == 0) return false;
         slot = 0;
         --m_pagedCount;
+        releaseHandle(id, handle, p.handle[offset]);
         if (--p.live == 0) { // recycle the page
             m_freePages.push_back(index);
             m_pageOf.erase(key);
             m_lastPageKey = 0;
         }
+        return true;
     }
     if (handle.isValid()) m_handles.releaseIssuedTo(handle, id);
     return true;

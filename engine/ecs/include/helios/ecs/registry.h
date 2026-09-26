@@ -104,17 +104,8 @@ public:
     bool releaseIssuedTo(NetHandle handle, EntityId id) {
         const u32 index = handle.index();
         if (index == 0 || index >= m_slots.size() || !id.isValid()) return false;
-        Slot& s = m_slots[index];
-        u8& generation = m_generations[index];
-        if (s.id != id || generation != handle.generation()) return false;
-        s.id = EntityId();
-        s.owner = 0;
-        generation = static_cast<u8>(generation == 0xFF ? 1 : generation + 1); // 0 is never issued
-        --m_live;
-        if (index > m_reserved) {
-            if (m_freeTail == m_freeRing.size()) growRing();
-            m_freeRing[m_freeTail++] = index;
-        }
+        if (m_state[index] != (kLive | handle.generation()) || m_slots[index].id != id) return false;
+        freeSlot(index);
         return true;
     }
 
@@ -128,7 +119,10 @@ public:
         const Slot* s = liveSlot(handle);
         return s ? s->owner : 0;
     }
-    bool isLive(NetHandle handle) const noexcept { return liveSlot(handle) != nullptr; }
+    bool isLive(NetHandle handle) const noexcept {
+        const u32 index = handle.index();
+        return index != 0 && index < m_state.size() && m_state[index] == (kLive | handle.generation());
+    }
     /// Handle currently issued for slot `index` (invalid if the slot is free).
     NetHandle handleAt(u32 index) const noexcept;
 
@@ -136,23 +130,40 @@ public:
     u32 reservedCount() const noexcept { return m_reserved; }
     u32 maxHandles() const noexcept { return m_max; }
     usize memoryBytes() const noexcept {
-        return m_slots.capacity() * sizeof(Slot) + m_generations.capacity() + m_freeRing.capacity() * sizeof(u32);
+        return m_slots.capacity() * sizeof(Slot) + m_state.capacity() * sizeof(u16) + m_freeRing.capacity() * sizeof(u32);
     }
 
 private:
-    // Spawn and destroy bursts visit slots in FIFO order, which is scattered over the table: a
-    // slot is 16 bytes (id and owner; live = valid id) so each visit costs one cache line, and the
-    // generations sit in a byte array small enough to stay cached.
+    friend class EntityRegistry;
+
+    // Spawn and destroy bursts visit slots in FIFO order, which is scattered over the table. A
+    // slot's id and owner (16 bytes, one cache line per visit) are only written when it is issued
+    // and read by lookups; whether it is live and its generation sit in a small array that stays
+    // cached, so a release validated by the caller (EntityRegistry keeps each id's handle) touches
+    // only that array and the FIFO.
     struct Slot {
-        EntityId id; // invalid while the slot is free
+        EntityId id; // meaningful while the slot is live
         u64 owner = 0;
     };
     static_assert(sizeof(Slot) == 16);
-    const Slot* liveSlot(NetHandle handle) const noexcept {
+    static constexpr u16 kLive = 0x100; // m_state: kLive | generation of the issued handle, or the
+                                        // generation the next handle gets while free
+    const Slot* liveSlot(NetHandle handle) const noexcept { return isLive(handle) ? &m_slots[handle.index()] : nullptr; }
+    /// release() of a handle the caller knows is live and issued by it (EntityRegistry::remove()).
+    bool releaseKnown(NetHandle handle) noexcept {
         const u32 index = handle.index();
-        if (index == 0 || index >= m_slots.size()) return nullptr;
-        const Slot& s = m_slots[index];
-        return s.id.isValid() && m_generations[index] == handle.generation() ? &s : nullptr;
+        if (index == 0 || index >= m_state.size() || m_state[index] != (kLive | handle.generation())) return false;
+        freeSlot(index);
+        return true;
+    }
+    void freeSlot(u32 index) {
+        const u16 generation = m_state[index] & 0xFF;
+        m_state[index] = static_cast<u16>(generation == 0xFF ? 1 : generation + 1); // 0 is never issued
+        --m_live;
+        if (index > m_reserved) {
+            if (m_freeTail == m_freeRing.size()) growRing();
+            m_freeRing[m_freeTail++] = index;
+        }
     }
     NetHandle issue(u32 index, EntityId id, u64 owner) noexcept;
     u32 nextIndex() noexcept; // the slot tryAllocate() issues next (0: full), taken from the FIFO
@@ -160,8 +171,8 @@ private:
     void growRing();
     void grow(u32 index);
 
-    std::vector<Slot> m_slots;      // index 0 unused
-    std::vector<u8> m_generations;  // per slot: generation of its current (or next) handle
+    std::vector<Slot> m_slots; // index 0 unused
+    std::vector<u16> m_state;  // per slot: kLive while issued | generation
     std::vector<u32> m_freeRing; // FIFO of freed dynamic slots: [m_freeHead, m_freeTail) wait
     usize m_freeHead = 0;
     usize m_freeTail = 0;
@@ -179,7 +190,8 @@ private:
 /// cache lines instead of one random line per id in a large hash table, which evicted the tables
 /// that the rest of a sync point works on (ADR-004a, SPIKES.md §5). Content-placed and client-local
 /// ids are hashes and stay in a U64Map. A page is recycled once its last id is removed, so ids
-/// scattered over many blocks (restored entities) cost at most one 520-byte page each.
+/// scattered over many blocks (restored entities) cost at most one 776-byte page each. A page also
+/// records the NetHandle issued for each of its ids, which validates that handle's release.
 class EntityRegistry {
 public:
     explicit EntityRegistry(const NetHandleTable::Desc& handles = {}, MemoryTag tag = MemoryTag::Unknown);
@@ -215,12 +227,13 @@ public:
     bool remove(EntityId id, NetHandle handle) {
         // A destroy burst of consecutive ids stays in one page (the page is recycled on the slow path).
         if (((id.value >> kPageBits) + 1) == m_lastPageKey && paged(id) && m_lastPagePtr->live > 1) {
-            u64& slot = m_lastPagePtr->entity[id.value & (kPageIds - 1)];
+            const u32 offset = static_cast<u32>(id.value & (kPageIds - 1));
+            u64& slot = m_lastPagePtr->entity[offset];
             if (slot == 0) return false;
             slot = 0;
             --m_lastPagePtr->live;
             --m_pagedCount;
-            if (handle.isValid()) m_handles.releaseIssuedTo(handle, id);
+            releaseHandle(id, handle, m_lastPagePtr->handle[offset]);
             return true;
         }
         return removeSlow(id, handle);
@@ -241,8 +254,23 @@ private:
     static constexpr u32 kChunkPages = 64;
     struct Page {
         u64 entity[kPageIds]; // Entity ids by offset within the page; 0 = free
+        u32 handle[kPageIds]; // NetHandle value the registry issued for the id, 0 = none
         u32 live;
     };
+    /// Releases `handle` for `id` (if valid). When it is the handle this registry recorded for the
+    /// id, it is known to be live and issued to `id`, and the release skips the handle table's
+    /// slot (a scattered cache line in a destroy burst); any other handle takes the checked path.
+    void releaseHandle(EntityId id, NetHandle handle, u32& recorded) {
+        if (handle.isValid()) {
+            if (handle.value == recorded) {
+                m_handles.releaseKnown(handle);
+            } else {
+                m_handles.releaseIssuedTo(handle, id);
+            }
+        }
+        recorded = 0;
+    }
+    void recordHandle(EntityId id, NetHandle handle);
     struct ChunkFree {
         void operator()(Page* chunk) const noexcept;
     };

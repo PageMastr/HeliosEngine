@@ -31,11 +31,12 @@ func TestPerfTokenIssueAt100PerSecond(t *testing.T) {
 	}
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{MaxIdleConnsPerHost: 128}}
 	body, _ := json.Marshal(session.CreateSessionRequest{ZoneID: 1001})
-	issue := func(bearer string) (time.Duration, error) {
+	// issue returns the latency counted from `from`: the request's scheduled slot in the run, so
+	// a request the client sends late is charged for the delay too (no coordinated omission).
+	issue := func(bearer string, from time.Time) (time.Duration, error) {
 		req, _ := http.NewRequest(http.MethodPost, apiURL+session.ServicePath+"CreateSession", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+bearer)
-		start := time.Now()
 		res, err := client.Do(req)
 		if err != nil {
 			return 0, err
@@ -45,10 +46,10 @@ func TestPerfTokenIssueAt100PerSecond(t *testing.T) {
 		if res.StatusCode != http.StatusOK {
 			return 0, fmt.Errorf("status %d", res.StatusCode)
 		}
-		return time.Since(start), nil
+		return time.Since(from), nil
 	}
 	for _, b := range bearers { // warm the connections and caches
-		if _, err := issue(b); err != nil {
+		if _, err := issue(b, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -57,11 +58,12 @@ func TestPerfTokenIssueAt100PerSecond(t *testing.T) {
 	var wg sync.WaitGroup
 	start := time.Now()
 	for i := 0; i < total; i++ {
-		time.Sleep(time.Until(start.Add(time.Duration(i) * time.Second / rate)))
+		sched := start.Add(time.Duration(i) * time.Second / rate)
+		time.Sleep(time.Until(sched))
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			d, err := issue(bearers[i%len(bearers)])
+			d, err := issue(bearers[i%len(bearers)], sched)
 			if err != nil {
 				failed.Add(1)
 				d = time.Hour

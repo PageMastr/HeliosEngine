@@ -1895,3 +1895,12 @@ This pass also takes three other inputs:
 - Links: 154 relative links and anchors in PLAN.md, 00, 09, ADR-004a and this file resolve (GitHub slug
   rules).
 - `cmake -P tools/status/check_status.cmake` passes: 42 module directories, PLAN-REV 6.
+
+## 43. Merged plan changes (09 §5.10.2 D1)
+
+*The Integrator appends one row per anchor of each merged `Plan-Change:`, when it raises
+`docs/plan/PLAN-REV`, and names the rework WPs that the change opened (D3).*
+
+| PLAN-REV | Anchor | PR, WP | Change | Rework WPs opened | Conformance test (D5) |
+|---|---|---|---|---|---|
+| 7 | 06 §1.2 | #12, WP-0.19 (merged 2026-09-26) | `AttributeDef` gains `id: Name`, the identifier HXL and the slot constants use (`attr(e, Shield.Max)`). The modifier tuple gains `priority`, which picks the `PreAssign` and `PostAssign` winner; on a tie, the larger value wins. The HXL built-in list names comparisons, short-circuit `&& \|\| !` and `abs floor ceil` (exact IEEE operations). This closes §42's hand-off to 06 (R5-09.11) | None. The only code under the anchor (`engine/hxl`, `engine/gameplay`, `services/pkg/hxl`, all WP-0.19) came in the same PR and implements the new text; their READMEs record `Plan-Rev: 7` | `attributes: Dogma operator order` (`engine/gameplay`, priority and tie rule); the built-ins through the shared corpus `tests/corpus/hxl` (GP-1) |

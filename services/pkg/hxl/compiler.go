@@ -221,7 +221,14 @@ func (g *gen) emitCall(n *node) (Type, *Diagnostic) {
 	}
 	argc := len(n.children)
 	if argc < fn.minArgs || (fn.maxArgs != variadic && argc > fn.maxArgs) {
-		return 0, g.failAt(n, EArity, "%s() takes %d..%d argument(s), got %d", n.name, fn.minArgs, fn.maxArgs, argc)
+		// Same wording as C++ (arityError).
+		expected := fmt.Sprintf("%d to %d", fn.minArgs, fn.maxArgs)
+		if fn.maxArgs == variadic {
+			expected = fmt.Sprintf("at least %d", fn.minArgs)
+		} else if fn.minArgs == fn.maxArgs {
+			expected = fmt.Sprintf("%d", fn.minArgs)
+		}
+		return 0, g.failAt(n, EArity, "%s() takes %s argument(s), got %d", n.name, expected, argc)
 	}
 	args := n.children
 	switch fn.id {
@@ -472,6 +479,10 @@ func Compile(source string, opts CompileOptions) (*Program, error) {
 			hostParams = []string{"self"}
 		}
 		for i := range hostParams {
+			// Host parameter names end up in the bytecode, whose verifier accepts only identifiers.
+			if !isIdentifier(hostParams[i]) {
+				return nil, diag(ESyntax, 1, 1, "invalid parameter name '%s'", hostParams[i])
+			}
 			for j := 0; j < i; j++ {
 				if hostParams[i] == hostParams[j] {
 					return nil, diag(EDuplicateParam, 1, 1, "duplicate parameter '%s'", hostParams[i])

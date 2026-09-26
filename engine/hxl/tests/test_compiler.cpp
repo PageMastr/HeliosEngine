@@ -258,6 +258,20 @@ TEST_CASE("hxl compiler: the deepest programs within the limits compile and eval
     CHECK(evalNum(everyLevel) == 1.0);
 }
 
+// Pinned wording, identical in Go (TestArityMessages): only status and position are in the corpus.
+TEST_CASE("hxl compiler: arity messages match Go") {
+    auto messageOf = [](std::string_view src) {
+        Diagnostic d;
+        CHECK_FALSE(compile(src, {}, &d).ok());
+        CHECK(d.status == Status::Arity);
+        return d.message;
+    };
+    CHECK(messageOf("min(1)") == "min() takes at least 2 argument(s), got 1");
+    CHECK(messageOf("sqrt(1, 2)") == "sqrt() takes 1 argument(s), got 2");
+    CHECK(messageOf("stacks(1)") == "stacks() takes 0 argument(s), got 1");
+    CHECK(messageOf("clamp(1, 2)") == "clamp() takes 3 argument(s), got 2");
+}
+
 TEST_CASE("hxl compiler: the static cost bounds every evaluation") {
     auto p = compile("select(1 < 2, exp(1) + ln(2), pow(2, 3))");
     REQUIRE(p.ok());

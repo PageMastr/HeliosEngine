@@ -465,6 +465,10 @@ Result<Program> compile(std::string_view source, const CompileOptions& options, 
         params = ast.params;
     } else {
         for (usize i = 0; i < options.params.size(); ++i) {
+            // Host parameter names end up in the bytecode, whose verifier accepts only identifiers.
+            if (!detail::isIdentifier(options.params[i])) {
+                return failWith(Status::Syntax, 1, 1, std::format("invalid parameter name '{}'", options.params[i]));
+            }
             for (usize j = 0; j < i; ++j) {
                 if (options.params[i] == options.params[j]) {
                     return failWith(Status::DuplicateParam, 1, 1, std::format("duplicate parameter '{}'", options.params[i]));

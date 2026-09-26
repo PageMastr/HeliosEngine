@@ -191,3 +191,29 @@ func TestDecodeStackLimit(t *testing.T) {
 		t.Errorf("n = MaxStack + 1: got %v, want E_BYTECODE (stack)", err)
 	}
 }
+
+// TestArityMessages: review regression (WP-0.19 round 1). Go printed "min() takes 2..-1
+// argument(s)"; the wording now matches C++ ("hxl compiler: arity messages match Go").
+func TestArityMessages(t *testing.T) {
+	for src, want := range map[string]string{
+		"min(1)":        "min() takes at least 2 argument(s), got 1",
+		"sqrt(1, 2)":    "sqrt() takes 1 argument(s), got 2",
+		"stacks(1)":     "stacks() takes 0 argument(s), got 1",
+		"clamp(1, 2)":   "clamp() takes 3 argument(s), got 2",
+		"attr(self)":    "attr() takes 2 argument(s), got 1",
+		"select(true)":  "select() takes 3 argument(s), got 1",
+		"lerp(1, 2, 3)": "",
+	} {
+		_, err := Compile(src, CompileOptions{})
+		if want == "" {
+			if err != nil {
+				t.Errorf("%s: %v", src, err)
+			}
+			continue
+		}
+		d, ok := AsDiagnostic(err)
+		if !ok || d.Status != EArity || d.Message != want {
+			t.Errorf("%s: got %v, want E_ARITY %q", src, err, want)
+		}
+	}
+}

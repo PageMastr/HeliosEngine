@@ -605,6 +605,21 @@
    "comment": "63 levels need 253 stack slots"
   },
   {
+   "name": "params.invalid_host_name",
+   "src": "1",
+   "params": ["self", "a b"],
+   "error": "E_SYNTAX",
+   "at": "1:1",
+   "comment": "host parameter names must be identifiers (they used to surface as an internal E_BYTECODE); review regression (WP-0.19 round 1)"
+  },
+  {
+   "name": "params.empty_host_name",
+   "src": "1",
+   "params": [""],
+   "error": "E_SYNTAX",
+   "at": "1:1"
+  },
+  {
    "name": "limit.formula_params",
    "src": "formula F(p0,p1,p2,p3,p4,p5,p6,p7,p8,p9,p10,p11,p12,p13,p14,p15,p16) = 1",
    "error": "E_LIMIT",

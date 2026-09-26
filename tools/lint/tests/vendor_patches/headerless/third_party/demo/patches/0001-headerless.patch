@@ -1,0 +1,5 @@
+Fixture patch: a hunk with no file header.
+
+@@ -1,1 +1,1 @@
+-a
++b

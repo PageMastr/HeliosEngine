@@ -1,0 +1,499 @@
+// Helios AAA scorecard registry (docs/plan/09-roadmap-and-process.md §5.6–5.8; WP-0.3).
+//
+// Every acceptance criterion is registered here with its evidence class, platforms, threshold and the
+// tests that evidence it (09 §5.3 DoD item 8). The nightly report evaluates each entry from JUnit, doctest
+// XML and `go test -json` results; this file never says that a criterion passes. An entry whose clauses
+// have no test yet says so: `status` is "partial" or "unmeasured" and `gaps` names each missing or
+// known-failing clause and the WP that owns it. A gap can never be green (09 §0 principle 4).
+// `threshold` quotes the plan; how a test reads a clause goes in `notes`.
+//
+// Check it with `python3 tools/scorecard/scorecard.py check` (CTest `lint_scorecard`); the format and the
+// checker are described in tools/scorecard/README.md.
+{
+  "version": 1,
+  "plan_rev": 6,
+  // Phases whose every criterion must be registered (the checker derives them from docs/plan).
+  "covers": [0],
+
+  // Result sets the nightly workflow produces. `default` runs count for every reference on their OS;
+  // the others count only for references that name them with "run".
+  "runs": {
+    "linux-gcc": {"os": "linux", "default": true,
+                  "description": "Linux GCC RelWithDebInfo: every CTest (lavapipe under Xvfb), perf serially, net_bench --gate"},
+    "linux-clang": {"os": "linux", "default": true,
+                    "description": "Linux Clang RelWithDebInfo: every CTest except perf (lavapipe under Xvfb)"},
+    "linux-asan": {"os": "linux", "default": false,
+                   "description": "Linux Clang Debug with ASan and UBSan"},
+    "linux-fuzz": {"os": "linux", "default": true,
+                   "description": "libFuzzer (Clang, -fsanitize=fuzzer with ASan and UBSan), 1 h per engine/net target"},
+    "windows-vs2026": {"os": "windows", "default": true,
+                       "description": "Windows MSBuild, VS 2026 (primary toolset), RelWithDebInfo, no GPU, net_bench --gate"},
+    "windows-vs2022": {"os": "windows", "default": true,
+                       "description": "Windows MSBuild, VS 2022 (floor toolset), RelWithDebInfo, no GPU"},
+    "windows-clang-cl": {"os": "windows", "default": true,
+                         "description": "Windows clang-cl RelWithDebInfo (Ninja), no GPU"},
+    "linux-go": {"os": "linux", "default": true,
+                 "description": "go test ./... and -tags integration (embedded PostgreSQL), HELIOS_NETCODE_INTEROP=1"},
+    "windows-go": {"os": "windows", "default": true,
+                   "description": "go test ./... and -tags integration (embedded PostgreSQL)"}
+  },
+
+  // Commands the nightly workflow runs outside CTest; each writes one JUnit result named after the gate.
+  "gates": {
+    "net_bench_gate": {"runs": ["linux-gcc", "windows-vs2026"], "min_seconds": 600,
+                       "description": "net_bench --gate: NS-0.2 raw and encrypted-stack pps per core, NS-0.7 600 s trunk run"},
+    "libfuzzer_packet_parser": {"runs": ["linux-fuzz"], "min_seconds": 3600,
+                                "description": "net_fuzz_packet_parser under libFuzzer for 1 h"},
+    "libfuzzer_connection_receive": {"runs": ["linux-fuzz"], "min_seconds": 3600,
+                                     "description": "net_fuzz_connection_receive under libFuzzer for 1 h"},
+    "libfuzzer_connect_token": {"runs": ["linux-fuzz"], "min_seconds": 3600,
+                                "description": "net_fuzz_connect_token under libFuzzer for 1 h"},
+    "libfuzzer_server_datagram": {"runs": ["linux-fuzz"], "min_seconds": 3600,
+                                  "description": "net_fuzz_server_datagram under libFuzzer for 1 h"},
+    "libfuzzer_address_parse": {"runs": ["linux-fuzz"], "min_seconds": 3600,
+                                "description": "net_fuzz_address_parse under libFuzzer for 1 h"}
+  },
+
+  // ------------------------------------------------------------------------------------------------
+  // Phase 0 criteria: every criterion whose plan phase includes 0, plus the IDs named in 09 §2.1's
+  // exit (the checker derives both lists from docs/plan and fails if one is missing here).
+  // ------------------------------------------------------------------------------------------------
+  "criteria": [
+    {
+      "id": "AAA-PLT-1", "phase": 0, "source": "01 §3.10", "owner": "WP-0.1",
+      "title": "Every commit builds and tests on the ADR-001a 8-job PR matrix",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Every commit builds and tests on both MSVC toolsets of ADR-001a (the primary VS 2026 v145, and the VS 2022 17.14 floor at MSVC 14.44, which also builds the SDK and every released Windows binary), clang-cl, GCC 13 and Clang 17, plus the MinGW cross-compile check: the 8-job PR matrix",
+      "notes": "Evidenced by the jobs of the latest completed ci.yml run on main; WP-0.1's acceptance adds that floor and primary run identical tests and determinism hashes",
+      "status": "partial",
+      "tests": [
+        {"ci_job": "Windows (MSVC, primary)"},
+        {"ci_job": "Windows (MSVC 14.44 floor)"},
+        {"ci_job": "Windows (clang-cl)"},
+        {"ci_job": "Linux (linux-gcc)"},
+        {"ci_job": "Linux (linux-clang)"},
+        {"ci_job": "Linux (headless servers + tools)"},
+        {"ci_job": "Windows cross-build (MinGW-w64)"}
+      ],
+      "gaps": [
+        {"clause": "The modular windows-msvc-dev job (the eighth PR job) does not exist yet", "state": "unmeasured", "owner": "WP-0.6c"}
+      ]
+    },
+    {
+      "id": "AAA-PLT-2", "phase": 0, "source": "01 §3.10", "owner": "WP-0.15",
+      "title": "All servers and helios-backend run natively on Windows without Docker (Phase 0 part)",
+      "class": "N", "platforms": ["windows"],
+      "threshold": "All servers and `helios-backend` run natively on Windows without Docker (Ph0)",
+      "notes": "The Linux production images (Ph2) are Phase 2's entry",
+      "status": "partial",
+      "tests": [
+        {"go": "internal/integration", "test": "TestRegisterLoginConnectToken", "tags": "integration"},
+        {"go": "internal/integration", "test": "TestGatewayCellReconnectOverNATS", "tags": "integration"},
+        {"go": "internal/stack", "test": "TestEmbeddedBusAndCache"},
+        {"ctest": "server_tests"},
+        {"ctest": "authority_tests"}
+      ],
+      "gaps": [
+        {"clause": "No nightly job starts the helios-cell.exe and helios-gateway.exe executables against helios-backend.exe on Windows (tools/milestone/validate.ps1 does it at milestone validation, 09 §5.9)", "state": "unmeasured", "owner": "WP-0.14"}
+      ]
+    },
+    {
+      "id": "AAA-REN-7", "phase": 0, "source": "01 §3.3", "owner": "WP-0.12",
+      "title": "Every render feature has a lavapipe golden from the commit that ships it, rendered twice bit-identically",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Every render feature has a lavapipe golden from the commit that ships it, whatever its REN-6 phase; each renders twice bit-identically; a failing golden blocks the merge",
+      "notes": "Lavapipe goldens run on Linux CI; Windows runners have no Vulkan driver, so Windows is evidenced by the Null trace goldens. The PR-tier Linux jobs run the goldens, which is how a failing golden blocks the merge",
+      "status": "partial",
+      "tests": [
+        {"ctest": "rendertest.vulkan.*", "platforms": ["linux"]},
+        {"ctest": "rendertest.report", "platforms": ["linux"]},
+        {"ctest": "rendertest.scenes"},
+        {"ctest": "rendertest.null.*"},
+        {"doctest": "render_tests", "case": "graph null: small frame trace golden (plan + command stream)"},
+        {"doctest": "render_tests", "case": "forward: a frame on the Null backend (trace golden)"},
+        {"doctest": "rhi_tests", "case": "null: command-stream trace golden for a small frame"},
+        {"ci_job": "Linux (linux-gcc)"},
+        {"ci_job": "Linux (linux-clang)"}
+      ],
+      "gaps": [
+        {"clause": "Coverage: nothing checks mechanically that every shipped render feature has a golden (rendertest.scenes only checks that the CMake scene list equals createScenes())", "state": "unmeasured", "owner": "WP-0.12"},
+        {"clause": "MinGW: the cross-built binaries are never executed, so the Null traces are not checked on MinGW", "state": "unmeasured", "owner": "WP-0.1"}
+      ]
+    },
+    {
+      "id": "RC-1", "phase": 0, "source": "03 §9.3", "owner": "WP-0.12",
+      "title": "Lavapipe goldens for every shipped feature, rendered twice; suite within 10 min; Null traces on all toolchains",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Every shipped feature has a lavapipe golden (ꟻLIP mean ≤ 0.01), rendered twice bit-identically; suite ≤ 10 min; Null traces on all toolchains",
+      "notes": "rendertest.report checks the 10-minute budget (--budget 600)",
+      "status": "partial",
+      "tests": [
+        {"ctest": "rendertest.vulkan.*", "platforms": ["linux"]},
+        {"ctest": "rendertest.report", "platforms": ["linux"]},
+        {"ctest": "rendertest.null.*"},
+        {"ctest": "rendertest.cli"},
+        {"ctest": "render_tests"},
+        {"ctest": "rhi_tests"},
+        {"ctest": "shaderc.spirv-val", "platforms": ["linux"]}
+      ],
+      "gaps": [
+        {"clause": "Coverage: nothing checks mechanically that every shipped feature has a golden (rendertest.scenes only checks that the CMake scene list equals createScenes())", "state": "unmeasured", "owner": "WP-0.12"},
+        {"clause": "MinGW: the cross-built binaries are never executed, so the Null traces are not checked on MinGW", "state": "unmeasured", "owner": "WP-0.1"}
+      ]
+    },
+    {
+      "id": "RT-03", "phase": 0, "source": "02 §8.2", "owner": "WP-0.9",
+      "title": "Physics hash (Phase 0 scope): the scripted scene's golden on every determinism toolchain and worker count, and the permuted-BodyID variant",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Phase 0 scope (02 §8.1): small hash; `stable-order` patch and stable body keys (RT-03 permuted variant). From RT-03: identical on every determinism toolchain (both MSVC toolsets, clang-cl, GCC, Clang and MinGW), at 1/4/16 workers; the permuted variant is rebuilt so that every `BodyID` differs and must give the identical hash; a CI build without the `stable-order` patch must fail it",
+      "notes": "The 1,000-body, 50-character, 10-vehicle scene, the AMD and Intel runs, the FBW hash and the slope-creep clause are RT-03's Phase 1 scope",
+      "status": "partial",
+      "tests": [
+        {"doctest": "physics_tests", "case": "determinism: the scripted scene matches its golden hash (RT-03 Phase 0)"},
+        {"doctest": "physics_tests", "case": "determinism: the golden holds at 1, 2, 4 and 16 workers"},
+        {"doctest": "physics_tests", "case": "determinism: repeated runs in one process are identical"},
+        {"doctest": "physics_tests", "case": "determinism: permuted BodyIDs give the same result when no island has two contacts"}
+      ],
+      "gaps": [
+        {"clause": "Permuted variant: multi-contact islands diverge until third_party/jolt/patches/stable-order is vendored; when it lands, a CI build without the patch must also fail the variant (the negative control)", "state": "failing", "owner": "WP-0.9",
+         "pinned_by": {"doctest": "physics_tests", "case": "determinism: KNOWN DIVERGENCE: permuted BodyIDs change multi-contact islands (stable-order patch pending)"}},
+        {"clause": "MinGW: the cross-built binaries are never executed, so the hash is not checked on MinGW", "state": "unmeasured", "owner": "WP-0.1"}
+      ]
+    },
+    {
+      "id": "RT-13", "phase": 0, "source": "02 §8.2", "owner": "WP-0.10",
+      "title": "Script kills, sticky kills, clean unwinding, no involuntary yields, StaleHandle, heap caps, 10k coroutines (all but the Phase 1 binding-heavy case)",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Runaway killed at `fuel_kill` on cells (replay kills at the identical fuel count) and ≤ 5 ms wall on the client; `pcall` cannot swallow a kill. A kill inside a metamethod, inside a `table.sort` comparator and inside a Luau callback invoked from C++ unwinds cleanly: ASan-clean, no engine lock held, VM usable afterwards. An instrumented `lua_yield` shows no yield except at explicit calls, including when budgets run out inside those three places. A handle whose entity is destroyed across a `wait` raises `StaleHandle`. Heap caps; 10k coroutines per zone. […] Fuel counts are identical between interpreter and codegen",
+      "notes": "The binding-heavy case (Ph1, WP-1.6) is elided. The replay clause is evidenced by re-running (identical output and fuel across runs); the 04 §10.2 replay itself comes later. The ≤ 10 % overhead is 02 §7.4's; WP-0.10r closed it with RT-13, and its perf case asserts it in optimized builds without sanitizers (the nightly linux-gcc run)",
+      "status": "measured",
+      "tests": [
+        {"doctest": "script_tests", "case": "fuel: a runaway loop is killed at exactly fuel_kill and the VM stays usable"},
+        {"doctest": "script_tests", "case": "fuel: client profile kills at the wall-time budget and still counts fuel"},
+        {"doctest": "script_tests", "case": "fuel: pcall, xpcall and nested coroutines cannot swallow a kill (sticky)"},
+        {"doctest": "script_tests", "case": "fuel: kill inside a metamethod unwinds cleanly"},
+        {"doctest": "script_tests", "case": "fuel: kill inside a table.sort comparator unwinds cleanly"},
+        {"doctest": "script_tests", "case": "fuel: kill inside a Luau callback invoked from C++ releases RAII state and locks"},
+        {"doctest": "script_tests", "case": "fuel: kill inside a metamethod unwinds cleanly", "run": "linux-asan"},
+        {"doctest": "script_tests", "case": "fuel: kill inside a table.sort comparator unwinds cleanly", "run": "linux-asan"},
+        {"doctest": "script_tests", "case": "fuel: kill inside a Luau callback invoked from C++ releases RAII state and locks", "run": "linux-asan"},
+        {"doctest": "script_tests", "case": "fuel: no involuntary yields — every yield is an explicit call (instrumented)"},
+        {"doctest": "script_tests", "case": "handles: a handle invalidated across a wait raises StaleHandle"},
+        {"doctest": "script_tests", "case": "memory: exceeding the VM heap cap raises a memory error and the VM recovers"},
+        {"doctest": "script_tests", "case": "scheduler: 10k coroutines per zone fit a 16 MB VM heap"},
+        {"doctest": "script_tests", "case": "determinism: a pure script gives identical output and fuel across runs"},
+        {"doctest": "script_tests", "case": "determinism: native codegen counts the same fuel as the interpreter"},
+        {"doctest": "script_tests", "case": "determinism: numeric for loops left early count the same fuel in native code"},
+        {"doctest": "script_tests", "case": "perf: fuel metering overhead and ns per fuel", "run": "linux-gcc", "platforms": ["linux"]}
+      ]
+    },
+    {
+      "id": "RT-18", "phase": 0, "source": "02 §8.2", "owner": "WP-0.6c",
+      "title": "Link-model spike: a game DLL survives 100 reloads on 10k live entities",
+      "class": "N+H", "platforms": ["linux", "windows"],
+      "threshold": "A game-DLL component on 10k live entities survives 100 reloads (code-only, add-field and remove-field edits) with an identical values checksum, memory tags back to baseline, and the old image unmapped. A CVar, a system, an observer, a Luau binding and a Tracy zone from the DLL all work after every reload. ASan is clean with MSVC and Clang. The DLL passes §1.4's symbol audit. The edit-to-reload time is ≤ 30 s p95 on DEV",
+      "notes": "N+H: the reload soak runs nightly; the edit-to-reload time is measured on DEV hardware (01 §3.1)",
+      "status": "unmeasured",
+      "tests": [],
+      "gaps": [
+        {"clause": "The link-model spike (HELIOS_MODULAR, reload loader, Probe game DLL) has not started", "state": "unmeasured", "owner": "WP-0.6c"}
+      ]
+    },
+    {
+      "id": "ED-1", "phase": 0, "source": "07 §5.2", "owner": "WP-0.18",
+      "title": "Headless ToolsFramework round-trips 10k random transactions; kill -9 loses at most one",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Headless ToolsFramework round-trips 10k random transactions (apply, undo, redo) to byte-identical JSONC on MSVC, GCC and Clang; `kill -9` mid-burst loses ≤ 1 transaction",
+      "status": "unmeasured",
+      "tests": [],
+      "gaps": [
+        {"clause": "No ToolsFramework or editor exists yet", "state": "unmeasured", "owner": "WP-0.18"}
+      ]
+    },
+    {
+      "id": "NS-0.1", "phase": 0, "source": "04 §11.4", "owner": "WP-0.13",
+      "title": "Handshake in 1.5 RTT",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Handshake in 1.5 RTT",
+      "notes": "The test: the server completes the handshake 1.5 RTT after the first request",
+      "status": "measured",
+      "tests": [
+        {"doctest": "net_tests", "case": "NS-0.1: the server completes the handshake 1.5 RTT after the first request"}
+      ]
+    },
+    {
+      "id": "NS-0.2", "phase": 0, "source": "04 §11.4", "owner": "WP-0.13",
+      "title": "Loopback 100k pps per core without loss",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Loopback 100k pps/core without loss",
+      "notes": "net_bench --gate measures raw datagrams and encrypted HTP packets through the full stack",
+      "status": "measured",
+      "tests": [
+        {"gate": "net_bench_gate"},
+        {"doctest": "net_tests", "case": "perf: NS-0.2: loopback 100k pps per core without loss", "platforms": ["linux"]}
+      ]
+    },
+    {
+      "id": "NS-0.3", "phase": 0, "source": "04 §11.4", "owner": "WP-0.14",
+      "title": "Windows client ↔ Linux gateway interop",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Windows client ↔ Linux gateway interop",
+      "status": "unmeasured",
+      "tests": [],
+      "gaps": [
+        {"clause": "No cross-host job pairs a Windows client with a Linux gateway (the e2e tests run both ends on one host)", "state": "unmeasured", "owner": "WP-0.14"}
+      ]
+    },
+    {
+      "id": "NS-0.4", "phase": 0, "source": "04 §11.4", "owner": "WP-0.13",
+      "title": "Fuzzers 1 h clean",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Fuzzers 1 h clean",
+      "notes": "Each engine/net fuzz target runs 1 h under libFuzzer with ASan and UBSan (09 §6: 1 h per target nightly); a crash, leak, UBSan report or timeout fails it",
+      "status": "partial",
+      "tests": [
+        {"gate": "libfuzzer_packet_parser", "platforms": ["linux"]},
+        {"gate": "libfuzzer_connection_receive", "platforms": ["linux"]},
+        {"gate": "libfuzzer_connect_token", "platforms": ["linux"]},
+        {"gate": "libfuzzer_server_datagram", "platforms": ["linux"]},
+        {"gate": "libfuzzer_address_parse", "platforms": ["linux"]}
+      ],
+      "gaps": [
+        {"clause": "No Windows libFuzzer run: engine/net links -fsanitize=fuzzer through the compiler driver, which the clang-cl build (lld-link) does not use", "state": "unmeasured", "owner": "WP-0.13"}
+      ]
+    },
+    {
+      "id": "NS-0.5", "phase": 0, "source": "04 §11.4", "owner": "WP-0.15",
+      "title": "Go-minted tokens accepted by vendored netcode",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Go-minted tokens accepted by vendored netcode",
+      "notes": "Go-issued golden tokens decode byte-exactly and complete the handshake in C++, an expired one is refused, and the C library reproduces the Go vectors (TestNetcodeCInterop, Linux)",
+      "status": "measured",
+      "tests": [
+        {"doctest": "net_tests", "case": "Go golden vectors: public and private parts decode byte-exactly"},
+        {"doctest": "net_tests", "case": "Go golden vector: a never-expiring Go-issued token completes the handshake"},
+        {"doctest": "net_tests", "case": "Go golden vector: an expired Go-issued token is refused"},
+        {"doctest": "server_tests", "case": "server.contracts: connect-token user data matches Go's layout v1"},
+        {"go": "pkg/connecttoken", "test": "TestFixedVectorsByteExact"},
+        {"go": "pkg/connecttoken", "test": "TestNetcodeAPIVectorDecrypts"},
+        {"go": "pkg/connecttoken", "test": "TestNetcodeCInterop", "platforms": ["linux"]}
+      ]
+    },
+    {
+      "id": "NS-0.6", "phase": 0, "source": "04 §11.4", "owner": "WP-0.14",
+      "title": "Empty-zone tick < 0.5 ms",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Empty-zone tick < 0.5 ms",
+      "status": "measured",
+      "tests": [
+        {"doctest": "server_tests", "case": "server.zonehost: NS-0.6 an empty zone ticks in < 0.5 ms"}
+      ]
+    },
+    {
+      "id": "NS-0.7", "phase": 0, "source": "04 §11.4", "owner": "WP-0.13",
+      "title": "Trunk throughput: 20k pps of 1,200 B payloads for 10 min",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Trunk throughput: one trunk connection sustains 20k pps of 1,200 B payloads (≈ 200 Mbit/s) for 10 min with < 0.1 % drops on ≤ 1 core, on loopback on Windows and Linux CI; otherwise the §2.6 fallback starts",
+      "notes": "net_bench --gate reads ≤ 1 core as ≤ 1 core for each side (the cell and gateway threads)",
+      "status": "measured",
+      "tests": [
+        {"gate": "net_bench_gate"},
+        {"doctest": "net_tests", "case": "perf: NS-0.7 (short run): trunk throughput over UDP loopback", "platforms": ["linux"]}
+      ]
+    },
+    {
+      "id": "BE-A1", "phase": 0, "source": "05 §10", "owner": "WP-0.15",
+      "title": "helios-backend.exe run on Windows 11: warm start, first run and idle RSS",
+      "class": "N+H", "platforms": ["windows"],
+      "threshold": "`helios-backend.exe run` on Windows 11: warm start ≤ 5 s, first run ≤ 30 s (PG binaries cached), idle RSS incl. Postgres ≤ 500 MB",
+      "notes": "N+H: the integration tests show the backend runs on hosted Windows (Windows Server); the timings are for a Windows 11 machine",
+      "status": "partial",
+      "tests": [
+        {"go": "internal/integration", "test": "TestRegisterLoginConnectToken", "tags": "integration"},
+        {"go": "internal/integration", "test": "TestOpsEndpoints", "tags": "integration"}
+      ],
+      "gaps": [
+        {"clause": "No automated measurement of the start times and idle RSS on Windows 11: hosted runners run Windows Server, and validate.ps1 records them only at milestone validation (09 §5.9)", "state": "unmeasured", "owner": "WP-0.15"}
+      ]
+    },
+    {
+      "id": "BE-A2", "phase": 0, "source": "05 §10", "owner": "WP-0.15",
+      "title": "Token golden vectors pass in Go and C++; issue p99 < 100 ms at 100/s",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Token golden vectors pass in Go and C++; issue p99 < 100 ms at 100/s",
+      "status": "partial",
+      "tests": [
+        {"go": "pkg/connecttoken", "test": "TestFixedVectorsByteExact"},
+        {"go": "pkg/connecttoken", "test": "TestNetcodeAPIVectorDecrypts"},
+        {"doctest": "net_tests", "case": "Go golden vectors: public and private parts decode byte-exactly"}
+      ],
+      "gaps": [
+        {"clause": "No load test measures connect-token issue latency at 100/s (the session service exports the histogram only)", "state": "unmeasured", "owner": "WP-0.15"}
+      ]
+    },
+    {
+      "id": "GP-1", "phase": 0, "source": "06 §12.2", "owner": "WP-0.19",
+      "title": "Gameplay kernel corpus clauses",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "200 golden ship and character builds match reference values within 1e-9, and are bit-identical on MSVC, GCC and Clang. C++ and Go HXL agree on 100% of the corpus, including the ≥ 1,000 FMA-sensitive vectors, on `windows/amd64`, `linux/amd64` at `GOAMD64=v1` and `v3`, and `linux/arm64`. The `hxlfloat` lint reports zero findings and catches 100% of its planted violations",
+      "notes": "09 §2.1's exit names GP-1's corpus clauses for Phase 0 (WP-0.19); the recompute budgets are Phase 1. The golden-build hash and the C++ corpus run in every native C++ job (MSVC, clang-cl, GCC, Clang); the Go corpus runs at GOAMD64=v1 on linux/amd64 and windows/amd64, and at v3 through TestCorpusAtGOAMD64v3 (which skips on a CPU without x86-64-v3)",
+      "status": "partial",
+      "tests": [
+        {"doctest": "gameplay_tests", "case": "attributes: 200 golden builds match a reference within 1e-9 and pin a golden hash"},
+        {"doctest": "hxl_tests", "case": "hxl corpus: every case matches bit for bit"},
+        {"go": "pkg/hxl", "test": "TestCorpus"},
+        {"go": "pkg/hxl", "test": "TestCorpusAtGOAMD64v3"},
+        {"go": "pkg/hxl", "test": "TestNoFusedMultiplyAddInMachineCode"},
+        {"go": "pkg/hxl/hxlfloat", "test": "TestHXLPackagesClean"},
+        {"go": "pkg/hxl/hxlfloat", "test": "TestPlantedViolations"}
+      ],
+      "gaps": [
+        {"clause": "linux/arm64: no runner runs the corpus there; only the arm64 machine-code listing is checked (TestNoFusedMultiplyAddInMachineCode)", "state": "unmeasured", "owner": "WP-0.1"}
+      ]
+    }
+  ],
+
+  // ------------------------------------------------------------------------------------------------
+  // Phase 0 exit items that are not scorecard criteria (09 §2.1 "Exit", 01 §5.4, 09 §5.7). An evidence
+  // record must exist before it is cited; a record still to come is a gap owned by whoever signs it.
+  // ------------------------------------------------------------------------------------------------
+  "exit": [
+    {
+      "id": "EXIT-0.ci-green", "phase": 0, "source": "01 §5.4", "owner": "WP-0.1",
+      "title": "CI green on every toolchain",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "CI green on every toolchain",
+      "status": "partial",
+      "tests": [
+        {"ci_job": "Backend services (Go, windows-latest)"},
+        {"ci_job": "Backend services (Go, ubuntu-24.04)"},
+        {"ci_job": "Backend integration (embedded PostgreSQL/NATS, Linux, non-root)"}
+      ],
+      "gaps": [{"clause": "Follows AAA-PLT-1 (the windows-msvc-dev job)", "state": "unmeasured", "owner": "WP-0.6c"}]
+    },
+    {
+      "id": "EXIT-0.schemac-emitters", "phase": 0, "source": "01 §5.4", "owner": "WP-0.7b",
+      "title": "helios-schemac emits C++, Go, Luau and SQL",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "`helios-schemac` emits C++/Go/Luau/SQL",
+      "status": "partial",
+      "tests": [
+        {"doctest": "schemac_tests", "case": "golden: generator output matches the committed expectations"},
+        {"doctest": "schemac_tests", "case": "go interop: generated Go matches the C++ codecs byte for byte"},
+        {"doctest": "schemac_tests", "case": "lock: --check-lock fails on a stale or missing lock"}
+      ],
+      "gaps": [{"clause": "The luau and sql emitters are stubs that report 'not yet implemented'", "state": "unmeasured", "owner": "WP-0.7b"}]
+    },
+    {
+      "id": "EXIT-0.goldens", "phase": 0, "source": "01 §5.4", "owner": "WP-0.12",
+      "title": "Golden images pass on the Vulkan and Null backends",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Golden images pass on the Vulkan and Null backends (demonstrated on Windows and Linux)",
+      "status": "partial",
+      "tests": [{"ctest": "rendertest.vulkan.*", "platforms": ["linux"]}, {"ctest": "rendertest.null.*"}],
+      "gaps": [{"clause": "Windows Vulkan goldens: the win-gpu runner does not exist (09 §5.4)", "state": "unmeasured", "owner": "WP-0.4"}]
+    },
+    {
+      "id": "EXIT-0.cell-tick", "phase": 0, "source": "01 §5.4", "owner": "WP-0.14",
+      "title": "A headless cell ticks a dilatable zone clock",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "A headless cell ticks a dilatable zone clock",
+      "status": "measured",
+      "tests": [
+        {"doctest": "server_tests", "case": "server.zonehost: TiDi is per zone: one hot zone dilates, its neighbour does not"},
+        {"doctest": "server_tests", "case": "server.zone: an overloaded zone dilates and tells its sessions ahead of time"},
+        {"doctest": "authority_tests", "case": "authority.clock: dilation stretches wall time, not game time"}
+      ]
+    },
+    {
+      "id": "EXIT-0.backend-login", "phase": 0, "source": "01 §5.4", "owner": "WP-0.15",
+      "title": "helios-backend serves login without Docker",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "`helios-backend` serves login without Docker",
+      "status": "measured",
+      "tests": [{"go": "internal/integration", "test": "TestRegisterLoginConnectToken", "tags": "integration"}]
+    },
+    {
+      "id": "EXIT-0.launcher-manifest", "phase": 0, "source": "01 §5.4", "owner": "WP-0.17",
+      "title": "The launcher fetches a chunked manifest",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "The launcher fetches a chunked manifest",
+      "status": "unmeasured",
+      "tests": [],
+      "gaps": [{"clause": "No patch pipeline or launcher exists yet", "state": "unmeasured", "owner": "WP-0.16, WP-0.17"}]
+    },
+    {
+      "id": "EXIT-0.spikes", "phase": 0, "source": "09 §2.1", "owner": "WP-0.6",
+      "title": "All spike decisions recorded",
+      "class": "M", "platforms": ["any"],
+      "threshold": "All spike decisions recorded (WP-0.6a–c; WP-0.9c pending its MIN confirmation)",
+      "status": "partial",
+      "tests": [{"evidence": "engine/ecs/SPIKES.md"}, {"evidence": "docs/adr/ADR-0.9c-hnoise-throughput.md"}],
+      "gaps": [{"clause": "Spike (c), the link model, has not started", "state": "unmeasured", "owner": "WP-0.6c"}]
+    },
+    {
+      "id": "EXIT-0.runner-policy", "phase": 0, "source": "09 §2.1", "owner": "WP-0.4",
+      "title": "The WP-0.4 runner policy check is green",
+      "class": "N", "platforms": ["any"],
+      "threshold": "The WP-0.4 runner policy check green",
+      "status": "unmeasured",
+      "tests": [],
+      "gaps": [{"clause": "tools/ci/check_runner_policy does not exist", "state": "unmeasured", "owner": "WP-0.4"}]
+    },
+    {
+      "id": "EXIT-0.conformance", "phase": 0, "source": "09 §2.1", "owner": "WP-0.2",
+      "title": "The conformance lint is clean on the full tree with the rework WPs merged",
+      "class": "N", "platforms": ["any"],
+      "threshold": "The conformance lint clean on the full tree with WP-0.15r, WP-0.2r, WP-0.5r and WP-0.10r merged (§5.10)",
+      "status": "unmeasured",
+      "tests": [],
+      "gaps": [{"clause": "tools/conformance does not exist", "state": "unmeasured", "owner": "WP-0.2"}]
+    },
+    {
+      "id": "EXIT-0.adr-004a", "phase": 0, "source": "09 §2.1", "owner": "WP-1.1a",
+      "title": "ADR-004a's option A under way in WP-1.1a",
+      "class": "M", "platforms": ["any"],
+      "threshold": "ADR-004a's option A under way in WP-1.1a (the ADR itself closes at the Phase 1 RT-01 gate)",
+      "status": "unmeasured",
+      "tests": [],
+      "gaps": [{"clause": "A process record, kept by the Director in 09 §8.1", "state": "unmeasured", "owner": "Director"}]
+    },
+    {
+      "id": "EXIT-0.auditors", "phase": 0, "source": "09 §5.7", "owner": "Director",
+      "title": "Two independent auditors score the phase exit at 9/10 or more",
+      "class": "M", "platforms": ["any"],
+      "threshold": "Every phase exit needs two independent auditors at ≥ 9/10, every criterion green, no open critical or high risk without an accepted mitigation, no conformance finding or open rework WP (§5.10), and the user's Windows validation",
+      "notes": "This item carries the two audits; the other conditions are the criteria, EXIT-0.risks, EXIT-0.conformance and EXIT-0.windows-validation",
+      "status": "unmeasured",
+      "tests": [],
+      "gaps": [{"clause": "The two Phase 0 exit audits have not been held (records in docs/evidence/)", "state": "unmeasured", "owner": "Director"}]
+    },
+    {
+      "id": "EXIT-0.risks", "phase": 0, "source": "09 §5.7", "owner": "Director",
+      "title": "No open critical or high risk without an accepted mitigation",
+      "class": "M", "platforms": ["any"],
+      "threshold": "No open critical or high risk without an accepted mitigation",
+      "status": "unmeasured",
+      "tests": [],
+      "gaps": [{"clause": "The risk register review at the Phase 0 exit has not been recorded", "state": "unmeasured", "owner": "Director"}]
+    },
+    {
+      "id": "EXIT-0.windows-validation", "phase": 0, "source": "09 §5.9", "owner": "User",
+      "title": "The user validates M0 on Windows",
+      "class": "M", "platforms": ["windows"],
+      "threshold": "The user's Windows validation (§5.7) of M0: the §5.9 table's M0 row, reported by tools/milestone/validate.ps1",
+      "status": "unmeasured",
+      "tests": [],
+      "gaps": [{"clause": "The pasted validate.ps1 report is not committed as docs/evidence/milestone-M0.txt yet; cite it as evidence when it is", "state": "unmeasured", "owner": "User"}]
+    },
+    {
+      "id": "EXIT-0.funding-f0", "phase": 0, "source": "09 §4.3.6", "owner": "User",
+      "title": "The F0 funding decision is signed",
+      "class": "M", "platforms": ["any"],
+      "threshold": "The F0 funding decision (§4.3.6) signed in `docs/evidence/funding-F0.md`",
+      "status": "unmeasured",
+      "tests": [],
+      "gaps": [{"clause": "docs/evidence/funding-F0.md does not exist yet (no envelope approved, 09 §8.1); cite it as evidence when it is signed", "state": "unmeasured", "owner": "User"}]
+    }
+  ]
+}

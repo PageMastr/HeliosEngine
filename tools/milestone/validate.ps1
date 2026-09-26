@@ -157,8 +157,9 @@ function Wait-Ready([string]$Url, [int]$TimeoutSeconds, [System.Diagnostics.Stop
 
 function Get-PostgresProcesses([string]$DataDir) {
     # The postmaster's command line names the data directory (in either separator and any case); its
-    # workers' command lines do not, so they are found by parent.
-    $needle = $DataDir.Replace('/', '\').ToLowerInvariant()
+    # workers' command lines do not, so they are found by parent. The trailing separator keeps
+    # ...\backend from also matching ...\backend-prime (the postmaster's -D is <data>\pg).
+    $needle = $DataDir.Replace('/', '\').ToLowerInvariant().TrimEnd('\') + '\'
     $all = @(Get-CimInstance Win32_Process -Filter "Name = 'postgres.exe'")
     $main = @($all | Where-Object { $_.CommandLine -and $_.CommandLine.Replace('/', '\').ToLowerInvariant().Contains($needle) })
     $ids = @($main | ForEach-Object { $_.ProcessId })

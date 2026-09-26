@@ -17,8 +17,16 @@ abilities, cues and the ASM arrive with WP-1.15.
 
 The kernel records live in [`schemas/gameplay`](../../schemas/gameplay) and are compiled by
 helios-schemac (`helios_schema()` in this module's CMakeLists) into C++ (`gameplay/*.gen.h`,
-namespace `helios::gameplay`) and Go (`services/pkg/hxl/gamedef`); the lock is
-`schemas/gameplay/schema.lock.jsonc`.
+namespace `helios::gameplay`) and Go; the lock is `schemas/gameplay/schema.lock.jsonc`. The build
+generates the Go package into `<build>/engine/gameplay/go/gamedef`, never into the source tree. The
+committed copy that Go services build is `services/pkg/hxl/gamedef` (02 §3.5: committed and
+CI-checked):
+
+- `lint_gamedef_go_current` (CTest label `lint`) fails when the committed copy differs from the
+  generated one (line endings aside), and names the refresh command;
+- `cmake --build <build dir> --target gameplay_gamedef_sync` copies the generated files over it;
+  commit them with the schema change;
+- `lint_gamedef_go_fixture_stale` seeds a stale copy and checks that the lint fails on it.
 
 | File | Records and types |
 |---|---|

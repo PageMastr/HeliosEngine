@@ -20,7 +20,7 @@ b := p.Encode()                        // canonical bytecode; hxl.Decode(b) veri
 | `hxl` | `Compile`, `Program` (`Encode`, `Decode`, `Hash`, `Eval`, `Disassemble`), `Env`, `MapEnv`, `Curve`, `Diagnostic`/`Status`, `CheckGOAMD64`, record helpers (`CompileDerived`, `CompileMagnitude`, `ValidateReasonCode`) |
 | `hxl/det` | port of `helios::det` exp/ln/pow/asinh; its tests reproduce the C++ golden hashes over ~95k inputs and check every constant against `engine/math/src/det_exp.cpp` |
 | `hxl/hxlfloat` | the `hxlfloat` analyzer (06 §1.2 rule 5), std-lib only; `go run ./pkg/hxl/hxlfloat/cmd/hxlfloat ./pkg/hxl ./pkg/hxl/det` |
-| `hxl/gamedef` | **generated** by helios-schemac from `schemas/gameplay/*.hschema` (do not edit; the C++ build regenerates it). Not `gofmt`-clean: that comes from schemac's Go emitter (follow-up in `tools/schemac`; CI does not run `gofmt`) |
+| `hxl/gamedef` | **generated** by helios-schemac from `schemas/gameplay/*.hschema`; do not edit. After a schema change, run `cmake --build <build dir> --target gameplay_gamedef_sync` and commit the result; the `lint` CTest `lint_gamedef_go_current` fails while the committed copy is stale. Not `gofmt`-clean: that comes from schemac's Go emitter (follow-up in `tools/schemac`; CI does not run `gofmt`) |
 
 ## Float rules (06 §1.2)
 

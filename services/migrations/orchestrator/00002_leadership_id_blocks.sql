@@ -1,5 +1,6 @@
 -- Orchestrator leadership anchored in PostgreSQL (05 §1.4.1) and time-prefixed ID blocks
--- (05 §1.4.5). Expand-only: 00001 is left untouched.
+-- (05 §1.4.5). Expand-only: 00001 is left untouched. Historical, like 00001: written against the
+-- schema's old name "orchestrator", which migrations.Up renames to svc_orch after this file.
 
 -- +goose Up
 -- One row per shard. A replica becomes leader by bumping term once expires_at has passed; every

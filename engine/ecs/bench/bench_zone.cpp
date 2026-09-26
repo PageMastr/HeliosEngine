@@ -922,10 +922,12 @@ void rawCreates(ecs_world_t* fw, const std::vector<ecs_table_t*>& tables, u32 pe
         for (i32 k = 0; k < type->count; ++k) {
             const ecs_id_t id = type->array[k];
             if (c.writeValues) bd.ids[k] = id;
-            if (ecs_get_typeid(fw, id) != 0) data[k] = c.zeros; // NetIdentity, RepDirty
             for (const RawColumns::Column& col : c.columns) {
                 if (col.id == id) data[k] = const_cast<std::byte*>(col.data + f * c.frameStride * col.size);
             }
+            // The other components (NetIdentity, RepDirty) get zeros; tags and pairs no data. As on
+            // main, the type lookup runs only for ids without a value column.
+            if (!data[k] && ecs_get_typeid(fw, id) != 0) data[k] = c.zeros;
         }
         bd.count = static_cast<i32>(count);
         bd.table = tables[f];

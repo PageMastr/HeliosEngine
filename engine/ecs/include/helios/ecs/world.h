@@ -389,7 +389,7 @@ private:
     u32 componentRun(CommandBuffer& buffer, u32 first);
     void unregisterSubtree(Entity e);
     void unregisterOne(const ::ecs_record_t* r);
-    inline bool mayHostDockRefs(Entity e) const noexcept; // (world.cpp)
+    bool mayHostDockRefs(Entity e) const noexcept;
     void releaseRelationTargets(Entity e, bool isTarget);
     ::ecs_table_t* findTable(std::vector<u64>& ids);
     void ensureRepDirty(Entity e);

@@ -771,7 +771,6 @@ void World::spawnBatch(CommandBuffer& buffer, u32 batchIndex) {
             if (impl.bulkRegistered[r]) handles[r] = m_registry.tryAssignHandle(ids[r], he(created[r]));
         }
     }
-    m_log.reserve(m_log.size() + registered);
     const AgId ag = desc.ag;
     for (u32 r = 0; r < count; ++r) {
         // Dropped entities keep an empty identity until they are deleted below.
@@ -873,7 +872,7 @@ void World::releaseRelationTargets(Entity e, bool isTarget) {
     }
 }
 
-inline bool World::mayHostDockRefs(Entity e) const noexcept {
+bool World::mayHostDockRefs(Entity e) const noexcept {
     // DockRef hosts are in a bloom filter (bits only set; rebuilt as hosts go away).
     return m_desc.relations.docking == DockStorage::Field && !m_impl->dockIndex.empty() && m_impl->mayHostDocks(e.id);
 }
@@ -929,7 +928,6 @@ HELIOS_ECS_FLATTEN u32 World::destroyRun(CommandBuffer& buffer, u32 first) {
         if (!ni || !ni->id.isValid()) break;
         run[count++] = Impl::PendingDestroy{end, fe(e), ni->id, ni->handle};
     }
-    m_log.reserve(m_log.size() + count);
     for (u32 k = 0; k < count; ++k) {
         const Impl::PendingDestroy& d = run[k];
         if (d.entity == 0) {

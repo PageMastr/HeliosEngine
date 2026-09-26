@@ -1140,13 +1140,16 @@ HELIOS_ECS_FLATTEN void World::setRawAlive(Entity e, ComponentId cid, const void
         // A plain sparse or DontFragment value: emplace finds or adds the slot and says which, so
         // there is no separate ownership lookup. The copy and ecs_modified_id() are what
         // ecs_set_id() does for a component without copy or replace hooks (OnSet observers run).
+        // The identity is read first, as on the toggle paths: its row load then overlaps the
+        // flecs calls (a DontFragment op never touches the entity's row otherwise).
+        const LoggedIdentity who = identityAt(m_flecs, m_netIdentityId, ecs_record_find(m_flecs, fe(e)));
         bool isNew = false;
         void* dst = ecs_emplace_id(m_flecs, fe(e), cid, size, &isNew);
         copyValue(dst, value, static_cast<u32>(size));
         ecs_modified_id(m_flecs, fe(e), cid);
         if (isNew) {
             ++m_impl->structuralOps;
-            logOp(m_log, StructuralOp::Add, identityAt(m_flecs, m_netIdentityId, ecs_record_find(m_flecs, fe(e))), cid);
+            logOp(m_log, StructuralOp::Add, who, cid);
         }
         return;
     }

@@ -10,6 +10,15 @@ ctest --test-dir build/<dir> -L lint --output-on-failure      # all lints + thei
 cmake -P tools/ci/run_lints.cmake                                # licences, IP names, manifest (no build)
 ```
 
+## SARIF in CI
+
+The Linux headless job writes CTest JUnit XML and converts failed `lint_*` tests with
+`tools/ci/ctest_to_sarif.py`. Findings with a reported `path:line` annotate that source line;
+failures without a source location annotate the relevant lint script and retain the diagnostic.
+When CTest runs, CI publishes the SARIF as an artifact. It also uploads to GitHub code scanning
+on `main` and same-repository PRs; fork PRs have read-only tokens, so their SARIF stays in the
+artifact. CTest's original pass/fail result remains the CI gate.
+
 | Lint | Script | What fails it | Plan |
 |---|---|---|---|
 | Module layering | `cmake/HeliosLayering.cmake` (configure time) | upward or unlisted same-layer dependency, cycle, `HELIOS_MODULE_ORDER` not topological, a HEADLESS module reaching a non-HEADLESS module or a graphics library (volk, VMA, SDL3, ImGui, …), an `EDITOR_ONLY` module in a client/launcher/bot/cell/gateway/voice executable or under a runtime module, a server executable (cell, gateway, voice, bot) linking anything non-HEADLESS | 02 §1.1, RT-09 |

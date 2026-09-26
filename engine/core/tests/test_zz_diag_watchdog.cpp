@@ -17,9 +17,13 @@
 #pragma comment(lib, "dbghelp.lib")
 #endif
 
+namespace helios::jobs {
+void diagDumpJobSystem(); // TEMPORARY CI DIAGNOSTIC, defined in jobs.cpp
+} // namespace helios::jobs
+
 namespace {
 
-constexpr long long kStuckSeconds = 120;
+constexpr long long kStuckSeconds = 60;
 constexpr long long kExitSeconds = 60;
 
 std::atomic<long long> g_lastProgressMs{0};
@@ -113,6 +117,7 @@ void watchdog() {
             const doctest::TestCaseData* tc = g_current.load();
             std::fprintf(stderr, "[diag] STUCK for %llds in test '%s' (%s:%d)\n", idle, tc ? tc->m_name : "?",
                          tc ? tc->m_file.c_str() : "?", tc ? static_cast<int>(tc->m_line) : 0);
+            helios::jobs::diagDumpJobSystem();
             dumpAllThreads();
             std::_Exit(97);
         }

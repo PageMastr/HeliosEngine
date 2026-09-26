@@ -940,8 +940,22 @@ void rawDestroys(ecs_world_t* fw, const std::vector<ecs_entity_t>& created) {
 }
 
 // The NPC tag toggles of structuralBurst(): even NPCs toggle the cloak tag, odd ones lose or regain
-// a species tag.
-void rawToggles(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply, ecs_id_t cloak,
+// a species tag. ids[i] is NPC i's tag (0: none), found before the timed loop as the World burst
+// finds it while recording its commands; apply rounds add the cloak and remove the species.
+void rawToggles(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply, const std::vector<ecs_id_t>& ids) {
+    for (usize i = 0; i < npcs.size(); ++i) {
+        if (ids[i] == 0) continue;
+        if ((i % 2 == 0) == apply) {
+            ecs_add_id(fw, npcs[i].id, ids[i]);
+        } else {
+            ecs_remove_id(fw, npcs[i].id, ids[i]);
+        }
+    }
+}
+
+// The pre-WP-1.1a raw toggles (--legacy-burst): the species an odd NPC loses is searched with
+// ecs_has_id() inside the timed loop, work the World burst does while recording.
+void rawTogglesLegacy(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply, ecs_id_t cloak,
                                 const std::vector<ecs_id_t>& species) {
     for (usize i = 0; i < npcs.size(); ++i) {
         const ecs_entity_t e = npcs[i].id;
@@ -985,9 +999,13 @@ HELIOS_NOINLINE void rawCreates(ecs_world_t* fw, const std::vector<ecs_table_t*>
 HELIOS_NOINLINE void rawDestroys(ecs_world_t* fw, const std::vector<ecs_entity_t>& created) {
     ops::rawDestroys(fw, created);
 }
-HELIOS_NOINLINE void rawToggles(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply, ecs_id_t cloak,
-                                const std::vector<ecs_id_t>& species) {
-    ops::rawToggles(fw, npcs, apply, cloak, species);
+HELIOS_NOINLINE void rawToggles(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply,
+                                const std::vector<ecs_id_t>& ids) {
+    ops::rawToggles(fw, npcs, apply, ids);
+}
+HELIOS_NOINLINE void rawTogglesLegacy(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply, ecs_id_t cloak,
+                                      const std::vector<ecs_id_t>& species) {
+    ops::rawTogglesLegacy(fw, npcs, apply, cloak, species);
 }
 HELIOS_NOINLINE void rawStatuses(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply, ecs_id_t status) {
     ops::rawStatuses(fw, npcs, apply, status);
@@ -1061,9 +1079,32 @@ BurstResult BenchZone::rawFlecsBurst(u32 round, bool profiled) {
 
     const bool apply = round % 2 == 0;
     std::vector<ecs_id_t> species{im.tags[8], im.tags[9], im.tags[10]};
-    sw.reset();
-    profiled ? timed::rawToggles(fw, npcs, apply, im.tags[5], species) : ops::rawToggles(fw, npcs, apply, im.tags[5], species);
-    res.toggleMs = sw.elapsedMillis();
+    if (legacy) {
+        sw.reset();
+        profiled ? timed::rawTogglesLegacy(fw, npcs, apply, im.tags[5], species)
+                 : ops::rawTogglesLegacy(fw, npcs, apply, im.tags[5], species);
+        res.toggleMs = sw.elapsedMillis();
+    } else {
+        // Which tag each NPC toggles, decided before timing like the World burst's recording.
+        std::vector<ecs_id_t> ids(npcs.size(), 0);
+        for (usize i = 0; i < npcs.size(); ++i) {
+            if (i % 2 == 0) {
+                ids[i] = im.tags[5];
+            } else if (apply) {
+                for (const ecs_id_t sp : species) {
+                    if (ecs_has_id(fw, npcs[i].id, sp)) {
+                        ids[i] = sp;
+                        break;
+                    }
+                }
+            } else {
+                ids[i] = species[static_cast<usize>(mix64(i) % species.size())];
+            }
+        }
+        sw.reset();
+        profiled ? timed::rawToggles(fw, npcs, apply, ids) : ops::rawToggles(fw, npcs, apply, ids);
+        res.toggleMs = sw.elapsedMillis();
+    }
 
     sw.reset();
     const ecs_id_t status = w.id<c::Status>();

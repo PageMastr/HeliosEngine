@@ -16,10 +16,11 @@
 //
 // Usage: ecs_bench [--ticks=N] [--warmup=N] [--quick] [--workers=0,1,2,4] [--no-spikes]
 //                  [--spikes-only] [--seed=N] [--inframe-dontfragment] [--no-warmup-pass] [--m1-gate]
-//                  [--per-command-creates] [--legacy-burst]
+//                  [--per-command-creates] [--legacy-burst] [--rounds]
 // The burst's 3,000 creates are 12 spawnN() batches (one per frame) unless --per-command-creates
 // records them as spawn() + 7 set() commands each. --legacy-burst runs the burst as the pre-WP-1.1a
-// bench did (bench_zone.h, ZoneConfig::legacyBurst; SPIKES.md §5.3), bugs included.
+// bench did (bench_zone.h, ZoneConfig::legacyBurst; SPIKES.md §5.3), bugs included. --rounds
+// prints every measured burst next to the medians.
 // Exit code: 0 = RT-01 PASS, 1 = FAIL. With --m1-gate: 0 = M1 PASS, 1 = FAIL (RT-01 still printed).
 
 #include <mimalloc.h>
@@ -85,6 +86,7 @@ struct RunResult {
     f64 structuralMaxMs = 0; // worst warm 9k-op burst total
     std::vector<f64> warmTotals, warmToggles;
     bench::BurstResult burstRaw; // median of kWarmBursts raw flecs bursts
+    std::vector<bench::BurstResult> warmRounds, rawRounds; // every measured burst (--rounds)
     f64 structuralRawMs = 0;
     f64 structuralDfMs = 0;    // median warm burst with DontFragment toggles
     f64 structuralRawDfMs = 0; // the same on raw flecs
@@ -263,6 +265,8 @@ RunResult runZone(u32 workers, u32 ticks, u32 warmup, u64 seed, bool inFrameDont
         std::vector<f64> rawDfTotals;
         for (const bench::BurstResult& b : raw) rawDfTotals.push_back(b.totalDontFragmentMs());
         r.structuralRawDfMs = percentile(rawDfTotals, 0.5);
+        r.warmRounds = warm;
+        r.rawRounds = raw;
 
         usize elapsed = 0, user = 0, sys = 0, rss = 0, peakRss = 0, commit = 0, peakCommit = 0, faults = 0;
         mi_process_info(&elapsed, &user, &sys, &rss, &peakRss, &commit, &peakCommit, &faults);
@@ -303,6 +307,7 @@ int main(int argc, char** argv) {
     const bool inFrameDontFragment = cmd.has("inframe-dontfragment");
     const bool legacyBurst = cmd.has("legacy-burst");
     const bool perCommandCreates = cmd.has("per-command-creates") || legacyBurst;
+    const bool showRounds = cmd.has("rounds");
 
     ecs::installFlecsOsApi();
     out(std::format("ecs_bench — RT-01 50k-entity zone on flecs {} ({} hardware threads; InFrame {}; burst creates {}; "
@@ -361,6 +366,21 @@ int main(int argc, char** argv) {
                 out(std::format(" {:.2f} ({:.2f})", r.warmTotals[i], r.warmToggles[i]));
             }
             out(std::format("; tables after bursts {}\n", r.tablesAfterBursts));
+            if (showRounds) {
+                // Odd rounds revert the toggles (removes), even rounds apply them; the World's warm
+                // rounds are 1..kWarmBursts, the raw rounds the same parities (see runZone()).
+                auto rounds = [&](const char* label, const std::vector<bench::BurstResult>& v, u32 firstRound) {
+                    for (usize i = 0; i < v.size(); ++i) {
+                        const u32 round = firstRound + static_cast<u32>(i);
+                        out(std::format("    {} round {:>2} ({}): create {:.3f} destroy {:.3f} toggle {:.3f} "
+                                        "DontFragment {:.3f}\n",
+                                        label, round, round % 2 == 0 ? "apply " : "revert", v[i].createMs,
+                                        v[i].destroyMs, v[i].toggleMs, v[i].toggleDontFragmentMs));
+                    }
+                };
+                rounds("World", r.warmRounds, 1);
+                rounds("raw  ", r.rawRounds, legacyBurst ? kWarmBursts + 1 : kWarmBursts + 2);
+            }
             out(std::format("    M1 (World / raw flecs, warm medians): tag toggles {:.3f} / {:.3f} = {:.2f}x; "
                             "DontFragment toggles {:.3f} / {:.3f} = {:.2f}x\n",
                             r.structuralMs, r.structuralRawMs, r.m1Tag(), r.structuralDfMs, r.structuralRawDfMs,

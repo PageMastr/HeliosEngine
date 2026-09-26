@@ -1,6 +1,7 @@
 """Seeded-fixture tests for the nightly report, the perf comparator and the result runners."""
 
 import contextlib
+import copy
 import io
 import json
 import sys
@@ -145,6 +146,13 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(r["platforms"]["linux"]["status"], "pass")
         self.assertEqual(r["platforms"]["windows"]["status"], "fail")
         self.assertIn("ran 12 s of the required 600 s", r["platforms"]["windows"]["refs"][0]["detail"])
+
+    def test_gate_without_min_seconds_fails(self):
+        data = copy.deepcopy(DATA)
+        del data["gates"]["net_bench_gate"]["min_seconds"]
+        r = report.evaluate(crit("NS-0.7", [{"gate": "net_bench_gate"}]), data, self.runs, None, self.root)
+        self.assertEqual(r["platforms"]["linux"]["status"], "fail")
+        self.assertIn("no positive min_seconds", r["platforms"]["linux"]["refs"][0]["detail"])
 
     def test_ci_jobs_and_evidence(self):
         jobs = {"Linux (linux-gcc)": "success", "Windows (clang-cl)": "failure"}

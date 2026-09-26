@@ -26,20 +26,34 @@ print as `scorecard.jsonc:<line>: …`, which the SARIF converter (`tools/ci/cte
 into annotations.
 
 - **IDs and phases come from the plan.** The checker reads the criterion tables (01 §3, 02 §8.2, 03 §9.3,
-  04 §11.4, 05 §10, 06 §12.2, 07 §5.2, 08 §4.4) and the `**Exit.**` paragraph of each 09 §2 phase. An
-  unknown ID fails, as does a phase the plan does not give the criterion, or a CL class that differs
-  from 08 §4.4.
+  04 §11.4, 05 §10, 06 §12.2, 07 §5.2, 08 §4.4; fenced blocks skipped) and the `**Exit…**` paragraph of
+  each 09 §2 phase. An unknown ID fails, as does a phase the plan does not give the criterion, a CL class
+  that differs from 08 §4.4, or an 01 row marked `(M)` registered with another class. A table row that
+  looks like a criterion but does not parse (a missing cell, an ID the pattern does not accept) is a
+  finding at its plan line, so a plan edit cannot silently drop a criterion.
 - **Coverage.** For every phase in `covers`, each criterion whose Ph cell includes that phase, and each ID
-  its 09 exit names, must be registered. `covers` is `[0]`, which is WP-0.3's acceptance ("the nightly report
-  covers every Ph0 criterion"). The Director adds a phase when its registration starts.
-- **Fields.** Unknown fields fail (a typo like `platfroms` cannot silently drop a restriction). `status`
-  must agree with the entry: `measured` (tests, no gaps), `partial` (tests and gaps) or `unmeasured`
-  (gaps only).
+  its 09 exit names, must be registered; a missing one is reported at its plan line. `covers` must
+  include 0 (WP-0.3's acceptance: "the nightly report covers every Ph0 criterion"), and a covered phase
+  needs an exit paragraph. The Director adds a phase when its registration starts.
+- **Fields.** Unknown fields fail everywhere: top-level keys, entries, references, gaps, `runs` and
+  `gates` (a typo like `platfroms` or `min_second` cannot silently drop a restriction). `version` is 1,
+  `plan_rev` a positive integer no higher than `docs/plan/PLAN-REV`, `source` a plan section
+  (`04 §11.4`), `owner` WPs, `User` or `Director`. A run needs `os` and a boolean `default`; a gate needs
+  declared `runs` and a positive integer `min_seconds`. `status` must agree with the entry: `measured`
+  (tests, no gaps), `partial` (tests and gaps) or `unmeasured` (gaps only).
+- **References.** Entries on `any` platform cite only `evidence` and `ci_job`. A reference's `platforms`
+  are a subset of its entry's; `run` names a declared run on those platforms; `tags` is for `go` only.
+  `ctest` names and doctest `case`s match literally except for `*`, and a name of wildcards only is
+  rejected. A test whose name says it pins a known divergence can only be a gap's `pinned_by`.
+  `evidence` is a relative path to a file that exists (a record still to come is a gap).
 - **Tests exist.** Every `ctest`, `doctest` (and `pinned_by`) reference must exist in each inventory whose
-  OS it is evaluated on. `go` references are checked when the inventory has a `go` section (the nightly
-  one does). `gate` references must be declared and run on the reference's platforms. `ci_job` names
-  must be jobs of `.github/workflows/ci.yml` (matrix names expanded). Every declared run (except those
-  marked `"nightly": false`) and gate must be produced by `.github/workflows/nightly.yml`.
+  OS it is evaluated on; an inventory with an unknown `os` or a doctest binary that failed to list is
+  a finding. `go` references are checked against the `func Test…(` declarations in `services/` on every
+  run (with their `//go:build integration` constraint) and against the inventory's `go` section when it
+  has one (the nightly's). `gate` references must be declared and run on the reference's platforms.
+  `ci_job` names must be jobs of `.github/workflows/ci.yml` (matrix names expanded); a missing ci.yml is
+  a finding. Every declared run (except those marked `"nightly": false`) and gate must be produced by
+  `.github/workflows/nightly.yml`.
 - **Perf metrics.** Each has one source (a gate, or a doctest binary and case), a pattern with exactly one
   group, a unit, `better` (`lower` or `higher`) and a budget category; a doctest source must exist.
 
@@ -61,25 +75,36 @@ into annotations.
 - `class` is the 09 §5.6 evidence class: **N** nightly (3 consecutive passing nightlies on Windows and
   Linux), **H** lab hardware (unmeasured without the lab), **W** long-running (2 scheduled passes), **M**
   manual or external (a signed record in `docs/evidence/`). `N+H` is 08's mixed class.
+- `threshold` quotes the plan (with `[…]` for elisions); how a test reads a clause goes in `notes`.
 - `platforms` are `linux` and `windows`, or `any` for records that do not run on a platform.
 - A multi-phase criterion gets one entry per phase scope (`RT-03` phase 0 now, phase 1 later).
 - `exit` holds the phase-exit items that are not criteria (01 §5.4 demos, spike records, the F0 decision),
-  with IDs `EXIT-<phase>.<slug>`.
+  with IDs `EXIT-<phase>.<slug>`. Items the exit leaves to people (the auditors' sign-off, the risk
+  review, the Windows validation run, the funding decision) are `unmeasured` gaps owned by `User` or
+  `Director` until their record lands in `docs/evidence/`.
 
 **Test references**, exactly one kind each:
 
 | Kind | Fields | Result comes from |
 |---|---|---|
-| `ctest` | name, `*` wildcards allowed | CTest JUnit (`ctest --output-junit`) |
+| `ctest` | name, `*` wildcards allowed (nothing else is special) | CTest JUnit (`ctest --output-junit`) |
 | `doctest` | `doctest` (the binary's CTest name), `case` | doctest XML of that binary |
 | `go` | `go` (package under `services/`), `test`, optional `tags` | `go test -json` |
 | `gate` | a name declared in `gates` | the JUnit file the nightly writes for that command |
 | `ci_job` | a job name of ci.yml | the latest completed CI run on `main` |
-| `evidence` | a path under the repository root | the file existing (M class) |
+| `evidence` | a path under the repository root | the file existing, which means only "recorded": the signature and the exit window (09 §5.6) are the auditor's to confirm |
 
 Optional on every reference: `platforms` (a subset of the entry's), `run` (only that result set counts,
 for example `linux-asan` for "ASan-clean" clauses), `note`. Result sets are declared in `runs`. A
 reference without `run` counts in every `default` run of its OS, and fails if any of them fails.
+
+**Runs and gates.** `runs` declares the result sets: `{"os": "linux"|"windows", "default": bool,
+"description": "…"}`. A `default` run counts for every reference of its OS without a `run`; others (ASan)
+count only where a reference names them. `gates` declares long gate commands:
+`{"runs": [run, …], "min_seconds": n, "description": "…"}`. `min_seconds` is required, a positive integer
+of seconds, and is the registry's machine-readable form of a duration clause (NS-0.4's "1 h per target"
+is 3600, NS-0.7's trunk run 600): the nightly fails a gate whose result is shorter. No other keys are
+accepted in either.
 
 **Gaps** are clauses without a passing test: `state` is `unmeasured` (no test yet) or `failing` (measured
 and red), with the `owner` WP. `pinned_by` names a test that pins a known divergence (such a test
@@ -108,7 +133,8 @@ although every case passed (a sanitizer report at exit).
 
 - **Per criterion.** On each platform, a reference passes when it has results in the runs that count for it
   and none failed. A missing result or a skip is *unmeasured*. A gate that ran shorter than its
-  `min_seconds` fails. The criterion passes when every reference passes on every platform and it has no gap.
+  `min_seconds` fails, and so does a gate without one. The criterion passes when every reference passes on
+  every platform and it has no gap.
   A broken pin (a `pinned_by` test that now fails) is reported so that the registry is updated.
 - **Green (09 §5.6).** The report keeps a streak per criterion from last night's report: consecutive passing
   *scheduled* nightlies. A manual run never extends it, and a failure resets it. N and H criteria are green

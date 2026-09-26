@@ -14,7 +14,7 @@
   3. Builds the Go services into build\go\ and runs the scripted checks: helios-backend first-run and warm
      start times and idle memory (05 BE-A1), a dev1 login, helios-cell ticking a zone and helios-gateway
      listening, and a connect token from the session service.
-  4. Evaluates the scorecard for the milestone's phase from this machine's results (needs Python 3), lists
+  4. Evaluates the scorecard for the milestone's phase from this machine's results (needs Python 3.10+), lists
      the interactive steps of 09 section 5.9's table, and writes build\milestone-<M>.txt to paste back.
 
   -NoInteractive skips opening the launcher. -SelfTest runs the script's own checks without building.
@@ -115,7 +115,8 @@ function Find-Python {
         if (-not (Get-Command $candidate[0] -ErrorAction SilentlyContinue)) { continue }
         $rest = @($candidate | Select-Object -Skip 1)
         try { $version = & $candidate[0] @rest --version 2>&1 | Out-String } catch { continue }
-        if ($LASTEXITCODE -eq 0 -and $version -match 'Python 3\.') { return , $candidate }
+        # The scorecard tools need 3.10+ (as check_status.cmake does); an older Python falls through to the next.
+        if ($LASTEXITCODE -eq 0 -and $version -match 'Python 3\.(\d+)' -and [int]$Matches[1] -ge 10) { return , $candidate }
     }
     return $null
 }
@@ -243,7 +244,7 @@ function Invoke-Services {
 
 function Invoke-Scorecard([int]$Phase, [string]$Results) {
     $py = Find-Python
-    if (-not $py) { Add-Check 'scorecard' 'SKIP' 'Python 3 not found; install it to add the scorecard evaluation'; return $null }
+    if (-not $py) { Add-Check 'scorecard' 'SKIP' 'Python 3.10+ not found; install it to add the scorecard evaluation'; return $null }
     $exe = $py[0]
     $pre = @($py | Select-Object -Skip 1)
     $out = Join-Path $Work 'scorecard'

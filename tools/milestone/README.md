@@ -27,7 +27,7 @@ What it does:
    stopped at the end. Logs are in `build\milestone\logs\`.
 5. **Interactive part.** It opens the launcher when one is built (WP-0.17) and lists the milestone's steps
    from 09 §5.9's table, for the user to answer in the pasted report.
-6. **Scorecard.** With Python 3 installed, it runs the doctest XML collection and `tools/scorecard/report.py`
+6. **Scorecard.** With Python 3.10+ installed, it runs the doctest XML collection and `tools/scorecard/report.py`
    for the milestone's phase over this machine's results. The report shows Linux as unmeasured, since only
    Windows results exist here.
 7. **Report.** `build\milestone-<M>.txt` holds the toolset, every check as PASS, FAIL or SKIP with its

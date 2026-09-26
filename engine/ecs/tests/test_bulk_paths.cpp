@@ -480,8 +480,9 @@ TEST_CASE("ecs bulk paths: a NetHandle slot keeps its id and owner until release
 }
 
 TEST_CASE("ecs bulk paths: a run of destroy commands matches one destroy at a time") {
-    // Plain entities, a parent with children, a DockRef host, a frame with members and an entity
-    // made by flecs directly (no identity), destroyed in one buffer with repeats and dead targets.
+    // Plain entities, a parent with children, a DockRef host and an entity the host filter mistakes
+    // for one, a frame with members and an entity made by flecs directly (no identity), destroyed in
+    // one buffer with repeats and dead targets.
     auto build = [](World& w, std::vector<Entity>& order) {
         registerCommon(w);
         std::vector<Entity> plain;
@@ -494,6 +495,14 @@ TEST_CASE("ecs bulk paths: a run of destroy commands matches one destroy at a ti
         REQUIRE(w.setParent(child2, parent).hasValue());
         const Entity host = w.spawn(), ship = w.spawn();
         REQUIRE(w.dock(ship, host).hasValue());
+        // An entity that is no host but hits the host filter (the World's filter bit: 12 bits of a
+        // multiplicative hash of the flecs id).
+        auto filterBit = [](Entity e) { return (e.id * 0x9E3779B97F4A7C15ull) >> 52; };
+        Entity lookalike;
+        while (!lookalike) {
+            const Entity x = w.spawn();
+            if (filterBit(x) == filterBit(host)) lookalike = x;
+        }
         const Entity frame = w.createFrame(FrameId(4));
         const Entity member = w.spawn();
         REQUIRE(w.setFrame(member, frame).hasValue());
@@ -514,6 +523,7 @@ TEST_CASE("ecs bulk paths: a run of destroy commands matches one destroy at a ti
         order.push_back(foreign);
         range(30, 40);
         order.push_back(child1); // died with its parent
+        order.push_back(lookalike);
         order.push_back(ship);
         order.push_back(plain[39]); // repeat at the end of a run
         range(40, 45);

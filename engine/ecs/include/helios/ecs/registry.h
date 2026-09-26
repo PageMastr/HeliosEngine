@@ -150,13 +150,13 @@ private:
                                         // generation the next handle gets while free
     const Slot* liveSlot(NetHandle handle) const noexcept { return isLive(handle) ? &m_slots[handle.index()] : nullptr; }
     /// release() of a handle the caller knows is live and issued by it (EntityRegistry::remove()).
-    bool releaseKnown(NetHandle handle) noexcept {
+    HELIOS_FORCEINLINE bool releaseKnown(NetHandle handle) noexcept {
         const u32 index = handle.index();
         if (index == 0 || index >= m_state.size() || m_state[index] != (kLive | handle.generation())) return false;
         freeSlot(index);
         return true;
     }
-    void freeSlot(u32 index) {
+    HELIOS_FORCEINLINE void freeSlot(u32 index) {
         const u16 generation = m_state[index] & 0xFF;
         m_state[index] = static_cast<u16>(generation == 0xFF ? 1 : generation + 1); // 0 is never issued
         --m_live;
@@ -268,7 +268,7 @@ private:
     /// Releases `handle` for `id` (if valid). When it is the handle this registry recorded for the
     /// id, it is known to be live and issued to `id`, and the release skips the handle table's
     /// slot (a scattered cache line in a destroy burst); any other handle takes the checked path.
-    void releaseHandle(EntityId id, NetHandle handle, u32& recorded) {
+    HELIOS_FORCEINLINE void releaseHandle(EntityId id, NetHandle handle, u32& recorded) {
         if (handle.isValid()) {
             if (handle.value == recorded) {
                 m_handles.releaseKnown(handle);

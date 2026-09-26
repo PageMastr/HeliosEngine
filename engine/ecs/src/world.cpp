@@ -919,18 +919,18 @@ void World::unregisterOne(const ecs_record_t* r) {
 }
 
 HELIOS_ECS_FLATTEN u32 World::destroyRun(CommandBuffer& buffer, u32 first) {
-    // Consecutive Destroy commands (ADR-004a item 3), up to kDestroyChunk at a time, in passes: read
-    // the live targets' identities, release them and log the Destroy events, then let flecs delete
-    // the entities back to back. Each pass keeps the command order; only a chunk's registry updates
-    // move ahead of its flecs deletes. The light passes overlap their cache misses across entities
-    // (a victim's row and its NetHandle slot are cold) instead of stalling behind every delete. A
-    // chunk ends before a pair target or DockRef host (relations and cascade need the per-entity
+    // Consecutive Destroy commands (ADR-004a item 3), up to kDestroyChunk at a time, in passes: check
+    // which targets are alive; read their identities, release them and log the Destroy events; then
+    // let flecs delete the entities back to back. Each pass keeps the command order; only a chunk's
+    // registry updates move ahead of its flecs deletes. The light passes overlap their cache misses
+    // across entities (a victim's record and row are cold) instead of stalling behind every delete.
+    // A chunk ends before a pair target or DockRef host (relations and cascade need the per-entity
     // path), an entity without identity, or a repeat of one of its entities; that command then
     // takes the per-entity path (a chunk that would start with it returns `first`).
     Impl& impl = *m_impl;
     const CommandBuffer::Command* cmds = buffer.m_commands.data();
     const u32 n = std::min(static_cast<u32>(buffer.m_commands.size()), first + Impl::kDestroyChunk);
-    Impl::PendingDestroy* run = impl.destroyRun.data();
+    ecs_entity_t* run = impl.destroyRun.data(); // run[k]: the target of command first + k (0: dead)
     const bool dockRefs = m_desc.relations.docking == DockStorage::Field && !impl.dockIndex.empty();
     u32 count = 0;
     u32 end = first;
@@ -938,31 +938,42 @@ HELIOS_ECS_FLATTEN u32 World::destroyRun(CommandBuffer& buffer, u32 first) {
         const EntityRef ref = cmds[end].target;
         const u32 t = ref.tempIndex();
         const Entity e = !ref.isTemp() ? ref.entity() : t < buffer.m_resolved.size() ? buffer.m_resolved[t] : Entity();
-        if (!e || !ecs_is_alive(m_flecs, fe(e))) {
-            run[count++] = Impl::PendingDestroy{end, 0, EntityId(), NetHandle()}; // discarded
+        run[count++] = e && ecs_is_alive(m_flecs, fe(e)) ? fe(e) : 0; // dead targets are discarded
+    }
+    // Then, in command order, each live target's identity (the column of the table the previous
+    // target was in is reused: a burst's victims come in runs from one table, and nothing before
+    // the deletes moves a flecs column), its release and its Destroy event.
+    const ecs_table_t* table = nullptr;
+    const NetIdentity* identities = nullptr;
+    for (u32 k = 0; k < count; ++k) {
+        const ecs_entity_t target = run[k];
+        if (target == 0) {
+            ++impl.discarded;
             continue;
         }
-        const ecs_record_t* r = ecs_record_find(m_flecs, fe(e));
-        if (isPairTarget(r) || (dockRefs && impl.mayHostDocks(e.id))) break;
-        const NetIdentity* ni = netIdentityAt(m_flecs, m_netIdentityId, r);
-        if (!ni || !ni->id.isValid()) break;
-        run[count++] = Impl::PendingDestroy{end, fe(e), ni->id, ni->handle};
-    }
-    for (u32 k = 0; k < count; ++k) {
-        const Impl::PendingDestroy& d = run[k];
-        if (d.entity == 0) {
-            ++impl.discarded;
-        } else if (m_registry.remove(d.id, d.handle)) {
-            m_log.push_back(StructuralEvent{d.id, 0, d.handle, StructuralOp::Destroy});
-        } else { // a repeat: released by this chunk already
-            end = d.command;
+        const ecs_record_t* r = ecs_record_find(m_flecs, target);
+        const NetIdentity* ni = nullptr;
+        // (The host filter has false positives: a hit is looked up before the chunk ends.)
+        if (!isPairTarget(r) && !(dockRefs && impl.mayHostDocks(target) && impl.dockIndex.contains(target))) {
+            if (r->table != table) {
+                table = r->table;
+                const int32_t col = ecs_table_get_column_index(m_flecs, table, m_netIdentityId);
+                identities =
+                    col < 0 ? nullptr : static_cast<const NetIdentity*>(ecs_table_get_column(table, col, 0));
+            }
+            if (identities) ni = &identities[ECS_RECORD_TO_ROW(r->row)];
+        }
+        // No identity, or a repeat (released by this chunk already): the chunk ends before it.
+        if (!ni || !ni->id.isValid() || !m_registry.remove(ni->id, ni->handle)) {
+            end = first + k;
             count = k;
             break;
         }
+        m_log.push_back(StructuralEvent{ni->id, 0, ni->handle, StructuralOp::Destroy});
     }
     for (u32 k = 0; k < count; ++k) {
-        if (run[k].entity == 0) continue;
-        ecs_delete(m_flecs, run[k].entity);
+        if (run[k] == 0) continue;
+        ecs_delete(m_flecs, run[k]);
         ++impl.structuralOps;
     }
     return end;

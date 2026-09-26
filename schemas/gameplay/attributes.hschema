@@ -1,0 +1,142 @@
+/// Gameplay kernel records, part 2: attributes and modifiers (06 §1.2; WP-0.19). Runtime:
+/// helios::gameplay::AttributeLayout / AttributeSet (engine/gameplay/include/helios/gameplay/attributes.h).
+package helios.gameplay;
+import "tags.hschema";
+
+/// Modifier operators in EVE Dogma order (06 §1.2). GAS `Override` maps to PostAssign.
+enum ModOp : u8 {
+  PreAssign
+  PreMul
+  PreDiv
+  ModAdd
+  ModSub
+  PostMul
+  PostDiv
+  PostPercent
+  PostAssign
+}
+
+/// How the PostMul/PostPercent/PostDiv factors combine (06 §1.2): Product = Dogma (with stacking
+/// penalties when the attribute is stackingPenalised), AdditiveBonus = GAS (two 1.5x give 2.0x).
+enum MultiplierMode : u8 {
+  Product
+  AdditiveBonus
+}
+
+/// Input of a curve magnitude.
+enum MagnitudeInput : u8 {
+  Level
+  Stacks
+}
+
+/// Which entity an attribute magnitude reads.
+enum MagnitudeSource : u8 {
+  Source
+  Target
+}
+
+/// Whether an attribute magnitude is captured when the modifier is applied or read live.
+enum CaptureMode : u8 {
+  Snapshot
+  Live
+}
+
+/// Dogma "location" domains of a modifier (06 §1.2). Only Self is resolved in Phase 0; the
+/// cross-entity domains arrive with WP-2.x (brain snapshots, fitsim).
+enum ModDomain : u8 {
+  Self
+  Owner
+  Pilot
+  Ship
+  ShipModules
+  Fleet
+  Grid
+  AreaVolume
+  Followers
+}
+
+/// A constant or another attribute's final value (06 §1.2 AttrOrConst: Shield.Current <= Shield.Max).
+alias AttrOrConst = variant { Const { value: f64 }; Attr { attr: AttributeRef } };
+
+/// Where a modifier's magnitude comes from (06 §1.2): a constant, a level curve, a source or target
+/// attribute (captured at apply or read live), or an HXL formula.
+alias Magnitude = variant {
+  Const { value: f64 };
+  Curve { curve: Name; input: MagnitudeInput = Level; scale: f64 = 1 };
+  Attr { attr: AttributeRef; from: MagnitudeSource = Source; capture: CaptureMode = Snapshot; coefficient: f64 = 1 };
+  Hxl { expr: HxlExpr }
+};
+
+/// Quantization of a replicated attribute value (04 §4): `bits` spread over [min, max].
+struct Quantization {
+  /// Bits per value on the wire.
+  bits: u8 = 16 @range(1, 32)
+  /// Lowest encodable value.
+  min: f64
+  /// Highest encodable value.
+  max: f64
+}
+
+/// An attribute definition (06 §1.2). Attributes that native code reads every tick get generated
+/// slot constants; everything else is looked up by `id` once.
+record AttributeDef @table("attr") {
+  /// Identifier used by HXL (`attr(e, Shield.Max)`) and by modifiers; dotted segments.
+  id: Name
+  /// Display name.
+  name: LocString
+  /// Display unit ("m/s", "GJ"); 06's UnitRef until a UnitDef record type exists.
+  unit: Name
+  /// Base value of a new entity.
+  default: f64
+  /// Lower bound of the final value: a constant or another attribute.
+  minClamp: AttrOrConst?
+  /// Upper bound of the final value (Shield.Current <= Shield.Max).
+  maxClamp: AttrOrConst?
+  /// Base value computed from other attributes of the same entity (`self`), e.g. EffectiveHP.
+  derived: HxlExpr?
+  /// How the PostMul/PostPercent/PostDiv factors combine.
+  multiplierMode: MultiplierMode = Product
+  /// Multiplicative modifiers are stacking-penalised (S(i) = e^-(i/2.67)^2) unless exempt.
+  stackingPenalised: bool
+  /// Who receives the final value (06 §1.6).
+  replicate: Audience = Server
+  /// Wire quantization of the replicated value.
+  quant: Quantization?
+  /// Only persisted attributes save their base value; derived and final values never persist.
+  persistBase: bool
+}
+
+/// The attribute set of a record template (06 §1.2): the layout of its entities' AttrBlock.
+record AttributeSetDef @table("aset") {
+  /// The attributes of the set, in slot order.
+  attrs: list<AttributeRef>
+}
+
+/// Target of a modifier (06 §1.2 cross-entity targeting): a domain plus a tag filter.
+struct ModifierTarget {
+  /// Which entities the modifier applies to (Self in Phase 0).
+  domain: ModDomain = Self
+  /// Selects the entities of a cross-entity domain by tag.
+  filter: TagQuery?
+}
+
+/// A modifier (06 §1.2): {attr, op, magnitude, priority, penaltyGroup, exempt, requirement}; the
+/// runtime adds its source (effect, item or skill) so it can be removed and replicated.
+struct ModifierDef {
+  /// The modified attribute.
+  attr: AttributeRef
+  /// Operator stage (Dogma order).
+  op: ModOp
+  /// The operand.
+  magnitude: Magnitude
+  /// PreAssign/PostAssign: the highest priority wins (ties: the larger value).
+  priority: i32
+  /// Stacking-penalty chain; different groups are penalised independently.
+  penaltyGroup: u16
+  /// Never stacking-penalised (S = 1) and not counted in the chain, e.g. skills.
+  exempt: bool
+  /// The modifier applies only while the target's tags match (06 §1.3 ongoing requirements).
+  requirement: TagQuery?
+  /// Target domain and filter.
+  target: ModifierTarget
+}

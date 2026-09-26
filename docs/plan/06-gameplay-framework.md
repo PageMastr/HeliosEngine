@@ -64,6 +64,7 @@
 
 ```
 record AttributeDef @table("attr") {
+  id: Name;                                                // identifier for HXL and slot constants: attr(e, Shield.Max)
   name: LocString; unit: UnitRef; default: f64;
   minClamp: AttrOrConst?; maxClamp: AttrOrConst?;          // Shield.Current <= Shield.Max
   derived: HxlExpr?;                                       // EffectiveHP = f(hp, resists)
@@ -79,7 +80,8 @@ aggregator heads in SoA form. Designers add attributes without writing code. Att
 code reads every tick (`Ship.MaxLinearSpeed`) get schemac-generated slot constants, so reading them
 needs no lookup.
 
-**Modifiers.** A modifier is `{attr, op, magnitude, penaltyGroup, exempt, requirement: TagQuery?, source}`.
+**Modifiers.** A modifier is `{attr, op, magnitude, priority, penaltyGroup, exempt, requirement: TagQuery?, source}`.
+`priority` picks the `PreAssign` and `PostAssign` winner below (ties: the larger value).
 - **Magnitude sources:** a constant, a level curve, a source or target attribute (captured at apply
   or read live), or HXL.
 - **Operators, in Dogma order (R01 §5):** `PreAssign, PreMul, PreDiv, ModAdd, ModSub, PostMul,
@@ -107,7 +109,8 @@ v = PostAssign ? PostAssign.highestPriority : v;   final = clamp(v, minClamp, ma
 
 **HXL (Helios eXpression Language).** HXL is pure, deterministic stack bytecode compiled by
 schemac. Formulas are data, not C++ (R09-A0).
-- **Built-ins:** arithmetic, `min max clamp lerp select`, `pow exp ln sqrt asinh` from the
+- **Built-ins:** arithmetic, comparisons, short-circuit `&& || !`, `min max clamp lerp select`,
+  `abs floor ceil` (exact IEEE operations), `pow exp ln sqrt asinh` from the
   deterministic `hmath` library (not libm), `curve(t, x)`, `attr(e, A)`, `tag(e, T)`, `stacks()`,
   `level()`, and context fields.
 - **Interpreters.** There are two, each about 1.5k lines: C++ (`engine/hxl`) and Go (`pkg/hxl`, 05 §8,

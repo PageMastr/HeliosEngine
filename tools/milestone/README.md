@@ -52,8 +52,9 @@ Name the failing tests in the pasted report so that known reds can be told from 
 The script is ASCII-only and uses no PowerShell 7 syntax, because the user runs it under Windows PowerShell
 5.1, which reads a script without a byte-order mark in the ANSI code page. CTest `lint_milestone_selftest`
 (label `lint`) runs `-SelfTest` under Windows PowerShell on Windows and `pwsh` elsewhere. The self-test
-covers the toolset rule, the version lookup, the JUnit summary, the report format and the encoding. The
-build, the service checks and the interactive part run only on a real Windows machine.
+covers the toolset rule, the version lookup, the JUnit summary, the report format, the PostgreSQL
+command-line match (the backend's postmaster, not the untimed run's) and the encoding. The build, the
+service checks and the interactive part run only on a real Windows machine.
 
 ## Plan conformance
 

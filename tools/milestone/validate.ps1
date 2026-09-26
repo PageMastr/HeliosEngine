@@ -155,13 +155,20 @@ function Wait-Ready([string]$Url, [int]$TimeoutSeconds, [System.Diagnostics.Stop
     return -1
 }
 
-function Get-PostgresProcesses([string]$DataDir) {
-    # The postmaster's command line names the data directory (in either separator and any case); its
-    # workers' command lines do not, so they are found by parent. The trailing separator keeps
-    # ...\backend from also matching ...\backend-prime (the postmaster's -D is <data>\pg).
+function Test-PostgresCommandLine([string]$CommandLine, [string]$DataDir) {
+    # Whether a postmaster's command line belongs to the backend data directory $DataDir: it names the
+    # directory (in either separator and any case) followed by a separator, because the postmaster's -D is
+    # <data>\pg (services/internal/stack). The separator keeps ...\backend from matching ...\backend-prime.
+    if (-not $CommandLine) { return $false }
     $needle = $DataDir.Replace('/', '\').ToLowerInvariant().TrimEnd('\') + '\'
+    return $CommandLine.Replace('/', '\').ToLowerInvariant().Contains($needle)
+}
+
+function Get-PostgresProcesses([string]$DataDir) {
+    # The postmaster is found by its command line; its workers' command lines do not name the data
+    # directory, so they are found by parent.
     $all = @(Get-CimInstance Win32_Process -Filter "Name = 'postgres.exe'")
-    $main = @($all | Where-Object { $_.CommandLine -and $_.CommandLine.Replace('/', '\').ToLowerInvariant().Contains($needle) })
+    $main = @($all | Where-Object { Test-PostgresCommandLine $_.CommandLine $DataDir })
     $ids = @($main | ForEach-Object { $_.ProcessId })
     return @($main) + @($all | Where-Object { $ids -contains $_.ParentProcessId })
 }
@@ -292,6 +299,11 @@ function Invoke-SelfTest {
         $text = Format-Report 'M0' 'MSVC 19.44' @([pscustomobject]@{ Name = 'x'; Status = 'PASS'; Detail = 'd' }) @('step') ''
         & $expect ($text -match '\[PASS\] x: d' -and $text -match '- step' -and $text -match 'milestone M0') 'formats the report'
         & $expect ((Join-Arguments @('a', 'b c', 'd"e')) -eq 'a "b c" "d\"e"') 'quotes arguments'
+        $d = 'C:\h\build\milestone\backend'
+        & $expect (Test-PostgresCommandLine '"C:\pg\bin\postgres.exe" -D "C:\H\Build\Milestone\Backend\pg" -p 5432' $d) 'matches the backend postmaster'
+        & $expect (Test-PostgresCommandLine 'postgres.exe -D C:/h/build/milestone/backend/pg' $d) 'matches either separator'
+        & $expect (-not (Test-PostgresCommandLine 'postgres.exe -D C:\h\build\milestone\backend-prime\pg' $d)) 'skips the untimed run'
+        & $expect (-not (Test-PostgresCommandLine '' $d)) 'skips a process without a command line'
         & $expect ($Manual.ContainsKey('M0') -and $Manual.ContainsKey('M4')) 'lists every milestone'
         $wide = @([System.IO.File]::ReadAllBytes($PSCommandPath) | Where-Object { $_ -gt 127 })
         & $expect ($wide.Count -eq 0) 'the script is ASCII (Windows PowerShell 5.1 reads it as ANSI)'

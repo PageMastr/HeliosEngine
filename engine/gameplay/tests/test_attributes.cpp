@@ -12,6 +12,7 @@
 #include "helios/core/assert.h"
 #include "helios/core/jobs.h"
 #include "helios/gameplay/attributes.h"
+#include "helios/math/scalar.h"
 
 using namespace helios;
 using namespace helios::gameplay;
@@ -52,7 +53,12 @@ TEST_CASE("attributes: stacking penalty series S(i) = exp(-(i/2.67)^2)") {
     CHECK(stackingPenalty(1) == doctest::Approx(0.869119980800).epsilon(1e-11));
     CHECK(stackingPenalty(3) == doctest::Approx(0.282955154023).epsilon(1e-11));
     CHECK(stackingPenalty(100) == 0.0); // underflows
-    CHECK(bits(stackingPenalty(70)) == bits(stackingPenalty(70)));
+    // Beyond the 64-entry table the value is computed on the fly, with the same det::exp formula.
+    for (u32 i : {63u, 64u, 70u}) {
+        const f64 q = static_cast<f64>(i) / 2.67;
+        CHECK(bits(stackingPenalty(i)) == bits(det::exp(-(q * q))));
+    }
+    CHECK(stackingPenalty(64) > 0.0);
 }
 
 TEST_CASE("attributes: Dogma operator order") {
@@ -89,6 +95,20 @@ TEST_CASE("attributes: Dogma operator order") {
     CHECK(s.value(0) == 9.0);
     CHECK(s.removeModifier(pre));
     CHECK_FALSE(s.removeModifier(pre)); // stale handle
+}
+
+TEST_CASE("attributes: PreMul before PreDiv, ModAdd before ModSub, with inexact values (review regression)") {
+    // Swapping either pair rounds differently, so these fail if the stage order changes; before
+    // this test only the self-pinned golden hash caught that.
+    auto layout = layoutOf({attr("A", 0.1), attr("B", 1.0)});
+    AttributeSet s(layout);
+    add(s, Modifier::constant(0, ModOp::PreDiv, 7.0));
+    add(s, Modifier::constant(0, ModOp::PreMul, 3.0));
+    add(s, Modifier::constant(1, ModOp::ModSub, 1e-16));
+    add(s, Modifier::constant(1, ModOp::ModAdd, 1e-16));
+    s.recompute();
+    CHECK(bits(s.value(0)) == bits(0x1.5f15f15f15f17p-5)); // (0.1 * 3) / 7; (0.1 / 7) * 3 is ...16p-5
+    CHECK(bits(s.value(1)) == bits(0x1.fffffffffffffp-1)); // (1 + 1e-16) - 1e-16; the swap gives 1.0
 }
 
 TEST_CASE("attributes: sums and products are exact folds that skip empty stages") {
@@ -694,4 +714,11 @@ TEST_CASE("attributes: Target/Snapshot magnitudes need a target of the context's
     twinTarget.recompute();
     ctx.target = &twinTarget;
     CHECK(instantiateModifier(d, ctx).ok());
+    // A layout of the same size but other attributes is rejected too: slot 1 exists there, but it is
+    // not Hull.Resist.
+    auto sameSize = layoutOf({attr("A"), attr("Other", 7.0)});
+    AttributeSet sameSizeTarget(sameSize);
+    sameSizeTarget.recompute();
+    ctx.target = &sameSizeTarget;
+    CHECK(instantiateModifier(d, ctx).errorCode() == ErrorCode::InvalidArgument);
 }

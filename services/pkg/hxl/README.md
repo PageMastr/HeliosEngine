@@ -44,7 +44,7 @@ as a unit test (`TestHXLPackagesClean`, so every `go test ./...` enforces it) an
 |---|---|
 | `linux/amd64`, `GOAMD64=v1` | CI (`services` job, `go test ./...`) |
 | `windows/amd64` | CI (`services` job on `windows-latest`) |
-| `linux/amd64`, `GOAMD64=v3` | Not in CI yet (WP-0.1); run locally for WP-0.19 |
+| `linux/amd64` (and `windows/amd64`), `GOAMD64=v3` | CI, through `TestCorpusAtGOAMD64v3`: every `go test ./pkg/hxl/` on amd64 builds the test binary at `GOAMD64=v3` and runs `TestCorpus` and `TestFMAHazardIsReal` in it (skipped with `-short` or on a CPU without x86-64-v3) |
 | `linux/arm64` | Not in CI yet (needs an arm64 runner, WP-0.1); not run |
 
 Every `go test` also compiles `pkg/hxl` and `pkg/hxl/det` for `arm64` and `amd64`/`v3` and checks that

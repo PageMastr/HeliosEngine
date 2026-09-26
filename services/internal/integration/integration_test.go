@@ -90,6 +90,9 @@ func TestMain(m *testing.M) {
 	cfg.Seed = "dev"
 	cfg.Orchestrator.LeaseTTL = platform.Duration(time.Second)
 	cfg.Orchestrator.HeartbeatInterval = platform.Duration(250 * time.Millisecond)
+	// TestPerfTokenIssueAt100PerSecond issues 1,000 connect tokens for four accounts in 10 s; the
+	// per-account limit (10/min, burst 5) is exercised by the session unit tests instead.
+	cfg.Session.CreatePerAccount = platform.RateLimit{Rate: 60_000, Per: platform.Duration(time.Minute), Burst: 1_000}
 	level := slog.LevelWarn
 	if os.Getenv("HELIOS_TEST_LOG") != "" {
 		level = slog.LevelDebug

@@ -855,8 +855,9 @@ here.
 **Why one slow burst can decide a configuration.** Each configuration's M1 uses the medians of 7 burst
 totals, 4 of them reverts and 3 applies, which cost differently. The median is then the slowest revert
 or the fastest apply, so a single slow revert burst moves it. That is a property of the measurement,
-which this round did not change. It is how a configuration reaches a DontFragment ratio of 1.82× while
-its tag ratio stays at 1.22×.
+which this round did not change. It is consistent with the failing runs of the second quiet series and
+of this round's own check, whose DontFragment ratios (1.63–1.82×) sat beside normal tag ratios
+(1.22–1.33×); those `--m1-gate` runs printed no per-burst times, so it is not shown for them.
 
 **Verdict.** Within option A's limits nothing measured moves the typical worst-configuration ratio by
 more than a few percent. The bookkeeping that separates the World from the floor is required by the

@@ -202,7 +202,6 @@ int protectTrampoline(lua_State* L) {
     return 0;
 }
 
-
 } // namespace
 
 bool ensureStack(lua_State* L, int n) noexcept {

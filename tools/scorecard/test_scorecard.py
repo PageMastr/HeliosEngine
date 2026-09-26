@@ -123,6 +123,12 @@ jobs:
       - run: echo hi
   plain:
     runs-on: ubuntu-24.04
+  wrapped:
+    name: Fuzz ${{ matrix.gate }}
+    strategy:
+      matrix:
+        gate: [one,
+               two]
 """
 
 
@@ -528,6 +534,118 @@ class CommandLineTests(Fixture):
         self.assertIn("scorecard: 9 criteria", out)  # the registry findings still print
 
 
+class PerfMetricTests(Fixture):
+    METRIC = {"id": "net.pps", "criterion": "NS-0.1", "doctest": "net_tests", "case": "NS-0.1: handshake",
+              "pattern": r"-> (\d+) pps", "unit": "pps", "better": "higher", "category": "runtime"}
+
+    def with_metric(self, **fields):
+        data = copy.deepcopy(VALID)
+        data["perf_metrics"] = [dict(self.METRIC, **fields)]
+        return data
+
+    def test_valid_metric_passes(self):
+        self.assertEqual(self.run_check(self.with_metric(), [INVENTORY]), [])
+
+    def test_metric_fields_are_checked(self):
+        self.assertFinding(self.run_check(self.with_metric(pattern=r"\d+ pps")), "exactly one group")
+        self.assertFinding(self.run_check(self.with_metric(pattern="(")), "bad 'pattern'")
+        self.assertFinding(self.run_check(self.with_metric(gate="net_bench_gate")), "either 'gate' or 'doctest'")
+        self.assertFinding(self.run_check(self.with_metric(category="speed")), "'category'")
+        self.assertFinding(self.run_check(self.with_metric(criterion="NS-0.9")), "'NS-0.9' is not registered")
+        self.assertFinding(self.run_check(self.with_metric(budgett="5 %")), "unknown field 'budgett'")
+        data = self.with_metric()
+        del data["perf_metrics"][0]["case"]
+        data["perf_metrics"][0].pop("doctest")
+        data["perf_metrics"][0]["gate"] = "nope"
+        self.assertFinding(self.run_check(data), "gate 'nope' is not declared")
+
+    def test_metric_shapes_are_checked(self):
+        self.assertFinding(self.run_check(self.with_metric(gate=["net_bench_gate"])), "gate must be strings")
+        self.assertFinding(self.run_check(self.with_metric(id="Net PPS")), "an 'id' of [a-z0-9_.-]")
+        data = copy.deepcopy(VALID)
+        data["perf_metrics"] = {"net.pps": self.METRIC}
+        self.assertFinding(self.run_check(data), "'perf_metrics' must be a list")
+        data = self.with_metric()
+        data["perf_metrics"].append(dict(self.METRIC))
+        self.assertFinding(self.run_check(data), "perf metric 'net.pps' is declared twice")
+
+    def test_metric_case_must_exist(self):
+        self.assertFinding(self.run_check(self.with_metric(case="NS-0.1: renamed"), [INVENTORY]),
+                           "doctest case doctest net_tests / NS-0.1: renamed does not exist")
+
+    def test_every_metric_source_is_checked_whether_or_not_it_names_a_criterion(self):
+        # The review's reproduction: a metric without a criterion whose case was renamed.
+        data = self.with_metric(case="NS-0.1: renamed")
+        del data["perf_metrics"][0]["criterion"]
+        errors = self.run_check(data, [INVENTORY])
+        self.assertEqual(len(errors), 1, errors)
+        self.assertFinding(errors, "perf metric 'net.pps': doctest case doctest net_tests / NS-0.1: renamed "
+                                   "does not exist in the linux inventory")
+        self.assertFinding(self.run_check(self.with_metric(doctest="gone_tests"), [INVENTORY]),
+                           "perf metric 'net.pps': doctest binary")
+        # A metric read from one run is checked only against inventories of that run's OS.
+        windows = dict(INVENTORY, os="windows", doctest={"net_tests": []})
+        metric_errors = (lambda data: [e for e in self.run_check(data, [windows]) if "perf metric" in e])
+        self.assertEqual(metric_errors(self.with_metric(run="linux-gcc")), [])
+        self.assertFinding(metric_errors(self.with_metric()), "perf metric 'net.pps': doctest case")
+
+    def test_metric_cases_are_exact(self):
+        self.assertFinding(self.run_check(self.with_metric(case="NS-0.1: *")), "take no '*'")
+
+    def test_perf_accept_is_checked(self):
+        good = {"metric": "net.pps", "night": "2026-01-05", "value": 1234.5, "run": "linux-gcc",
+                "reason": "new codec; accepted by the Director"}
+        data = self.with_metric()
+        data["perf_accept"] = [good]
+        self.assertEqual(self.run_check(data), [])
+        for bad, finding in (({"metric": "net.nope"}, "'metric' must name a declared perf metric"),
+                             ({"night": "2026-13-01"}, "'night' must be the YYYY-MM-DD"),
+                             ({"night": "2026-01-5"}, "'night' must be the YYYY-MM-DD"),
+                             ({"night": "2999-01-01"}, "'night' is after today"),
+                             ({"value": 0}, "needs the positive 'value'"),
+                             ({"value": True}, "needs the positive 'value'"),
+                             ({"value": "1234"}, "needs the positive 'value'"),
+                             ({"run": "linux-x"}, "unknown run 'linux-x'"),
+                             ({"reason": " "}, "needs a 'reason'"),
+                             ({"because": "x"}, "unknown field 'because'")):
+            data["perf_accept"] = [dict(good, **bad)]
+            self.assertFinding(self.run_check(data), finding)
+        no_value = dict(good)
+        del no_value["value"]
+        data["perf_accept"] = [no_value]
+        self.assertFinding(self.run_check(data), "needs the positive 'value'")
+        # A record for a run the metric is never read from could never match.
+        data = self.with_metric(run="linux-gcc")
+        data["perf_accept"] = [dict(good, run="windows-vs2026")]
+        self.assertFinding(self.run_check(data), "read only from run 'linux-gcc'")
+        data = self.with_metric()  # read from every run: any declared run may be named
+        data["perf_accept"] = [dict(good, run="windows-vs2026")]
+        self.assertEqual(self.run_check(data), [])
+        errors = []
+        tomorrow = {k: v for k, v in good.items() if k != "run"}
+        sc._check_accepts("s", {"perf_accept": [dict(tomorrow, night="2026-01-06")]}, {"net.pps"}, errors,
+                          today="2026-01-05")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("after today (2026-01-05)", errors[0])
+        data["perf_accept"] = {"net.pps": good}
+        self.assertFinding(self.run_check(data), "'perf_accept' must be a list")
+        data["perf_accept"] = ["net.pps"]
+        self.assertFinding(self.run_check(data), "every perf_accept item must be an object")
+
+    def test_nightly_must_produce_every_run_and_gate(self):
+        workflow = self.root / "nightly.yml"
+        workflow.write_text("jobs:\n  a:\n    steps:\n      - run: echo linux-gcc linux-asan windows-vs2026 "
+                            "net_bench_gate\n", encoding="utf-8")
+        errors = sc.check_workflow(VALID, self.root / "scorecard.jsonc", workflow)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("gate 'fuzz_linux' is never produced", errors[0])
+        local = copy.deepcopy(VALID)
+        local["runs"]["windows-local"] = {"os": "windows", "default": True, "nightly": False}
+        self.assertEqual(len(sc.check_workflow(local, self.root / "scorecard.jsonc", workflow)), 1)
+        local["runs"]["windows-local"]["nightly"] = "no"
+        self.assertFinding(self.run_check(local), "run 'windows-local': 'nightly'")
+
+
 class InventoryTests(Fixture):
     def test_missing_ctest_fails(self):
         inv = dict(INVENTORY, ctest=["net_tests"])
@@ -631,7 +749,8 @@ class FormatTests(unittest.TestCase):
             path = Path(d) / "ci.yml"
             path.write_text(CI_YML, encoding="utf-8")
             self.assertEqual(sc.workflow_jobs(path),
-                             ["Build (linux-gcc)", "Build (linux-clang)", "MSBuild (vs2026)", "plain"])
+                             ["Build (linux-gcc)", "Build (linux-clang)", "MSBuild (vs2026)", "plain", "Fuzz one",
+                              "Fuzz two"])
 
     def test_go_list_and_doctest_list_parsing(self):
         listing = ("TestA\nTestB\nok  \tm/x/pkg/a\t0.01s\n?   \tm/x/pkg/none\t[no test files]\n"

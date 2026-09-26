@@ -1,16 +1,55 @@
 name: Nightly
 
+# The nightly tier (docs/plan/09-roadmap-and-process.md §5.6; WP-0.3). Each job writes a result set
+# (CTest JUnit, doctest XML, `go test -json`, gate JUnit and a test inventory, see tools/scorecard) and the
+# scorecard job turns them into the report of every criterion in scorecard.jsonc, in the job summary and
+# the `scorecard-report` artifact, plus the `perf-history` artifact and its regression check (§5.8).
+# Budget ≤ 8 h wall clock: the jobs run in parallel and the longest, the 1 h libFuzzer runs, take about
+# 75 min. No secrets and no write access: the scorecard job only reads this repository's Actions runs and
+# artifacts (last night's report and perf history, the latest ci.yml run on main).
+
 on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  linux-asan:
-    name: Linux Clang Debug + ASan/UBSan
+  linux:
+    name: Linux (${{ matrix.run }})
     runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # GCC: every CTest, then the timing gates (label perf) serially on the otherwise idle runner,
+          # then net_bench --gate (NS-0.2, NS-0.7).
+          - preset: linux-gcc
+            run: linux-gcc
+            ctest_args: -LE perf
+          - preset: linux-clang
+            run: linux-clang
+            ctest_args: -LE perf
+          # ASan/UBSan runs every test, the timing gates included, as it did before WP-0.3.
+          - preset: linux-debug-asan
+            run: linux-asan
+            ctest_args: ""
+    env:
+      BUILD: build/${{ matrix.preset }}
+      RESULTS: ${{ github.workspace }}/results/${{ matrix.run }}
     steps:
       - uses: actions/checkout@v5
+      - name: Record the run
+        run: |
+          mkdir -p "$RESULTS"
+          echo '{"run": "${{ matrix.run }}"}' > "$RESULTS/run.json"
       - name: Install system packages
         run: |
           sudo apt-get update
@@ -18,47 +57,281 @@ jobs:
             libxi-dev libxkbcommon-dev libxext-dev libxfixes-dev libxss-dev libxtst-dev libdbus-1-dev \
             libudev-dev mesa-vulkan-drivers xvfb
       - name: Configure
-        run: cmake --preset linux-debug-asan
+        run: cmake --preset ${{ matrix.preset }}
       - name: Build
-        run: cmake --build --preset linux-debug-asan
-      - name: Test
-        run: xvfb-run -a ctest --preset linux-debug-asan
-
-  # Timing gates ("perf: ..." doctest cases, ctest label `perf`) run serially on an otherwise idle runner.
-  linux-perf:
-    name: Linux perf gates (GCC RelWithDebInfo)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install system packages
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Test (software Vulkan via lavapipe)
+        run: xvfb-run -a ctest --test-dir "$BUILD" ${{ matrix.ctest_args }} --output-on-failure --output-junit "$RESULTS/ctest.xml"
+      - name: Test cases (doctest XML)
+        if: ${{ !cancelled() }}
+        run: xvfb-run -a python3 tools/scorecard/runners.py doctest --build-dir "$BUILD" --out "$RESULTS/doctest"
+      - name: Perf gates (label perf, serial)
+        if: ${{ !cancelled() && matrix.run == 'linux-gcc' }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
-            libxi-dev libxkbcommon-dev libxext-dev libxfixes-dev libxss-dev libxtst-dev libdbus-1-dev \
-            libudev-dev mesa-vulkan-drivers xvfb
-      - name: Configure
-        run: cmake --preset linux-gcc
-      - name: Build
-        run: cmake --build --preset linux-gcc
-      - name: Perf gates
-        run: xvfb-run -a ctest --preset linux-gcc -L perf
+          status=0
+          xvfb-run -a ctest --test-dir "$BUILD" -L perf --output-on-failure --output-junit "$RESULTS/ctest-perf.xml" || status=1
+          xvfb-run -a python3 tools/scorecard/runners.py doctest --perf --build-dir "$BUILD" --out "$RESULTS/doctest" || status=1
+          exit $status
+      - name: net_bench --gate (NS-0.2, NS-0.7; 10 min)
+        if: ${{ !cancelled() && matrix.run == 'linux-gcc' }}
+        run: >
+          python3 tools/scorecard/runners.py gate --name net_bench_gate --build-dir "$BUILD" --timeout 1800
+          --out "$RESULTS/gates" -- net_bench --gate
+      - name: Test inventory
+        if: ${{ !cancelled() }}
+        run: python3 tools/scorecard/scorecard.py inventory --build-dir "$BUILD" --out "$RESULTS/inventory.json"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: results-${{ matrix.run }}
+          path: results/${{ matrix.run }}
+          retention-days: 30
 
-  windows-msbuild:
-    name: Windows MSBuild (${{ matrix.preset }})
+  windows:
+    name: Windows (${{ matrix.run }})
     runs-on: ${{ matrix.image }}
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
         include:
           - preset: windows-vs2026
             image: windows-latest
+            run: windows-vs2026
           - preset: windows-vs2022
             image: windows-2022
+            run: windows-vs2022
+          - preset: windows-clang-cl
+            image: windows-latest
+            run: windows-clang-cl
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      BUILD: build/${{ matrix.preset }}
+      RESULTS: ${{ github.workspace }}/results/${{ matrix.run }}
     steps:
       - uses: actions/checkout@v5
+      - name: Record the run
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:RESULTS | Out-Null
+          Set-Content -Encoding ascii -Path "$env:RESULTS/run.json" -Value '{"run": "${{ matrix.run }}"}'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: ${{ matrix.preset == 'windows-clang-cl' }}
+        with:
+          arch: x64
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test (no GPU on hosted runners)
-        run: ctest --test-dir build/${{ matrix.preset }} -C RelWithDebInfo -LE "gpu|perf" --output-on-failure
+        run: ctest --test-dir $env:BUILD -C RelWithDebInfo -LE "gpu|perf" --output-on-failure --output-junit "$env:RESULTS/ctest.xml"
+      - name: Test cases (doctest XML)
+        if: ${{ !cancelled() }}
+        run: python tools/scorecard/runners.py doctest --build-dir $env:BUILD --config RelWithDebInfo --out "$env:RESULTS/doctest"
+      - name: net_bench --gate (NS-0.2, NS-0.7; 10 min)
+        if: ${{ !cancelled() && matrix.run == 'windows-vs2026' }}
+        run: >
+          python tools/scorecard/runners.py gate --name net_bench_gate --build-dir $env:BUILD --config RelWithDebInfo
+          --timeout 1800 --out "$env:RESULTS/gates" -- net_bench --gate
+      - name: Test inventory
+        if: ${{ !cancelled() }}
+        run: python tools/scorecard/scorecard.py inventory --build-dir $env:BUILD --config RelWithDebInfo --out "$env:RESULTS/inventory.json"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: results-${{ matrix.run }}
+          path: results/${{ matrix.run }}
+          retention-days: 30
+
+  go:
+    name: Go (${{ matrix.run }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            run: linux-go
+            target: linux
+            interop: "1"
+          - os: windows-latest
+            run: windows-go
+            target: windows
+            interop: ""
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: "0"
+      HELIOS_NETCODE_INTEROP: ${{ matrix.interop }}
+      RESULTS: results/${{ matrix.run }}  # relative: Git Bash on Windows and POSIX paths alike
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: services/go.mod
+          cache-dependency-path: services/go.sum
+      - name: Record the run and its Go test inventory
+        run: |
+          py=$(command -v python3 || command -v python)
+          mkdir -p "$RESULTS"
+          echo '{"run": "${{ matrix.run }}"}' > "$RESULTS/run.json"
+          (cd services && go test -list . ./... > "../$RESULTS/go-list.txt" && \
+            go test -tags integration -list . ./... > "../$RESULTS/go-list-integration.txt")
+          "$py" tools/scorecard/scorecard.py inventory --os ${{ matrix.target }} --go-list "$RESULTS/go-list.txt" \
+            --go-list "$RESULTS/go-list-integration.txt" --out "$RESULTS/inventory-go.json"
+      - name: go test -json
+        if: ${{ !cancelled() }}
+        working-directory: services
+        run: go test -json ./... > "../$RESULTS/go.json"
+      # Embedded PostgreSQL refuses to run as root; hosted runners use a normal user (Windows: pg_ctl
+      # drops the administrator token).
+      - name: go test -json -tags integration
+        if: ${{ !cancelled() }}
+        working-directory: services
+        run: go test -json -tags integration ./internal/integration/... > "../$RESULTS/go-integration.json"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: results-${{ matrix.run }}
+          path: results/${{ matrix.run }}
+          retention-days: 30
+
+  # NS-0.4: each engine/net fuzz target under libFuzzer with ASan and UBSan for 1 h (needs clang's
+  # compiler-rt). A crash, leak, UBSan report or slow input fails the gate; its reproducer is uploaded.
+  fuzz:
+    name: libFuzzer (${{ matrix.gate }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [libfuzzer_packet_parser, libfuzzer_connection_receive, libfuzzer_connect_token,
+               libfuzzer_server_datagram, libfuzzer_address_parse]
+    env:
+      GATE: ${{ matrix.gate }}
+      RESULTS: ${{ github.workspace }}/results/${{ matrix.gate }}
+      SANITIZE: -fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=undefined
+    steps:
+      - uses: actions/checkout@v5
+      - name: Record the run
+        run: |
+          mkdir -p "$RESULTS"
+          echo '{"run": "linux-fuzz"}' > "$RESULTS/run.json"
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang libclang-rt-18-dev
+      - name: Configure (libFuzzer, ASan, UBSan)
+        run: >
+          cmake --preset linux-clang -B build/fuzz -DHELIOS_BUILD_GRAPHICS=OFF -DHELIOS_BUILD_TESTS=OFF
+          -DHELIOS_NET_LIBFUZZER=ON "-DCMAKE_C_FLAGS=$SANITIZE" "-DCMAKE_CXX_FLAGS=$SANITIZE"
+      - name: Build
+        run: cmake --build build/fuzz --target "net_fuzz_${GATE#libfuzzer_}"
+      - name: Fuzz for 1 h
+        run: |
+          target="${GATE#libfuzzer_}"
+          mkdir -p "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/crashes"
+          cp engine/net/fuzz/corpus/"$target"/* "$RUNNER_TEMP/corpus/"
+          python3 tools/scorecard/runners.py gate --name "$GATE" --build-dir build/fuzz --timeout 4500 \
+            --out "$RESULTS/gates" -- "net_fuzz_$target" -max_total_time=3600 -timeout=25 -rss_limit_mb=2048 \
+            -print_final_stats=1 -artifact_prefix="$RUNNER_TEMP/crashes/" "$RUNNER_TEMP/corpus"
+      - uses: actions/upload-artifact@v4
+        if: ${{ failure() }}
+        with:
+          name: fuzz-crashes-${{ matrix.gate }}
+          path: ${{ runner.temp }}/crashes
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: results-${{ matrix.gate }}
+          path: results/${{ matrix.gate }}
+          retention-days: 30
+
+  scorecard:
+    name: Scorecard report
+    needs: [linux, windows, go, fuzz]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: results
+      - name: Fetch last night's report and perf history and the latest CI run on main
+        run: |
+          mkdir -p previous out
+          # The newest earlier nightly that has each artifact, looked for separately: a night whose perf step
+          # failed still uploads its report, and its perf history then comes from an older night. A listed
+          # artifact that fails to download, or an API error, fails this step instead of passing for a first
+          # night, and without previous/first-night the perf step requires a history (perf.py
+          # --require-history), so a lost artifact cannot reset every baseline.
+          for id in $(gh run list -R "$GITHUB_REPOSITORY" --workflow nightly.yml --branch main --status completed \
+                        --limit 30 --json databaseId --jq '.[].databaseId'); do
+            [ "$id" = "$GITHUB_RUN_ID" ] && continue
+            names=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?per_page=100" \
+                      --jq '.artifacts[] | select(.expired | not) | .name')
+            for want in scorecard-report perf-history; do
+              if [ ! -f "previous/$want.json" ] && grep -qx "$want" <<<"$names"; then
+                gh run download "$id" -R "$GITHUB_REPOSITORY" -n "$want" -D previous
+                echo "previous $want: run $id"
+              fi
+            done
+            if [ -f previous/scorecard-report.json ] && [ -f previous/perf-history.json ]; then break; fi
+          done
+          if [ ! -f previous/scorecard-report.json ] && [ ! -f previous/perf-history.json ]; then
+            echo "no earlier nightly left a report or a perf history: first night"
+            touch previous/first-night
+          fi
+          ci=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --status completed \
+                 --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -n "$ci" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ci/jobs?per_page=100" > ci-jobs.json
+            echo "CI run on main: $ci"
+          fi
+      - name: Check the registry against tonight's test inventories
+        run: |
+          shopt -s nullglob
+          args=()
+          for f in results/*/inventory*.json; do args+=(--inventory "$f"); done
+          python3 tools/scorecard/scorecard.py check "${args[@]}"
+      - name: Scorecard report
+        if: ${{ !cancelled() }}
+        run: |
+          python3 tools/scorecard/report.py --results results --ci-jobs ci-jobs.json \
+            --previous previous/scorecard-report.json ${{ github.event_name == 'schedule' && '--scheduled' || '' }} \
+            --out out/scorecard-report.json --markdown out/scorecard.md > /dev/null
+          cat out/scorecard.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Perf history (±5 % render and runtime, ±10 % backend, editor, iteration)
+        if: ${{ !cancelled() }}
+        run: |
+          status=0
+          require=--require-history
+          if [ -f previous/first-night ]; then require=; fi
+          python3 tools/scorecard/perf.py extract --results results --sha "$GITHUB_SHA" --out out/perf-entry.json
+          python3 tools/scorecard/perf.py compare --entry out/perf-entry.json --history previous/perf-history.json \
+            $require --out out/perf-history.json --markdown out/perf.md > perf-compare.log || status=$?
+          if [ -f out/perf.md ]; then cat out/perf.md; else cat perf-compare.log; fi >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && hashFiles('out/scorecard-report.json') != '' }}
+        with:
+          name: scorecard-report
+          path: |
+            out/scorecard-report.json
+            out/scorecard.md
+          retention-days: 90
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && hashFiles('out/perf-history.json') != '' }}
+        with:
+          name: perf-history
+          path: out/perf-history.json
+          retention-days: 90

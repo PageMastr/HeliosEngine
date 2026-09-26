@@ -15,8 +15,8 @@
   // Phases whose every criterion must be registered (the checker derives them from docs/plan).
   "covers": [0],
 
-  // Result sets the nightly workflow produces. `default` runs count for every reference on their OS;
-  // the others count only for references that name them with "run".
+  // Result sets the nightly workflow produces (and, with "nightly": false, validate.ps1). `default` runs
+  // count for every reference on their OS; the others count only for references that name them with "run".
   "runs": {
     "linux-gcc": {"os": "linux", "default": true,
                   "description": "Linux GCC RelWithDebInfo: every CTest (lavapipe under Xvfb), perf serially, net_bench --gate"},
@@ -35,7 +35,9 @@
     "linux-go": {"os": "linux", "default": true,
                  "description": "go test ./... and -tags integration (embedded PostgreSQL), HELIOS_NETCODE_INTEROP=1"},
     "windows-go": {"os": "windows", "default": true,
-                   "description": "go test ./... and -tags integration (embedded PostgreSQL)"}
+                   "description": "go test ./... and -tags integration (embedded PostgreSQL)"},
+    "windows-local": {"os": "windows", "default": true, "nightly": false,
+                      "description": "tools/milestone/validate.ps1 on the user's Windows machine (09 §5.9)"}
   },
 
   // Commands the nightly workflow runs outside CTest; each writes one JUnit result named after the gate.
@@ -53,6 +55,41 @@
     "libfuzzer_address_parse": {"runs": ["linux-fuzz"], "min_seconds": 3600,
                                 "description": "net_fuzz_address_parse under libFuzzer for 1 h"}
   },
+
+  // Numbers the perf gates print, tracked night by night by tools/scorecard/perf.py against the 09 §5.8
+  // budgets of their category (render and runtime ±5 %, backend, editor and iteration ±10 %). `pattern`
+  // captures the number from a doctest case's MESSAGE lines or a gate's output.
+  "perf_metrics": [
+    {"id": "net.ns02.socket_pps_per_core", "criterion": "NS-0.2", "gate": "net_bench_gate",
+     "pattern": "NS-0\\.2 socket: \\d+/\\d+ datagrams, (\\d+) pps per core", "unit": "pps/core", "better": "higher", "category": "runtime"},
+    {"id": "net.ns02.stack_packets_per_core", "criterion": "NS-0.2", "gate": "net_bench_gate",
+     "pattern": "NS-0\\.2 HTP stack: \\d+/\\d+ encrypted packets delivered, (\\d+) packets per core", "unit": "packets/core", "better": "higher", "category": "runtime"},
+    {"id": "net.ns07.trunk_delivered_pps", "criterion": "NS-0.7", "gate": "net_bench_gate",
+     "pattern": "NS-0\\.7 trunk: [\\d.]+ s, sent \\d+, delivered \\d+ \\((\\d+) pps", "unit": "pps", "better": "higher", "category": "runtime"},
+    {"id": "net.ns07.trunk_cell_cores", "criterion": "NS-0.7", "gate": "net_bench_gate",
+     "pattern": "NS-0\\.7 trunk: .*?cell thread ([\\d.]+) cores", "unit": "cores", "better": "lower", "category": "runtime"},
+    {"id": "net.ns02.loopback_pps_per_core", "criterion": "NS-0.2", "doctest": "net_tests",
+     "case": "perf: NS-0.2: loopback 100k pps per core without loss", "run": "linux-gcc",
+     "pattern": "-> (\\d+) pps per core", "unit": "pps/core", "better": "higher", "category": "runtime"},
+    {"id": "script.fuel_metering_overhead_pct", "criterion": "RT-13", "doctest": "script_tests",
+     "case": "perf: fuel metering overhead and ns per fuel", "run": "linux-gcc",
+     "pattern": "metering overhead ([\\d.]+) %", "unit": "%", "better": "lower", "category": "runtime"},
+    {"id": "script.trivial_resume_ns", "doctest": "script_tests",
+     "case": "perf: host cost of a trivial resume versus FuelBudget::resumeCost", "run": "linux-gcc",
+     "pattern": "trivial resume: ([\\d.]+) ns", "unit": "ns", "better": "lower", "category": "runtime"},
+    {"id": "pcg.cpu_vm_avx2_ms_per_tile", "doctest": "pcg_tests",
+     "case": "perf: CPU VM ms per 65x65 tile per core on the dispatched AVX2 kernel (03 §5.5a budget 0.5 ms)", "run": "linux-gcc",
+     "pattern": "avx2 ([\\d.]+) ms", "unit": "ms", "better": "lower", "category": "runtime"},
+    {"id": "schemac.regenerate_2000_types_s", "doctest": "schemac_tests",
+     "case": "perf: 2,000 types regenerate within the 02 §3.5 budget", "run": "linux-gcc",
+     "pattern": "types, \\d+ outputs \\(\\d+ KiB\\) in ([\\d.]+) s", "unit": "s", "better": "lower", "category": "iteration"}
+  ],
+
+  // Reviewed acceptances of a new perf level: {"metric", "night": "YYYY-MM-DD" (UTC), "value" (what that
+  // night measured), "run"?, "reason"}. A regression fails every night until it is fixed or accepted here,
+  // and the anchor (the level drift is measured from) moves only here; the rolling baseline follows
+  // changes too small to flag (tools/scorecard/README.md, "Perf history").
+  "perf_accept": [],
 
   // ------------------------------------------------------------------------------------------------
   // Phase 0 criteria: every criterion whose plan phase includes 0, plus the IDs named in 09 §2.1's

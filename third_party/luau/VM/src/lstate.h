@@ -236,6 +236,8 @@ typedef struct global_State
     uint64_t rngstate; // PCG random number generator state
     uint64_t ptrenckey[4]; // pointer encoding key for display (remove when unreferenced)
 
+    int64_t fuelcounter; // Helios patch fuel-counter: safepoints left before interrupt(L, -1) is called (see lua_fuelcounter)
+
     lua_Callbacks cb;
 
     lua_ExecutionCallbacks ecb;

@@ -3,6 +3,8 @@
 All engine runtime dependencies are vendored as source (Godot-style) so a build never touches the
 network. Re-vendor with `tools/vendor/fetch_third_party.sh [name...]`. Only permissive licenses
 (MIT / BSD / zlib / Apache-2.0 / Boost / public domain) are allowed in shipped runtime code.
+Vendored code is never edited in place: the few changes Helios needs are patches, listed under
+[Patches](#patches) below.
 
 | Name | Upstream | Pinned ref (commit) | License | Used for |
 |---|---|---|---|---|
@@ -23,7 +25,7 @@ network. Re-vendor with `tools/vendor/fetch_third_party.sh [name...]`. Only perm
 | Recast/Detour | recastnavigation/recastnavigation | v1.6.0 (6dc1667) | zlib | Navmesh generation, pathfinding, crowds |
 | Monocypher | LoupVaillant/Monocypher | 4.0.3 (ab2b16d) | BSD-2 / CC0 | Ed25519 manifest signing, X25519/XChaCha20 utilities (4.0.3 fixes an EdDSA timing leak) |
 | Tracy | wolfpld/tracy | v0.14.1 (30997d5) | BSD-3 | Frame/zone profiler (enabled with `HELIOS_PROFILE=ON`; viewer must match 0.14.1) |
-| Luau | luau-lang/luau | 0.739 (a62362a) | MIT | Gameplay scripting VM + compiler + native codegen + type analysis (editor) |
+| Luau | luau-lang/luau | 0.739 (a62362a) + 2 Helios patches | MIT | Gameplay scripting VM + compiler + native codegen + type analysis (editor) |
 | SDL3 | libsdl-org/SDL | release-3.4.16 (fa2c02b) | zlib | Windowing, input (IME, gamepads w/ rumble, raw mouse), replaces GLFW |
 | flecs | SanderMertens/flecs | v4.1.6 (fb55f3c) | MIT | Archetype ECS with relationships (single-file distr build) |
 | mimalloc | microsoft/mimalloc | v3.5.3 (d4881d3) | MIT | Heaps behind the tagged allocators (no global override) |
@@ -36,6 +38,33 @@ network. Re-vendor with `tools/vendor/fetch_third_party.sh [name...]`. Only perm
 Planned additions (vendored when their phase starts, per docs/research/10-tech-selection.md §13): RmlUi 6.3,
 FreeType VER-2-14-3 (FTL: credit required in product docs), HarfBuzz 14.5.0, SheenBidi v3.0.0, libunibreak 8.0,
 basis_universal v2_50, sentry-native 0.17.1; tools-only: bc7enc_rdo, tinyexr v3.2.0, ufbx v0.23.0, msdfgen v1.13.
+
+## Patches
+
+A dependency's committed tree is its pinned upstream plus the patches in `third_party/<name>/patches/`,
+applied in file-name order (`NNNN-<slug>.patch`, a `git diff` relative to `third_party/<name>/`, headed by
+a short description). `tools/vendor/fetch_third_party.sh` applies them with `git apply` after copying the
+upstream sources and keeps the `patches/` directory. The `lint_vendor_patches` CTest (label `lint`, also in
+`tools/ci/run_lints.cmake`) fails when a patch hunk is not applied to the committed tree, or when a patch is
+missing from its dependency's table below (or the table names a missing patch). It cannot see an in-place edit
+outside every hunk: the full proof that a tree is its upstream plus its patches is re-running
+`tools/vendor/fetch_third_party.sh <name>` and finding no diff under `third_party/`. Every hunk carries a
+`Helios patch <slug>` comment. Patches are Helios code, MIT-licensed like the rest of Helios.
+
+**On every bump of a patched dependency (K10)** the patches are rebased onto the new upstream in the same
+change (the script stops at the first patch that no longer applies), the dependency's table below is
+updated, and the tests named in its last column must pass. A patch that upstream has absorbed is deleted.
+
+### Luau (`third_party/luau/patches/`)
+
+| Patch | What it changes | Why | Upstream | Tests; `sim_abi` |
+|---|---|---|---|---|
+| `0001-codegen-fornloop-fuel.patch` | `CodeGen/src/IrTranslation.cpp`: native code emits the numeric-`for` interrupt in `FORNLOOP`, where the interpreter has it, instead of at the top of the loop body | Native code reached one more safepoint than the interpreter for every numeric loop left by `break` or `return`, so it counted different fuel, and every numeric-loop safepoint sat one body earlier, so kills stopped it elsewhere (RT-13's fuel identity, K39; 02 §7.4, 04 §10.2) | not submitted | `script_tests` (`determinism: numeric for loops left early …`, both `luau patches: codegen-fornloop-fuel …` cases); `sim_abi.script` |
+| `0002-fuel-counter.patch` | `VM/` and `CodeGen/`: an inline counter (`global_State::fuelcounter`, `lua_fuelcounter()`) decremented at every gc < 0 safepoint, in the interpreter (`VM_INTERRUPT`), the pattern matcher and native code (x64 and A64 `INTERRUPT` lowering and interrupt helpers); `interrupt(L, -1)` runs only when it reaches zero. A host that never arms it keeps stock behaviour | Calling the host at every safepoint cost 12–17 % of script time against RT-13's ≤ 10 %; `engine/script` arms the counter with the fuel left until its next decision point, so fuel counts are unchanged (K39; 02 §7.4, 04 §10.2) | not submitted | `script_tests` (`luau patches: fuel-counter …`, `fuel: the inline counter …`, `fuel: the host runs only at decision points …`, the counter bookkeeping cases in `test_fuel.cpp`, `perf: fuel metering overhead …`); `sim_abi.script` |
+
+The Luau patches, with the planned `det-math` patch (04 §10.2), are inputs of `sim_abi.script` (04 §6.7):
+the component covers Luau's bytecode version range and the ordered list of these patches. `sim_abi` itself is
+computed by WP-3.1 (planned region migration); until then this list is the record of what it must cover.
 
 ## Prebuilt tools (downloaded at configure time, never committed)
 

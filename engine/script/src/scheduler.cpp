@@ -208,19 +208,18 @@ void VmState::resumeTask(TaskHandle h, TickStats& ts) {
 
     HELIOS_ASSERT(run == nullptr, "nested task resume");
     run = &r;
-    RunContext* const prevActive = t_activeRun;
-    t_activeRun = &r;
+    armCounter(r); // the VM counts this resume's safepoints from here
     const u8 prevMemcat = activeMemcat;
     activeMemcat = module.memcat; // the task thread carries the module's category
     const int status = lua_resume(t->thread, nullptr, nargs);
+    disarmCounter(r); // r.fuel is final
     run = nullptr;
-    t_activeRun = prevActive;
     activeMemcat = prevMemcat;
 
     ++stats.resumes;
     ++ts.resumed;
-    stats.fuelTotal += r.fuel;
-    ts.fuel += r.fuel;
+    stats.fuelTotal = saturatingAdd(stats.fuelTotal, r.fuel);
+    ts.fuel = saturatingAdd(ts.fuel, r.fuel);
     ts.maxResumeFuel = std::max(ts.maxResumeFuel, r.fuel);
     t = tasks.get(h); // HandlePool addresses are stable, but re-fetch for clarity
     if (allocFailures != r.allocFailuresAtStart) collectAfterOom();

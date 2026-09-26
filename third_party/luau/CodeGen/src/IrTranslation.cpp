@@ -1399,10 +1399,9 @@ void translateInstForNPrep(IrBuilder& build, const Instruction* pc, int pcpos)
     if (build.isInternalBlock(loopStart))
         build.beginBlock(loopStart);
 
-    // VM places interrupt in FORNLOOP, but that creates a likely spill point for short loops that use loop index as INTERRUPT always spills
-    // We place the interrupt at the beginning of the loop body instead; VM uses FORNLOOP because it doesn't want to waste an extra instruction.
-    // Because loop block may not have been started yet (as it's started when lowering the first instruction!), we need to defer INTERRUPT placement.
-    build.interruptRequested = true;
+    // Helios patch codegen-fornloop-fuel: the loop interrupt is emitted in FORNLOOP, where the VM has it (see translateInstForNLoop).
+    // Upstream places it at the beginning of the loop body to avoid a likely spill point, but then native code reaches one more
+    // safepoint than the interpreter for every loop left by break or return, and hosts that count safepoints need both to agree.
 }
 
 void translateInstForNLoop(IrBuilder& build, const Instruction* pc, int pcpos)
@@ -1416,11 +1415,9 @@ void translateInstForNLoop(IrBuilder& build, const Instruction* pc, int pcpos)
     CODEGEN_ASSERT(!build.numericLoopStack.empty());
     IrBuilder::LoopInfo loopInfo = build.numericLoopStack.back();
 
-    // normally, the interrupt is placed at the beginning of the loop body by FORNPREP translation
-    // however, there are rare cases where FORNLOOP might not jump directly to the first loop instruction
-    // we detect this by checking the starting instruction of the loop body from loop information stack
-    if (repeatJumpTarget != loopInfo.startpc)
-        build.inst(IrCmd::INTERRUPT, build.constUint(pcpos));
+    // Helios patch codegen-fornloop-fuel: the interrupt is always placed here, as in the VM's FORNLOOP, so that native code and the
+    // interpreter reach the same safepoints (upstream places it at the beginning of the loop body)
+    build.inst(IrCmd::INTERRUPT, build.constUint(pcpos));
 
     if (FFlag::LuauBackedgeHeapCheck)
         build.inst(IrCmd::CHECK_GC);

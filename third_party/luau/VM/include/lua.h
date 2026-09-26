@@ -607,7 +607,8 @@ LUA_API void lua_getcounters(lua_State* L, int funcindex, void* context, lua_Cou
  * These are shared between all coroutines.
  *
  * Note: interrupt is safe to set from an arbitrary thread but all other callbacks
- * can only be changed when the VM is not running any code */
+ * can only be changed when the VM is not running any code (Helios patch fuel-counter: a gc < 0 interrupt
+ * set that way runs only once the fuel counter reaches zero, see lua_fuelcounter) */
 struct lua_Callbacks
 {
     void* userdata; // arbitrary userdata pointer that is never overwritten by Luau
@@ -638,6 +639,21 @@ struct lua_Callbacks
 typedef struct lua_Callbacks lua_Callbacks;
 
 LUA_API lua_Callbacks* lua_callbacks(lua_State* L);
+
+/* Helios patch fuel-counter: an inline counter in front of the gc < 0 `interrupt` calls.
+ * Every safepoint that would call interrupt(L, -1) (loop back edges, calls, returns and pattern-matcher
+ * steps, in the interpreter and in native code) first decrements the counter, and calls interrupt only
+ * when the result is <= 0, after resetting the counter to 0. A host that arms the counter with the
+ * number of safepoints until its next decision is called only then; a host that never writes it keeps
+ * the per-safepoint calls (in native code, the out-of-line interrupt helper at every safepoint: a host
+ * without an interrupt should park the counter at INT64_MAX). The host must keep the counter above
+ * INT64_MIN. The counter is shared between all coroutines of the state and owned by the thread that
+ * runs the VM: every decrement is a plain read-modify-write, so no other thread may write it (interrupt
+ * may re-arm it). Stopping a script from another thread while the counter is armed needs a flag that
+ * the host checks at its own decision points, and a bounded arming distance so that such a point is
+ * reached; setting interrupt from another thread is not enough */
+#define LUA_FUELCOUNTER 1
+LUA_API int64_t* lua_fuelcounter(lua_State* L);
 
 // Must be called after lua_newstate and before the state creates any buffers
 // The VM makes no assumptions about the layout or structure of the caged heap

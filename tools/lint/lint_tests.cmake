@@ -1,8 +1,9 @@
-# Repository lints (WP-0.2, 09 §5.3 DoD item 5): ISA audit, licence scanner, IP-name grep, Windows
-# manifest check and the module-layering fixtures. Every lint is a CMake script (`cmake -P`), so it
-# runs on Windows developer machines without Python. Included by helios_finalize_build()
-# (cmake/HeliosLayering.cmake) at the end of the top-level CMakeLists.txt, once every target exists
-# (a deferred call cannot add_subdirectory, hence an include). All tests carry the CTest label `lint`.
+# Repository lints (WP-0.2, 09 §5.3 DoD item 5): ISA audit, licence scanner, vendored-patch check,
+# IP-name grep, Windows manifest check and the module-layering fixtures. Every lint is a CMake script
+# (`cmake -P`), so it runs on Windows developer machines without Python. Included by
+# helios_finalize_build() (cmake/HeliosLayering.cmake) at the end of the top-level CMakeLists.txt,
+# once every target exists (a deferred call cannot add_subdirectory, hence an include). All tests
+# carry the CTest label `lint`.
 
 set(LINT ${CMAKE_CURRENT_LIST_DIR})
 set(LINT_TESTS ${CMAKE_CURRENT_LIST_DIR}/tests)
@@ -143,6 +144,31 @@ foreach(case
   helios_lint_test(lint_licenses_fixture_${fixture} EXPECT_FAIL "${expect}"
     COMMAND ${CMAKE_COMMAND} ${licenseCommon} -DTHIRD_PARTY_DIR=${LINT_TESTS}/licenses/${fixture}/third_party
             -DMANIFEST=${LINT_TESTS}/licenses/${fixture}/MANIFEST.md -P ${LINT}/licenses.cmake)
+endforeach()
+
+# ---------------------------------------------------------------------------------------------
+# Vendored patches (CLAUDE.md; third_party/MANIFEST.md "Patches"): every third_party/<dep>/patches/
+# NNNN-<slug>.patch is listed in the manifest and applied to the committed tree.
+# ---------------------------------------------------------------------------------------------
+helios_lint_test(lint_vendor_patches COMMAND ${CMAKE_COMMAND}
+  -DTHIRD_PARTY_DIR=${PROJECT_SOURCE_DIR}/third_party -DMANIFEST=${PROJECT_SOURCE_DIR}/third_party/MANIFEST.md
+  -P ${LINT}/vendor_patches.cmake)
+foreach(case
+    "applied|"
+    "unapplied|hunk 1 of third_party/demo/greeting.c is not applied"
+    "unlisted|0001-greeting.patch: not listed in third_party/MANIFEST.md"
+    "badname|greeting.patch: not named NNNN-<slug>.patch"
+    "missing_file|patched file third_party/demo/greeting.c does not exist")
+  string(REPLACE "|" ";" parts "${case}")
+  list(GET parts 0 fixture)
+  list(LENGTH parts n)
+  set(expect "")
+  if(n GREATER 1)
+    list(GET parts 1 expect)
+  endif()
+  helios_lint_test(lint_vendor_patches_fixture_${fixture} EXPECT_FAIL "${expect}"
+    COMMAND ${CMAKE_COMMAND} -DTHIRD_PARTY_DIR=${LINT_TESTS}/vendor_patches/${fixture}/third_party
+            -DMANIFEST=${LINT_TESTS}/vendor_patches/${fixture}/MANIFEST.md -P ${LINT}/vendor_patches.cmake)
 endforeach()
 
 # ---------------------------------------------------------------------------------------------

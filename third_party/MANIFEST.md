@@ -3,6 +3,8 @@
 All engine runtime dependencies are vendored as source (Godot-style) so a build never touches the
 network. Re-vendor with `tools/vendor/fetch_third_party.sh [name...]`. Only permissive licenses
 (MIT / BSD / zlib / Apache-2.0 / Boost / public domain) are allowed in shipped runtime code.
+Vendored code is never edited in place: the few changes Helios needs are patches, listed under
+[Patches](#patches) below.
 
 | Name | Upstream | Pinned ref (commit) | License | Used for |
 |---|---|---|---|---|
@@ -36,6 +38,20 @@ network. Re-vendor with `tools/vendor/fetch_third_party.sh [name...]`. Only perm
 Planned additions (vendored when their phase starts, per docs/research/10-tech-selection.md §13): RmlUi 6.3,
 FreeType VER-2-14-3 (FTL: credit required in product docs), HarfBuzz 14.5.0, SheenBidi v3.0.0, libunibreak 8.0,
 basis_universal v2_50, sentry-native 0.17.1; tools-only: bc7enc_rdo, tinyexr v3.2.0, ufbx v0.23.0, msdfgen v1.13.
+
+## Patches
+
+A dependency's committed tree is its pinned upstream plus the patches in `third_party/<name>/patches/`,
+applied in file-name order (`NNNN-<slug>.patch`, a `git diff` relative to `third_party/<name>/`, headed by
+a short description). `tools/vendor/fetch_third_party.sh` applies them with `git apply` after copying the
+upstream sources and keeps the `patches/` directory; the `lint_vendor_patches` CTest (label `lint`, also in
+`tools/ci/run_lints.cmake`) fails when a patch is not applied to the committed tree or is missing from this
+list. Every hunk carries a `Helios patch <slug>` comment. Patches are Helios code, MIT-licensed like
+the rest of Helios.
+
+**On every bump of a patched dependency (K10)** the patches are rebased onto the new upstream in the same
+change (the script stops at the first patch that no longer applies), the dependency's table below is
+updated, and the tests named in its last column must pass. A patch that upstream has absorbed is deleted.
 
 ## Prebuilt tools (downloaded at configure time, never committed)
 

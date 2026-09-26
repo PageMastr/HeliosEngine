@@ -1,0 +1,37 @@
+/// Gameplay kernel records, part 5: the reason-code registry (06 §4, 05 §1.6). Runtime:
+/// helios::gameplay::ReasonCodeRegistry (engine/gameplay/include/helios/gameplay/economy.h).
+package helios.gameplay;
+
+/// The class of a reason code; it restricts which system accounts a posting may touch.
+enum ReasonKind : u8 {
+  Faucet
+  Sink
+  Transfer
+}
+
+/// Daily grant cap of a faucet code usable by world scripts (05 §1.23).
+struct FaucetCap {
+  /// Most value one project may grant under the code per day.
+  dailyCap: i64 @range(0, 9000000000000000000)
+}
+
+/// Why value moved (06 §4). Every ledger journal entry names one; unknown codes are rejected
+/// (05 §1.6). Faucets mint from the system account mint:<code>, sinks burn to burn:<code>, and
+/// transfers touch no system account, so faucet and sink telemetry is correct by construction.
+record ReasonCodeDef @table("reason") {
+  /// Dotted code whose first segment names the class: "Faucet.Bounty.NPC", "Sink.Tax.Market.Broker",
+  /// "Transfer.Trade".
+  code: Name
+  /// Faucet, sink or transfer.
+  kind: ReasonKind
+  /// World-script grant cap (faucets only).
+  faucet: FaucetCap?
+  /// Economy guard (06 §4): rate thresholds for the telemetry anomaly rules (0 = unlimited).
+  maxTxPerHour: i64 @range(0, 9000000000000000000)
+  /// Largest amount per transaction (0 = unlimited).
+  maxAmountPerTx: i64 @range(0, 9000000000000000000)
+  /// Named kill switch that disables the code ("econ.trade", 05 §1.15).
+  killSwitch: Name
+  /// Display text for journals and telemetry.
+  description: LocString
+}

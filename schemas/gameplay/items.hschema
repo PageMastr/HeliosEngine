@@ -1,0 +1,227 @@
+/// Gameplay kernel records, part 4: items (06 §2). Phase 0 ships the schema; inventories, loot and
+/// fitting arrive in WP-1.x/2.x on top of the ledger (05 §1.6).
+package helios.gameplay;
+import "tags.hschema";
+import "attributes.hschema";
+import "effects.hschema";
+
+/// Dogma item states: stateEffects apply per state (06 §2).
+enum ItemState : u8 {
+  Offline
+  Online
+  Active
+  Overloaded
+}
+
+enum BindRule : u8 {
+  None
+  OnPickup
+  OnEquip
+  Account
+}
+
+enum OwnerKind : u8 {
+  Character
+  Corporation
+  Account
+  System
+  Escrow
+}
+
+/// Every item has exactly one location: another item, an entity, a hangar or space (06 §2).
+enum LocationKind : u8 {
+  Item
+  Entity
+  Hangar
+  Space
+}
+
+/// A socket (06 §2, Destiny sockets and plugs). Plugs are ItemDefs tagged Item.Plug.*.
+struct SocketEntry {
+  /// Socket type; plugs must match it.
+  type: Name
+  /// Plug inserted when the item is created.
+  initialPlug: ItemRef?
+  /// PlugSetDef names (a PlugSetDef record type arrives with sockets in Phase 2).
+  randomizedPlugSet: Name
+  /// PlugSetDef of plugs the player may swap in freely.
+  reusablePlugSet: Name
+  /// Plugs rolled from the randomized set at grant time.
+  rollCount: u8
+}
+
+/// A minimum attribute value of an equip requirement.
+struct AttrMinimum {
+  /// Attribute to check.
+  attr: AttributeRef
+  /// Minimum final value.
+  min: f64
+}
+
+/// Requirements to equip or use an item: tags and attribute minimums (skills, level).
+struct Requirement {
+  /// Required tags of the user.
+  tags: TagQuery?
+  /// Required attribute minimums (skills, level).
+  attrs: list<AttrMinimum>
+}
+
+/// A slot of a container (06 §2 slot descriptors).
+struct SlotDescriptor {
+  /// Slot name.
+  slot: Name
+  /// Items the slot accepts.
+  accepts: TagQuery?
+}
+
+/// Makes an item a container: capacity (volume and count), allowed contents and slots (06 §2).
+struct ContainerSpec {
+  /// Volume capacity.
+  maxVolume: f32 @unit(m3)
+  /// Item-count capacity (0 = unlimited).
+  maxCount: u32
+  /// Items the container accepts.
+  allowed: TagQuery?
+  /// Named slots (equipment layouts).
+  slots: list<SlotDescriptor>
+  /// Access policy name (owner, corporation division, public).
+  access: Name
+}
+
+/// An item port on a ship or vehicle (06 §8.4).
+struct ItemPortSpec {
+  /// Port type (weapon, shield, cooler...).
+  portType: Name
+  /// Smallest item size the port takes.
+  minSize: u8
+  /// Largest item size the port takes.
+  maxSize: u8
+  /// Items the port accepts.
+  accepts: TagQuery?
+}
+
+/// Durability loss per use and per hour (06 §2 decay).
+struct DecaySpec {
+  /// Durability of a new item.
+  maxDurability: f32 = 1
+  /// Loss per use.
+  perUse: f32
+  /// Loss per hour of use.
+  perHour: f32
+}
+
+/// An item template (06 §2; DataForge-style typed record).
+record ItemDef @table("itm") {
+  /// Display name.
+  name: LocString
+  /// Tags of the item (Item.Weapon.Laser).
+  tags: TagSet
+  /// Largest stack; 1 for items with per-instance state.
+  stackMax: u32 = 1 @range(1, 1000000000)
+  /// Volume of one unit.
+  volume: f32 @unit(m3)
+  /// Mass of one unit.
+  mass: f32 @unit(kg)
+  /// Base attribute values of the item.
+  baseAttrs: map<AttributeRef, f64>
+  /// Effects applied per Dogma state (Offline/Online/Active/Overloaded).
+  stateEffects: map<ItemState, list<EffectRef>>
+  /// The item occupies ALL slots of ONE arrangement (SWG); slot names until a SlotDef exists.
+  arrangements: list<list<Name>>
+  /// Sockets for plugs.
+  sockets: list<SocketEntry>
+  /// Requirement to equip or use.
+  equipReq: Requirement
+  /// Makes the item a container.
+  container: ContainerSpec?
+  /// Makes the item an item port.
+  port: ItemPortSpec?
+  /// Binding rule (soulbound, account-bound).
+  bind: BindRule = None
+  /// Durability loss.
+  decay: DecaySpec?
+  /// InsuranceClassDef name (Phase 4); empty = uninsurable.
+  insurance: Name
+  /// LifetimePolicyDef name (05 §1.17 lifetime policies).
+  lifetime: Name
+  client {
+    /// Prefab spawned for the item in the world.
+    appearance: AssetRef<Prefab>
+    /// Inventory icon.
+    icon: AssetRef<Texture>
+  }
+}
+
+struct OwnerRef {
+  /// Kind of owner.
+  kind: OwnerKind
+  /// Owner id (character, corporation, account, ...).
+  id: u64
+}
+
+struct LocationRef {
+  /// Kind of location.
+  kind: LocationKind
+  /// Location id (container item, entity, hangar, space region).
+  id: u64
+}
+
+/// Who crafted an item (06 §3); the crafter's name is resolved from the id at display time.
+struct CraftStamp {
+  /// Character id of the crafter.
+  crafterId: u64
+  /// Schematic used.
+  schematic: Name
+  /// Crafted quality.
+  quality: f32
+  /// Serial number of the craft.
+  serial: u64
+}
+
+/// Placement of a physicalized item (Phase 5 cargo).
+struct Xform {
+  /// Frame-local position.
+  position: vec3d
+  /// Orientation.
+  rotation: quatf
+}
+
+/// Mutable per-instance state (06 §2 ItemInstance.payload; JSONB in the ledger).
+struct ItemPayload {
+  /// Inserted plugs, per socket.
+  plugs: list<ItemRef>
+  /// Rolled attribute values.
+  rolled: map<AttributeRef, f64>
+  /// Crafter stamp of crafted items.
+  crafted: CraftStamp?
+  /// RollAudit id (seeded, auditable rolls; 06 §2).
+  rollAudit: u64?
+  /// Current durability.
+  durability: f32 = 1
+  /// Player-given name.
+  customName: string?
+  /// Placement when physicalized.
+  transform: Xform?
+}
+
+/// An item instance: a ledger row (05 §1.6) with an EVE-style location tree.
+struct ItemInstance @store(ledger) {
+  /// Block-allocated item id (05 §1.4.5).
+  itemId: u64
+  /// The item template.
+  def: ItemRef
+  /// Current owner.
+  owner: OwnerRef
+  /// Current location.
+  location: LocationRef
+  /// Slot or hangar flag inside the location (EVE location tree).
+  flag: u16
+  /// Stack size.
+  quantity: u32 = 1
+  /// Optimistic-concurrency version of the ledger row.
+  version: u64
+  /// Authority-group fence epoch while in custody.
+  fenceEpoch: u64
+  /// Per-instance state.
+  payload: ItemPayload
+}

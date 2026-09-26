@@ -1,0 +1,105 @@
+/// Gameplay kernel records, part 3: effects (06 §1.3). The schema lands with WP-0.19; the runtime
+/// (timing wheel, stacking, prediction) is WP-1.15.
+package helios.gameplay;
+import "tags.hschema";
+import "attributes.hschema";
+
+/// Zone = dilated zone time (TiDi-safe); Wall = absolute wall-clock expiry.
+enum EffectClock : u8 {
+  Zone
+  Wall
+}
+
+enum StackingPolicy : u8 {
+  None
+  BySource
+  ByTarget
+}
+
+enum StackExpiry : u8 {
+  ClearAll
+  RemoveOneAndRefresh
+}
+
+/// Which stack survives when the limit is reached (Strongest: fleet command bursts, 06 §8.3a).
+enum StackKeep : u8 {
+  Newest
+  Strongest
+}
+
+/// Cue events (06 §1.5).
+enum CueEvent : u8 {
+  Execute
+  Add
+  Remove
+  Burst
+}
+
+/// A native or HXL execution of an effect (damage, healing, custom logic).
+alias ExecutionRef = variant { Native { id: Name }; Hxl { expr: HxlExpr } };
+
+/// Binds a cue (a Cue.* tag, 06 §1.5) to an effect event.
+struct CueBinding {
+  /// Cue.* tag naming the CueDef.
+  cue: Name
+  /// Effect event that triggers the cue.
+  event: CueEvent = Execute
+}
+
+/// Stacking rules of an effect (06 §1.3).
+struct EffectStacking {
+  /// How repeated applications stack.
+  policy: StackingPolicy = None
+  /// Maximum stacks (0 = unlimited).
+  limit: u16
+  /// A new stack refreshes the duration.
+  refreshDuration: bool
+  /// A new stack restarts the periodic timer.
+  resetPeriod: bool
+  /// What expiry removes.
+  onExpire: StackExpiry = ClearAll
+  /// Effect applied instead when the limit is reached.
+  overflow: EffectRef?
+  /// Which stack survives at the limit.
+  keep: StackKeep = Newest
+}
+
+/// An effect definition (06 §1.3): timed or instant bundles of modifiers, executions and tags.
+record EffectDef @table("eff") {
+  /// Instant, timed (seconds), infinite, or periodic (period, optional total seconds).
+  duration: variant {
+    Instant;
+    Duration { secs: Magnitude };
+    Infinite;
+    Periodic { period: Magnitude; secs: Magnitude?; executeOnApply: bool }
+  }
+  /// Zone (dilated) or wall-clock timing.
+  clock: EffectClock = Zone
+  /// Attribute modifiers active while the effect is.
+  modifiers: list<ModifierDef>
+  /// Native or HXL executions (damage, healing, custom logic).
+  executions: list<ExecutionRef>
+  /// Tags held while the effect is active (timed tags: crimewatch, cooldowns).
+  grantedTags: TagSet
+  /// AbilityDef record names until AbilityDef lands (WP-1.15; 06 §1.4 AbilityRef).
+  grantedAbilities: list<Name>
+  /// Required target tags to apply.
+  applicationReq: TagQuery
+  /// Required target tags while active: when they stop matching, the effect is inhibited (its
+  /// modifiers and tags switch off), not removed (06 §1.3).
+  ongoingReq: TagQuery
+  /// Applying removes active effects granting any of these tags.
+  removeEffectsWithTags: TagSet
+  /// Targets holding any of these tags are immune.
+  immunityTags: TagSet
+  /// Stacking rules.
+  stacking: EffectStacking
+  /// Cues fired by effect events.
+  cues: list<CueBinding>
+  /// The owner client may predict it (self effects of predicted abilities).
+  predictable: bool
+  /// Saved with the character (wounds, long buffs, clone penalties).
+  persist: bool
+  /// Replicated to everyone as an icon (others only see public effects).
+  publicIcon: bool
+}

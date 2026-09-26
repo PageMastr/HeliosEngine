@@ -1,0 +1,14 @@
+Fixture patch: edits the last line of a file without a final newline.
+
+diff --git a/f.c b/f.c
+index fa2d79e..911cee2 100644
+--- a/f.c
++++ b/f.c
+@@ -2,4 +2,4 @@ one
+ two
+ three
+ four
+-last
+\ No newline at end of file
++LAST
+\ No newline at end of file

@@ -1,0 +1,16 @@
+Fixture patch: two hunks in one file.
+
+diff --git a/order.c b/order.c
+index 1111111..2222222 100644
+--- a/order.c
++++ b/order.c
+@@ -1,3 +1,3 @@
+ int a1;
+-int a2;
++int a2_new;
+ int a3;
+@@ -10,3 +10,3 @@
+ int b1;
+-int b2;
++int b2_new;
+ int b3;

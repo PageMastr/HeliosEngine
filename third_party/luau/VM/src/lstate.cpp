@@ -247,6 +247,7 @@ lua_State* lua_newstate(lua_Alloc allocator, void* ud)
         g->gcstepsize = LUAI_GCSTEPSIZE << 10;
 
         g->cb = lua_Callbacks();
+        g->fuelcounter = 0; // Helios patch fuel-counter
         g->ecb = lua_ExecutionCallbacks();
         g->gcstats = GCStats();
 
@@ -361,6 +362,7 @@ lua_State* lua_newstate(lua_Alloc allocator, void* ud)
         g->memcatbytes[0] = sizeof(LG);
 
         g->cb = lua_Callbacks();
+        g->fuelcounter = 0; // Helios patch fuel-counter
 
         g->ecb = lua_ExecutionCallbacks();
 

@@ -1,6 +1,6 @@
 // Determinism: a pure script produces identical output and identical fuel counts across runs and
 // VMs (fuel counts are what replay and the lane budget rely on, 04 §10.2), and native codegen hits
-// the same safepoints as the interpreter.
+// the same safepoints as the interpreter (RT-13; the vendored codegen-fornloop-fuel patch).
 
 #include "luacodegen.h"
 #include "script_test_util.h"
@@ -46,8 +46,13 @@ struct RunResult {
     u64 fuel = 0;
 };
 
-RunResult runSource(const char* source, bool native) {
+// Runs `source` as a task to completion. Native code needs a client or editor profile (cells refuse
+// codegen, 02 §7.4), so interpreter-versus-native comparisons run both sides on the editor profile;
+// the budgets below are fuel on every profile.
+RunResult runSource(const char* source, bool native, HostProfile profile = HostProfile::Cell) {
+    REQUIRE((!native || profile != HostProfile::Cell));
     VmConfig c = Harness::defaultConfig();
+    c.profile = profile;
     c.budget.fuelPerResume = 0;
     c.budget.fuelKill = 50'000'000;
     c.budget.fuelPerTick = 50'000'000;
@@ -65,7 +70,9 @@ RunResult runSource(const char* source, bool native) {
     return RunResult{h.prints[0], done->fuel};
 }
 
-RunResult runPure(bool native) { return runSource(kPureScript, native); }
+RunResult runPure(bool native, HostProfile profile = HostProfile::Cell) {
+    return runSource(kPureScript, native, profile);
+}
 
 } // namespace
 
@@ -86,19 +93,57 @@ TEST_CASE("determinism: native codegen counts the same fuel as the interpreter")
         MESSAGE("native codegen not supported on this target; skipped");
         return;
     }
-    const RunResult interp = runPure(false);
-    const RunResult native = runPure(true);
+    const RunResult interp = runPure(false, HostProfile::Editor);
+    const RunResult native = runPure(true, HostProfile::Editor);
     CHECK(native.output == interp.output);
     CHECK(native.fuel == interp.fuel);
+    // The profile does not change fuel either: the editor interpreter counts the cell's golden fuel.
+    CHECK(interp.fuel == runPure(false, HostProfile::Cell).fuel);
+    CHECK(native.fuel == kGoldenPureFuel);
 }
 
-TEST_CASE("determinism: known codegen divergence — numeric for loops left early") {
-    // Luau 0.739's code generator places the numeric-for interrupt at the start of the loop body,
-    // the interpreter in FORNLOOP (IrTranslation.cpp translateInstForNPrep). Counts agree for loops
-    // that run to completion, but every iteration left by `break`/`return` costs one extra fuel in
-    // native code. This pins the divergence so the pending vendored patch (or an upstream fix) is
-    // noticed; until then native codegen stays off on cells (VmConfig default).
-    if (!luau_codegen_supported()) return;
+TEST_CASE("determinism: the golden fuel count holds under the production cell budgets") {
+    // FuelBudget::cell() as shipped: soft 200k, kill 500k, lane 750k fuel and the 20 ms wall backstop,
+    // which makes the host read the clock every 64 fuel, before every binding call and after every GC
+    // step. Those reads must not move a single fuel. Any nonzero backstop gives the same read points,
+    // so Debug and sanitizer builds, where this resume alone takes 10-20 ms, use 10 s instead. In
+    // optimized builds (≈ 1 ms) a backstop kill means the machine preempted the resume for 20 ms: it
+    // is retried, and three in a row fail the test.
+    FuelBudget cell = FuelBudget::cell();
+    REQUIRE(cell.wallBackstopNanos == 20'000'000);
+    if (!test::kTimingGates) cell.wallBackstopNanos = 10'000'000'000ull;
+    bool finished = false;
+    for (int attempt = 0; attempt < 3 && !finished; ++attempt) {
+        VmConfig c = Harness::defaultConfig();
+        c.budget = cell;
+        c.randomSeed = 1234;
+        Harness h(c);
+        h.load("pure", kPureScript);
+        const TaskId id = h.spawn("pure");
+        h.steps(5);
+        if (const auto* killed = h.eventFor(id, ScriptEventKind::TaskKilled)) {
+            REQUIRE(killed->killReason == KillReason::WallBackstop);
+            MESSAGE("attempt ", attempt, " was preempted past the wall backstop; retrying");
+            continue;
+        }
+        const auto* done = h.eventFor(id, ScriptEventKind::TaskFinished);
+        REQUIRE(done != nullptr);
+        CHECK(done->fuel == kGoldenPureFuel);
+        finished = true;
+    }
+    CHECK(finished);
+}
+
+TEST_CASE("determinism: numeric for loops left early count the same fuel in native code") {
+    // Stock Luau 0.739's code generator places the numeric-for interrupt at the start of the loop
+    // body, the interpreter in FORNLOOP, so every loop left by `break` or `return` cost one extra
+    // fuel in native code (K39). The vendored codegen-fornloop-fuel patch emits it in FORNLOOP
+    // (third_party/luau/patches/0001); this case pinned the divergence (+50) before the patch and
+    // fails again if a Luau bump loses it.
+    if (!luau_codegen_supported()) {
+        MESSAGE("native codegen not supported on this target; skipped");
+        return;
+    }
     constexpr const char* kEarlyExit = R"(
         local exits = 0
         for i = 1, 50 do
@@ -106,13 +151,21 @@ TEST_CASE("determinism: known codegen divergence — numeric for loops left earl
                 if j == 3 then exits += 1 break end
             end
         end
+        local function firstOver(limit)
+            for k = 1, 100 do
+                if k * k > limit then return k end
+            end
+            return 0
+        end
+        for i = 1, 30 do exits += firstOver(i) end
         print(exits)
     )";
-    const RunResult interp = runSource(kEarlyExit, false);
-    const RunResult native = runSource(kEarlyExit, true);
-    CHECK(interp.output == "50");
-    CHECK(native.output == "50");
-    CHECK(native.fuel == interp.fuel + 50); // one extra safepoint per early exit
+    const RunResult interp = runSource(kEarlyExit, false, HostProfile::Editor);
+    const RunResult native = runSource(kEarlyExit, true, HostProfile::Editor);
+    CHECK(interp.output == native.output);
+    CHECK(interp.output == "180");
+    CHECK(native.fuel == interp.fuel); // stock 0.739: + 50 (break) + 30 (return)
+    CHECK(interp.fuel == runSource(kEarlyExit, false, HostProfile::Cell).fuel);
 }
 
 TEST_CASE("determinism: charges never depend on the printed length of heap addresses") {

@@ -93,16 +93,21 @@ LUAU_FASTFLAGVARIABLE(LuauFastpcallInterrupt)
 #define VM_PATCH_AUX(pc, slot) *const_cast<Instruction*>(pc) = uint32_t(slot)
 #define VM_PATCH_AUX_SLOT(pc, k, slot) *const_cast<Instruction*>(pc) = ((k) | (uint32_t(slot) << 16))
 
+/* Helios patch fuel-counter: the interrupt runs only when the inline counter reaches zero (see lua_fuelcounter) */
 #define VM_INTERRUPT() \
     { \
-        void (*interrupt)(lua_State*, int) = L->global->cb.interrupt; \
-        if (LUAU_UNLIKELY(!!interrupt)) \
-        { /* the interrupt hook is called right before we advance pc */ \
-            VM_PROTECT(L->ci->savedpc++; interrupt(L, -1)); \
-            if (L->status != 0) \
-            { \
-                L->ci->savedpc--; \
-                goto exit; \
+        if (LUAU_UNLIKELY(--L->global->fuelcounter <= 0)) \
+        { \
+            L->global->fuelcounter = 0; \
+            void (*interrupt)(lua_State*, int) = L->global->cb.interrupt; \
+            if (interrupt) \
+            { /* the interrupt hook is called right before we advance pc */ \
+                VM_PROTECT(L->ci->savedpc++; interrupt(L, -1)); \
+                if (L->status != 0) \
+                { \
+                    L->ci->savedpc--; \
+                    goto exit; \
+                } \
             } \
         } \
     }

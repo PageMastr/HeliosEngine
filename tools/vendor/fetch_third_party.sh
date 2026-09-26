@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Re-vendors pinned third-party sources into third_party/ (Godot-style: sources are committed,
 # builds never touch the network). Run from repo root: tools/vendor/fetch_third_party.sh [name...]
+#
+# Helios never edits vendored code in place. A change it needs is a patch in
+# third_party/<name>/patches/NNNN-<slug>.patch (a git diff relative to third_party/<name>), listed in
+# third_party/MANIFEST.md ("Patches"). After copying a dependency, this script applies its patches in
+# file-name order with `git apply` (exact context, no fuzz) and keeps the patches directory; a patch
+# that no longer applies stops the script and must be rebased onto the new upstream. The
+# `lint_vendor_patches` CTest checks that every listed patch is applied to the committed tree.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TP="$ROOT/third_party"
@@ -18,7 +25,27 @@ copy() { # name src... (relative to clone) -> third_party/name/
     cp -r "$WORK/$n/$p" "$TP/$n/$(dirname "$p")/"
   done
 }
-fresh() { rm -rf "$TP/$1"; mkdir -p "$TP/$1"; }
+# Empties third_party/<name>/ for a fresh copy, keeping its patches/ (Helios-owned, not upstream).
+REFRESHED=()
+fresh() {
+  rm -rf "$WORK/.patches/$1"
+  if [ -d "$TP/$1/patches" ]; then mkdir -p "$WORK/.patches"; cp -r "$TP/$1/patches" "$WORK/.patches/$1"; fi
+  rm -rf "$TP/$1"; mkdir -p "$TP/$1"
+  REFRESHED+=("$1")
+}
+# Restores third_party/<name>/patches/ and applies *.patch in order. `git apply` resolves patch paths
+# from the repository top, so they are prefixed with this tree's location inside it.
+apply_patches() {
+  local n="$1" p prefix
+  [ -d "$WORK/.patches/$n" ] || return 0
+  cp -r "$WORK/.patches/$n" "$TP/$n/patches"
+  prefix="$(git -C "$ROOT" rev-parse --show-prefix 2>/dev/null || true)"
+  for p in "$TP/$n/patches"/*.patch; do
+    [ -e "$p" ] || continue
+    (cd "$ROOT" && git apply --whitespace=nowarn --directory="${prefix}third_party/$n" "$p")
+    echo "patched $n: $(basename "$p")"
+  done
+}
 
 want() { [ ${#SELECTED[@]} -eq 0 ] && return 0; for w in "${SELECTED[@]}"; do [ "$w" = "$1" ] && return 0; done; return 1; }
 SELECTED=("$@")
@@ -54,4 +81,5 @@ if want reliable;   then clone reliable mas-bandwidth/reliable v1.4.5; fresh rel
 # third_party/CMakeLists.txt compiles it with its own target instead of nats.c's CMake.
 if want natsc;      then clone natsc nats-io/nats.c v3.14.0; fresh nats.c; mkdir -p "$TP/nats.c/src"
   (cd "$WORK/natsc" && cp LICENSE "$TP/nats.c/" && cp src/*.c src/*.h "$TP/nats.c/src/" && cp -r src/include src/unix src/win src/glib "$TP/nats.c/src/"); fi
+for n in ${REFRESHED[@]+"${REFRESHED[@]}"}; do apply_patches "$n"; done
 echo "vendored into $TP"

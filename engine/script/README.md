@@ -95,7 +95,11 @@ TickStats ts = vm->tick();            // wakes waits, resumes tasks while lane f
   cannot swallow it. Luau is built with C++ exceptions, so binding frames unwind through RAII (no
   lock stays held). When the resume returns the scheduler closes the coroutine
   (`lua_resetthread`) and emits `TaskKilled` (ScriptKilled telemetry). The resume is charged exactly
-  `fuelKill`; a charge that trips the kill has no side effect. Three kills of a module within
+  `fuelKill`; a charge that trips the kill has no side effect, and a charge the sticky kill refuses
+  leaves the run's fuel unchanged, even when it saturates (a `pcall` that swallowed the kill, then a
+  binding reached through `__index` with no safepoint in between: WP-0.10 subtracted the whole
+  saturated charge and reported 0 fuel for such a cell kill). Fuel and the lane and VM totals saturate
+  instead of wrapping. Three kills of a module within
   `killWindowNanos` of zone time disable it (tasks cancelled, spawns refused) until
   `enableModule`/`reloadModule`.
 * **Wall time.** Cells: a 20 ms backstop (fault path, `KillReason::WallBackstop`). Clients/editor
@@ -216,7 +220,7 @@ WP-3.1, from the patch list in `third_party/MANIFEST.md`. They are rebased on ev
 
 ## Tests
 
-`script_tests` (doctest, `tests/*.cpp`, 94 cases): sandbox escapes; kills at `fuelKill` inside a
+`script_tests` (doctest, `tests/*.cpp`, 97 cases): sandbox escapes; kills at `fuelKill` inside a
 metamethod, a `table.sort` comparator and C++→Luau callbacks (RAII/lock release, VM usable
 afterwards); sticky kills through `pcall`/`xpcall`/coroutines/bindings; instrumented yields;
 `task.checkpoint`; lane bound; binding and builtin charges; wall budgets and backstop; the
@@ -227,14 +231,15 @@ independent of GC pacing, interpreter vs native fuel, including loops left early
 coverage; the vendored Luau patches at the API level (one decrement per safepoint, host calls only at
 zero, the helpers' counter reset, kill positions interpreter vs native); the inline counter's
 bookkeeping (fuel identical with and without clock reads, around GC-forced reads, cheap bindings,
-charges landing exactly on a decision point, top-level runs, sticky re-raises and saturated charges,
-and the golden count under the production cell budgets); the refused cell codegen config;
-fuel-metering overhead (≤ 10 %, `perf:`). Review
-regressions: synchronous async completion, callbacks from async bindings cannot yield, charges of
-every input-proportional builtin, prompt wall kills on allocation-heavy loops, module categories of
-`task.spawn` children and resumed coroutines, `require` of a disabled module, bounded `print` and
-error messages, charges independent of heap addresses, queue compaction after cancelled waits,
-`resumeCost` bounding trivial resumes per tick, clean failure of unbounded binding↔Luau recursion.
+charges landing exactly on a decision point, top-level runs, sticky re-raises, and saturating charges
+before and after a kill, in the safepoint and charge slow paths and the task, lane and VM totals; and
+the golden count under the production cell budgets); the refused cell codegen config; fuel-metering
+overhead (≤ 10 %, `perf:`). Review regressions: synchronous async completion, callbacks from async
+bindings cannot yield, charges of every input-proportional builtin, prompt wall kills on
+allocation-heavy loops, module categories of `task.spawn` children and resumed coroutines, `require`
+of a disabled module, bounded `print` and error messages, charges independent of heap addresses,
+queue compaction after cancelled waits, `resumeCost` bounding trivial resumes per tick, clean failure
+of unbounded binding↔Luau recursion.
 
 ```
 cmake -S . -B build/script -G Ninja -DHELIOS_BUILD_GRAPHICS=OFF

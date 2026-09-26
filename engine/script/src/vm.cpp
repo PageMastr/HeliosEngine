@@ -286,7 +286,9 @@ MemcatScope::~MemcatScope() {
 
 RunScope::RunScope(VmState& s, u32 module) noexcept
     : m_state(s), m_prev(s.run), m_prevMemcat(s.activeMemcat) {
-    if (m_prev) s.disarmCounter(*m_prev); // the VM counter belongs to the active run only
+    // Defensive: every creator refuses or avoids a nested top-level run today (callExport nests in the
+    // running resume instead), but the VM counter belongs to the active run only.
+    if (m_prev) s.disarmCounter(*m_prev);
     s.beginRun(m_run, TaskHandle{}, module, 0, nullptr);
     s.run = &m_run;
     s.armCounter(m_run);
@@ -330,7 +332,7 @@ void VmState::beginRun(RunContext& r, TaskHandle task, u32 module, u64 owner, lu
         if (b.wallSoftNanos) r.wallSoftAt = saturatingAdd(r.wallStart, b.wallSoftNanos);
         if (b.wallKillNanos) r.wallKillAt = saturatingAdd(r.wallStart, b.wallKillNanos);
         if (b.wallBackstopNanos) r.wallBackstopAt = saturatingAdd(r.wallStart, b.wallBackstopNanos);
-        r.nextWallCheck = r.fuel + kWallCheckInterval;
+        r.nextWallCheck = saturatingAdd(r.fuel, kWallCheckInterval);
     }
     updateNextCheck(r);
 }
@@ -364,7 +366,7 @@ void VmState::chargeSlow(lua_State* L, RunContext& r, u64 fuel) {
 // Reads the clock (r.fuel must be current) and re-arms the counter.
 void VmState::wallCheck(lua_State* L, RunContext& r) {
     if (r.nextWallCheck == kNoLimit) return;
-    r.nextWallCheck = r.fuel + kWallCheckInterval;
+    r.nextWallCheck = saturatingAdd(r.fuel, kWallCheckInterval);
     const u64 t = monotonicNanos();
     if (t >= r.wallBackstopAt) kill(L, r, KillReason::WallBackstop);
     if (t >= r.wallKillAt) kill(L, r, KillReason::WallBudget);

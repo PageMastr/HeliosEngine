@@ -990,3 +990,42 @@ TEST_CASE("fuel: a saturated charge on a host without fuel_kill never wraps the 
     CHECK(ts.fuel == ~u64(0));
     CHECK(h.vm->stats().fuelTotal == ~u64(0));
 }
+
+TEST_CASE("fuel: a saturating charge in a killed run keeps the kill's fuel (charge slow path)") {
+    // A pcall swallows a fuel kill. The next instruction reaches a binding through __index (no CALL,
+    // so no safepoint re-raises first), and its declared cost saturates (3 fuel per item, 2^53
+    // items). The sticky kill refuses it, and the killed run's fuel must stay at fuel_kill (before
+    // WP-0.10r the slow path subtracted the whole charge and reported 0).
+    const ScriptVm::ApiRegistrar api = [](Binder& b) {
+        b.function("P", "big", &pItems, FuelCost{0, 3'000, 2});
+    };
+    Harness h(Harness::defaultConfig(), api); // the cell profile
+    const TaskId id = h.run("sat", R"(
+        local t = setmetatable({}, { __index = P.big })
+        pcall(function() while true do end end)
+        local x = t[2^53]
+    )");
+    const TickStats ts = h.step();
+    const RecordedEvent& e = requireKilled(h, id);
+    CHECK(e.killReason == KillReason::Fuel);
+    CHECK(e.fuel == Harness::defaultConfig().budget.fuelKill);
+    CHECK(ts.fuel == e.fuel); // the lane counts the killed resume
+}
+
+TEST_CASE("fuel: a saturating charge in a killed run without fuel_kill stays saturated") {
+    Harness h(unlimited(), counterApi());
+    const TaskId id =
+        h.run("sat", "local t = setmetatable({}, {__index = P.items})\npcall(P.huge)\nlocal _ = t.x");
+    h.step();
+    const RecordedEvent& e = requireKilled(h, id);
+    CHECK(e.fuel == ~u64(0));
+}
+
+TEST_CASE("fuel: a saturated top-level run never wraps the VM's fuel total") {
+    Harness h(unlimited(), counterApi());
+    h.load("m", "return { f = function() P.huge() end }");
+    REQUIRE(h.vm->instantiateModule("m").ok()); // a top-level run: fuelTotal > 0 afterwards
+    REQUIRE(h.vm->stats().fuelTotal > 0);
+    CHECK_FALSE(h.vm->callExport("m", "f", {}, {}, 0).ok());
+    CHECK(h.vm->stats().fuelTotal == ~u64(0));
+}

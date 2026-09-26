@@ -7,7 +7,7 @@ nothing but Go. The same code runs against real PostgreSQL, NATS and Valkey via 
 
 | Service | Package | Phase 0 scope |
 |---|---|---|
-| Identity/Auth (05 §1.1) | `internal/identity`, `pkg/pii` | accounts with `Handle#1234` tags; direct PII only encrypted under a per-account DEK wrapped by the subject KEK: e-mail addresses (found by a keyed blind index) and client IPs (on refresh tokens, and in a login history kept 90 days); audit rows hold only pseudonymous IDs (05 §1.17, §6.6, below); argon2id (m=64 MiB, t=3, p=1 behind a 2×GOMAXPROCS semaphore that sheds load after 5 s), EdDSA JWTs (10 min) + JWKS, rotating refresh-token families with reuse detection (rotation and revocation serialized per family), one-time launch codes bound to the launcher's family, bans that kick the live session, per-IP/per-account GCRA rate limits, hash-chained append-only audit log |
+| Identity/Auth (05 §1.1) | `internal/identity`, `pkg/pii` | accounts with `Handle#1234` tags; direct PII and GM free text stored in PostgreSQL only encrypted under a per-account DEK wrapped by the subject KEK: e-mail addresses (found by a keyed blind index), client IPs (on refresh tokens and in a login history, both kept 90 days) and ban reasons; audit rows hold only pseudonymous IDs (05 §1.17, §6.6, below). Per-IP rate-limit buckets in Valkey are still keyed by the raw IP and expire with their window; argon2id (m=64 MiB, t=3, p=1 behind a 2×GOMAXPROCS semaphore that sheds load after 5 s), EdDSA JWTs (10 min) + JWKS, rotating refresh-token families with reuse detection (rotation and revocation serialized per family), one-time launch codes bound to the launcher's family, bans that kick the live session, per-IP/per-account GCRA rate limits, hash-chained append-only audit log |
 | Session & connect tokens (05 §1.3, 04 §2.3–2.4) | `internal/session`, `pkg/connecttoken` | netcode 1.02 connect tokens (XChaCha20-Poly1305, byte-exact with vendored netcode 1.4.8), 1–4 gateway addresses picked by free slots on the newest shard key (old-key gateways drain), random 63-bit session IDs, `sess:<id>` + `session_epoch` in Valkey, reconnect tickets sealed for gateways over NATS and redeemed over HTTPS with an epoch CAS |
 | Orchestrator / world directory (05 §1.4) | `internal/orchestrator` | one leader per shard anchored in PostgreSQL (`orch_leader`, 10 s lease, term-fenced writes, standby takeover), process registry (failure domain `fd{az, rack, host}` and server build stored at registration; 1 Hz heartbeat over NATS reporting the regions held with their generations; 12 s liveness TTL, per-name epochs), time-prefixed ID blocks (`id_alloc`, `AllocateIdBlocks`), v0 zone placement (one cell per zone, one region per zone) under `region_lease` generations allocated in PostgreSQL, `ResolveZone`, KV projection `DIRECTORY`, local process supervision with backoff |
 | Platform | `internal/platform` | config (defaults < TOML < `HELIOS_*` env < flags), slog, OpenTelemetry hooks, `/healthz` `/readyz`, Prometheus `/metrics`, HTTP(S) servers with graceful shutdown |
@@ -39,13 +39,20 @@ saved/backend/  helios.toml (optional)  pg/  pg-runtime/  nats/  keys/  logs/  b
 
 PostgreSQL holds one schema per service, `svc_identity` and `svc_orch` (05 §1.4, §3). A data directory
 created before WP-0.15r has them as `identity` and `orchestrator`: the first start (or `migrate`) renames them
-in place, encrypts the stored e-mail addresses and client IPs with the keys in `keys/`, moves the IPs out of
-the audit chain (verifying the old chain first, and recording its head in an `audit.rechain` row), drops the
-plain-text columns and rewrites those tables, so existing accounts keep working. Two consequences:
+in place, encrypts the stored e-mail addresses, client IPs and ban reasons with the keys in `keys/`, moves
+the IPs and ban reasons out of the audit chain (verifying the old chain row by row and against its head first,
+and recording that head in an `audit.rechain` row and in the log), drops the plain-text columns and rewrites
+those tables and their statistics, so existing accounts keep working. Consequences:
 - **The upgrade is one-way.** Do not open an upgraded data directory with an older helios-backend: it would
   recreate the old schemas and write plain text into them (the new one logs an error if it finds them).
   Restore a backup instead.
 - Plain text written before the upgrade can still be in the WAL and in backups taken before it.
+- Upgrade with a process that runs Identity (the default all-in-one start, or `helios-backend migrate`):
+  an orchestrator-only process has no PII keys, so it stops at `svc_identity` version 2 with
+  `ErrNeedPIIKeys` before it reaches `svc_orch`.
+- A legacy database whose audit chain does not verify is refused (`ErrAuditChainBroken`) on every start, and
+  there is no override, since one would launder the break: restore a backup from before the break, or, for a
+  dev data directory, delete it.
 
 Only one helios-backend can own a data directory (an OS file lock; a crashed backend never leaves it
 stuck). If a previous backend was killed hard and its PostgreSQL is still running, the next start stops it.
@@ -231,9 +238,11 @@ session epoch, content build, zone, placement ticket, entitlements, attestation 
   re-wrapped, and the pepper rotates only with a re-index (a pepper file with a second generation is refused).
   The same DEK seals the client IP of each refresh token (bound to the token row) and of each
   `svc_identity.login_history` row (bound to that row; deleted after 90 days, 05 §6.6). Unknown logins have no
-  subject, so their IP is not stored at all. Each file must carry its own purpose and the two must differ; with
-  encrypted accounts in the database a missing file is never regenerated, and a KEK that does not unwrap the
-  stored keys stops the start. Only processes that run Identity load them. Staging and prod mount them from
+  subject, so their IP is not stored at all. A ban's reason is sealed the same way in
+  `account.ban_reason_ct`. Each file must carry its own purpose and the two must differ; with encrypted
+  accounts in the database a missing file is never regenerated, and a KEK that does not unwrap the stored
+  keys, or a pepper that does not reproduce a stored blind index, stops the start. Only processes that run
+  Identity load them. Staging and prod mount them from
   the secret store until KMS holds them; 05 §6.5 wants the pepper never to leave KMS, so this is a Phase 0
   deviation (see Plan conformance).
 - Dev generates missing key files; `--env prod` refuses to (a silently generated shard key would make every
@@ -266,13 +275,15 @@ go test -run 'TestConformance/holder_rule' ./internal/orchestrator/   # CONF-03'
   the PostgreSQL audit chain and the store conformance suites against real PostgreSQL (including races of
   revocation against rotation). It also checks:
   - the schema the plan requires: only `svc_*` schemas; every e-mail, IP, date-of-birth or real-name column is
-    `*_ct` or `*_bidx` in `svc_identity` (CONF-07); leases in `region_lease`;
-  - the upgrade of a database built by the pre-WP-0.15r migrations: rename, encryption of stored addresses and
-    IPs, the verified re-chain of the audit log, no plain text left in the tables' files on disk, generations
-    carried into `region_lease`; a broken old chain is refused; concurrent upgrades and first starts converge;
+    `*_ct` or `*_bidx` in `svc_identity` (CONF-07), and so is the ban reason; leases in `region_lease`;
+  - the upgrade of a database built by the pre-WP-0.15r migrations: rename, encryption of stored addresses,
+    IPs and ban reasons, the verified re-chain of the audit log, no plain text left in the tables' files or in
+    `pg_statistic` on disk, generations carried into `region_lease`; a broken old chain, or one truncated or
+    emptied behind its head, is refused; concurrent upgrades and first starts converge;
   - the adoption guards (foreign or pre-created schemas) and the PII key-file guards;
   - **perf:** BE-A2's connect-token issue p99 < 100 ms at 100/s (`TestPerfTokenIssueAt100PerSecond`, 1,000
-    `CreateSession` calls over HTTP; under 20 ms p99 in this repository's Linux container).
+    `CreateSession` calls over HTTP, each timed from its scheduled slot; under 20 ms p99 in this repository's
+    Linux container).
 
   `HELIOS_TEST_LOG=1` shows backend logs.
 - **Conformance** (`TestConformance/<name>`, the test IDs `conformance/<name>` of 09 §5.10): `holder_rule`
@@ -318,9 +329,9 @@ Plan-Rev: 6
 
 Written to draft v1 (plan revision 1), reworked to revision 2's lease and ID design, and brought to revision 6 by
 WP-0.15r (09 §5.10.4 (a)): the `svc_identity` and `svc_orch` schema names, e-mail as `email_ct` and
-`email_bidx` and client IPs as `client_ip_ct` under per-account DEKs, audit rows without IPs (row format 2),
-`region_lease`, `fd` and `serverBuild` in registration, and held regions in heartbeats. Revisions 4–6 added no
-delta (§5.10.4 (a), (c)).
+`email_bidx`, client IPs as `client_ip_ct` and ban reasons as `ban_reason_ct` under per-account DEKs, audit
+rows without IPs or GM text (row format 2), `region_lease`, `fd` and `serverBuild` in registration, and held
+regions in heartbeats. No delta is open. Revisions 4–6 added none (§5.10.4 (a), (c)).
 
 Deviations, all Phase 0:
 - **05 §3.3 (expand/contract).** No release had shipped, so the schema rename is a single in-place step and
@@ -328,7 +339,7 @@ Deviations, all Phase 0:
 - **05 §6.5 (keys in KMS).** The subject KEK and the blind-index pepper are key files (dev generates them;
   staging and prod mount them from the secret store) until the KMS integration replaces the file-backed KEK
   and blind index behind the same types (`pkg/pii`).
-
-Open, owned elsewhere: the reason of the dev `Ban` is GM free text, stored in `account.ban_reason` and in the
-ban's audit detail. 05 §1.17 puts such text in `audit_note`, sealed under the subject's key with its digest in
-the chain (row format 2 already carries `note_digest`); WP-1.14's GM audit builds that (09 §5.10.4 (a)).
+- **05 §1.17 and §6.5 (append-only audit log).** Migration 3 rewrites the pre-WP-0.15r audit log once, to take
+  client IPs, the unkeyed digests of unknown logins and ban reasons out of the chain: it verifies the old chain
+  first, then recomputes it and appends an `audit.rechain` row with the old head (also logged). Nothing had
+  shipped and no anchor exists yet; WP-1.14's first anchor must cover that row.

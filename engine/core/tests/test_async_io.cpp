@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -105,6 +106,86 @@ TEST_CASE("async io: many concurrent ranged reads into caller memory") {
     CHECK(dst == std::vector<u8>(file.bytes.begin(), file.bytes.begin() + dst.size()));
     // readAsync fills caller memory; take() has no bytes to hand out.
     CHECK(reads[0].take().errorCode() == ErrorCode::InvalidState);
+}
+
+TEST_CASE("async io: a read is ready for other threads only after its onComplete has returned") {
+    // Regression (the case above failed in CI with "63 == 64"): readiness was published before
+    // onComplete ran and isReady()/wait()/bytesRead() went by it, so a thread waiting for a read could
+    // return while the callback was still running and miss its effects. The callback blocks here until
+    // released, which makes the old ordering fail deterministically.
+    TempFile file(4096);
+    ManualResetEvent entered;
+    ManualResetEvent release;
+    std::atomic<bool> readyInside{false};
+    std::atomic<bool> callbackReturning{false};
+    jobs::BackgroundPool pool(1, "IO");
+    fs::AsyncReadOptions options;
+    options.onComplete = [&](fs::AsyncRead& r) {
+        readyInside.store(r.isReady()); // the callback's own thread already sees the result
+        entered.set();
+        (void)release.waitFor(std::chrono::seconds(20));
+        callbackReturning.store(true);
+    };
+    fs::AsyncRead read = fs::readFileAsync(pool, file.path, options);
+    REQUIRE(entered.waitFor(std::chrono::seconds(20)));
+    CHECK(readyInside.load());
+    CHECK(!read.isReady());
+    CHECK(!read.counter().isDone());
+
+    ManualResetEvent waiterReturned;
+    Result<usize> count = usize{0};
+    bool sawCallbackReturn = false;
+    Thread waiter("AsyncWaiter", [&] {
+        count = read.bytesRead();
+        sawCallbackReturn = callbackReturning.load();
+        waiterReturned.set();
+    });
+    // The callback is still blocked, so the waiter must be too.
+    CHECK(!waiterReturned.waitFor(std::chrono::milliseconds(50)));
+    release.set();
+    waiter.join();
+    CHECK(sawCallbackReturn);
+    REQUIRE(count.ok());
+    CHECK(*count == file.bytes.size());
+    CHECK(read.isReady());
+    CHECK(read.counter().isDone());
+}
+
+TEST_CASE("async io: onComplete's captures are destroyed before the read becomes ready") {
+    // A waiter may free what the callback's captures refer to once the read is ready, so the callback
+    // object must be gone by then. Its last capture's destructor blocks here until released.
+    struct Probe {
+        ManualResetEvent* entered;
+        ManualResetEvent* release;
+        Probe(ManualResetEvent* e, ManualResetEvent* r) : entered(e), release(r) {}
+        ~Probe() {
+            entered->set();
+            (void)release->waitFor(std::chrono::seconds(20));
+        }
+    };
+    TempFile file(4096);
+    ManualResetEvent entered;
+    ManualResetEvent release;
+    ManualResetEvent unblock;
+    jobs::Counter blocker;
+    jobs::BackgroundPool pool(1, "IO");
+    // Hold the only IO thread so every temporary copy of the callback is gone before the read runs.
+    pool.run([&] { (void)unblock.waitFor(std::chrono::seconds(20)); }, &blocker);
+    fs::AsyncRead read = [&] {
+        fs::AsyncReadOptions options;
+        options.onComplete = [probe = std::make_shared<Probe>(&entered, &release)](fs::AsyncRead&) {
+            (void)probe;
+        };
+        return fs::readFileAsync(pool, file.path, std::move(options));
+    }();
+    unblock.set();
+    REQUIRE(entered.waitFor(std::chrono::seconds(20)));
+    CHECK(!read.isReady());
+    CHECK(!read.counter().isDone());
+    release.set();
+    read.wait();
+    CHECK(read.isReady());
+    CHECK(read.take()->size() == file.bytes.size());
 }
 
 TEST_CASE("async io: JobSystem::wait helps while a read completes") {

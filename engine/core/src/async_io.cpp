@@ -13,12 +13,14 @@ namespace detail {
 struct AsyncReadState {
     enum Phase : u8 { Queued = 0, Running = 1, Cancelled = 2 };
 
+    // The one completion signal: released once the result is stored and onComplete has returned.
+    // isReady(), wait(), take(), bytesRead() and JobSystem::wait all go by it (see finish()).
     jobs::Counter counter;
     jobs::BackgroundPool* pool = nullptr;
     std::atomic<u8> phase{Queued};
-    std::atomic<bool> ready{false};
     std::function<void(AsyncRead&)> onComplete;
-    // Written by the IO thread before `ready` is released; read after it is acquired.
+    // Written by the IO thread before onComplete runs and `counter` is released; other threads read
+    // them only after observing the counter at zero (acquire).
     Result<std::vector<u8>> bytes;
     Result<usize> count{usize{0}};
     std::mutex takeMutex;
@@ -31,6 +33,15 @@ namespace {
 
 using State = detail::AsyncReadState;
 
+// The request whose onComplete is running on this thread. Its result is already stored, so here (and
+// only here) it counts as ready before its counter is released: take()/bytesRead() inside the callback
+// must not wait for the callback itself.
+constinit thread_local const State* t_completing = nullptr;
+
+// True once the result may be read on this thread: the request is complete, or we are inside its
+// onComplete.
+bool isComplete(const State& st) noexcept { return st.counter.isDone() || t_completing == &st; }
+
 // Returns false if the request was cancelled before it started (the result is then stored).
 bool begin(State& st) {
     u8 expected = State::Queued;
@@ -40,20 +51,28 @@ bool begin(State& st) {
     return false;
 }
 
-// Publishes the result, runs onComplete and only then releases the counter. Runs inside the IO job,
-// whose lambda owns a reference to `st`: the counter is released while the state is certainly
-// alive. (Handing &st->counter to BackgroundPool::run would let the pool decrement it after the
-// job, and with it possibly the last reference to the state, had been destroyed: a use-after-free
-// for fire-and-forget requests whose caller dropped every AsyncRead.)
+// Runs onComplete, destroys it, and only then releases the counter, which is what makes the request
+// complete for every other thread: whoever sees it ready (by any of isReady, wait, take, bytesRead or
+// the counter) also sees everything the callback did, and may destroy what it captured. (Publishing
+// readiness before the callback let a waiter return while the callback was still running.)
+// Runs inside the IO job, whose lambda owns a reference to `st`: the counter is released while the
+// state is certainly alive. (Handing &st->counter to BackgroundPool::run would let the pool decrement
+// it after the job, and with it possibly the last reference to the state, had been destroyed: a
+// use-after-free for fire-and-forget requests whose caller dropped every AsyncRead.)
 void finish(const std::shared_ptr<State>& st) {
-    st->ready.store(true, std::memory_order_release);
     // Moved out so a callback that captures an AsyncRead of its own request cannot keep the state
     // alive through a reference cycle.
     std::function<void(AsyncRead&)> onComplete = std::move(st->onComplete);
     st->onComplete = nullptr;
     if (onComplete) {
-        AsyncRead handle(st);
-        onComplete(handle);
+        const State* const outer = t_completing;
+        t_completing = st.get();
+        {
+            AsyncRead handle(st);
+            onComplete(handle);
+        }
+        t_completing = outer;
+        onComplete = nullptr; // captures die before the request completes
     }
     st->counter.decrement();
 }
@@ -83,7 +102,7 @@ Result<usize> readRange(const File& file, u64 offset, u8* dst, usize size) {
 
 } // namespace
 
-bool AsyncRead::isReady() const noexcept { return m_state && m_state->ready.load(std::memory_order_acquire); }
+bool AsyncRead::isReady() const noexcept { return m_state && isComplete(*m_state); }
 
 const jobs::Counter& AsyncRead::counter() const noexcept {
     static const jobs::Counter kDone{0};
@@ -91,10 +110,9 @@ const jobs::Counter& AsyncRead::counter() const noexcept {
 }
 
 void AsyncRead::wait() const {
-    // `ready` is set before onComplete runs, so this returns inside onComplete too (take() and
-    // bytesRead() from the callback do not wait for the callback itself to finish).
-    if (!m_state || m_state->ready.load(std::memory_order_acquire)) return;
-    m_state->pool->wait(m_state->counter); // sleeps (never helps) until the request's job is done
+    // Checked before touching the pool, which may already be gone once the request is complete.
+    if (!m_state || isComplete(*m_state)) return;
+    m_state->pool->wait(m_state->counter); // sleeps (never helps) until the request is complete
 }
 
 bool AsyncRead::cancel() noexcept {

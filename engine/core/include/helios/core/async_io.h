@@ -9,6 +9,10 @@
 //   * an optional onComplete callback, which runs on the IO thread right after the result is
 //     stored (keep it short: take() the bytes and hand them to a job, do not decode on the IO
 //     thread). take() and bytesRead() do not block inside it.
+// A request is complete once its result is stored and its onComplete (if any) has returned and been
+// destroyed. isReady(), counter(), wait(), take() and bytesRead() all report that one moment, so
+// whoever observes a read as ready also observes everything its callback did, and may then free what
+// the callback captured. Only onComplete's own thread sees the request ready earlier, during the call.
 // Fire-and-forget is allowed: the caller may drop every AsyncRead at once; the request keeps its
 // own state alive until its job (and onComplete) has finished.
 // Requests not yet started can be cancelled (their result is ErrorCode::Cancelled).
@@ -54,7 +58,9 @@ struct AsyncReadOptions {
     u64 offset = 0;
     u64 size = kReadToEnd; ///< Bytes to read; a range past the end of the file is truncated.
     jobs::Priority priority = jobs::Priority::Normal;
-    /// Runs on the IO thread once the result is stored (isReady() is already true).
+    /// Runs on the IO thread once the result is stored, before the request completes. During the call,
+    /// on that thread only, the request already counts as ready (isReady() is true; wait(), take() and
+    /// bytesRead() return at once). Other threads see it ready only after the callback has returned.
     std::function<void(AsyncRead&)> onComplete;
 };
 
@@ -64,13 +70,16 @@ public:
     AsyncRead() noexcept = default;
 
     bool isValid() const noexcept { return m_state != nullptr; }
-    /// True once the read has finished, failed or been cancelled.
+    /// True once the read has finished, failed or been cancelled and its onComplete has returned (for
+    /// a valid handle, exactly when counter() is done). Inside this request's onComplete it is already
+    /// true.
     bool isReady() const noexcept;
-    /// Reaches zero when the request (including onComplete) has finished. JobSystem::wait() on it
-    /// helps with other jobs; BackgroundPool::wait() sleeps.
+    /// Reaches zero when the request (including onComplete) has finished, at the moment isReady()
+    /// turns true. JobSystem::wait() on it helps with other jobs; BackgroundPool::wait() sleeps.
     const jobs::Counter& counter() const noexcept;
-    /// Blocks (sleeping) until ready. Returns at once from this request's onComplete. Must not be
-    /// called from another task of the pool doing the read (it could wait for itself).
+    /// Blocks (sleeping) until ready, i.e. until onComplete has returned too. Returns at once from
+    /// this request's onComplete. Must not be called from another task of the pool doing the read
+    /// (it could wait for itself).
     void wait() const;
     /// Cancels the request if it has not started yet. Returns true if it will not run.
     bool cancel() noexcept;

@@ -68,8 +68,10 @@ struct VmConfig {
     const DilatableClock* clock = nullptr;
     /// Seed of the deterministic stream behind math.random.
     u64 randomSeed = 0x48454c494f53ull;
-    /// Opt-in native code generation (off by default; keep it off on servers until profiled).
-    /// Ignored when luau_codegen_supported() is false.
+    /// Opt-in native code generation for client and editor VMs (off by default). create() refuses it
+    /// on HostProfile::Cell, which cells and world-script hosts run (02 §7.4). Native code counts the
+    /// same fuel as the interpreter (vendored codegen-fornloop-fuel patch). Ignored when
+    /// luau_codegen_supported() is false.
     bool enableNativeCodegen = false;
     CompileOptions compileOptions;
     /// Shared per content version; a private cache is created when null.
@@ -104,7 +106,8 @@ public:
     using ApiRegistrar = std::function<void(Binder&)>;
 
     /// Creates and sandboxes a VM; `registerApi` adds host bindings before the sandbox freezes the
-    /// globals. Fails when the heap cap is too small for the libraries or Luau cannot start.
+    /// globals. Fails when the heap cap is too small for the libraries, when a cell config enables
+    /// native codegen (InvalidArgument), or when Luau cannot start.
     static Result<std::unique_ptr<ScriptVm>> create(const VmConfig& config,
                                                     const ApiRegistrar& registerApi = {});
     ~ScriptVm();

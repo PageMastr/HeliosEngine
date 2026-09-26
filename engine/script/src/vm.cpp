@@ -685,6 +685,16 @@ Result<std::unique_ptr<ScriptVm>> ScriptVm::create(const VmConfig& config, const
     if (config.heapLimitBytes < (256u << 10)) {
         return Error{ErrorCode::InvalidArgument, "VmConfig::heapLimitBytes must be at least 256 KiB"};
     }
+    if (config.enableNativeCodegen && config.profile == HostProfile::Cell) {
+        // 02 §7.4: cells and world-script hosts (which run the cell profile) refuse native codegen.
+        // The vendored codegen-fornloop-fuel patch, which makes native fuel equal to the
+        // interpreter's, is the precondition for lifting this, not the lift itself: that is 02 §8.1's
+        // P3 "codegen opt-in on cells", gated by 04 §10.2's interpreter-vs-native corpus run.
+        return Error{ErrorCode::InvalidArgument,
+                     std::format("ScriptVm '{}': native codegen is refused on cells and world-script hosts "
+                                 "(02 §7.4); use the interpreter",
+                                 config.name)};
+    }
     auto newState = std::make_unique<VmState>();
     newState->config = config;
     newState->deterministic = config.profile == HostProfile::Cell;
@@ -705,13 +715,6 @@ Result<std::unique_ptr<ScriptVm>> ScriptVm::create(const VmConfig& config, const
     if (config.enableNativeCodegen && luau_codegen_supported()) {
         luau_codegen_create(L);
         newState->codegen = true;
-        if (config.profile == HostProfile::Cell) {
-            HELIOS_LOG_WARN(LogScript,
-                            "ScriptVm '{}': native codegen on a cell counts different fuel than the "
-                            "interpreter for loops left by break/return (Luau 0.739); replays must use "
-                            "the same mode (see engine/script/README.md)",
-                            config.name);
-        }
     }
 
     std::unique_ptr<ScriptVm> vm(new ScriptVm(std::move(newState)));

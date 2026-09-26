@@ -114,6 +114,7 @@ bool parseHexFloat(std::string_view s, f64& out) {
 // Decimal text follows the HXL literal rule: zero or a normal finite double (both languages'
 // correctly rounded parsers then agree; subnormals must be written as exact hex floats).
 bool parseDecimal(std::string_view s, f64& out) {
+    if (s.size() > limits::kMaxNumberBytes) return false; // like literals: Go is exact only this far
     f64 v = 0.0;
     const auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), v, std::chars_format::general);
     if (ec != std::errc() || ptr != s.data() + s.size() || !std::isfinite(v)) return false;

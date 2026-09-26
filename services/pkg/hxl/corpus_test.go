@@ -217,7 +217,8 @@ func parseCorpusNumber(text string) (float64, bool) {
 			return 0, false
 		}
 	default:
-		if len(s) == 0 || !((s[0] >= '0' && s[0] <= '9') || s[0] == '.') || strings.ContainsAny(s, "xXnN_") {
+		if len(s) == 0 || len(s) > MaxNumberBytes || !((s[0] >= '0' && s[0] <= '9') || s[0] == '.') ||
+			strings.ContainsAny(s, "xXnN_") {
 			return 0, false
 		}
 		f, ok := parseNumber(s) // decimal text follows the literal rule: zero or a normal double

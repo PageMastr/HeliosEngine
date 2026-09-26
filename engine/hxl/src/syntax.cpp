@@ -25,8 +25,11 @@ void fail(Diagnostic& diag, Status status, u32 line, u32 column, std::string mes
     diag.message = std::move(message);
 }
 
-// Parses a lexically valid decimal literal. Literals must be zero or normal finite doubles, so
-// both languages' correctly rounded parsers agree on every accepted literal.
+// Parses a lexically valid decimal literal of at most limits::kMaxNumberBytes bytes. Literals must
+// be zero or normal finite doubles. std::from_chars is correctly rounded for every input, but Go's
+// strconv.ParseFloat only up to 800 significant digits (it truncates longer mantissas when its fast
+// paths fail), so the lexer bounds the length first: within it both parsers agree on every literal
+// (the corpus pins the rounding edges, tests/corpus/hxl).
 bool parseNumber(std::string_view text, f64& out) {
     f64 value = 0.0;
     const auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), value, std::chars_format::general);
@@ -170,6 +173,10 @@ bool lex(std::string_view src, std::vector<Token>& out, Diagnostic& diag) {
             tok.kind = Tok::Number;
             if (!ok) {
                 fail(diag, Status::Number, line, col, "malformed number literal");
+                return false;
+            }
+            if (tok.text.size() > limits::kMaxNumberBytes) {
+                fail(diag, Status::Number, line, col, std::format("number literal longer than {} bytes", limits::kMaxNumberBytes));
                 return false;
             }
             if (!parseNumber(tok.text, tok.number)) {

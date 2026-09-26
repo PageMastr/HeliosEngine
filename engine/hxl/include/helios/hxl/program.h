@@ -118,6 +118,9 @@ inline constexpr u32 kMaxCodeBytes = 16384;
 inline constexpr u32 kMaxConstants = 1024;
 inline constexpr u32 kMaxSymbols = 256;     ///< per symbol table
 inline constexpr u32 kMaxNameBytes = 256;
+/// Longest number literal. Go's strconv.ParseFloat is not correctly rounded beyond 800 significant
+/// digits, so an unbounded literal could compile to different constants in C++ and Go.
+inline constexpr u32 kMaxNumberBytes = 100;
 inline constexpr u32 kMaxStack = 256;
 inline constexpr u32 kMaxCost = 4096;       ///< default and maximum evaluation cost
 } // namespace limits

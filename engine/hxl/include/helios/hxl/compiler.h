@@ -13,7 +13,9 @@
 //   power   := primary ['^' unary]       (right associative; -2^2 == -(2^2), 2^-1 is fine)
 //   primary := Number | 'true' | 'false' | '(' expr ')' | Ident '(' [expr {',' expr}] ')'
 //            | Ident {'.' Ident}
-// Comments: `//` to the end of the line. Numbers: decimal with optional fraction and exponent.
+// Comments: `//` to the end of the line. Numbers: decimal with optional fraction and exponent, at
+// most limits::kMaxNumberBytes (100) bytes, and zero or a normal double after correct rounding
+// (E_NUMBER otherwise).
 //
 // Values: `p.field` reads a context field of parameter p; attr(p, Name.Path) reads an attribute;
 // tag(p, Tag.Path) tests a tag (hierarchically); curve(Curve.Name, x) samples a piecewise-linear

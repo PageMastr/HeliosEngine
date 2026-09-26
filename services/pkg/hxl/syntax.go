@@ -92,7 +92,9 @@ func diag(status Status, line, col int, format string, args ...any) *Diagnostic 
 	return &Diagnostic{Status: status, Line: line, Column: col, Message: fmt.Sprintf(format, args...)}
 }
 
-// parseNumber mirrors the C++ literal rule: zero or a normal finite double, correctly rounded.
+// parseNumber mirrors the C++ literal rule: zero or a normal finite double, correctly rounded. The
+// lexer first bounds the literal to MaxNumberBytes: strconv.ParseFloat is not correctly rounded
+// beyond 800 significant digits.
 func parseNumber(text string) (float64, bool) {
 	v, err := strconv.ParseFloat(text, 64)
 	if err != nil || math.IsInf(v, 0) || math.IsNaN(v) {
@@ -200,6 +202,9 @@ func lex(src string) ([]token, *Diagnostic) {
 			t.kind = tNumber
 			if !ok {
 				return nil, diag(ENumber, line, col, "malformed number literal")
+			}
+			if len(t.text) > MaxNumberBytes {
+				return nil, diag(ENumber, line, col, "number literal longer than %d bytes", MaxNumberBytes)
 			}
 			v, valid := parseNumber(t.text)
 			if !valid {

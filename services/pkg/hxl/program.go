@@ -140,6 +140,7 @@ const (
 	MaxConstants   = 1024
 	MaxSymbols     = 256
 	MaxNameBytes   = 256
+	MaxNumberBytes = 100 // longest number literal (strconv.ParseFloat is exact only up to 800 digits)
 	MaxStack       = 256
 	MaxCost        = 4096
 	MaxCurvePoints = 4096

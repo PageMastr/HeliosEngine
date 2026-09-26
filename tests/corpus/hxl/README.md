@@ -64,7 +64,8 @@ covers all of these except `GOAMD64=v3` and `linux/arm64` (see `services/pkg/hxl
 ```
 
 **Numbers** are JSON numbers or strings: exact hex floats (`"0x1.8p+1"`, `"-0x1p-1074"`; they must be
-exactly representable), decimal text (zero or a normal double; correctly rounded by both languages),
+exactly representable), decimal text (zero or a normal double, at most 100 bytes like HXL literals;
+correctly rounded by both languages),
 `"inf"`, `"-inf"`, `"-0"` and `"nan"` (every NaN result is the canonical `0x7ff8000000000000`).
 
 ## Adding cases

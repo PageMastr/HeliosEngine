@@ -35,7 +35,7 @@ Values are numbers (f64) and booleans. A source is an expression over host-decla
 
 | Form | Meaning |
 |---|---|
-| `1.5`, `.5`, `2e-3`, `true`, `false` | literals (must be zero or a normal double) |
+| `1.5`, `.5`, `2e-3`, `true`, `false` | literals (at most 100 bytes; must round to zero or a normal double) |
 | `p.field` | context field of parameter `p` (`ctx.distance`) |
 | `attr(p, Shield.Max)` | attribute of `p` |
 | `tag(p, State.Debuff)` | `p` holds the tag or a descendant (06 §1.1) |
@@ -68,7 +68,9 @@ Bytecode jumps only forward and has no calls, so each op runs at most once and t
 `Program::cost()` bounds every evaluation (default budget `limits::kMaxCost` = 4096 units; `pow`,
 `exp`, `ln`, `asinh` cost 8, `curve` 4, input reads 2, everything else 1). Parse depth (128), tree
 depth (256), ops (4096), code size (16 KiB), constants (1024), symbols (256 per table), stack (256)
-and source size (64 KiB) are limited (`E_LIMIT`). The parser (precedence climbing) and the code
+and source size (64 KiB) are limited (`E_LIMIT`). Number literals longer than 100 bytes are
+`E_NUMBER`: Go's `strconv.ParseFloat` is not correctly rounded beyond 800 significant digits, and
+C++ and Go must compile every accepted source to the same constants. The parser (precedence climbing) and the code
 generator recurse once per nesting level, so those limits bound their stack: the deepest programs the
 limits admit, in every nesting shape, compile in at most 72 KiB of stack at `-O2` and 160 KiB at `-O0`
 (GCC 13 and Clang 18, measured with `ulimit -s` probes; MSVC not measured). Before WP-0.19's review

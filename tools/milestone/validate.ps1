@@ -191,23 +191,21 @@ function Invoke-Services {
     if (Test-Path $data) { Remove-Item -Recurse -Force $data }
     $logs = Join-Path $Work 'logs'
     New-Item -ItemType Directory -Force -Path $logs | Out-Null
+    $prime = Join-Path $Work 'backend-prime'
     $procs = @()
     try {
-        # BE-A1's first run is timed with the PostgreSQL binaries cached (services' default cache dir,
-        # os.UserCacheDir()\helios\pg-bin). On a machine that never ran the backend, an untimed run
-        # downloads them first, so the download is not counted against the 30 s.
-        $pgCache = Join-Path $env:LOCALAPPDATA 'helios\pg-bin'
-        if (-not (Test-Path $pgCache) -or -not (Get-ChildItem $pgCache -ErrorAction SilentlyContinue)) {
-            $prime = Join-Path $Work 'backend-prime'
-            if (Test-Path $prime) { Remove-Item -Recurse -Force $prime }
-            $primer = Start-Logged $backendExe @('run', '--seed', 'dev', '--data', $prime) (Join-Path $logs 'backend-prime.log')
-            $primed = Wait-Ready 'http://127.0.0.1:7701/readyz' 900 ([System.Diagnostics.Stopwatch]::StartNew())
-            Stop-Tree @($primer) $prime
-            Start-Sleep -Seconds 2
-            Remove-Item -Recurse -Force $prime -ErrorAction SilentlyContinue
-            if ($primed -lt 0) { Add-Check 'backend first run' 'FAIL' 'PostgreSQL download run not ready within 900 s (see build\milestone\logs)'; return }
-            Write-Host ('== PostgreSQL binaries downloaded to {0} in {1:N0} s (untimed)' -f $pgCache, $primed)
-        }
+        # BE-A1 times the first run with the PostgreSQL binaries cached. An untimed run on its own data
+        # directory always goes first: it downloads or extracts the binaries when they are missing, stale or
+        # partial (a PostgreSQL bump, HELIOS_PG_CACHE elsewhere) and costs seconds when they are there.
+        if (Test-Path $prime) { Remove-Item -Recurse -Force $prime }
+        $primer = Start-Logged $backendExe @('run', '--seed', 'dev', '--data', $prime) (Join-Path $logs 'backend-prime.log')
+        $procs += $primer
+        $primed = Wait-Ready 'http://127.0.0.1:7701/readyz' 900 ([System.Diagnostics.Stopwatch]::StartNew())
+        Stop-Tree @($primer) $prime
+        Start-Sleep -Seconds 2
+        Remove-Item -Recurse -Force $prime -ErrorAction SilentlyContinue
+        if ($primed -lt 0) { Add-Check 'backend first run' 'FAIL' 'untimed PostgreSQL download run not ready within 900 s (see build\milestone\logs)'; return }
+        Write-Host ('== untimed run with the PostgreSQL binaries fetched: ready in {0:N0} s' -f $primed)
         $runArgs = @('run', '--seed', 'dev', '--data', $data)
         $clock = [System.Diagnostics.Stopwatch]::StartNew()
         $backend = Start-Logged $backendExe $runArgs (Join-Path $logs 'backend-first.log')
@@ -254,6 +252,7 @@ function Invoke-Services {
         Add-Check 'services' 'FAIL' $_.Exception.Message
     } finally {
         Stop-Tree $procs $data
+        Stop-Tree @() $prime  # the untimed run's PostgreSQL, if a Ctrl+C or an error came during it
     }
 }
 

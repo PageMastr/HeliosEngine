@@ -22,14 +22,15 @@ What it does:
 4. **Scripted checks.** It builds the Go services into `build\go\` and runs `helios-backend.exe run --seed dev`
    with a fresh data directory under `build\milestone\`. It measures the first-run and warm start times and
    the idle working set including PostgreSQL against 05 BE-A1 (≤ 30 s, ≤ 5 s, ≤ 500 MB). BE-A1 times the
-   first run with the PostgreSQL binaries cached, so when `%LOCALAPPDATA%\helios\pg-bin` is empty an untimed
-   run downloads them first. The warm start follows a hard stop of the first run (the backend has no stop
-   command, and a hidden child gets no Ctrl+C), so PostgreSQL does crash recovery: that is harsher than a
-   clean restart and can only turn a pass into a fail, so re-run a warm-start FAIL before reporting it. It
-   then logs in as `dev1`,
+   first run with the PostgreSQL binaries cached, so an untimed run on its own data directory always goes
+   first: it fetches or extracts the binaries when they are missing, stale or partial (wherever
+   `HELIOS_PG_CACHE` or the default `%LOCALAPPDATA%\helios\pg-bin` puts them) and costs seconds otherwise.
+   The warm start follows a hard stop of the first run (the backend has no stop command, and a hidden child
+   gets no Ctrl+C), so PostgreSQL does crash recovery: that is harsher than a clean restart and can only
+   turn a pass into a fail, so re-run a warm-start FAIL before reporting it. It then logs in as `dev1`,
    starts `helios-cell.exe` and `helios-gateway.exe` against the backend, waits for a zone tick line and the
    gateway's listening line, and asks the session service for a connect token. Everything it starts is
-   stopped at the end. Logs are in `build\milestone\logs\`.
+   stopped at the end, the untimed run included, even after a Ctrl+C. Logs are in `build\milestone\logs\`.
 5. **Interactive part.** It opens the launcher when one is built (WP-0.17) and lists the milestone's steps
    from 09 §5.9's table, for the user to answer in the pasted report.
 6. **Scorecard.** With Python 3.10+ installed, it runs the doctest XML collection and `tools/scorecard/report.py`

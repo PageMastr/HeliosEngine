@@ -238,10 +238,12 @@ ninja -C build/script helios_script script_tests && ./build/script/bin/script_te
 
 ## Known limitations (Phase 0)
 
-* **Metering cost.** On the perf workload (dev container, GCC 13 RelWithDebInfo) the Helios host runs
-  within a few percent of unmetered plain Luau, where the per-safepoint callback it replaced cost
-  12–17 %; ≈ 10.5 ns per fuel. The A64 native-code half of `fuel-counter` is compiled on every target but
-  runs only on arm64 hosts, which CI does not have.
+* **Metering cost.** On the perf workload (dev container, GCC 13 and Clang 18, RelWithDebInfo), the
+  Helios host reading the clock every 64 fuel, as on cells, runs ≈ 3–7 % slower than unmetered plain
+  Luau, and the counter alone costs ≈ 0–3 %. Calling the host at every safepoint cost ≈ 15–20 % in plain
+  Luau and ≈ 25–28 % for the host before `fuel-counter` (budget ≤ 10 %, asserted by the `perf:` case).
+  ≈ 11 ns per fuel. The A64 native-code half of `fuel-counter` is compiled on every target but runs only
+  on arm64 hosts, which CI does not have.
 * Weak tables are rejected at `setmetatable` time only; adding `__mode` to a metatable after it is
   attached is left to the planned `simdet` Luau analyzer rule, as is iteration over tables keyed by
   tables/userdata/functions.

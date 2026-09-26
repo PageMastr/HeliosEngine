@@ -19,11 +19,16 @@ import (
 // Go runner of the shared corpus tests/corpus/hxl/*.jsonc (format: tests/corpus/hxl/README.md). The
 // C++ runner (engine/hxl/tests/corpus.cpp) performs the same checks on the same files.
 
+// corpusDir is tests/corpus/hxl of the checkout. A missing corpus fails the test (GP-1 must never
+// pass vacuously); set HXL_CORPUS_OPTIONAL=1 to skip instead, e.g. when vendoring the package alone.
 func corpusDir(t testing.TB) string {
 	_, file, _, _ := runtime.Caller(0)
 	dir := filepath.Join(filepath.Dir(file), "..", "..", "..", "tests", "corpus", "hxl")
 	if _, err := os.Stat(dir); err != nil {
-		t.Skipf("corpus not found at %s: %v", dir, err)
+		if os.Getenv("HXL_CORPUS_OPTIONAL") != "" {
+			t.Skipf("corpus not found at %s: %v", dir, err)
+		}
+		t.Fatalf("corpus not found at %s: %v (set HXL_CORPUS_OPTIONAL=1 to skip)", dir, err)
 	}
 	return dir
 }

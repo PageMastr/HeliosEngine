@@ -442,16 +442,38 @@ func generateDifferentialCorpus(seed uint64, count int) ([]byte, diffStats) {
 	return []byte(sb.String()), stats
 }
 
+// sameText reports whether two text files are equal up to line endings. A checkout with
+// core.autocrlf (the Windows CI runners' default) turns the committed LF file into CRLF;
+// tests/corpus/hxl/.gitattributes pins LF as well, but the check must not depend on it.
+func sameText(a, b []byte) bool {
+	crlf, lf := []byte("\r\n"), []byte("\n")
+	return bytes.Equal(bytes.ReplaceAll(a, crlf, lf), bytes.ReplaceAll(b, crlf, lf))
+}
+
 // TestDifferentialGeneratorIsDeterministic: the committed differential.jsonc is exactly what the
 // generator produces (so it can be regenerated, and a stale file is noticed).
 func TestDifferentialGeneratorIsDeterministic(t *testing.T) {
 	path := filepath.Join(corpusDir(t), "differential.jsonc")
 	want, err := os.ReadFile(path)
 	if err != nil {
-		t.Skipf("no differential.jsonc: %v", err)
+		t.Fatalf("differential.jsonc: %v", err)
 	}
 	got, _ := generateDifferentialCorpus(0xd1ff5eed, 1200)
-	if !bytes.Equal(got, want) {
+	if !sameText(got, want) {
 		t.Errorf("differential.jsonc is stale: regenerate it with HXL_CORPUS_GEN_DIFF=1 go test ./pkg/hxl/ -run TestGenerateDifferentialCorpus")
+	}
+}
+
+// TestDifferentialCheckIgnoresLineEndings: review regression (WP-0.19 round 1). The staleness check
+// compared raw bytes, so the windows-latest Go job, which checks the corpus out with CRLF, failed.
+func TestDifferentialCheckIgnoresLineEndings(t *testing.T) {
+	got, _ := generateDifferentialCorpus(0xd1ff5eed, 20)
+	crlf := bytes.ReplaceAll(got, []byte("\n"), []byte("\r\n"))
+	if !sameText(got, crlf) {
+		t.Error("a CRLF checkout of the generated corpus is reported as stale")
+	}
+	edited := bytes.Replace(crlf, []byte("diff."), []byte("dIff."), 1)
+	if sameText(got, edited) {
+		t.Error("an edited corpus is not reported as stale")
 	}
 }

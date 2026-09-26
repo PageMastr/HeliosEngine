@@ -1709,12 +1709,13 @@ from `ZoneClock::wall_now()`, and it cannot convert into sim types. A Luau analy
 table-order and removed-API checks to scripts. CI also runs the script corpus through the interpreter and native codegen and asserts **identical fuel
 counts**. Stock Luau 0.739 fails that: its code generator emits the numeric-`for` interrupt at the top of the
 loop body instead of in `FORNLOOP`, so every numeric `for` left by `break` or `return` costs one extra fuel in
-native code (WP-0.10 pins the case in a test). The vendored patch **`third_party/luau/patches/codegen-fornloop-fuel`**
+native code (WP-0.10 pinned the divergence; WP-0.10r's test asserts parity). The vendored patch
+**`third_party/luau/patches/0001-codegen-fornloop-fuel.patch`**
 emits it in `FORNLOOP`, as the interpreter does (`CodeGen/src/IrTranslation.cpp`). Cells and world-script
 hosts run the interpreter only, and `VmConfig` refuses native codegen on them. The patch is the precondition
 for lifting that, and lifting it is 02 §8.1's P3 "codegen opt-in on cells" item, behind this
 interpreter-versus-native corpus run. The `interrupt` hook's overhead must stay ≤ 10 % of script time (RT-13). WP-0.10 measured
-12–17 % with the callback, so the second vendored patch, **`third_party/luau/patches/fuel-counter`** (an
+12–17 % with the callback, so the second vendored patch, **`third_party/luau/patches/0002-fuel-counter.patch`** (an
 inline counter decremented at each `gc < 0` safepoint, which calls the host only when it reaches zero), is
 required rather than a fallback. Both patches, and `det-math`, are in `sim_abi.script` (§6.7); 09 names their
 owning WP, and RT-13 plus the interpreter-versus-codegen parity test are its acceptance.

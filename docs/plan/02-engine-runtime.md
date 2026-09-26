@@ -2104,13 +2104,14 @@ The client never decides who hears whom. Per-player mute is local, and block and
   `lua_singlestep`). It serves over TCP from the editor, dev client and cells, including `--replay`.
   luau-lsp reads the generated `.d.luau`, and CI uses the old type solver (R10 §4).
 - **Native codegen** is opt-in per module and off for UGC (Phase 5). On cells and world-script hosts it stays
-  off: `VmConfig` refuses codegen on those hosts. The vendored `third_party/luau/patches/codegen-fornloop-fuel`
-  is the precondition for lifting that, because it makes native fuel equal to the interpreter's: Luau 0.739's
-  code generator puts the numeric-`for` interrupt at the top of the loop body instead of in `FORNLOOP`, so a
-  loop left by `break` or `return` costs one extra fuel in native code (04 §10.2). Lifting the refusal is
+  off: `VmConfig` refuses codegen on those hosts. The vendored
+  `third_party/luau/patches/0001-codegen-fornloop-fuel.patch` is the precondition for lifting that, because it
+  makes native fuel equal to the interpreter's: stock Luau 0.739's code generator put the numeric-`for` interrupt
+  at the top of the loop body instead of in `FORNLOOP`, so a loop left by `break` or `return` cost one extra
+  fuel in native code (04 §10.2). Lifting the refusal is
   §8.1's P3 "codegen opt-in on cells" item, behind 04 §10.2's interpreter-versus-native corpus run.
 - **Interrupt cost.** WP-0.10 measured the `interrupt` callback at 12–17 % of script time against RT-13's
-  ≤ 10 %, so the vendored `third_party/luau/patches/fuel-counter` (an inline counter decremented at each
+  ≤ 10 %, so the vendored `third_party/luau/patches/0002-fuel-counter.patch` (an inline counter decremented at each
   `gc < 0` safepoint, calling the host only when it reaches zero) is required on every host that meters fuel.
   It also lets the VM charge operations the API cannot see, such as `..` copies. Both patches join `det-math`
   in `sim_abi.script` (04 §6.7).

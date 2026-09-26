@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -12,6 +13,13 @@
 
 using namespace helios;
 
+// Everything in this file, the test cases included, lives in an unnamed namespace. doctest names each
+// test function DOCTEST_ANON_FUNC_<__COUNTER__> with internal linkage, so other test files have
+// functions of the same names. MSVC (cl, not clang-cl) mangles a lambda local to such a function
+// without anything unique to the file, so templates instantiated with it (Job, std::function, the
+// lambda's operator()) become COMDATs that the linker merges across files: once this file's 8th test
+// and test_jobs.cpp's 7th both passed a `[&] {...}` to a job, one of them ran the other's lambda and
+// "jobs: higher priorities run first" hung. Unnamed-namespace names are unique per file on MSVC.
 namespace {
 
 struct TempFile {
@@ -27,8 +35,6 @@ struct TempFile {
     }
     ~TempFile() { (void)fs::removeAll(dir); }
 };
-
-} // namespace
 
 TEST_CASE("async io: whole-file and ranged reads match the synchronous read") {
     TempFile file(1 << 20);
@@ -105,6 +111,134 @@ TEST_CASE("async io: many concurrent ranged reads into caller memory") {
     CHECK(dst == std::vector<u8>(file.bytes.begin(), file.bytes.begin() + dst.size()));
     // readAsync fills caller memory; take() has no bytes to hand out.
     CHECK(reads[0].take().errorCode() == ErrorCode::InvalidState);
+}
+
+TEST_CASE("async io: a read is ready for other threads only after its onComplete has returned") {
+    // Regression (the case above failed in CI with "63 == 64"): readiness was published before
+    // onComplete ran and isReady()/wait()/bytesRead() went by it, so a thread waiting for a read could
+    // return while the callback was still running and miss its effects. The callback blocks here until
+    // released, which makes the old ordering fail deterministically.
+    TempFile file(4096);
+    ManualResetEvent entered;
+    ManualResetEvent release;
+    std::atomic<bool> readyInside{false};
+    std::atomic<bool> callbackReturning{false};
+    jobs::BackgroundPool pool(1, "IO");
+    fs::AsyncReadOptions options;
+    options.onComplete = [&](fs::AsyncRead& r) {
+        readyInside.store(r.isReady()); // the callback's own thread already sees the result
+        entered.set();
+        (void)release.waitFor(std::chrono::seconds(20));
+        callbackReturning.store(true);
+    };
+    fs::AsyncRead read = fs::readFileAsync(pool, file.path, options);
+    REQUIRE(entered.waitFor(std::chrono::seconds(20)));
+    CHECK(readyInside.load());
+    CHECK(!read.isReady());
+    CHECK(!read.counter().isDone());
+
+    ManualResetEvent waiterReturned;
+    Result<usize> count = usize{0};
+    bool sawCallbackReturn = false;
+    Thread waiter("AsyncWaiter", [&] {
+        count = read.bytesRead();
+        sawCallbackReturn = callbackReturning.load();
+        waiterReturned.set();
+    });
+    // The callback is still blocked, so the waiter must be too.
+    CHECK(!waiterReturned.waitFor(std::chrono::milliseconds(50)));
+    release.set();
+    waiter.join();
+    CHECK(sawCallbackReturn);
+    REQUIRE(count.ok());
+    CHECK(*count == file.bytes.size());
+    CHECK(read.isReady());
+    CHECK(read.counter().isDone());
+}
+
+TEST_CASE("async io: onComplete's captures are destroyed before the read becomes ready") {
+    // A waiter may free what the callback's captures refer to once the read is ready, so the callback
+    // object must be gone by then. Its last capture's destructor blocks here until released.
+    struct Probe {
+        ManualResetEvent* entered;
+        ManualResetEvent* release;
+        Probe(ManualResetEvent* e, ManualResetEvent* r) : entered(e), release(r) {}
+        ~Probe() {
+            entered->set();
+            (void)release->waitFor(std::chrono::seconds(20));
+        }
+    };
+    TempFile file(4096);
+    ManualResetEvent entered;
+    ManualResetEvent release;
+    ManualResetEvent unblock;
+    jobs::Counter blocker;
+    jobs::BackgroundPool pool(1, "IO");
+    // Hold the only IO thread so every temporary copy of the callback is gone before the read runs.
+    pool.run([&] { (void)unblock.waitFor(std::chrono::seconds(20)); }, &blocker);
+    fs::AsyncRead read = [&] {
+        fs::AsyncReadOptions options;
+        options.onComplete = [probe = std::make_shared<Probe>(&entered, &release)](fs::AsyncRead&) {
+            (void)probe;
+        };
+        return fs::readFileAsync(pool, file.path, std::move(options));
+    }();
+    unblock.set();
+    REQUIRE(entered.waitFor(std::chrono::seconds(20)));
+    CHECK(!read.isReady());
+    CHECK(!read.counter().isDone());
+    release.set();
+    read.wait();
+    CHECK(read.isReady());
+    CHECK(read.take()->size() == file.bytes.size());
+}
+
+TEST_CASE("async io: a capture's destructor may wait on its own request") {
+    // The callable is destroyed on the IO thread before the counter is released, so a capture that owns
+    // a handle to its own request and waits on it while being destroyed must still see the request as
+    // ready there; otherwise the IO thread waits for itself.
+    struct Holder {
+        fs::AsyncRead read;
+        ManualResetEvent* done = nullptr;
+        std::atomic<bool>* readyThere = nullptr;
+        std::atomic<usize>* countThere = nullptr;
+        ~Holder() {
+            read.wait();
+            readyThere->store(read.isReady());
+            countThere->store(read.bytesRead().valueOr(0));
+            done->set();
+        }
+    };
+    TempFile file(4096);
+    // Leaked if the IO thread deadlocks: destroying a pool whose thread is stuck would hang the test.
+    auto* pool = new jobs::BackgroundPool(1, "IO");
+    ManualResetEvent unblock;
+    ManualResetEvent done;
+    std::atomic<bool> readyThere{false};
+    std::atomic<usize> countThere{0};
+    jobs::Counter blocker;
+    // Hold the only IO thread until the holder owns its handle and every temporary copy of the callback
+    // is gone.
+    pool->run([&] { (void)unblock.waitFor(std::chrono::seconds(20)); }, &blocker);
+    fs::AsyncRead read;
+    {
+        auto holder = std::make_shared<Holder>();
+        holder->done = &done;
+        holder->readyThere = &readyThere;
+        holder->countThere = &countThere;
+        fs::AsyncReadOptions options;
+        options.onComplete = [holder](fs::AsyncRead&) { (void)holder; };
+        holder->read = fs::readFileAsync(*pool, file.path, std::move(options));
+        read = holder->read;
+    } // the callback now owns the last reference to the holder
+    unblock.set();
+    REQUIRE(done.waitFor(std::chrono::seconds(20)));
+    CHECK(readyThere.load());
+    CHECK(countThere.load() == file.bytes.size());
+    read.wait();
+    CHECK(read.isReady());
+    pool->waitIdle();
+    delete pool;
 }
 
 TEST_CASE("async io: JobSystem::wait helps while a read completes") {
@@ -196,3 +330,5 @@ TEST_CASE("async io: onComplete may take the result (no self-deadlock on the IO 
     CHECK(got == file.bytes);
     CHECK(read.take().errorCode() == ErrorCode::InvalidState); // already taken inside the callback
 }
+
+} // namespace

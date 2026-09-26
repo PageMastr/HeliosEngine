@@ -103,7 +103,12 @@ platform, also when `workingDirectory` is set. POSIX needs glibc >= 2.29 / musl 
 `fs::readFileAsync(pool, path, {offset, size})` and `fs::readAsync(pool, file, offset, dst)` queue
 positional reads on an IO `BackgroundPool` and return an `AsyncRead`: poll `isReady()`, wait on its
 `counter()` with `JobSystem::wait` (which helps), or pass an `onComplete` callback (runs on the IO
-thread; `take()`/`bytesRead()` work inside it). Queued requests can be cancelled. Fire-and-forget is
+thread; `take()`/`bytesRead()` work inside it). A request completes only once its callback has returned:
+`isReady()`, the counter, `wait()`, `take()` and `bytesRead()` all report that same moment, so a thread
+that saw a read complete also sees the callback's effects and may free what the callback used (such as
+the destination memory). The flip side: a callback must not wait for anything that waits on its own
+request, must not run other jobs (`JobSystem::wait`) and must not throw (see `async_io.h`). Queued
+requests can be cancelled. Fire-and-forget is
 safe: the request's job owns its state until the counter is released, so dropping every `AsyncRead`
 right away is fine. Phase 0 issues one blocking `pread`/`ReadFile` per
 request; the Phase 3 backends (Windows 11 IORing, Linux io_uring with fixed files and buffers, batched

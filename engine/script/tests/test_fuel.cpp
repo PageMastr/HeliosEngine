@@ -992,18 +992,19 @@ TEST_CASE("fuel: a saturated charge on a host without fuel_kill never wraps the 
 }
 
 TEST_CASE("fuel: a saturating charge in a killed run keeps the kill's fuel (charge slow path)") {
-    // A pcall swallows a fuel kill. The next instruction reaches a binding through __index (no CALL,
-    // so no safepoint re-raises first), and its declared cost saturates (3 fuel per item, 2^53
-    // items). The sticky kill refuses it, and the killed run's fuel must stay at fuel_kill (before
-    // WP-0.10r the slow path subtracted the whole charge and reported 0).
+    // A pcall swallows a fuel kill. The next instruction reaches a binding through __newindex (no
+    // CALL, so no safepoint re-raises first), and its declared cost saturates (3 fuel per item of the
+    // assigned value, 2^53 items; a string key keeps Luau's number-to-int key conversion out of it).
+    // The sticky kill refuses it, and the killed run's fuel must stay at fuel_kill (before WP-0.10r
+    // the slow path subtracted the whole charge and reported 0).
     const ScriptVm::ApiRegistrar api = [](Binder& b) {
-        b.function("P", "big", &pItems, FuelCost{0, 3'000, 2});
+        b.function("P", "big", &pItems, FuelCost{0, 3'000, 3});
     };
     Harness h(Harness::defaultConfig(), api); // the cell profile
     const TaskId id = h.run("sat", R"(
-        local t = setmetatable({}, { __index = P.big })
+        local t = setmetatable({}, { __newindex = P.big })
         pcall(function() while true do end end)
-        local x = t[2^53]
+        t.x = 2^53
     )");
     const TickStats ts = h.step();
     const RecordedEvent& e = requireKilled(h, id);

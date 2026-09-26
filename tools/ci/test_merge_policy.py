@@ -18,6 +18,13 @@ import merge_policy
 
 
 class MergePolicyTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def assertViolation(self, pattern):
+        """Policy violations must use exit 1, never the unverified exit 2."""
+        with self.assertRaisesRegex(merge_policy.PolicyError, pattern) as caught:
+            yield
+        self.assertIs(type(caught.exception), merge_policy.PolicyError)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -123,29 +130,32 @@ class MergePolicyTests(unittest.TestCase):
         self.commit("first", "First WP commit")
         after = self.commit("finished", "Second WP commit")
         originals = self.run_git("rev-list", "--reverse", f"{self.before}..{after}").splitlines()
-        with self.assertRaisesRegex(merge_policy.PolicyError, "landed as 2 commits") as caught:
+        with self.assertViolation("landed as 2 commits"):
             self.audit_with(after, originals)
-        self.assertNotIsInstance(caught.exception, merge_policy.VerificationError)
 
     def test_merge_commit_is_not_linear_history(self):
         self.run_git("checkout", "-q", "-b", "feature")
         self.commit("finished", "WP commit")
         self.run_git("checkout", "-q", "main")
         self.run_git("merge", "--no-ff", "-q", "feature", "-m", "Merge feature")
-        with self.assertRaisesRegex(merge_policy.PolicyError, "merge commit or nonlinear"):
+        with self.assertViolation("merge commit or nonlinear"):
             self.landed(self.run_git("rev-parse", "HEAD"))
 
     def test_wp_squash_with_changed_tree_fails(self):
         after = self.commit("finished", "WP-0.1: merge policy")
         landed = self.landed(after)
         expected = [replace(landed[0], tree="0" * 40)]
-        with self.assertRaisesRegex(merge_policy.PolicyError, "differs from the reviewed"):
+        with self.assertViolation("differs from the reviewed"):
             merge_policy.check_policy(expected, landed, collab=False)
 
     def test_non_ascii_git_metadata_uses_utf8(self):
         self.run_git("config", "user.name", "Renée")
         after = self.commit("finished", "Publish ✅\n\nHelios-Tx: 1..1")
-        landed = self.landed(after)
+        with patch.object(merge_policy.subprocess, "run", wraps=subprocess.run) as run:
+            landed = self.landed(after)
+        self.assertTrue(run.call_args_list)
+        for invocation in run.call_args_list:
+            self.assertEqual(invocation.kwargs["encoding"], "utf-8")
         self.assertEqual(landed[0].author_name, "Renée")
         self.assertIn("Helios-Tx: 1..1", landed[0].trailers)
 
@@ -162,7 +172,7 @@ class MergePolicyTests(unittest.TestCase):
         originals = self.collab_originals()
         after = self.commit("second", "Squashed publish\n\nHelios-Tx: 1..4")
         pr = self.pr(after, originals, branch="collab/s1")
-        with self.assertRaisesRegex(merge_policy.PolicyError, "2 commits but 1 landed"):
+        with self.assertViolation("2 commits but 1 landed"):
             self.audit_with(after, originals, pr)
         self.assertEqual(len(self.landed(after)), 1)
 
@@ -179,7 +189,7 @@ class MergePolicyTests(unittest.TestCase):
                     raw[-1]["commit"][field] = value
                 else:
                     raw[-1]["commit"]["author"][field] = value
-                with self.assertRaisesRegex(merge_policy.PolicyError, f"changed {reason}"):
+                with self.assertViolation(f"changed {reason}"):
                     self.audit_with(after, originals, pr, raw)
 
     def test_collab_changed_tree_fails(self):
@@ -188,14 +198,14 @@ class MergePolicyTests(unittest.TestCase):
         pr = self.pr(after, originals, branch="collab/s1")
         raw = [self.raw_commit(sha) for sha in originals]
         raw[-1]["commit"]["tree"]["sha"] = "0" * 40
-        with self.assertRaisesRegex(merge_policy.PolicyError, "changed tree"):
+        with self.assertViolation("changed tree"):
             self.audit_with(after, originals, pr, raw)
 
     def test_fork_collab_branch_is_wp_class(self):
         originals = self.collab_originals()
         after = self.collab_rebase(originals)
         pr = self.pr(after, originals, branch="collab/s1", head_repo="fork/repo")
-        with self.assertRaisesRegex(merge_policy.PolicyError, "WP-class PR landed as 2"):
+        with self.assertViolation("WP-class PR landed as 2"):
             self.audit_with(after, originals, pr)
 
     def test_audit_similar_prefixes_are_wp_class(self):
@@ -203,14 +213,14 @@ class MergePolicyTests(unittest.TestCase):
         after = self.collab_rebase(originals)
         for branch in ("collaborate/x", "collab-s1"):
             with self.subTest(branch=branch):
-                with self.assertRaisesRegex(merge_policy.PolicyError, "WP-class PR landed as 2"):
+                with self.assertViolation("WP-class PR landed as 2"):
                     self.audit_with(after, originals, self.pr(after, originals, branch=branch))
 
     def test_unrelated_push_is_rejected(self):
         after = self.commit("next", "Next")
         self.run_git("checkout", "-q", "--orphan", "unrelated")
         self.commit("other", "Other")
-        with self.assertRaisesRegex(merge_policy.PolicyError, "not a descendant"):
+        with self.assertViolation("not a descendant"):
             merge_policy.landed_commits(after, self.run_git("rev-parse", "HEAD"),
                                         self.checkout)
 
@@ -222,6 +232,41 @@ class MergePolicyTests(unittest.TestCase):
                 merge_policy.audit(self.event(after), "owner/repo", self.checkout, "test-token")
         self.assertEqual(get.call_count, 3)
         self.assertEqual(sleep.call_args_list, [call(1), call(2)])
+
+    def test_local_git_and_event_failures_are_unverified(self):
+        after = self.commit("next", "Next")
+        with patch.object(merge_policy.subprocess, "run", side_effect=FileNotFoundError("git missing")):
+            code, _, err = self.run_main(after, [])
+        self.assertEqual(code, 2)
+        self.assertIn("could not verify: could not run git", err)
+
+        missing = self.checkout / "missing-event.json"
+        argv = ["merge_policy.py", "--event", str(missing), "--repository", "owner/repo",
+                "--checkout", str(self.checkout)]
+        err = io.StringIO()
+        with patch.object(sys, "argv", argv), contextlib.redirect_stderr(err):
+            code = merge_policy.main()
+        self.assertEqual(code, 2)
+        self.assertIn("could not verify:", err.getvalue())
+
+    def test_missing_pr_association_number_is_unverified(self):
+        after = self.commit("next", "Next")
+        association = self.pr(after, [after])
+        del association["number"]
+        with patch.object(merge_policy, "api_get", return_value=[association]) as get:
+            with self.assertRaisesRegex(merge_policy.VerificationError,
+                                        "incomplete PR association metadata"):
+                merge_policy.audit(self.event(after), "owner/repo", self.checkout,
+                                   "test-token")
+        get.assert_called_once()
+
+    def test_incomplete_pr_commit_metadata_is_unverified(self):
+        after = self.commit("next", "Next")
+        raw = [self.raw_commit(after)]
+        del raw[0]["commit"]["author"]
+        with self.assertRaisesRegex(merge_policy.VerificationError,
+                                    "incomplete PR commit metadata"):
+            self.audit_with(after, [after], raw=raw)
 
     def test_commit_association_lag_is_retried(self):
         after = self.commit("next", "Next")
@@ -244,9 +289,10 @@ class MergePolicyTests(unittest.TestCase):
         self.assertEqual(open_url.call_count, 2)
         sleep.assert_called_once_with(1)
         with patch.object(merge_policy.urllib.request, "urlopen", side_effect=[error] * 3), \
-                patch.object(merge_policy.time, "sleep"):
+                patch.object(merge_policy.time, "sleep") as sleep:
             with self.assertRaisesRegex(merge_policy.VerificationError, "HTTP 502"):
                 merge_policy.api_get("repos/owner/repo/pulls/7", "test-token")
+        self.assertEqual(sleep.call_args_list, [call(1), call(2)])
 
     def test_connection_failures_are_retried_then_unverified(self):
         class Truncated(io.BytesIO):
@@ -277,6 +323,7 @@ class MergePolicyTests(unittest.TestCase):
         request = open_url.call_args.args[0]
         self.assertEqual(request.full_url, "https://api.github.test/repos/owner/repo/pulls/7")
         self.assertEqual(request.headers["Authorization"], "Bearer test-token")
+        self.assertEqual(request.headers["Accept"], "application/vnd.github+json")
         self.assertEqual(request.headers["X-github-api-version"], "2022-11-28")
         sleep.assert_called_once_with(1)
 
@@ -312,10 +359,9 @@ class MergePolicyTests(unittest.TestCase):
         after = self.commit("next", "Next")
         pr = self.pr(after, [after])
         with patch.object(merge_policy, "api_get", return_value=[pr, pr]) as get:
-            with self.assertRaisesRegex(merge_policy.PolicyError, "found 2") as caught:
+            with self.assertViolation("found 2"):
                 merge_policy.audit(self.event(after), "owner/repo", self.checkout,
                                    "test-token")
-        self.assertNotIsInstance(caught.exception, merge_policy.VerificationError)
         get.assert_called_once()
 
     def test_pr_detail_must_target_main_and_match_merge_sha(self):
@@ -326,7 +372,7 @@ class MergePolicyTests(unittest.TestCase):
             with self.subTest(change=change):
                 detail = {**associated, **change}
                 with patch.object(merge_policy, "api_get", side_effect=[[associated], detail]) as get:
-                    with self.assertRaisesRegex(merge_policy.PolicyError, reason):
+                    with self.assertViolation(reason):
                         merge_policy.audit(self.event(after), "owner/repo", self.checkout,
                                            "test-token")
                 self.assertEqual(get.call_count, 2)
@@ -335,7 +381,7 @@ class MergePolicyTests(unittest.TestCase):
         after = self.commit("next", "Next")
         pr = self.pr(after, [after])
         pr["head"]["sha"] = "0" * 40
-        with self.assertRaisesRegex(merge_policy.PolicyError, "does not end"):
+        with self.assertViolation("does not end"):
             self.audit_with(after, [after], pr)
 
     def test_pr_commit_pagination_and_count(self):
@@ -366,13 +412,13 @@ class MergePolicyTests(unittest.TestCase):
         ):
             with self.subTest(changed=changed, repository=repository, token=token):
                 with patch.object(merge_policy, "api_get") as get:
-                    with self.assertRaisesRegex(merge_policy.PolicyError, reason):
+                    with self.assertViolation(reason):
                         merge_policy.audit({**event, **changed}, repository, self.checkout, token)
                 get.assert_not_called()
         pr = self.pr(after, [after])
         pr["commits"] = 0
         with patch.object(merge_policy, "api_get", side_effect=[[pr], pr]) as get:
-            with self.assertRaisesRegex(merge_policy.PolicyError, "invalid commit count"):
+            with self.assertViolation("invalid commit count"):
                 merge_policy.audit(event, "owner/repo", self.checkout, "test-token")
         self.assertEqual(get.call_count, 2)
 

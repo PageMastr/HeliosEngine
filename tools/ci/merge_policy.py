@@ -34,12 +34,19 @@ class Commit:
     trailers: tuple[str, ...]
 
 
-def git(*args: str, checkout: Path, input_text: str | None = None) -> str:
+def git_run(*args: str, checkout: Path, input_text: str | None = None) -> subprocess.CompletedProcess:
     command = ["git", "-C", str(checkout), *args]
-    completed = subprocess.run(command, input=input_text, text=True, encoding="utf-8",
-                               capture_output=True, check=False)
+    try:
+        return subprocess.run(command, input=input_text, text=True, encoding="utf-8",
+                              capture_output=True, check=False)
+    except OSError as error:
+        raise VerificationError(f"could not run git {args[0]}: {error}") from error
+
+
+def git(*args: str, checkout: Path, input_text: str | None = None) -> str:
+    completed = git_run(*args, checkout=checkout, input_text=input_text)
     if completed.returncode:
-        raise PolicyError(f"git {args[0]} failed: {completed.stderr.strip()}")
+        raise VerificationError(f"git {args[0]} failed: {completed.stderr.strip()}")
     return completed.stdout
 
 
@@ -51,10 +58,11 @@ def trailers(message: str, checkout: Path) -> tuple[str, ...]:
 def landed_commits(before: str, after: str, checkout: Path) -> list[Commit]:
     if not SHA.fullmatch(before) or not SHA.fullmatch(after):
         raise PolicyError("push event has an invalid before or after SHA")
-    try:
-        git("merge-base", "--is-ancestor", before, after, checkout=checkout)
-    except PolicyError as error:
-        raise PolicyError("push is not a descendant of the previous main head") from error
+    ancestry = git_run("merge-base", "--is-ancestor", before, after, checkout=checkout)
+    if ancestry.returncode == 1:
+        raise PolicyError("push is not a descendant of the previous main head")
+    if ancestry.returncode:
+        raise VerificationError(f"git merge-base failed: {ancestry.stderr.strip()}")
     hashes = git("rev-list", "--reverse", f"{before}..{after}", checkout=checkout).splitlines()
     if not hashes:
         raise PolicyError("push introduced no commits")
@@ -172,7 +180,9 @@ def merged_pr(repository: str, after: str, token: str) -> dict:
             f"expected one merged PR associated with {after}, found {len(matches)}; "
             "direct pushes and ambiguous merges are forbidden"
         )
-    number = matches[0]["number"]
+    number = matches[0].get("number")
+    if not isinstance(number, int) or number < 1:
+        raise VerificationError("GitHub returned incomplete PR association metadata")
     detail = api_get(f"repos/{repository}/pulls/{number}", token)
     if not isinstance(detail, dict) or not isinstance(detail.get("base"), dict) \
             or detail["base"].get("ref") != "main":
@@ -249,7 +259,10 @@ def main() -> int:
     except VerificationError as error:
         print(f"merge-policy: could not verify: {error}", file=sys.stderr)
         return 2
-    except (OSError, ValueError, PolicyError) as error:
+    except (OSError, ValueError) as error:
+        print(f"merge-policy: could not verify: {error}", file=sys.stderr)
+        return 2
+    except PolicyError as error:
         print(f"merge-policy: {error}", file=sys.stderr)
         return 1
     return 0

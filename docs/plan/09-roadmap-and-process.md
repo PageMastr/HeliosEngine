@@ -886,9 +886,11 @@ engine repository therefore uses rebase-merge. A studio's own project repository
   After the revert below, the Integrator updates the branch on `main`, reruns that tier and
   squash-merges it again through a new PR.
 
-A "could not verify" failure (exit 2) is rerun before reverting anything. If a rerun still finds no
-associated PR, the Integrator treats it as a direct-push violation. A violation (exit 1) fails the check.
-The Integrator then reverts the landed commit(s) and re-merges with the correct
+A violation (exit 1) and a "could not verify" result (exit 2) both fail the check. The Integrator
+reruns exit 2 before reverting anything. If a rerun still finds no associated PR, the Integrator
+treats it as a direct-push violation. Any other persistent exit 2 is checked by hand against the
+PR's reviewed head, and the result is recorded on the PR. After a violation, the Integrator
+reverts the landed commit(s) and re-merges with the correct
 method within the same hour, so per-commit authorship and the ED-10 evidence are restored. A second
 violation in a round raises K25.
 

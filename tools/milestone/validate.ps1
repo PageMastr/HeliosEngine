@@ -193,6 +193,21 @@ function Invoke-Services {
     New-Item -ItemType Directory -Force -Path $logs | Out-Null
     $procs = @()
     try {
+        # BE-A1's first run is timed with the PostgreSQL binaries cached (services' default cache dir,
+        # os.UserCacheDir()\helios\pg-bin). On a machine that never ran the backend, an untimed run
+        # downloads them first, so the download is not counted against the 30 s.
+        $pgCache = Join-Path $env:LOCALAPPDATA 'helios\pg-bin'
+        if (-not (Test-Path $pgCache) -or -not (Get-ChildItem $pgCache -ErrorAction SilentlyContinue)) {
+            $prime = Join-Path $Work 'backend-prime'
+            if (Test-Path $prime) { Remove-Item -Recurse -Force $prime }
+            $primer = Start-Logged $backendExe @('run', '--seed', 'dev', '--data', $prime) (Join-Path $logs 'backend-prime.log')
+            $primed = Wait-Ready 'http://127.0.0.1:7701/readyz' 900 ([System.Diagnostics.Stopwatch]::StartNew())
+            Stop-Tree @($primer) $prime
+            Start-Sleep -Seconds 2
+            Remove-Item -Recurse -Force $prime -ErrorAction SilentlyContinue
+            if ($primed -lt 0) { Add-Check 'backend first run' 'FAIL' 'PostgreSQL download run not ready within 900 s (see build\milestone\logs)'; return }
+            Write-Host ('== PostgreSQL binaries downloaded to {0} in {1:N0} s (untimed)' -f $pgCache, $primed)
+        }
         $runArgs = @('run', '--seed', 'dev', '--data', $data)
         $clock = [System.Diagnostics.Stopwatch]::StartNew()
         $backend = Start-Logged $backendExe $runArgs (Join-Path $logs 'backend-first.log')

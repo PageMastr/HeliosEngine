@@ -21,7 +21,12 @@ What it does:
    as 09 §5.9 says, so the script reads the cache first and then that file.
 4. **Scripted checks.** It builds the Go services into `build\go\` and runs `helios-backend.exe run --seed dev`
    with a fresh data directory under `build\milestone\`. It measures the first-run and warm start times and
-   the idle working set including PostgreSQL against 05 BE-A1 (≤ 30 s, ≤ 5 s, ≤ 500 MB), logs in as `dev1`,
+   the idle working set including PostgreSQL against 05 BE-A1 (≤ 30 s, ≤ 5 s, ≤ 500 MB). BE-A1 times the
+   first run with the PostgreSQL binaries cached, so when `%LOCALAPPDATA%\helios\pg-bin` is empty an untimed
+   run downloads them first. The warm start follows a hard stop of the first run (the backend has no stop
+   command, and a hidden child gets no Ctrl+C), so PostgreSQL does crash recovery: that is harsher than a
+   clean restart and can only turn a pass into a fail, so re-run a warm-start FAIL before reporting it. It
+   then logs in as `dev1`,
    starts `helios-cell.exe` and `helios-gateway.exe` against the backend, waits for a zone tick line and the
    gateway's listening line, and asks the session service for a connect token. Everything it starts is
    stopped at the end. Logs are in `build\milestone\logs\`.
@@ -37,6 +42,11 @@ What it does:
 
 Options: `-NoInteractive` (do not open the launcher) and `-SelfTest` (the script's own checks, no build).
 The exit code is 1 when any check fails.
+
+**Expected red today.** The `ctest` check fails on `pcg_tests_perf`, which fails by design (K5b, armed by
+WP-0.9c's red outcome; 09 §8.1), so an M0 report exits 1 even when everything else passes. Golden images
+are recorded on lavapipe; on a real GPU a golden that differs is a finding to report, not a script error.
+Name the failing tests in the pasted report so that known reds can be told from new ones.
 
 The script is ASCII-only and uses no PowerShell 7 syntax, because the user runs it under Windows PowerShell
 5.1, which reads a script without a byte-order mark in the ANSI code page. CTest `lint_milestone_selftest`

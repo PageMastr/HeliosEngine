@@ -2,6 +2,7 @@ package migrations
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -157,5 +158,59 @@ func TestDropDetailKey(t *testing.T) {
 	}
 	if _, err := dropDetailKey(`not json`, "login"); err == nil {
 		t.Error("invalid detail accepted")
+	}
+}
+
+func TestDecideAdoption(t *testing.T) {
+	ident, orch := Schemas[0], Schemas[1]
+	ours := schemaState{exists: true, owned: true, plainACL: true}
+	withGoose := func(st schemaState, gooseOnly, markers bool, maxVersion int64) schemaState {
+		st.goose, st.gooseOnly, st.markers, st.maxVersion = true, gooseOnly, markers, maxVersion
+		return st
+	}
+	empty := ours
+	empty.empty = true
+	legacy := withGoose(ours, false, true, 1)
+	adopted := withGoose(ours, false, false, 5)
+	foreignOwner := empty
+	foreignOwner.owned = false
+	granted := empty
+	granted.plainACL = false
+	objects := ours // tables, but no goose table
+	for name, c := range map[string]struct {
+		s        Schema
+		cur, old schemaState
+		want     adoptStep
+		foreign  bool
+	}{
+		"fresh database":                 {ident, schemaState{}, schemaState{}, runLegacy, false},
+		"legacy schema, empty":           {ident, schemaState{}, empty, runLegacy, false},
+		"legacy run in progress":         {ident, schemaState{}, withGoose(ours, true, false, 0), runLegacy, false},
+		"torn read of a run in progress": {ident, schemaState{}, withGoose(ours, true, false, 1), runLegacy, false},
+		"torn read, orchestrator":        {orch, schemaState{}, withGoose(ours, true, false, 2), runLegacy, false},
+		"pre-rework database":            {ident, schemaState{}, legacy, runLegacy, false},
+		"already adopted":                {ident, adopted, schemaState{}, adoptedAlready, false},
+		"stray legacy next to adopted":   {ident, adopted, legacy, adoptedStray, false},
+		"pre-created empty svc_ schema":  {ident, empty, schemaState{}, replaceEmptyThenRunLegacy, false},
+		"goose table only, too new":      {ident, schemaState{}, withGoose(ours, true, false, 2), 0, true},
+		"legacy newer than its files":    {ident, schemaState{}, withGoose(ours, false, true, 2), 0, true},
+		"goose-managed foreign schema":   {ident, schemaState{}, withGoose(ours, false, false, 1), 0, true},
+		"foreign objects, no goose":      {ident, schemaState{}, objects, 0, true},
+		"legacy owned by another role":   {ident, schemaState{}, foreignOwner, 0, true},
+		"svc_ schema with objects":       {ident, objects, schemaState{}, 0, true},
+		"svc_ schema of another role":    {ident, foreignOwner, schemaState{}, 0, true},
+		"svc_ schema with privileges":    {ident, granted, schemaState{}, 0, true},
+		"pre-created svc_, foreign old":  {ident, empty, objects, 0, true},
+	} {
+		got, err := decideAdoption(c.s, c.cur, c.old)
+		if c.foreign {
+			if !errors.Is(err, ErrForeignSchema) {
+				t.Errorf("%s: got %v, %v; want ErrForeignSchema", name, got, err)
+			}
+			continue
+		}
+		if err != nil || got != c.want {
+			t.Errorf("%s: got %v, %v; want %v", name, got, err, c.want)
+		}
 	}
 }

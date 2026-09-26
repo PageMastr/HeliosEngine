@@ -130,41 +130,31 @@ func adoptLegacy(ctx context.Context, db *sql.DB, s Schema, log *slog.Logger) er
 		if err != nil {
 			return false, err
 		}
-		switch {
-		case cur.goose:
-			// Already adopted. An older helios-backend started on this database afterwards would
-			// have created the legacy schema again and written plain text into it.
-			if old, err := inspect(ctx, tx, s.Legacy, s.Markers); err == nil && old.goose {
-				log.Error("stray legacy schema next to an adopted one: an older helios-backend ran on this upgraded database "+
-					"and may have stored plain-text PII there; check it and drop it (the upgrade is one-way)",
-					"legacy", s.Legacy, "schema", s.Name)
-			}
-			return true, nil
-		case cur.exists && cur.empty && cur.owned:
-			// Pre-created and empty: adopt as fresh (the rename needs the name free).
-			if _, err := tx.ExecContext(ctx, "DROP SCHEMA "+s.Name); err != nil {
-				return false, err
-			}
-		case cur.exists:
-			return false, fmt.Errorf("%w: %s exists but was not created by helios-backend (no goose version table)", ErrForeignSchema, s.Name)
-		}
 		old, err := inspect(ctx, tx, s.Legacy, s.Markers)
 		if err != nil {
 			return false, err
 		}
-		switch {
-		case !old.exists:
-		case !old.owned:
-			return false, fmt.Errorf("%w: %s belongs to another role", ErrForeignSchema, s.Legacy)
-		case old.empty:
-		case old.gooseOnly && old.versions == 1 && old.maxVersion == 0:
-			// Another starter's goose run has created its version table and not yet applied the
-			// first file (or crashed right there): ours, in progress.
-		case !old.goose || !old.markers:
-			return false, fmt.Errorf("%w: %s holds objects helios-backend did not create", ErrForeignSchema, s.Legacy)
-		case old.maxVersion > s.LegacyVersion:
-			return false, fmt.Errorf("%w: %s is at version %d, newer than any legacy file (%d)", ErrForeignSchema, s.Legacy,
-				old.maxVersion, s.LegacyVersion)
+		step, err := decideAdoption(s, cur, old)
+		if err != nil {
+			return false, err
+		}
+		switch step {
+		case adoptedStray:
+			// An older helios-backend started on this database after the upgrade would have
+			// created the legacy schema again and written plain text into it.
+			log.Error("stray legacy schema next to an adopted one: an older helios-backend ran on this upgraded database "+
+				"and may have stored plain-text PII there; check it and drop it (the upgrade is one-way)",
+				"legacy", s.Legacy, "schema", s.Name)
+			return true, nil
+		case adoptedAlready:
+			return true, nil
+		case replaceEmptyThenRunLegacy:
+			// Pre-created, empty and with default privileges: adopt as fresh (the rename needs
+			// the name free).
+			if _, err := tx.ExecContext(ctx, "DROP SCHEMA "+s.Name); err != nil {
+				return false, err
+			}
+			log.Warn("replaced a pre-created empty schema", "schema", s.Name)
 		}
 		_, err = tx.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+s.Legacy)
 		return false, err
@@ -206,9 +196,65 @@ func adoptLegacy(ctx context.Context, db *sql.DB, s Schema, log *slog.Logger) er
 // schemaState is what adoption needs to know about one schema.
 type schemaState struct {
 	exists, owned, empty, goose bool
+	plainACL                    bool  // no GRANT on the schema and no default privileges in it
 	gooseOnly                   bool  // it holds nothing but goose's version table
 	markers                     bool  // every marker table exists
-	versions, maxVersion        int64 // rows in, and highest version of, goose's table
+	maxVersion                  int64 // highest version in goose's table
+}
+
+// adoptStep is what adoptLegacy does next for one service schema.
+type adoptStep int
+
+const (
+	runLegacy                 adoptStep = iota // apply the legacy files under s.Legacy, then rename
+	replaceEmptyThenRunLegacy                  // drop a pre-created empty s.Name first
+	adoptedAlready                             // s.Name is helios-backend's already
+	adoptedStray                               // as adoptedAlready, but a goose-managed s.Legacy exists too
+)
+
+// decideAdoption is adoptLegacy's decision, given the state of s.Name (cur) and s.Legacy (old).
+//
+// inspect reads a schema in two statements, and other starters run goose on the legacy schema
+// outside the adoption lock, so old can be torn: the first read may predate a starter's commit of
+// its first legacy file and the second follow it (only goose's table, yet a version row past 0).
+// A consistent read of an unfinished run shows only goose's table at version 0, so any state
+// with nothing but goose's table at or below LegacyVersion is taken as ours and in progress: it
+// holds no objects, so running the legacy files into it can harm nothing.
+func decideAdoption(s Schema, cur, old schemaState) (adoptStep, error) {
+	switch {
+	case cur.goose:
+		if old.goose {
+			return adoptedStray, nil
+		}
+		return adoptedAlready, nil
+	case cur.exists && cur.empty && cur.owned && cur.plainACL:
+		return replaceEmptyThenRunLegacy, legacyAdoptable(s, old)
+	case cur.exists && cur.empty && cur.owned:
+		return 0, fmt.Errorf("%w: %s was pre-created with privileges that replacing it would drop; drop it first",
+			ErrForeignSchema, s.Name)
+	case cur.exists:
+		return 0, fmt.Errorf("%w: %s exists but was not created by helios-backend (no goose version table)", ErrForeignSchema, s.Name)
+	}
+	return runLegacy, legacyAdoptable(s, old)
+}
+
+// legacyAdoptable reports whether the legacy files may run into s.Legacy (see decideAdoption).
+func legacyAdoptable(s Schema, old schemaState) error {
+	switch {
+	case !old.exists:
+	case !old.owned:
+		return fmt.Errorf("%w: %s belongs to another role", ErrForeignSchema, s.Legacy)
+	case old.empty:
+	case old.goose && old.gooseOnly && old.maxVersion <= s.LegacyVersion:
+		// Another starter's goose run has created its version table and not yet applied the
+		// first file, or crashed right there, or this read is torn (see decideAdoption).
+	case !old.goose || !old.markers:
+		return fmt.Errorf("%w: %s holds objects helios-backend did not create", ErrForeignSchema, s.Legacy)
+	case old.maxVersion > s.LegacyVersion:
+		return fmt.Errorf("%w: %s is at version %d, newer than any legacy file (%d)", ErrForeignSchema, s.Legacy,
+			old.maxVersion, s.LegacyVersion)
+	}
+	return nil
 }
 
 // inspect reads name's state. name is one of the constant schema names above, never input.
@@ -218,17 +264,18 @@ func inspect(ctx context.Context, tx *sql.Tx, name string, markers []string) (sc
 			COALESCE(pg_get_userbyid(n.nspowner) = current_user, false),
 			NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = n.oid),
 			EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = n.oid AND c.relname = 'goose_db_version'),
+			n.nspacl IS NULL AND NOT EXISTS (SELECT 1 FROM pg_default_acl d WHERE d.defaclnamespace = n.oid),
 			NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = n.oid
 			   AND c.relname NOT IN ('goose_db_version', 'goose_db_version_pkey', 'goose_db_version_id_seq')),
 			(SELECT count(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'r'
 			   AND c.relname = ANY (string_to_array($2, ','))) = cardinality(string_to_array($2, ','))
 		FROM (SELECT $1::name AS want) w LEFT JOIN pg_namespace n ON n.nspname = w.want`,
-		name, strings.Join(markers, ",")).Scan(&st.exists, &st.owned, &st.empty, &st.goose, &st.gooseOnly, &st.markers)
+		name, strings.Join(markers, ",")).Scan(&st.exists, &st.owned, &st.empty, &st.goose, &st.plainACL, &st.gooseOnly,
+		&st.markers)
 	if err != nil || !st.goose {
 		return st, err
 	}
-	err = tx.QueryRowContext(ctx, "SELECT count(*), COALESCE(max(version_id), 0) FROM "+name+".goose_db_version").
-		Scan(&st.versions, &st.maxVersion)
+	err = tx.QueryRowContext(ctx, "SELECT COALESCE(max(version_id), 0) FROM "+name+".goose_db_version").Scan(&st.maxVersion)
 	return st, err
 }
 

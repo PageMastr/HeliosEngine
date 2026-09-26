@@ -467,25 +467,43 @@ func TestSchemaAdoptionGuards(t *testing.T) {
 		_, err := migrations.Up(ctx, db, log, migrations.Options{})
 		return err
 	}
-	for name, setup := range map[string]string{
-		"foreign table in identity":   `CREATE SCHEMA identity; CREATE TABLE identity.users (id INT)`,
-		"foreign goose-managed":       `CREATE SCHEMA identity; CREATE TABLE identity.goose_db_version (id SERIAL, version_id BIGINT, is_applied BOOLEAN, tstamp TIMESTAMP); INSERT INTO identity.goose_db_version (version_id, is_applied) VALUES (0, true), (1, true); CREATE TABLE identity.users (id INT)`,
-		"non-empty svc_identity":      `CREATE SCHEMA svc_identity; CREATE TABLE svc_identity.users (id INT)`,
-		"foreign orchestrator schema": `CREATE SCHEMA orchestrator; CREATE TABLE orchestrator.jobs (id INT)`,
+	for name, c := range map[string]struct {
+		setup, table string   // the foreign schema's setup and its table, which must stay as it was
+		svc          []string // the svc_ schemas afterwards
+	}{
+		"foreign table in identity": {`CREATE SCHEMA identity; CREATE TABLE identity.users (id INT)`, "identity.users", nil},
+		"foreign goose-managed": {`CREATE SCHEMA identity; CREATE TABLE identity.goose_db_version (id SERIAL, version_id BIGINT,
+			is_applied BOOLEAN, tstamp TIMESTAMP); INSERT INTO identity.goose_db_version (version_id, is_applied) VALUES (0, true), (1, true);
+			CREATE TABLE identity.users (id INT)`, "identity.users", nil},
+		"non-empty svc_identity": {`CREATE SCHEMA svc_identity; CREATE TABLE svc_identity.users (id INT)`, "svc_identity.users",
+			[]string{"svc_identity"}},
+		"svc_identity with privileges": {`CREATE SCHEMA svc_identity; GRANT USAGE ON SCHEMA svc_identity TO PUBLIC`, "",
+			[]string{"svc_identity"}},
+		"foreign orchestrator schema": {`CREATE SCHEMA orchestrator; CREATE TABLE orchestrator.jobs (id INT)`, "orchestrator.jobs",
+			[]string{"svc_identity"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			pool := emptyDB(t)
-			if _, err := pool.Exec(ctx, setup); err != nil {
+			if _, err := pool.Exec(ctx, c.setup); err != nil {
 				t.Fatal(err)
 			}
 			if err := up(pool, quietLog); !errors.Is(err, migrations.ErrForeignSchema) {
 				t.Fatalf("want ErrForeignSchema: %v", err)
 			}
 			for _, schema := range []string{"identity", "orchestrator"} {
-				if strings.Contains(setup, "SCHEMA "+schema+";") && len(queryStrings(t, pool,
+				if strings.Contains(c.setup, "SCHEMA "+schema+";") && len(queryStrings(t, pool,
 					`SELECT nspname FROM pg_namespace WHERE nspname = $1`, schema)) != 1 {
 					t.Fatalf("the foreign schema %s was renamed", schema)
 				}
+			}
+			if c.table != "" {
+				schema, table, _ := strings.Cut(c.table, ".")
+				if got := columns(t, pool, schema, table); !slices.Equal(got, []string{"id"}) {
+					t.Fatalf("the foreign table %s was changed: %v", c.table, got)
+				}
+			}
+			if got := queryStrings(t, pool, `SELECT nspname FROM pg_namespace WHERE nspname LIKE 'svc\_%' ORDER BY 1`); !slices.Equal(got, c.svc) {
+				t.Fatalf("svc_ schemas %v, want %v", got, c.svc)
 			}
 		})
 	}

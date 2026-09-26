@@ -71,8 +71,9 @@ func TestAgentLifecycleOverNATS(t *testing.T) {
 	svc := startService(t, bus)
 	cellConn := bus.Connect(t, "cell")
 
+	fd := orchestrator.FailureDomain{AZ: "t1-a", Rack: "r1", Host: "sim-1"}
 	agent := orchestrator.NewAgent(cellConn, "t1", orchestrator.ProcessInfo{Name: "cell-a", Kind: orchestrator.KindCell,
-		Address: "127.0.0.1:9100"}, quiet)
+		Address: "127.0.0.1:9100", FD: fd, ServerBuild: 42}, quiet)
 	var fenced atomic.Int32
 	agent.OnFence = func() { fenced.Add(1) }
 	var lastAssign atomic.Value
@@ -102,10 +103,15 @@ func TestAgentLifecycleOverNATS(t *testing.T) {
 		t.Fatalf("unknown zone over NATS: %v", err)
 	}
 
-	// Heartbeats keep it alive well past the TTL.
+	// Heartbeats keep it alive well past the TTL, and report the region held with its generation.
 	time.Sleep(900 * time.Millisecond)
 	if cur := agent.Current(); cur == nil || cur.ProcessID != first.ProcessID {
 		t.Fatal("lease lapsed despite heartbeats")
+	}
+	ps := svc.Registry().Processes()
+	if len(ps) != 1 || ps[0].Info.FD != fd || ps[0].Info.ServerBuild != 42 ||
+		len(ps[0].Held) != 1 || ps[0].Held[0] != (orchestrator.HeldRegion{Region: 1001, LeaseGen: 1}) {
+		t.Fatalf("registration and held regions as the leader sees them: %+v", ps)
 	}
 
 	// KV mirror for nats.c consumers.

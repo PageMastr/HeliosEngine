@@ -11,8 +11,9 @@
 // Threading: evaluate() is reentrant; an Env is used by one evaluation at a time.
 //
 // FP environment: eval() requires the default floating-point environment (round to nearest, no
-// flush-to-zero or denormals-are-zero). Other modes change results, and the corpus fails under them,
-// so a thread that changes the mode must restore it before evaluating. Go has no such modes.
+// flush-to-zero or denormals-are-zero). Other modes change results (subnormal and rounding-sensitive
+// corpus cases), so a thread that changes the mode must restore it before evaluating. Go has no such
+// modes.
 
 #include <span>
 #include <string>

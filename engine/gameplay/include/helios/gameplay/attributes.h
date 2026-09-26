@@ -45,8 +45,8 @@
 // writer; different sets may be recomputed concurrently (resolveAttributes does exactly that).
 //
 // FP environment: recompute() and the HXL VM require the default floating-point environment (round
-// to nearest, no flush-to-zero or denormals-are-zero); other modes change results, and the HXL
-// corpus fails under them. Threads that change the mode must restore it before resolving.
+// to nearest, no flush-to-zero or denormals-are-zero); other modes change results. Threads that
+// change the mode must restore it before resolving.
 
 #include <memory>
 #include <optional>

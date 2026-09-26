@@ -85,9 +85,10 @@
      "pattern": "types, \\d+ outputs \\(\\d+ KiB\\) in ([\\d.]+) s", "unit": "s", "better": "lower", "category": "iteration"}
   ],
 
-  // Reviewed acceptances of a new perf level: {"metric", "night": "YYYY-MM-DD", "run"?, "reason"}. The
-  // nightly never moves a baseline on its own; an unfixed regression fails every night until it is fixed
-  // or accepted here (tools/scorecard/README.md, "Perf history").
+  // Reviewed acceptances of a new perf level: {"metric", "night": "YYYY-MM-DD" (UTC), "value" (what that
+  // night measured), "run"?, "reason"}. A regression fails every night until it is fixed or accepted here,
+  // and the anchor (the level drift is measured from) moves only here; the rolling baseline follows
+  // changes too small to flag (tools/scorecard/README.md, "Perf history").
   "perf_accept": [],
 
   // ------------------------------------------------------------------------------------------------

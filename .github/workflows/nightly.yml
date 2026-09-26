@@ -269,15 +269,28 @@ jobs:
       - name: Fetch last night's report and perf history and the latest CI run on main
         run: |
           mkdir -p previous out
+          # The newest earlier nightly that has each artifact, looked for separately: a night whose perf step
+          # failed still uploads its report, and its perf history then comes from an older night. A listed
+          # artifact that fails to download, or an API error, fails this step instead of passing for a first
+          # night, and without previous/first-night the perf step requires a history (perf.py
+          # --require-history), so a lost artifact cannot reset every baseline.
           for id in $(gh run list -R "$GITHUB_REPOSITORY" --workflow nightly.yml --branch main --status completed \
-                        --limit 20 --json databaseId --jq '.[].databaseId'); do
+                        --limit 30 --json databaseId --jq '.[].databaseId'); do
             [ "$id" = "$GITHUB_RUN_ID" ] && continue
-            if gh run download "$id" -R "$GITHUB_REPOSITORY" -n scorecard-report -D previous 2>/dev/null; then
-              gh run download "$id" -R "$GITHUB_REPOSITORY" -n perf-history -D previous 2>/dev/null || true
-              echo "previous nightly: run $id"
-              break
-            fi
+            names=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?per_page=100" \
+                      --jq '.artifacts[] | select(.expired | not) | .name')
+            for want in scorecard-report perf-history; do
+              if [ ! -f "previous/$want.json" ] && grep -qx "$want" <<<"$names"; then
+                gh run download "$id" -R "$GITHUB_REPOSITORY" -n "$want" -D previous
+                echo "previous $want: run $id"
+              fi
+            done
+            if [ -f previous/scorecard-report.json ] && [ -f previous/perf-history.json ]; then break; fi
           done
+          if [ ! -f previous/scorecard-report.json ] && [ ! -f previous/perf-history.json ]; then
+            echo "no earlier nightly left a report or a perf history: first night"
+            touch previous/first-night
+          fi
           ci=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --status completed \
                  --limit 1 --json databaseId --jq '.[0].databaseId // empty')
           if [ -n "$ci" ]; then
@@ -301,10 +314,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           status=0
+          require=--require-history
+          if [ -f previous/first-night ]; then require=; fi
           python3 tools/scorecard/perf.py extract --results results --sha "$GITHUB_SHA" --out out/perf-entry.json
           python3 tools/scorecard/perf.py compare --entry out/perf-entry.json --history previous/perf-history.json \
-            --out out/perf-history.json --markdown out/perf.md > /dev/null || status=$?
-          cat out/perf.md >> "$GITHUB_STEP_SUMMARY"
+            $require --out out/perf-history.json --markdown out/perf.md > perf-compare.log || status=$?
+          if [ -f out/perf.md ]; then cat out/perf.md; else cat perf-compare.log; fi >> "$GITHUB_STEP_SUMMARY"
           exit $status
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && hashFiles('out/scorecard-report.json') != '' }}

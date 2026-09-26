@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import perf
@@ -233,6 +233,9 @@ class PerfTests(unittest.TestCase):
         self.assertEqual(entry["declared"], ["net.pps", "net.trunk_pps"])
         self.assertEqual(entry["runs"], sorted(DATA["runs"]))
         self.assertEqual(entry["accepted"], [])
+        self.assertEqual(entry["metric_runs"], {})
+        one_run = dict(DATA, perf_metrics=[dict(DATA["perf_metrics"][0], run="linux-gcc")])
+        self.assertEqual(perf.extract(one_run, [], "abc", "2026-09-26")["metric_runs"], {"net.pps": "linux-gcc"})
 
     @staticmethod
     def entry(sha, **values):
@@ -241,9 +244,9 @@ class PerfTests(unittest.TestCase):
                 "category": {"t": "runtime", "p": "runtime", "b": "backend", "d": "runtime"}[k[0]], "gate": k[0] != "d"}
             for k, v in values.items()}}
 
-    def verdicts(self, history, entry):
-        _, rows = perf.compare({"entries": history}, entry, 5)
-        return {r["metric"]: r["verdict"] for r in rows}
+    def verdicts(self, history, entry, window=5):
+        _, rows = perf.compare({"entries": history}, entry, window)
+        return {r["metric"]: r["verdict"] for r in rows if r["verdict"] != "never measured"}
 
     def test_within_budget_passes_and_beyond_fails(self):
         history = [self.entry(str(i), t=100.0, p=1000.0, b=100.0, d=1.0) for i in range(5)]
@@ -255,12 +258,13 @@ class PerfTests(unittest.TestCase):
     def test_baseline_is_the_median_of_the_window(self):
         history = [self.entry(str(i), t=v) for i, v in enumerate([100.0, 100.0, 300.0, 100.0, 100.0])]
         self.assertEqual(self.verdicts(history, self.entry("x", t=104.0)), {"t": "ok"})
-        # A 2 % creep per night passes against last night alone but not against the window's median.
+        # A 2 % creep per night passes against last night alone, but the anchor still catches it.
         creep = [self.entry(str(i), t=100.0 * 1.02 ** i) for i in range(5)]
         tonight = self.entry("x", t=100.0 * 1.02 ** 5)
         _, rows = perf.compare({"entries": creep}, tonight, 1)
-        self.assertEqual(rows[0]["verdict"], "ok")
-        self.assertEqual(self.verdicts(creep, tonight), {"t": "regression"})
+        self.assertAlmostEqual(rows[0]["change"], 2.0)
+        self.assertAlmostEqual(rows[0]["anchor_change"], 100.0 * (1.02 ** 5 - 1))
+        self.assertEqual((rows[0]["verdict"], rows[0]["note"]), ("regression", "drift against the anchor"))
 
     def test_first_night_and_missing_metrics(self):
         self.assertEqual(self.verdicts([], self.entry("x", t=1.0)), {"t": "new"})
@@ -271,23 +275,32 @@ class PerfTests(unittest.TestCase):
         self.assertEqual(self.verdicts(history, undeclared), {"t": "ok"})
 
     @staticmethod
-    def night(n, accepted=(), declared=("t", "p"), runs=("linux-gcc",), **values):
+    def day(n):
+        return (date(2026, 1, 1) + timedelta(days=n)).isoformat()
+
+    @staticmethod
+    def night(n, accepted=(), declared=("t", "p"), runs=("linux-gcc",), metric_runs=None, run="linux-gcc",
+              **values):
         """A nightly entry as `extract` writes it: dated, run-qualified keys, the registry's declarations."""
         e = PerfTests.entry(f"sha{n}", **values)
-        e.update(date=f"2026-10-{n:02d}T03:00:00Z", declared=list(declared), runs=list(runs), accepted=list(accepted))
-        e["metrics"] = {f"linux-gcc/{k}": v for k, v in e["metrics"].items()}
+        e.update(date=PerfTests.day(n) + "T03:17:00Z", declared=list(declared), runs=list(runs),
+                 accepted=list(accepted), metric_runs=dict(metric_runs or {}))
+        e["metrics"] = {f"{run}/{k}": v for k, v in e["metrics"].items()}
         return e
 
-    def replay(self, nights, window=5):
+    def replay(self, nights, window=5, history=None):
         """Feed nights through compare as the nightly does; the verdicts per night."""
-        history, out = {}, []
+        history, out = history or {}, []
         for e in nights:
             history, rows = perf.compare(history, e, window)
-            out.append({r["metric"].split("/", 1)[1]: r["verdict"] for r in rows})
+            out.append({r["metric"].split("/", 1)[-1]: r["verdict"] for r in rows if r["verdict"] != "never measured"})
         return history, out
 
+    def accept(self, n, value, **extra):
+        return dict({"metric": "t", "night": self.day(n), "value": value, "reason": "accepted in review"}, **extra)
+
     def test_an_unfixed_step_regression_fails_every_night(self):
-        # The review's scenario: +10 % from night 6 on, never fixed, for window + 2 nights.
+        # Round 1's scenario: +10 % from night 6 on, never fixed, for window + 2 nights.
         nights = [self.night(n, t=100.0) for n in range(1, 6)] + [self.night(n, t=110.0) for n in range(6, 13)]
         history, verdicts = self.replay(nights)
         self.assertEqual([v["t"] for v in verdicts[5:]], ["regression"] * 7)
@@ -296,28 +309,123 @@ class PerfTests(unittest.TestCase):
         _, rows = perf.compare(history, self.night(13, t=101.0), 5)
         self.assertEqual((rows[0]["verdict"], rows[0]["baseline"]), ("ok", 100.0))
 
-    def test_a_creep_keeps_failing_once_it_passes_the_budget(self):
-        nights = [self.night(n, t=100.0 * 1.02 ** n) for n in range(1, 16)]
-        _, verdicts = self.replay(nights)
-        first = next(i for i, v in enumerate(verdicts) if v["t"] == "regression")
-        self.assertEqual([v["t"] for v in verdicts[first:]], ["regression"] * (15 - first))
+    def test_a_step_held_past_the_history_limit_stays_a_regression(self):
+        # Round 2's scenario: the last clean night leaves the 60-entry history; the stored levels carry on.
+        steps = perf.HISTORY_LIMIT + 10
+        nights = [self.night(n, t=100.0) for n in range(1, 6)] + [self.night(n, t=110.0) for n in range(6, 6 + steps)]
+        history, verdicts = self.replay(nights)
+        self.assertEqual([v["t"] for v in verdicts[5:]], ["regression"] * steps)
+        self.assertEqual(verdicts.count({"t": "new"}), 1)
+        last = history["entries"][-1]["metrics"]["linux-gcc/t"]
+        self.assertEqual((last["baseline"], last["anchor"]), (100.0, 100.0))
+        self.assertNotIn(100.0, [e["metrics"]["linux-gcc/t"]["value"] for e in history["entries"]])
+        # A history whose only values are regressions and that carries no levels fails instead of restarting.
+        bare = {"entries": [dict(self.night(1, t=110.0), metrics={"linux-gcc/t": dict(
+            self.night(1, t=110.0)["metrics"]["linux-gcc/t"], verdict="regression")})]}
+        _, rows = perf.compare(bare, self.night(2, t=110.0), 5)
+        self.assertEqual(rows[0]["verdict"], "no-baseline")
+
+    def test_slow_creep_is_caught_against_the_anchor(self):
+        # Rolling medians lag, so creep below about a third of the budget per night never trips them; the
+        # anchor does, on the night the drift passes the budget, and keeps failing.
+        for rate, category, key, first_bad in ((0.015, "runtime", "t", 4), (0.03, "backend", "b", 4)):
+            nights = [self.night(n, **{key: 100.0}) for n in range(1, 6)]
+            nights += [self.night(5 + k, **{key: 100.0 * (1 + rate) ** k}) for k in range(1, 26)]
+            _, verdicts = self.replay(nights)
+            creep = [v[key] for v in verdicts[5:]]
+            self.assertEqual(creep, ["ok"] * (first_bad - 1) + ["regression"] * (26 - first_bad), (rate, category))
+            # The rolling baseline alone would have passed that night: the anchor is what caught it.
+            before, _ = self.replay(nights[:4 + first_bad])
+            _, rows = perf.compare(before, nights[4 + first_bad], 5)
+            row = next(r for r in rows if r["metric"].endswith("/" + key))
+            self.assertEqual((row["verdict"], row["note"]), ("regression", "drift against the anchor"))
+            self.assertLess(row["change"], perf.BUDGET_PERCENT[category])
+
+    def test_sub_budget_steps_stack_against_the_anchor_unless_accepted(self):
+        nights = [self.night(n, t=100.0) for n in range(1, 6)] + [self.night(n, t=104.0) for n in range(6, 12)]
+        steps = nights + [self.night(n, t=108.2) for n in range(12, 16)]
+        _, verdicts = self.replay(steps)
+        self.assertEqual([v["t"] for v in verdicts[5:]], ["ok"] * 6 + ["regression"] * 4)
+        # Accepting the first step (night 6 at 104) makes it the anchor: it and the second step then pass.
+        record = [self.accept(6, 104.0)]
+        accepted = nights[:6] + [self.night(n, accepted=record, t=104.0) for n in range(7, 30)]
+        _, verdicts = self.replay(accepted)
+        self.assertEqual({v["t"] for v in verdicts[5:]}, {"ok"})
+        _, verdicts = self.replay(accepted + [self.night(n, accepted=record, t=108.2) for n in range(30, 34)])
+        self.assertEqual({v["t"] for v in verdicts[-4:]}, {"ok"})
+
+    def test_an_improvement_leaves_the_anchor_and_a_return_is_caught_by_the_rolling_baseline(self):
+        nights = [self.night(n, t=100.0) for n in range(1, 6)] + [self.night(n, t=80.0) for n in range(6, 12)]
+        history, verdicts = self.replay(nights)
+        self.assertEqual({v["t"] for v in verdicts[5:]}, {"ok"})
+        self.assertEqual(history["entries"][-1]["metrics"]["linux-gcc/t"]["anchor"], 100.0)
+        _, rows = perf.compare(history, self.night(12, t=100.0), 5)
+        self.assertEqual((rows[0]["verdict"], rows[0]["baseline"], rows[0]["note"]), ("regression", 80.0, ""))
+
+    def test_regressions_in_the_first_nights_do_not_set_the_anchor(self):
+        # Night 1 is clean and nights 2-4 regress; the anchor comes from clean nights only, so a slow creep
+        # from the clean level is still measured from 100, not from the regressed 150.
+        nights = [self.night(1, t=100.0)] + [self.night(n, t=150.0) for n in (2, 3, 4)]
+        nights += [self.night(4 + k, t=100.0 * 1.01 ** (k - 1)) for k in range(1, 12)]
+        history, verdicts = self.replay(nights)
+        self.assertEqual([v["t"] for v in verdicts[1:4]], ["regression"] * 3)
+        self.assertEqual(verdicts[-1]["t"], "regression")
+        self.assertEqual(history["entries"][-1]["metrics"]["linux-gcc/t"]["anchor"], 101.0)
+
+    def test_an_accepted_level_outlives_its_record(self):
+        # Once the accepted level is stored, the record can be removed: the anchor stays at the new level.
+        record = [self.accept(6, 110.0)]
+        nights = [self.night(n, t=100.0) for n in range(1, 6)] + [self.night(6, accepted=record, t=110.0)]
+        nights += [self.night(n, accepted=record, t=110.0) for n in range(7, 13)]
+        history, verdicts = self.replay(nights)
+        self.assertEqual({v["t"] for v in verdicts[6:]}, {"ok"})
+        _, verdicts = self.replay([self.night(n, t=110.0) for n in range(13, 20)], history=history)
+        self.assertEqual({v["t"] for v in verdicts}, {"ok"})
 
     def test_only_an_accepted_night_moves_the_baseline(self):
-        accept = [{"metric": "t", "night": "2026-10-07", "reason": "new allocator; accepted in review"}]
+        record = [self.accept(7, 110.0)]
         nights = [self.night(n, t=100.0) for n in range(1, 6)] + [self.night(n, t=110.0) for n in (6, 7, 8)]
-        nights += [self.night(9, accepted=accept, t=110.0), self.night(10, accepted=accept, t=122.0),
-                   self.night(11, accepted=accept, t=122.0), self.night(12, accepted=accept, t=111.0)]
+        nights += [self.night(9, accepted=record, t=110.0), self.night(10, accepted=record, t=122.0),
+                   self.night(11, accepted=record, t=122.0), self.night(12, accepted=record, t=111.0)]
         _, verdicts = self.replay(nights)
         self.assertEqual([v["t"] for v in verdicts[5:]],
                          ["regression"] * 3 + ["ok", "regression", "regression", "ok"])
-        # A record for tonight's own night takes tonight's value as the new level.
         eight, _ = self.replay(nights[:8])
-        _, rows = perf.compare(eight, self.night(9, accepted=[dict(accept[0], night="2026-10-09")], t=110.0), 5)
+        # A record for tonight's own night takes tonight's value as the new level, if it is the value accepted.
+        _, rows = perf.compare(eight, self.night(9, accepted=[self.accept(9, 110.0)], t=110.0), 5)
         self.assertEqual(rows[0]["verdict"], "accepted")
+        _, rows = perf.compare(eight, self.night(9, accepted=[self.accept(9, 110.0)], t=330.0), 5)
+        self.assertEqual(rows[0]["verdict"], "accept-unmatched")
+        self.assertIn("accepts 110.0, but that night measured 330", rows[0]["note"])
         # A record for another run, another metric or a later night changes nothing.
-        for other in ({"run": "windows-vs2026"}, {"metric": "p"}, {"night": "2026-10-30"}):
-            _, rows = perf.compare(eight, self.night(9, accepted=[dict(accept[0], **other)], t=110.0), 5)
+        for other in ({"run": "windows-vs2026"}, {"metric": "p"}, {"night": self.day(30)}):
+            _, rows = perf.compare(eight, self.night(9, accepted=[self.accept(7, 110.0, **other)], t=110.0), 5)
             self.assertEqual(rows[0]["verdict"], "regression", other)
+
+    def test_the_latest_accept_wins(self):
+        nights = [self.night(n, t=100.0) for n in range(1, 6)] + [self.night(n, t=110.0) for n in (6, 7, 8)]
+        nights += [self.night(9, t=120.0)]
+        history, _ = self.replay(nights)
+        both = [self.accept(9, 120.0), self.accept(7, 110.0)]
+        _, rows = perf.compare(history, self.night(10, accepted=both, t=120.0), 5)
+        self.assertEqual((rows[0]["verdict"], rows[0]["baseline"], rows[0]["anchor"]), ("ok", 120.0, 120.0))
+
+    def test_an_accept_for_a_night_without_the_value_fails(self):
+        # Round 2's scenario: the record names night 7, which has no stored value (its nightly failed).
+        nights = [self.night(n, t=100.0) for n in range(1, 6)] + [self.night(n, t=110.0) for n in (6, 8, 9)]
+        history, _ = self.replay(nights)
+        record = [self.accept(7, 110.0)]
+        history, verdicts = self.replay([self.night(10, accepted=record, t=130.0),
+                                         self.night(11, accepted=record, t=130.0)], history=history)
+        self.assertEqual([v["t"] for v in verdicts], ["accept-unmatched"] * 2)
+        _, rows = perf.compare(history, self.night(11, accepted=record, t=130.0), 5)
+        self.assertIn(f"perf_accept for {self.day(7)} names a night with no stored value", rows[0]["note"])
+        # 130 never became the baseline: with the record fixed or removed, it is still a regression against 100.
+        _, rows = perf.compare(history, self.night(12, t=130.0), 5)
+        self.assertEqual((rows[0]["verdict"], rows[0]["baseline"], rows[0]["anchor"]), ("regression", 100.0, 100.0))
+        # A record whose value is not what that night measured fails the same way.
+        _, rows = perf.compare(history, self.night(12, accepted=[self.accept(8, 150.0)], t=130.0), 5)
+        self.assertEqual(rows[0]["verdict"], "accept-unmatched")
 
     def test_a_vanished_metric_stays_missing(self):
         nights = [self.night(1, t=1.0, p=2.0), self.night(2, t=1.0), self.night(3, t=1.0), self.night(4, t=1.0)]
@@ -326,10 +434,38 @@ class PerfTests(unittest.TestCase):
         self.assertEqual(history["entries"][-1]["missing"], ["linux-gcc/p"])
         _, rows = perf.compare(history, self.night(5, t=1.0, p=2.0), 5)
         self.assertEqual({r["metric"]: r["verdict"] for r in rows}["linux-gcc/p"], "ok")
-        # Dropping the metric, or the run it came from, from the registry ends it.
-        for tonight in (self.night(5, declared=("t",), t=1.0), self.night(5, runs=("linux-clang",), t=1.0)):
+        # Dropping the metric or its run, or moving the metric to another run, ends it.
+        for tonight in (self.night(5, declared=("t",), t=1.0), self.night(5, runs=("linux-clang",), t=1.0),
+                        self.night(5, runs=("linux-gcc", "linux-clang"), metric_runs={"p": "linux-clang"}, t=1.0)):
             _, rows = perf.compare(history, tonight, 5)
             self.assertNotIn("missing", [r["verdict"] for r in rows])
+        _, rows = perf.compare(history, self.night(5, metric_runs={"p": "linux-gcc"}, t=1.0), 5)
+        self.assertIn("missing", [r["verdict"] for r in rows])
+
+    def test_a_declared_metric_never_measured_is_listed_not_failed(self):
+        with tempfile.TemporaryDirectory() as d:
+            entry, out = Path(d) / "e.json", Path(d) / "n.json"
+            entry.write_text(json.dumps(self.night(1, declared=("t", "p", "q"), t=1.0)), encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()) as text:
+                rc = perf.main(["compare", "--entry", str(entry), "--out", str(out)])
+        self.assertEqual(rc, 0)
+        self.assertIn("| `p` | — ", text.getvalue())
+        self.assertIn("never measured (declared, but no night has produced it yet)", text.getvalue())
+        self.assertIn(f"Night {self.day(1)} (UTC", text.getvalue())
+
+    def test_require_history_refuses_to_reset_the_baselines(self):
+        with tempfile.TemporaryDirectory() as d:
+            entry, out, gone = Path(d) / "e.json", Path(d) / "n.json", Path(d) / "absent.json"
+            entry.write_text(json.dumps(self.night(2, t=110.0)), encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()) as text:
+                rc = perf.main(["compare", "--entry", str(entry), "--history", str(gone), "--out", str(out),
+                                "--require-history"])
+            self.assertEqual(rc, 2)
+            self.assertIn("perf history not found", text.getvalue())
+            self.assertFalse(out.exists())
+            # Without the flag (the first night), an absent history is a fresh start.
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(perf.main(["compare", "--entry", str(entry), "--history", str(gone), "--out", str(out)]), 0)
 
     def test_history_is_bounded_and_main_exits_nonzero_on_regression(self):
         with tempfile.TemporaryDirectory() as d:

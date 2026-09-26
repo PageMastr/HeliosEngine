@@ -13,6 +13,7 @@ import (
 
 	"github.com/PageMastr/scifi-test/services/internal/platform"
 	"github.com/PageMastr/scifi-test/services/internal/stack"
+	"github.com/PageMastr/scifi-test/services/pkg/keyring"
 )
 
 // The full stack (embedded PostgreSQL) is exercised by internal/integration; these tests cover
@@ -134,5 +135,63 @@ func TestLoadKeysDevGeneratesProdRequires(t *testing.T) {
 	}
 	if _, err := LoadKeys(cfg, KeyFileNetcode, "netcode-shard", log); err != nil {
 		t.Fatalf("prod with provisioned key: %v", err)
+	}
+}
+
+func TestLoadPIIKeys(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := platform.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.Env = "prod"
+	if _, err := LoadPIIKeys(cfg, log); err == nil {
+		t.Fatal("prod generated missing PII keys")
+	}
+	cfg.Env = "dev"
+	k1, err := LoadPIIKeys(cfg, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{KeyFileSubjectKEK, KeyFileEmailPepper} {
+		if _, err := os.Stat(KeyPath(cfg, name)); err != nil {
+			t.Fatalf("%s not written: %v", name, err)
+		}
+	}
+	// A restart reads the same files: the same address has the same blind index.
+	k2, _ := LoadPIIKeys(cfg, log)
+	if !bytes.Equal(k1.EmailIndex("a@b.io"), k2.EmailIndex("A@B.io")) {
+		t.Fatal("PII keys changed across loads")
+	}
+	cfg.Env = "prod"
+	if _, err := LoadPIIKeys(cfg, log); err != nil {
+		t.Fatalf("prod with provisioned keys: %v", err)
+	}
+}
+
+func TestLoadPIIKeysRefusesTheWrongFiles(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := platform.Default()
+	cfg.DataDir = t.TempDir()
+	if _, err := LoadPIIKeys(cfg, log); err != nil {
+		t.Fatal(err)
+	}
+	jwt, err := LoadKeys(cfg, KeyFileJWT, "jwt-ed25519", log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Another ring copied over the KEK file: its purpose gives it away.
+	if err := jwt.Save(KeyPath(cfg, KeyFileSubjectKEK)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPIIKeys(cfg, log); err == nil || !strings.Contains(err.Error(), "purpose") {
+		t.Fatalf("a jwt ring as the KEK: %v", err)
+	}
+	// The pepper file copied over the KEK file: same secret.
+	pepper, _ := keyring.Load(KeyPath(cfg, KeyFileEmailPepper))
+	pepper.Purpose = "subject-kek"
+	if err := pepper.Save(KeyPath(cfg, KeyFileSubjectKEK)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPIIKeys(cfg, log); err == nil || !strings.Contains(err.Error(), "share a secret") {
+		t.Fatalf("KEK equal to the pepper: %v", err)
 	}
 }

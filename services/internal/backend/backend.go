@@ -7,6 +7,7 @@ package backend
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -21,6 +22,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/PageMastr/scifi-test/services/internal/app"
@@ -45,6 +48,12 @@ const (
 	// KeyFileNATS holds the embedded NATS fleet password (cells and gateways): the standard
 	// base64 of the current secret, i.e. the "secret" string in the file as written.
 	KeyFileNATS = "nats-fleet.json"
+	// KeyFileSubjectKEK wraps every account's data key and KeyFileEmailPepper keys the e-mail
+	// blind index (05 §6.6: dev uses local key files, prod the secret store until KMS). Losing
+	// them makes every stored e-mail address unreadable and unfindable; never prune a KEK
+	// generation that still wraps a DEK.
+	KeyFileSubjectKEK  = "subject-kek.json"
+	KeyFileEmailPepper = "email-bidx-pepper.json"
 )
 
 // Options tune Start for tests.
@@ -80,6 +89,7 @@ type Backend struct {
 	runner    *app.Runner
 	telemetry *platform.Telemetry
 	lock      *stack.DataDirLock
+	pii       *identity.PIIKeys // see piiKeys
 }
 
 // KeyPath returns the path of a key file (cfg.KeysDir, default <data>/keys).
@@ -110,6 +120,116 @@ func LoadKeys(cfg *platform.Config, name, purpose string, log *slog.Logger) (*ke
 		log.Info("generated key file", "purpose", purpose, "file", path)
 	}
 	return ring, nil
+}
+
+// Keyring purposes of the PII key files; a file with another purpose is refused.
+const (
+	purposeSubjectKEK  = "subject-kek"
+	purposeEmailPepper = "email-bidx-pepper"
+)
+
+// LoadPIIKeys opens the keys that protect Identity's direct PII (05 §6.6); dev generates missing
+// files, prod requires them (LoadKeys). Each file must carry its own purpose, and no KEK
+// generation may equal the pepper, so another key file copied into place is refused. Use
+// OpenPIIKeys when a database is at hand: it also refuses to generate keys over encrypted data.
+func LoadPIIKeys(cfg *platform.Config, log *slog.Logger) (*identity.PIIKeys, error) {
+	kek, err := LoadKeys(cfg, KeyFileSubjectKEK, purposeSubjectKEK, log)
+	if err != nil {
+		return nil, err
+	}
+	pepper, err := LoadKeys(cfg, KeyFileEmailPepper, purposeEmailPepper, log)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range []struct {
+		ring    *keyring.Ring
+		file    string
+		purpose string
+	}{{kek, KeyFileSubjectKEK, purposeSubjectKEK}, {pepper, KeyFileEmailPepper, purposeEmailPepper}} {
+		if r.ring.Purpose != r.purpose {
+			return nil, fmt.Errorf("%s has purpose %q, want %q", KeyPath(cfg, r.file), r.ring.Purpose, r.purpose)
+		}
+	}
+	for _, k := range kek.Keys {
+		for _, p := range pepper.Keys {
+			if subtle.ConstantTimeCompare(k.Secret, p.Secret) == 1 {
+				return nil, fmt.Errorf("%s and %s share a secret", KeyPath(cfg, KeyFileSubjectKEK), KeyPath(cfg, KeyFileEmailPepper))
+			}
+		}
+	}
+	return identity.NewPIIKeys(kek, pepper)
+}
+
+// OpenPIIKeys loads the PII keys for the database behind pool. While that database holds
+// encrypted accounts it refuses to generate a missing key file (a new KEK or pepper would make
+// every stored address unreadable or unfindable: crypto-shredding by accident), and it checks,
+// on one account per KEK generation in use, that the KEK unwraps the stored DEK and that the
+// pepper reproduces the stored blind index of the decrypted address. A wrong or replaced key
+// file then stops the start instead of failing each request (or, for the pepper, letting every
+// address register a second account).
+func OpenPIIKeys(ctx context.Context, cfg *platform.Config, log *slog.Logger, pool *pgxpool.Pool) (*identity.PIIKeys, error) {
+	var table, encrypted bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('svc_identity.subject_key') IS NOT NULL`).Scan(&table); err != nil {
+		return nil, err
+	}
+	if table {
+		if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM svc_identity.subject_key)`).Scan(&encrypted); err != nil {
+			return nil, err
+		}
+	}
+	if encrypted {
+		for _, name := range []string{KeyFileSubjectKEK, KeyFileEmailPepper} {
+			if _, err := os.Stat(KeyPath(cfg, name)); errors.Is(err, os.ErrNotExist) {
+				return nil, fmt.Errorf("%s is missing but the database holds encrypted accounts: restore it "+
+					"(a new key would make every stored address unreadable)", KeyPath(cfg, name))
+			}
+		}
+	}
+	keys, err := LoadPIIKeys(cfg, log)
+	if err != nil || !encrypted {
+		return keys, err
+	}
+	type sampled struct {
+		key  identity.SubjectKey
+		acct identity.Account
+	}
+	rows, err := pool.Query(ctx, `SELECT DISTINCT ON (k.kek_version) k.account_id, k.wrapped_dek, k.kek_version,
+			a.email_ct, a.email_bidx
+		FROM svc_identity.subject_key k JOIN svc_identity.account a USING (account_id)
+		WHERE k.wrapped_dek IS NOT NULL ORDER BY k.kek_version, k.account_id`)
+	if err != nil {
+		return nil, err
+	}
+	sample, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (sampled, error) {
+		var s sampled
+		err := row.Scan(&s.key.AccountID, &s.key.WrappedDEK, &s.key.KEKVersion, &s.acct.EmailCT, &s.acct.EmailBidx)
+		s.acct.ID = s.key.AccountID
+		return s, err
+	})
+	if err != nil {
+		return nil, err
+	}
+	for i := range sample {
+		s := &sample[i]
+		dek, err := keys.UnwrapSubjectKey(&s.key)
+		if err != nil {
+			return nil, fmt.Errorf("%s does not unwrap the stored keys of KEK generation %d (wrong or replaced key file): %w",
+				KeyPath(cfg, KeyFileSubjectKEK), s.key.KEKVersion, err)
+		}
+		dek.Clear()
+		if s.acct.EmailCT == nil {
+			continue
+		}
+		email, err := keys.DecryptEmail(&s.acct, &s.key)
+		if err != nil {
+			return nil, fmt.Errorf("the stored address of account %d does not decrypt: %w", s.acct.ID, err)
+		}
+		if subtle.ConstantTimeCompare(keys.EmailIndex(email), s.acct.EmailBidx) != 1 {
+			return nil, fmt.Errorf("%s does not match the stored blind indexes (wrong or replaced key file)",
+				KeyPath(cfg, KeyFileEmailPepper))
+		}
+	}
+	return keys, nil
 }
 
 // Start brings up everything. On error, whatever was started is torn down again.
@@ -148,7 +268,12 @@ func Start(ctx context.Context, cfg *platform.Config, log *slog.Logger, opts Opt
 			return b, err
 		}
 		db := b.PG.SQLDB()
-		_, err = migrations.Up(ctx, db, log)
+		var mopts migrations.Options
+		if cfg.Enabled(platform.ServiceIdentity) {
+			// Only a process that runs Identity holds its keys; others cannot encrypt old rows.
+			mopts.PIIKeys = func() (*identity.PIIKeys, error) { return b.piiKeys(ctx) }
+		}
+		_, err = migrations.Up(ctx, db, log, mopts)
 		_ = db.Close()
 		if err != nil {
 			return b, err
@@ -275,9 +400,26 @@ func leaderHolder(cfg *platform.Config) (string, error) {
 	return host + ":" + dir, nil
 }
 
+// piiKeys opens the PII keys once; migrations (to encrypt pre-WP-0.15r rows) and identity share
+// them. The first call may come from inside a migration, before any account is encrypted.
+func (b *Backend) piiKeys(ctx context.Context) (*identity.PIIKeys, error) {
+	if b.pii == nil {
+		k, err := OpenPIIKeys(ctx, b.Cfg, b.Log, b.PG.Pool)
+		if err != nil {
+			return nil, err
+		}
+		b.pii = k
+	}
+	return b.pii, nil
+}
+
 func (b *Backend) newIdentity(cfg *platform.Config, log *slog.Logger, limiter *ratelimit.Limiter, ids *idgen.Minter,
 	clk clock.Clock, opts Options) (*identity.Service, error) {
 	ring, err := LoadKeys(cfg, KeyFileJWT, "jwt-ed25519", log)
+	if err != nil {
+		return nil, err
+	}
+	piiKeys, err := b.piiKeys(context.Background())
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +434,7 @@ func (b *Backend) newIdentity(cfg *platform.Config, log *slog.Logger, limiter *r
 		params = *opts.HashParams
 	}
 	return identity.New(identity.Deps{
-		Config: cfg.Identity, Store: identity.NewPGStore(b.PG.Pool),
+		Config: cfg.Identity, Store: identity.NewPGStore(b.PG.Pool), PII: piiKeys,
 		Hasher:  identity.NewHasher(params, cfg.Identity.Argon2.MaxConcurrent),
 		Issuer:  authn.NewIssuer(signing, cfg.Identity.Issuer, cfg.Identity.Audience, cfg.Identity.AccessTTL.D(), clk),
 		Keys:    authn.NewKeySet(pubs...),

@@ -63,7 +63,7 @@ func queryStrings(t *testing.T, pool *pgxpool.Pool, q string, args ...any) []str
 // checkSchemas asserts the net schema 05 §1.4, §3 and §6.6 require: every service schema is
 // svc_<service> and none has its old name (CONF-06); every direct-PII column CONF-07 names
 // (e-mail, IP address, date of birth, real name) is *_ct ciphertext or a *_bidx blind index in
-// svc_identity; leases live in region_lease, not zone.
+// svc_identity, and so is the GM's ban reason; leases live in region_lease, not zone.
 func checkSchemas(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	schemas := queryStrings(t, pool, `SELECT nspname FROM pg_namespace WHERE nspname NOT LIKE 'pg\_%'
@@ -90,6 +90,10 @@ func checkSchemas(t *testing.T, pool *pgxpool.Pool) {
 	}
 	if got := columns(t, pool, "svc_identity", "audit_log"); !slices.Contains(got, "note_digest") {
 		t.Fatalf("audit_log columns %v", got)
+	}
+	// GM free text (05 §1.17, §6.6) is sealed too.
+	if got := columns(t, pool, "svc_identity", "account"); slices.Contains(got, "ban_reason") || !slices.Contains(got, "ban_reason_ct") {
+		t.Fatalf("account columns %v: the ban reason must be ban_reason_ct only", got)
 	}
 }
 
@@ -248,8 +252,8 @@ func gooseVersion(t *testing.T, pool *pgxpool.Pool, schema string) int64 {
 }
 
 // noPlainTextOnDisk flushes the buffers and reads the heap files of the tables that held plain
-// text: after 00005's rewrite, no old row version or dropped column may keep it (PR #8 review,
-// nit 7). The test runs as the same OS user as the embedded server, so it can read them.
+// text, and of pg_statistic, which ANALYZE fills with samples of them: after 00005's rewrite, no
+// old row version, dropped column or sampled statistic may keep it (PR #8 reviews). The test runs as the same OS user as the embedded server, so it can read them.
 func noPlainTextOnDisk(t *testing.T, pool *pgxpool.Pool, secrets ...string) {
 	t.Helper()
 	ctx := context.Background()
@@ -260,7 +264,8 @@ func noPlainTextOnDisk(t *testing.T, pool *pgxpool.Pool, secrets ...string) {
 	if err := pool.QueryRow(ctx, "SHOW data_directory").Scan(&dataDir); err != nil {
 		t.Fatal(err)
 	}
-	for _, rel := range []string{"svc_identity.account", "svc_identity.refresh_token", "svc_identity.audit_log"} {
+	for _, rel := range []string{"svc_identity.account", "svc_identity.refresh_token", "svc_identity.audit_log",
+		"pg_catalog.pg_statistic"} {
 		var path string
 		if err := pool.QueryRow(ctx, "SELECT pg_relation_filepath($1)", rel).Scan(&path); err != nil {
 			t.Fatal(err)
@@ -288,15 +293,19 @@ func TestLegacyDatabaseUpgrade(t *testing.T) {
 	ctx := context.Background()
 	pool := legacyDB(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	// Rows the old code wrote: plain-text e-mail and client IPs, a placed zone at generation 7.
+	const banReason = "sold gold to Zed Quillon"
+	// Rows the old code wrote: plain-text e-mail, client IPs (and the dev seed's "seed") and ban
+	// reason, a placed zone at generation 7.
 	for _, q := range []string{
 		`INSERT INTO identity.account (account_id, email, email_norm, handle, handle_norm, discriminator, password_hash,
-			created_at, updated_at) VALUES (4242, 'Legacy.Pilot@Example.com', 'legacy.pilot@example.com', 'Legacy', 'legacy', 7,
-			'$argon2id$x', $1, $1)`,
+			banned_until, ban_reason, created_at, updated_at) VALUES (4242, 'Legacy.Pilot@Example.com', 'legacy.pilot@example.com',
+			'Legacy', 'legacy', 7, '$argon2id$x', '2099-01-01T00:00:00Z', '` + banReason + `', $1, $1)`,
 		`INSERT INTO identity.refresh_token (token_hash, family_id, account_id, issued_at, expires_at, client_ip)
 			VALUES ('\x01', 9, 4242, $1, $1, '198.51.100.7')`,
 		`INSERT INTO identity.refresh_token (token_hash, family_id, account_id, issued_at, expires_at)
 			VALUES ('\x02', 10, 4242, $1, $1)`,
+		`INSERT INTO identity.refresh_token (token_hash, family_id, account_id, issued_at, expires_at, client_ip)
+			VALUES ('\x03', 11, 4242, $1, $1, 'seed')`,
 		`INSERT INTO orchestrator.zone (zone_id, name, owner_process, lease_gen, updated_at) VALUES (1001, 'alpha', 55, 7, $1)`,
 		`INSERT INTO orchestrator.placement_log (at, zone_id, process_id, lease_gen, action) VALUES ($1, 1001, 55, 7, 'assign')`,
 	} {
@@ -313,7 +322,12 @@ func TestLegacyDatabaseUpgrade(t *testing.T) {
 	la.add(t, pool, identity.NewAudit(now.Add(-100*24*time.Hour), 4242, 4242, identity.ActionLogin,
 		map[string]any{"ua": "old"}), "198.51.100.8")
 	la.add(t, pool, identity.NewAudit(now, 7, 4242, identity.ActionBan,
-		map[string]any{"reason": "it", "until": "2099-01-01T00:00:00Z"}), "")
+		map[string]any{"reason": banReason, "until": "2099-01-01T00:00:00Z"}), "")
+	la.add(t, pool, identity.NewAudit(now, 4242, 4242, identity.ActionLogin, nil), "seed")
+	// Statistics sample the plain-text columns into pg_statistic, which 00005 must rewrite too.
+	if _, err := pool.Exec(ctx, "ANALYZE identity.account, identity.refresh_token, identity.audit_log"); err != nil {
+		t.Fatal(err)
+	}
 	db := stdlib.OpenDBFromPool(pool)
 	defer db.Close()
 
@@ -328,7 +342,7 @@ func TestLegacyDatabaseUpgrade(t *testing.T) {
 		(SELECT count(*) FROM svc_identity.audit_log WHERE client_ip <> '')`).Scan(&keysN, &sealedN, &ipsN); err != nil {
 		t.Fatal(err)
 	}
-	if keysN != 0 || sealedN != 0 || ipsN != 3 || gooseVersion(t, pool, "svc_identity") != 2 {
+	if keysN != 0 || sealedN != 0 || ipsN != 4 || gooseVersion(t, pool, "svc_identity") != 2 {
 		t.Fatalf("stopped state: %d keys, %d sealed, %d audit IPs, version %d", keysN, sealedN, ipsN,
 			gooseVersion(t, pool, "svc_identity"))
 	}
@@ -356,28 +370,34 @@ func TestLegacyDatabaseUpgrade(t *testing.T) {
 	if fam, err := store.ActiveFamily(ctx, 9, now.Add(-time.Minute)); err != nil || fam != 4242 {
 		t.Fatalf("refresh token after the rename: %d %v", fam, err)
 	}
-	var ct1, ct2 []byte
+	var ct1, ct2, ct3 []byte
 	if err := pool.QueryRow(ctx, `SELECT (SELECT client_ip_ct FROM svc_identity.refresh_token WHERE token_hash = '\x01'),
-		(SELECT client_ip_ct FROM svc_identity.refresh_token WHERE token_hash = '\x02')`).Scan(&ct1, &ct2); err != nil {
+		(SELECT client_ip_ct FROM svc_identity.refresh_token WHERE token_hash = '\x02'),
+		(SELECT client_ip_ct FROM svc_identity.refresh_token WHERE token_hash = '\x03')`).Scan(&ct1, &ct2, &ct3); err != nil {
 		t.Fatal(err)
 	}
-	if ip, err := keys.Open(sk, identity.RefreshIPAAD([]byte{1}), ct1); err != nil || ip != "198.51.100.7" || ct2 != nil {
-		t.Fatalf("migrated refresh-token IPs: %q %v, empty one %x", ip, err, ct2)
+	if ip, err := keys.Open(sk, identity.RefreshIPAAD([]byte{1}), ct1); err != nil || ip != "198.51.100.7" || ct2 != nil || ct3 != nil {
+		t.Fatalf("migrated refresh-token IPs: %q %v, empty one %x, not an IP %x", ip, err, ct2, ct3)
+	}
+	// The ban reason is sealed for its row.
+	if reason, err := keys.Open(sk, identity.BanReasonAAD(4242), acct.BanReasonCT); err != nil || reason != banReason ||
+		acct.BannedUntil == nil || acct.BannedUntil.Year() != 2099 {
+		t.Fatalf("migrated ban: %q %v %+v", reason, err, acct)
 	}
 
-	// The audit log verifies in row format 2, carries no IP, and records the re-chain with the
-	// old head; the IP of the recent row with a subject moved to the login history, the others
-	// (no subject, or past the 90-day retention) are gone.
+	// The audit log verifies in row format 2, carries no IP and no ban reason, and records the
+	// re-chain with the old head; the IP of the recent row with a subject moved to the login
+	// history, the others (no subject, past the 90-day retention, or not an IP) are gone.
 	all, err := store.ListAudit(ctx, 0, 0)
-	if err != nil || len(all) != 5 {
+	if err != nil || len(all) != 6 {
 		t.Fatalf("audit rows: %d %v", len(all), err)
 	}
 	if err := identity.VerifyAuditChain([32]byte{}, all); err != nil {
 		t.Fatal(err)
 	}
-	if all[1].Detail != `{"reason":"unknown_login"}` || all[4].Action != identity.ActionAuditRechain ||
-		!strings.Contains(all[4].Detail, hex.EncodeToString(la.prev[:])) {
-		t.Fatalf("scrubbed row %q, marker %+v", all[1].Detail, all[4])
+	if all[1].Detail != `{"reason":"unknown_login"}` || all[3].Detail != `{"until":"2099-01-01T00:00:00Z"}` ||
+		all[5].Action != identity.ActionAuditRechain || !strings.Contains(all[5].Detail, hex.EncodeToString(la.prev[:])) {
+		t.Fatalf("scrubbed rows %q %q, marker %+v", all[1].Detail, all[3].Detail, all[5])
 	}
 	hist, err := store.LoginHistory(ctx, 4242)
 	if err != nil || len(hist) != 1 || hist[0].ID != -1 || hist[0].Action != identity.ActionRegister {
@@ -396,11 +416,11 @@ func TestLegacyDatabaseUpgrade(t *testing.T) {
 	if err := store.AppendAudit(ctx, identity.NewAudit(now, 1, 4242, "test.after", nil)); err != nil {
 		t.Fatal(err)
 	}
-	if all, _ = store.ListAudit(ctx, 0, 0); identity.VerifyAuditChain([32]byte{}, all) != nil || len(all) != 6 {
+	if all, _ = store.ListAudit(ctx, 0, 0); identity.VerifyAuditChain([32]byte{}, all) != nil || len(all) != 7 {
 		t.Fatalf("chain after a new row: %d", len(all))
 	}
 	noPlainTextOnDisk(t, pool, "Legacy.Pilot@Example.com", "legacy.pilot@example.com", "198.51.100.7", "203.0.113.66",
-		"198.51.100.8", hex.EncodeToString(unkeyed[:12]))
+		"198.51.100.8", hex.EncodeToString(unkeyed[:12]), banReason)
 
 	// The zone's lease moved to region_lease with its generation, and the next assignment
 	// continues from it, term-fenced as before.
@@ -452,6 +472,41 @@ func TestLegacyBrokenAuditChainIsNotRechained(t *testing.T) {
 	}
 	if v := gooseVersion(t, pool, "svc_identity"); v != 2 {
 		t.Fatalf("version %d after a refused re-chain", v)
+	}
+}
+
+// The legacy chain is checked against audit_head too, so a log truncated or emptied behind its
+// head, or a head that does not match, is refused rather than re-chained (PR #8 review 2).
+func TestLegacyChainIsCheckedAgainstHead(t *testing.T) {
+	need(t)
+	for name, tamper := range map[string]string{
+		"newest row dropped": `DELETE FROM identity.audit_log WHERE seq = 2`,
+		"head hash differs":  `UPDATE identity.audit_head SET hash = '\x00'::bytea || substring(hash from 2) WHERE id = 1`,
+		"every row dropped":  `DELETE FROM identity.audit_log`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			pool := legacyDB(t)
+			var la legacyAudit
+			la.add(t, pool, identity.NewAudit(time.Now(), 0, 0, "test.one", nil), "")
+			la.add(t, pool, identity.NewAudit(time.Now(), 0, 0, "test.two", nil), "")
+			if _, err := pool.Exec(ctx, `ALTER TABLE identity.audit_log DISABLE TRIGGER audit_log_append_only; `+tamper+
+				`; ALTER TABLE identity.audit_log ENABLE TRIGGER audit_log_append_only`); err != nil {
+				t.Fatal(err)
+			}
+			db := stdlib.OpenDBFromPool(pool)
+			defer db.Close()
+			if _, err := migrations.Up(ctx, db, quietLog, migrations.Options{}); !errors.Is(err, migrations.ErrAuditChainBroken) {
+				t.Fatalf("tampered chain (%s) re-chained: %v", name, err)
+			}
+		})
+	}
+	// An untouched empty log (seq 0, the all-zero head 00001 seeds) upgrades without a re-chain.
+	pool := legacyDB(t)
+	db := stdlib.OpenDBFromPool(pool)
+	defer db.Close()
+	if _, err := migrations.Up(context.Background(), db, quietLog, migrations.Options{}); err != nil {
+		t.Fatalf("empty legacy log: %v", err)
 	}
 }
 
@@ -614,6 +669,15 @@ func TestPIIKeysGuardEncryptedData(t *testing.T) {
 	}
 	if _, err := backend.OpenPIIKeys(ctx, cfg, quietLog, pool); err != nil {
 		t.Fatalf("the restored KEK: %v", err)
+	}
+	// A pepper file with the right purpose but another secret would miss every stored index.
+	pepperPath := backend.KeyPath(cfg, backend.KeyFileEmailPepper)
+	otherPepper, _ := keyring.New("email-bidx-pepper", nil, now)
+	if err := otherPepper.Save(pepperPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.OpenPIIKeys(ctx, cfg, quietLog, pool); err == nil || !strings.Contains(err.Error(), "does not match the stored blind indexes") {
+		t.Fatalf("a replaced pepper: %v", err)
 	}
 }
 

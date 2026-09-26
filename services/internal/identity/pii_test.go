@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/PageMastr/scifi-test/services/internal/identity"
+	"github.com/PageMastr/scifi-test/services/internal/platform"
 	"github.com/PageMastr/scifi-test/services/pkg/authn"
 	"github.com/PageMastr/scifi-test/services/pkg/idgen"
 	"github.com/PageMastr/scifi-test/services/pkg/pii"
@@ -97,6 +99,9 @@ func TestEmailIsStoredEncryptedAndFoundByBlindIndex(t *testing.T) {
 	}
 	if _, err := other.Login(ctx, meta, &identity.LoginRequest{Login: reg.Tag, Password: pw}); rpc.CodeOf(err) != rpc.CodeInternal {
 		t.Fatalf("another KEK must not seal for this account: %v", err)
+	}
+	if _, err := other.GetAccount(ctx, p); rpc.CodeOf(err) != rpc.CodeInternal {
+		t.Fatalf("another KEK must not decrypt the address, nor pass it off as shredded: %v", err)
 	}
 	if _, err := newPIIKeys(t).DecryptEmail(acct, key); !errors.Is(err, pii.ErrDecrypt) {
 		t.Fatalf("wrong KEK: %v", err)
@@ -231,18 +236,197 @@ func TestClientIPsAreSealedPerAccount(t *testing.T) {
 		t.Fatalf("an unknown login stored an IP: %+v", h0)
 	}
 
-	// Retention: 90 days, then the job deletes it.
+	// Retention: 90 days, then the job deletes the history and clears the token's IP.
 	f.clk.Advance(identity.LoginHistoryRetention + time.Hour)
-	if n, err := f.svc.PurgeLoginHistory(ctx); err != nil || n != 2 {
-		t.Fatalf("purge: %d %v", n, err)
+	if n, err := f.svc.PurgeLoginHistory(ctx); err != nil || n != 3 {
+		t.Fatalf("purge: %d %v (want 2 history rows and 1 token IP)", n, err)
 	}
 	if hist, _ := f.store.LoginHistory(ctx, reg.AccountID); len(hist) != 0 {
 		t.Fatalf("after retention: %+v", hist)
 	}
+	if tok, err := f.store.RevokeFamilyOf(ctx, h[:], f.clk.Now(), nil); err != nil || tok.ClientIPCT != nil {
+		t.Fatalf("refresh token IP after retention: %+v %v", tok, err)
+	}
+}
+
+// The retention job keeps what is younger than 90 days, and Start runs it (05 §6.6).
+func TestLoginHistoryRetentionKeepsRecentRows(t *testing.T) {
+	if identity.LoginHistoryRetention != 90*24*time.Hour {
+		t.Fatalf("05 §6.6 keeps login and IP history 90 days, not %s", identity.LoginHistoryRetention)
+	}
+	f := newFixture(t)
+	ctx := context.Background()
+	reg := f.register(t, "keep@example.com", "Keep", "analytical engine")
+	f.clk.Advance(identity.LoginHistoryRetention - time.Hour)
+	if n, err := f.svc.PurgeLoginHistory(ctx); err != nil || n != 0 {
+		t.Fatalf("purged %d rows younger than the retention: %v", n, err)
+	}
+	f.clk.Advance(2 * time.Hour)
 	if err := f.svc.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
+	deadline := time.Now().Add(5 * time.Second)
+	for h, _ := f.store.LoginHistory(ctx, reg.AccountID); len(h) != 0; h, _ = f.store.LoginHistory(ctx, reg.AccountID) {
+		if time.Now().After(deadline) {
+			t.Fatalf("Start did not run the retention job: %+v", h)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err := f.svc.Stop(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A ban's reason is GM free text (05 §1.17, §6.6): it is sealed under the account's DEK, bound
+// to the account row, and kept off the hash-chained audit row.
+func TestBanReasonIsSealedAndKeptOffTheChain(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	reg := f.register(t, "ban@example.com", "Banned", "analytical engine")
+	other := f.register(t, "other@example.com", "Other", "difference engine")
+	until := f.clk.Now().Add(24 * time.Hour)
+	const reason = "gold selling to Zed Quillon"
+	if err := f.svc.Ban(ctx, 7, reg.AccountID, &until, reason); err != nil {
+		t.Fatal(err)
+	}
+	acct, _ := f.store.AccountByID(ctx, reg.AccountID)
+	key, _ := f.store.SubjectKey(ctx, reg.AccountID)
+	if acct.BanReasonCT == nil || bytes.Contains(acct.BanReasonCT, []byte("Quillon")) {
+		t.Fatalf("ban_reason_ct is not ciphertext: %q", acct.BanReasonCT)
+	}
+	if got, err := f.pii.Open(key, identity.BanReasonAAD(reg.AccountID), acct.BanReasonCT); err != nil || got != reason {
+		t.Fatalf("ban reason: %q %v", got, err)
+	}
+	if _, err := f.pii.Open(key, identity.BanReasonAAD(other.AccountID), acct.BanReasonCT); !errors.Is(err, pii.ErrDecrypt) {
+		t.Fatalf("ban reason must be bound to its row: %v", err)
+	}
+	if _, err := f.pii.Open(key, identity.EmailAAD(reg.AccountID), acct.BanReasonCT); !errors.Is(err, pii.ErrDecrypt) {
+		t.Fatalf("ban reason must be bound to its column: %v", err)
+	}
+	entries, err := f.store.ListAudit(ctx, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bans int
+	for _, e := range entries {
+		if e.Action == identity.ActionBan {
+			bans++
+			if strings.Contains(e.Detail, "reason") || strings.Contains(e.Detail, "Quillon") || e.Subject != reg.AccountID {
+				t.Fatalf("the chained ban row carries the GM text: %+v", e)
+			}
+		}
+	}
+	if bans != 1 {
+		t.Fatalf("%d ban rows", bans)
+	}
+	long := strings.Repeat("x", 1025)
+	if err := f.svc.Ban(ctx, 7, reg.AccountID, &until, long); rpc.CodeOf(err) != rpc.CodeInvalidArgument {
+		t.Fatalf("an unbounded reason was accepted: %v", err)
+	}
+	if err := f.svc.Ban(ctx, 7, reg.AccountID, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	if acct, _ := f.store.AccountByID(ctx, reg.AccountID); acct.BanReasonCT != nil {
+		t.Fatalf("unban kept the reason: %+v", acct)
+	}
+}
+
+// Row format 2 is tagged, so no legacy row (with an IP) hashes like a new one: without the tag a
+// v1 row with (ip X, detail Y) would encode exactly like a v2 row with (detail X, note_digest Y).
+func TestAuditRowFormatsNeverCollide(t *testing.T) {
+	var prev [32]byte
+	v1 := identity.AuditEntry{Seq: 3, At: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), Actor: 1, Subject: 2,
+		Action: identity.ActionLogin, Detail: "Y"}
+	v2 := v1
+	v2.Detail, v2.NoteDigest = "X", []byte("Y")
+	if identity.LegacyChainHashV1(prev, &v1, "X") == identity.ChainHash(prev, &v2) {
+		t.Fatal("a row-format-1 row hashes like a crossed row-format-2 row")
+	}
+}
+
+// Every event with a subject records its client IP in the login history, sealed for its row, and
+// a refreshed token carries its own sealed IP (05 §6.6).
+func TestEveryIPEventIsSealedAndRecorded(t *testing.T) {
+	f := newFixture(t, func(c *platform.IdentityConfig) { c.LoginPerAccount = platform.RateLimit{} })
+	ctx := context.Background()
+	from := func(ip string) identity.Meta { return identity.Meta{ClientIP: ip, UserAgent: "test"} }
+	const pw = "analytical engine"
+	reg, err := f.svc.Register(ctx, from("192.0.2.1"), &identity.RegisterRequest{Email: "all@example.com", Handle: "All", Password: pw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := func(ip string) *identity.TokenPair {
+		t.Helper()
+		pair, err := f.svc.Login(ctx, from(ip), &identity.LoginRequest{Login: reg.Tag, Password: pw})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pair
+	}
+	if _, err := f.svc.Login(ctx, from("192.0.2.2"), &identity.LoginRequest{Login: reg.Tag, Password: "wrong"}); err == nil {
+		t.Fatal("bad password accepted")
+	}
+	first := login("192.0.2.3")
+	second, err := f.svc.Refresh(ctx, from("192.0.2.4"), &identity.RefreshRequest{RefreshToken: first.RefreshToken})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Refresh(ctx, from("192.0.2.5"), &identity.RefreshRequest{RefreshToken: first.RefreshToken}); err == nil {
+		t.Fatal("reuse accepted")
+	}
+	out := login("192.0.2.6")
+	if _, err := f.svc.Logout(ctx, from("192.0.2.7"), &identity.LogoutRequest{RefreshToken: out.RefreshToken}); err != nil {
+		t.Fatal(err)
+	}
+	launcher := login("192.0.2.8")
+	p, err := f.svc.Verifier().Verify(launcher.AccessToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := f.svc.CreateLaunchCode(ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.ExchangeLaunchCode(ctx, from("192.0.2.9"), &identity.ExchangeLaunchCodeRequest{Code: code.Code}); err != nil {
+		t.Fatal(err)
+	}
+	until := f.clk.Now().Add(time.Hour)
+	if err := f.svc.Ban(ctx, 7, reg.AccountID, &until, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Login(ctx, from("192.0.2.10"), &identity.LoginRequest{Login: reg.Tag, Password: pw}); err == nil {
+		t.Fatal("banned login accepted")
+	}
+
+	key, _ := f.store.SubjectKey(ctx, reg.AccountID)
+	hist, err := f.store.LoginHistory(ctx, reg.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range hist {
+		ip, err := f.pii.Open(key, identity.LoginIPAAD(e.ID), e.ClientIPCT)
+		if err != nil {
+			t.Fatalf("history row %d: %v", e.ID, err)
+		}
+		got = append(got, e.Action+" "+ip)
+	}
+	slices.Sort(got)
+	want := []string{identity.ActionRegister + " 192.0.2.1", identity.ActionLoginFailed + " 192.0.2.2",
+		identity.ActionLogin + " 192.0.2.3", identity.ActionRefreshReuse + " 192.0.2.5", identity.ActionLogin + " 192.0.2.6",
+		identity.ActionLogout + " 192.0.2.7", identity.ActionLogin + " 192.0.2.8", identity.ActionLaunchCode + " 192.0.2.9",
+		identity.ActionLoginDenied + " 192.0.2.10"}
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("login history:\n got %v\nwant %v", got, want)
+	}
+	// The refreshed token carries the IP it was refreshed from, sealed for its own row.
+	h := sha256.Sum256([]byte(second.RefreshToken))
+	tok, err := f.store.RevokeFamilyOf(ctx, h[:], f.clk.Now(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ip, err := f.pii.Open(key, identity.RefreshIPAAD(h[:]), tok.ClientIPCT); err != nil || ip != "192.0.2.4" {
+		t.Fatalf("refreshed token IP: %q %v", ip, err)
 	}
 }

@@ -19,7 +19,7 @@ type PGStore struct {
 func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
 
 const accountColumns = `account_id, email_ct, email_bidx, handle, handle_norm, discriminator, password_hash, is_bot,
-	banned_until, COALESCE(ban_reason, ''), created_at, updated_at, last_login_at`
+	banned_until, ban_reason_ct, created_at, updated_at, last_login_at`
 
 // Unique constraints CreateAccount maps to errors.
 const (
@@ -30,7 +30,7 @@ const (
 func scanAccount(row pgx.Row) (*Account, error) {
 	var a Account
 	err := row.Scan(&a.ID, &a.EmailCT, &a.EmailBidx, &a.Handle, &a.HandleNorm, &a.Discriminator, &a.PasswordHash, &a.IsBot,
-		&a.BannedUntil, &a.BanReason, &a.CreatedAt, &a.UpdatedAt, &a.LastLoginAt)
+		&a.BannedUntil, &a.BanReasonCT, &a.CreatedAt, &a.UpdatedAt, &a.LastLoginAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -171,14 +171,13 @@ func (s *PGStore) RecordLogin(ctx context.Context, id int64, now time.Time, audi
 }
 
 // SetBan implements Store.
-func (s *PGStore) SetBan(ctx context.Context, id int64, until *time.Time, reason string, now time.Time, audit *AuditEntry) error {
+func (s *PGStore) SetBan(ctx context.Context, id int64, until *time.Time, reasonCT []byte, now time.Time, audit *AuditEntry) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
-		var r *string
-		if until != nil {
-			r = &reason
+		if until == nil {
+			reasonCT = nil
 		}
-		if err := expectOne(tx.Exec(ctx, `UPDATE svc_identity.account SET banned_until = $2, ban_reason = $3, updated_at = $4
-			WHERE account_id = $1`, id, until, r, now)); err != nil {
+		if err := expectOne(tx.Exec(ctx, `UPDATE svc_identity.account SET banned_until = $2, ban_reason_ct = $3, updated_at = $4
+			WHERE account_id = $1`, id, until, reasonCT, now)); err != nil {
 			return err
 		}
 		if until != nil {
@@ -232,8 +231,13 @@ func (s *PGStore) LoginHistory(ctx context.Context, accountID int64) ([]LoginEve
 
 // PurgeLoginHistory implements Store.
 func (s *PGStore) PurgeLoginHistory(ctx context.Context, before time.Time) (int64, error) {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM svc_identity.login_history WHERE at < $1`, before)
-	return tag.RowsAffected(), err
+	hist, err := s.pool.Exec(ctx, `DELETE FROM svc_identity.login_history WHERE at < $1`, before)
+	if err != nil {
+		return 0, err
+	}
+	toks, err := s.pool.Exec(ctx, `UPDATE svc_identity.refresh_token SET client_ip_ct = NULL
+		WHERE issued_at < $1 AND client_ip_ct IS NOT NULL`, before)
+	return hist.RowsAffected() + toks.RowsAffected(), err
 }
 
 // lockFamilyOf serializes every change to the family of the token with hash (rotation,

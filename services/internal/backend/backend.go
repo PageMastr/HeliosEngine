@@ -162,9 +162,11 @@ func LoadPIIKeys(cfg *platform.Config, log *slog.Logger) (*identity.PIIKeys, err
 
 // OpenPIIKeys loads the PII keys for the database behind pool. While that database holds
 // encrypted accounts it refuses to generate a missing key file (a new KEK or pepper would make
-// every stored address unreadable or unfindable: crypto-shredding by accident), and it checks
-// that the KEK unwraps a stored DEK of every generation in use, so a wrong or replaced
-// subject-kek.json stops the start instead of failing each request.
+// every stored address unreadable or unfindable: crypto-shredding by accident), and it checks,
+// on one account per KEK generation in use, that the KEK unwraps the stored DEK and that the
+// pepper reproduces the stored blind index of the decrypted address. A wrong or replaced key
+// file then stops the start instead of failing each request (or, for the pepper, letting every
+// address register a second account).
 func OpenPIIKeys(ctx context.Context, cfg *platform.Config, log *slog.Logger, pool *pgxpool.Pool) (*identity.PIIKeys, error) {
 	var table, encrypted bool
 	if err := pool.QueryRow(ctx, `SELECT to_regclass('svc_identity.subject_key') IS NOT NULL`).Scan(&table); err != nil {
@@ -187,26 +189,45 @@ func OpenPIIKeys(ctx context.Context, cfg *platform.Config, log *slog.Logger, po
 	if err != nil || !encrypted {
 		return keys, err
 	}
-	rows, err := pool.Query(ctx, `SELECT DISTINCT ON (kek_version) account_id, wrapped_dek, kek_version
-		FROM svc_identity.subject_key WHERE wrapped_dek IS NOT NULL ORDER BY kek_version, account_id`)
+	type sampled struct {
+		key  identity.SubjectKey
+		acct identity.Account
+	}
+	rows, err := pool.Query(ctx, `SELECT DISTINCT ON (k.kek_version) k.account_id, k.wrapped_dek, k.kek_version,
+			a.email_ct, a.email_bidx
+		FROM svc_identity.subject_key k JOIN svc_identity.account a USING (account_id)
+		WHERE k.wrapped_dek IS NOT NULL ORDER BY k.kek_version, k.account_id`)
 	if err != nil {
 		return nil, err
 	}
-	sample, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (identity.SubjectKey, error) {
-		var k identity.SubjectKey
-		err := row.Scan(&k.AccountID, &k.WrappedDEK, &k.KEKVersion)
-		return k, err
+	sample, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (sampled, error) {
+		var s sampled
+		err := row.Scan(&s.key.AccountID, &s.key.WrappedDEK, &s.key.KEKVersion, &s.acct.EmailCT, &s.acct.EmailBidx)
+		s.acct.ID = s.key.AccountID
+		return s, err
 	})
 	if err != nil {
 		return nil, err
 	}
 	for i := range sample {
-		dek, err := keys.UnwrapSubjectKey(&sample[i])
+		s := &sample[i]
+		dek, err := keys.UnwrapSubjectKey(&s.key)
 		if err != nil {
 			return nil, fmt.Errorf("%s does not unwrap the stored keys of KEK generation %d (wrong or replaced key file): %w",
-				KeyPath(cfg, KeyFileSubjectKEK), sample[i].KEKVersion, err)
+				KeyPath(cfg, KeyFileSubjectKEK), s.key.KEKVersion, err)
 		}
 		dek.Clear()
+		if s.acct.EmailCT == nil {
+			continue
+		}
+		email, err := keys.DecryptEmail(&s.acct, &s.key)
+		if err != nil {
+			return nil, fmt.Errorf("the stored address of account %d does not decrypt: %w", s.acct.ID, err)
+		}
+		if subtle.ConstantTimeCompare(keys.EmailIndex(email), s.acct.EmailBidx) != 1 {
+			return nil, fmt.Errorf("%s does not match the stored blind indexes (wrong or replaced key file)",
+				KeyPath(cfg, KeyFileEmailPepper))
+		}
 	}
 	return keys, nil
 }

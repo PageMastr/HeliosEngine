@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -393,8 +394,10 @@ var ErrForeignSchema = errors.New("migrations: refusing to adopt a schema")
 // ErrNeedPIIKeys is returned when plain-text PII rows exist but Options.PIIKeys is nil.
 var ErrNeedPIIKeys = errors.New("migrations: plain-text PII needs the identity keys (subject KEK and blind-index pepper)")
 
-// ErrAuditChainBroken is returned when the pre-WP-0.15r audit chain does not verify: migration 3
-// refuses to re-chain (and so launder) a chain that was already broken.
+// ErrAuditChainBroken is returned when the pre-WP-0.15r audit chain does not verify, row by row
+// and against audit_head: migration 3 refuses to re-chain (and so launder) a chain that was
+// already broken. The chain is unkeyed, so this catches corruption, naive edits and truncation,
+// not a chain recomputed by someone who can write the table.
 var ErrAuditChainBroken = errors.New("migrations: the audit chain does not verify; refusing to re-chain it")
 
 // keySource loads the PII keys on first use and says what needed them if there are none.
@@ -422,18 +425,29 @@ func (k *keySource) get(what string, n int) (*identity.PIIKeys, error) {
 // write for the rows the old schema stored in plain text, and nulls the plain-text copies:
 //   - every account without email_ct gets a subject key, its address sealed under it and the
 //     address's blind index;
+//   - every ban reason (GM free text, 05 §1.17) is sealed into ban_reason_ct for its row;
 //   - every refresh token's client IP is sealed into client_ip_ct for its row;
-//   - the audit chain is verified in its old row format, its IPs of the last 90 days move to the
-//     sealed login history (subject-less rows keep none), unknown-login rows lose the unkeyed
-//     address digest they carried, and the chain is recomputed in row format 2 with a closing
-//     "audit.rechain" row that records the old head.
+//   - the audit chain is verified in its old row format, row by row and against audit_head, its
+//     IPs of the last 90 days move to the sealed login history (subject-less rows keep none),
+//     unknown-login rows lose the unkeyed address digest they carried and ban rows their GM
+//     reason, and the chain is recomputed in row format 2 with a closing "audit.rechain" row
+//     that records the old head. Both heads are logged, so the old one also survives outside
+//     the database.
+//
+// Values that are not IP addresses (dev seeds stored "seed") are dropped, not sealed.
 //
 // It runs in goose's transaction, so a failure leaves the database at version 2 with nothing
-// half-done. It is sized for dev databases (≤ 10k accounts, a few seconds): it holds the rows in
-// memory and makes a few round trips per row. No address or IP is ever logged.
+// half-done. It is sized for dev databases: it holds the rows in memory and makes a few round
+// trips per row, about 6k audit rows/s, so ≤ 10k accounts and ≤ 100k audit rows take under 30 s
+// (goose's lock makes concurrent starters wait up to 5 minutes). No address, IP or reason is
+// ever logged.
 func encryptLegacyPII(ctx context.Context, tx *sql.Tx, o Options, log *slog.Logger) error {
 	ks := &keySource{o: o}
 	emails, err := encryptLegacyEmails(ctx, tx, ks)
+	if err != nil {
+		return err
+	}
+	bans, err := encryptLegacyBanReasons(ctx, tx, ks)
 	if err != nil {
 		return err
 	}
@@ -441,15 +455,25 @@ func encryptLegacyPII(ctx context.Context, tx *sql.Tx, o Options, log *slog.Logg
 	if err != nil {
 		return err
 	}
-	rows, moved, err := rechainAuditLog(ctx, tx, ks, time.Now().UTC())
+	rc, err := rechainAuditLog(ctx, tx, ks, time.Now().UTC())
 	if err != nil {
 		return err
 	}
-	if emails+ips+rows > 0 {
-		log.Info("encrypted plain-text PII (WP-0.15r)", "accounts", emails, "refresh_token_ips", ips,
-			"audit_rows_rechained", rows, "ips_to_login_history", moved)
+	if emails+bans+ips+rc.rows > 0 {
+		log.Info("encrypted plain-text PII (WP-0.15r)", "accounts", emails, "ban_reasons", bans, "refresh_token_ips", ips,
+			"audit_rows_rechained", rc.rows, "ips_to_login_history", rc.moved)
+	}
+	if rc.rows > 0 {
+		log.Info("audit log re-chained in row format 2 (WP-0.15r)", "old_head", hex.EncodeToString(rc.oldHead[:]),
+			"new_head", hex.EncodeToString(rc.newHead[:]), "marker_seq", rc.rows+1)
 	}
 	return nil
+}
+
+// isIP reports whether a legacy client_ip value is an IP address worth sealing.
+func isIP(s string) bool {
+	_, err := netip.ParseAddr(s)
+	return err == nil
 }
 
 func encryptLegacyEmails(ctx context.Context, tx *sql.Tx, ks *keySource) (int, error) {
@@ -496,6 +520,54 @@ func encryptLegacyEmails(ctx context.Context, tx *sql.Tx, ks *keySource) (int, e
 	return len(todo), nil
 }
 
+func encryptLegacyBanReasons(ctx context.Context, tx *sql.Tx, ks *keySource) (int, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT account_id, ban_reason FROM svc_identity.account
+		WHERE ban_reason IS NOT NULL ORDER BY account_id FOR UPDATE`)
+	if err != nil {
+		return 0, err
+	}
+	type legacy struct {
+		id     int64
+		reason string
+	}
+	var todo []legacy
+	for rows.Next() {
+		var l legacy
+		if err := rows.Scan(&l.id, &l.reason); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		todo = append(todo, l)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	sealed := 0
+	for _, l := range todo {
+		var ct []byte
+		sk, err := subjectKeyTx(ctx, tx, l.id)
+		if err != nil {
+			return 0, err
+		}
+		if sk != nil && l.reason != "" {
+			keys, err := ks.get("accounts with a plain-text ban reason", len(todo))
+			if err != nil {
+				return 0, err
+			}
+			if ct, err = keys.Seal(sk, identity.BanReasonAAD(l.id), l.reason); err != nil {
+				return 0, err
+			}
+			sealed++
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE svc_identity.account SET ban_reason_ct = $2, ban_reason = NULL
+			WHERE account_id = $1`, l.id, ct); err != nil {
+			return 0, err
+		}
+	}
+	return sealed, nil
+}
+
 // subjectKeyTx reads an account's subject key inside the migration; nil if it has none.
 func subjectKeyTx(ctx context.Context, tx *sql.Tx, accountID int64) (*identity.SubjectKey, error) {
 	k := identity.SubjectKey{AccountID: accountID}
@@ -534,7 +606,7 @@ func encryptLegacyTokenIPs(ctx context.Context, tx *sql.Tx, ks *keySource) (int,
 	sealed := 0
 	for _, l := range todo {
 		var ct []byte
-		if l.ip != "" {
+		if isIP(l.ip) {
 			sk, err := subjectKeyTx(ctx, tx, l.account)
 			if err != nil {
 				return 0, err
@@ -558,13 +630,20 @@ func encryptLegacyTokenIPs(ctx context.Context, tx *sql.Tx, ks *keySource) (int,
 	return sealed, nil
 }
 
-// rechainAuditLog verifies the row-format-1 chain, moves its IPs out and recomputes it in row
-// format 2. It returns the rows re-chained and the IPs moved to the login history.
-func rechainAuditLog(ctx context.Context, tx *sql.Tx, ks *keySource, now time.Time) (int, int, error) {
+// rechainResult is what rechainAuditLog did.
+type rechainResult struct {
+	rows, moved      int // rows re-chained; IPs moved to the login history
+	oldHead, newHead [32]byte
+}
+
+// rechainAuditLog verifies the row-format-1 chain, moves its IPs and ban reasons out and
+// recomputes it in row format 2.
+func rechainAuditLog(ctx context.Context, tx *sql.Tx, ks *keySource, now time.Time) (rechainResult, error) {
+	var res rechainResult
 	rows, err := tx.QueryContext(ctx, `SELECT seq, at, actor_account, subject_account, action, COALESCE(client_ip, ''),
 		detail, prev_hash, hash FROM svc_identity.audit_log ORDER BY seq FOR UPDATE`)
 	if err != nil {
-		return 0, 0, err
+		return res, err
 	}
 	type legacy struct {
 		e  identity.AuditEntry
@@ -576,38 +655,43 @@ func rechainAuditLog(ctx context.Context, tx *sql.Tx, ks *keySource, now time.Ti
 		var prev, h []byte
 		if err := rows.Scan(&l.e.Seq, &l.e.At, &l.e.Actor, &l.e.Subject, &l.e.Action, &l.ip, &l.e.Detail, &prev, &h); err != nil {
 			rows.Close()
-			return 0, 0, err
+			return res, err
 		}
 		copy(l.e.PrevHash[:], prev)
 		copy(l.e.Hash[:], h)
 		todo = append(todo, l)
 	}
 	rows.Close()
-	if err := rows.Err(); err != nil || len(todo) == 0 {
-		return 0, 0, err
+	if err := rows.Err(); err != nil {
+		return res, err
 	}
-
-	// Verify the old chain first, against its head: re-chaining must never launder a broken one.
-	var prev [32]byte
-	for i, l := range todo {
-		if l.e.Seq != int64(i+1) || l.e.PrevHash != prev || identity.LegacyChainHashV1(prev, &l.e, l.ip) != l.e.Hash {
-			return 0, 0, fmt.Errorf("%w (at seq %d)", ErrAuditChainBroken, l.e.Seq)
-		}
-		prev = l.e.Hash
-	}
-	oldHead := prev
 	var headSeq int64
 	var headHash []byte
 	if err := tx.QueryRowContext(ctx, `SELECT seq, hash FROM svc_identity.audit_head WHERE id = 1 FOR UPDATE`).
 		Scan(&headSeq, &headHash); err != nil {
-		return 0, 0, err
+		return res, err
 	}
+
+	// Verify the old chain first, against its head: re-chaining must never launder a broken one.
+	// The chain is unkeyed, so this catches corruption and edits, truncation included, but not
+	// a chain recomputed by someone who can write the table; an external anchor (05 §1.17) will.
+	var prev [32]byte // an empty log's head is the all-zero hash 00001 seeds
+	for i, l := range todo {
+		if l.e.Seq != int64(i+1) || l.e.PrevHash != prev || identity.LegacyChainHashV1(prev, &l.e, l.ip) != l.e.Hash {
+			return res, fmt.Errorf("%w (at seq %d)", ErrAuditChainBroken, l.e.Seq)
+		}
+		prev = l.e.Hash
+	}
+	oldHead := prev
 	if headSeq != int64(len(todo)) || !bytes.Equal(headHash, oldHead[:]) {
-		return 0, 0, fmt.Errorf("%w (audit_head is at seq %d, the log at %d)", ErrAuditChainBroken, headSeq, len(todo))
+		return res, fmt.Errorf("%w (audit_head is at seq %d, the log at %d)", ErrAuditChainBroken, headSeq, len(todo))
+	}
+	if len(todo) == 0 {
+		return res, nil
 	}
 
 	if _, err := tx.ExecContext(ctx, `ALTER TABLE svc_identity.audit_log DISABLE TRIGGER audit_log_append_only`); err != nil {
-		return 0, 0, err
+		return res, err
 	}
 	cutoff := now.Add(-identity.LoginHistoryRetention)
 	moved := 0
@@ -615,64 +699,67 @@ func rechainAuditLog(ctx context.Context, tx *sql.Tx, ks *keySource, now time.Ti
 	prev = [32]byte{}
 	for _, l := range todo {
 		e := l.e
-		if l.ip != "" && e.Subject != 0 && !e.At.Before(cutoff) {
+		if isIP(l.ip) && e.Subject != 0 && !e.At.Before(cutoff) {
 			sk, ok := keysOf[e.Subject]
 			if !ok {
 				if sk, err = subjectKeyTx(ctx, tx, e.Subject); err != nil {
-					return 0, 0, err
+					return res, err
 				}
 				keysOf[e.Subject] = sk
 			}
 			if sk != nil {
 				keys, err := ks.get("audit rows with a plain-text client IP", len(todo))
 				if err != nil {
-					return 0, 0, err
+					return res, err
 				}
 				// Negative event IDs never collide with the block IDs new rows get.
 				ct, err := keys.Seal(sk, identity.LoginIPAAD(-e.Seq), l.ip)
 				if err != nil {
-					return 0, 0, err
+					return res, err
 				}
 				if ct != nil {
 					if _, err := tx.ExecContext(ctx, `INSERT INTO svc_identity.login_history
 						(event_id, account_id, action, at, client_ip_ct) VALUES ($1, $2, $3, $4, $5)`,
 						-e.Seq, e.Subject, e.Action, e.At, ct); err != nil {
-						return 0, 0, err
+						return res, err
 					}
 					moved++
 				}
 			}
 		}
-		if e.Action == identity.ActionLoginFailed {
-			if e.Detail, err = dropDetailKey(e.Detail, "login"); err != nil {
-				return 0, 0, fmt.Errorf("migrations: audit seq %d detail: %w", e.Seq, err)
+		// Unknown-login rows carried an unkeyed address digest, ban rows the GM's free-text
+		// reason (now sealed in ban_reason_ct): chained rows hold only pseudonymous IDs (05 §1.17).
+		if drop := map[string]string{identity.ActionLoginFailed: "login", identity.ActionBan: "reason"}[e.Action]; drop != "" {
+			if e.Detail, err = dropDetailKey(e.Detail, drop); err != nil {
+				return res, fmt.Errorf("migrations: audit seq %d detail: %w", e.Seq, err)
 			}
 		}
 		e.PrevHash = prev
 		e.Hash = identity.ChainHash(prev, &e)
 		if _, err := tx.ExecContext(ctx, `UPDATE svc_identity.audit_log SET client_ip = NULL, detail = $2, prev_hash = $3,
 			hash = $4 WHERE seq = $1`, e.Seq, e.Detail, e.PrevHash[:], e.Hash[:]); err != nil {
-			return 0, 0, err
+			return res, err
 		}
 		prev = e.Hash
 	}
 	marker := identity.NewAudit(now, 0, 0, identity.ActionAuditRechain, map[string]any{"from_format": 1, "to_format": 2,
-		"rows": len(todo), "old_head": hex.EncodeToString(oldHead[:]), "reason": "client IPs left the chain (05 §1.17, §6.6; WP-0.15r)"})
+		"rows": len(todo), "old_head": hex.EncodeToString(oldHead[:]), "reason": "client IPs and ban reasons left the chain (05 §1.17, §6.6; WP-0.15r)"})
 	marker.Seq, marker.PrevHash = int64(len(todo))+1, prev
 	marker.Hash = identity.ChainHash(prev, marker)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO svc_identity.audit_log
 		(seq, at, actor_account, subject_account, action, detail, prev_hash, hash) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		marker.Seq, marker.At, marker.Actor, marker.Subject, marker.Action, marker.Detail, marker.PrevHash[:], marker.Hash[:]); err != nil {
-		return 0, 0, err
+		return res, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE svc_identity.audit_head SET seq = $1, hash = $2 WHERE id = 1`,
 		marker.Seq, marker.Hash[:]); err != nil {
-		return 0, 0, err
+		return res, err
 	}
 	if _, err := tx.ExecContext(ctx, `ALTER TABLE svc_identity.audit_log ENABLE TRIGGER audit_log_append_only`); err != nil {
-		return 0, 0, err
+		return res, err
 	}
-	return len(todo), moved, nil
+	res.rows, res.moved, res.oldHead, res.newHead = len(todo), moved, oldHead, marker.Hash
+	return res, nil
 }
 
 // dropDetailKey removes key from a canonical JSON detail and re-encodes it canonically (sorted

@@ -4,8 +4,9 @@
 --
 -- Historical: databases created before WP-0.15r applied this file, so its statements stay as they
 -- were. They use the schema's old name "identity"; migrations.Up renames it to svc_identity right
--- after this file (05 §1.4, §3), and 00002-00004 replace the plain-text e-mail columns with
--- email_ct and email_bidx under per-account DEKs (05 §6.6).
+-- after this file (05 §1.4, §3). 00002-00005 then replace its plain-text PII: e-mail becomes
+-- email_ct and email_bidx, client IPs and the ban reason are sealed under per-account DEKs, the
+-- audit log is re-chained without them, and the tables are rewritten (05 §1.17, §6.6).
 
 -- +goose Up
 CREATE TABLE identity.account (

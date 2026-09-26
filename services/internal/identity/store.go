@@ -25,10 +25,12 @@ type Account struct {
 	PasswordHash  string
 	IsBot         bool
 	BannedUntil   *time.Time // nil = not banned
-	BanReason     string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	LastLoginAt   *time.Time
+	// BanReasonCT is the GM's reason for the ban, sealed with BanReasonAAD under the account's
+	// DEK (GM free text, 05 §1.17, §6.6); nil when not banned or shredded.
+	BanReasonCT []byte
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	LastLoginAt *time.Time
 }
 
 // Tag is the display tag "Handle#0042".
@@ -196,13 +198,16 @@ type Store interface {
 	AppendLoginEvent(ctx context.Context, e *LoginEvent) error
 	// LoginHistory returns an account's login-history rows, oldest first.
 	LoginHistory(ctx context.Context, accountID int64) ([]LoginEvent, error)
-	// PurgeLoginHistory deletes rows older than before and returns how many went.
+	// PurgeLoginHistory applies the retention of login and IP history (05 §6.6): it deletes the
+	// login-history rows older than before and clears the client IP of refresh tokens issued
+	// before it. It returns how many rows it changed.
 	PurgeLoginHistory(ctx context.Context, before time.Time) (int64, error)
 	AccountByTag(ctx context.Context, handleNorm string, discriminator int16) (*Account, error)
 	SetPasswordHash(ctx context.Context, id int64, hash string, now time.Time) error
 	RecordLogin(ctx context.Context, id int64, now time.Time, audit *AuditEntry) error
-	// SetBan bans until `until` (nil lifts the ban). A ban also revokes every refresh token.
-	SetBan(ctx context.Context, id int64, until *time.Time, reason string, now time.Time, audit *AuditEntry) error
+	// SetBan bans until `until` (nil lifts the ban and clears the reason) with the sealed reason
+	// reasonCT. A ban also revokes every refresh token.
+	SetBan(ctx context.Context, id int64, until *time.Time, reasonCT []byte, now time.Time, audit *AuditEntry) error
 
 	InsertRefreshToken(ctx context.Context, t *RefreshToken) error
 	// RefreshTokenOwner returns the account of the token with hash; ErrTokenInvalid if unknown.

@@ -28,7 +28,7 @@ func NewMemStore() *MemStore {
 
 func cloneAccount(a *Account) *Account {
 	c := *a
-	c.EmailCT, c.EmailBidx = bytes.Clone(a.EmailCT), bytes.Clone(a.EmailBidx)
+	c.EmailCT, c.EmailBidx, c.BanReasonCT = bytes.Clone(a.EmailCT), bytes.Clone(a.EmailBidx), bytes.Clone(a.BanReasonCT)
 	if a.BannedUntil != nil {
 		t := *a.BannedUntil
 		c.BannedUntil = &t
@@ -162,6 +162,12 @@ func (m *MemStore) PurgeLoginHistory(_ context.Context, before time.Time) (int64
 		kept = append(kept, e)
 	}
 	m.logins = kept
+	for _, t := range m.tokens {
+		if t.ClientIPCT != nil && t.IssuedAt.Before(before) {
+			t.ClientIPCT = nil
+			n++
+		}
+	}
 	return n, nil
 }
 
@@ -208,7 +214,7 @@ func (m *MemStore) RecordLogin(_ context.Context, id int64, now time.Time, audit
 }
 
 // SetBan implements Store.
-func (m *MemStore) SetBan(_ context.Context, id int64, until *time.Time, reason string, now time.Time, audit *AuditEntry) error {
+func (m *MemStore) SetBan(_ context.Context, id int64, until *time.Time, reasonCT []byte, now time.Time, audit *AuditEntry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	a, ok := m.accounts[id]
@@ -216,10 +222,10 @@ func (m *MemStore) SetBan(_ context.Context, id int64, until *time.Time, reason 
 		return ErrNotFound
 	}
 	if until == nil {
-		a.BannedUntil, a.BanReason = nil, ""
+		a.BannedUntil, a.BanReasonCT = nil, nil
 	} else {
 		u := *until
-		a.BannedUntil, a.BanReason = &u, reason
+		a.BannedUntil, a.BanReasonCT = &u, bytes.Clone(reasonCT)
 		for _, t := range m.tokens {
 			if t.AccountID == id && t.RevokedAt == nil {
 				n := now

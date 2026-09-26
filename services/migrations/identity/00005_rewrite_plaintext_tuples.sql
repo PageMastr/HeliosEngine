@@ -3,12 +3,17 @@
 -- the plain-text columns nulled and 00004 dropped the columns, but the old row versions stay in
 -- the heap until vacuumed, and a dropped column's values stay in live rows until a rewrite.
 -- VACUUM FULL copies every live row with dropped columns set to NULL and discards the rest.
--- It cannot run in a transaction, hence NO TRANSACTION. On a fresh database it is instant.
+-- Statistics hold plain text too: ANALYZE samples of the old values (IPs, addresses, ban reasons
+-- in audit details) stay in pg_statistic until the tables are analyzed again, and then as dead
+-- rows until pg_statistic itself is rewritten (a role that may not vacuum it gets a warning, not
+-- an error). VACUUM cannot run in a transaction, hence NO TRANSACTION. On a fresh database it is
+-- instant.
 
 -- +goose Up
-VACUUM FULL svc_identity.account;
-VACUUM FULL svc_identity.refresh_token;
-VACUUM FULL svc_identity.audit_log;
+VACUUM (FULL, ANALYZE) svc_identity.account;
+VACUUM (FULL, ANALYZE) svc_identity.refresh_token;
+VACUUM (FULL, ANALYZE) svc_identity.audit_log;
+VACUUM FULL pg_catalog.pg_statistic;
 
 -- +goose Down
 -- +goose StatementBegin

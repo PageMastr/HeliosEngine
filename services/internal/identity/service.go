@@ -49,6 +49,7 @@ const (
 	refreshTokenPrefix  = "hrt1_"
 	launchCodePrefix    = "hlc1_"
 	launchCodeKeyPrefix = "identity:lc:"
+	maxBanReason        = 1024 // bytes of GM text per ban
 )
 
 // Deps are the collaborators of the service.
@@ -509,6 +510,10 @@ func (s *Service) login(ctx context.Context, meta Meta, req *LoginRequest) (*Tok
 	}
 	now := s.clk.Now().UTC()
 	if acct == nil {
+		// DummyVerify spends what argon2id would, so an unknown login costs about what a bad
+		// password does. The known-account paths also seal and store the client IP (well under a
+		// millisecond against argon2id's tens): an accepted, rate-limited oracle, since whether an
+		// address or tag exists already shows through Register.
 		if derr := s.hasher.DummyVerify(ctx, req.Password); errors.Is(derr, ErrHasherBusy) {
 			return nil, "busy", errBusy
 		}
@@ -832,12 +837,28 @@ func (s *Service) Ban(ctx context.Context, actor, accountID int64, until *time.T
 	if until != nil && strings.TrimSpace(reason) == "" {
 		return rpc.Errorf(rpc.CodeInvalidArgument, "a ban needs a reason")
 	}
-	now := s.clk.Now().UTC()
-	action, detail := ActionUnban, map[string]any{}
-	if until != nil {
-		action, detail = ActionBan, map[string]any{"until": until.UTC().Format(time.RFC3339), "reason": reason}
+	if len(reason) > maxBanReason {
+		return rpc.Errorf(rpc.CodeInvalidArgument, "a ban reason is at most %d bytes", maxBanReason)
 	}
-	err := s.store.SetBan(ctx, accountID, until, reason, now, NewAudit(now, actor, accountID, action, detail))
+	now := s.clk.Now().UTC()
+	// The reason is GM free text: it is sealed under the account's DEK and kept off the chained
+	// audit row, which holds only pseudonymous IDs (05 §1.17, §6.6).
+	action, detail := ActionUnban, map[string]any{}
+	var reasonCT []byte
+	if until != nil {
+		action, detail = ActionBan, map[string]any{"until": until.UTC().Format(time.RFC3339)}
+		key, err := s.store.SubjectKey(ctx, accountID)
+		if errors.Is(err, ErrNotFound) {
+			return rpc.Errorf(rpc.CodeNotFound, "no such account")
+		}
+		if err != nil {
+			return rpc.Internal(err)
+		}
+		if reasonCT, err = s.pii.Seal(key, BanReasonAAD(accountID), reason); err != nil {
+			return rpc.Internal(err)
+		}
+	}
+	err := s.store.SetBan(ctx, accountID, until, reasonCT, now, NewAudit(now, actor, accountID, action, detail))
 	if errors.Is(err, ErrNotFound) {
 		return rpc.Errorf(rpc.CodeNotFound, "no such account")
 	}
@@ -860,7 +881,8 @@ func (s *Service) SeedDev(ctx context.Context) (created int, err error) {
 		if _, err := s.store.AccountByEmailIndex(ctx, s.pii.EmailIndex(email)); err == nil {
 			continue
 		}
-		_, err := s.register(ctx, Meta{ClientIP: "seed"}, &RegisterRequest{Email: email, Handle: fmt.Sprintf("dev%d", i), Password: "dev"}, true)
+		// Seeding has no client: no rate limit applies and no IP is recorded.
+		_, err := s.register(ctx, Meta{}, &RegisterRequest{Email: email, Handle: fmt.Sprintf("dev%d", i), Password: "dev"}, true)
 		if err != nil {
 			return created, fmt.Errorf("seed dev%d: %w", i, err)
 		}

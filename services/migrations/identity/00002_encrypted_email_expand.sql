@@ -8,10 +8,12 @@
 -- - client IPs are sealed the same way: refresh_token.client_ip_ct (bound to the token row), and
 --   login_history, which takes the IPs out of the chained audit rows (05 §1.17: rows hold only
 --   pseudonymous IDs) and keeps them 90 days (05 §6.6). Unknown logins have no subject: no IP.
+-- - a ban's reason, GM free text (05 §1.17), is sealed the same way in account.ban_reason_ct,
+--   and the chained audit row of a ban no longer carries it;
 -- - audit_log.note_digest is 05 §1.17's BLAKE2b digest of a sealed audit_note (none yet).
 -- Migration 3 (Go, migrations.go) encrypts what the old schema stored in plain text, nulls the
--- plain-text copies and re-chains the audit log without IPs; 00004 drops the plain-text columns
--- and 00005 rewrites the tables so no old tuple keeps them.
+-- plain-text copies and re-chains the audit log without IPs or ban reasons; 00004 drops the
+-- plain-text columns and 00005 rewrites the tables so no old tuple keeps them.
 
 -- +goose Up
 CREATE TABLE svc_identity.subject_key (
@@ -28,6 +30,7 @@ CREATE TABLE svc_identity.subject_key (
 ALTER TABLE svc_identity.account
     ADD COLUMN email_ct   BYTEA,
     ADD COLUMN email_bidx BYTEA,
+    ADD COLUMN ban_reason_ct BYTEA,
     ADD CONSTRAINT account_email_bidx_unique UNIQUE (email_bidx),
     ALTER COLUMN email DROP NOT NULL,
     ALTER COLUMN email_norm DROP NOT NULL;

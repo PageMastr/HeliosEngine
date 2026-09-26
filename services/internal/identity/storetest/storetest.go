@@ -257,10 +257,10 @@ func Run(t *testing.T, newStore Factory) {
 		// A banned account's family cannot grow.
 		_ = s.InsertRefreshToken(ctx, &identity.RefreshToken{Hash: hash("h0"), FamilyID: 50, AccountID: 2, IssuedAt: base, ExpiresAt: base.Add(time.Hour)})
 		until := base.Add(time.Hour)
-		_ = s.SetBan(ctx, 2, &until, "x", base, nil)
-		_ = s.SetBan(ctx, 2, nil, "", base, nil) // unban: the ban revoked the tokens anyway
+		_ = s.SetBan(ctx, 2, &until, []byte("x"), base, nil)
+		_ = s.SetBan(ctx, 2, nil, nil, base, nil) // unban: the ban revoked the tokens anyway
 		_ = s.InsertRefreshToken(ctx, &identity.RefreshToken{Hash: hash("h1"), FamilyID: 51, AccountID: 2, IssuedAt: base, ExpiresAt: base.Add(time.Hour)})
-		_ = s.SetBan(ctx, 2, &until, "x", base, nil)
+		_ = s.SetBan(ctx, 2, &until, []byte("x"), base, nil)
 		if err := s.ExtendFamily(ctx, &identity.RefreshToken{Hash: hash("h2"), FamilyID: 51, AccountID: 2, IssuedAt: base,
 			ExpiresAt: base.Add(time.Hour)}, base); !errors.Is(err, identity.ErrTokenInvalid) {
 			t.Fatalf("banned family extended: %v", err)
@@ -329,25 +329,25 @@ func Run(t *testing.T, newStore Factory) {
 		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), subjectKey(1), nil)
 		_ = s.InsertRefreshToken(ctx, &identity.RefreshToken{Hash: hash("b0"), FamilyID: 1, AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour)})
 		until := base.Add(24 * time.Hour)
-		if err := s.SetBan(ctx, 1, &until, "botting", base, identity.NewAudit(base, 7, 1, identity.ActionBan, nil)); err != nil {
+		if err := s.SetBan(ctx, 1, &until, []byte("sealed reason"), base, identity.NewAudit(base, 7, 1, identity.ActionBan, nil)); err != nil {
 			t.Fatal(err)
 		}
 		a, _ := s.AccountByID(ctx, 1)
-		if a.BannedUntil == nil || !a.BannedUntil.Equal(until) || a.BanReason != "botting" || !a.BannedAt(base) || a.BannedAt(until) {
+		if a.BannedUntil == nil || !a.BannedUntil.Equal(until) || string(a.BanReasonCT) != "sealed reason" || !a.BannedAt(base) || a.BannedAt(until) {
 			t.Fatalf("ban: %+v", a)
 		}
 		if _, err := s.RotateRefreshToken(ctx, hash("b0"), &identity.RefreshToken{Hash: hash("b1"), IssuedAt: base,
 			ExpiresAt: base.Add(time.Hour)}, base, nil); !errors.Is(err, identity.ErrTokenInvalid) {
 			t.Fatalf("token survived ban: %v", err)
 		}
-		if err := s.SetBan(ctx, 1, nil, "", base, nil); err != nil {
+		if err := s.SetBan(ctx, 1, nil, []byte("ignored"), base, nil); err != nil {
 			t.Fatal(err)
 		}
 		a, _ = s.AccountByID(ctx, 1)
-		if a.BannedUntil != nil || a.BanReason != "" {
+		if a.BannedUntil != nil || a.BanReasonCT != nil {
 			t.Fatalf("unban: %+v", a)
 		}
-		if err := s.SetBan(ctx, 42, &until, "x", base, nil); !errors.Is(err, identity.ErrNotFound) {
+		if err := s.SetBan(ctx, 42, &until, []byte("x"), base, nil); !errors.Is(err, identity.ErrNotFound) {
 			t.Fatalf("ban missing: %v", err)
 		}
 	})
@@ -424,13 +424,33 @@ func Run(t *testing.T, newStore Factory) {
 		if err != nil || len(h) != 3 || h[0].ID != 10 || h[1].ID != 12 || h[2].ID != 11 || string(h[2].ClientIPCT) != "sealed 1" {
 			t.Fatalf("history, oldest first: %+v %v", h, err)
 		}
-		// Retention (05 §6.6: 90 days) drops what is older, and only that.
-		n, err := s.PurgeLoginHistory(ctx, base.Add(-identity.LoginHistoryRetention))
-		if err != nil || n != 1 {
-			t.Fatalf("purge: %d %v", n, err)
+		// Retention (05 §6.6: 90 days) drops what is older, and only that: a row exactly at the
+		// cutoff stays, and so does a refresh token's IP issued at or after it.
+		cutoff := base.Add(-identity.LoginHistoryRetention)
+		_ = s.AppendLoginEvent(ctx, &identity.LoginEvent{ID: 13, AccountID: 1, Action: identity.ActionLogin, At: cutoff,
+			ClientIPCT: []byte("at the cutoff")})
+		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), subjectKey(1), nil)
+		for i, tok := range []struct {
+			at time.Time
+			ip []byte
+		}{{cutoff.Add(-time.Second), []byte("old ip")}, {cutoff, []byte("recent ip")}, {cutoff.Add(-time.Hour), nil}} {
+			if err := s.InsertRefreshToken(ctx, &identity.RefreshToken{Hash: hash(fmt.Sprint("ret", i)), FamilyID: int64(90 + i),
+				AccountID: 1, IssuedAt: tok.at, ExpiresAt: tok.at.Add(time.Hour), ClientIPCT: tok.ip}); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if h, _ := s.LoginHistory(ctx, 1); len(h) != 2 || h[0].ID != 12 {
+		n, err := s.PurgeLoginHistory(ctx, cutoff)
+		if err != nil || n != 2 {
+			t.Fatalf("purge: %d %v (want the 100-day-old row and one token IP)", n, err)
+		}
+		if h, _ := s.LoginHistory(ctx, 1); len(h) != 3 || h[0].ID != 13 || h[1].ID != 12 {
 			t.Fatalf("after purge: %+v", h)
+		}
+		for i, want := range []string{"", "recent ip", ""} {
+			tok, err := s.RevokeFamilyOf(ctx, hash(fmt.Sprint("ret", i)), base, nil)
+			if err != nil || string(tok.ClientIPCT) != want {
+				t.Fatalf("token %d after purge: %+v %v", i, tok, err)
+			}
 		}
 		if h, _ := s.LoginHistory(ctx, 2); len(h) != 1 {
 			t.Fatalf("other account: %+v", h)

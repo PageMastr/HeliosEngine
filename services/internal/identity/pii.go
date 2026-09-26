@@ -19,6 +19,7 @@ const (
 	ColumnEmailCT     = "email_ct"
 	ColumnDEK         = "wrapped_dek"
 	ColumnClientIPCT  = "client_ip_ct"
+	ColumnBanReasonCT = "ban_reason_ct"
 )
 
 // ErrShredded is returned when an account's DEK has been deleted: its PII is gone for good.
@@ -60,6 +61,9 @@ func RefreshIPAAD(tokenHash []byte) []byte {
 
 // LoginIPAAD binds a login-history row's client_ip_ct to its row.
 func LoginIPAAD(eventID int64) []byte { return pii.AAD(TableLoginHistory, ColumnClientIPCT, eventID) }
+
+// BanReasonAAD binds an account's ban_reason_ct (GM free text, 05 §1.17) to its row.
+func BanReasonAAD(accountID int64) []byte { return pii.AAD(TableAccount, ColumnBanReasonCT, accountID) }
 
 // Seal encrypts value under the account's DEK (sk) for the location aad. A shredded key yields
 // (nil, nil): there is nothing left to encrypt under, so the value is not stored.

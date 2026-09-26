@@ -105,6 +105,20 @@
    "at": "1:1"
   },
   {
+   "name": "number.rounds_to_largest_subnormal",
+   "src": "2.2250738585072011e-308",
+   "error": "E_NUMBER",
+   "at": "1:1",
+   "comment": "below the midpoint to the smallest normal: rounds to the largest subnormal, which literals may not be"
+  },
+  {
+   "name": "number.rounds_to_infinity",
+   "src": "1 + 1.7976931348623159e308",
+   "error": "E_NUMBER",
+   "at": "1:5",
+   "comment": "more than half an ulp above the largest double: overflows"
+  },
+  {
    "name": "number.subnormal_2",
    "src": "2e-308",
    "error": "E_NUMBER",

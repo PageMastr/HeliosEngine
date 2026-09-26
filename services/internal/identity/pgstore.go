@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// PGStore is the PostgreSQL Store (schema "identity").
+// PGStore is the PostgreSQL Store (schema svc_identity, 05 §1.1, §3.2).
 type PGStore struct {
 	pool *pgxpool.Pool
 }
@@ -18,13 +18,19 @@ type PGStore struct {
 // NewPGStore wraps a pool whose database has the identity migrations applied.
 func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
 
-const accountColumns = `account_id, email, email_norm, handle, handle_norm, discriminator, password_hash, is_bot,
-	banned_until, COALESCE(ban_reason, ''), created_at, updated_at, last_login_at`
+const accountColumns = `account_id, email_ct, email_bidx, handle, handle_norm, discriminator, password_hash, is_bot,
+	banned_until, ban_reason_ct, created_at, updated_at, last_login_at`
+
+// Unique constraints CreateAccount maps to errors.
+const (
+	constraintTag   = "account_tag_unique"
+	constraintEmail = "account_email_bidx_unique"
+)
 
 func scanAccount(row pgx.Row) (*Account, error) {
 	var a Account
-	err := row.Scan(&a.ID, &a.Email, &a.EmailNorm, &a.Handle, &a.HandleNorm, &a.Discriminator, &a.PasswordHash, &a.IsBot,
-		&a.BannedUntil, &a.BanReason, &a.CreatedAt, &a.UpdatedAt, &a.LastLoginAt)
+	err := row.Scan(&a.ID, &a.EmailCT, &a.EmailBidx, &a.Handle, &a.HandleNorm, &a.Discriminator, &a.PasswordHash, &a.IsBot,
+		&a.BannedUntil, &a.BanReasonCT, &a.CreatedAt, &a.UpdatedAt, &a.LastLoginAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -60,37 +66,46 @@ func appendAuditTx(ctx context.Context, tx pgx.Tx, e *AuditEntry) error {
 	}
 	var seq int64
 	var head []byte
-	if err := tx.QueryRow(ctx, `SELECT seq, hash FROM identity.audit_head WHERE id = 1 FOR UPDATE`).Scan(&seq, &head); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT seq, hash FROM svc_identity.audit_head WHERE id = 1 FOR UPDATE`).Scan(&seq, &head); err != nil {
 		return err
 	}
 	e.Seq = seq + 1
 	copy(e.PrevHash[:], head)
 	e.Hash = ChainHash(e.PrevHash, e)
-	if _, err := tx.Exec(ctx, `INSERT INTO identity.audit_log
-		(seq, at, actor_account, subject_account, action, client_ip, detail, prev_hash, hash)
+	if _, err := tx.Exec(ctx, `INSERT INTO svc_identity.audit_log
+		(seq, at, actor_account, subject_account, action, detail, note_digest, prev_hash, hash)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		e.Seq, e.At, e.Actor, e.Subject, e.Action, e.ClientIP, e.Detail, e.PrevHash[:], e.Hash[:]); err != nil {
+		e.Seq, e.At, e.Actor, e.Subject, e.Action, e.Detail, e.NoteDigest, e.PrevHash[:], e.Hash[:]); err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, `UPDATE identity.audit_head SET seq = $1, hash = $2 WHERE id = 1`, e.Seq, e.Hash[:])
+	_, err := tx.Exec(ctx, `UPDATE svc_identity.audit_head SET seq = $1, hash = $2 WHERE id = 1`, e.Seq, e.Hash[:])
 	return err
 }
 
 // CreateAccount implements Store.
-func (s *PGStore) CreateAccount(ctx context.Context, a *Account, audit *AuditEntry) error {
+func (s *PGStore) CreateAccount(ctx context.Context, a *Account, key *SubjectKey, audit *AuditEntry) error {
+	if key == nil || key.AccountID != a.ID {
+		return errors.New("identity: an account needs its own subject key")
+	}
 	return s.inTx(ctx, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO identity.account
-			(account_id, email, email_norm, handle, handle_norm, discriminator, password_hash, is_bot, created_at, updated_at)
+		_, err := tx.Exec(ctx, `INSERT INTO svc_identity.account
+			(account_id, email_ct, email_bidx, handle, handle_norm, discriminator, password_hash, is_bot, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-			a.ID, a.Email, a.EmailNorm, a.Handle, a.HandleNorm, a.Discriminator, a.PasswordHash, a.IsBot, a.CreatedAt, a.UpdatedAt)
+			a.ID, a.EmailCT, a.EmailBidx, a.Handle, a.HandleNorm, a.Discriminator, a.PasswordHash, a.IsBot, a.CreatedAt, a.UpdatedAt)
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			if pgErr.ConstraintName == "account_tag_unique" {
+			switch pgErr.ConstraintName {
+			case constraintTag:
 				return ErrTagTaken
+			case constraintEmail:
+				return ErrEmailTaken
 			}
-			return ErrEmailTaken
 		}
 		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO svc_identity.subject_key (account_id, wrapped_dek, kek_version)
+			VALUES ($1, $2, $3)`, key.AccountID, key.WrappedDEK, key.KEKVersion); err != nil {
 			return err
 		}
 		return appendAuditTx(ctx, tx, audit)
@@ -99,17 +114,34 @@ func (s *PGStore) CreateAccount(ctx context.Context, a *Account, audit *AuditEnt
 
 // AccountByID implements Store.
 func (s *PGStore) AccountByID(ctx context.Context, id int64) (*Account, error) {
-	return scanAccount(s.pool.QueryRow(ctx, `SELECT `+accountColumns+` FROM identity.account WHERE account_id = $1`, id))
+	return scanAccount(s.pool.QueryRow(ctx, `SELECT `+accountColumns+` FROM svc_identity.account WHERE account_id = $1`, id))
 }
 
-// AccountByEmail implements Store.
-func (s *PGStore) AccountByEmail(ctx context.Context, emailNorm string) (*Account, error) {
-	return scanAccount(s.pool.QueryRow(ctx, `SELECT `+accountColumns+` FROM identity.account WHERE email_norm = $1`, emailNorm))
+// AccountByEmailIndex implements Store.
+func (s *PGStore) AccountByEmailIndex(ctx context.Context, bidx []byte) (*Account, error) {
+	if len(bidx) == 0 {
+		return nil, ErrNotFound
+	}
+	return scanAccount(s.pool.QueryRow(ctx, `SELECT `+accountColumns+` FROM svc_identity.account WHERE email_bidx = $1`, bidx))
+}
+
+// SubjectKey implements Store.
+func (s *PGStore) SubjectKey(ctx context.Context, accountID int64) (*SubjectKey, error) {
+	k := SubjectKey{AccountID: accountID}
+	err := s.pool.QueryRow(ctx, `SELECT wrapped_dek, kek_version FROM svc_identity.subject_key WHERE account_id = $1`,
+		accountID).Scan(&k.WrappedDEK, &k.KEKVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &k, nil
 }
 
 // AccountByTag implements Store.
 func (s *PGStore) AccountByTag(ctx context.Context, handleNorm string, d int16) (*Account, error) {
-	return scanAccount(s.pool.QueryRow(ctx, `SELECT `+accountColumns+` FROM identity.account
+	return scanAccount(s.pool.QueryRow(ctx, `SELECT `+accountColumns+` FROM svc_identity.account
 		WHERE handle_norm = $1 AND discriminator = $2`, handleNorm, d))
 }
 
@@ -125,13 +157,13 @@ func expectOne(tag pgconn.CommandTag, err error) error {
 
 // SetPasswordHash implements Store.
 func (s *PGStore) SetPasswordHash(ctx context.Context, id int64, hash string, now time.Time) error {
-	return expectOne(s.pool.Exec(ctx, `UPDATE identity.account SET password_hash = $2, updated_at = $3 WHERE account_id = $1`, id, hash, now))
+	return expectOne(s.pool.Exec(ctx, `UPDATE svc_identity.account SET password_hash = $2, updated_at = $3 WHERE account_id = $1`, id, hash, now))
 }
 
 // RecordLogin implements Store.
 func (s *PGStore) RecordLogin(ctx context.Context, id int64, now time.Time, audit *AuditEntry) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
-		if err := expectOne(tx.Exec(ctx, `UPDATE identity.account SET last_login_at = $2 WHERE account_id = $1`, id, now)); err != nil {
+		if err := expectOne(tx.Exec(ctx, `UPDATE svc_identity.account SET last_login_at = $2 WHERE account_id = $1`, id, now)); err != nil {
 			return err
 		}
 		return appendAuditTx(ctx, tx, audit)
@@ -139,18 +171,17 @@ func (s *PGStore) RecordLogin(ctx context.Context, id int64, now time.Time, audi
 }
 
 // SetBan implements Store.
-func (s *PGStore) SetBan(ctx context.Context, id int64, until *time.Time, reason string, now time.Time, audit *AuditEntry) error {
+func (s *PGStore) SetBan(ctx context.Context, id int64, until *time.Time, reasonCT []byte, now time.Time, audit *AuditEntry) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
-		var r *string
-		if until != nil {
-			r = &reason
+		if until == nil {
+			reasonCT = nil
 		}
-		if err := expectOne(tx.Exec(ctx, `UPDATE identity.account SET banned_until = $2, ban_reason = $3, updated_at = $4
-			WHERE account_id = $1`, id, until, r, now)); err != nil {
+		if err := expectOne(tx.Exec(ctx, `UPDATE svc_identity.account SET banned_until = $2, ban_reason_ct = $3, updated_at = $4
+			WHERE account_id = $1`, id, until, reasonCT, now)); err != nil {
 			return err
 		}
 		if until != nil {
-			if _, err := tx.Exec(ctx, `UPDATE identity.refresh_token SET revoked_at = $2
+			if _, err := tx.Exec(ctx, `UPDATE svc_identity.refresh_token SET revoked_at = $2
 				WHERE account_id = $1 AND revoked_at IS NULL`, id, now); err != nil {
 				return err
 			}
@@ -161,10 +192,52 @@ func (s *PGStore) SetBan(ctx context.Context, id int64, until *time.Time, reason
 
 // InsertRefreshToken implements Store.
 func (s *PGStore) InsertRefreshToken(ctx context.Context, t *RefreshToken) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO identity.refresh_token
-		(token_hash, family_id, account_id, issued_at, expires_at, client_ip) VALUES ($1, $2, $3, $4, $5, $6)`,
-		t.Hash, t.FamilyID, t.AccountID, t.IssuedAt, t.ExpiresAt, t.ClientIP)
+	_, err := s.pool.Exec(ctx, `INSERT INTO svc_identity.refresh_token
+		(token_hash, family_id, account_id, issued_at, expires_at, client_ip_ct) VALUES ($1, $2, $3, $4, $5, $6)`,
+		t.Hash, t.FamilyID, t.AccountID, t.IssuedAt, t.ExpiresAt, t.ClientIPCT)
 	return err
+}
+
+// RefreshTokenOwner implements Store.
+func (s *PGStore) RefreshTokenOwner(ctx context.Context, hash []byte) (int64, error) {
+	var acct int64
+	err := s.pool.QueryRow(ctx, `SELECT account_id FROM svc_identity.refresh_token WHERE token_hash = $1`, hash).Scan(&acct)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrTokenInvalid
+	}
+	return acct, err
+}
+
+// AppendLoginEvent implements Store.
+func (s *PGStore) AppendLoginEvent(ctx context.Context, e *LoginEvent) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO svc_identity.login_history (event_id, account_id, action, at, client_ip_ct)
+		VALUES ($1, $2, $3, $4, $5)`, e.ID, e.AccountID, e.Action, e.At, e.ClientIPCT)
+	return err
+}
+
+// LoginHistory implements Store.
+func (s *PGStore) LoginHistory(ctx context.Context, accountID int64) ([]LoginEvent, error) {
+	rows, err := s.pool.Query(ctx, `SELECT event_id, account_id, action, at, client_ip_ct FROM svc_identity.login_history
+		WHERE account_id = $1 ORDER BY at, event_id`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (LoginEvent, error) {
+		var e LoginEvent
+		err := row.Scan(&e.ID, &e.AccountID, &e.Action, &e.At, &e.ClientIPCT)
+		return e, err
+	})
+}
+
+// PurgeLoginHistory implements Store.
+func (s *PGStore) PurgeLoginHistory(ctx context.Context, before time.Time) (int64, error) {
+	hist, err := s.pool.Exec(ctx, `DELETE FROM svc_identity.login_history WHERE at < $1`, before)
+	if err != nil {
+		return 0, err
+	}
+	toks, err := s.pool.Exec(ctx, `UPDATE svc_identity.refresh_token SET client_ip_ct = NULL
+		WHERE issued_at < $1 AND client_ip_ct IS NOT NULL`, before)
+	return hist.RowsAffected() + toks.RowsAffected(), err
 }
 
 // lockFamilyOf serializes every change to the family of the token with hash (rotation,
@@ -173,7 +246,7 @@ func (s *PGStore) InsertRefreshToken(ctx context.Context, t *RefreshToken) error
 // successor row that a concurrent rotation inserted after the UPDATE's snapshot was taken.
 func lockFamilyOf(ctx context.Context, tx pgx.Tx, hash []byte) (int64, error) {
 	var family int64
-	err := tx.QueryRow(ctx, `SELECT family_id FROM identity.refresh_token WHERE token_hash = $1`, hash).Scan(&family)
+	err := tx.QueryRow(ctx, `SELECT family_id FROM svc_identity.refresh_token WHERE token_hash = $1`, hash).Scan(&family)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, ErrTokenInvalid
 	}
@@ -184,14 +257,14 @@ func lockFamilyOf(ctx context.Context, tx pgx.Tx, hash []byte) (int64, error) {
 }
 
 func lockFamily(ctx context.Context, tx pgx.Tx, family int64) error {
-	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('identity.refresh_family:' || $1::bigint::text, 0))`, family)
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('svc_identity.refresh_family:' || $1::bigint::text, 0))`, family)
 	return err
 }
 
 // ActiveFamily implements Store.
 func (s *PGStore) ActiveFamily(ctx context.Context, familyID int64, now time.Time) (int64, error) {
 	var acct int64
-	err := s.pool.QueryRow(ctx, `SELECT account_id FROM identity.refresh_token
+	err := s.pool.QueryRow(ctx, `SELECT account_id FROM svc_identity.refresh_token
 		WHERE family_id = $1 AND revoked_at IS NULL AND used_at IS NULL AND expires_at > $2 LIMIT 1`, familyID, now).Scan(&acct)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, ErrTokenInvalid
@@ -208,7 +281,7 @@ func (s *PGStore) ExtendFamily(ctx context.Context, t *RefreshToken, now time.Ti
 			return err
 		}
 		var acct int64
-		err := tx.QueryRow(ctx, `SELECT account_id FROM identity.refresh_token
+		err := tx.QueryRow(ctx, `SELECT account_id FROM svc_identity.refresh_token
 			WHERE family_id = $1 AND revoked_at IS NULL AND used_at IS NULL AND expires_at > $2 LIMIT 1`, t.FamilyID, now).Scan(&acct)
 		if errors.Is(err, pgx.ErrNoRows) || (err == nil && acct != t.AccountID) {
 			return ErrTokenInvalid
@@ -217,15 +290,15 @@ func (s *PGStore) ExtendFamily(ctx context.Context, t *RefreshToken, now time.Ti
 			return err
 		}
 		var banned *time.Time
-		if err := tx.QueryRow(ctx, `SELECT banned_until FROM identity.account WHERE account_id = $1 FOR SHARE`, acct).Scan(&banned); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT banned_until FROM svc_identity.account WHERE account_id = $1 FOR SHARE`, acct).Scan(&banned); err != nil {
 			return err
 		}
 		if banned != nil && banned.After(now) {
 			return ErrTokenInvalid
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO identity.refresh_token
-			(token_hash, family_id, account_id, issued_at, expires_at, client_ip) VALUES ($1, $2, $3, $4, $5, $6)`,
-			t.Hash, t.FamilyID, t.AccountID, t.IssuedAt, t.ExpiresAt, t.ClientIP)
+		_, err = tx.Exec(ctx, `INSERT INTO svc_identity.refresh_token
+			(token_hash, family_id, account_id, issued_at, expires_at, client_ip_ct) VALUES ($1, $2, $3, $4, $5, $6)`,
+			t.Hash, t.FamilyID, t.AccountID, t.IssuedAt, t.ExpiresAt, t.ClientIPCT)
 		return err
 	})
 }
@@ -233,8 +306,8 @@ func (s *PGStore) ExtendFamily(ctx context.Context, t *RefreshToken, now time.Ti
 func lockToken(ctx context.Context, tx pgx.Tx, hash []byte) (*RefreshToken, error) {
 	var t RefreshToken
 	err := tx.QueryRow(ctx, `SELECT token_hash, family_id, account_id, issued_at, expires_at, used_at, revoked_at,
-		COALESCE(client_ip, '') FROM identity.refresh_token WHERE token_hash = $1 FOR UPDATE`, hash).
-		Scan(&t.Hash, &t.FamilyID, &t.AccountID, &t.IssuedAt, &t.ExpiresAt, &t.UsedAt, &t.RevokedAt, &t.ClientIP)
+		client_ip_ct FROM svc_identity.refresh_token WHERE token_hash = $1 FOR UPDATE`, hash).
+		Scan(&t.Hash, &t.FamilyID, &t.AccountID, &t.IssuedAt, &t.ExpiresAt, &t.UsedAt, &t.RevokedAt, &t.ClientIPCT)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrTokenInvalid
 	}
@@ -242,7 +315,7 @@ func lockToken(ctx context.Context, tx pgx.Tx, hash []byte) (*RefreshToken, erro
 }
 
 func revokeFamilyTx(ctx context.Context, tx pgx.Tx, family int64, now time.Time) error {
-	_, err := tx.Exec(ctx, `UPDATE identity.refresh_token SET revoked_at = $2 WHERE family_id = $1 AND revoked_at IS NULL`, family, now)
+	_, err := tx.Exec(ctx, `UPDATE svc_identity.refresh_token SET revoked_at = $2 WHERE family_id = $1 AND revoked_at IS NULL`, family, now)
 	return err
 }
 
@@ -275,16 +348,16 @@ func (s *PGStore) RotateRefreshToken(ctx context.Context, oldHash []byte, next *
 			reused = true
 			return appendAuditTx(ctx, tx, reuseAudit)
 		}
-		if !old.ExpiresAt.After(now) {
+		if !old.ExpiresAt.After(now) || (next.AccountID != 0 && next.AccountID != old.AccountID) {
 			return ErrTokenInvalid
 		}
-		if _, err := tx.Exec(ctx, `UPDATE identity.refresh_token SET used_at = $2 WHERE token_hash = $1`, oldHash, now); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE svc_identity.refresh_token SET used_at = $2 WHERE token_hash = $1`, oldHash, now); err != nil {
 			return err
 		}
 		next.FamilyID, next.AccountID = old.FamilyID, old.AccountID
-		_, err = tx.Exec(ctx, `INSERT INTO identity.refresh_token
-			(token_hash, family_id, account_id, issued_at, expires_at, client_ip) VALUES ($1, $2, $3, $4, $5, $6)`,
-			next.Hash, next.FamilyID, next.AccountID, next.IssuedAt, next.ExpiresAt, next.ClientIP)
+		_, err = tx.Exec(ctx, `INSERT INTO svc_identity.refresh_token
+			(token_hash, family_id, account_id, issued_at, expires_at, client_ip_ct) VALUES ($1, $2, $3, $4, $5, $6)`,
+			next.Hash, next.FamilyID, next.AccountID, next.IssuedAt, next.ExpiresAt, next.ClientIPCT)
 		return err
 	})
 	if err != nil {
@@ -328,8 +401,8 @@ func (s *PGStore) ListAudit(ctx context.Context, afterSeq int64, limit int) ([]A
 	if limit <= 0 {
 		limit = 1000
 	}
-	rows, err := s.pool.Query(ctx, `SELECT seq, at, actor_account, subject_account, action, client_ip, detail, prev_hash, hash
-		FROM identity.audit_log WHERE seq > $1 ORDER BY seq LIMIT $2`, afterSeq, limit)
+	rows, err := s.pool.Query(ctx, `SELECT seq, at, actor_account, subject_account, action, detail, note_digest, prev_hash, hash
+		FROM svc_identity.audit_log WHERE seq > $1 ORDER BY seq LIMIT $2`, afterSeq, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +411,7 @@ func (s *PGStore) ListAudit(ctx context.Context, afterSeq int64, limit int) ([]A
 	for rows.Next() {
 		var e AuditEntry
 		var prev, h []byte
-		if err := rows.Scan(&e.Seq, &e.At, &e.Actor, &e.Subject, &e.Action, &e.ClientIP, &e.Detail, &prev, &h); err != nil {
+		if err := rows.Scan(&e.Seq, &e.At, &e.Actor, &e.Subject, &e.Action, &e.Detail, &e.NoteDigest, &prev, &h); err != nil {
 			return nil, err
 		}
 		copy(e.PrevHash[:], prev)

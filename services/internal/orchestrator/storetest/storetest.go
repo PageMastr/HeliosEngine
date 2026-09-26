@@ -102,11 +102,11 @@ func Run(t *testing.T, newStore Factory) {
 				return err
 			},
 			"EndProcess": func(f orchestrator.Fence) error { return s.EndProcess(ctx, f, 1, "x", now) },
-			"AssignZone": func(f orchestrator.Fence) error {
-				_, err := s.AssignZone(ctx, f, 1, 7, now)
+			"AssignRegion": func(f orchestrator.Fence) error {
+				_, err := s.AssignRegion(ctx, f, 1, 7, now)
 				return err
 			},
-			"ReleaseZone": func(f orchestrator.Fence) error { return s.ReleaseZone(ctx, f, 1, 7, now) },
+			"ReleaseRegion": func(f orchestrator.Fence) error { return s.ReleaseRegion(ctx, f, 1, 7, now) },
 		} {
 			for _, bad := range []orchestrator.Fence{stale, none} {
 				if err := op(bad); !errors.Is(err, orchestrator.ErrNotLeader) {
@@ -120,7 +120,7 @@ func Run(t *testing.T, newStore Factory) {
 		}
 	})
 
-	t.Run("zones and generations", func(t *testing.T) {
+	t.Run("region leases and generations", func(t *testing.T) {
 		s := newStore(t)
 		f := lead(t, s)
 		if err := s.EnsureZones(ctx, f, []orchestrator.Zone{{ID: 2, Name: "b"}, {ID: 1, Name: "a"}}, now); err != nil {
@@ -133,26 +133,36 @@ func Run(t *testing.T, newStore Factory) {
 		if err != nil || len(zs) != 2 || zs[0].ID != 1 || zs[1].Name != "b" || zs[0].Owner != 0 || zs[0].LeaseGen != 0 {
 			t.Fatalf("list: %+v %v", zs, err)
 		}
-		g1, err := s.AssignZone(ctx, f, 1, 100, now)
+		// Each v0 zone gets one region_lease row, its Whole region (05 §1.4.2).
+		rs, err := s.ListRegions(ctx)
+		want := []orchestrator.Region{{ID: orchestrator.WholeRegion(1), InstanceID: 1}, {ID: orchestrator.WholeRegion(2), InstanceID: 2}}
+		if err != nil || len(rs) != 2 || rs[0] != want[0] || rs[1] != want[1] {
+			t.Fatalf("regions: %+v %v", rs, err)
+		}
+		g1, err := s.AssignRegion(ctx, f, orchestrator.WholeRegion(1), 100, now)
 		if err != nil || g1 != 1 {
 			t.Fatalf("assign: %d %v", g1, err)
 		}
+		// The generation lives in region_lease and belongs to that region alone.
+		if rs, _ := s.ListRegions(ctx); rs[0].Holder != 100 || rs[0].LeaseGen != 1 || rs[1].Holder != 0 || rs[1].LeaseGen != 0 {
+			t.Fatalf("region rows after assign: %+v", rs)
+		}
 		// Release by a non-owner is a no-op.
-		if err := s.ReleaseZone(ctx, f, 1, 999, now); err != nil {
+		if err := s.ReleaseRegion(ctx, f, 1, 999, now); err != nil {
 			t.Fatal(err)
 		}
 		zs, _ = s.ListZones(ctx)
 		if zs[0].Owner != 100 {
 			t.Fatal("non-owner released the zone")
 		}
-		if err := s.ReleaseZone(ctx, f, 1, 100, now); err != nil {
+		if err := s.ReleaseRegion(ctx, f, 1, 100, now); err != nil {
 			t.Fatal(err)
 		}
-		g2, _ := s.AssignZone(ctx, f, 1, 101, now)
+		g2, _ := s.AssignRegion(ctx, f, 1, 101, now)
 		if g2 != 2 {
 			t.Fatalf("generation must grow on every assignment: %d", g2)
 		}
-		if _, err := s.AssignZone(ctx, f, 77, 1, now); !errors.Is(err, orchestrator.ErrUnknownZone) {
+		if _, err := s.AssignRegion(ctx, f, 77, 1, now); !errors.Is(err, orchestrator.ErrUnknownRegion) {
 			t.Fatalf("unknown zone: %v", err)
 		}
 		// A new leader clears owners but keeps generations.
@@ -163,8 +173,11 @@ func Run(t *testing.T, newStore Factory) {
 		if zs[0].Owner != 0 || zs[0].LeaseGen != 2 {
 			t.Fatalf("reset: %+v", zs[0])
 		}
-		if g3, _ := s.AssignZone(ctx, f, 1, 102, now); g3 != 3 {
+		if g3, _ := s.AssignRegion(ctx, f, 1, 102, now); g3 != 3 {
 			t.Fatalf("after reset: %d", g3)
+		}
+		if rs, _ := s.ListRegions(ctx); rs[0].Holder != 102 || rs[0].LeaseGen != 3 || rs[1].LeaseGen != 0 {
+			t.Fatalf("region rows at the end: %+v", rs)
 		}
 	})
 

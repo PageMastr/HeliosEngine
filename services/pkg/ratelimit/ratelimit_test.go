@@ -1,7 +1,10 @@
 package ratelimit
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,11 +82,16 @@ func TestAllowNAndDisabled(t *testing.T) {
 func TestFailOpenAndClosed(t *testing.T) {
 	dead := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 100 * time.Millisecond, MaxRetries: -1})
 	defer dead.Close()
-	l := New(dead, nil, "rl:", nil)
+	var logs bytes.Buffer
+	l := New(dead, nil, "rl:", slog.New(slog.NewTextHandler(&logs, nil)))
 	ctx := context.Background()
 	lim := Limit{Rate: 1, Per: time.Second, Burst: 1}
-	if res, err := l.Allow(ctx, "k", lim); err != nil || !res.Allowed {
+	if res, err := l.Allow(ctx, "login:ip:2001:db8::7", lim); err != nil || !res.Allowed {
 		t.Fatalf("fail-open: %+v %v", res, err)
+	}
+	// The log names the bucket's class, not the client IP it limits.
+	if out := logs.String(); !strings.Contains(out, "bucket=login:ip") || strings.Contains(out, "2001:db8") {
+		t.Fatalf("fail-open log: %s", out)
 	}
 	l.FailOpen = false
 	if _, err := l.Allow(ctx, "k", lim); err == nil {

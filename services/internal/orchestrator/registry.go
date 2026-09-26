@@ -1,13 +1,15 @@
 // Package orchestrator is the Phase 0 orchestrator / world directory (05 §1.4, 04 §1): one
 // leader per shard, anchored in PostgreSQL with term-fenced writes (§1.4.1); processes (cells and
 // gateways) register over NATS and prove liveness with a 1 Hz heartbeat; every registration gets
-// a per-name epoch, and minting processes get time-prefixed ID blocks (§1.4.5); zones are placed on
-// cells (v0: one cell per zone) under lease generations allocated in PostgreSQL before the holder
-// is told; the world directory answers "which cell owns zone X"; and a local supervisor spawns and
-// restarts configured executables.
+// a per-name epoch and records its failure domain and server build, and minting processes get
+// time-prefixed ID blocks (§1.4.5); zones are placed on cells (v0: one cell per zone, one region
+// per zone) under region_lease generations allocated in PostgreSQL before the holder is told
+// (§1.4.2), and heartbeats report the regions held; the world directory answers "which cell owns
+// zone X"; and a local supervisor spawns and restarts configured executables.
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,11 +19,13 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/PageMastr/scifi-test/services/internal/platform"
 	"github.com/PageMastr/scifi-test/services/pkg/clock"
 	"github.com/PageMastr/scifi-test/services/pkg/idgen"
 	"github.com/PageMastr/scifi-test/services/pkg/rpc"
@@ -33,17 +37,47 @@ const (
 	KindGateway = "gateway"
 )
 
-// ProcessInfo is what a process declares when it registers.
+// ProcessInfo is what a process declares when it registers (05 §1.4 RegisterProcess).
 type ProcessInfo struct {
 	Name     string   `json:"name"`              // logical name, e.g. "cell-a", "gw-1"
 	Kind     string   `json:"kind"`              // cell | gateway
 	Address  string   `json:"address,omitempty"` // gateway: public UDP ip:port; cell: trunk address
-	Host     string   `json:"host,omitempty"`
+	Host     string   `json:"host,omitempty"`    // superseded by FD.Host, which it fills when that is empty
 	PID      int      `json:"pid,omitempty"`
 	Version  string   `json:"version,omitempty"`
 	Zones    []string `json:"zones,omitempty"`    // cell: zones it serves; empty = any
 	KeyID    uint32   `json:"keyId,omitempty"`    // gateway: shard netcode key generation it runs with
 	Capacity int      `json:"capacity,omitempty"` // gateway: session slots
+	// FD is the failure domain (05 §1.4.3): from node labels under Agones, from helios.toml [fd]
+	// under helios-agent. Phase 0 stores it; Phase 2's detection and placement use it.
+	FD FailureDomain `json:"fd,omitzero"`
+	// ServerBuild is the server build the process runs (05 §1.4.6's poison-build brake).
+	ServerBuild int64 `json:"serverBuild,string,omitempty"`
+}
+
+// FailureDomain locates a process: availability zone, rack and host (05 §1.4.3).
+type FailureDomain struct {
+	AZ   string `json:"az,omitempty"`
+	Rack string `json:"rack,omitempty"`
+	Host string `json:"host,omitempty"`
+}
+
+// Input bounds for registrations and heartbeats (hostile or broken clients must not grow the
+// registry without limit).
+const (
+	MaxFDLabel      = 64                   // az, rack
+	MaxFDHost       = 255                  // a DNS name
+	MaxHeldRegions  = 256                  // regions a heartbeat's report keeps, and regions one process is placed (a v1 zone has up to 64)
+	maxZones        = 256                  // zones one cell may declare
+	maxZoneName     = platform.MaxZoneName // bytes per declared zone name
+	maxProcessField = 255                  // address, version
+)
+
+// HeldRegion is a region a process holds and the lease generation it holds it under, as its
+// heartbeats report them (05 §1.4). v0 regions are whole zones, so Region is the zone ID.
+type HeldRegion struct {
+	Region   int64 `json:"region,string"`
+	LeaseGen int64 `json:"leaseGen,string"`
 }
 
 // Load is reported with every heartbeat.
@@ -62,9 +96,13 @@ type Process struct {
 	RegisteredAt  time.Time   `json:"registeredAt"`
 	LastHeartbeat time.Time   `json:"lastHeartbeat"`
 	LeaseExpires  time.Time   `json:"leaseExpires"`
+	// Held is what the process's last heartbeat said it holds, by region. Phase 0 records it;
+	// the degraded-mode exit (05 §1.4.4) reconciles it against region_lease from Phase 2.
+	Held []HeldRegion `json:"held"`
 }
 
-// Assignment is a zone placed on a process under a lease generation.
+// Assignment is a zone placed on a process under its region's lease generation (v0: the zone's
+// Whole region, so ZoneID also names the region).
 type Assignment struct {
 	ZoneID   int64  `json:"zoneId,string"`
 	ZoneName string `json:"zoneName"`
@@ -150,9 +188,11 @@ type Registry struct {
 type metrics struct {
 	processes     *prometheus.GaugeVec
 	zonesAssigned prometheus.Gauge
+	zonesUnplaced prometheus.Gauge
 	registrations *prometheus.CounterVec
 	ended         *prometheus.CounterVec
 	assignments   prometheus.Counter
+	heldDropped   prometheus.Counter
 }
 
 func newMetrics(reg prometheus.Registerer) *metrics {
@@ -161,15 +201,19 @@ func newMetrics(reg prometheus.Registerer) *metrics {
 			Help: "Live registered processes by kind."}, []string{"kind"}),
 		zonesAssigned: prometheus.NewGauge(prometheus.GaugeOpts{Name: "helios_orchestrator_zones_assigned",
 			Help: "Zones currently placed on a live cell."}),
+		zonesUnplaced: prometheus.NewGauge(prometheus.GaugeOpts{Name: "helios_orchestrator_zones_unplaced",
+			Help: "Zones with no live cell: none is registered for them, or every candidate holds MaxHeldRegions."}),
 		registrations: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "helios_orchestrator_registrations_total",
 			Help: "Process registrations by kind."}, []string{"kind"}),
 		ended: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "helios_orchestrator_processes_ended_total",
 			Help: "Registrations ended by reason (lease_expired, superseded, deregistered)."}, []string{"reason"}),
 		assignments: prometheus.NewCounter(prometheus.CounterOpts{Name: "helios_orchestrator_zone_assignments_total",
-			Help: "Zone placements (each bumps the zone's lease generation)."}),
+			Help: "Zone placements (each bumps the region_lease generation of the zone's region)."}),
+		heldDropped: prometheus.NewCounter(prometheus.CounterOpts{Name: "helios_orchestrator_held_entries_dropped_total",
+			Help: "Held-region entries a heartbeat reported that were not recorded (invalid, duplicate or over the cap)."}),
 	}
 	if reg != nil {
-		reg.MustRegister(m.processes, m.zonesAssigned, m.registrations, m.ended, m.assignments)
+		reg.MustRegister(m.processes, m.zonesAssigned, m.zonesUnplaced, m.registrations, m.ended, m.assignments, m.heldDropped)
 	}
 	return m
 }
@@ -247,6 +291,24 @@ func validate(info *ProcessInfo) error {
 	if info.Name == "" || len(info.Name) > 64 {
 		return rpc.Errorf(rpc.CodeInvalidArgument, "name must be 1-64 characters")
 	}
+	if info.FD.Host == "" {
+		info.FD.Host = info.Host
+	}
+	switch {
+	case len(info.FD.AZ) > MaxFDLabel || len(info.FD.Rack) > MaxFDLabel || len(info.FD.Host) > MaxFDHost || len(info.Host) > MaxFDHost:
+		return rpc.Errorf(rpc.CodeInvalidArgument, "fd: az and rack are at most %d bytes, host at most %d", MaxFDLabel, MaxFDHost)
+	case info.ServerBuild < 0:
+		return rpc.Errorf(rpc.CodeInvalidArgument, "serverBuild must not be negative")
+	case len(info.Address) > maxProcessField || len(info.Version) > maxProcessField || len(info.Zones) > maxZones:
+		return rpc.Errorf(rpc.CodeInvalidArgument, "address or version too long, or too many zones")
+	case hasNUL(info.Name, info.Address, info.Host, info.Version, info.FD.AZ, info.FD.Rack, info.FD.Host):
+		return rpc.Errorf(rpc.CodeInvalidArgument, "text fields must not contain NUL")
+	}
+	for _, z := range info.Zones {
+		if z == "" || len(z) > maxZoneName || hasNUL(z) {
+			return rpc.Errorf(rpc.CodeInvalidArgument, "zone names are 1-%d bytes without NUL", maxZoneName)
+		}
+	}
 	switch info.Kind {
 	case KindCell:
 	case KindGateway:
@@ -260,6 +322,16 @@ func validate(info *ProcessInfo) error {
 		return rpc.Errorf(rpc.CodeInvalidArgument, "kind must be cell or gateway")
 	}
 	return nil
+}
+
+// hasNUL reports whether any s contains a NUL byte (PostgreSQL TEXT cannot store one).
+func hasNUL(s ...string) bool {
+	for _, x := range s {
+		if strings.IndexByte(x, 0) >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // RegisterResult is returned to a registering process.
@@ -336,7 +408,7 @@ func (r *Registry) Register(ctx context.Context, info ProcessInfo) (*RegisterRes
 		return nil, r.storeErr(err)
 	}
 	p := &Process{ID: rec.ID, Epoch: rec.Epoch, Info: info, RegisteredAt: now, LastHeartbeat: now,
-		LeaseExpires: now.Add(r.cfg.LeaseTTL)}
+		LeaseExpires: now.Add(r.cfg.LeaseTTL), Held: []HeldRegion{}}
 	if info.Kind == KindGateway {
 		p.Load.FreeSlots = info.Capacity
 	}
@@ -387,9 +459,14 @@ type HeartbeatResult struct {
 	Mode         string       `json:"mode"`
 }
 
-// Heartbeat renews a lease. A heartbeat that arrives after the lease lapsed is refused: the
-// zones may already have moved, so the holder is told lease_lost and registers again.
-func (r *Registry) Heartbeat(ctx context.Context, id, epoch int64, load Load) (*HeartbeatResult, error) {
+// Heartbeat renews a lease and records the regions the process says it holds. A heartbeat that
+// arrives after the lease lapsed is refused: the zones may already have moved, so the holder is
+// told lease_lost and registers again. A well-formed held report never blocks the renewal: Phase
+// 0 only records it, so invalid or duplicate entries and those over MaxHeldRegions are dropped
+// (and counted) rather than refused, and lease_lost always wins over a bad report. A report that
+// does not decode (a region that is not a decimal string, say) is refused by the transport before
+// Heartbeat runs, so senders must encode it as the contract vectors do.
+func (r *Registry) Heartbeat(ctx context.Context, id, epoch int64, load Load, held ...HeldRegion) (*HeartbeatResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.clk.Now()
@@ -406,7 +483,34 @@ func (r *Registry) Heartbeat(ctx context.Context, id, epoch int64, load Load) (*
 	p.LastHeartbeat = now
 	p.LeaseExpires = now.Add(r.cfg.LeaseTTL)
 	p.Load = load
+	var dropped int
+	p.Held, dropped = sanitizeHeld(held)
+	if dropped > 0 {
+		r.m.heldDropped.Add(float64(dropped))
+		r.log.Debug("held report entries dropped", "process", p.ID, "dropped", dropped)
+	}
 	return &HeartbeatResult{LeaseExpires: p.LeaseExpires, Assignments: r.assignmentsLocked(id), Mode: ModeNormal}, nil
+}
+
+// sanitizeHeld keeps the valid entries of a held report (region > 0, leaseGen >= 0), one per
+// region (the highest generation reported), at most MaxHeldRegions of them (the lowest region
+// IDs), sorted by region; the result does not depend on the report's order. It also returns how
+// many entries it dropped.
+func sanitizeHeld(held []HeldRegion) ([]HeldRegion, int) {
+	out := make([]HeldRegion, 0, len(held))
+	for _, h := range held {
+		if h.Region > 0 && h.LeaseGen >= 0 {
+			out = append(out, h)
+		}
+	}
+	slices.SortFunc(out, func(a, b HeldRegion) int {
+		return cmp.Or(cmp.Compare(a.Region, b.Region), cmp.Compare(b.LeaseGen, a.LeaseGen))
+	})
+	out = slices.CompactFunc(out, func(a, b HeldRegion) bool { return a.Region == b.Region })
+	if len(out) > MaxHeldRegions {
+		out = out[:MaxHeldRegions]
+	}
+	return slices.Clip(out), len(held) - len(out)
 }
 
 // Deregister ends a registration cleanly (graceful shutdown).
@@ -457,7 +561,7 @@ func (r *Registry) endLocked(ctx context.Context, p *Process, reason string, now
 	delete(r.procs, p.ID)
 	for _, z := range r.zones {
 		if z.Owner == p.ID {
-			if err := r.store.ReleaseZone(ctx, r.fence, z.ID, p.ID, now); err != nil {
+			if err := r.store.ReleaseRegion(ctx, r.fence, WholeRegion(z.ID), p.ID, now); err != nil {
 				r.log.Error("zone release failed", "zone", z.ID, "err", err)
 				_ = r.storeErr(err)
 			}
@@ -479,7 +583,8 @@ func (r *Registry) endLocked(ctx context.Context, p *Process, reason string, now
 }
 
 // placeLocked assigns every unowned zone to a live cell: cells that declared the zone first,
-// then cells that accept any zone; the least-loaded candidate wins (ties: lowest process ID).
+// then cells that accept any zone; the least-loaded candidate wins (ties: lowest process ID). No
+// cell gets more than MaxHeldRegions regions, so its whole held report is always recorded.
 func (r *Registry) placeLocked(ctx context.Context, now time.Time) {
 	zoneIDs := make([]int64, 0, len(r.zones))
 	for id := range r.zones {
@@ -501,7 +606,7 @@ func (r *Registry) placeLocked(ctx context.Context, now time.Time) {
 		bestDeclared := false
 		for _, id := range r.sortedIDsLocked() {
 			p := r.procs[id]
-			if p.Info.Kind != KindCell || now.After(p.LeaseExpires) {
+			if p.Info.Kind != KindCell || now.After(p.LeaseExpires) || owned[p.ID] >= MaxHeldRegions {
 				continue
 			}
 			declared := slices.Contains(p.Info.Zones, z.Name)
@@ -515,7 +620,7 @@ func (r *Registry) placeLocked(ctx context.Context, now time.Time) {
 		if best == nil {
 			continue
 		}
-		gen, err := r.store.AssignZone(ctx, r.fence, z.ID, best.ID, now)
+		gen, err := r.store.AssignRegion(ctx, r.fence, WholeRegion(z.ID), best.ID, now)
 		if err != nil {
 			r.log.Error("zone assignment failed", "zone", z.ID, "process", best.ID, "err", err)
 			_ = r.storeErr(err)
@@ -557,6 +662,7 @@ func (r *Registry) updateGaugesLocked() {
 		}
 	}
 	r.m.zonesAssigned.Set(float64(assigned))
+	r.m.zonesUnplaced.Set(float64(len(r.zones) - assigned))
 }
 
 // ResolveZone answers the world-directory query by zone ID or name.
@@ -575,7 +681,7 @@ func (r *Registry) ResolveZone(zoneID int64, name string) (*Route, error) {
 	}
 	p, ok := r.procs[z.Owner]
 	if z.Owner == 0 || !ok {
-		return nil, rpc.Errorf(rpc.CodeUnavailable, "zone %s has no live cell", z.Name)
+		return nil, rpc.Errorf(rpc.CodeUnavailable, "zone %s has no live cell with capacity for it", z.Name)
 	}
 	return &Route{ZoneID: z.ID, ZoneName: z.Name, LeaseGen: z.LeaseGen, ProcessID: p.ID, Process: p.Info.Name,
 		Epoch: p.Epoch, Address: p.Info.Address}, nil

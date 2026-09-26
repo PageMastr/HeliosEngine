@@ -1,5 +1,9 @@
 -- Orchestrator schema (05 §1.4, v0): zones, registered processes with epochs, zone lease
 -- generations and the placement log. Generations are allocated here before any holder is told.
+--
+-- Historical: databases created before WP-0.15r applied 00001 and 00002, so their statements stay
+-- as they were. They use the schema's old name "orchestrator"; migrations.Up renames it to svc_orch
+-- after 00002 (05 §1.4, §3), and 00003-00004 move the lease generation into region_lease.
 
 -- +goose Up
 CREATE TABLE orchestrator.zone (

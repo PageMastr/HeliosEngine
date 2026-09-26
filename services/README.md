@@ -7,9 +7,9 @@ nothing but Go. The same code runs against real PostgreSQL, NATS and Valkey via 
 
 | Service | Package | Phase 0 scope |
 |---|---|---|
-| Identity/Auth (05 §1.1) | `internal/identity` | accounts with `Handle#1234` tags, argon2id (m=64 MiB, t=3, p=1 behind a 2×GOMAXPROCS semaphore that sheds load after 5 s), EdDSA JWTs (10 min) + JWKS, rotating refresh-token families with reuse detection (rotation and revocation serialized per family), one-time launch codes bound to the launcher's family, bans that kick the live session, per-IP/per-account GCRA rate limits, hash-chained append-only audit log |
+| Identity/Auth (05 §1.1) | `internal/identity`, `pkg/pii` | accounts with `Handle#1234` tags; direct PII and GM free text stored in PostgreSQL only encrypted under a per-account DEK wrapped by the subject KEK: e-mail addresses (found by a keyed blind index), client IPs (on refresh tokens and in a login history, both kept 90 days) and ban reasons; audit rows hold only pseudonymous IDs (05 §1.17, §6.6, below). Per-IP rate-limit buckets in Valkey are still keyed by the raw IP and expire with their window; argon2id (m=64 MiB, t=3, p=1 behind a 2×GOMAXPROCS semaphore that sheds load after 5 s), EdDSA JWTs (10 min) + JWKS, rotating refresh-token families with reuse detection (rotation and revocation serialized per family), one-time launch codes bound to the launcher's family, bans that kick the live session, per-IP/per-account GCRA rate limits, hash-chained append-only audit log |
 | Session & connect tokens (05 §1.3, 04 §2.3–2.4) | `internal/session`, `pkg/connecttoken` | netcode 1.02 connect tokens (XChaCha20-Poly1305, byte-exact with vendored netcode 1.4.8), 1–4 gateway addresses picked by free slots on the newest shard key (old-key gateways drain), random 63-bit session IDs, `sess:<id>` + `session_epoch` in Valkey, reconnect tickets sealed for gateways over NATS and redeemed over HTTPS with an epoch CAS |
-| Orchestrator / world directory (05 §1.4) | `internal/orchestrator` | one leader per shard anchored in PostgreSQL (`orch_leader`, 10 s lease, term-fenced writes, standby takeover), process registry (1 Hz heartbeat over NATS, 12 s liveness TTL, per-name epochs), time-prefixed ID blocks (`id_alloc`, `AllocateIdBlocks`), v0 zone placement (one cell per zone) under lease generations allocated in PostgreSQL, `ResolveZone`, KV projection `DIRECTORY`, local process supervision with backoff |
+| Orchestrator / world directory (05 §1.4) | `internal/orchestrator` | one leader per shard anchored in PostgreSQL (`orch_leader`, 10 s lease, term-fenced writes, standby takeover), process registry (failure domain `fd{az, rack, host}` and server build stored at registration; 1 Hz heartbeat over NATS reporting the regions held with their generations; 12 s liveness TTL, per-name epochs), time-prefixed ID blocks (`id_alloc`, `AllocateIdBlocks`), v0 zone placement (one cell per zone, one region per zone) under `region_lease` generations allocated in PostgreSQL, `ResolveZone`, KV projection `DIRECTORY`, local process supervision with backoff |
 | Platform | `internal/platform` | config (defaults < TOML < `HELIOS_*` env < flags), slog, OpenTelemetry hooks, `/healthz` `/readyz`, Prometheus `/metrics`, HTTP(S) servers with graceful shutdown |
 
 ## Run it
@@ -36,6 +36,23 @@ about 120 MB). Everything the backend owns lives in the data directory (`--data`
 ```
 saved/backend/  helios.toml (optional)  pg/  pg-runtime/  nats/  keys/  logs/  backend.lock
 ```
+
+PostgreSQL holds one schema per service, `svc_identity` and `svc_orch` (05 §1.4, §3). A data directory
+created before WP-0.15r has them as `identity` and `orchestrator`: the first start (or `migrate`) renames them
+in place, encrypts the stored e-mail addresses, client IPs and ban reasons with the keys in `keys/`, moves
+the IPs and ban reasons out of the audit chain (verifying the old chain row by row and against its head first,
+and recording that head in an `audit.rechain` row and in the log), drops the plain-text columns and rewrites
+those tables and their statistics, so existing accounts keep working. Consequences:
+- **The upgrade is one-way.** Do not open an upgraded data directory with an older helios-backend: it would
+  recreate the old schemas and write plain text into them (the new one logs an error if it finds them).
+  Restore a backup instead.
+- Plain text written before the upgrade can still be in the WAL and in backups taken before it.
+- Upgrade with a process that runs Identity (the default all-in-one start, or `helios-backend migrate`):
+  an orchestrator-only process has no PII keys, so it stops at `svc_identity` version 2 with
+  `ErrNeedPIIKeys` before it reaches `svc_orch`.
+- A legacy database whose audit chain does not verify is refused (`ErrAuditChainBroken`) on every start, and
+  there is no override, since one would launder the break: restore a backup from before the break, or, for a
+  dev data directory, delete it.
 
 Only one helios-backend can own a data directory (an OS file lock; a crashed backend never leaves it
 stuck). If a previous backend was killed hard and its PostgreSQL is still running, the next start stops it.
@@ -163,8 +180,8 @@ children). With an external bus, credentials go in `--bus nats://user:password@h
 
 | Subject | Who | Payload |
 |---|---|---|
-| `rpc.<shard>.orch.RegisterProcess` | cell, gateway | `{name, kind: cell\|gateway, address, zones[], keyId, capacity, pid, version}` → `{processId, epoch, leaseTtlMs, heartbeatIntervalMs, assignments[], idShard, idBlocks[]}` (cells get 2 block prefixes; gateways never mint) |
-| `rpc.<shard>.orch.Heartbeat` | every `heartbeatIntervalMs` | `{processId, epoch, load: {players, freeSlots, tickP99Ms}}` → `{leaseExpires, assignments[], mode}`; `failed_precondition "lease_lost"` means: stop acting as owner, register again |
+| `rpc.<shard>.orch.RegisterProcess` | cell, gateway | `{name, kind: cell\|gateway, address, zones[], keyId, capacity, pid, version, fd: {az, rack, host}, serverBuild}` → `{processId, epoch, leaseTtlMs, heartbeatIntervalMs, assignments[], idShard, idBlocks[]}` (cells get 2 block prefixes; gateways never mint). `fd` and `serverBuild` are optional and stored in `svc_orch.process` (05 §1.4.3); a bare `host` fills `fd.host` |
+| `rpc.<shard>.orch.Heartbeat` | every `heartbeatIntervalMs` | `{processId, epoch, load: {players, freeSlots, tickP99Ms}, held: [{region, leaseGen}]}` → `{leaseExpires, assignments[], mode}`; `failed_precondition "lease_lost"` means: stop acting as owner, register again. `held` (optional, ≤ 256) is what the process holds; the leader records it with the registration |
 | `rpc.<shard>.orch.AllocateIdBlocks` | cell minter | `{processId, epoch, n: 1..16}` → `{idShard, prefixes[]}` |
 | `rpc.<shard>.orch.Deregister` | on shutdown | `{processId, epoch}` |
 | `rpc.<shard>.orch.ResolveZone` | anyone | `{zoneId \| zoneName}` → `{zoneId, zoneName, leaseGen, processId, process, epoch, address}` |
@@ -172,15 +189,21 @@ children). With an external bus, credentials go in `--bus nats://user:password@h
 | `ctl.<shard>.gateway.all.kick` | gateways subscribe | `{sessionId, reason}` (superseded, logout) |
 | `ctl.<shard>.gateway.all.session_epoch` | gateways subscribe | `{sessionId, epoch}` — drop your copy if you hold an older epoch |
 | `evt.<shard>.orch.{process.up,process.down,zone.changed}` | informational | registry changes |
-| KV `DIRECTORY` (`zone.<id>`) | watchers | read projection of zone ownership (PostgreSQL is the authority; there is no `LEASES` bucket, 05 §2.3) |
+| KV `DIRECTORY` (`zone.<id>`) | watchers | read projection of `region_lease` (PostgreSQL is the authority; there is no `LEASES` bucket, 05 §2.3) |
+
+**Regions and generations (05 §1.4.2).** `svc_orch.region_lease(region_id, instance_id, holder_proc, lease_gen,
+assigned_at)` has one row per region. A v0 zone is its own instance with one region (`Whole`) whose ID is the
+zone ID, so `zoneId` names the region in assignments and `held` lists until multi-region zones add a region
+field. Every placement bumps the region's `lease_gen` in a term-fenced transaction before the holder is told.
 
 `internal/orchestrator.Agent` is the reference implementation of the register/heartbeat/fence loop. The
-**holder rule** (05 §1.4.2): a process never fences itself because it cannot reach the orchestrator; it keeps
-its zones and keeps heartbeating, and stops acting as owner only when told `lease_lost` (or when a zone leaves,
-or changes generation in, the assignments a heartbeat returns). A process silent for the 12 s liveness TTL
-loses its zones; a gateway that misses three heartbeats gets no new connect tokens.
+**holder rule** (05 §1.4.2): a process never fences itself because it cannot reach the orchestrator, however
+long that lasts; it keeps its regions, keeps heartbeating and reporting them, and drops a region only on an
+answer from the leader: `lease_lost` (every region), a higher `leaseGen` for the region in a heartbeat reply, or
+the region missing from the reply's assignments (`Agent.OnRegionLost` names which). A process silent for the
+12 s liveness TTL loses its zones; a gateway that misses three heartbeats gets no new connect tokens.
 
-**Leadership (05 §1.4.1).** Each shard has one orchestrator leader, recorded in `orchestrator.orch_leader`
+**Leadership (05 §1.4.1).** Each shard has one orchestrator leader, recorded in `svc_orch.orch_leader`
 (10 s lease, renewed every 2 s; the leader acts only while its last renewal is < 8 s old). Every mutating
 statement share-locks that row and checks the term, so a deposed leader's writes touch nothing. A second
 backend on the same database stays on standby and takes over when the lease expires; a backend restarted on
@@ -188,7 +211,7 @@ the same host and data directory reclaims its own lease at once. A new leader st
 processes are answered `lease_lost` and register again under new epochs and lease generations.
 
 **IDs (05 §1.4.5).** 63-bit block IDs: `0 | 41-bit block prefix (ms since 2026-01-01) | 5-bit shard |
-17-bit offset`. `AllocateIdBlocks` advances `orchestrator.id_alloc` (`last_ms = GREATEST(last_ms + n, now_ms)`),
+17-bit offset`. `AllocateIdBlocks` advances `svc_orch.id_alloc` (`last_ms = GREATEST(last_ms + n, now_ms)`),
 so prefixes never repeat and no process needs a node ID. `pkg/idgen.Minter` holds 2 blocks (4 for battle
 cells), refills in the background at half use, retires blocks after an hour and keeps minting from retired
 blocks while the control plane is unreachable. Cells mint the same layout in C++ (`testdata/vectors/block_ids.json`).
@@ -206,6 +229,22 @@ session epoch, content build, zone, placement ticket, entitlements, attestation 
 - Gateways must set netcode's `max_connect_token_lifetime` to `session.token_expiry` (default 30 s,
   `HELIOS_TOKEN_LIFETIME` for children) or they refuse fresh tokens right after they start.
 - `reconnect-ticket.json`, `jwt-ed25519.json` — backend-only.
+- `subject-kek.json`, `email-bidx-pepper.json` — Identity's PII keys (05 §6.6). Each account's 256-bit data
+  key (DEK) is wrapped by the current KEK generation (XChaCha20-Poly1305, bound to the account's row) in
+  `svc_identity.subject_key`; the address is sealed under the DEK in `account.email_ct` (AAD = table, column,
+  account ID), and `account.email_bidx` = HMAC-SHA256(pepper, trimmed lower-case address) is the unique
+  login key. Without these files no address can be read or looked up, and deleting an account's DEK shreds its
+  PII. There is no `keys rotate` for them yet: a KEK generation may be dropped only after every DEK it wraps is
+  re-wrapped, and the pepper rotates only with a re-index (a pepper file with a second generation is refused).
+  The same DEK seals the client IP of each refresh token (bound to the token row) and of each
+  `svc_identity.login_history` row (bound to that row; deleted after 90 days, 05 §6.6). Unknown logins have no
+  subject, so their IP is not stored at all. A ban's reason is sealed the same way in
+  `account.ban_reason_ct`. Each file must carry its own purpose and the two must differ; with encrypted
+  accounts in the database a missing file is never regenerated, and a KEK that does not unwrap the stored
+  keys, or a pepper that does not reproduce a stored blind index, stops the start. Only processes that run
+  Identity load them. Staging and prod mount them from
+  the secret store until KMS holds them; 05 §6.5 wants the pepper never to leave KMS, so this is a Phase 0
+  deviation (see Plan conformance).
 - Dev generates missing key files; `--env prod` refuses to (a silently generated shard key would make every
   gateway reject tokens) and expects them in `--keys-dir`, mounted from the secret store.
 
@@ -215,6 +254,7 @@ session epoch, content build, zone, placement ticket, entitlements, attestation 
 go build ./... && go vet ./... && go test ./...           # fast, no network, no C compiler
 HELIOS_NETCODE_INTEROP=1 go test ./pkg/connecttoken/       # + builds a C harness against third_party/netcode
 go test -tags integration ./internal/integration/ -v       # boots the whole stack on embedded PostgreSQL
+go test -run 'TestConformance/holder_rule' ./internal/orchestrator/   # CONF-03's test, 60 s (skipped with -short)
 ```
 
 - **Golden vectors** in `testdata/vectors/` are shared with the C++ side: `netcode_token_fixed.json` (tokens
@@ -233,7 +273,23 @@ go test -tags integration ./internal/integration/ -v       # boots the whole sta
   over TCP NATS, cell ID blocks, sealed tickets and Reconnect, PostgreSQL leadership (a second orchestrator
   stays on standby, stale-term writes are refused), launch-code families, ban kicks, refresh reuse detection,
   the PostgreSQL audit chain and the store conformance suites against real PostgreSQL (including races of
-  revocation against rotation). `HELIOS_TEST_LOG=1` shows backend logs.
+  revocation against rotation). It also checks:
+  - the schema the plan requires: only `svc_*` schemas; every e-mail, IP, date-of-birth or real-name column is
+    `*_ct` or `*_bidx` in `svc_identity` (CONF-07), and so is the ban reason; leases in `region_lease`;
+  - the upgrade of a database built by the pre-WP-0.15r migrations: rename, encryption of stored addresses,
+    IPs and ban reasons, the verified re-chain of the audit log, no plain text left in the tables' files or in
+    `pg_statistic` on disk, generations carried into `region_lease`; a broken old chain, or one truncated or
+    emptied behind its head, is refused; concurrent upgrades and first starts converge;
+  - the adoption guards (foreign or pre-created schemas) and the PII key-file guards;
+  - **perf:** BE-A2's connect-token issue p99 < 100 ms at 100/s (`TestPerfTokenIssueAt100PerSecond`, 1,000
+    `CreateSession` calls over HTTP, each timed from its scheduled slot; under 20 ms p99 in this repository's
+    Linux container).
+
+  `HELIOS_TEST_LOG=1` shows backend logs.
+- **Conformance** (`TestConformance/<name>`, the test IDs `conformance/<name>` of 09 §5.10): `holder_rule`
+  (CONF-03) keeps the control plane unreachable for 60 s (no responders, timeouts, `unavailable` answers) and
+  requires the Agent to keep every region, then to drop exactly the region whose generation rose. A shorter
+  outage would not be CONF-03 evidence, so `-short` skips it; CI's Go jobs run without `-short`.
 - Fuzzing: `go test -fuzz FuzzParse ./pkg/connecttoken/`.
 
 ## Layout
@@ -252,8 +308,9 @@ pkg/connecttoken/          netcode 1.02 codec + Helios user data (+ cinterop tes
 pkg/authn/                 EdDSA JWT issue/verify, JWKS, bearer middleware
 pkg/ratelimit/             GCRA buckets in Valkey (one Lua script)
 pkg/rpc/                   Connect-style JSON over HTTP, JSON request/reply over NATS, error codes
+pkg/pii/                   DEKs, KEK wrapping, field sealing (XChaCha20-Poly1305) and blind indexes (05 §6.6)
 pkg/idgen/ pkg/keyring/ pkg/clock/ pkg/testkit/
-migrations/<schema>/       goose SQL migrations, embedded, one schema per service
+migrations/<service>/      goose migrations for svc_<service>, embedded (plus Go steps in migrations.go)
 deploy/                    docker-compose.yml, Dockerfile, helios.example.toml
 testdata/vectors/          golden vectors shared with C++
 ```
@@ -261,16 +318,28 @@ testdata/vectors/          golden vectors shared with C++
 ## Not yet (by design, see 05 §9)
 
 Login queue, character/ledger/market and the other Phase 1+ services; connect-go/protobuf stubs (waiting for
-schemac); OIDC/MFA; region leases beyond v0 zone placement (`region_lease`, zone leaders, handle blocks),
-two-signal failure detection and control-plane degraded mode (Phase 2); per-role NATS users with narrow
-subject permissions; PostgreSQL roles per service; the transactional outbox and JetStream `EVT` stream; OTLP
-exporters.
+schemac); OIDC/MFA; multi-region zones, instances, zone leaders and handle blocks; failure detection that uses
+`fd` and held regions, and control-plane degraded mode (Phase 2); KEK re-wrapping, erasure and DSAR (Phase 3);
+per-role NATS users with narrow subject permissions; PostgreSQL roles per service; the transactional outbox and
+JetStream `EVT` stream; OTLP exporters.
 
 ## Plan conformance
 
-Plan-Rev: 1
+Plan-Rev: 6
 
-Written to draft v1 (plan revision 1), and since reworked to revision 2's lease and ID design, except the open
-rows of 09 §5.10.4 (a) from revisions 2 and 3: the `svc_identity` and `svc_orch` schema names, the encrypted
-e-mail columns, `region_lease`, failure domains in registration and held regions in heartbeats. WP-0.15r
-reworks them. Revisions 4–6 added no delta (§5.10.4 (a), (c)).
+Written to draft v1 (plan revision 1), reworked to revision 2's lease and ID design, and brought to revision 6 by
+WP-0.15r (09 §5.10.4 (a)): the `svc_identity` and `svc_orch` schema names, e-mail as `email_ct` and
+`email_bidx`, client IPs as `client_ip_ct` and ban reasons as `ban_reason_ct` under per-account DEKs, audit
+rows without IPs or GM text (row format 2), `region_lease`, `fd` and `serverBuild` in registration, and held
+regions in heartbeats. No delta is open. Revisions 4–6 added none (§5.10.4 (a), (c)).
+
+Deviations, all Phase 0:
+- **05 §3.3 (expand/contract).** No release had shipped, so the schema rename is a single in-place step and
+  each expand and its contract land together in WP-0.15r; upgrade every replica together.
+- **05 §6.5 (keys in KMS).** The subject KEK and the blind-index pepper are key files (dev generates them;
+  staging and prod mount them from the secret store) until the KMS integration replaces the file-backed KEK
+  and blind index behind the same types (`pkg/pii`).
+- **05 §1.17 and §6.5 (append-only audit log).** Migration 3 rewrites the pre-WP-0.15r audit log once, to take
+  client IPs, the unkeyed digests of unknown logins and ban reasons out of the chain: it verifies the old chain
+  first, then recomputes it and appends an `audit.rechain` row with the old head (also logged). Nothing had
+  shipped and no anchor exists yet; WP-1.14's first anchor must cover that row.

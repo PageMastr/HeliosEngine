@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -89,6 +90,17 @@ func (l *Limiter) Allow(ctx context.Context, key string, lim Limit) (Result, err
 	return l.AllowN(ctx, key, lim, 1)
 }
 
+// keyClass is key without its last part, which names the client (an IP address, an account, a
+// blind index): logs carry the bucket's class, never whom it limits. Keys are
+// "<scope>:<kind>:<id>", and an IPv6 ID holds colons of its own.
+func keyClass(key string) string {
+	parts := strings.SplitN(key, ":", 3)
+	if len(parts) < 3 {
+		return parts[0]
+	}
+	return parts[0] + ":" + parts[1]
+}
+
 // AllowN charges n requests.
 func (l *Limiter) AllowN(ctx context.Context, key string, lim Limit, n int) (Result, error) {
 	if !lim.Enabled() {
@@ -106,7 +118,7 @@ func (l *Limiter) AllowN(ctx context.Context, key string, lim Limit, n int) (Res
 	vals, err := script.Run(ctx, l.rdb, []string{l.prefix + key}, now, interval, burst, n).Int64Slice()
 	if err != nil {
 		if l.FailOpen {
-			l.log.WarnContext(ctx, "rate limiter unavailable; failing open", "key", key, "err", err)
+			l.log.WarnContext(ctx, "rate limiter unavailable; failing open", "bucket", keyClass(key), "err", err)
 			return Result{Allowed: true}, nil
 		}
 		return Result{}, err

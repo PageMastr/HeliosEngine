@@ -20,9 +20,15 @@ type Factory func(t *testing.T) identity.Store
 
 var base = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 
+// account builds a row as the service would, with stand-ins for the sealed address and its
+// blind index (the store never sees plain-text e-mail).
 func account(id int64, email, handle string, disc int16) *identity.Account {
-	return &identity.Account{ID: id, Email: email, EmailNorm: email, Handle: handle, HandleNorm: handle,
-		Discriminator: disc, PasswordHash: "$argon2id$x", CreatedAt: base, UpdatedAt: base}
+	return &identity.Account{ID: id, EmailCT: []byte("sealed:" + email), EmailBidx: hash(email), Handle: handle,
+		HandleNorm: handle, Discriminator: disc, PasswordHash: "$argon2id$x", CreatedAt: base, UpdatedAt: base}
+}
+
+func subjectKey(id int64) *identity.SubjectKey {
+	return &identity.SubjectKey{AccountID: id, WrappedDEK: hash(fmt.Sprint("dek", id)), KEKVersion: 1}
 }
 
 func hash(s string) []byte {
@@ -37,30 +43,59 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("accounts", func(t *testing.T) {
 		s := newStore(t)
 		a := account(1, "a@x.io", "ada", 42)
-		if err := s.CreateAccount(ctx, a, identity.NewAudit(base, 1, 1, identity.ActionRegister, "1.2.3.4", nil)); err != nil {
+		if err := s.CreateAccount(ctx, a, subjectKey(1), identity.NewAudit(base, 1, 1, identity.ActionRegister, nil)); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.CreateAccount(ctx, account(2, "a@x.io", "bob", 1), nil); !errors.Is(err, identity.ErrEmailTaken) {
+		if err := s.CreateAccount(ctx, account(2, "a@x.io", "bob", 1), subjectKey(2), nil); !errors.Is(err, identity.ErrEmailTaken) {
 			t.Fatalf("duplicate email: %v", err)
 		}
-		if err := s.CreateAccount(ctx, account(3, "c@x.io", "ada", 42), nil); !errors.Is(err, identity.ErrTagTaken) {
+		if err := s.CreateAccount(ctx, account(3, "c@x.io", "ada", 42), subjectKey(3), nil); !errors.Is(err, identity.ErrTagTaken) {
 			t.Fatalf("duplicate tag: %v", err)
 		}
-		if err := s.CreateAccount(ctx, account(4, "d@x.io", "ada", 43), nil); err != nil {
+		if err := s.CreateAccount(ctx, account(4, "d@x.io", "ada", 43), subjectKey(4), nil); err != nil {
 			t.Fatalf("same handle, other discriminator: %v", err)
 		}
 		for name, get := range map[string]func() (*identity.Account, error){
 			"id":    func() (*identity.Account, error) { return s.AccountByID(ctx, 1) },
-			"email": func() (*identity.Account, error) { return s.AccountByEmail(ctx, "a@x.io") },
+			"email": func() (*identity.Account, error) { return s.AccountByEmailIndex(ctx, hash("a@x.io")) },
 			"tag":   func() (*identity.Account, error) { return s.AccountByTag(ctx, "ada", 42) },
 		} {
 			got, err := get()
-			if err != nil || got.ID != 1 || got.Handle != "ada" || !got.CreatedAt.Equal(base) || got.BannedUntil != nil {
+			if err != nil || got.ID != 1 || got.Handle != "ada" || !got.CreatedAt.Equal(base) || got.BannedUntil != nil ||
+				!bytes.Equal(got.EmailCT, a.EmailCT) || !bytes.Equal(got.EmailBidx, a.EmailBidx) {
 				t.Fatalf("lookup by %s: %+v %v", name, got, err)
 			}
 		}
 		if _, err := s.AccountByID(ctx, 99); !errors.Is(err, identity.ErrNotFound) {
 			t.Fatalf("missing: %v", err)
+		}
+		for _, bidx := range [][]byte{hash("nobody@x.io"), nil} {
+			if _, err := s.AccountByEmailIndex(ctx, bidx); !errors.Is(err, identity.ErrNotFound) {
+				t.Fatalf("unknown blind index %x: %v", bidx, err)
+			}
+		}
+		// The subject key is stored with the account, and only when the account is.
+		if k, err := s.SubjectKey(ctx, 1); err != nil || k.AccountID != 1 || k.KEKVersion != 1 ||
+			!bytes.Equal(k.WrappedDEK, subjectKey(1).WrappedDEK) {
+			t.Fatalf("subject key: %+v %v", k, err)
+		}
+		for _, id := range []int64{2, 3, 99} {
+			if _, err := s.SubjectKey(ctx, id); !errors.Is(err, identity.ErrNotFound) {
+				t.Fatalf("subject key of a rejected or missing account %d: %v", id, err)
+			}
+		}
+		for _, key := range []*identity.SubjectKey{nil, subjectKey(6)} {
+			if err := s.CreateAccount(ctx, account(5, "e@x.io", "eve", 1), key, nil); err == nil {
+				t.Fatalf("account created with subject key %+v", key)
+			}
+		}
+		// A duplicate account ID is refused and leaves the first account's key alone.
+		dup := &identity.SubjectKey{AccountID: 1, WrappedDEK: hash("other dek"), KEKVersion: 2}
+		if err := s.CreateAccount(ctx, account(1, "f@x.io", "fay", 1), dup, nil); err == nil {
+			t.Fatal("duplicate account id accepted")
+		}
+		if k, _ := s.SubjectKey(ctx, 1); k == nil || !bytes.Equal(k.WrappedDEK, subjectKey(1).WrappedDEK) {
+			t.Fatalf("a rejected duplicate replaced the subject key: %+v", k)
 		}
 		if _, err := s.AccountByTag(ctx, "ada", 44); !errors.Is(err, identity.ErrNotFound) {
 			t.Fatalf("missing tag: %v", err)
@@ -82,20 +117,34 @@ func Run(t *testing.T, newStore Factory) {
 
 	t.Run("refresh rotation and reuse", func(t *testing.T) {
 		s := newStore(t)
-		if err := s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), nil); err != nil {
+		if err := s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), subjectKey(1), nil); err != nil {
 			t.Fatal(err)
 		}
-		t0 := &identity.RefreshToken{Hash: hash("t0"), FamilyID: 500, AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour)}
+		t0 := &identity.RefreshToken{Hash: hash("t0"), FamilyID: 500, AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour),
+			ClientIPCT: []byte("sealed ip t0")}
 		if err := s.InsertRefreshToken(ctx, t0); err != nil {
 			t.Fatal(err)
 		}
-		t1 := &identity.RefreshToken{Hash: hash("t1"), IssuedAt: base, ExpiresAt: base.Add(time.Hour)}
+		if acct, err := s.RefreshTokenOwner(ctx, hash("t0")); err != nil || acct != 1 {
+			t.Fatalf("owner: %d %v", acct, err)
+		}
+		if _, err := s.RefreshTokenOwner(ctx, hash("nope")); !errors.Is(err, identity.ErrTokenInvalid) {
+			t.Fatalf("owner of an unknown token: %v", err)
+		}
+		// A successor claimed for another account is refused, and the token stays unused.
+		if _, err := s.RotateRefreshToken(ctx, hash("t0"), &identity.RefreshToken{Hash: hash("tx"), AccountID: 2, IssuedAt: base,
+			ExpiresAt: base.Add(time.Hour)}, base.Add(time.Minute), nil); !errors.Is(err, identity.ErrTokenInvalid) {
+			t.Fatalf("successor for another account: %v", err)
+		}
+		t1 := &identity.RefreshToken{Hash: hash("t1"), AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour),
+			ClientIPCT: []byte("sealed ip t1")}
 		old, err := s.RotateRefreshToken(ctx, hash("t0"), t1, base.Add(time.Minute), nil)
-		if err != nil || old.AccountID != 1 || old.FamilyID != 500 || t1.FamilyID != 500 || t1.AccountID != 1 {
+		if err != nil || old.AccountID != 1 || old.FamilyID != 500 || t1.FamilyID != 500 || t1.AccountID != 1 ||
+			!bytes.Equal(old.ClientIPCT, t0.ClientIPCT) {
 			t.Fatalf("rotate: %+v %+v %v", old, t1, err)
 		}
 		// Reusing t0 revokes the family, including the live t1.
-		reuse := identity.NewAudit(base, 0, 0, identity.ActionRefreshReuse, "", nil)
+		reuse := identity.NewAudit(base, 0, 0, identity.ActionRefreshReuse, nil)
 		if _, err := s.RotateRefreshToken(ctx, hash("t0"), &identity.RefreshToken{Hash: hash("t2"), IssuedAt: base,
 			ExpiresAt: base.Add(time.Hour)}, base.Add(2*time.Minute), reuse); !errors.Is(err, identity.ErrTokenReused) {
 			t.Fatalf("reuse: %v", err)
@@ -120,7 +169,7 @@ func Run(t *testing.T, newStore Factory) {
 		// Logout revokes the family.
 		l0 := &identity.RefreshToken{Hash: hash("l0"), FamilyID: 700, AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour)}
 		_ = s.InsertRefreshToken(ctx, l0)
-		got, err := s.RevokeFamilyOf(ctx, hash("l0"), base, identity.NewAudit(base, 0, 0, identity.ActionLogout, "", nil))
+		got, err := s.RevokeFamilyOf(ctx, hash("l0"), base, identity.NewAudit(base, 0, 0, identity.ActionLogout, nil))
 		if err != nil || got.FamilyID != 700 {
 			t.Fatalf("logout: %v", err)
 		}
@@ -135,7 +184,7 @@ func Run(t *testing.T, newStore Factory) {
 
 	t.Run("concurrent rotation has one winner", func(t *testing.T) {
 		s := newStore(t)
-		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), nil)
+		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), subjectKey(1), nil)
 		_ = s.InsertRefreshToken(ctx, &identity.RefreshToken{Hash: hash("c0"), FamilyID: 9, AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour)})
 		var wg sync.WaitGroup
 		results := make(chan error, 8)
@@ -165,8 +214,8 @@ func Run(t *testing.T, newStore Factory) {
 
 	t.Run("family branches and liveness", func(t *testing.T) {
 		s := newStore(t)
-		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), nil)
-		_ = s.CreateAccount(ctx, account(2, "b@x.io", "bob", 1), nil)
+		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), subjectKey(1), nil)
+		_ = s.CreateAccount(ctx, account(2, "b@x.io", "bob", 1), subjectKey(2), nil)
 		_ = s.InsertRefreshToken(ctx, &identity.RefreshToken{Hash: hash("f0"), FamilyID: 40, AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour)})
 		if acct, err := s.ActiveFamily(ctx, 40, base); err != nil || acct != 1 {
 			t.Fatalf("active family: %d %v", acct, err)
@@ -208,10 +257,10 @@ func Run(t *testing.T, newStore Factory) {
 		// A banned account's family cannot grow.
 		_ = s.InsertRefreshToken(ctx, &identity.RefreshToken{Hash: hash("h0"), FamilyID: 50, AccountID: 2, IssuedAt: base, ExpiresAt: base.Add(time.Hour)})
 		until := base.Add(time.Hour)
-		_ = s.SetBan(ctx, 2, &until, "x", base, nil)
-		_ = s.SetBan(ctx, 2, nil, "", base, nil) // unban: the ban revoked the tokens anyway
+		_ = s.SetBan(ctx, 2, &until, []byte("x"), base, nil)
+		_ = s.SetBan(ctx, 2, nil, nil, base, nil) // unban: the ban revoked the tokens anyway
 		_ = s.InsertRefreshToken(ctx, &identity.RefreshToken{Hash: hash("h1"), FamilyID: 51, AccountID: 2, IssuedAt: base, ExpiresAt: base.Add(time.Hour)})
-		_ = s.SetBan(ctx, 2, &until, "x", base, nil)
+		_ = s.SetBan(ctx, 2, &until, []byte("x"), base, nil)
 		if err := s.ExtendFamily(ctx, &identity.RefreshToken{Hash: hash("h2"), FamilyID: 51, AccountID: 2, IssuedAt: base,
 			ExpiresAt: base.Add(time.Hour)}, base); !errors.Is(err, identity.ErrTokenInvalid) {
 			t.Fatalf("banned family extended: %v", err)
@@ -224,7 +273,7 @@ func Run(t *testing.T, newStore Factory) {
 		// rotation's successor survive the revocation. Each round races both kinds across
 		// several families at once, then requires every family to be dead.
 		s := newStore(t)
-		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), nil)
+		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), subjectKey(1), nil)
 		const families = 8
 		for round := 0; round < 25; round++ {
 			type fam struct {
@@ -277,28 +326,28 @@ func Run(t *testing.T, newStore Factory) {
 
 	t.Run("ban revokes tokens", func(t *testing.T) {
 		s := newStore(t)
-		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), nil)
+		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), subjectKey(1), nil)
 		_ = s.InsertRefreshToken(ctx, &identity.RefreshToken{Hash: hash("b0"), FamilyID: 1, AccountID: 1, IssuedAt: base, ExpiresAt: base.Add(time.Hour)})
 		until := base.Add(24 * time.Hour)
-		if err := s.SetBan(ctx, 1, &until, "botting", base, identity.NewAudit(base, 7, 1, identity.ActionBan, "", nil)); err != nil {
+		if err := s.SetBan(ctx, 1, &until, []byte("sealed reason"), base, identity.NewAudit(base, 7, 1, identity.ActionBan, nil)); err != nil {
 			t.Fatal(err)
 		}
 		a, _ := s.AccountByID(ctx, 1)
-		if a.BannedUntil == nil || !a.BannedUntil.Equal(until) || a.BanReason != "botting" || !a.BannedAt(base) || a.BannedAt(until) {
+		if a.BannedUntil == nil || !a.BannedUntil.Equal(until) || string(a.BanReasonCT) != "sealed reason" || !a.BannedAt(base) || a.BannedAt(until) {
 			t.Fatalf("ban: %+v", a)
 		}
 		if _, err := s.RotateRefreshToken(ctx, hash("b0"), &identity.RefreshToken{Hash: hash("b1"), IssuedAt: base,
 			ExpiresAt: base.Add(time.Hour)}, base, nil); !errors.Is(err, identity.ErrTokenInvalid) {
 			t.Fatalf("token survived ban: %v", err)
 		}
-		if err := s.SetBan(ctx, 1, nil, "", base, nil); err != nil {
+		if err := s.SetBan(ctx, 1, nil, []byte("ignored"), base, nil); err != nil {
 			t.Fatal(err)
 		}
 		a, _ = s.AccountByID(ctx, 1)
-		if a.BannedUntil != nil || a.BanReason != "" {
+		if a.BannedUntil != nil || a.BanReasonCT != nil {
 			t.Fatalf("unban: %+v", a)
 		}
-		if err := s.SetBan(ctx, 42, &until, "x", base, nil); !errors.Is(err, identity.ErrNotFound) {
+		if err := s.SetBan(ctx, 42, &until, []byte("x"), base, nil); !errors.Is(err, identity.ErrNotFound) {
 			t.Fatalf("ban missing: %v", err)
 		}
 	})
@@ -306,7 +355,7 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("audit chain", func(t *testing.T) {
 		s := newStore(t)
 		for i := 0; i < 25; i++ {
-			e := identity.NewAudit(base.Add(time.Duration(i)*time.Second), int64(i), int64(i+1), "test.action", "10.0.0.1",
+			e := identity.NewAudit(base.Add(time.Duration(i)*time.Second), int64(i), int64(i+1), "test.action",
 				map[string]any{"i": i, "z": "last", "a": "first"})
 			if err := s.AppendAudit(ctx, e); err != nil {
 				t.Fatal(err)
@@ -338,7 +387,7 @@ func Run(t *testing.T, newStore Factory) {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
-				if err := s.AppendAudit(ctx, identity.NewAudit(base, 0, 0, "concurrent", "", map[string]any{"i": i})); err != nil {
+				if err := s.AppendAudit(ctx, identity.NewAudit(base, 0, 0, "concurrent", map[string]any{"i": i})); err != nil {
 					t.Error(err)
 				}
 			}(i)
@@ -353,6 +402,78 @@ func Run(t *testing.T, newStore Factory) {
 		}
 		if !bytes.Equal(all[34].PrevHash[:], all[33].Hash[:]) {
 			t.Fatal("tail link")
+		}
+	})
+
+	t.Run("login history", func(t *testing.T) {
+		s := newStore(t)
+		for i, at := range []time.Time{base.Add(-100 * 24 * time.Hour), base, base.Add(-time.Hour)} {
+			e := &identity.LoginEvent{ID: int64(10 + i), AccountID: 1, Action: identity.ActionLogin, At: at,
+				ClientIPCT: []byte(fmt.Sprint("sealed ", i))}
+			if err := s.AppendLoginEvent(ctx, e); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_ = s.AppendLoginEvent(ctx, &identity.LoginEvent{ID: 20, AccountID: 2, Action: identity.ActionLogin, At: base,
+			ClientIPCT: []byte("other")})
+		if err := s.AppendLoginEvent(ctx, &identity.LoginEvent{ID: 10, AccountID: 1, Action: identity.ActionLogin, At: base,
+			ClientIPCT: []byte("dup")}); err == nil {
+			t.Fatal("duplicate event id accepted")
+		}
+		h, err := s.LoginHistory(ctx, 1)
+		if err != nil || len(h) != 3 || h[0].ID != 10 || h[1].ID != 12 || h[2].ID != 11 || string(h[2].ClientIPCT) != "sealed 1" {
+			t.Fatalf("history, oldest first: %+v %v", h, err)
+		}
+		// Retention (05 §6.6: 90 days) drops what is older, and only that: a row exactly at the
+		// cutoff stays, and so does a refresh token's IP issued at or after it.
+		cutoff := base.Add(-identity.LoginHistoryRetention)
+		_ = s.AppendLoginEvent(ctx, &identity.LoginEvent{ID: 13, AccountID: 1, Action: identity.ActionLogin, At: cutoff,
+			ClientIPCT: []byte("at the cutoff")})
+		_ = s.CreateAccount(ctx, account(1, "a@x.io", "ada", 1), subjectKey(1), nil)
+		for i, tok := range []struct {
+			at time.Time
+			ip []byte
+		}{{cutoff.Add(-time.Second), []byte("old ip")}, {cutoff, []byte("recent ip")}, {cutoff.Add(-time.Hour), nil}} {
+			if err := s.InsertRefreshToken(ctx, &identity.RefreshToken{Hash: hash(fmt.Sprint("ret", i)), FamilyID: int64(90 + i),
+				AccountID: 1, IssuedAt: tok.at, ExpiresAt: tok.at.Add(time.Hour), ClientIPCT: tok.ip}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		n, err := s.PurgeLoginHistory(ctx, cutoff)
+		if err != nil || n != 2 {
+			t.Fatalf("purge: %d %v (want the 100-day-old row and one token IP)", n, err)
+		}
+		if h, _ := s.LoginHistory(ctx, 1); len(h) != 3 || h[0].ID != 13 || h[1].ID != 12 {
+			t.Fatalf("after purge: %+v", h)
+		}
+		for i, want := range []string{"", "recent ip", ""} {
+			tok, err := s.RevokeFamilyOf(ctx, hash(fmt.Sprint("ret", i)), base, nil)
+			if err != nil || string(tok.ClientIPCT) != want {
+				t.Fatalf("token %d after purge: %+v %v", i, tok, err)
+			}
+		}
+		if h, _ := s.LoginHistory(ctx, 2); len(h) != 1 {
+			t.Fatalf("other account: %+v", h)
+		}
+	})
+
+	t.Run("audit note digest is chained", func(t *testing.T) {
+		s := newStore(t)
+		e := identity.NewAudit(base, 1, 2, "test.note", nil)
+		e.NoteDigest = hash("note ciphertext")
+		if err := s.AppendAudit(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+		all, err := s.ListAudit(ctx, 0, 0)
+		if err != nil || len(all) != 1 || !bytes.Equal(all[0].NoteDigest, e.NoteDigest) {
+			t.Fatalf("list: %+v %v", all, err)
+		}
+		if err := identity.VerifyAuditChain([32]byte{}, all); err != nil {
+			t.Fatal(err)
+		}
+		all[0].NoteDigest = hash("another note")
+		if err := identity.VerifyAuditChain([32]byte{}, all); !errors.Is(err, identity.ErrAuditChainBroken) {
+			t.Fatalf("a swapped note digest must break the chain: %v", err)
 		}
 	})
 

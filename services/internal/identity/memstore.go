@@ -3,6 +3,7 @@ package identity
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -13,18 +14,21 @@ import (
 type MemStore struct {
 	mu       sync.Mutex
 	accounts map[int64]*Account
+	keys     map[int64]*SubjectKey
 	tokens   map[string]*RefreshToken
+	logins   []LoginEvent
 	audit    []AuditEntry
 	head     [32]byte
 }
 
 // NewMemStore returns an empty store.
 func NewMemStore() *MemStore {
-	return &MemStore{accounts: map[int64]*Account{}, tokens: map[string]*RefreshToken{}}
+	return &MemStore{accounts: map[int64]*Account{}, keys: map[int64]*SubjectKey{}, tokens: map[string]*RefreshToken{}}
 }
 
 func cloneAccount(a *Account) *Account {
 	c := *a
+	c.EmailCT, c.EmailBidx, c.BanReasonCT = bytes.Clone(a.EmailCT), bytes.Clone(a.EmailBidx), bytes.Clone(a.BanReasonCT)
 	if a.BannedUntil != nil {
 		t := *a.BannedUntil
 		c.BannedUntil = &t
@@ -48,11 +52,17 @@ func (m *MemStore) appendAuditLocked(e *AuditEntry) {
 }
 
 // CreateAccount implements Store.
-func (m *MemStore) CreateAccount(_ context.Context, a *Account, audit *AuditEntry) error {
+func (m *MemStore) CreateAccount(_ context.Context, a *Account, key *SubjectKey, audit *AuditEntry) error {
+	if key == nil || key.AccountID != a.ID {
+		return errors.New("identity: an account needs its own subject key")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, dup := m.accounts[a.ID]; dup {
+		return errors.New("identity: duplicate account id") // PostgreSQL: account_pkey
+	}
 	for _, x := range m.accounts {
-		if x.EmailNorm == a.EmailNorm {
+		if bytes.Equal(x.EmailBidx, a.EmailBidx) {
 			return ErrEmailTaken
 		}
 		if x.HandleNorm == a.HandleNorm && x.Discriminator == a.Discriminator {
@@ -60,6 +70,7 @@ func (m *MemStore) CreateAccount(_ context.Context, a *Account, audit *AuditEntr
 		}
 	}
 	m.accounts[a.ID] = cloneAccount(a)
+	m.keys[a.ID] = &SubjectKey{AccountID: key.AccountID, WrappedDEK: bytes.Clone(key.WrappedDEK), KEKVersion: key.KEKVersion}
 	m.appendAuditLocked(audit)
 	return nil
 }
@@ -80,9 +91,95 @@ func (m *MemStore) AccountByID(_ context.Context, id int64) (*Account, error) {
 	return m.find(func(a *Account) bool { return a.ID == id })
 }
 
-// AccountByEmail implements Store.
-func (m *MemStore) AccountByEmail(_ context.Context, emailNorm string) (*Account, error) {
-	return m.find(func(a *Account) bool { return a.EmailNorm == emailNorm })
+// AccountByEmailIndex implements Store.
+func (m *MemStore) AccountByEmailIndex(_ context.Context, bidx []byte) (*Account, error) {
+	if len(bidx) == 0 {
+		return nil, ErrNotFound
+	}
+	return m.find(func(a *Account) bool { return bytes.Equal(a.EmailBidx, bidx) })
+}
+
+// SubjectKey implements Store.
+func (m *MemStore) SubjectKey(_ context.Context, accountID int64) (*SubjectKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k, ok := m.keys[accountID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	c := *k
+	c.WrappedDEK = bytes.Clone(k.WrappedDEK)
+	return &c, nil
+}
+
+// AppendLoginEvent implements Store.
+func (m *MemStore) AppendLoginEvent(_ context.Context, e *LoginEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, x := range m.logins {
+		if x.ID == e.ID {
+			return errors.New("identity: duplicate login event id")
+		}
+	}
+	c := *e
+	c.ClientIPCT = bytes.Clone(e.ClientIPCT)
+	m.logins = append(m.logins, c)
+	return nil
+}
+
+// LoginHistory implements Store.
+func (m *MemStore) LoginHistory(_ context.Context, accountID int64) ([]LoginEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []LoginEvent
+	for _, e := range m.logins {
+		if e.AccountID == accountID {
+			c := e
+			c.ClientIPCT = bytes.Clone(e.ClientIPCT)
+			out = append(out, c)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].At.Equal(out[j].At) {
+			return out[i].At.Before(out[j].At)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
+}
+
+// PurgeLoginHistory implements Store.
+func (m *MemStore) PurgeLoginHistory(_ context.Context, before time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	kept := m.logins[:0]
+	var n int64
+	for _, e := range m.logins {
+		if e.At.Before(before) {
+			n++
+			continue
+		}
+		kept = append(kept, e)
+	}
+	m.logins = kept
+	for _, t := range m.tokens {
+		if t.ClientIPCT != nil && t.IssuedAt.Before(before) {
+			t.ClientIPCT = nil
+			n++
+		}
+	}
+	return n, nil
+}
+
+// RefreshTokenOwner implements Store.
+func (m *MemStore) RefreshTokenOwner(_ context.Context, hash []byte) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.tokens[string(hash)]
+	if !ok {
+		return 0, ErrTokenInvalid
+	}
+	return t.AccountID, nil
 }
 
 // AccountByTag implements Store.
@@ -117,7 +214,7 @@ func (m *MemStore) RecordLogin(_ context.Context, id int64, now time.Time, audit
 }
 
 // SetBan implements Store.
-func (m *MemStore) SetBan(_ context.Context, id int64, until *time.Time, reason string, now time.Time, audit *AuditEntry) error {
+func (m *MemStore) SetBan(_ context.Context, id int64, until *time.Time, reasonCT []byte, now time.Time, audit *AuditEntry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	a, ok := m.accounts[id]
@@ -125,10 +222,10 @@ func (m *MemStore) SetBan(_ context.Context, id int64, until *time.Time, reason 
 		return ErrNotFound
 	}
 	if until == nil {
-		a.BannedUntil, a.BanReason = nil, ""
+		a.BannedUntil, a.BanReasonCT = nil, nil
 	} else {
 		u := *until
-		a.BannedUntil, a.BanReason = &u, reason
+		a.BannedUntil, a.BanReasonCT = &u, bytes.Clone(reasonCT)
 		for _, t := range m.tokens {
 			if t.AccountID == id && t.RevokedAt == nil {
 				n := now
@@ -146,7 +243,7 @@ func (m *MemStore) InsertRefreshToken(_ context.Context, t *RefreshToken) error 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	c := *t
-	c.Hash = bytes.Clone(t.Hash)
+	c.Hash, c.ClientIPCT = bytes.Clone(t.Hash), bytes.Clone(t.ClientIPCT)
 	m.tokens[string(t.Hash)] = &c
 	return nil
 }
@@ -179,7 +276,7 @@ func (m *MemStore) ExtendFamily(_ context.Context, t *RefreshToken, now time.Tim
 		return ErrTokenInvalid
 	}
 	c := *t
-	c.Hash = bytes.Clone(t.Hash)
+	c.Hash, c.ClientIPCT = bytes.Clone(t.Hash), bytes.Clone(t.ClientIPCT)
 	m.tokens[string(t.Hash)] = &c
 	return nil
 }
@@ -209,13 +306,13 @@ func (m *MemStore) RotateRefreshToken(_ context.Context, oldHash []byte, next *R
 		m.appendAuditLocked(reuseAudit)
 		return nil, ErrTokenReused
 	}
-	if !old.ExpiresAt.After(now) {
+	if !old.ExpiresAt.After(now) || (next.AccountID != 0 && next.AccountID != old.AccountID) {
 		return nil, ErrTokenInvalid
 	}
 	n := now
 	old.UsedAt = &n
 	c := *next
-	c.Hash = bytes.Clone(next.Hash)
+	c.Hash, c.ClientIPCT = bytes.Clone(next.Hash), bytes.Clone(next.ClientIPCT)
 	c.FamilyID, c.AccountID = old.FamilyID, old.AccountID
 	next.FamilyID, next.AccountID = old.FamilyID, old.AccountID
 	m.tokens[string(c.Hash)] = &c

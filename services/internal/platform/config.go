@@ -161,8 +161,12 @@ type SessionConfig struct {
 // ZoneConfig declares a zone the orchestrator places (v0: one cell per zone).
 type ZoneConfig struct {
 	ID   int64  `toml:"id"`
-	Name string `toml:"name"`
+	Name string `toml:"name"` // 1..MaxZoneName bytes, no NUL
 }
+
+// MaxZoneName bounds a zone name in bytes; RegisterProcess refuses a longer declared name, so
+// configuration refuses one too.
+const MaxZoneName = 64
 
 // SpawnConfig declares a child process the local supervisor runs.
 type SpawnConfig struct {
@@ -591,6 +595,9 @@ func (c *Config) Validate() error {
 	for _, z := range o.Zones {
 		if z.ID <= 0 || z.Name == "" || zoneIDs[z.ID] || zoneNames[z.Name] {
 			bad("zone %d %q: ids must be positive and ids/names unique", z.ID, z.Name)
+		}
+		if len(z.Name) > MaxZoneName || strings.IndexByte(z.Name, 0) >= 0 {
+			bad("zone %d: names are at most %d bytes, without NUL", z.ID, MaxZoneName)
 		}
 		zoneIDs[z.ID], zoneNames[z.Name] = true, true
 	}

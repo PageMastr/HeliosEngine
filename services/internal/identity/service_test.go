@@ -21,6 +21,7 @@ import (
 	"github.com/PageMastr/scifi-test/services/pkg/authn"
 	"github.com/PageMastr/scifi-test/services/pkg/clock"
 	"github.com/PageMastr/scifi-test/services/pkg/idgen"
+	"github.com/PageMastr/scifi-test/services/pkg/keyring"
 	"github.com/PageMastr/scifi-test/services/pkg/ratelimit"
 	"github.com/PageMastr/scifi-test/services/pkg/rpc"
 	"github.com/PageMastr/scifi-test/services/pkg/testkit"
@@ -33,6 +34,7 @@ func TestMemStoreConformance(t *testing.T) {
 type fixture struct {
 	svc    *identity.Service
 	store  *identity.MemStore
+	pii    *identity.PIIKeys
 	clk    *clock.Fake
 	redis  *testkit.Redis
 	reg    *prometheus.Registry
@@ -66,9 +68,9 @@ func newFixture(t *testing.T, mutate ...func(*platform.IdentityConfig)) *fixture
 	}
 	t.Cleanup(ids.Close)
 	reg := prometheus.NewRegistry()
-	f := &fixture{store: store, clk: fc, redis: r, reg: reg, cfg: cfg}
+	f := &fixture{store: store, pii: newPIIKeys(t), clk: fc, redis: r, reg: reg, cfg: cfg}
 	svc, err := identity.New(identity.Deps{
-		Config: cfg, Store: store, Hasher: fastHasher(), Issuer: issuer, Keys: authn.NewKeySet(issuer.PublicKey()),
+		Config: cfg, Store: store, PII: f.pii, Hasher: fastHasher(), Issuer: issuer, Keys: authn.NewKeySet(issuer.PublicKey()),
 		Limiter: ratelimit.New(r.Client, fc, "rl:", quiet), Cache: r.Client, IDs: ids, Clock: fc, Log: quiet, Metrics: reg,
 		OnBan: func(_ context.Context, account int64) { f.banned = append(f.banned, account) },
 	})
@@ -77,6 +79,24 @@ func newFixture(t *testing.T, mutate ...func(*platform.IdentityConfig)) *fixture
 	}
 	f.svc = svc
 	return f
+}
+
+// newPIIKeys returns a fresh KEK and blind-index pepper, as a new dev data directory has.
+func newPIIKeys(t *testing.T) *identity.PIIKeys {
+	t.Helper()
+	kek, err := keyring.New("subject-kek", nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pepper, err := keyring.New("email-bidx-pepper", nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := identity.NewPIIKeys(kek, pepper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
 }
 
 var meta = identity.Meta{ClientIP: "203.0.113.9", UserAgent: "test"}

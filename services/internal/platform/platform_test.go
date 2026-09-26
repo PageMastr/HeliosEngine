@@ -144,12 +144,14 @@ func TestConfigErrors(t *testing.T) {
 	cfg := Default()
 	cfg.Session.TokenExpiry = Duration(60 * time.Second)
 	cfg.Session.Gateways = []string{"gateway.example:7777"} // tokens need literal IPs
-	cfg.Orchestrator.Zones = append(cfg.Orchestrator.Zones, cfg.Orchestrator.Zones[0])
+	cfg.Orchestrator.Zones = append(cfg.Orchestrator.Zones, cfg.Orchestrator.Zones[0],
+		ZoneConfig{ID: 99, Name: strings.Repeat("z", MaxZoneName+1)}, ZoneConfig{ID: 98, Name: "nul\x00"})
 	cfg.Orchestrator.Spawn = []SpawnConfig{{Name: "x", Exe: "y", Restart: "sometimes"}}
 	cfg.Orchestrator.HeartbeatInterval = Duration(7 * time.Second) // more than half the 12 s liveness TTL
 	cfg.Session.ProtocolID = "zz"
 	err := cfg.Validate()
-	for _, want := range []string{"token_expiry", "gateway.example", "unique", "sometimes", "lease_ttl", "protocol_id"} {
+	for _, want := range []string{"token_expiry", "gateway.example", "unique", "sometimes", "lease_ttl", "protocol_id",
+		"zone 99: names are at most", "zone 98: names are at most"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("Validate should mention %q: %v", want, err)
 		}

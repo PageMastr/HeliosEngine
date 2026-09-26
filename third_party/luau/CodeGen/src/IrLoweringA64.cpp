@@ -2821,8 +2821,12 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         Label self;
 
-        build.ldr(x0, mem(rGlobalState, offsetof(global_State, cb.interrupt)));
-        build.cbnz(x0, self);
+        // Helios patch fuel-counter: decrement the inline counter; the handler runs only when it reaches zero
+        build.ldr(x0, mem(rGlobalState, offsetof(global_State, fuelcounter)));
+        build.sub(x0, x0, uint16_t(1));
+        build.str(x0, mem(rGlobalState, offsetof(global_State, fuelcounter)));
+        build.cmp(x0, uint16_t(0));
+        build.b(ConditionA64::LessEqual, self);
 
         Label next = build.setLabel();
 

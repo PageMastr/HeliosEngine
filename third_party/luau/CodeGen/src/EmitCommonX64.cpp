@@ -390,6 +390,8 @@ void emitInterrupt(AssemblyBuilderX64& build)
 
     // Load interrupt handler; it may be nullptr in case the update raced with the check before we got here
     build.mov(rax, qword[rState + offsetof(lua_State, global)]);
+    // Helios patch fuel-counter: the inline counter reached zero or below; reset it to zero as the VM does
+    build.mov(qword[rax + offsetof(global_State, fuelcounter)], 0);
     build.mov(rax, qword[rax + offsetof(global_State, cb.interrupt)]);
     build.test(rax, rax);
     build.jcc(ConditionX64::Zero, skip);

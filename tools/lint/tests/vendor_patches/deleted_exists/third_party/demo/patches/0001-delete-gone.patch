@@ -1,0 +1,10 @@
+Fixture patch: deletes gone.c.
+
+diff --git a/gone.c b/gone.c
+deleted file mode 100644
+index 1234567..0000000
+--- a/gone.c
++++ /dev/null
+@@ -1,2 +0,0 @@
+-int gone(void);
+-int gone(void) { return 0; }

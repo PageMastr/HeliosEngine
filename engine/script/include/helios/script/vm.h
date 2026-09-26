@@ -15,12 +15,12 @@
 // `collectgarbage`, which Luau 0.739 lacks) are removed and `setmetatable` rejects `__mode`, so GC
 // timing stays unobservable.
 //
-// Budgets (FuelBudget): fuel is counted by the interrupt callback at every gc < 0 safepoint and by
-// binding charges. The interrupt NEVER yields: past the soft budget the resume is flagged and an
-// explicit task.checkpoint() yields; at the hard budget the resume is killed with a sticky error
-// that pcall cannot swallow (every later safepoint and binding call raises again). The scheduler
-// then closes the coroutine (lua_resetthread). Three kills of a module within 60 s of zone time
-// disable it.
+// Budgets (FuelBudget): fuel is counted at every gc < 0 safepoint (by the VM's inline fuel counter,
+// which calls the host only at its next decision point) and by binding charges. The interrupt NEVER
+// yields: past the soft budget the resume is flagged and an explicit task.checkpoint() yields; at
+// the hard budget the resume is killed with a sticky error that pcall cannot swallow (every later
+// safepoint and binding call raises again). The scheduler then closes the coroutine
+// (lua_resetthread). Three kills of a module within 60 s of zone time disable it.
 //
 // Threading: a ScriptVm is owned by one job at a time. It is not thread-safe; every member must
 // be called by the current owner, never concurrently (checked by an assert in development
@@ -68,8 +68,10 @@ struct VmConfig {
     const DilatableClock* clock = nullptr;
     /// Seed of the deterministic stream behind math.random.
     u64 randomSeed = 0x48454c494f53ull;
-    /// Opt-in native code generation (off by default; keep it off on servers until profiled).
-    /// Ignored when luau_codegen_supported() is false.
+    /// Opt-in native code generation for client and editor VMs (off by default); native code counts
+    /// the same fuel as the interpreter (vendored codegen-fornloop-fuel patch). On client and editor
+    /// VMs it is ignored when luau_codegen_supported() is false. On HostProfile::Cell, which cells and
+    /// world-script hosts run, create() refuses it on every target (02 §7.4).
     bool enableNativeCodegen = false;
     CompileOptions compileOptions;
     /// Shared per content version; a private cache is created when null.
@@ -104,7 +106,8 @@ public:
     using ApiRegistrar = std::function<void(Binder&)>;
 
     /// Creates and sandboxes a VM; `registerApi` adds host bindings before the sandbox freezes the
-    /// globals. Fails when the heap cap is too small for the libraries or Luau cannot start.
+    /// globals. Fails when the heap cap is too small for the libraries, when a cell config enables
+    /// native codegen (InvalidArgument), or when Luau cannot start.
     static Result<std::unique_ptr<ScriptVm>> create(const VmConfig& config,
                                                     const ApiRegistrar& registerApi = {});
     ~ScriptVm();

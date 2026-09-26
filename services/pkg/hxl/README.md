@@ -68,10 +68,12 @@ HXL_CORPUS_GEN_FMA=1 go test ./pkg/hxl/ -run TestGenerateFMACorpus # regenerate 
 
 ## Plan conformance
 
-Plan-Rev: 6
+Plan-Rev: 7
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
 `docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked against 06 §1.2 in WP-0.19's review
-on 2026-09-26. No D7 conformance delta is open (§5.10.4 (c)), meaning no plan change since Plan-Rev 6
-contradicts this code. That does not mean nothing is open: the GP-1 gaps (the `linux/arm64` run) and
+on 2026-09-26. Plan revision 7 is WP-0.19's own `Plan-Change: 06 §1.2` (`AttributeDef.id`, the modifier `priority`
+and its tie rule, and the built-in list), which this code implements; the Integrator raised this
+line to 7 when it merged (09 §5.10.2 D1). No D7 conformance delta is open (§5.10.4 (c)), meaning no plan change up to
+Plan-Rev 7 contradicts this code. That does not mean nothing is open: the GP-1 gaps (the `linux/arm64` run) and
 the tooling items above are open WP-0.19 follow-ups.

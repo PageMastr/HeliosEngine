@@ -120,9 +120,11 @@ compile errors), 2,358 evaluations including 1,050 FMA-sensitive vectors, and 1,
 
 ## Plan conformance
 
-Plan-Rev: 6
+Plan-Rev: 7
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
 `docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked against 06 §1.2 in WP-0.19's review
-on 2026-09-26. No D7 conformance delta is open (§5.10.4 (c)), meaning no plan change since Plan-Rev 6
-contradicts this code. GP-1's open items are listed in `services/pkg/hxl/README.md` and 09 §8.1.
+on 2026-09-26. Plan revision 7 is WP-0.19's own `Plan-Change: 06 §1.2` (`AttributeDef.id`, the modifier `priority`
+and its tie rule, and the built-in list), which this code implements; the Integrator raised this
+line to 7 when it merged (09 §5.10.2 D1). No D7 conformance delta is open (§5.10.4 (c)), meaning no plan change up to
+Plan-Rev 7 contradicts this code. GP-1's open items are listed in `services/pkg/hxl/README.md` and 09 §8.1.

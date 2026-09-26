@@ -5,12 +5,17 @@
 #include <algorithm>
 #include <bit>
 
+#include "helios/core/hash.h"
 #include "helios/hxl/hxl.h"
 
 using namespace helios;
 using namespace helios::hxl;
 
 namespace {
+
+// Pinned outcome of the 30,000-mutant fuzz, identical in services/pkg/hxl (TestDecodeMutations).
+constexpr usize kAcceptedMutants = 1067;
+constexpr u64 kAcceptedMutantsHash = 0x2b6c209b5e06162cull;
 
 Program mustCompile(std::string_view src, std::vector<std::string> params = {"self"}) {
     CompileOptions opts;
@@ -152,6 +157,7 @@ TEST_CASE("hxl bytecode: mutation fuzz never crashes and decoded programs stay w
     };
     TotalEnv env;
     usize decoded = 0;
+    u64 acceptedHash = kFnv1a64Offset; // FNV-1a over every accepted encoding, in order
     for (int iter = 0; iter < 30000; ++iter) {
         std::vector<u8> b = seeds[iter % 3].encode();
         const int edits = 1 + static_cast<int>(next() % 4);
@@ -175,8 +181,52 @@ TEST_CASE("hxl bytecode: mutation fuzz never crashes and decoded programs stay w
         CHECK(eval(*p, env, v) == Status::Ok);
         CHECK(v.type == p->resultType());
         CHECK(p->encode() == b); // anything accepted is canonical
+        for (u8 byte : b) {
+            acceptedHash ^= byte;
+            acceptedHash *= kFnv1a64Prime;
+        }
     }
     MESSAGE("mutants that decoded: " << decoded);
+    // Go runs the same mutations (TestDecodeMutations): both verifiers must accept exactly the same
+    // hostile programs, so the count and the hash of the accepted encodings are pinned in both.
+    CHECK(decoded == kAcceptedMutants);
+    CHECK(acceptedHash == kAcceptedMutantsHash);
+}
+
+namespace {
+
+// Hand-assembled `stacks() + stacks() + ...` in postfix order: n Stacks ops, then n - 1 Adds, so the
+// stack is n deep and the cost is 2n - 1. The header claims exactly that.
+std::vector<u8> deepStackProgram(u32 n) {
+    std::vector<u8> b = {'H', 'X', 'L', '1', 1, 0, static_cast<u8>(n), static_cast<u8>(n >> 8)};
+    const u32 cost = 2 * n - 1;
+    for (int i = 0; i < 4; ++i) b.push_back(static_cast<u8>(cost >> (8 * i)));
+    b.insert(b.end(), {0, 0, 0, 0, 0}); // no name, no parameters, no constants
+    b.insert(b.end(), 8, 0);            // four empty symbol tables
+    const u32 codeSize = 2 * n - 1;
+    for (int i = 0; i < 4; ++i) b.push_back(static_cast<u8>(codeSize >> (8 * i)));
+    b.insert(b.end(), n, static_cast<u8>(Op::Stacks));
+    b.insert(b.end(), n - 1, static_cast<u8>(Op::Add));
+    return b;
+}
+
+} // namespace
+
+// Review regression (WP-0.19 round 1): the verifier's stack bound is the only guard of eval()'s
+// fixed limits::kMaxStack-slot stack (the VM has no runtime checks), and no test pinned it. The Go
+// twin is TestDecodeStackLimit.
+TEST_CASE("hxl bytecode: decoded programs may use exactly limits::kMaxStack stack slots") {
+    auto full = Program::decode(deepStackProgram(limits::kMaxStack));
+    REQUIRE_MESSAGE(full.ok(), (full.ok() ? std::string() : full.error().message));
+    CHECK(full->maxStack() == limits::kMaxStack);
+    TotalEnv env; // stacks() = 3
+    Value v;
+    REQUIRE(eval(*full, env, v) == Status::Ok);
+    CHECK(v.number == 3.0 * limits::kMaxStack);
+    Diagnostic d;
+    CHECK_FALSE(Program::decode(deepStackProgram(limits::kMaxStack + 1), &d).ok());
+    CHECK(d.status == Status::Bytecode);
+    CHECK(d.message.find("stack") != std::string::npos);
 }
 
 TEST_CASE("hxl bytecode: decode reports size and cost limits as E_BYTECODE at 0:0, like Go (review regression)") {

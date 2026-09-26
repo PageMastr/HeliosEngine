@@ -591,6 +591,20 @@
    "expect": 256
   },
   {
+   "name": "limit.stack",
+   "src": "clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * 1))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))",
+   "error": "E_LIMIT",
+   "at": "1:1",
+   "comment": "64 levels need 4 * 64 + 1 = 257 stack slots, one more than limits::kMaxStack; review regression (WP-0.19 round 1)"
+  },
+  {
+   "name": "limit.stack_ok",
+   "src": "clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * clamp(1, 1, 1 + 1 * 1)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))",
+   "bytecode": "d047c017f2236648",
+   "expect": 1,
+   "comment": "63 levels need 253 stack slots"
+  },
+  {
    "name": "limit.formula_params",
    "src": "formula F(p0,p1,p2,p3,p4,p5,p6,p7,p8,p9,p10,p11,p12,p13,p14,p15,p16) = 1",
    "error": "E_LIMIT",

@@ -269,6 +269,7 @@ func TestDecodeMutations(t *testing.T) {
 		return state
 	}
 	decoded := 0
+	acceptedHash := uint64(0xcbf29ce484222325) // FNV-1a over every accepted encoding, in order
 	for iter := 0; iter < 30000; iter++ {
 		b := seeds[iter%3].Encode()
 		edits := 1 + int(next()%4)
@@ -289,10 +290,19 @@ func TestDecodeMutations(t *testing.T) {
 		}
 		if _, err := Decode(b); err == nil {
 			decoded++
+			for _, c := range b {
+				acceptedHash ^= uint64(c)
+				acceptedHash *= 0x100000001b3
+			}
 		}
 		checkDecoded(t, b)
 	}
 	t.Logf("mutants that decoded: %d", decoded)
+	// Pinned to the same values as the C++ test (kAcceptedMutants, kAcceptedMutantsHash): both
+	// verifiers must accept exactly the same hostile programs.
+	if decoded != 1067 || acceptedHash != 0x2b6c209b5e06162c {
+		t.Errorf("accepted mutants: %d, hash %#016x; want 1067, 0x2b6c209b5e06162c (as C++)", decoded, acceptedHash)
+	}
 }
 
 // FuzzDecode: `go test -fuzz FuzzDecode ./pkg/hxl/` explores beyond the deterministic mutations.

@@ -1,6 +1,7 @@
 package hxl
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -155,4 +156,38 @@ func TestDeepestPrograms(t *testing.T) {
 	check("select", eval(r("select(true, ", calls)+"true"+r("||true", links)+r(", false)", calls)), 1.0) // true
 	levels := (MaxAstDepth - 1) / 7
 	check("every level", eval(r("select(true || true && true == 1 < 1 + 1 * (", levels)+"1"+r("), 1, 0)", levels)), 1.0)
+}
+
+// deepStackProgram hand-assembles n Stacks ops followed by n-1 Adds: stack depth n, cost 2n-1, with
+// a header that claims exactly that (the C++ twin is deepStackProgram in test_bytecode.cpp).
+func deepStackProgram(n int) []byte {
+	b := []byte{'H', 'X', 'L', '1', 1, 0, byte(n), byte(n >> 8)}
+	b = binary.LittleEndian.AppendUint32(b, uint32(2*n-1))
+	b = append(b, 0, 0, 0, 0, 0)          // no name, no parameters, no constants
+	b = append(b, 0, 0, 0, 0, 0, 0, 0, 0) // four empty symbol tables
+	b = binary.LittleEndian.AppendUint32(b, uint32(2*n-1))
+	b = append(b, bytes.Repeat([]byte{byte(OpStacks)}, n)...)
+	return append(b, bytes.Repeat([]byte{byte(OpAdd)}, n-1)...)
+}
+
+// TestDecodeStackLimit: review regression (WP-0.19 round 1). The verifier's stack bound is the only
+// guard of Eval's fixed MaxStack-slot array, and no test pinned it. Mirrors the C++ test "decoded
+// programs may use exactly limits::kMaxStack stack slots".
+func TestDecodeStackLimit(t *testing.T) {
+	p, err := Decode(deepStackProgram(MaxStack))
+	if err != nil {
+		t.Fatalf("n = MaxStack: %v", err)
+	}
+	if p.MaxStack() != MaxStack {
+		t.Errorf("MaxStack() = %d", p.MaxStack())
+	}
+	env := &MapEnv{HasStacks: true, StacksVal: 3}
+	env.Bind(p)
+	if v, s := p.Eval(env); s != OK || v.Number != 3*MaxStack {
+		t.Errorf("eval: %v %s", v, s)
+	}
+	_, err = Decode(deepStackProgram(MaxStack + 1))
+	if d, ok := AsDiagnostic(err); !ok || d.Status != EBytecode || !strings.Contains(d.Message, "stack") {
+		t.Errorf("n = MaxStack + 1: got %v, want E_BYTECODE (stack)", err)
+	}
 }

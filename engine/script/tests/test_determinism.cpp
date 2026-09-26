@@ -105,10 +105,13 @@ TEST_CASE("determinism: native codegen counts the same fuel as the interpreter")
 TEST_CASE("determinism: the golden fuel count holds under the production cell budgets") {
     // FuelBudget::cell() as shipped: soft 200k, kill 500k, lane 750k fuel and the 20 ms wall backstop,
     // which makes the host read the clock every 64 fuel, before every binding call and after every GC
-    // step. Those reads must not move a single fuel. A run killed by the backstop means the machine
-    // preempted the resume for 20 ms; it is retried, and three in a row fail the test.
-    const FuelBudget cell = FuelBudget::cell();
+    // step. Those reads must not move a single fuel. Any nonzero backstop gives the same read points,
+    // so Debug and sanitizer builds, where this resume alone takes 10-20 ms, use 10 s instead. In
+    // optimized builds (≈ 1 ms) a backstop kill means the machine preempted the resume for 20 ms: it
+    // is retried, and three in a row fail the test.
+    FuelBudget cell = FuelBudget::cell();
     REQUIRE(cell.wallBackstopNanos == 20'000'000);
+    if (!test::kTimingGates) cell.wallBackstopNanos = 10'000'000'000ull;
     bool finished = false;
     for (int attempt = 0; attempt < 3 && !finished; ++attempt) {
         VmConfig c = Harness::defaultConfig();
@@ -120,7 +123,7 @@ TEST_CASE("determinism: the golden fuel count holds under the production cell bu
         h.steps(5);
         if (const auto* killed = h.eventFor(id, ScriptEventKind::TaskKilled)) {
             REQUIRE(killed->killReason == KillReason::WallBackstop);
-            MESSAGE("attempt ", attempt, " was preempted past the 20 ms backstop; retrying");
+            MESSAGE("attempt ", attempt, " was preempted past the wall backstop; retrying");
             continue;
         }
         const auto* done = h.eventFor(id, ScriptEventKind::TaskFinished);

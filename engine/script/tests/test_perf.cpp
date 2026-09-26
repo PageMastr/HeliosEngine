@@ -16,19 +16,10 @@ using helios::script::test::Harness;
 
 namespace {
 
-// The timing thresholds hold for optimized, uninstrumented builds: the nightly perf job (linux-gcc,
-// RelWithDebInfo). Debug and sanitizer builds (the ASan nightly also runs perf cases) keep only the
-// loose guards and report the figures.
-#if defined(__has_feature)
-#if __has_feature(address_sanitizer)
-#define HELIOS_SCRIPT_PERF_INSTRUMENTED 1
-#endif
-#endif
-#if defined(NDEBUG) && !defined(__SANITIZE_ADDRESS__) && !defined(HELIOS_SCRIPT_PERF_INSTRUMENTED)
-constexpr bool kTimingGates = true;
-#else
-constexpr bool kTimingGates = false;
-#endif
+// The timing thresholds hold for optimized, uninstrumented builds (test::kTimingGates): the nightly
+// perf job (linux-gcc, RelWithDebInfo). Debug and sanitizer builds (the ASan nightly also runs perf
+// cases) keep only the loose guards and report the figures.
+using helios::script::test::kTimingGates;
 
 constexpr const char* kWorkload = R"(
     local function fib(n) if n < 2 then return n end return fib(n - 1) + fib(n - 2) end

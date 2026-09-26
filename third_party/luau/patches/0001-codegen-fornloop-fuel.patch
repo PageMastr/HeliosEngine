@@ -3,12 +3,18 @@ Helios patch 0001 codegen-fornloop-fuel (Luau 0.739; 02 §7.4, 04 §10.2; WP-0.1
 Native code must reach the same `interrupt` safepoints as the interpreter, because Helios charges one
 fuel per safepoint and replays kills at the identical fuel count (RT-13). Upstream's code generator puts
 the numeric-for interrupt at the top of the loop body instead of in FORNLOOP (to avoid a spill point), so
-every loop left by `break` or `return` reaches one more safepoint in native code. This patch emits the
-interrupt in FORNLOOP, where the VM has it. In native code that can add a register spill to short numeric
-loops that use the loop index.
+every loop left by `break` or `return` reaches one more safepoint in native code, and every numeric-loop
+safepoint sits one loop body earlier than the interpreter's, so a kill at the k-th safepoint stops native
+code at another program point even in loops that run to completion. This patch emits the interrupt in
+FORNLOOP, where the VM has it, which aligns both the counts and the kill positions. In native code that can
+add a register spill to short numeric loops that use the loop index.
 
-Upstream status: not submitted. Rebase on every Luau bump (K10); engine/script's determinism tests fail
-if the divergence comes back. Licence: MIT (Helios, like Luau).
+Rebase notes: after this patch IrBuilder::interruptRequested is never set and LoopInfo::startpc is never
+read. Keep it that way: an upstream change that sets interruptRequested again would emit a second
+interrupt per iteration.
+
+Upstream status: not submitted. Rebase on every Luau bump (K10); engine/script's determinism and
+`luau patches:` tests fail if the divergence comes back. Licence: MIT (Helios, like Luau).
 
 diff --git a/CodeGen/src/IrTranslation.cpp b/CodeGen/src/IrTranslation.cpp
 index 3089e9d..8114eee 100644

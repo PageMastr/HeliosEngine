@@ -9,10 +9,15 @@ decrements the counter and calls interrupt only when the result is <= 0, after r
 arms the counter with the fuel left until its next decision point (kill, soft budget, wall-clock read), so
 it is called only there and counts exactly the same fuel. The counter starts at 0, so a host that never
 arms it keeps stock behaviour (interrupt at every safepoint). GC-step interrupts (gc >= 0) are unchanged.
-The host can also subtract charges from the counter (binding and builtin fuel costs).
+The host can also subtract charges from the counter (binding and builtin fuel costs). The counter is owned
+by the thread that runs the VM (plain read-modify-write decrements), and the host must keep it above
+INT64_MIN (x64's jle, A64's sub and C's -- disagree there).
 
-Upstream status: not submitted. Rebase on every Luau bump (K10): every caller of cb.interrupt with
-gc < 0 must go through the counter. Licence: MIT (Helios, like Luau).
+Rebase notes: every caller of cb.interrupt with gc < 0 must go through the counter. CodeGen/src/
+CodeGenUtils.cpp's VM_INTERRUPT has no callers, upstream or patched; it is patched only so that a caller
+added upstream counts correctly.
+
+Upstream status: not submitted. Rebase on every Luau bump (K10). Licence: MIT (Helios, like Luau).
 
 diff --git a/CodeGen/src/CodeGenA64.cpp b/CodeGen/src/CodeGenA64.cpp
 index 89e2bb4..4d10c8d 100644
@@ -111,10 +116,10 @@ index 5ccd80c..bda7b0a 100644
          Label next = build.setLabel();
  
 diff --git a/VM/include/lua.h b/VM/include/lua.h
-index ed6f1a0..8fabc32 100644
+index ed6f1a0..6ba0d6d 100644
 --- a/VM/include/lua.h
 +++ b/VM/include/lua.h
-@@ -639,6 +639,17 @@ typedef struct lua_Callbacks lua_Callbacks;
+@@ -639,6 +639,20 @@ typedef struct lua_Callbacks lua_Callbacks;
  
  LUA_API lua_Callbacks* lua_callbacks(lua_State* L);
  
@@ -123,9 +128,12 @@ index ed6f1a0..8fabc32 100644
 + * steps, in the interpreter and in native code) first decrements the counter, and calls interrupt only
 + * when the result is <= 0, after resetting the counter to 0. A host that arms the counter with the
 + * number of safepoints until its next decision is called only then; a host that never writes it keeps
-+ * the per-safepoint calls. The counter is shared between all coroutines of the state and is written
-+ * by the thread that runs the VM (interrupt may re-arm it). A host that arms it and sets interrupt from
-+ * another thread to stop a script must also store 0 into the counter, or the stop waits for it */
++ * the per-safepoint calls (in native code, the out-of-line interrupt helper at every safepoint: a host
++ * without an interrupt should park the counter at INT64_MAX). The host must keep the counter above
++ * INT64_MIN. The counter is shared between all coroutines of the state and owned by the thread that
++ * runs the VM: every decrement is a plain read-modify-write, so no other thread may write it (interrupt
++ * may re-arm it). Stopping a script from another thread while the counter is armed needs a flag that
++ * the host checks at its own decision points; setting interrupt from another thread is not enough */
 +#define LUA_FUELCOUNTER 1
 +LUA_API int64_t* lua_fuelcounter(lua_State* L);
 +

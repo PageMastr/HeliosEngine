@@ -644,9 +644,12 @@ LUA_API lua_Callbacks* lua_callbacks(lua_State* L);
  * steps, in the interpreter and in native code) first decrements the counter, and calls interrupt only
  * when the result is <= 0, after resetting the counter to 0. A host that arms the counter with the
  * number of safepoints until its next decision is called only then; a host that never writes it keeps
- * the per-safepoint calls. The counter is shared between all coroutines of the state and is written
- * by the thread that runs the VM (interrupt may re-arm it). A host that arms it and sets interrupt from
- * another thread to stop a script must also store 0 into the counter, or the stop waits for it */
+ * the per-safepoint calls (in native code, the out-of-line interrupt helper at every safepoint: a host
+ * without an interrupt should park the counter at INT64_MAX). The host must keep the counter above
+ * INT64_MIN. The counter is shared between all coroutines of the state and owned by the thread that
+ * runs the VM: every decrement is a plain read-modify-write, so no other thread may write it (interrupt
+ * may re-arm it). Stopping a script from another thread while the counter is armed needs a flag that
+ * the host checks at its own decision points; setting interrupt from another thread is not enough */
 #define LUA_FUELCOUNTER 1
 LUA_API int64_t* lua_fuelcounter(lua_State* L);
 

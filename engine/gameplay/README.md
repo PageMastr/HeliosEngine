@@ -39,8 +39,14 @@ CI-checked):
 `AttributeDef.id` (the identifier HXL and slot constants use; the display `name` is a `LocString`)
 and `ModifierDef.priority` (which picks the `PreAssign`/`PostAssign` winner) were missing from 06's
 illustrative snippets; WP-0.19 adopted both into 06 §1.2 (`Plan-Change: 06 §1.2`). The remaining
-difference is `Name` placeholders where the referenced record type does not exist yet (`UnitRef`,
-`AbilityRef`, `SlotRef`, `InsuranceClassRef`, `LifetimePolicyRef`, plug sets).
+differences from 06's snippets:
+
+- `Name` placeholders where the referenced record type does not exist yet (`UnitRef`, `AbilityRef`,
+  `SlotRef`, `InsuranceClassRef`, `LifetimePolicyRef`, plug sets);
+- `ItemInstance.payload.rollAudit` is a `u64?` id, because no `RollAuditRef` record type exists yet;
+- `CraftStamp` is `{crafterId, schematic, quality, serial}`, while 06 §3 names
+  `{crafterId, serial, station, time}`. Crafting is WP-2.x scope, and that WP aligns the record
+  with 06 §3.
 
 ## Tags (06 §1.1)
 

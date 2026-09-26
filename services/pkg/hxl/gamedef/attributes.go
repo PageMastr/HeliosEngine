@@ -532,8 +532,8 @@ func (m *ModifierTarget) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// A modifier (06 §1.2): {attr, op, magnitude, penaltyGroup, exempt, requirement}; the runtime adds
-// its source (effect, item or skill) so it can be removed and replicated.
+// A modifier (06 §1.2): {attr, op, magnitude, priority, penaltyGroup, exempt, requirement}; the
+// runtime adds its source (effect, item or skill) so it can be removed and replicated.
 type ModifierDef struct {
 	// The modified attribute.
 	Attr AttributeRef `json:"attr"`

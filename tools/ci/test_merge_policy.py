@@ -1,8 +1,12 @@
 """Seeded merge-history violations for the WP-0.1 post-merge gate."""
 
-import os
+import contextlib
+import http.client
 import io
+import json
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 import urllib.error
@@ -35,7 +39,7 @@ class MergePolicyTests(unittest.TestCase):
         if committer:
             env["GIT_COMMITTER_NAME"], env["GIT_COMMITTER_EMAIL"] = committer
         result = subprocess.run(["git", "-C", str(self.checkout), *args], env=env,
-                                check=True, capture_output=True, text=True)
+                                check=True, capture_output=True, text=True, encoding="utf-8")
         return result.stdout.strip()
 
     def commit(self, content, message):
@@ -77,6 +81,19 @@ class MergePolicyTests(unittest.TestCase):
         ])
         return result
 
+    def run_main(self, after, responses):
+        event = self.checkout / "event.json"
+        event.write_text(json.dumps(self.event(after)), encoding="utf-8")
+        argv = ["merge_policy.py", "--event", str(event), "--repository", "owner/repo",
+                "--checkout", str(self.checkout)]
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(sys, "argv", argv), patch.dict(os.environ, {"GITHUB_TOKEN": "t"}), \
+                patch.object(merge_policy, "api_get", side_effect=responses), \
+                patch.object(merge_policy.time, "sleep"), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = merge_policy.main()
+        return code, out.getvalue(), err.getvalue()
+
     def collab_originals(self):
         self.run_git("checkout", "-q", "-b", "collab/s1")
         first = self.commit("first", "First\n\nHelios-Tx: 1..2\nHelios-Session: s1")
@@ -106,8 +123,9 @@ class MergePolicyTests(unittest.TestCase):
         self.commit("first", "First WP commit")
         after = self.commit("finished", "Second WP commit")
         originals = self.run_git("rev-list", "--reverse", f"{self.before}..{after}").splitlines()
-        with self.assertRaisesRegex(merge_policy.PolicyError, "landed as 2 commits"):
+        with self.assertRaisesRegex(merge_policy.PolicyError, "landed as 2 commits") as caught:
             self.audit_with(after, originals)
+        self.assertNotIsInstance(caught.exception, merge_policy.VerificationError)
 
     def test_merge_commit_is_not_linear_history(self):
         self.run_git("checkout", "-q", "-b", "feature")
@@ -122,7 +140,14 @@ class MergePolicyTests(unittest.TestCase):
         landed = self.landed(after)
         expected = [replace(landed[0], tree="0" * 40)]
         with self.assertRaisesRegex(merge_policy.PolicyError, "differs from the reviewed"):
-            merge_policy.check_policy("wp/0.1", expected, landed)
+            merge_policy.check_policy(expected, landed, collab=False)
+
+    def test_non_ascii_git_metadata_uses_utf8(self):
+        self.run_git("config", "user.name", "Renée")
+        after = self.commit("finished", "Publish ✅\n\nHelios-Tx: 1..1")
+        landed = self.landed(after)
+        self.assertEqual(landed[0].author_name, "Renée")
+        self.assertIn("Helios-Tx: 1..1", landed[0].trailers)
 
     def test_collab_rebase_preserves_authors_trees_and_trailers(self):
         originals = self.collab_originals()
@@ -173,12 +198,13 @@ class MergePolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(merge_policy.PolicyError, "WP-class PR landed as 2"):
             self.audit_with(after, originals, pr)
 
-    def test_similar_prefix_is_wp_class(self):
-        self.commit("first", "First")
-        later = self.commit("second", "Second")
-        expected = self.landed(later)
-        with self.assertRaisesRegex(merge_policy.PolicyError, "WP-class PR landed as 2"):
-            merge_policy.check_policy("collaborate/x", expected, expected)
+    def test_audit_similar_prefixes_are_wp_class(self):
+        originals = self.collab_originals()
+        after = self.collab_rebase(originals)
+        for branch in ("collaborate/x", "collab-s1"):
+            with self.subTest(branch=branch):
+                with self.assertRaisesRegex(merge_policy.PolicyError, "WP-class PR landed as 2"):
+                    self.audit_with(after, originals, self.pr(after, originals, branch=branch))
 
     def test_unrelated_push_is_rejected(self):
         after = self.commit("next", "Next")
@@ -192,7 +218,7 @@ class MergePolicyTests(unittest.TestCase):
         after = self.commit("next", "Next")
         with patch.object(merge_policy, "api_get", return_value=[]) as get, \
                 patch.object(merge_policy.time, "sleep") as sleep:
-            with self.assertRaisesRegex(merge_policy.PolicyError, "expected one merged PR"):
+            with self.assertRaisesRegex(merge_policy.VerificationError, "expected one merged PR"):
                 merge_policy.audit(self.event(after), "owner/repo", self.checkout, "test-token")
         self.assertEqual(get.call_count, 3)
         self.assertEqual(sleep.call_args_list, [call(1), call(2)])
@@ -217,14 +243,79 @@ class MergePolicyTests(unittest.TestCase):
                              {"ok": True})
         self.assertEqual(open_url.call_count, 2)
         sleep.assert_called_once_with(1)
+        with patch.object(merge_policy.urllib.request, "urlopen", side_effect=[error] * 3), \
+                patch.object(merge_policy.time, "sleep"):
+            with self.assertRaisesRegex(merge_policy.VerificationError, "HTTP 502"):
+                merge_policy.api_get("repos/owner/repo/pulls/7", "test-token")
+
+    def test_connection_failures_are_retried_then_unverified(self):
+        class Truncated(io.BytesIO):
+            def read(self, *args):
+                raise http.client.IncompleteRead(b"[", 10)
+
+        dropped = http.client.RemoteDisconnected("Remote end closed connection without response")
+        with patch.object(merge_policy.urllib.request, "urlopen",
+                          side_effect=[dropped, TimeoutError("read timed out"), io.BytesIO(b"[]")]) as open_url, \
+                patch.object(merge_policy.time, "sleep"):
+            self.assertEqual(merge_policy.api_get("repos/owner/repo/pulls/7", "t"), [])
+        self.assertEqual(open_url.call_count, 3)
+        for failure in (dropped, ConnectionResetError(104, "reset"), Truncated(b"")):
+            with self.subTest(failure=type(failure).__name__):
+                with patch.object(merge_policy.urllib.request, "urlopen", side_effect=[failure] * 3), \
+                        patch.object(merge_policy.time, "sleep"):
+                    with self.assertRaises(merge_policy.VerificationError):
+                        merge_policy.api_get("repos/owner/repo/pulls/7", "t")
+
+    def test_api_request_headers_and_url_error_retry(self):
+        failure = urllib.error.URLError("network unavailable")
+        with patch.dict(os.environ, {"GITHUB_API_URL": "https://api.github.test/"}), \
+                patch.object(merge_policy.urllib.request, "urlopen",
+                             side_effect=[failure, io.BytesIO(b"[]")]) as open_url, \
+                patch.object(merge_policy.time, "sleep") as sleep:
+            self.assertEqual(merge_policy.api_get("repos/owner/repo/pulls/7", "test-token"), [])
+        self.assertEqual(open_url.call_count, 2)
+        request = open_url.call_args.args[0]
+        self.assertEqual(request.full_url, "https://api.github.test/repos/owner/repo/pulls/7")
+        self.assertEqual(request.headers["Authorization"], "Bearer test-token")
+        self.assertEqual(request.headers["X-github-api-version"], "2022-11-28")
+        sleep.assert_called_once_with(1)
+
+    def test_main_exit_status_separates_violation_and_unverified(self):
+        first = self.commit("first", "First WP commit")
+        first_pr = self.pr(first, [first])
+        code, out, err = self.run_main(first, [[first_pr], first_pr, [self.raw_commit(first)]])
+        self.assertEqual(code, 0)
+        self.assertIn("obey merge policy", out)
+        self.assertEqual(err, "")
+        second = self.commit("second", "Second WP commit")
+        second_pr = self.pr(second, [first, second])
+        code, _, err = self.run_main(second, [[second_pr], second_pr,
+                                              [self.raw_commit(first), self.raw_commit(second)]])
+        self.assertEqual(code, 1)
+        self.assertTrue(err.startswith("merge-policy: WP-class PR landed as 2"), err)
+        code, _, err = self.run_main(second, [[], [], []])
+        self.assertEqual(code, 2)
+        self.assertTrue(err.startswith("merge-policy: could not verify:"), err)
+
+    def test_other_associated_pr_does_not_make_match_ambiguous(self):
+        after = self.commit("next", "Next")
+        pr = self.pr(after, [after])
+        other = {**pr, "number": 8, "merge_commit_sha": "0" * 40}
+        with patch.object(merge_policy, "api_get",
+                          side_effect=[[other, pr], pr, [self.raw_commit(after)]]) as get:
+            result = merge_policy.audit(self.event(after), "owner/repo", self.checkout,
+                                        "test-token")
+        self.assertIn("PR #7", result)
+        self.assertEqual(get.call_count, 3)
 
     def test_ambiguous_associated_prs_fail(self):
         after = self.commit("next", "Next")
         pr = self.pr(after, [after])
         with patch.object(merge_policy, "api_get", return_value=[pr, pr]) as get:
-            with self.assertRaisesRegex(merge_policy.PolicyError, "found 2"):
+            with self.assertRaisesRegex(merge_policy.PolicyError, "found 2") as caught:
                 merge_policy.audit(self.event(after), "owner/repo", self.checkout,
                                    "test-token")
+        self.assertNotIsInstance(caught.exception, merge_policy.VerificationError)
         get.assert_called_once()
 
     def test_pr_detail_must_target_main_and_match_merge_sha(self):
@@ -256,10 +347,10 @@ class MergePolicyTests(unittest.TestCase):
             call("repos/owner/repo/pulls/7/commits?per_page=100&page=2", "test-token"),
         ])
         with patch.object(merge_policy, "api_get", side_effect=[commits[:100], []]):
-            with self.assertRaisesRegex(merge_policy.PolicyError, "reports 102 commits"):
+            with self.assertRaisesRegex(merge_policy.VerificationError, "reports 102 commits"):
                 merge_policy.all_pr_commits("owner/repo", 7, 102, "test-token")
         with patch.object(merge_policy, "api_get") as get:
-            with self.assertRaisesRegex(merge_policy.PolicyError, "caps this at 250"):
+            with self.assertRaisesRegex(merge_policy.VerificationError, "caps this at 250"):
                 merge_policy.all_pr_commits("owner/repo", 7, 251, "test-token")
         get.assert_not_called()
 

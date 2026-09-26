@@ -1,6 +1,7 @@
 """Check that a push to main preserved its pull request's merge policy (WP-0.1)."""
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -35,7 +36,8 @@ class Commit:
 
 def git(*args: str, checkout: Path, input_text: str | None = None) -> str:
     command = ["git", "-C", str(checkout), *args]
-    completed = subprocess.run(command, input=input_text, text=True, capture_output=True, check=False)
+    completed = subprocess.run(command, input=input_text, text=True, encoding="utf-8",
+                               capture_output=True, check=False)
     if completed.returncode:
         raise PolicyError(f"git {args[0]} failed: {completed.stderr.strip()}")
     return completed.stdout
@@ -89,12 +91,9 @@ def pr_commits(data: list[dict], checkout: Path) -> list[Commit]:
     return commits
 
 
-def check_policy(branch: str, expected: list[Commit], landed: list[Commit],
-                 *, collab: bool | None = None) -> None:
+def check_policy(expected: list[Commit], landed: list[Commit], *, collab: bool) -> None:
     if not expected or not landed:
         raise PolicyError("cannot compare empty PR or landed commit history")
-    if collab is None:
-        collab = branch.startswith("collab/")
     if collab:
         if len(landed) != len(expected):
             raise PolicyError(
@@ -142,7 +141,7 @@ def api_get(path: str, token: str) -> object:
                 time.sleep(2 ** attempt)
                 continue
             raise VerificationError(f"GitHub API {path}: HTTP {error.code}") from error
-        except urllib.error.URLError as error:
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
             if attempt < 2:
                 time.sleep(2 ** attempt)
                 continue
@@ -185,7 +184,7 @@ def merged_pr(repository: str, after: str, token: str) -> dict:
 
 def all_pr_commits(repository: str, number: int, expected_count: int, token: str) -> list[dict]:
     if expected_count > 250:
-        raise PolicyError(f"PR #{number} has {expected_count} commits; GitHub's PR API caps this at 250")
+        raise VerificationError(f"PR #{number} has {expected_count} commits; GitHub's PR API caps this at 250")
     found = []
     for page in range(1, 4):
         data = api_get(f"repos/{repository}/pulls/{number}/commits?per_page=100&page={page}", token)
@@ -234,7 +233,7 @@ def audit(event: dict, repository: str, checkout: Path, token: str) -> str:
         raise PolicyError(f"PR #{number} commit list does not end at its reviewed head SHA")
     expected = pr_commits(raw_commits, checkout)
     collab = branch.startswith("collab/") and head_repository_name == repository
-    check_policy(branch, expected, landed, collab=collab)
+    check_policy(expected, landed, collab=collab)
     return f"PR #{number} ({branch}): {len(landed)} landed commit(s) obey merge policy"
 
 
@@ -249,7 +248,7 @@ def main() -> int:
         print(audit(event, args.repository, args.checkout, os.environ.get("GITHUB_TOKEN", "")))
     except VerificationError as error:
         print(f"merge-policy: could not verify: {error}", file=sys.stderr)
-        return 1
+        return 2
     except (OSError, ValueError, PolicyError) as error:
         print(f"merge-policy: {error}", file=sys.stderr)
         return 1

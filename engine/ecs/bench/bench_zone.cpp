@@ -881,9 +881,16 @@ std::vector<Entity> BenchZone::burstNpcs() {
 
 namespace ops {
 
+/// Column arrays of all 3,000 creates (frame f takes elements [f * perFrame, ...), as the World's
+/// burst has 3,000 distinct values), plus zeros for NetIdentity and RepDirty.
 struct RawColumns {
-    ecs_id_t pos, vel, proj, life, fac, bounds, cell;
-    void *posData, *velData, *projData, *lifeData, *facData, *boundsData, *cellData, *zeros;
+    struct Column {
+        ecs_id_t id;
+        const std::byte* data;
+        usize size;
+    };
+    Column columns[7];
+    void* zeros;
 };
 
 // 3,000 creates: one ecs_bulk_init with values per frame table.
@@ -897,14 +904,10 @@ void rawCreates(ecs_world_t* fw, const std::vector<ecs_table_t*>& tables, u32 pe
         std::vector<void*> data(static_cast<usize>(type->count), nullptr);
         for (i32 k = 0; k < type->count; ++k) {
             const ecs_id_t id = type->array[k];
-            if (id == c.pos) data[k] = c.posData;
-            else if (id == c.vel) data[k] = c.velData;
-            else if (id == c.proj) data[k] = c.projData;
-            else if (id == c.life) data[k] = c.lifeData;
-            else if (id == c.fac) data[k] = c.facData;
-            else if (id == c.bounds) data[k] = c.boundsData;
-            else if (id == c.cell) data[k] = c.cellData;
-            else if (ecs_get_typeid(fw, id) != 0) data[k] = c.zeros; // NetIdentity, RepDirty
+            if (ecs_get_typeid(fw, id) != 0) data[k] = c.zeros; // NetIdentity, RepDirty
+            for (const RawColumns::Column& col : c.columns) {
+                if (col.id == id) data[k] = const_cast<std::byte*>(col.data + f * perFrame * col.size);
+            }
         }
         ecs_bulk_desc_t bd{};
         bd.count = static_cast<i32>(count);
@@ -1004,23 +1007,27 @@ BurstResult BenchZone::rawFlecsBurst(u32 round, bool profiled) {
     const ecs_id_t idPos = w.id<c::Position>(), idVel = w.id<c::Velocity>(), idProj = w.id<c::Projectile>(),
                    idLife = w.id<c::Lifetime>(), idFac = w.id<c::Faction>(), idBounds = w.id<c::Bounds>(),
                    idCell = w.id<c::SpatialCell>();
-    std::vector<c::Position> pos(perFrame);
-    std::vector<c::Velocity> vel(perFrame, c::Velocity{{100, 0, 0}, {}});
-    std::vector<c::Projectile> proj(perFrame);
-    std::vector<c::Lifetime> life(perFrame, c::Lifetime{2});
-    std::vector<c::Faction> fac(perFrame, c::Faction{1});
-    std::vector<c::Bounds> bounds(perFrame, c::Bounds{0.2f});
-    std::vector<c::SpatialCell> cells(perFrame);
+    const usize total = static_cast<usize>(perFrame) * frameCount;
+    std::vector<c::Position> pos(total);
+    std::vector<c::Velocity> vel(total, c::Velocity{{100, 0, 0}, {}});
+    std::vector<c::Projectile> proj(total);
+    std::vector<c::Lifetime> life(total, c::Lifetime{2});
+    std::vector<c::Faction> fac(total, c::Faction{1});
+    std::vector<c::Bounds> bounds(total, c::Bounds{0.2f});
+    std::vector<c::SpatialCell> cells(total);
     std::vector<std::byte> zeros(perFrame * 64);
-    for (u32 i = 0; i < perFrame; ++i) {
+    for (u32 i = 0; i < total; ++i) {
         pos[i].p = DVec3(unit(h64(0xFA57 + round, i)) * 1000.0, 0.0, 0.0);
         proj[i] = c::Projectile{im.targets[i % im.targets.size()], 5};
     }
     std::vector<ecs_entity_t> created;
     created.reserve(3000);
-    const ops::RawColumns columns{idPos, idVel, idProj, idLife, idFac, idBounds, idCell,
-                                    pos.data(), vel.data(), proj.data(), life.data(), fac.data(), bounds.data(),
-                                    cells.data(), zeros.data()};
+    auto col = [](ecs_id_t id, const auto& v) {
+        return ops::RawColumns::Column{id, reinterpret_cast<const std::byte*>(v.data()), sizeof(v[0])};
+    };
+    const ops::RawColumns columns{{col(idPos, pos), col(idVel, vel), col(idProj, proj), col(idLife, life),
+                                   col(idFac, fac), col(idBounds, bounds), col(idCell, cells)},
+                                  zeros.data()};
     Stopwatch sw;
     profiled ? timed::rawCreates(fw, tables, perFrame, columns, created) : ops::rawCreates(fw, tables, perFrame, columns, created);
     res.createMs = sw.elapsedMillis();

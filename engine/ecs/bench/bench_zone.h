@@ -57,6 +57,8 @@ struct BurstResult {
     f64 toggleMs = 0;
     f64 toggleDontFragmentMs = 0;
     f64 totalMs() const noexcept { return createMs + destroyMs + toggleMs; }
+    /// The same burst with the toggles on the DontFragment component instead of tags.
+    f64 totalDontFragmentMs() const noexcept { return createMs + destroyMs + toggleDontFragmentMs; }
 };
 
 /// Per-tick damage events: one vector per job of the producing system, consumed in job order.
@@ -90,14 +92,16 @@ public:
     /// Round 0 creates new tag-combination tables ("cold"); rounds >= 1 destroy the previous
     /// round's projectiles and alternately revert / re-apply the tag changes, using only existing
     /// tables ("warm").
-    BurstResult structuralBurst(u32 round);
+    /// `profiled` routes the timed work through bench::timed:: functions, the ones the callgrind
+    /// job collects (SPIKES.md §5.2); the timings are the same either way.
+    BurstResult structuralBurst(u32 round, bool profiled = true);
     /// The same 9k operations issued directly through the flecs C API (bulk init into the final
     /// tables with values, ecs_delete, ecs_add_id/ecs_remove_id, ecs_set_id/ecs_remove_id on the
     /// DontFragment status), without World bookkeeping (ids, handles, registry, logs, dirty
     /// tracking, command buffers). This is the floor any flecs-based wrapper pays; the entities it
     /// creates are unregistered and destroyed again in the same call. Continue the round numbering
     /// of structuralBurst() so the NPC tag toggles keep alternating.
-    BurstResult rawFlecsBurst(u32 round);
+    BurstResult rawFlecsBurst(u32 round, bool profiled = true);
 
     u32 liveProjectiles();
 

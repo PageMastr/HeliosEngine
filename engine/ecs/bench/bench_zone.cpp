@@ -140,6 +140,36 @@ u64 cellKey(const DVec3& p) noexcept {
 
 } // namespace
 
+// The timed parts of the 9k-op burst, out of line so that callgrind counts exactly the measured
+// work (SPIKES.md §5.2):  valgrind --tool=callgrind --toggle-collect='bench::timed::*' ecs_bench ...
+// Each writes its own marker so identical-code folding cannot merge the World phases, and
+// writes it again after the call so that it is not a tail call.
+namespace timed {
+namespace {
+volatile u32 g_phase = 0;
+} // namespace
+HELIOS_NOINLINE void worldCreates(World& w, CommandBuffer& cb) {
+    g_phase = 1;
+    w.apply(cb);
+    g_phase = 0; // not a tail call, so callgrind sees the function return
+}
+HELIOS_NOINLINE void worldDestroys(World& w, CommandBuffer& cb) {
+    g_phase = 2;
+    w.apply(cb);
+    g_phase = 0; // not a tail call, so callgrind sees the function return
+}
+HELIOS_NOINLINE void worldToggles(World& w, CommandBuffer& cb) {
+    g_phase = 3;
+    w.apply(cb);
+    g_phase = 0; // not a tail call, so callgrind sees the function return
+}
+HELIOS_NOINLINE void worldStatuses(World& w, CommandBuffer& cb) {
+    g_phase = 4;
+    w.apply(cb);
+    g_phase = 0; // not a tail call, so callgrind sees the function return
+}
+} // namespace timed
+
 struct BenchZone::Impl {
     std::vector<ComponentId> tags; // runtime-registered variant tags
     std::vector<Entity> frames;
@@ -718,7 +748,7 @@ u32 BenchZone::iterate3(u64* collectNs, u32* chunkCount) {
     return visited;
 }
 
-BurstResult BenchZone::structuralBurst(u32 round) {
+BurstResult BenchZone::structuralBurst(u32 round, bool profiled) {
     World& w = m_world;
     Impl& im = *m_impl;
     BurstResult res;
@@ -777,18 +807,18 @@ BurstResult BenchZone::structuralBurst(u32 round) {
     res.recordMs = record.elapsedMillis();
     res.commands = static_cast<u32>(creates.size() + destroys.size() + toggles.size());
     Stopwatch sw;
-    w.apply(creates);
+    profiled ? timed::worldCreates(w, creates) : w.apply(creates);
     res.createMs = sw.elapsedMillis();
     im.burstCreated.clear();
     for (u32 i = 0; i < 3000; ++i) im.burstCreated.push_back(creates.resolved(TempEntity{i}));
     sw.reset();
-    w.apply(destroys);
+    profiled ? timed::worldDestroys(w, destroys) : w.apply(destroys);
     res.destroyMs = sw.elapsedMillis();
     sw.reset();
-    w.apply(toggles);
+    profiled ? timed::worldToggles(w, toggles) : w.apply(toggles);
     res.toggleMs = sw.elapsedMillis();
     sw.reset();
-    w.apply(statuses);
+    profiled ? timed::worldStatuses(w, statuses) : w.apply(statuses);
     res.toggleDontFragmentMs = sw.elapsedMillis();
     w.clearStructuralLog();
     return res;
@@ -805,7 +835,102 @@ std::vector<Entity> BenchZone::burstNpcs() {
     return npcs;
 }
 
-BurstResult BenchZone::rawFlecsBurst(u32 round) {
+namespace ops {
+
+struct RawColumns {
+    ecs_id_t pos, vel, proj, life, fac, bounds, cell;
+    void *posData, *velData, *projData, *lifeData, *facData, *boundsData, *cellData, *zeros;
+};
+
+// 3,000 creates: one ecs_bulk_init with values per frame table.
+void rawCreates(ecs_world_t* fw, const std::vector<ecs_table_t*>& tables, u32 perFrame,
+                                const RawColumns& c, std::vector<ecs_entity_t>& created) {
+    u32 remaining = 3000;
+    for (usize f = 0; f < tables.size() && remaining > 0; ++f) {
+        const u32 count = std::min(perFrame, remaining);
+        remaining -= count;
+        const ecs_type_t* type = ecs_table_get_type(tables[f]);
+        std::vector<void*> data(static_cast<usize>(type->count), nullptr);
+        for (i32 k = 0; k < type->count; ++k) {
+            const ecs_id_t id = type->array[k];
+            if (id == c.pos) data[k] = c.posData;
+            else if (id == c.vel) data[k] = c.velData;
+            else if (id == c.proj) data[k] = c.projData;
+            else if (id == c.life) data[k] = c.lifeData;
+            else if (id == c.fac) data[k] = c.facData;
+            else if (id == c.bounds) data[k] = c.boundsData;
+            else if (id == c.cell) data[k] = c.cellData;
+            else if (ecs_get_typeid(fw, id) != 0) data[k] = c.zeros; // NetIdentity, RepDirty
+        }
+        ecs_bulk_desc_t bd{};
+        bd.count = static_cast<i32>(count);
+        bd.table = tables[f];
+        bd.data = data.data();
+        const ecs_entity_t* es = ecs_bulk_init(fw, &bd);
+        created.insert(created.end(), es, es + count);
+    }
+}
+
+void rawDestroys(ecs_world_t* fw, const std::vector<ecs_entity_t>& created) {
+    for (const ecs_entity_t e : created) ecs_delete(fw, e);
+}
+
+// The NPC tag toggles of structuralBurst(): even NPCs toggle the cloak tag, odd ones lose or regain
+// a species tag.
+void rawToggles(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply, ecs_id_t cloak,
+                                const std::vector<ecs_id_t>& species) {
+    for (usize i = 0; i < npcs.size(); ++i) {
+        const ecs_entity_t e = npcs[i].id;
+        if (i % 2 == 0) {
+            if (apply) {
+                ecs_add_id(fw, e, cloak);
+            } else {
+                ecs_remove_id(fw, e, cloak);
+            }
+        } else if (apply) {
+            for (const ecs_id_t sp : species) {
+                if (ecs_has_id(fw, e, sp)) {
+                    ecs_remove_id(fw, e, sp);
+                    break;
+                }
+            }
+        } else {
+            ecs_add_id(fw, e, species[static_cast<usize>(mix64(i) % species.size())]);
+        }
+    }
+}
+
+void rawStatuses(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply, ecs_id_t status) {
+    for (usize i = 0; i < npcs.size(); ++i) {
+        if (apply) {
+            const c::Status value{static_cast<u32>(i)};
+            ecs_set_id(fw, npcs[i].id, status, sizeof value, &value);
+        } else {
+            ecs_remove_id(fw, npcs[i].id, status);
+        }
+    }
+}
+
+} // namespace ops
+
+namespace timed {
+HELIOS_NOINLINE void rawCreates(ecs_world_t* fw, const std::vector<ecs_table_t*>& tables, u32 perFrame,
+                                const ops::RawColumns& c, std::vector<ecs_entity_t>& created) {
+    ops::rawCreates(fw, tables, perFrame, c, created);
+}
+HELIOS_NOINLINE void rawDestroys(ecs_world_t* fw, const std::vector<ecs_entity_t>& created) {
+    ops::rawDestroys(fw, created);
+}
+HELIOS_NOINLINE void rawToggles(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply, ecs_id_t cloak,
+                                const std::vector<ecs_id_t>& species) {
+    ops::rawToggles(fw, npcs, apply, cloak, species);
+}
+HELIOS_NOINLINE void rawStatuses(ecs_world_t* fw, const std::vector<Entity>& npcs, bool apply, ecs_id_t status) {
+    ops::rawStatuses(fw, npcs, apply, status);
+}
+} // namespace timed
+
+BurstResult BenchZone::rawFlecsBurst(u32 round, bool profiled) {
     World& w = m_world;
     Impl& im = *m_impl;
     ecs_world_t* fw = w.flecsWorld();
@@ -849,71 +974,26 @@ BurstResult BenchZone::rawFlecsBurst(u32 round) {
     }
     std::vector<ecs_entity_t> created;
     created.reserve(3000);
+    const ops::RawColumns columns{idPos, idVel, idProj, idLife, idFac, idBounds, idCell,
+                                    pos.data(), vel.data(), proj.data(), life.data(), fac.data(), bounds.data(),
+                                    cells.data(), zeros.data()};
     Stopwatch sw;
-    u32 remaining = 3000;
-    for (u32 f = 0; f < frameCount && remaining > 0; ++f) {
-        const u32 count = std::min(perFrame, remaining);
-        remaining -= count;
-        const ecs_type_t* type = ecs_table_get_type(tables[f]);
-        std::vector<void*> data(static_cast<usize>(type->count), nullptr);
-        for (i32 k = 0; k < type->count; ++k) {
-            const ecs_id_t id = type->array[k];
-            if (id == idPos) data[k] = pos.data();
-            else if (id == idVel) data[k] = vel.data();
-            else if (id == idProj) data[k] = proj.data();
-            else if (id == idLife) data[k] = life.data();
-            else if (id == idFac) data[k] = fac.data();
-            else if (id == idBounds) data[k] = bounds.data();
-            else if (id == idCell) data[k] = cells.data();
-            else if (ecs_get_typeid(fw, id) != 0) data[k] = zeros.data(); // NetIdentity, RepDirty
-        }
-        ecs_bulk_desc_t bd{};
-        bd.count = static_cast<i32>(count);
-        bd.table = tables[f];
-        bd.data = data.data();
-        const ecs_entity_t* es = ecs_bulk_init(fw, &bd);
-        created.insert(created.end(), es, es + count);
-    }
+    profiled ? timed::rawCreates(fw, tables, perFrame, columns, created) : ops::rawCreates(fw, tables, perFrame, columns, created);
     res.createMs = sw.elapsedMillis();
 
     sw.reset();
-    for (const ecs_entity_t e : created) ecs_delete(fw, e);
+    profiled ? timed::rawDestroys(fw, created) : ops::rawDestroys(fw, created);
     res.destroyMs = sw.elapsedMillis();
 
     const bool apply = round % 2 == 0;
-    const ecs_id_t cloak = im.tags[5];
+    std::vector<ecs_id_t> species{im.tags[8], im.tags[9], im.tags[10]};
     sw.reset();
-    for (usize i = 0; i < npcs.size(); ++i) {
-        const ecs_entity_t e = npcs[i].id;
-        if (i % 2 == 0) {
-            if (apply) {
-                ecs_add_id(fw, e, cloak);
-            } else {
-                ecs_remove_id(fw, e, cloak);
-            }
-        } else if (apply) {
-            for (u32 sp = 8; sp <= 10; ++sp) {
-                if (ecs_has_id(fw, e, im.tags[sp])) {
-                    ecs_remove_id(fw, e, im.tags[sp]);
-                    break;
-                }
-            }
-        } else {
-            ecs_add_id(fw, e, im.tags[8 + static_cast<u32>(mix64(i) % 3)]);
-        }
-    }
+    profiled ? timed::rawToggles(fw, npcs, apply, im.tags[5], species) : ops::rawToggles(fw, npcs, apply, im.tags[5], species);
     res.toggleMs = sw.elapsedMillis();
 
-    const ecs_id_t status = w.id<c::Status>();
     sw.reset();
-    for (usize i = 0; i < npcs.size(); ++i) {
-        if (apply) {
-            const c::Status value{static_cast<u32>(i)};
-            ecs_set_id(fw, npcs[i].id, status, sizeof value, &value);
-        } else {
-            ecs_remove_id(fw, npcs[i].id, status);
-        }
-    }
+    const ecs_id_t status = w.id<c::Status>();
+    profiled ? timed::rawStatuses(fw, npcs, apply, status) : ops::rawStatuses(fw, npcs, apply, status);
     res.toggleDontFragmentMs = sw.elapsedMillis();
     res.commands = 9000;
     return res;

@@ -135,6 +135,16 @@
       }
     },
     {
+      "name": "linux-bench",
+      "displayName": "Linux GCC Release, asserts off, headless (ecs_bench: RT-01, ADR-004a M1, callgrind)",
+      "inherits": "linux-gcc",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "HELIOS_BUILD_GRAPHICS": "OFF",
+        "HELIOS_ECS_BENCH_CTEST": "ON"
+      }
+    },
+    {
       "name": "cross-mingw",
       "displayName": "Cross-compile Windows x64 from Linux (MinGW portability check)",
       "inherits": "base",
@@ -188,6 +198,11 @@
     {
       "name": "linux-headless",
       "configurePreset": "linux-headless"
+    },
+    {
+      "name": "linux-bench",
+      "configurePreset": "linux-bench",
+      "targets": ["ecs_bench"]
     },
     {
       "name": "cross-mingw",

@@ -9,10 +9,12 @@
 #     heading; every patch that table lists exists;
 #  2. every hunk is applied to the committed tree: its post-image (context and added lines) appears
 #     in the target file, hunks in order; a file the patch deletes is absent.
-# No network, git or build is needed, and CRLF checkouts pass (line endings are normalized). A tree
-# re-vendored without its patches, or edited inside a patched hunk, fails. An in-place edit outside
-# every hunk is not detected: re-running fetch_third_party.sh and diffing third_party/ is the full
-# proof that the tree is upstream plus its patches (third_party/MANIFEST.md, "Patches").
+# No network, git or build is needed, CRLF checkouts pass (line endings are normalized), and a hunk
+# that reaches the unterminated last line of a file ("\ No newline at end of file") must match at the
+# file's end. A tree re-vendored without its patches, or edited inside a patched hunk, fails. An
+# in-place edit outside every hunk is not detected: re-running fetch_third_party.sh and diffing
+# third_party/ is the full proof that the tree is upstream plus its patches (third_party/MANIFEST.md,
+# "Patches").
 # Exits non-zero with one line per finding.
 
 cmake_minimum_required(VERSION 3.28)
@@ -29,6 +31,7 @@ string(ASCII 29 _vpOpen)
 string(ASCII 30 _vpClose)
 
 function(_vp_escape text out)
+  # file(READ) already drops the CR of each CRLF on CMake 3.28; this keeps the check independent of that.
   string(REPLACE "\r\n" "\n" text "${text}")
   string(REPLACE ";" "${_vpSemi}" text "${text}")
   string(REPLACE "\\" "${_vpBackslash}" text "${text}")
@@ -72,6 +75,41 @@ if(MANIFEST)
   endforeach()
 endif()
 
+# Checks the hunk just read (a macro, so that it updates the loop's variables): its post-image must be
+# in the target file after the previous hunk, and at its very end when the post-image has no final
+# newline ("\ No newline at end of file" after its last context or added line).
+macro(_vp_finish_hunk)
+  set(hunkPending FALSE)
+  math(EXPR hunkCount "${hunkCount} + 1")
+  math(EXPR fileHunks "${fileHunks} + 1")
+  if(skipFile)
+    # reported with the +++ line (missing file), or nothing to find (deleted file)
+  elseif(target STREQUAL "")
+    list(APPEND findings "${rel}:${hunkLine}: hunk before any +++ line")
+  elseif(NOT post STREQUAL "")
+    string(SUBSTRING "${targetText}" ${searchFrom} -1 rest)
+    string(LENGTH "${post}" postLen)
+    set(at -1)
+    if(postNoEol)
+      string(LENGTH "${rest}" restLen)
+      if(restLen GREATER_EQUAL postLen)
+        math(EXPR tailAt "${restLen} - ${postLen}")
+        string(SUBSTRING "${rest}" ${tailAt} -1 tail)
+        if(tail STREQUAL post)
+          set(at ${tailAt})
+        endif()
+      endif()
+    else()
+      string(FIND "${rest}" "${post}" at)
+    endif()
+    if(at EQUAL -1)
+      list(APPEND findings "${rel}:${hunkLine}: hunk ${fileHunks} of third_party/${dep}/${target} is not applied (its post-image is not in the committed file, after the previous hunk)")
+    else()
+      math(EXPR searchFrom "${searchFrom} + ${at} + ${postLen}")
+    endif()
+  endif()
+endmacro()
+
 file(GLOB deps LIST_DIRECTORIES true RELATIVE "${THIRD_PARTY_DIR}" "${THIRD_PARTY_DIR}/*")
 list(SORT deps)
 foreach(dep IN LISTS deps)
@@ -101,6 +139,9 @@ foreach(dep IN LISTS deps)
     set(targetText "")    # its escaped, normalized content
     set(searchFrom 0)     # offset after the previous hunk of this file
     set(inHunk FALSE)
+    set(hunkPending FALSE) # counts reached 0; a "\ No newline" marker may still follow
+    set(lastTag "")        # tag of the hunk's last context, removed or added line
+    set(postNoEol FALSE)   # the post-image has no final newline
     set(preLeft 0)
     set(postLeft 0)
     set(post "")
@@ -110,6 +151,19 @@ foreach(dep IN LISTS deps)
     set(patchHunks 0)
     foreach(line IN LISTS lines)
       math(EXPR lineNo "${lineNo} + 1")
+      if(hunkPending)
+        string(SUBSTRING "${line}" 0 1 tag)
+        if(tag STREQUAL "${_vpBackslash}")
+          # "\ No newline at end of file" after the hunk's last line.
+          if(lastTag STREQUAL " " OR lastTag STREQUAL "+")
+            string(REGEX REPLACE "\n$" "" post "${post}")
+            set(postNoEol TRUE)
+          endif()
+          _vp_finish_hunk()
+          continue()
+        endif()
+        _vp_finish_hunk()
+      endif()
       if(inHunk)
         string(SUBSTRING "${line}" 0 1 tag)
         string(LENGTH "${line}" len)
@@ -122,14 +176,21 @@ foreach(dep IN LISTS deps)
           string(APPEND post "${body}\n")
           math(EXPR preLeft "${preLeft} - 1")
           math(EXPR postLeft "${postLeft} - 1")
+          set(lastTag " ")
         elseif(tag STREQUAL "-")
           math(EXPR preLeft "${preLeft} - 1")
+          set(lastTag "-")
         elseif(tag STREQUAL "+")
           string(APPEND post "${body}\n")
           math(EXPR postLeft "${postLeft} - 1")
+          set(lastTag "+")
         elseif(tag STREQUAL "${_vpBackslash}")
-          # "\ No newline at end of file": the last line has no newline.
-          string(REGEX REPLACE "\n$" "" post "${post}")
+          # "\ No newline at end of file" describes the line before it: after a removed line it is
+          # about the pre-image (ignored); after a context or added line, the post-image ends there.
+          if(lastTag STREQUAL " " OR lastTag STREQUAL "+")
+            string(REGEX REPLACE "\n$" "" post "${post}")
+            set(postNoEol TRUE)
+          endif()
         else()
           list(APPEND findings "${rel}:${lineNo}: malformed hunk line (hunk at line ${hunkLine})")
           set(inHunk FALSE)
@@ -137,28 +198,14 @@ foreach(dep IN LISTS deps)
         endif()
         if(preLeft LESS_EQUAL 0 AND postLeft LESS_EQUAL 0)
           set(inHunk FALSE)
-          math(EXPR hunkCount "${hunkCount} + 1")
-          math(EXPR fileHunks "${fileHunks} + 1")
-          if(skipFile)
-            # reported with the +++ line (missing file), or nothing to find (deleted file)
-          elseif(target STREQUAL "")
-            list(APPEND findings "${rel}:${hunkLine}: hunk before any +++ line")
-          elseif(NOT post STREQUAL "")
-            string(SUBSTRING "${targetText}" ${searchFrom} -1 rest)
-            string(FIND "${rest}" "${post}" at)
-            if(at EQUAL -1)
-              list(APPEND findings "${rel}:${hunkLine}: hunk ${fileHunks} of third_party/${dep}/${target} is not applied (its post-image is not in the committed file, after the previous hunk)")
-            else()
-              string(LENGTH "${post}" postLen)
-              math(EXPR searchFrom "${searchFrom} + ${at} + ${postLen}")
-            endif()
-          endif()
+          set(hunkPending TRUE) # checked at the next line, which may be a "\ No newline" marker
         endif()
         continue()
       endif()
 
       if(line MATCHES "^diff --git ")
         set(target "")
+        set(deleted "")
         set(skipFile FALSE)
       elseif(line MATCHES "^\\+\\+\\+ (.*)$")
         set(path "${CMAKE_MATCH_1}")
@@ -201,11 +248,16 @@ foreach(dep IN LISTS deps)
           set(postLeft ${CMAKE_MATCH_4})
         endif()
         set(post "")
+        set(lastTag "")
+        set(postNoEol FALSE)
         set(hunkLine ${lineNo})
         set(inHunk TRUE)
         math(EXPR patchHunks "${patchHunks} + 1")
       endif()
     endforeach()
+    if(hunkPending)
+      _vp_finish_hunk()
+    endif()
     if(inHunk)
       list(APPEND findings "${rel}:${hunkLine}: truncated hunk")
     elseif(patchHunks EQUAL 0)

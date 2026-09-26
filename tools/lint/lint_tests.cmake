@@ -149,7 +149,8 @@ endforeach()
 # ---------------------------------------------------------------------------------------------
 # Vendored patches (CLAUDE.md; third_party/MANIFEST.md "Patches"): every third_party/<dep>/patches/
 # NNNN-<slug>.patch is listed in the manifest and applied to the committed tree. The fixtures with an
-# empty expectation must pass (a correctly applied patch, a CRLF checkout, a deleted file).
+# empty expectation must pass (a correctly applied patch, a CRLF checkout, a deleted file, hunks that
+# reach the unterminated last line of a file).
 # ---------------------------------------------------------------------------------------------
 helios_lint_test(lint_vendor_patches COMMAND ${CMAKE_COMMAND}
   -DTHIRD_PARTY_DIR=${PROJECT_SOURCE_DIR}/third_party -DMANIFEST=${PROJECT_SOURCE_DIR}/third_party/MANIFEST.md
@@ -158,6 +159,10 @@ foreach(case
     "applied|"
     "crlf|"
     "deleted|"
+    "noeol_edit_last|"
+    "noeol_context|"
+    "noeol_append|"
+    "noeol_unapplied|hunk 1 of third_party/demo/f.c is not applied"
     "unapplied|hunk 1 of third_party/demo/greeting.c is not applied"
     "reordered|hunk 2 of third_party/demo/order.c is not applied"
     "unlisted|0001-greeting.patch: not listed in the table under MANIFEST.md"
@@ -167,7 +172,9 @@ foreach(case
     "missing_file|patched file third_party/demo/greeting.c does not exist"
     "deleted_exists|third_party/demo/gone.c should be deleted by this patch but exists"
     "truncated|0001-greeting.patch:7: truncated hunk"
-    "malformed|0001-greeting.patch:9: malformed hunk line")
+    "malformed|0001-greeting.patch:9: malformed hunk line"
+    "headerless|0001-headerless.patch:3: hunk before any \\+\\+\\+ line"
+    "devnull_orphan|0001-orphan.patch:12: \\+\\+\\+ /dev/null without a --- a/<file> line")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)
   list(LENGTH parts n)

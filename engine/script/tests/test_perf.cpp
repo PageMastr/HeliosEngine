@@ -16,6 +16,20 @@ using helios::script::test::Harness;
 
 namespace {
 
+// The timing thresholds hold for optimized, uninstrumented builds: the nightly perf job (linux-gcc,
+// RelWithDebInfo). Debug and sanitizer builds (the ASan nightly also runs perf cases) keep only the
+// loose guards and report the figures.
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define HELIOS_SCRIPT_PERF_INSTRUMENTED 1
+#endif
+#endif
+#if defined(NDEBUG) && !defined(__SANITIZE_ADDRESS__) && !defined(HELIOS_SCRIPT_PERF_INSTRUMENTED)
+constexpr bool kTimingGates = true;
+#else
+constexpr bool kTimingGates = false;
+#endif
+
 constexpr const char* kWorkload = R"(
     local function fib(n) if n < 2 then return n end return fib(n - 1) + fib(n - 2) end
     local acc = 0
@@ -84,6 +98,9 @@ TEST_CASE("perf: fuel metering overhead and ns per fuel") {
     c.budget.fuelPerResume = 0;
     c.budget.fuelKill = 0;
     c.budget.fuelPerTick = 0;
+    // A wall limit makes the host read the clock every 64 fuel, as a cell's 20 ms backstop does; 10 s
+    // so that a slow (sanitizer) build is never killed.
+    c.budget.wallBackstopNanos = 10'000'000'000ull;
     Harness h(c);
     h.load("bench", kWorkload);
 
@@ -110,8 +127,11 @@ TEST_CASE("perf: fuel metering overhead and ns per fuel") {
             " %), ns/fuel ", static_cast<double>(metered) / static_cast<double>(fuel));
     // RT-13's <= 10 %: the counter mechanism alone, and the whole Helios host (sandbox, charging
     // wrappers, scheduler and resume, fuel counter) against unmetered plain Luau.
-    CHECK(overhead(rawCounter, raw) <= 0.10);
-    CHECK(overhead(metered, raw) <= 0.10);
+    CHECK(overhead(metered, raw) < 1.0); // loose guard for every build
+    if constexpr (kTimingGates) {
+        CHECK(overhead(rawCounter, raw) <= 0.10);
+        CHECK(overhead(metered, raw) <= 0.10);
+    }
 }
 
 TEST_CASE("perf: host cost of a trivial resume versus FuelBudget::resumeCost") {

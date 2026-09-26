@@ -392,10 +392,12 @@ add fewer than 20 tables (`test_regressions.cpp`).
 
 ## 5. WP-1.1a: wrapper optimization (ADR-004a option A)
 
-WP-1.1a ran in two rounds. The first (commits up to 56497b5) missed M1 at 2.05×. The second fixed two
+WP-1.1a ran in three rounds. The first (commits up to 56497b5) missed M1 at 2.05×. The second fixed two
 more bench asymmetries (§5.3) and cut the per-command overhead further, bringing M1 to about 1.53×
-(GCC) and 1.57–1.60× (Clang) as medians over runs. Against ≤ 1.6× that is marginal, and per run, as the ADR
-defines M1, it is not demonstrated on the shared VM (§5.8). The numbers in §5.4 are the second round's.
+(GCC) and 1.57–1.60× (Clang) as medians over runs: marginal, and not demonstrated per run (§5.8). The
+owner then had a series run on a quiet VM, where a third of the runs still failed, and asked for more
+optimization. The third round (§5.10) brought M1 to about 1.4× with both compilers in the same kind of
+series. The numbers in §5.4 are the second round's.
 
 ### 5.1 What changed
 
@@ -431,14 +433,18 @@ pre-WP-1.1a World (commit f08cf5b, GCC 13 and Clang 18 alike), and the zone's st
      also asserts the flecs version), with the component record cached until flecs frees one. A plain
      DontFragment set uses `ecs_emplace_id`, which says whether the value is new, then `ecs_modified_id`
      for OnSet. `registerComponent` creates a DontFragment component's record up front (§5.9).
-   * The toggle paths read the entity's identity before their flecs call and log it after, so the load
-     of the entity's row overlaps the operation.
+   * The table-stored toggle paths read the entity's identity from its row before their flecs call
+     and log it after, so the load of the row flecs is about to move overlaps the operation. The
+     Sparse and DontFragment paths, which touch no part of the entity's table, take the identity
+     through a per-entity hint that the handle table confirms (third round, §5.10).
    * Consecutive Add, Remove and Set commands on existing entities run in one tight loop
      (`componentRun`), with liveness checked once per command.
-   * Consecutive Destroy commands run in chunks of up to 256, in three passes: live targets and their
-     identities, then the registry releases and Destroy events, then the flecs deletes, each in command
-     order. A pair target, a DockRef host, an entity without identity or a repeated entity ends the
-     chunk and takes the per-entity path (`test_bulk_paths.cpp` checks that a destroy buffer ends where
+   * Consecutive Destroy commands run in chunks of up to 256, in three passes, each in command order:
+     which targets are alive; then each target's identity (the NetIdentity column of the previous
+     target's table is reused), its registry release and its Destroy event; then the flecs deletes. A
+     pair target, a DockRef host, an entity without identity or a repeated entity ends the chunk and
+     takes the per-entity path; a hit of the DockRef host filter is looked up first, so the filter's
+     false positives stay in the chunk (`test_bulk_paths.cpp` checks that a destroy buffer ends where
      one `destroy()` at a time ends).
 4. **Specialized command buffers.**
    * `CommandBuffer::spawnN(desc, count, columns)` records homogeneous spawns as column arrays. The World
@@ -451,9 +457,10 @@ pre-WP-1.1a World (commit f08cf5b, GCC 13 and Clang 18 alike), and the zone's st
    * Batched toggles were evaluated and not adopted (§5.6).
 5. **`InFrame` storage** stays fragmenting (§5.7, ADR-004a M5).
 
-Tried and dropped, because they measured no gain on the wall clock: prefetching NetHandle slots ahead
-of a destroy's release, a per-table cache of the NetIdentity column index, and reading a whole run's
-identities in a separate first pass (+70 instructions per op, no gain).
+Tried and dropped in the second round, because they measured no gain on the wall clock: prefetching
+NetHandle slots ahead of a destroy's release, a per-table cache of the NetIdentity column index for
+the toggles, and reading a whole run's identities in a separate first pass (+70 instructions per op,
+no gain). The third round's are in §5.10.
 
 ### 5.2 How to measure
 
@@ -639,6 +646,9 @@ against 1,250. Revisit it if flecs makes non-fragmenting pair changes cheaper or
 
 ### 5.8 Verdict
 
+The second round's verdict; the third round's numbers are in §5.10, and M1 stays "not demonstrated per
+run" until the owner's quiet series shows otherwise.
+
 * **M1 is marginal and not demonstrated per run on the shared VM.** The ADR defines M1 per run: the
   worst of 0/1/2/4 workers and both toggle storages, in the same run, in a release build. It defines
   no statistic over runs.
@@ -665,7 +675,8 @@ against 1,250. Revisit it if flecs makes non-fragmenting pair changes cheaper or
   * or option B, whose entity record would hold it.
 
   An entity-indexed identity cache in the World would win on this bench's sorted-id order, but it costs
-  every create and destroy a scattered write, so it was not built.
+  every create and destroy a scattered write, so it was not built. (The third round measured that and
+  built a lazily written, validated hint instead: §5.10.)
 
 ### 5.9 flecs divergence: a DontFragment remove before the id's first add
 
@@ -689,3 +700,98 @@ DontFragment tags alike; Sparse components are not affected.
     paths.
 
 It should be reported upstream (K10).
+
+### 5.10 Third round: after the quiet series
+
+**The quiet series.** On the owner's instruction the coordinator paused every other job and ran 12
+interleaved runs of each compiler on head 0cc4347 (`ecs_bench --no-spikes --m1-gate`). M1 per run was
+1.52× [1.47–1.70] with GCC and 1.55× [1.44–1.74] with Clang, above 1.6× in 4 of 12 runs each. Every
+failing run's worst configuration was the DontFragment storage (1.65–1.74×); in most of them the same
+configuration's tag ratio was high too (up to 1.61×). The passing runs sat at 1.44–1.58×.
+
+**Where the spread comes from.** Measured with `--rounds` (every burst) on the same VM:
+
+* It is not the address-space layout: with ASLR off (`setarch -R`) the spread is unchanged.
+* It is not the placement of one World's memory: measuring one zone four times (the normal pair of
+  World and raw windows, then three more) gives ratios as different between the windows of one World
+  as between Worlds (for example 1.71×, 1.22×, 1.41× and 1.41× in one configuration).
+* It is noise in time. Each side's seven bursts run back to back in a window of about 10 ms, the World's
+  first. In the configurations above 1.6× every World phase is 10–25 % slower while the raw phases are
+  not, which is why tag and DontFragment ratios rise together. Single slow bursts (30 % above the
+  fastest of their kind) are about as frequent on either side: in the DontFragment phase, 4–13 of 144
+  World bursts and 3–10 of 144 raw bursts per configuration and parity.
+* The ratio of one configuration varies by about 7 % (coefficient of variation). With four
+  configurations per run, a per-configuration median of about 1.45× fails a quarter to a third of the
+  runs; most runs pass only below about 1.35×.
+
+**Attribution.** Release experiment builds that each switch one piece off (their logs are wrong; 4–5
+interleaved runs each, overhead over raw per 3,000 ops, GCC / Clang):
+
+| Switched off | DontFragment toggles | Destroys |
+|---|---|---|
+| nothing | +150 / +95 µs (sets), +118 / +77 µs (removes) | +125 / +90 µs |
+| the identity read for the log | −90 / −35 µs (sets), −30 / −20 µs (removes) | −25 / ≈0 µs |
+| the liveness check | −60 / ≈0 µs (sets), −20 / ≈0 µs (removes) | −29 / −6 µs |
+| the ownership check (removes) | −9 / ≈0 µs | — |
+| identity, liveness, ownership and log together | DontFragment toggles within 3–12 % of raw | — |
+| everything but the flecs deletes | — | +19 / +27 µs |
+| the registry release | — | −27 / −28 µs |
+
+A cycle count per destroyed entity (Clang, `rdtsc` around the chunk passes) gave 17 ticks for the
+liveness pass, 17 for the identities, 25 for the registry releases and log, and 95–100 for the flecs
+deletes against 84–93 on raw flecs.
+
+**What changed.**
+
+* **Identity hints for Sparse and DontFragment ops** (`IdentityHints`, `src/world_impl.h`). Such an op
+  touches no part of the entity's table, so reading its NetIdentity row, through the table's component
+  map and column array, was the World's only access to the table. Now each flecs entity index keeps the
+  NetHandle last read for it. The hint counts only when the handle table confirms that the handle is
+  live and issued to exactly this entity (flecs id and generation); the handle table then also gives
+  the EntityId (`EntityRegistry::identityOfHandle`). A missing or stale hint falls back to the column
+  and is rewritten. Nothing writes hints at spawn and nothing clears them at destroy. Entities without a
+  NetHandle always read the column. Tests pin both paths, including an index that flecs recycled for
+  an entity with another identity, one without a NetHandle and one without identity.
+* **Destroy chunks** (`World::destroyRun`): a liveness pass, then one pass per target for its identity,
+  release and Destroy event (the NetIdentity column of the previous target's table is reused), then the
+  deletes. A hit of the DockRef host filter is looked up in the index before the chunk ends: in the zone
+  the filter's false positives had sent about one victim in seven to the per-entity path. The scratch
+  holds only the targets, and the handle release is inlined.
+
+**Tried and not kept** (measured, no net gain):
+
+* An identity index written at every spawn, cleared or not at destroy: the DontFragment toggles gained
+  what the index's scattered writes cost creates (+10–24 µs) and destroys (+24–40 µs with clearing).
+* Deferring a component run's identities to one pass after the run: the tag toggles lost more (+30–60
+  µs) than the DontFragment toggles gained; the tag paths' early row read also warms the row flecs
+  moves.
+* Hints confirmed through the registry's EntityId pages: more instructions than they saved.
+* `ecs_set_id` after an ownership check for DontFragment sets: better with GCC, worse with Clang.
+* A cache of spawn tables (skipping the sort and `ecs_table_find` per batch), and prefetching the
+  victims' rows and handle states, or new entities' hints: no measurable change.
+
+**Results.** 12 interleaved runs of each binary, this round's and head 0cc4347, in one series (load
+1.9–4.1; another agent's jobs ran during part of it):
+
+| | head 0cc4347, GCC | this round, GCC | head 0cc4347, Clang | this round, Clang |
+|---|---|---|---|---|
+| **M1 per run, median [min–max]** | 1.51× [1.44–1.60] | **1.42× [1.32–1.71]** | 1.52× [1.41–2.16] | **1.41× [1.31–1.55]** |
+| runs above 1.6× | 0 of 12 | 1 of 12 | 2 of 12 | 0 of 12 |
+| M1 per configuration, DontFragment / tag (medians) | 1.45× / 1.28× | 1.32× / 1.25× | 1.42× / 1.23× | 1.31× / 1.23× |
+| creates, over raw | +42 µs | +42 µs | +41 µs | +42 µs |
+| destroys, over raw | +123 µs | +98 µs | +90 µs | +74 µs |
+| DontFragment sets / removes, over raw | +144 / +114 µs | +92 / +79 µs | +95 / +76 µs | +50 / +48 µs |
+| callgrind, tag / DontFragment | 1.24× / 1.29× | 1.22× / 1.26× | 1.29× / 1.30× | 1.24× / 1.26× |
+
+An earlier series of the same code at lower load (8 runs each) gave 1.36× with GCC and 1.41× with Clang,
+with one GCC run above 1.6× (2.41×): in one configuration every World burst ran about twice as slow as
+usual while the raw bursts did not. The one run above 1.6× in the series above (GCC, 1.71×) is the same
+pattern, milder: one configuration whose tag and DontFragment ratios both rose to 1.70–1.71×. With
+per-command creates (5 runs each, load about 3) M1 is 2.24× [2.16–2.36] with GCC and 2.68× [2.54–3.13]
+with Clang, against 2.33× and 2.81× in the second round's series. The state hash was `e099e42eb09fc124`
+in every configuration of every run, and `ecs_tests` pins the log as before.
+
+What remains per op, Clang: about 25 ns per destroy (liveness, registry release, identity, log), 16 ns
+per DontFragment toggle and 14 ns per create. Whether M1 now passes per run is for the owner's quiet
+series to show; until then it stays "not demonstrated per run".
+

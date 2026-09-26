@@ -73,7 +73,10 @@ lookup each, and writes NetIdentity in the same pass. The registry keeps runtime
 64 consecutive ids, so a burst of spawns or destroys touches a few cache lines per 64 entities
 (content-placed ids stay hashed). The subtree walk (children, frame members, docking pairs) runs only
 for entities flecs has flagged as a pair target (`EcsEntityIsTarget`, the flag `ecs_delete` uses for
-its own cleanup).
+its own cleanup). Structural log entries take the entity's identity from its NetIdentity row, except
+for Sparse and DontFragment ops, which touch no part of the entity's table: they read a per-entity hint
+(the NetHandle last seen at that flecs index) that is used only when the handle table confirms the
+handle is live and issued to exactly this entity, and that is rewritten from the row otherwise.
 
 **Components.** Both registration paths end in `registerComponent(const ComponentDesc&)`. "Plain"
 components (no destruct/copy/move hooks — all trivially copyable C++ types) register with no flecs
@@ -181,7 +184,7 @@ counters, and optional batched tag accounting.
 
 ## Tests and benchmark
 
-`ecs_tests` (doctest, 105 cases) covers: block-id layout against the shared Go golden vectors,
+`ecs_tests` (doctest, 107 cases) covers: block-id layout against the shared Go golden vectors,
 the AllocateIdBlocks rule, minting (order, refill at half use, retirement, stalls, failed and async
 sources, concurrency, determinism, restarts, never id 0); U64Map fuzz vs `std::unordered_map`; NetHandle FIFO/reuse delay/
 generations/content slots; registry maps; TaggedHeap accounting, pooling, the mimalloc recycling
@@ -200,8 +203,8 @@ collisions, id-0 commands). WP-1.1a's structural fast paths are pinned by `test_
 recorded with the World before WP-1.1a) and `test_bulk_paths.cpp` (spawnN against the same spawn +
 set commands, `allocateN` and batched NetHandle issue against one call per id, the paged registry
 under churn and its handle releases, destroy runs against one destroy at a time, Sparse/DontFragment
-ownership, the flecs DontFragment-remove divergence and the World's workaround, fusion runs, the
-dock-host filter).
+ownership, identity hints of recycled flecs indices, the flecs DontFragment-remove divergence and the
+World's workaround, fusion runs, the dock-host filter).
 
 ```
 cmake -S . -B build/ecs -G Ninja -DHELIOS_BUILD_GRAPHICS=OFF
@@ -227,13 +230,14 @@ SPIKES.md §3 (Phase 0) and §5 (WP-1.1a).
 
 ## Known limitations
 
-* ADR-004a's indicator M1 (World burst / raw-flecs burst, ≤ 1.6×) is marginal on the dev VM and not
-  demonstrated per run. The median over runs is about 1.53× with GCC and 1.57–1.60× with Clang. About a
-  quarter of single GCC runs and nearly half of single Clang runs are above 1.6×. The per-configuration
-  medians are 1.24–1.49×, and the instruction ratio is 1.24–1.30×. With per-command creates instead of
-  `spawnN`, M1 is 2.3–2.9×. The 9k-op burst takes 1.26–1.27 ms per configuration there (0.96–0.98 ms
-  with Clang), against the 1.5 ms of RT-01's structural clause, whose formal run is on SERVER (ADR-004a
-  M2). SPIKES.md §5 has the numbers and where the rest goes.
+* ADR-004a's indicator M1 (World burst / raw-flecs burst, ≤ 1.6×) is not demonstrated per run yet. After
+  WP-1.1a's third round the median over runs on the dev VM is about 1.4× with GCC and with Clang, with 1
+  of 24 runs above 1.6×; a quiet-VM series of the second round's code had 4 of 12 runs per compiler
+  above it. The per-configuration medians are 1.23–1.32×, and the instruction ratio is 1.22–1.26×. With
+  per-command creates instead of `spawnN`, M1 is 2.2–2.7×. The 9k-op burst takes 1.15–1.21 ms per
+  configuration there (0.90–0.91 ms with Clang), against the 1.5 ms of RT-01's structural clause, whose
+  formal run is on SERVER (ADR-004a M2). SPIKES.md §5 (§5.10 for the third round) has the numbers and
+  where the rest goes.
 * Sparse and DontFragment ownership checks call `flecs_component_sparse_has`, a flecs 4.1.6 internal
   declared in `src/flecs_internal.h`. A `static_assert` on the flecs version makes a flecs update
   re-check it.

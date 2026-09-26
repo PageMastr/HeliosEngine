@@ -2165,6 +2165,12 @@ lua_Callbacks* lua_callbacks(lua_State* L)
     return &L->global->cb;
 }
 
+// Helios patch fuel-counter
+int64_t* lua_fuelcounter(lua_State* L)
+{
+    return &L->global->fuelcounter;
+}
+
 void lua_setmemcat(lua_State* L, int category)
 {
     api_check(L, unsigned(category) < LUA_MEMORY_CATEGORIES);

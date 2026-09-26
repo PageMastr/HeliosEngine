@@ -1895,3 +1895,18 @@ This pass also takes three other inputs:
 - Links: 154 relative links and anchors in PLAN.md, 00, 09, ADR-004a and this file resolve (GitHub slug
   rules).
 - `cmake -P tools/status/check_status.cmake` passes: 42 module directories, PLAN-REV 6.
+
+## 43. Merged plan changes (09 §5.10.2 D1)
+
+*The Integrator appends one row per anchor of each merged `Plan-Change:`, when it raises
+`docs/plan/PLAN-REV`, and names the rework WPs that the change opened (D3).*
+
+| PLAN-REV | Anchor | PR, WP | Change | Rework WPs opened | Conformance test (D5) |
+|---|---|---|---|---|---|
+| 7 | 06 §1.2 | #12, WP-0.19 (merged 2026-09-26) | `AttributeDef` gains `id: Name`, the identifier HXL and the slot constants use (`attr(e, Shield.Max)`). The modifier tuple gains `priority`, which picks the `PreAssign` and `PostAssign` winner; on a tie, the larger value wins. The HXL built-in list names comparisons, short-circuit `&& \|\| !` and `abs floor ceil` (exact IEEE operations). This closes §42's hand-off to 06 (R5-09.11) | None. The only code under the anchor (`engine/hxl`, `engine/gameplay`, `services/pkg/hxl`, all WP-0.19) came in the same PR and implements the new text; their READMEs record `Plan-Rev: 7` | `attributes: Dogma operator order` (`engine/gameplay`, priority and tie rule); the built-ins through the shared corpus `tests/corpus/hxl` (GP-1) |
+| 8 | 02 §7.4 | #9, WP-0.10r (merged 2026-09-26) | Native codegen stays off on cells and world-script hosts: `VmConfig` refuses it (the text said "until `codegen-fornloop-fuel` lands … (today it warns)"). The vendored `third_party/luau/patches/0001-codegen-fornloop-fuel.patch` is the precondition for lifting the refusal, which is §8.1's P3 "codegen opt-in on cells" item behind 04 §10.2's interpreter-versus-native corpus run. The two patches are named by their files (`0001-codegen-fornloop-fuel.patch`, `0002-fuel-counter.patch`) | None. The code under the anchor (`engine/script`, `third_party/luau/patches/`) came in the same PR and implements the new text; `engine/script`'s README records `Plan-Rev: 8` | `compiler: a cell VmConfig with native codegen fails create()` (`engine/script`); fuel parity: `determinism: numeric for loops left early count the same fuel in native code` |
+| 8 | 04 §10.2 | #9, WP-0.10r | The same refusal and precondition as 02 §7.4. "WP-0.10 pinned the divergence; WP-0.10r's test asserts parity"; the patch file names; §10.2's Phase 3 replay note says "with `codegen-fornloop-fuel`" | None (as for 02 §7.4) | As for 02 §7.4 |
+| 8 | 09 §2.1 WP-0.10r | #9, WP-0.10r | The WP row says the refusal outlasts the patch (the patch is its precondition; lifting it is 02 §8.1's P3 item), where it said "until … merges (today `create()` warns)" | None | None needed (the WP definition follows 02 §7.4) |
+| 8 | 09 §7 K39 | #9, WP-0.10r | K39's state: both mitigations are in review (WP-0.10r), and its mitigation text says the refusal stays after the patch | None | None needed (risk register) |
+| 8 | 09 §5.10.4 (c) | #9, WP-0.10r | Status row only (not normative, 09 §5.10.1): `engine/script` is conforming with WP-0.10r at `Plan-Rev` 8 | None | None needed (status) |
+| 8 | 09 §8.1 | #9, WP-0.10r | Status row only (not normative, 09 §5.10.1): the WP-0.10 row now also covers WP-0.10r and its test count | None | None needed (status) |

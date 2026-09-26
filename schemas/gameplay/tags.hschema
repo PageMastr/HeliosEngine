@@ -1,0 +1,22 @@
+/// Gameplay kernel records, part 1: tags (06 §1.1; WP-0.19). The runtime registry is
+/// helios::gameplay::TagRegistry (engine/gameplay/include/helios/gameplay/tags.h).
+package helios.gameplay;
+
+/// Who receives a replicated kernel value (06 §1.6). Server = never sent to clients.
+enum Audience : u8 {
+  Server
+  Owner
+  All
+}
+
+/// A gameplay tag declaration (06 §1.1). One record per tag; ancestors are implied, so declaring
+/// "State.Debuff.Stun" also declares "State.Debuff" and "State". The registry interns tags to dense
+/// u16 TagIndex values in canonical (segment-wise sorted) order, so ids depend only on the set of
+/// names, never on load order.
+record TagDef @table("tag") {
+  /// Full dotted name; segments are [A-Za-z_][A-Za-z0-9_]* ("Ship.Class.Frigate").
+  tag: Name
+  /// Audience of the tag when an entity holds it explicitly (06 §1.6: explicit tags replicate per
+  /// declaration, as index deltas).
+  replicate: Audience = Server
+}

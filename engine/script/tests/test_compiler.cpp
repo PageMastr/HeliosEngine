@@ -160,14 +160,16 @@ TEST_CASE("compiler: optimization and debug levels produce equivalent programs")
 
 TEST_CASE("compiler: native codegen is opt-in and gated by luau_codegen_supported") {
     {
-        Harness h; // default: off (servers stay on the interpreter until profiled)
+        Harness h; // default: off (and refused on cells, 02 §7.4)
         CHECK_FALSE(h.vm->nativeCodegenActive());
         ModuleOptions native;
         native.native = true;
         h.load("nat", "return { f = function(x) return x * 2 end }", native);
         CHECK_FALSE(h.vm->moduleInfo("nat")->native);
     }
+    // Client and editor VMs may opt in (the budgets below are still fuel, which native code counts).
     VmConfig c = Harness::defaultConfig();
+    c.profile = HostProfile::Editor;
     c.enableNativeCodegen = true;
     Harness h(c);
     CHECK(h.vm->nativeCodegenActive() == (luau_codegen_supported() != 0));
@@ -193,4 +195,26 @@ TEST_CASE("compiler: native codegen is opt-in and gated by luau_codegen_supporte
     REQUIRE(killed != nullptr);
     CHECK(killed->fuel == 10'000);
     h.expectRuns("natafter", "assert(require('nat').mix(10) > 0)");
+}
+
+TEST_CASE("compiler: a cell VmConfig with native codegen fails create()") {
+    // 02 §7.4 / 04 §10.2: cells and world-script hosts (which run the cell profile) are
+    // interpreter-only; the config is refused on every target, not just where codegen is supported.
+    VmConfig cell = Harness::defaultConfig();
+    cell.enableNativeCodegen = true;
+    const auto refused = ScriptVm::create(cell);
+    REQUIRE_FALSE(refused.ok());
+    CHECK(refused.error().code == ErrorCode::InvalidArgument);
+    CHECK(refused.error().message.find("native codegen is refused on cells") != std::string::npos);
+
+    VmConfig interpreted = Harness::defaultConfig(); // a cell without codegen is fine
+    CHECK(ScriptVm::create(interpreted).ok());
+    for (const HostProfile profile : {HostProfile::Client, HostProfile::Editor}) {
+        VmConfig c = Harness::defaultConfig();
+        c.profile = profile;
+        c.enableNativeCodegen = true;
+        const auto created = ScriptVm::create(c);
+        REQUIRE(created.ok());
+        CHECK((*created)->nativeCodegenActive() == (luau_codegen_supported() != 0));
+    }
 }

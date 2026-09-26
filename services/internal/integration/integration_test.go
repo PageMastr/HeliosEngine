@@ -90,6 +90,9 @@ func TestMain(m *testing.M) {
 	cfg.Seed = "dev"
 	cfg.Orchestrator.LeaseTTL = platform.Duration(time.Second)
 	cfg.Orchestrator.HeartbeatInterval = platform.Duration(250 * time.Millisecond)
+	// TestPerfTokenIssueAt100PerSecond issues 1,000 connect tokens for four accounts in 10 s; the
+	// per-account limit (10/min, burst 5) is exercised by the session unit tests instead.
+	cfg.Session.CreatePerAccount = platform.RateLimit{Rate: 60_000, Per: platform.Duration(time.Minute), Burst: 1_000}
 	level := slog.LevelWarn
 	if os.Getenv("HELIOS_TEST_LOG") != "" {
 		level = slog.LevelDebug
@@ -271,8 +274,9 @@ func TestGatewayCellReconnectOverNATS(t *testing.T) {
 	gw := orchestrator.NewAgent(gwConn, shard, orchestrator.ProcessInfo{Name: "gw-1", Kind: orchestrator.KindGateway,
 		Address: "127.0.0.1:47777", KeyID: ring.Current().ID, Capacity: 128}, nil)
 	gw.Load = func() orchestrator.Load { return orchestrator.Load{FreeSlots: 120} }
+	cellFD := orchestrator.FailureDomain{AZ: "it-a", Rack: "r7", Host: "sim-it-1"}
 	cell := orchestrator.NewAgent(cellConn, shard, orchestrator.ProcessInfo{Name: "cell-a", Kind: orchestrator.KindCell,
-		Address: "127.0.0.1:47800"}, nil)
+		Address: "127.0.0.1:47800", FD: cellFD, ServerBuild: 20260926}, nil)
 	var assigned atomic.Int64
 	cell.OnAssignments = func(a []orchestrator.Assignment) {
 		if len(a) > 0 {
@@ -292,6 +296,29 @@ func TestGatewayCellReconnectOverNATS(t *testing.T) {
 	if creg == nil || len(creg.IDBlocks) != 2 || creg.IDShard != stack.Cfg.ShardIndex {
 		t.Fatalf("cell id blocks: %+v", creg)
 	}
+	// Registration persisted its failure domain and server build (05 §1.4 API), the zone's
+	// region_lease row names the cell under the generation it was told, and its heartbeats report
+	// that region and generation.
+	var az, rack, host string
+	var build int64
+	if err := stack.PG.Pool.QueryRow(ctx, `SELECT az, rack, host, server_build FROM svc_orch.process WHERE process_id = $1`,
+		creg.ProcessID).Scan(&az, &rack, &host, &build); err != nil || (orchestrator.FailureDomain{AZ: az, Rack: rack, Host: host}) != cellFD ||
+		build != 20260926 {
+		t.Fatalf("persisted registration: %q %q %q %d %v", az, rack, host, build, err)
+	}
+	var holder, gen int64
+	if err := stack.PG.Pool.QueryRow(ctx, `SELECT holder_proc, lease_gen FROM svc_orch.region_lease WHERE region_id = $1`,
+		orchestrator.WholeRegion(1001)).Scan(&holder, &gen); err != nil || holder != creg.ProcessID || gen != creg.Assignments[0].LeaseGen {
+		t.Fatalf("region_lease: holder %d gen %d (assignment %+v) %v", holder, gen, creg.Assignments, err)
+	}
+	eventually(t, "held regions reported", func() bool {
+		for _, p := range stack.Orchestrator.Registry().Processes() {
+			if p.ID == creg.ProcessID {
+				return len(p.Held) == 1 && p.Held[0] == orchestrator.HeldRegion{Region: orchestrator.WholeRegion(1001), LeaseGen: gen}
+			}
+		}
+		return false
+	})
 	minter, err := idgen.NewMinter(creg.IDShard, cell, idgen.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -383,7 +410,7 @@ func TestBlockIDsAndOrchestratorLeadership(t *testing.T) {
 	}
 	var holder string
 	var term int64
-	if err := stack.PG.Pool.QueryRow(context.Background(), `SELECT holder, term FROM orchestrator.orch_leader WHERE shard = $1`,
+	if err := stack.PG.Pool.QueryRow(context.Background(), `SELECT holder, term FROM svc_orch.orch_leader WHERE shard = $1`,
 		shard).Scan(&holder, &term); err != nil || !strings.HasSuffix(holder, stack.Cfg.DataDir) || term != list.Term {
 		t.Fatalf("orch_leader row: %q %d %v", holder, term, err)
 	}
@@ -405,7 +432,8 @@ func TestBlockIDsAndOrchestratorLeadership(t *testing.T) {
 		t.Fatal(err)
 	}
 	pg := orchestrator.NewPGStore(stack.PG.Pool)
-	if _, err := pg.AssignZone(context.Background(), orchestrator.Fence{Shard: shard, Term: term - 1}, 1001, 1, time.Now()); !errors.Is(err, orchestrator.ErrNotLeader) {
+	if _, err := pg.AssignRegion(context.Background(), orchestrator.Fence{Shard: shard, Term: term - 1}, orchestrator.WholeRegion(1001), 1,
+		time.Now()); !errors.Is(err, orchestrator.ErrNotLeader) {
 		t.Fatalf("stale-term write: %v", err)
 	}
 }
@@ -507,7 +535,7 @@ func TestRefreshLogoutBanAudit(t *testing.T) {
 		t.Fatalf("audit chain in PostgreSQL: %d %+v", st, audit)
 	}
 	// The append-only guard holds even for the owner role.
-	if _, err := stack.PG.Pool.Exec(context.Background(), "DELETE FROM identity.audit_log"); err == nil {
+	if _, err := stack.PG.Pool.Exec(context.Background(), "DELETE FROM svc_identity.audit_log"); err == nil {
 		t.Fatal("audit rows could be deleted")
 	}
 }
@@ -537,6 +565,18 @@ func TestOpsEndpoints(t *testing.T) {
 // freshDB creates an empty, migrated database on the embedded server for one store suite run.
 func freshDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
+	pool := emptyDB(t)
+	db := stdlib.OpenDBFromPool(pool)
+	if _, err := migrations.Up(context.Background(), db, slog.New(slog.NewTextHandler(io.Discard, nil)), migrations.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	return pool
+}
+
+// emptyDB creates an empty database on the embedded server, dropped at cleanup.
+func emptyDB(t *testing.T) *pgxpool.Pool {
+	t.Helper()
 	ctx := context.Background()
 	name := fmt.Sprintf("conf_%d", time.Now().UnixNano())
 	if _, err := stack.PG.Pool.Exec(ctx, "CREATE DATABASE "+name); err != nil {
@@ -548,11 +588,6 @@ func freshDB(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db := stdlib.OpenDBFromPool(pool)
-	if _, err := migrations.Up(ctx, db, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
-		t.Fatal(err)
-	}
-	_ = db.Close()
 	t.Cleanup(func() {
 		pool.Close()
 		_, _ = stack.PG.Pool.Exec(context.Background(), "DROP DATABASE "+name+" WITH (FORCE)")
@@ -570,7 +605,7 @@ func TestMigrationsAreIdempotent(t *testing.T) {
 	need(t)
 	db := stdlib.OpenDBFromPool(stack.PG.Pool)
 	defer db.Close()
-	res, err := migrations.Up(context.Background(), db, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	res, err := migrations.Up(context.Background(), db, slog.New(slog.NewTextHandler(io.Discard, nil)), migrations.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

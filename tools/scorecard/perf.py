@@ -29,7 +29,9 @@ is inside the history but has no stored value for the metric, or measured someth
 metric that had a value and stops being produced is `missing` until it comes back or the registry drops
 the metric, its run or its run assignment; a declared metric that never had a value is listed, not failed.
 It exits 1 on any failing verdict, and 2 under --require-history when there is no history to compare with
-(so a lost artifact cannot reset every level); --note lines head the summary (a first night, a restart).
+(so a lost artifact cannot reset every level); --note lines head the summary (a first night, or a restart,
+which the nightly allows only when no history can be fetched), and a new history records when and why it
+started, which every later summary shows.
 Standard library only.
 """
 
@@ -156,6 +158,9 @@ def _evaluate(past: list[dict], entry: dict, key: str, m: dict, window: int) -> 
     applied = carried["accepted"] if isinstance(carried["accepted"], dict) else None
     record = _accept_for(entry, key) if m["gate"] else None
     notes = []
+    if record is not None and applied is not None and record["night"] < applied.get("night", ""):
+        notes.append(f"perf_accept for {record['night']} is older than the applied accept of {applied['night']}, "
+                     f"so it has no effect; accept the level you want with a newer night")
     if record is not None and (applied is None or record["night"] > applied.get("night", "")):
         night, want, tonight = record["night"], record.get("value"), _night(entry)
         if night == tonight:
@@ -214,14 +219,17 @@ def _evaluate(past: list[dict], entry: dict, key: str, m: dict, window: int) -> 
     flagged = worse > limit or anchor_worse > limit
     if anchor_worse > limit and worse <= limit:
         notes.append("drift against the anchor")
+    elif m["gate"] and -anchor_worse > limit:
+        notes.append(f"better than the anchor by {-anchor_worse:.1f} %: accept it with perf_accept to protect it")
     row.update(baseline=base, change=change, anchor=anchor, anchor_change=anchor_change, anchor_n=n,
                accepted=applied, verdict=("regression" if m["gate"] else "slower") if flagged else "ok",
                note="; ".join(notes))
     return row
 
 
-def compare(history: dict, entry: dict, window: int) -> tuple[dict, list[dict]]:
-    """(new history, one row per metric of the entry with its levels and verdict)."""
+def compare(history: dict, entry: dict, window: int, start_note: str = "") -> tuple[dict, list[dict]]:
+    """(new history, one row per metric of the entry with its levels and verdict). A history that starts
+    tonight records the night and why (`start_note`, e.g. a requested restart) for as long as it lasts."""
     past = history.get("entries", [])
     stored = json.loads(json.dumps(entry))  # the entry as appended, with every verdict and level
     rows = []
@@ -254,13 +262,19 @@ def compare(history: dict, entry: dict, window: int) -> tuple[dict, list[dict]]:
     ever = {_split(k)[1] for e in past + [entry] for k in (e.get("metrics") or {})}
     rows += [dict(blank, metric=d, verdict="never measured", note="declared, but no night has produced it yet")
              for d in sorted(declared - ever)]
-    new = {"version": 1, "entries": (past + [stored])[-HISTORY_LIMIT:]}
+    started = history.get("started") or ({"night": _night(past[0]), "note": ""} if past else
+                                         {"night": _night(entry), "note": start_note or "first night"})
+    new = {"version": 1, "started": started, "entries": (past + [stored])[-HISTORY_LIMIT:]}
     return new, rows
 
 
-def markdown(rows: list[dict], entry: dict, notes: list[str] = ()) -> str:
+def markdown(rows: list[dict], entry: dict, notes: list[str] = (), started: dict | None = None) -> str:
     bad = [r for r in rows if r["verdict"] in FAILING]
-    lines = ["## Perf history", ""] + [f"**{n}**" for n in notes] + ([""] if notes else []) + [
+    since = []
+    if started and started.get("night") and started["night"] != _night(entry):
+        since = [f"History since {started['night']}" + (f" ({started['note']})" if started.get("note") else "") +
+                 ".", ""]
+    lines = ["## Perf history", ""] + [f"**{n}**" for n in notes] + ([""] if notes else []) + since + [
              f"Night {_night(entry)} (UTC, the `night` a `perf_accept` record names), commit `{entry['sha'][:12]}`: "
              f"{len(bad)} gated metric(s) failing. Budgets are 5 % (render, runtime) and 10 % (backend, editor, "
              f"iteration), against the anchor (the median of a metric's first nights, or its last accepted "
@@ -315,9 +329,9 @@ def main(argv: list[str] | None = None) -> int:
               f"baseline, anchor and missing marker. To start a new history on purpose, dispatch the nightly "
               f"with restart_perf_history (tools/scorecard/README.md)")
         return 2
-    new, rows = compare(history, entry, args.window)
+    new, rows = compare(history, entry, args.window, args.note[0] if args.note else "")
     args.out.write_text(json.dumps(new, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    text = markdown(rows, entry, args.note)
+    text = markdown(rows, entry, args.note, new.get("started"))
     if args.markdown:
         args.markdown.write_text(text, encoding="utf-8")
     print(text)

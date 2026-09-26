@@ -83,11 +83,11 @@
      "pattern": "types, \\d+ outputs \\(\\d+ KiB\\) in ([\\d.]+) s", "unit": "s", "better": "lower", "category": "iteration"}
   ],
 
-  // Reviewed acceptances of a new perf level: {"metric", "night": "YYYY-MM-DD" (UTC), "value" (what that
-  // night measured), "run" (required for a metric read from every run), "reason"}. A regression fails every
-  // night until it is fixed or accepted here, and the anchor (the level every night is measured against) moves only
-  // here. A record is applied once and stays applied, so it may be removed after its first nightly
-  // (tools/scorecard/README.md, "Perf history").
+  // Reviewed acceptances of a new perf level: {"metric", "night": "YYYY-MM-DD" (UTC), "value" (what
+  // that night measured), "run" (required for a metric read from every run), "reason"}. A regression fails
+  // every night until it is fixed or accepted here, and the anchor (the level every night is measured
+  // against) moves only here. A record is applied once and stays applied, so it may be removed after its
+  // first nightly (tools/scorecard/README.md, "Perf history").
   "perf_accept": [],
 
   // ------------------------------------------------------------------------------------------------

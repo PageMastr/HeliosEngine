@@ -759,8 +759,15 @@ BurstResult BenchZone::structuralBurst(u32 round, bool profiled) {
     // the new tag-combination tables: "cold"); later rounds destroy the projectiles the previous
     // round created and alternately revert / re-apply the tag changes (all tables exist: "warm",
     // the steady state of a running zone).
+    const bool legacy = m_config.legacyBurst;
     std::vector<Entity> victims, npcs;
-    if (round == 0 || im.burstCreated.empty()) {
+    if (legacy) {
+        // Pre-WP-1.1a: loot in round 0, then the first 3,000 projectiles in query order.
+        Query vq(w, {Term{round == 0 ? w.id<c::Loot>() : w.id<c::Projectile>(), TermAccess::Read}});
+        vq.forEachChunk([&](ChunkView& ch) {
+            for (u32 r = 0; r < ch.count() && victims.size() < 3000; ++r) victims.push_back(ch.entity(r));
+        });
+    } else if (round == 0 || im.burstCreated.empty()) {
         Query vq(w, {Term{w.id<c::Loot>(), TermAccess::Read}});
         vq.forEachChunk([&](ChunkView& ch) {
             for (u32 r = 0; r < ch.count() && victims.size() < 3000; ++r) victims.push_back(ch.entity(r));
@@ -775,16 +782,17 @@ BurstResult BenchZone::structuralBurst(u32 round, bool profiled) {
     }
     npcs = burstNpcs();
 
-    CommandBuffer& creates = im.creates;
-    CommandBuffer& destroys = im.destroys;
-    CommandBuffer& toggles = im.toggles;
-    CommandBuffer& statuses = im.statuses;
+    CommandBuffer fresh[4]; // the legacy burst records into new buffers every round
+    CommandBuffer& creates = legacy ? fresh[0] : im.creates;
+    CommandBuffer& destroys = legacy ? fresh[1] : im.destroys;
+    CommandBuffer& toggles = legacy ? fresh[2] : im.toggles;
+    CommandBuffer& statuses = legacy ? fresh[3] : im.statuses;
     for (CommandBuffer* b : {&creates, &destroys, &toggles, &statuses}) b->setWorld(&w);
     const Stopwatch record;
     const u32 frameCount = static_cast<u32>(im.frames.size());
     std::vector<TempEntity> createdTemps; // creation order (the next round destroys them in it)
     createdTemps.reserve(3000);
-    if (m_config.perCommandCreates) {
+    if (m_config.perCommandCreates || legacy) {
         // One spawn() and seven set() commands per projectile (fused at apply time).
         for (u32 i = 0; i < 3000; ++i) {
             const u64 h = h64(0xB0057 + round, i);
@@ -882,8 +890,9 @@ std::vector<Entity> BenchZone::burstNpcs() {
 
 namespace ops {
 
-/// Column arrays of all 3,000 creates (frame f takes elements [f * perFrame, ...), as the World's
-/// burst has 3,000 distinct values), plus zeros for NetIdentity and RepDirty.
+/// Column arrays of the creates plus zeros for NetIdentity and RepDirty. Frame f reads elements
+/// [f * frameStride, ...): the burst's 3,000 distinct values, or (legacy burst) the same 250 for
+/// every frame.
 struct RawColumns {
     struct Column {
         ecs_id_t id;
@@ -892,6 +901,11 @@ struct RawColumns {
     };
     Column columns[7];
     void* zeros;
+    usize frameStride;
+    /// Pass the table type as ecs_bulk_desc_t::ids. ecs_bulk_init copies bd.data only for the ids
+    /// listed there (with a table and no ids it copies nothing), so without it the "values" are
+    /// never written: the pre-WP-1.1a raw burst's bug, kept for the legacy burst.
+    bool writeValues;
 };
 
 // 3,000 creates: one ecs_bulk_init with values per frame table.
@@ -902,15 +916,17 @@ void rawCreates(ecs_world_t* fw, const std::vector<ecs_table_t*>& tables, u32 pe
         const u32 count = std::min(perFrame, remaining);
         remaining -= count;
         const ecs_type_t* type = ecs_table_get_type(tables[f]);
+        HELIOS_VERIFY(type->count < FLECS_ID_DESC_MAX);
+        ecs_bulk_desc_t bd{};
         std::vector<void*> data(static_cast<usize>(type->count), nullptr);
         for (i32 k = 0; k < type->count; ++k) {
             const ecs_id_t id = type->array[k];
+            if (c.writeValues) bd.ids[k] = id;
             if (ecs_get_typeid(fw, id) != 0) data[k] = c.zeros; // NetIdentity, RepDirty
             for (const RawColumns::Column& col : c.columns) {
-                if (col.id == id) data[k] = const_cast<std::byte*>(col.data + f * perFrame * col.size);
+                if (col.id == id) data[k] = const_cast<std::byte*>(col.data + f * c.frameStride * col.size);
             }
         }
-        ecs_bulk_desc_t bd{};
         bd.count = static_cast<i32>(count);
         bd.table = tables[f];
         bd.data = data.data();
@@ -1004,11 +1020,12 @@ BurstResult BenchZone::rawFlecsBurst(u32 round, bool profiled) {
     }
 
     // Values in column order (per frame group), as the World writes them.
+    const bool legacy = m_config.legacyBurst;
     const u32 perFrame = (3000 + frameCount - 1) / frameCount;
     const ecs_id_t idPos = w.id<c::Position>(), idVel = w.id<c::Velocity>(), idProj = w.id<c::Projectile>(),
                    idLife = w.id<c::Lifetime>(), idFac = w.id<c::Faction>(), idBounds = w.id<c::Bounds>(),
                    idCell = w.id<c::SpatialCell>();
-    const usize total = static_cast<usize>(perFrame) * frameCount;
+    const usize total = static_cast<usize>(perFrame) * (legacy ? 1 : frameCount);
     std::vector<c::Position> pos(total);
     std::vector<c::Velocity> vel(total, c::Velocity{{100, 0, 0}, {}});
     std::vector<c::Projectile> proj(total);
@@ -1028,17 +1045,19 @@ BurstResult BenchZone::rawFlecsBurst(u32 round, bool profiled) {
     };
     const ops::RawColumns columns{{col(idPos, pos), col(idVel, vel), col(idProj, proj), col(idLife, life),
                                    col(idFac, fac), col(idBounds, bounds), col(idCell, cells)},
-                                  zeros.data()};
+                                  zeros.data(), legacy ? 0 : perFrame, !legacy};
     Stopwatch sw;
     profiled ? timed::rawCreates(fw, tables, perFrame, columns, created) : ops::rawCreates(fw, tables, perFrame, columns, created);
     res.createMs = sw.elapsedMillis();
 
     // Like the World burst, delete the previous burst's creates while this burst's sit at the ends
-    // of the tables (so every delete moves a row into the hole, as it does for the World).
+    // of the tables (so every delete moves a row into the hole, as it does for the World). The
+    // legacy burst deletes this burst's own creates instead.
+    std::vector<ecs_entity_t>& victims = legacy ? created : im.rawCreated;
     sw.reset();
-    profiled ? timed::rawDestroys(fw, im.rawCreated) : ops::rawDestroys(fw, im.rawCreated);
+    profiled ? timed::rawDestroys(fw, victims) : ops::rawDestroys(fw, victims);
     res.destroyMs = sw.elapsedMillis();
-    im.rawCreated = std::move(created);
+    if (!legacy) im.rawCreated = std::move(created);
 
     const bool apply = round % 2 == 0;
     std::vector<ecs_id_t> species{im.tags[8], im.tags[9], im.tags[10]};

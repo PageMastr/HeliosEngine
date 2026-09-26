@@ -40,6 +40,11 @@ struct ZoneConfig {
     u64 seed = 0x5EED;
     /// The burst's 3,000 creates as spawn() + 7 set() commands each instead of 12 spawnN() batches.
     bool perCommandCreates = false;
+    /// The burst exactly as the pre-WP-1.1a bench (f08cf5b) ran it, for comparison (SPIKES.md
+    /// §5.3): per-command creates, the first 3,000 projectiles in query order as victims, fresh
+    /// buffers every round, and a raw floor that writes no create values, reuses 250 values for
+    /// every frame and deletes its own creates. ecs_bench also skips the raw parity alignment.
+    bool legacyBurst = false;
 };
 
 struct ZoneInfo {

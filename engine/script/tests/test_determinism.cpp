@@ -46,11 +46,13 @@ struct RunResult {
     u64 fuel = 0;
 };
 
-// Native runs use the editor profile: cells refuse codegen (02 §7.4). The profile changes neither the
-// bytecode nor the safepoints, and the budgets below are fuel on every profile.
-RunResult runSource(const char* source, bool native) {
+// Runs `source` as a task to completion. Native code needs a client or editor profile (cells refuse
+// codegen, 02 §7.4), so interpreter-versus-native comparisons run both sides on the editor profile;
+// the budgets below are fuel on every profile.
+RunResult runSource(const char* source, bool native, HostProfile profile = HostProfile::Cell) {
+    REQUIRE((!native || profile != HostProfile::Cell));
     VmConfig c = Harness::defaultConfig();
-    if (native) c.profile = HostProfile::Editor;
+    c.profile = profile;
     c.budget.fuelPerResume = 0;
     c.budget.fuelKill = 50'000'000;
     c.budget.fuelPerTick = 50'000'000;
@@ -68,7 +70,9 @@ RunResult runSource(const char* source, bool native) {
     return RunResult{h.prints[0], done->fuel};
 }
 
-RunResult runPure(bool native) { return runSource(kPureScript, native); }
+RunResult runPure(bool native, HostProfile profile = HostProfile::Cell) {
+    return runSource(kPureScript, native, profile);
+}
 
 } // namespace
 
@@ -89,11 +93,42 @@ TEST_CASE("determinism: native codegen counts the same fuel as the interpreter")
         MESSAGE("native codegen not supported on this target; skipped");
         return;
     }
-    const RunResult interp = runPure(false);
-    const RunResult native = runPure(true);
+    const RunResult interp = runPure(false, HostProfile::Editor);
+    const RunResult native = runPure(true, HostProfile::Editor);
     CHECK(native.output == interp.output);
     CHECK(native.fuel == interp.fuel);
+    // The profile does not change fuel either: the editor interpreter counts the cell's golden fuel.
+    CHECK(interp.fuel == runPure(false, HostProfile::Cell).fuel);
     CHECK(native.fuel == kGoldenPureFuel);
+}
+
+TEST_CASE("determinism: the golden fuel count holds under the production cell budgets") {
+    // FuelBudget::cell() as shipped: soft 200k, kill 500k, lane 750k fuel and the 20 ms wall backstop,
+    // which makes the host read the clock every 64 fuel, before every binding call and after every GC
+    // step. Those reads must not move a single fuel. A run killed by the backstop means the machine
+    // preempted the resume for 20 ms; it is retried, and three in a row fail the test.
+    const FuelBudget cell = FuelBudget::cell();
+    REQUIRE(cell.wallBackstopNanos == 20'000'000);
+    bool finished = false;
+    for (int attempt = 0; attempt < 3 && !finished; ++attempt) {
+        VmConfig c = Harness::defaultConfig();
+        c.budget = cell;
+        c.randomSeed = 1234;
+        Harness h(c);
+        h.load("pure", kPureScript);
+        const TaskId id = h.spawn("pure");
+        h.steps(5);
+        if (const auto* killed = h.eventFor(id, ScriptEventKind::TaskKilled)) {
+            REQUIRE(killed->killReason == KillReason::WallBackstop);
+            MESSAGE("attempt ", attempt, " was preempted past the 20 ms backstop; retrying");
+            continue;
+        }
+        const auto* done = h.eventFor(id, ScriptEventKind::TaskFinished);
+        REQUIRE(done != nullptr);
+        CHECK(done->fuel == kGoldenPureFuel);
+        finished = true;
+    }
+    CHECK(finished);
 }
 
 TEST_CASE("determinism: numeric for loops left early count the same fuel in native code") {
@@ -122,11 +157,12 @@ TEST_CASE("determinism: numeric for loops left early count the same fuel in nati
         for i = 1, 30 do exits += firstOver(i) end
         print(exits)
     )";
-    const RunResult interp = runSource(kEarlyExit, false);
-    const RunResult native = runSource(kEarlyExit, true);
+    const RunResult interp = runSource(kEarlyExit, false, HostProfile::Editor);
+    const RunResult native = runSource(kEarlyExit, true, HostProfile::Editor);
     CHECK(interp.output == native.output);
     CHECK(interp.output == "180");
     CHECK(native.fuel == interp.fuel); // stock 0.739: + 50 (break) + 30 (return)
+    CHECK(interp.fuel == runSource(kEarlyExit, false, HostProfile::Cell).fuel);
 }
 
 TEST_CASE("determinism: charges never depend on the printed length of heap addresses") {

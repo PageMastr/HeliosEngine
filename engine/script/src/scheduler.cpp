@@ -218,8 +218,8 @@ void VmState::resumeTask(TaskHandle h, TickStats& ts) {
 
     ++stats.resumes;
     ++ts.resumed;
-    stats.fuelTotal += r.fuel;
-    ts.fuel += r.fuel;
+    stats.fuelTotal = saturatingAdd(stats.fuelTotal, r.fuel);
+    ts.fuel = saturatingAdd(ts.fuel, r.fuel);
     ts.maxResumeFuel = std::max(ts.maxResumeFuel, r.fuel);
     t = tasks.get(h); // HandlePool addresses are stable, but re-fetch for clarity
     if (allocFailures != r.allocFailuresAtStart) collectAfterOom();

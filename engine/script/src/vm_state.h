@@ -39,6 +39,8 @@ inline constexpr int kFirstObjectTag = 32;
 inline constexpr int kLastObjectTag = 127;
 
 inline constexpr u64 kNoLimit = ~u64(0);
+/// Fuel and deadlines saturate at kNoLimit instead of wrapping (a saturated charge must stay a kill).
+constexpr u64 saturatingAdd(u64 a, u64 b) noexcept { return b > kNoLimit - a ? kNoLimit : a + b; }
 /// Interpreter safepoints between wall-clock reads when a wall limit is active.
 inline constexpr u64 kWallCheckInterval = 64;
 /// Longest distance the VM's inline fuel counter is armed with (fuel-counter patch). Also the value
@@ -287,11 +289,11 @@ struct VmState {
             return;
         }
         const u64 now = fuelOf(r);
-        r.fuel = fuel > kNoLimit - now ? kNoLimit : now + fuel;
-        chargeSlow(L, r, fuel);
+        r.fuel = saturatingAdd(now, fuel);
+        chargeSlow(L, r, r.fuel - now); // what was actually added (less once saturated)
     }
-    /// Slow path of a charge or safepoint: r.fuel is current (the fuel is already added). Handles the
-    /// sticky kill, fuel_kill, the soft budget and the wall-clock read, then re-arms the counter.
+    /// Slow path of a charge or safepoint: r.fuel is current (`fuel` is what was just added). Handles
+    /// the sticky kill, fuel_kill, the soft budget and the wall-clock read, then re-arms the counter.
     void chargeSlow(lua_State* L, RunContext& run, u64 fuel);
     static void updateNextCheck(RunContext& run) noexcept;
     void wallCheck(lua_State* L, RunContext& run);

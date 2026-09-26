@@ -185,9 +185,9 @@ void luauInterrupt(lua_State* L, int gc) {
         return;
     }
     // The counter reached zero at this safepoint, the armedDistance-th since it was armed (the first
-    // when it was armed at 0, i.e. due).
-    run->fuel = run->armedFuel + std::max<u64>(run->armedDistance, 1);
-    s->chargeSlow(L, *run, 1);
+    // when it was armed at 0, i.e. due). Saturating: a killed run whose fuel saturated stays there.
+    run->fuel = saturatingAdd(run->armedFuel, std::max<u64>(run->armedDistance, 1));
+    s->chargeSlow(L, *run, run->fuel - run->armedFuel);
 }
 
 struct ProtectCall {
@@ -202,7 +202,6 @@ int protectTrampoline(lua_State* L) {
     return 0;
 }
 
-u64 saturatingAdd(u64 a, u64 b) noexcept { return b > kNoLimit - a ? kNoLimit : a + b; }
 
 } // namespace
 
@@ -620,7 +619,7 @@ Result<void> VmState::finishTopLevel(RunContext& r, u32 module, bool failed, Scr
         armCounter(r);
     }
     ++stats.resumes;
-    stats.fuelTotal += r.fuel;
+    stats.fuelTotal = saturatingAdd(stats.fuelTotal, r.fuel);
     if (allocFailures != r.allocFailuresAtStart) collectAfterOom();
     if (module < modules.size()) err.module = modules[module]->name;
     if (!r.killed && !failed) return {};

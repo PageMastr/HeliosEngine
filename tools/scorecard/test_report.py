@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import perf
@@ -191,6 +192,28 @@ class ReportTests(unittest.TestCase):
         text = report.markdown(broken)
         self.assertIn("0 of 1 criteria pass tonight, 1 fail", text)
         self.assertIn("| NS-0.1 | **FAIL** |", text)
+
+
+    def test_a_night_without_a_report_restarts_the_streaks(self):
+        data = dict(DATA, criteria=[crit("NS-0.1", [{"ctest": "net_tests"}])], exit=[])
+        day = datetime(2026, 10, 1, 4, 0, tzinfo=timezone.utc)
+        prev = None
+        for night in range(2):
+            prev = report.build_report(data, self.runs, None, prev, True, 0, self.root, now=day + timedelta(days=night))
+        self.assertEqual(prev["criteria"][0]["streak"], 2)
+        # A dispatch run in between carries the last scheduled time forward, not its own.
+        manual = report.build_report(data, self.runs, None, prev, False, 0, self.root, now=day + timedelta(days=2))
+        self.assertEqual(manual["last_scheduled"], prev["generated"])
+        # The scheduled night of day 2 left no report, so day 3 starts again at 1, not 3.
+        late = report.build_report(data, self.runs, None, manual, True, 0, self.root, now=day + timedelta(days=3))
+        self.assertEqual((late["criteria"][0]["streak"], late["criteria"][0]["green"]), (1, False))
+        self.assertIn("no scheduled report for 48 h", late["streaks_restarted"])
+        self.assertIn("Every streak restarted tonight", report.markdown(late))
+        self.assertEqual(len(late["criteria"][0]["history"]), 4)
+        # A delayed schedule within the gap keeps the streak.
+        slow = report.build_report(data, self.runs, None, prev, True, 0, self.root,
+                                   now=day + timedelta(days=1, hours=30))
+        self.assertEqual(slow["criteria"][0]["streak"], 3)
 
 
 class PerfTests(unittest.TestCase):

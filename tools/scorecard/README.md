@@ -139,10 +139,12 @@ although every case passed (a sanitizer report at exit).
   every platform and it has no gap.
   A broken pin (a `pinned_by` test that now fails) is reported so that the registry is updated.
 - **Green (09 §5.6).** The report keeps a streak per criterion from last night's report: consecutive passing
-  *scheduled* nightlies. A manual run never extends it, and a failure resets it. N and H criteria are green
-  at 3 and W at 2; an M record is green once it exists. The summary gives the green fraction of the phase,
-  the 60 % part of the round score (§5.7). It is written to the job summary and the `scorecard-report`
-  artifact.
+  *scheduled* nightlies. A manual run never extends it, and a failure resets it. A scheduled report more than
+  36 h after the previous scheduled one restarts every streak, because the night in between left no report
+  (the report says so). N and H criteria are green at 3 and W at 2; an M record is green once it exists.
+  09 §5.6's further W rule ("the latest within 14 days of the exit streak") is not enforced yet; no Phase 0
+  criterion is W. The summary gives the green fraction of the phase, the 60 % part of the round score (§5.7).
+  It is written to the job summary and the `scorecard-report` artifact.
 - **Perf history (09 §5.8).** `perf_metrics` name the numbers the perf gates print (a regex over a doctest
   case's MESSAGE lines or a gate's output; the case by its exact name). `compare` flags a metric that is
   worse than its baseline by more than its category's budget: render and runtime 5 % (02 §8.3 for runtime

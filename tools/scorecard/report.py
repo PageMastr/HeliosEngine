@@ -17,7 +17,8 @@ a criterion passes when every reference passes on every platform and it has no g
 fail (a failed reference or a failing gap) or unmeasured (no result, a skip, or an unmeasured gap).
 The streak counts consecutive passing scheduled reports (--previous is last night's report.json), and
 a criterion is green under 09 §5.6 at 3 (N, H) or 2 (W) passes; an M record is green once it exists.
-Standard library only.
+A scheduled night more than MAX_NIGHT_GAP_HOURS after the last scheduled report restarts every streak,
+because the night in between has no report and so no known result. Standard library only.
 """
 
 from __future__ import annotations
@@ -33,6 +34,9 @@ import scorecard
 from scorecard import matches
 
 GREEN_STREAK = {"N": 3, "H": 3, "N+H": 3, "W": 2}
+# The nightly is scheduled daily; a scheduled report further than this from the previous scheduled one
+# means a night without a report (a failed scorecard job, a skipped schedule), which breaks the streak.
+MAX_NIGHT_GAP_HOURS = 36
 CI_CONCLUSION = {"success": "pass", "failure": "fail", "cancelled": "fail", "timed_out": "fail",
                  "startup_failure": "fail", "skipped": "skip", "neutral": "skip"}
 
@@ -222,16 +226,35 @@ def ci_job_conclusions(path: Path | None) -> dict | None:
     return {j.get("name"): j.get("conclusion") for j in listing.get("jobs", [])}
 
 
+def _stamp(value) -> datetime | None:
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
 def build_report(data: dict, runs: list[Results], ci_jobs: dict | None, previous: dict | None, scheduled: bool,
-                 phase: int, repo: Path) -> dict:
-    before = {(c["id"], c["phase"]): c for c in (previous or {}).get("criteria", []) + (previous or {}).get("exit", [])}
-    out: dict = {"generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "phase": phase,
-                 "scheduled": scheduled, "runs": sorted({r.name for r in runs}), "criteria": [], "exit": []}
+                 phase: int, repo: Path, now: datetime | None = None) -> dict:
+    now = now or datetime.now(timezone.utc)
+    previous = previous or {}
+    generated = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    # The time of the last scheduled report: a dispatch report carries it forward unchanged.
+    last_scheduled = previous.get("last_scheduled") or (previous.get("generated") if previous.get("scheduled") else None)
+    gap = None
+    if scheduled and last_scheduled and _stamp(last_scheduled):
+        gap = (now - _stamp(last_scheduled)).total_seconds() / 3600
+    restart = gap is not None and gap > MAX_NIGHT_GAP_HOURS
+    before = {(c["id"], c["phase"]): c for c in previous.get("criteria", []) + previous.get("exit", [])}
+    out: dict = {"generated": generated, "phase": phase, "scheduled": scheduled,
+                 "last_scheduled": generated if scheduled else last_scheduled,
+                 "runs": sorted({r.name for r in runs}), "criteria": [], "exit": []}
+    if restart:
+        out["streaks_restarted"] = f"no scheduled report for {gap:.0f} h (since {last_scheduled})"
     for key in ("criteria", "exit"):
         for entry in (e for e in data.get(key) or [] if e.get("phase") == phase):
             result = evaluate(entry, data, runs, ci_jobs, repo)
             prev = before.get((entry["id"], entry["phase"]), {})
-            streak = int(prev.get("streak", 0))
+            streak = 0 if restart else int(prev.get("streak", 0))
             if result["status"] != "pass":
                 streak = 0
             elif scheduled:
@@ -260,7 +283,10 @@ def markdown(report: dict) -> str:
     lines = [f"## Scorecard: Phase {report['phase']}", "",
              f"{s['pass']} of {s['total']} criteria pass tonight, {s['fail']} fail and {s['unmeasured']} are "
              f"unmeasured. **{s['green']} are green** under 09 §5.6 (the streak each class needs), so the scorecard "
-             f"part of the round score (60 %, §5.7) is {100 * s['green_fraction']:.1f} % of its maximum.", ""] + HEADER
+             f"part of the round score (60 %, §5.7) is {100 * s['green_fraction']:.1f} % of its maximum.", ""]
+    if report.get("streaks_restarted"):
+        lines += [f"Every streak restarted tonight: {report['streaks_restarted']}.", ""]
+    lines += HEADER
 
     def row(c: dict) -> str:
         cells = {os_name: ICON[v["status"]] for os_name, v in c["platforms"].items()}

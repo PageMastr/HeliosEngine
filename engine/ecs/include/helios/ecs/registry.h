@@ -8,7 +8,8 @@
 //   table); the rest are issued by allocate(): freed slots wait in a FIFO and are reused once more
 //   than `reuseDelay` are waiting (or the table has no fresh slot left), so stale handles on
 //   clients are unlikely to alias (the 8-bit generation catches the rest). Issue order is a pure
-//   function of the call sequence (deterministic).
+//   function of the call sequence (deterministic). Each slot also stores an opaque owner value
+//   (EntityRegistry keeps the entity there, so a handle's id and entity share one slot).
 // * EntityRegistry: combines both; Entity -> EntityId is not stored here because every entity
 //   carries NetIdentity (World::entityId()).
 //
@@ -16,6 +17,7 @@
 // points (main thread); concurrent const lookups from parallel stages are safe.
 
 #include <memory>
+#include <span>
 #include <vector>
 
 #include "helios/core/memory.h"
@@ -87,42 +89,84 @@ public:
     explicit NetHandleTable(const Desc& desc);
     NetHandleTable();
 
-    /// Issues a dynamic handle (FIFO slot reuse). Fails with LimitExceeded when the table is full.
-    Result<NetHandle> allocate(EntityId id);
-    /// allocate() without the error object (bulk spawn paths): an invalid handle when full.
-    NetHandle tryAllocate(EntityId id) noexcept;
+    /// Issues a dynamic handle (FIFO slot reuse) and stores `owner` with it. Fails with
+    /// LimitExceeded when the table is full and InvalidArgument for an invalid id.
+    Result<NetHandle> allocate(EntityId id, u64 owner = 0);
+    /// allocate() without the error object (bulk spawn paths): an invalid handle on failure.
+    NetHandle tryAllocate(EntityId id, u64 owner = 0) noexcept;
+    /// tryAllocate(ids[i], owners[i]) for every i, in order, into out[i] (the same handles).
+    void tryAllocateN(std::span<const EntityId> ids, const u64* owners, NetHandle* out) noexcept;
     /// Issues the content-placed slot `index` (1..reservedCount). Fails if out of range or in use.
-    Result<NetHandle> allocateAt(u32 index, EntityId id);
+    Result<NetHandle> allocateAt(u32 index, EntityId id, u64 owner = 0);
     /// Frees a live handle (bumps the slot generation). Returns false for stale/invalid handles.
     bool release(NetHandle handle);
     /// release() only if `handle` is live and was issued to `id` (one validation for both checks).
-    bool releaseIssuedTo(NetHandle handle, EntityId id);
+    bool releaseIssuedTo(NetHandle handle, EntityId id) {
+        const u32 index = handle.index();
+        if (index == 0 || index >= m_slots.size() || !id.isValid()) return false;
+        Slot& s = m_slots[index];
+        u8& generation = m_generations[index];
+        if (s.id != id || generation != handle.generation()) return false;
+        s.id = EntityId();
+        s.owner = 0;
+        generation = static_cast<u8>(generation == 0xFF ? 1 : generation + 1); // 0 is never issued
+        --m_live;
+        if (index > m_reserved) {
+            if (m_freeTail == m_freeRing.size()) growRing();
+            m_freeRing[m_freeTail++] = index;
+        }
+        return true;
+    }
 
     /// EntityId of a live handle, or an invalid id for stale/invalid handles.
-    EntityId resolve(NetHandle handle) const noexcept;
-    bool isLive(NetHandle handle) const noexcept { return resolve(handle).isValid(); }
+    EntityId resolve(NetHandle handle) const noexcept {
+        const Slot* s = liveSlot(handle);
+        return s ? s->id : EntityId();
+    }
+    /// Owner value stored with a live handle, or 0 for stale/invalid handles.
+    u64 ownerOf(NetHandle handle) const noexcept {
+        const Slot* s = liveSlot(handle);
+        return s ? s->owner : 0;
+    }
+    bool isLive(NetHandle handle) const noexcept { return liveSlot(handle) != nullptr; }
     /// Handle currently issued for slot `index` (invalid if the slot is free).
     NetHandle handleAt(u32 index) const noexcept;
+    /// Fetches the cache line of `handle`'s slot (a release or lookup soon after hits it).
+    void prefetch(NetHandle handle) const noexcept;
 
     u32 liveCount() const noexcept { return m_live; }
     u32 reservedCount() const noexcept { return m_reserved; }
     u32 maxHandles() const noexcept { return m_max; }
+    usize memoryBytes() const noexcept {
+        return m_slots.capacity() * sizeof(Slot) + m_generations.capacity() + m_freeRing.capacity() * sizeof(u32);
+    }
 
 private:
+    // Spawn and destroy bursts visit slots in FIFO order, which is scattered over the table: a
+    // slot is 16 bytes (id and owner; live = valid id) so each visit costs one cache line, and the
+    // generations sit in a byte array small enough to stay cached.
     struct Slot {
-        EntityId id;
-        u8 generation = 1;
-        bool live = false;
+        EntityId id; // invalid while the slot is free
+        u64 owner = 0;
     };
-    Slot& slot(u32 index) {
-        if (index >= m_slots.size()) grow(index);
-        return m_slots[index];
+    static_assert(sizeof(Slot) == 16);
+    const Slot* liveSlot(NetHandle handle) const noexcept {
+        const u32 index = handle.index();
+        if (index == 0 || index >= m_slots.size()) return nullptr;
+        const Slot& s = m_slots[index];
+        return s.id.isValid() && m_generations[index] == handle.generation() ? &s : nullptr;
     }
+    NetHandle issue(u32 index, EntityId id, u64 owner) noexcept;
+    u32 nextIndex() noexcept; // the slot tryAllocate() issues next (0: full), taken from the FIFO
+    void compactRing() noexcept;
+    void growRing();
     void grow(u32 index);
 
-    std::vector<Slot> m_slots; // index 0 unused
-    std::vector<u32> m_freeRing;
-    usize m_freeHead = 0; // FIFO over m_freeRing[m_freeHead..]
+    std::vector<Slot> m_slots;      // index 0 unused
+    std::vector<u8> m_generations;  // per slot: generation of its current (or next) handle
+    std::vector<u32> m_freeRing; // FIFO of freed dynamic slots: [m_freeHead, m_freeTail) wait
+    usize m_freeHead = 0;
+    usize m_freeTail = 0;
     u32 m_nextFresh;
     u32 m_max;
     u32 m_reserved;
@@ -146,7 +190,18 @@ public:
     Result<void> add(EntityId id, Entity entity);
     /// add() for the bulk spawn paths: one lookup and no error object. Returns false, registering
     /// nothing, if `id` or `entity` is invalid or `id` is taken.
-    bool addNew(EntityId id, Entity entity);
+    bool addNew(EntityId id, Entity entity) {
+        // Consecutive ids of a spawn burst land in the page the previous add used.
+        if (((id.value >> kPageBits) + 1) == m_lastPageKey && paged(id) && entity.isValid()) {
+            u64& slot = m_lastPagePtr->entity[id.value & (kPageIds - 1)];
+            if (slot != 0) return false;
+            slot = entity.id;
+            ++m_lastPagePtr->live;
+            ++m_pagedCount;
+            return true;
+        }
+        return addNewSlow(id, entity);
+    }
     /// Reserves capacity for `additional` more ids (one rehash for a whole spawn group).
     void reserve(usize additional);
     /// Issues a NetHandle for a registered id. `contentIndex` != 0 uses allocateAt().
@@ -156,11 +211,27 @@ public:
     /// assignHandleFor() of a dynamic handle without the error object (bulk spawn paths): an
     /// invalid handle when the table is full.
     NetHandle tryAssignHandle(EntityId id, Entity entity) noexcept;
+    /// tryAssignHandle(ids[i], Entity(entities[i])) for every i, in order, into out[i].
+    void tryAssignHandles(std::span<const EntityId> ids, const u64* entities, NetHandle* out) noexcept;
     /// Removes id (and releases `handle` if valid). Returns false if id was unknown.
-    bool remove(EntityId id, NetHandle handle);
+    bool remove(EntityId id, NetHandle handle) {
+        // A destroy burst of consecutive ids stays in one page (the page is recycled on the slow path).
+        if (((id.value >> kPageBits) + 1) == m_lastPageKey && paged(id) && m_lastPagePtr->live > 1) {
+            u64& slot = m_lastPagePtr->entity[id.value & (kPageIds - 1)];
+            if (slot == 0) return false;
+            slot = 0;
+            --m_lastPagePtr->live;
+            --m_pagedCount;
+            if (handle.isValid()) m_handles.releaseIssuedTo(handle, id);
+            return true;
+        }
+        return removeSlow(id, handle);
+    }
 
     Entity find(EntityId id) const noexcept;
-    Entity find(NetHandle handle) const noexcept;
+    Entity find(NetHandle handle) const noexcept { return Entity(m_handles.ownerOf(handle)); }
+    /// Hints that `handle` will be released soon (fetches its slot's cache line).
+    void prefetchHandle(NetHandle handle) const noexcept { m_handles.prefetch(handle); }
     EntityId resolve(NetHandle handle) const noexcept { return m_handles.resolve(handle); }
     bool contains(EntityId id) const noexcept { return find(id).isValid(); }
 
@@ -183,11 +254,8 @@ private:
     Page& pageAt(u32 index) const noexcept { return m_chunks[index / kChunkPages].get()[index % kChunkPages]; }
     Page* findPage(EntityId id) const noexcept;
     Page& ensurePage(EntityId id);
-    void mapHandle(u32 index, Entity entity) {
-        if (index >= m_byHandleIndex.size()) growHandleIndex(index);
-        m_byHandleIndex[index] = entity;
-    }
-    void growHandleIndex(u32 index);
+    bool addNewSlow(EntityId id, Entity entity);
+    bool removeSlow(EntityId id, NetHandle handle);
 
     MemoryTag m_tag;
     U64Map m_byId;   // content-placed and client-local ids
@@ -200,8 +268,8 @@ private:
     // use it, so they stay safe to run concurrently.
     u64 m_lastPageKey = 0;
     u32 m_lastPage = 0;
-    NetHandleTable m_handles;
-    std::vector<Entity> m_byHandleIndex;
+    Page* m_lastPagePtr = nullptr; // pageAt(m_lastPage) while m_lastPageKey != 0
+    NetHandleTable m_handles; // handle -> EntityId, with the Entity as the slot owner
 };
 
 } // namespace helios::ecs

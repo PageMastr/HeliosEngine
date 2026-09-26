@@ -10,6 +10,15 @@
 
 #include "helios/ecs/types.h"
 
+// flecs 4.1.6 internals that flecs.h does not declare (defined in flecs.c, extern linkage). Keep
+// this list short: a flecs update must re-check each signature (a mismatch fails to link or the
+// DontFragment tests in test_bulk_paths.cpp).
+extern "C" {
+/// Whether `entity` has a value in the sparse storage of `cr` (a Sparse or DontFragment component,
+/// not a wildcard): ecs_owns_id() for such components without its table-cache lookup.
+bool flecs_component_sparse_has(ecs_component_record_t* cr, ecs_entity_t entity);
+}
+
 namespace helios::ecs::detail {
 
 static_assert(sizeof(ecs_entity_t) == sizeof(u64));

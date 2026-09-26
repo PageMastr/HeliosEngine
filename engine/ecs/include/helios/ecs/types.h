@@ -21,6 +21,7 @@
 
 struct ecs_world_t; // flecs world (opaque here)
 struct ecs_table_t; // flecs table (opaque here)
+struct ecs_record_t; // flecs entity record (opaque here)
 
 namespace helios {
 struct Guid;

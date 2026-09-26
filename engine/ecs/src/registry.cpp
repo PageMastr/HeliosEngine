@@ -6,6 +6,7 @@
 
 #include "helios/core/assert.h"
 #include "helios/core/hash.h"
+#include "prefetch.h"
 
 namespace helios::ecs {
 
@@ -158,79 +159,139 @@ NetHandleTable::NetHandleTable(const Desc& desc)
       m_reserved(std::min(desc.reservedCount, NetHandle::kMaxIndex)), m_reuseDelay(desc.reuseDelay) {
     m_nextFresh = m_reserved + 1;
     m_slots.resize(1); // slot 0 is never issued
+    m_generations.resize(1, u8{1});
 }
 
 NetHandleTable::NetHandleTable() : NetHandleTable(Desc{}) {}
 
-void NetHandleTable::grow(u32 index) { m_slots.resize(static_cast<usize>(index) + 1); }
+void NetHandleTable::grow(u32 index) {
+    m_slots.resize(static_cast<usize>(index) + 1);
+    m_generations.resize(static_cast<usize>(index) + 1, u8{1});
+}
 
-Result<NetHandle> NetHandleTable::allocate(EntityId id) {
-    const NetHandle h = tryAllocate(id);
+NetHandle NetHandleTable::issue(u32 index, EntityId id, u64 owner) noexcept {
+    if (index >= m_slots.size()) grow(index);
+    Slot& s = m_slots[index];
+    HELIOS_ASSERT(!s.id.isValid());
+    s.id = id;
+    s.owner = owner;
+    ++m_live;
+    return NetHandle::make(index, m_generations[index]);
+}
+
+Result<NetHandle> NetHandleTable::allocate(EntityId id, u64 owner) {
+    if (!id.isValid()) return Error{ErrorCode::InvalidArgument, "NetHandleTable: invalid EntityId"};
+    const NetHandle h = tryAllocate(id, owner);
     if (!h.isValid()) return Error{ErrorCode::LimitExceeded, "NetHandleTable is full"};
     return h;
 }
 
-NetHandle NetHandleTable::tryAllocate(EntityId id) noexcept {
-    u32 index = 0;
-    const usize waiting = m_freeRing.size() - m_freeHead;
+u32 NetHandleTable::nextIndex() noexcept {
+    const usize waiting = m_freeTail - m_freeHead;
     const bool freshLeft = m_nextFresh <= m_max && m_nextFresh > m_reserved;
     if (waiting > 0 && (waiting > m_reuseDelay || !freshLeft)) {
-        index = m_freeRing[m_freeHead++];
-        if (m_freeHead >= 4096 && m_freeHead * 2 >= m_freeRing.size()) {
-            m_freeRing.erase(m_freeRing.begin(), m_freeRing.begin() + static_cast<isize>(m_freeHead));
-            m_freeHead = 0;
+        const u32 index = m_freeRing[m_freeHead++];
+        // Bursts pop runs of scattered slots: fetch the slot a few pops ahead.
+        if (constexpr usize kAhead = 8; m_freeHead + kAhead < m_freeTail) {
+            detail::prefetch(&m_slots[m_freeRing[m_freeHead + kAhead]]);
         }
-    } else if (freshLeft) {
-        index = m_nextFresh++;
-    } else {
-        return NetHandle();
+        compactRing();
+        return index;
     }
-    Slot& s = slot(index);
-    HELIOS_ASSERT(!s.live);
-    s.live = true;
-    s.id = id;
-    ++m_live;
-    return NetHandle::make(index, s.generation);
+    return freshLeft ? m_nextFresh++ : 0;
 }
 
-Result<NetHandle> NetHandleTable::allocateAt(u32 index, EntityId id) {
+void NetHandleTable::compactRing() noexcept {
+    if (m_freeHead >= 4096 && m_freeHead * 2 >= m_freeTail) {
+        std::copy(m_freeRing.begin() + static_cast<isize>(m_freeHead), m_freeRing.begin() + static_cast<isize>(m_freeTail),
+                  m_freeRing.begin());
+        m_freeTail -= m_freeHead;
+        m_freeHead = 0;
+    }
+}
+
+NetHandle NetHandleTable::tryAllocate(EntityId id, u64 owner) noexcept {
+    if (!id.isValid()) return NetHandle();
+    const u32 index = nextIndex();
+    return index != 0 ? issue(index, id, owner) : NetHandle();
+}
+
+void NetHandleTable::tryAllocateN(std::span<const EntityId> ids, const u64* owners, NetHandle* out) noexcept {
+    const usize n = ids.size();
+    if (std::any_of(ids.begin(), ids.end(), [](EntityId id) { return !id.isValid(); })) {
+        for (usize i = 0; i < n; ++i) out[i] = tryAllocate(ids[i], owners[i]);
+        return;
+    }
+    // tryAllocate()'s policy resolved once per run of slots from one source: FIFO slots while more
+    // than reuseDelay wait (or no fresh slot is left), else fresh slots.
+    usize i = 0;
+    while (i < n) {
+        const usize waiting = m_freeTail - m_freeHead;
+        const bool freshLeft = m_nextFresh <= m_max && m_nextFresh > m_reserved;
+        if (waiting > 0 && (waiting > m_reuseDelay || !freshLeft)) {
+            const usize run = std::min(n - i, freshLeft ? waiting - m_reuseDelay : waiting);
+            const u32* ring = m_freeRing.data() + m_freeHead;
+            const usize ahead = std::min<usize>(8, waiting);
+            for (usize k = 0; k < run; ++k, ++i) {
+                if (k + ahead < waiting) detail::prefetch(&m_slots[ring[k + ahead]]);
+                const u32 index = ring[k];
+                Slot& s = m_slots[index];
+                HELIOS_ASSERT(!s.id.isValid());
+                s.id = ids[i];
+                s.owner = owners[i];
+                out[i] = NetHandle::make(index, m_generations[index]);
+            }
+            m_freeHead += run;
+            m_live += static_cast<u32>(run);
+            compactRing();
+        } else if (freshLeft) {
+            const usize run = std::min<usize>(n - i, m_max - m_nextFresh + 1);
+            const u32 first = m_nextFresh;
+            if (first + run > m_slots.size()) grow(static_cast<u32>(first + run - 1));
+            for (usize k = 0; k < run; ++k, ++i) {
+                const u32 index = first + static_cast<u32>(k);
+                m_slots[index] = Slot{ids[i], owners[i]};
+                out[i] = NetHandle::make(index, m_generations[index]);
+            }
+            m_nextFresh += static_cast<u32>(run);
+            m_live += static_cast<u32>(run);
+        } else {
+            for (; i < n; ++i) out[i] = NetHandle(); // full
+        }
+    }
+}
+
+Result<NetHandle> NetHandleTable::allocateAt(u32 index, EntityId id, u64 owner) {
     if (index == 0 || index > m_reserved) {
         return makeError(ErrorCode::OutOfRange, "content handle index {} outside [1, {}]", index, m_reserved);
     }
-    Slot& s = slot(index);
-    if (s.live) return makeError(ErrorCode::AlreadyExists, "content handle index {} in use", index);
-    s.live = true;
-    s.id = id;
-    ++m_live;
-    return NetHandle::make(index, s.generation);
+    if (!id.isValid()) return Error{ErrorCode::InvalidArgument, "NetHandleTable: invalid EntityId"};
+    if (index < m_slots.size() && m_slots[index].id.isValid()) {
+        return makeError(ErrorCode::AlreadyExists, "content handle index {} in use", index);
+    }
+    return issue(index, id, owner);
 }
 
 bool NetHandleTable::release(NetHandle handle) { return releaseIssuedTo(handle, resolve(handle)); }
 
-bool NetHandleTable::releaseIssuedTo(NetHandle handle, EntityId id) {
-    const u32 index = handle.index();
-    if (index == 0 || index >= m_slots.size()) return false;
-    Slot& s = m_slots[index];
-    if (!s.live || s.generation != handle.generation() || s.id != id) return false;
-    s.live = false;
-    s.id = EntityId();
-    s.generation = static_cast<u8>(s.generation + 1);
-    if (s.generation == 0) s.generation = 1; // generation 0 is never issued
-    --m_live;
-    if (index > m_reserved) m_freeRing.push_back(index);
-    return true;
+void NetHandleTable::growRing() {
+    if (m_freeHead * 4 >= m_freeTail && m_freeHead > 0) { // mostly consumed: move the waiting part down
+        std::copy(m_freeRing.begin() + static_cast<isize>(m_freeHead), m_freeRing.begin() + static_cast<isize>(m_freeTail),
+                  m_freeRing.begin());
+        m_freeTail -= m_freeHead;
+        m_freeHead = 0;
+        return;
+    }
+    m_freeRing.resize(std::max<usize>(64, m_freeRing.size() * 2));
 }
 
-EntityId NetHandleTable::resolve(NetHandle handle) const noexcept {
-    const u32 index = handle.index();
-    if (index == 0 || index >= m_slots.size()) return EntityId();
-    const Slot& s = m_slots[index];
-    return (s.live && s.generation == handle.generation()) ? s.id : EntityId();
+void NetHandleTable::prefetch(NetHandle handle) const noexcept {
+    if (handle.index() < m_slots.size()) detail::prefetch(&m_slots[handle.index()]);
 }
 
 NetHandle NetHandleTable::handleAt(u32 index) const noexcept {
-    if (index == 0 || index >= m_slots.size() || !m_slots[index].live) return NetHandle();
-    return NetHandle::make(index, m_slots[index].generation);
+    if (index == 0 || index >= m_slots.size() || !m_slots[index].id.isValid()) return NetHandle();
+    return NetHandle::make(index, m_generations[index]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -249,11 +310,12 @@ EntityRegistry::Page* EntityRegistry::findPage(EntityId id) const noexcept {
 
 EntityRegistry::Page& EntityRegistry::ensurePage(EntityId id) {
     const u64 key = (id.value >> kPageBits) + 1;
-    if (key == m_lastPageKey) return pageAt(m_lastPage);
+    if (key == m_lastPageKey) return *m_lastPagePtr;
     if (const u64 page = m_pageOf.find(key); page != 0) {
         m_lastPageKey = key;
         m_lastPage = static_cast<u32>(page - 1);
-        return pageAt(m_lastPage);
+        m_lastPagePtr = &pageAt(m_lastPage);
+        return *m_lastPagePtr;
     }
     u32 index = 0;
     if (!m_freePages.empty()) {
@@ -272,6 +334,7 @@ EntityRegistry::Page& EntityRegistry::ensurePage(EntityId id) {
     m_pageOf.insert(key, index + 1);
     m_lastPageKey = key;
     m_lastPage = index;
+    m_lastPagePtr = &p;
     return p;
 }
 
@@ -286,7 +349,7 @@ Result<void> EntityRegistry::add(EntityId id, Entity entity) {
     return {};
 }
 
-bool EntityRegistry::addNew(EntityId id, Entity entity) {
+bool EntityRegistry::addNewSlow(EntityId id, Entity entity) {
     if (!id.isValid() || !entity.isValid()) return false;
     if (!paged(id)) return m_byId.insertNew(id.value, entity.id);
     Page& p = ensurePage(id);
@@ -310,25 +373,26 @@ Result<NetHandle> EntityRegistry::assignHandle(EntityId id, u32 contentIndex) {
     return assignHandleFor(id, entity, contentIndex);
 }
 
-void EntityRegistry::growHandleIndex(u32 index) {
-    m_byHandleIndex.resize(std::max<usize>(index + 1, m_byHandleIndex.size() * 2));
-}
-
 NetHandle EntityRegistry::tryAssignHandle(EntityId id, Entity entity) noexcept {
     HELIOS_ASSERT(find(id) == entity, "tryAssignHandle: id is not registered for this entity");
-    const NetHandle handle = m_handles.tryAllocate(id);
-    if (handle.isValid()) mapHandle(handle.index(), entity);
-    return handle;
+    return m_handles.tryAllocate(id, entity.id);
+}
+
+void EntityRegistry::tryAssignHandles(std::span<const EntityId> ids, const u64* entities, NetHandle* out) noexcept {
+#if HELIOS_ENABLE_ASSERTS
+    for (usize i = 0; i < ids.size(); ++i) {
+        HELIOS_ASSERT(find(ids[i]) == Entity(entities[i]), "tryAssignHandles: id is not registered for this entity");
+    }
+#endif
+    m_handles.tryAllocateN(ids, entities, out);
 }
 
 Result<NetHandle> EntityRegistry::assignHandleFor(EntityId id, Entity entity, u32 contentIndex) {
     HELIOS_ASSERT(find(id) == entity, "assignHandleFor: id is not registered for this entity");
-    Result<NetHandle> handle = contentIndex != 0 ? m_handles.allocateAt(contentIndex, id) : m_handles.allocate(id);
-    if (handle) mapHandle(handle->index(), entity);
-    return handle;
+    return contentIndex != 0 ? m_handles.allocateAt(contentIndex, id, entity.id) : m_handles.allocate(id, entity.id);
 }
 
-bool EntityRegistry::remove(EntityId id, NetHandle handle) {
+bool EntityRegistry::removeSlow(EntityId id, NetHandle handle) {
     if (!paged(id)) {
         if (!m_byId.erase(id.value)) return false;
     } else {
@@ -340,6 +404,7 @@ bool EntityRegistry::remove(EntityId id, NetHandle handle) {
             index = static_cast<u32>(page - 1);
             m_lastPageKey = key;
             m_lastPage = index;
+            m_lastPagePtr = &pageAt(index);
         }
         Page& p = pageAt(index);
         u64& slot = p.entity[id.value & (kPageIds - 1)];
@@ -352,19 +417,13 @@ bool EntityRegistry::remove(EntityId id, NetHandle handle) {
             m_lastPageKey = 0;
         }
     }
-    if (handle.isValid() && m_handles.releaseIssuedTo(handle, id)) m_byHandleIndex[handle.index()] = Entity();
+    if (handle.isValid()) m_handles.releaseIssuedTo(handle, id);
     return true;
-}
-
-Entity EntityRegistry::find(NetHandle handle) const noexcept {
-    if (!m_handles.isLive(handle)) return Entity();
-    const u32 index = handle.index();
-    return index < m_byHandleIndex.size() ? m_byHandleIndex[index] : Entity();
 }
 
 usize EntityRegistry::memoryBytes() const noexcept {
     return m_byId.memoryBytes() + m_pageOf.memoryBytes() + m_chunks.size() * kChunkPages * sizeof(Page) +
-           m_byHandleIndex.capacity() * sizeof(Entity);
+           m_handles.memoryBytes();
 }
 
 } // namespace helios::ecs

@@ -103,13 +103,15 @@ std::string_view structuralOpName(StructuralOp op) noexcept;
 /// entity's EntityId; SetFrame = the frame's FrameId value (or its flecs id without a FrameRef; 0 =
 /// no frame). Destroying a frame or docking host logs SetFrame(0) / Undock for the entities that
 /// were in it or docked at it.
+/// 24 bytes (x64): a burst logs one per structural op, so the fields are ordered to pack.
 struct StructuralEvent {
-    StructuralOp op = StructuralOp::Create;
     EntityId entity;
-    NetHandle handle;
     u64 arg = 0;
+    NetHandle handle;
+    StructuralOp op = StructuralOp::Create;
     friend bool operator==(const StructuralEvent&, const StructuralEvent&) = default;
 };
+static_assert(sizeof(StructuralEvent) == 24, "keep structural events at 24 bytes (x64)");
 
 /// Called while applying an InFrame change (before the pair changes) so the world module can
 /// convert the entity's frame-local state (02 §5.3). `from` is invalid when the entity had no frame.
@@ -383,7 +385,10 @@ private:
     void addIdAlive(Entity e, ComponentId id);
     void removeIdAlive(Entity e, ComponentId id);
     void setRawAlive(Entity e, ComponentId id, const void* value, usize size);
+    u32 destroyRun(CommandBuffer& buffer, u32 first);
     void unregisterSubtree(Entity e);
+    void unregisterOne(const ::ecs_record_t* r);
+    inline bool mayHostDockRefs(Entity e) const noexcept; // (world.cpp)
     void releaseRelationTargets(Entity e, bool isTarget);
     ::ecs_table_t* findTable(std::vector<u64>& ids);
     void ensureRepDirty(Entity e);

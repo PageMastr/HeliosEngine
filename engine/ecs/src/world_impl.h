@@ -71,6 +71,25 @@ struct StageSchedule {
     u64 lastSyncNs = 0;
 };
 
+/// The flecs component record of the Sparse or DontFragment component used last (their ownership
+/// checks go to its sparse set): a toggle run on one component skips flecs_components_get(). The
+/// record stays valid while flecs frees none (ecs_world_info_t::id_delete_total is unchanged).
+struct SparseRecordCache {
+    const ecs_world_info_t* info = nullptr; // flecs' counters (stable for the world's lifetime)
+    ComponentId id = 0;
+    ecs_component_record_t* record = nullptr;
+    int64_t epoch = -1;
+
+    ecs_component_record_t* get(const ecs_world_t* w, ComponentId cid) noexcept {
+        if (cid != id || record == nullptr || info->id_delete_total != epoch) {
+            id = cid;
+            record = flecs_components_get(w, cid);
+            epoch = info->id_delete_total;
+        }
+        return record;
+    }
+};
+
 struct World::Impl {
     explicit Impl(World& w) : self(w) {}
 
@@ -96,7 +115,7 @@ struct World::Impl {
     std::array<u64, 64> dockHostFilter{};
     u32 dockHostsErased = 0;
     static constexpr u32 kDockFilterRebuild = 1024;
-    static u64 dockFilterBit(u64 host) noexcept { return mix64(host) & 4095; }
+    static u64 dockFilterBit(u64 host) noexcept { return (host * 0x9E3779B97F4A7C15ull) >> 52; } // 12 bits
     bool mayHostDocks(u64 host) const noexcept {
         const u64 b = dockFilterBit(host);
         return (dockHostFilter[b >> 6] >> (b & 63)) & 1;
@@ -111,6 +130,12 @@ struct World::Impl {
     std::vector<u8> fusedClosed, fused;
     std::vector<u32> lateOps, opIndex;
     std::vector<Entity> destroyScratch;
+    struct PendingDestroy {
+        u32 command;                 // index in the buffer
+        ecs_entity_t entity;         // 0: the target was dead (discarded)
+        const NetIdentity* identity; // its row (read once every row of the run is fetched)
+    };
+    std::vector<PendingDestroy> destroyRun; // World::destroyRun() scratch
     std::vector<u64> typeScratch;
     std::vector<u32> spawnOpBegin;           // per spawn: first index into flatOps
     std::vector<u32> spawnOpEnd;             // per spawn: one past its last op
@@ -130,6 +155,8 @@ struct World::Impl {
     U64Map groupByKey{MemoryTag::Unknown, 16};
     std::vector<ecs_entity_t> bulkEntities;
     std::vector<ecs_entity_t> bulkDropped;
+    std::vector<u8> bulkRegistered;       // per spawnN entity: registered (0 = dropped)
+    std::vector<NetHandle> handleScratch; // per spawnN entity
     std::vector<std::byte*> groupColumns;
     std::vector<u32> groupSizes;
     std::vector<const ComponentHooks*> groupHooks;
@@ -150,6 +177,8 @@ struct World::Impl {
 
     // flecs native path.
     u32 flecsTaskThreads = 0;
+
+    SparseRecordCache sparseRecords;
 
     // Stats.
     u64 structuralOps = 0;

@@ -598,3 +598,39 @@ TEST_CASE("ecs bulk paths: Sparse and DontFragment ownership comes from the spar
     }
     CHECK(w.get<Status>(other)->flags == 9);
 }
+
+TEST_CASE("ecs bulk paths: the registry releases handles as the checked path does") {
+    // Runtime ids release their recorded handle without the slot check; every other combination
+    // (another live handle, a stale one, a hashed id, a second handle for one id) takes the checked
+    // path, with the same results as before the pages recorded handles.
+    EntityRegistry reg({.maxHandles = 64, .reuseDelay = 0});
+    const EntityId a = composeBlockId(7, 1, 10), b = composeBlockId(7, 1, 11), placed = EntityId::contentPlaced(99);
+    REQUIRE(reg.addNew(a, Entity(1)));
+    REQUIRE(reg.addNew(b, Entity(2)));
+    REQUIRE(reg.addNew(placed, Entity(3)));
+    const NetHandle ha = reg.tryAssignHandle(a, Entity(1));
+    const NetHandle hb = reg.tryAssignHandle(b, Entity(2));
+    const NetHandle hp = reg.tryAssignHandle(placed, Entity(3));
+    const NetHandle ha2 = reg.tryAssignHandle(a, Entity(1)); // a second handle for one id
+    CHECK(reg.handles().liveCount() == 4);
+
+    CHECK(reg.remove(b, ha)); // b's entry goes; a's handle is not b's: it stays live
+    CHECK(reg.find(ha) == Entity(1));
+    CHECK(reg.handles().isLive(hb)); // (b's own handle was not passed: it stays issued, as before)
+    CHECK(reg.remove(a, ha));        // not the recorded one (ha2 is): checked path, released
+    CHECK_FALSE(reg.handles().isLive(ha));
+    CHECK(reg.handles().isLive(ha2));
+    CHECK(reg.remove(placed, hp)); // hashed id: checked path
+    CHECK_FALSE(reg.find(hp).isValid());
+
+    const EntityId c = composeBlockId(7, 1, 12);
+    REQUIRE(reg.addNew(c, Entity(4)));
+    const NetHandle hc = reg.tryAssignHandle(c, Entity(4)); // reuse delay 0: a recycled slot
+    CHECK(hc.index() == ha.index());
+    CHECK(hc.generation() != ha.generation());
+    CHECK_FALSE(reg.handles().isLive(ha)); // the stale handle stays stale
+    CHECK(reg.remove(c, hc)); // recorded: released through the state array
+    CHECK_FALSE(reg.find(hc).isValid());
+    CHECK(reg.resolve(hc) == EntityId());
+    CHECK(reg.handles().liveCount() == 2); // hb and ha2
+}

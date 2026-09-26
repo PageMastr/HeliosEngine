@@ -70,7 +70,7 @@
      "pattern": "-> (\\d+) pps per core", "unit": "pps/core", "better": "higher", "category": "runtime"},
     {"id": "script.fuel_metering_overhead_pct", "criterion": "RT-13", "doctest": "script_tests",
      "case": "perf: fuel metering overhead and ns per fuel", "run": "linux-gcc",
-     "pattern": "Helios metering overhead ([\\d.]+) %", "unit": "%", "better": "lower", "category": "runtime"},
+     "pattern": "metering overhead ([\\d.]+) %", "unit": "%", "better": "lower", "category": "runtime"},
     {"id": "script.trivial_resume_ns", "doctest": "script_tests",
      "case": "perf: host cost of a trivial resume versus FuelBudget::resumeCost", "run": "linux-gcc",
      "pattern": "trivial resume: ([\\d.]+) ns", "unit": "ns", "better": "lower", "category": "runtime"},

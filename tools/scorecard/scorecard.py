@@ -480,8 +480,10 @@ def validate(data: dict, text: str, path: Path, plan: tuple[dict, dict] | None =
         errors.append(f"{name}:1: 'covers' must list phases 0-5")
         covers = []
     for run_name, run in (data.get("runs") or {}).items():
-        if not isinstance(run, dict) or run.get("os") not in OSES or not isinstance(run.get("default"), bool):
-            errors.append(f"{name}:1: run '{run_name}' needs 'os' (linux or windows) and a boolean 'default'")
+        if not isinstance(run, dict) or run.get("os") not in OSES or not isinstance(run.get("default"), bool) \
+                or not isinstance(run.get("nightly", True), bool):
+            errors.append(f"{name}:1: run '{run_name}' needs 'os' (linux or windows), a boolean 'default' "
+                          f"and optionally a boolean 'nightly'")
     for gate_name, gate in (data.get("gates") or {}).items():
         ok = isinstance(gate, dict) and isinstance(gate.get("runs"), list) and gate["runs"] and \
             all(r in (data.get("runs") or {}) for r in gate["runs"]) and \
@@ -609,7 +611,8 @@ def check_workflow(data: dict, path: Path, workflow: Path) -> list[str]:
     """Every declared run and gate is produced by the nightly workflow (it names each one)."""
     text = workflow.read_text(encoding="utf-8")
     errors = []
-    for kind, names in (("run", data.get("runs") or {}), ("gate", data.get("gates") or {})):
+    runs = {k: v for k, v in (data.get("runs") or {}).items() if not isinstance(v, dict) or v.get("nightly", True)}
+    for kind, names in (("run", runs), ("gate", data.get("gates") or {})):
         for n in names:
             if not re.search(r"(?<![\w-])" + re.escape(n) + r"(?![\w-])", text):
                 errors.append(f"{display(path)}:1: {kind} '{n}' is never produced by {display(workflow)}")

@@ -350,6 +350,11 @@ class PerfMetricTests(Fixture):
         errors = sc.check_workflow(VALID, self.root / "scorecard.jsonc", workflow)
         self.assertEqual(len(errors), 1)
         self.assertIn("gate 'fuzz_linux' is never produced", errors[0])
+        local = copy.deepcopy(VALID)
+        local["runs"]["windows-local"] = {"os": "windows", "default": True, "nightly": False}
+        self.assertEqual(len(sc.check_workflow(local, self.root / "scorecard.jsonc", workflow)), 1)
+        local["runs"]["windows-local"]["nightly"] = "no"
+        self.assertFinding(self.run_check(local), "optionally a boolean 'nightly'")
 
 
 class InventoryTests(Fixture):

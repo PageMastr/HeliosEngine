@@ -14,8 +14,8 @@
   // Phases whose every criterion must be registered (the checker derives them from docs/plan).
   "covers": [0],
 
-  // Result sets the nightly workflow produces. `default` runs count for every reference on their OS;
-  // the others count only for references that name them with "run".
+  // Result sets the nightly workflow produces (and, with "nightly": false, validate.ps1). `default` runs
+  // count for every reference on their OS; the others count only for references that name them with "run".
   "runs": {
     "linux-gcc": {"os": "linux", "default": true,
                   "description": "Linux GCC RelWithDebInfo: every CTest (lavapipe under Xvfb), perf serially, net_bench --gate"},
@@ -34,7 +34,9 @@
     "linux-go": {"os": "linux", "default": true,
                  "description": "go test ./... and -tags integration (embedded PostgreSQL), HELIOS_NETCODE_INTEROP=1"},
     "windows-go": {"os": "windows", "default": true,
-                   "description": "go test ./... and -tags integration (embedded PostgreSQL)"}
+                   "description": "go test ./... and -tags integration (embedded PostgreSQL)"},
+    "windows-local": {"os": "windows", "default": true, "nightly": false,
+                      "description": "tools/milestone/validate.ps1 on the user's Windows machine (09 §5.9)"}
   },
 
   // Commands the nightly workflow runs outside CTest; each writes one JUnit result named after the gate.

@@ -38,8 +38,8 @@ into annotations.
 - **Tests exist.** Every `ctest`, `doctest` (and `pinned_by`) reference must exist in each inventory whose
   OS it is evaluated on. `go` references are checked when the inventory has a `go` section (the nightly
   one does). `gate` references must be declared and run on the reference's platforms. `ci_job` names
-  must be jobs of `.github/workflows/ci.yml` (matrix names expanded). Every declared run and gate must be
-  produced by `.github/workflows/nightly.yml`.
+  must be jobs of `.github/workflows/ci.yml` (matrix names expanded). Every declared run (except those
+  marked `"nightly": false`) and gate must be produced by `.github/workflows/nightly.yml`.
 - **Perf metrics.** Each has one source (a gate, or a doctest binary and case), a pattern with exactly one
   group, a unit, `better` (`lower` or `higher`) and a budget category; a doctest source must exist.
 

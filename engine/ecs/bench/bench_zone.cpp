@@ -782,7 +782,8 @@ BurstResult BenchZone::structuralBurst(u32 round, bool profiled) {
     for (CommandBuffer* b : {&creates, &destroys, &toggles, &statuses}) b->setWorld(&w);
     const Stopwatch record;
     const u32 frameCount = static_cast<u32>(im.frames.size());
-    std::vector<TempEntity> createdTemps(3000);
+    std::vector<TempEntity> createdTemps; // creation order (the next round destroys them in it)
+    createdTemps.reserve(3000);
     if (m_config.perCommandCreates) {
         // One spawn() and seven set() commands per projectile (fused at apply time).
         for (u32 i = 0; i < 3000; ++i) {
@@ -795,7 +796,7 @@ BurstResult BenchZone::structuralBurst(u32 round, bool profiled) {
             creates.set(t, c::Faction{1});
             creates.set(t, c::Bounds{0.2f});
             creates.set(t, c::SpatialCell{});
-            createdTemps[i] = t;
+            createdTemps.push_back(t);
         }
     } else {
         // The same projectiles as one spawnN() batch per frame, values in column arrays: how a
@@ -817,7 +818,7 @@ BurstResult BenchZone::structuralBurst(u32 round, bool profiled) {
             const u32 n = static_cast<u32>(pos.size());
             const TempEntity first = creates.spawnN({.frame = im.frames[f]}, n, pos.data(), vel.data(), proj.data(),
                                                     life.data(), fac.data(), bounds.data(), cells.data());
-            for (u32 k = 0; k < n; ++k) createdTemps[f + k * frameCount] = TempEntity{first.index + k};
+            for (u32 k = 0; k < n; ++k) createdTemps.push_back(TempEntity{first.index + k});
         }
     }
     for (const Entity e : victims) destroys.destroy(e);

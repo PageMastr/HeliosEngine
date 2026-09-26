@@ -20,7 +20,7 @@ TEST_CASE("items: ItemDef validation") {
     def.sockets.push_back(SocketEntry{Name("Barrel"), std::nullopt, Name("Plugs.Barrel"), Name(), 1});
     def.equipReq.tags = refl::TagQuery{"all(Item.Weapon)"};
     CHECK(validateItemDef(def, tags.get()).ok());
-    CHECK(validateItemDef(def).ok()); // without a registry only syntax is checked
+    CHECK(validateItemDef(def).ok()); // without a registry the queries are not checked
 
     ItemDef bad = def;
     bad.stackMax = 0;
@@ -54,6 +54,35 @@ TEST_CASE("items: ItemDef validation") {
     ammo.stackMax = 9999;
     ammo.volume = 0.01f;
     CHECK(validateItemDef(ammo).ok());
+}
+
+TEST_CASE("items: record gaps found in review are rejected (review regression)") {
+    ItemDef ammo;
+    ammo.stackMax = kMaxStackSize;
+    CHECK(validateItemDef(ammo).ok());
+    ammo.stackMax = kMaxStackSize + 1; // above the schema's @range
+    CHECK_FALSE(validateItemDef(ammo).ok());
+    ItemDef box;
+    box.container = ContainerSpec{};
+    box.container->slots.push_back(SlotDescriptor{Name("Slot.A"), std::nullopt});
+    CHECK(validateItemDef(box).ok());
+    box.container->slots.push_back(SlotDescriptor{Name("Slot.A"), std::nullopt});
+    CHECK_FALSE(validateItemDef(box).ok()); // duplicate slot
+    box.container->slots.back().slot = Name("not a name");
+    CHECK_FALSE(validateItemDef(box).ok());
+    ItemDef gun;
+    gun.equipReq.attrs.push_back(AttrMinimum{AttributeRef(3), 5.0});
+    CHECK(validateItemDef(gun).ok());
+    gun.equipReq.attrs.push_back(AttrMinimum{AttributeRef(4), std::numeric_limits<f64>::quiet_NaN()});
+    CHECK_FALSE(validateItemDef(gun).ok());
+    // Plugs need sockets.
+    ItemDef socketed;
+    socketed.sockets.push_back(SocketEntry{Name("Barrel"), std::nullopt, Name(), Name(), 0});
+    ItemInstance item;
+    item.payload.plugs.push_back(ItemRef(7));
+    CHECK(validateItemInstance(item, socketed).ok());
+    item.payload.plugs.push_back(ItemRef(8));
+    CHECK(validateItemInstance(item, socketed).errorCode() == ErrorCode::OutOfRange);
 }
 
 TEST_CASE("items: ItemInstance validation") {

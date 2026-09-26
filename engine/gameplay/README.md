@@ -92,7 +92,12 @@ through. `S(i)` uses `helios::det::exp` and is bit-identical with HXL's
   formulas over `self` (with the modifier's `stacks`/`level`). `instantiateModifier()` turns a
   `ModifierDef` into a `Modifier`, capturing curve, `Source` and `Target/Snapshot` magnitudes and
   compiling tag requirements; a `Target/Snapshot` magnitude needs a target set of the context's layout.
-  Only the `Self` domain is resolved in Phase 0.
+  The result records its layout's hash and its requirement the registry's `queryHash()`, and
+  `addModifier` rejects a modifier made for another layout or registry. Only the `Self` domain is
+  resolved in Phase 0.
+- **Clamps** are `if (v < min) v = min; if (v > max) v = max` (IEEE compares, not HXL's `clamp()`): a
+  NaN value passes through, −0 stays −0 against a min of +0, and a NaN bound read from an attribute
+  clamps nothing. Constant bounds must be ordered and not NaN.
 - **Derived attributes** (`AttributeDef.derived`) compute the base from other attributes and tags of
   `self`; they cannot use context fields, curves, `stacks()` or `level()`.
 - **Dependencies.** Derived formulas and attribute clamps are static edges (cycles fail

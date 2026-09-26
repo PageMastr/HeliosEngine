@@ -137,7 +137,7 @@ f64 BoundFormula::evaluate(std::span<const f64> finals, const TagContainer* tags
 // ---- AttributeLayout --------------------------------------------------------------------------------
 
 AttrSlot AttributeLayout::find(std::string_view id) const noexcept {
-    auto it = m_byId.find(std::string(id));
+    auto it = m_byId.find(id); // heterogeneous lookup: no std::string
     return it == m_byId.end() ? kInvalidAttr : it->second;
 }
 
@@ -227,6 +227,7 @@ Result<std::shared_ptr<const AttributeLayout>> AttributeLayout::build(std::span<
                      AttrBound& out) -> Result<void> {
         if (!in) return {};
         if (const f64* c = std::get_if<f64>(&*in)) {
+            if (std::isnan(*c)) return makeError(ErrorCode::InvalidArgument, "attribute '{}': clamp bound is NaN", owner);
             out.kind = AttrBound::Kind::Const;
             out.value = *c;
             return {};
@@ -245,6 +246,16 @@ Result<std::shared_ptr<const AttributeLayout>> AttributeLayout::build(std::span<
         AttributeSpec& s = layout->m_specs[i];
         HELIOS_TRY(bound(in.minClamp, in.id, s.minClamp));
         HELIOS_TRY(bound(in.maxClamp, in.id, s.maxClamp));
+        if (s.minClamp.kind == AttrBound::Kind::Const && s.maxClamp.kind == AttrBound::Kind::Const &&
+            s.minClamp.value > s.maxClamp.value) {
+            return makeError(ErrorCode::InvalidArgument, "attribute '{}': minClamp {} > maxClamp {}", in.id, s.minClamp.value,
+                             s.maxClamp.value);
+        }
+        if (s.quant && (s.quant->bits < 1 || s.quant->bits > 32 || !std::isfinite(s.quant->min) ||
+                        !std::isfinite(s.quant->max) || !(s.quant->min < s.quant->max))) {
+            return makeError(ErrorCode::InvalidArgument, "attribute '{}': quantization needs 1..32 bits and min < max",
+                             in.id);
+        }
         h.str(s.id);
         h.pod(std::bit_cast<u64>(s.defaultValue));
         for (const AttrBound* b : {&s.minClamp, &s.maxClamp}) {
@@ -305,13 +316,17 @@ Result<std::shared_ptr<const AttributeLayout>> AttributeLayout::build(std::span<
 
 Result<std::shared_ptr<const AttributeLayout>> AttributeLayout::fromRecords(std::span<const Record> records,
                                                                             std::shared_ptr<const TagRegistry> tags) {
+    if (records.size() > kMaxAttributes) return makeError(ErrorCode::LimitExceeded, "more than {} attributes", kMaxAttributes);
     std::vector<Input> inputs;
     inputs.reserve(records.size());
+    std::unordered_map<refl::RecordId, const AttributeDef*> byRid; // clamp references (was a linear scan)
+    byRid.reserve(records.size());
+    for (const Record& r : records) {
+        if (r.rid != 0) byRid.emplace(r.rid, r.def); // duplicates are rejected by build()
+    }
     auto idOf = [&](refl::RecordId rid) -> const AttributeDef* {
-        for (const Record& r : records) {
-            if (r.rid == rid && rid != 0) return r.def;
-        }
-        return nullptr;
+        const auto it = byRid.find(rid);
+        return it == byRid.end() ? nullptr : it->second;
     };
     for (const Record& r : records) {
         if (!r.def) return Error{ErrorCode::InvalidArgument, "attribute record without a definition"};
@@ -382,6 +397,7 @@ Result<Modifier> instantiateModifier(const ModifierDef& def, const ModifierConte
     const AttrSlot slot = layout.findByRecord(def.attr.id);
     if (slot == kInvalidAttr) return makeError(ErrorCode::NotFound, "modifier targets attribute record {} not in the layout", def.attr.id);
     Modifier m = Modifier::constant(slot, def.op, 0.0, ctx.sourceId);
+    m.layoutHash = layout.hash();
     m.priority = def.priority;
     m.penaltyGroup = def.penaltyGroup;
     m.exempt = def.exempt;
@@ -541,11 +557,18 @@ Result<ModifierHandle> AttributeSet::addModifier(Modifier m) {
     if (m.kind == MagnitudeKind::Attribute && m.source >= m_size) {
         return Error{ErrorCode::OutOfRange, "modifier source attribute out of range"};
     }
+    if (m.layoutHash != 0 && m.layoutHash != m_layout->hash()) {
+        return Error{ErrorCode::InvalidArgument, "modifier was instantiated for a different attribute layout"};
+    }
     if (m.kind == MagnitudeKind::Formula) {
         if (!m.formula) return Error{ErrorCode::InvalidArgument, "formula modifier without a formula"};
         if (m.formula->layoutHash() != m_layout->hash()) {
             return Error{ErrorCode::InvalidArgument, "formula was bound to a different attribute layout"};
         }
+    }
+    if (m.requirement && m.requirement->registry != 0 &&
+        (!m_layout->tags() || m_layout->tags()->queryHash() != m.requirement->registry)) {
+        return Error{ErrorCode::InvalidArgument, "requirement was compiled against a different tag registry"};
     }
     std::vector<AttrSlot> deps;
     dependencies(m, deps);

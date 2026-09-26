@@ -230,6 +230,11 @@ Result<std::shared_ptr<const TagRegistry>> TagRegistry::Builder::build() const {
         mix(t.declared ? 1 : 0);
     }
     reg->m_hash = h;
+    for (const TagInfo& t : reg->m_tags) {
+        mix(static_cast<u8>(t.hot));
+        mix(static_cast<u8>(t.hot >> 8));
+    }
+    reg->m_queryHash = h;
     return std::shared_ptr<const TagRegistry>(std::move(reg));
 }
 
@@ -258,6 +263,7 @@ TagIndex TagRegistry::find(std::string_view name) const noexcept {
 
 Result<TagQuery> TagRegistry::compileQuery(std::string_view text) const {
     TagQuery q;
+    q.registry = m_queryHash;
     auto parsed = parseQuery(text, [&](Clause clause, std::string_view name, usize offset) -> Result<void> {
         const TagIndex t = find(name);
         if (t == kInvalidTag) return makeError(ErrorCode::NotFound, "tag query: unknown tag '{}' at offset {}", name, offset);
@@ -266,13 +272,16 @@ Result<TagQuery> TagRegistry::compileQuery(std::string_view text) const {
         if (clause == Clause::Any) q.hasAny = true;
         if (m_tags[t].hot != kNotHot) {
             mask.set(m_tags[t].hot);
-        } else if (std::find(cold.begin(), cold.end(), t) == cold.end()) {
-            cold.push_back(t);
+        } else {
+            cold.push_back(t); // deduplicated below (a linear find made hostile queries quadratic)
         }
         return {};
     });
     if (!parsed) return std::move(parsed).error();
-    for (auto* v : {&q.allCold, &q.anyCold, &q.noneCold}) std::sort(v->begin(), v->end());
+    for (auto* v : {&q.allCold, &q.anyCold, &q.noneCold}) {
+        std::sort(v->begin(), v->end());
+        v->erase(std::unique(v->begin(), v->end()), v->end());
+    }
     return q;
 }
 
@@ -283,6 +292,7 @@ bool TagQuery::matchesEverything() const noexcept {
 }
 
 bool TagQuery::matches(const TagContainer& c) const noexcept {
+    HELIOS_ASSERT(registry == 0 || registry == c.registry().queryHash(), "tag query compiled against another registry");
     const TagBits& b = c.bits();
     if (!b.containsAll(allMask) || b.intersects(noneMask)) return false;
     for (TagIndex t : allCold) {

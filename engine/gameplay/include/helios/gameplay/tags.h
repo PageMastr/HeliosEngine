@@ -81,8 +81,13 @@ struct TagQuery {
     std::vector<TagIndex> anyCold;
     std::vector<TagIndex> noneCold;
     bool hasAny = false;           ///< the query has an any() clause
+    /// TagRegistry::queryHash() of the registry that compiled the query: the masks are hot-set bits
+    /// of that registry and mean nothing in another (0 for a query built by hand).
+    u64 registry = 0;
 
+    /// True for the empty query (no clause).
     bool matchesEverything() const noexcept;
+    /// Evaluates the query; `tags` must use the registry that compiled it.
     bool matches(const TagContainer& tags) const noexcept;
 };
 
@@ -142,6 +147,9 @@ public:
     Result<TagQuery> compileQuery(std::string_view text) const;
     /// FNV-1a 64 over the sorted names and audiences: part of the content version.
     u64 hash() const noexcept { return m_hash; }
+    /// hash() plus the hot-set assignment: equal only for registries on which compiled TagQuery
+    /// masks mean the same thing (a compiled query records it).
+    u64 queryHash() const noexcept { return m_queryHash; }
 
 private:
     std::vector<TagInfo> m_tags;
@@ -149,6 +157,7 @@ private:
     std::vector<u16> m_hotList;
     u32 m_hotCount = 0;
     u64 m_hash = 0;
+    u64 m_queryHash = 0;
 };
 
 /// A tag and how many sources grant it (06 §1.1 TagCounts).

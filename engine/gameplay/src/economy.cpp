@@ -54,13 +54,17 @@ Result<std::shared_ptr<const ReasonCodeRegistry>> ReasonCodeRegistry::build(std:
             return makeError(ErrorCode::AlreadyExists, "duplicate reason code '{}'", reg->m_codes[i].code);
         }
     }
-    // findByRecord() must be unambiguous.
+    // findByRecord() must be unambiguous (sorted, not pairwise: content can hold many codes).
+    std::vector<std::pair<refl::RecordId, usize>> rids;
+    rids.reserve(reg->m_codes.size());
     for (usize i = 0; i < reg->m_codes.size(); ++i) {
-        for (usize j = 0; reg->m_codes[i].rid != 0 && j < i; ++j) {
-            if (reg->m_codes[j].rid == reg->m_codes[i].rid) {
-                return makeError(ErrorCode::AlreadyExists, "reason codes '{}' and '{}' share record id {}", reg->m_codes[j].code,
-                                 reg->m_codes[i].code, reg->m_codes[i].rid);
-            }
+        if (reg->m_codes[i].rid != 0) rids.emplace_back(reg->m_codes[i].rid, i);
+    }
+    std::sort(rids.begin(), rids.end());
+    for (usize k = 1; k < rids.size(); ++k) {
+        if (rids[k].first == rids[k - 1].first) {
+            return makeError(ErrorCode::AlreadyExists, "reason codes '{}' and '{}' share record id {}",
+                             reg->m_codes[rids[k - 1].second].code, reg->m_codes[rids[k].second].code, rids[k].first);
         }
     }
     u64 h = kFnv1a64Offset;

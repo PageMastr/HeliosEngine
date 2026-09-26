@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "helios/core/assert.h"
 #include "helios/gameplay/tags.h"
 
 using namespace helios;
@@ -300,6 +301,14 @@ TEST_CASE("tags: registry from TagDef records") {
     CHECK_FALSE(TagRegistry::fromRecords(defs).ok());
 }
 
+namespace {
+int g_tagAsserts = 0;
+AssertAction countTagAssert(const AssertInfo&) {
+    ++g_tagAsserts;
+    return AssertAction::Continue;
+}
+} // namespace
+
 TEST_CASE("tags: untrusted replication input and foreign indices are rejected safely (review regression)") {
     // assign() used to trust indices from the wire (only a debug assert): an out-of-range index was
     // read out of bounds in release builds. has() likewise indexed the registry unchecked.
@@ -329,7 +338,17 @@ TEST_CASE("tags: untrusted replication input and foreign indices are rejected sa
     REQUIRE(q.ok());
     REQUIRE(q->noneCold.size() == 1);
     REQUIRE(q->noneCold[0] >= r->size());
-    CHECK(q->matches(c)); // the foreign tag is simply not held
+    // Matching it is a caller bug (asserted, since WP-0.19's review: TagQuery records its registry),
+    // but release builds must stay safe: the foreign tag is simply not held.
+    CHECK(q->registry == big->queryHash());
+    CHECK(q->registry != r->queryHash());
+    g_tagAsserts = 0;
+    const AssertHandler previous = setAssertHandler(&countTagAssert);
+    CHECK(q->matches(c));
+    setAssertHandler(previous);
+#if HELIOS_ENABLE_ASSERTS
+    CHECK(g_tagAsserts == 1);
+#endif
 }
 
 TEST_CASE("tags: replicatedTags filters explicit tags by declared audience (06 §1.6)") {

@@ -669,6 +669,71 @@ TEST_CASE("attributes: formula rules shared with Go content validation (review r
     CHECK(layout->compileFormula("formula Ehp(ship) = attr(ship, Hull.Hp) * select(tag(ship, T), 2, 1)", false).ok());
 }
 
+TEST_CASE("attributes: modifiers and requirements carry the layout and registry they were made for (review regression)") {
+    // A Modifier from instantiateModifier names slots of its layout; a set of another layout applied
+    // it to whatever attribute had that slot. A requirement compiled against another registry
+    // evaluated the wrong hot bits.
+    std::vector<AttributeDef> defs(2);
+    defs[0].id = Name("Hull.Hp");
+    defs[1].id = Name("Hull.Resist");
+    std::vector<AttributeLayout::Record> recs = {{101, &defs[0]}, {102, &defs[1]}};
+    TagRegistry::Builder tb;
+    REQUIRE(tb.add("State.Combat").ok());
+    REQUIRE(tb.markHotFromQuery("all(State.Combat)").ok());
+    auto tags = *tb.build();
+    auto layout = *AttributeLayout::fromRecords(recs, tags);
+    ModifierContext ctx;
+    ctx.layout = layout.get();
+    ModifierDef d;
+    d.attr = AttributeRef(102);
+    d.op = ModOp::ModAdd;
+    d.magnitude = MagnitudeConst{1.0};
+    auto m = instantiateModifier(d, ctx);
+    REQUIRE(m.ok());
+    CHECK(m->layoutHash == layout->hash());
+    AttributeSet own(layout);
+    CHECK(own.addModifier(*m).ok());
+    AttributeSet other(layoutOf({attr("X"), attr("Y")}, tags));
+    CHECK(other.addModifier(*m).errorCode() == ErrorCode::InvalidArgument);
+    // Requirements: the layout's registry is accepted, another one is not (even with the same tags
+    // but another hot set), and so is a layout without a registry.
+    d.requirement = refl::TagQuery{"all(State.Combat)"};
+    m = instantiateModifier(d, ctx);
+    REQUIRE(m.ok());
+    CHECK(m->requirement->registry == tags->queryHash());
+    CHECK(own.addModifier(*m).ok());
+    TagRegistry::Builder cold;
+    REQUIRE(cold.add("State.Combat").ok());
+    auto coldTags = *cold.build();
+    CHECK(coldTags->hash() == tags->hash());           // same tags
+    CHECK(coldTags->queryHash() != tags->queryHash()); // other hot bits
+    Modifier foreign = Modifier::constant(1, ModOp::ModAdd, 1.0);
+    foreign.requirement = std::make_shared<const TagQuery>(*coldTags->compileQuery("all(State.Combat)"));
+    CHECK(own.addModifier(foreign).errorCode() == ErrorCode::InvalidArgument);
+    AttributeSet noRegistry(layoutOf({attr("A"), attr("B")}));
+    CHECK(noRegistry.addModifier(foreign).errorCode() == ErrorCode::InvalidArgument);
+    foreign.requirement = std::make_shared<const TagQuery>(); // hand-built, no registry: not checked
+    CHECK(noRegistry.addModifier(foreign).ok());
+}
+
+TEST_CASE("attributes: layouts reject unordered or NaN constant clamps and bad quantization (review regression)") {
+    auto a = attr("A");
+    a.minClamp = 5.0;
+    a.maxClamp = 1.0;
+    CHECK(AttributeLayout::build(std::vector<AttributeLayout::Input>{a}).errorCode() == ErrorCode::InvalidArgument);
+    a.maxClamp = 5.0; // equal bounds are fine
+    CHECK(AttributeLayout::build(std::vector<AttributeLayout::Input>{a}).ok());
+    a.maxClamp = std::numeric_limits<f64>::quiet_NaN();
+    CHECK_FALSE(AttributeLayout::build(std::vector<AttributeLayout::Input>{a}).ok());
+    auto q = attr("Q");
+    q.quant = Quantization{0, 0.0, 1.0};
+    CHECK_FALSE(AttributeLayout::build(std::vector<AttributeLayout::Input>{q}).ok());
+    q.quant = Quantization{16, 1.0, 1.0};
+    CHECK_FALSE(AttributeLayout::build(std::vector<AttributeLayout::Input>{q}).ok());
+    q.quant = Quantization{16, 0.0, 1.0};
+    CHECK(AttributeLayout::build(std::vector<AttributeLayout::Input>{q}).ok());
+}
+
 TEST_CASE("attributes: two attributes with one record id are rejected (review regression)") {
     auto a = attr("A"), b = attr("B");
     a.rid = 5;

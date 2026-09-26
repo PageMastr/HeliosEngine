@@ -22,7 +22,9 @@ Result<void> checkQuery(const std::optional<refl::TagQuery>& q, const TagRegistr
 } // namespace
 
 Result<void> validateItemDef(const ItemDef& def, const TagRegistry* tags) {
-    if (def.stackMax < 1) return Error{ErrorCode::InvalidArgument, "stackMax must be at least 1"};
+    if (def.stackMax < 1 || def.stackMax > kMaxStackSize) {
+        return makeError(ErrorCode::InvalidArgument, "stackMax must be in [1, {}]", kMaxStackSize);
+    }
     if (!finiteNonNegative(def.volume) || !finiteNonNegative(def.mass)) {
         return Error{ErrorCode::InvalidArgument, "volume and mass must be finite and non-negative"};
     }
@@ -53,7 +55,15 @@ Result<void> validateItemDef(const ItemDef& def, const TagRegistry* tags) {
         const ContainerSpec& c = *def.container;
         if (!finiteNonNegative(c.maxVolume)) return Error{ErrorCode::InvalidArgument, "container maxVolume must be >= 0"};
         HELIOS_TRY(checkQuery(c.allowed, tags, "container filter"));
-        for (const SlotDescriptor& s : c.slots) HELIOS_TRY(checkQuery(s.accepts, tags, "slot filter"));
+        std::vector<std::string_view> slotNames;
+        for (const SlotDescriptor& s : c.slots) {
+            if (!isValidTagName(s.slot.view())) return makeError(ErrorCode::InvalidArgument, "invalid container slot name '{}'", s.slot.view());
+            if (std::find(slotNames.begin(), slotNames.end(), s.slot.view()) != slotNames.end()) {
+                return makeError(ErrorCode::InvalidArgument, "container slot '{}' is declared twice", s.slot.view());
+            }
+            slotNames.push_back(s.slot.view());
+            HELIOS_TRY(checkQuery(s.accepts, tags, "slot filter"));
+        }
     }
     if (def.port) {
         if (def.port->minSize > def.port->maxSize) return Error{ErrorCode::InvalidArgument, "item port minSize > maxSize"};
@@ -67,6 +77,9 @@ Result<void> validateItemDef(const ItemDef& def, const TagRegistry* tags) {
         }
     }
     HELIOS_TRY(checkQuery(def.equipReq.tags, tags, "equip requirement"));
+    for (const AttrMinimum& m : def.equipReq.attrs) {
+        if (std::isnan(m.min)) return makeError(ErrorCode::InvalidArgument, "equip requirement on attribute {} is NaN", m.attr.id);
+    }
     for (const auto& [attr, value] : def.baseAttrs) {
         if (!std::isfinite(value)) return makeError(ErrorCode::InvalidArgument, "base attribute {} is not finite", attr.id);
     }
@@ -84,6 +97,9 @@ Result<void> validateItemInstance(const ItemInstance& item, const ItemDef& def) 
     }
     for (const auto& [attr, value] : item.payload.rolled) {
         if (!std::isfinite(value)) return makeError(ErrorCode::InvalidArgument, "rolled attribute {} is not finite", attr.id);
+    }
+    if (item.payload.plugs.size() > def.sockets.size()) {
+        return makeError(ErrorCode::OutOfRange, "{} plugs for {} sockets", item.payload.plugs.size(), def.sockets.size());
     }
     return {};
 }

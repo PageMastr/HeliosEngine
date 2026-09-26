@@ -19,6 +19,9 @@
 //                  (exempt modifiers, or all of them when the attribute is not stackingPenalised,
 //                  use S ≡ 1 and do not take a place in the chain; f == 1 is skipped)
 //   v = PostAssign ? PostAssign.highestPriority : v;   final = clamp(v, minClamp, maxClamp)
+// The clamp is `if (v < min) v = min; if (v > max) v = max` (IEEE compares, unlike HXL's clamp()):
+// a NaN v passes through (and is made canonical), -0 stays -0 against a min of +0, and a bound that
+// reads a NaN attribute clamps nothing. Constant bounds must be ordered and not NaN (build() fails).
 // Empty stages are skipped entirely (so -0 and exact values pass through untouched). Every product
 // and sum is an explicit left-to-right fold (products Π and sums Σ are computed first, then applied
 // once), all transcendental math is helios::det, and FP contraction is off, so final values are
@@ -40,12 +43,17 @@
 //
 // Threading: AttributeLayout and BoundFormula are immutable and shareable. An AttributeSet has one
 // writer; different sets may be recomputed concurrently (resolveAttributes does exactly that).
+//
+// FP environment: recompute() and the HXL VM require the default floating-point environment (round
+// to nearest, no flush-to-zero or denormals-are-zero); other modes change results, and the HXL
+// corpus fails under them. Threads that change the mode must restore it before resolving.
 
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <functional>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -150,9 +158,13 @@ public:
     static Result<std::shared_ptr<const AttributeLayout>> fromRecords(std::span<const Record> records,
                                                                       std::shared_ptr<const TagRegistry> tags = nullptr);
 
+    /// Number of attributes (slots [0, size())).
     usize size() const noexcept { return m_specs.size(); }
+    /// Slot of an attribute id ("Hull.Hp"), or kInvalidAttr. No allocation.
     AttrSlot find(std::string_view id) const noexcept;
+    /// Slot of the attribute with this RecordId, or kInvalidAttr (also for 0). O(n).
     AttrSlot findByRecord(refl::RecordId rid) const noexcept;
+    /// Runtime spec of a valid slot (unchecked, like the other slot accessors).
     const AttributeSpec& spec(AttrSlot slot) const noexcept { return m_specs[slot]; }
     /// Deterministic topological order of the static graph (derived and clamp edges).
     std::span<const AttrSlot> order() const noexcept { return m_order; }
@@ -170,7 +182,11 @@ public:
 
 private:
     std::vector<AttributeSpec> m_specs;
-    std::unordered_map<std::string, AttrSlot> m_byId;
+    struct IdHash {
+        using is_transparent = void;
+        usize operator()(std::string_view s) const noexcept { return std::hash<std::string_view>{}(s); }
+    };
+    std::unordered_map<std::string, AttrSlot, IdHash, std::equal_to<>> m_byId;
     std::vector<AttrSlot> m_order;
     std::vector<std::vector<AttrSlot>> m_dependents;
     std::shared_ptr<const TagRegistry> m_tagRegistry;
@@ -204,13 +220,20 @@ struct Modifier {
     i32 priority = 0;                            ///< PreAssign / PostAssign: highest wins
     u16 penaltyGroup = 0;
     bool exempt = false;
-    /// Active only while the entity's tags match. Shared: every instance of an effect uses the same
-    /// compiled query.
+    /// Active only while the entity's tags match. Held by shared_ptr so copies of one modifier share
+    /// the compiled query (instantiateModifier compiles a new one on every call); it must be
+    /// compiled against the layout's tag registry (addModifier checks TagQuery::registry).
     std::shared_ptr<const TagQuery> requirement;
     u64 sourceId = 0;                            ///< owning effect / item / skill (removal, UI)
+    /// AttributeLayout::hash() of the layout `attr` and `source` are slots of. instantiateModifier
+    /// sets it and addModifier rejects a mismatch; 0 (modifiers built in code) is not checked.
+    u64 layoutHash = 0;
 
+    /// A constant magnitude.
     static Modifier constant(AttrSlot attr, ModOp op, f64 value, u64 sourceId = 0);
+    /// coefficient x the live final value of `source` (same entity).
     static Modifier fromAttribute(AttrSlot attr, ModOp op, AttrSlot source, f64 coefficient = 1.0, u64 sourceId = 0);
+    /// A live HXL magnitude bound to the set's layout (AttributeLayout::compileFormula).
     static Modifier fromFormula(AttrSlot attr, ModOp op, std::shared_ptr<const BoundFormula> formula, u64 sourceId = 0);
 };
 
@@ -227,7 +250,11 @@ struct ModifierContext {
 
 /// Instantiates a ModifierDef: resolves the attribute, compiles the requirement, and captures
 /// Snapshot/Source/Curve magnitudes (Target+Live attribute and HXL magnitudes stay live). Only the
-/// Self domain is supported in Phase 0 (Unsupported otherwise).
+/// Self domain is supported in Phase 0 (Unsupported otherwise). The result carries the layout's
+/// hash. It compiles the requirement and HXL formula on every call (~3 us); cache the Modifier to
+/// apply one definition many times.
+/// Threading: reads ctx.target's and ctx.source's final values, so neither may be recomputed
+/// concurrently; otherwise reentrant.
 Result<Modifier> instantiateModifier(const ModifierDef& def, const ModifierContext& ctx);
 
 /// Replication and UI view of a modifier (06 §1.6: the owner sees the source modifiers).
@@ -261,8 +288,10 @@ class AttributeSet {
 public:
     explicit AttributeSet(std::shared_ptr<const AttributeLayout> layout);
 
+    /// The layout the slots refer to.
     const AttributeLayout& layout() const noexcept { return *m_layout; }
     const std::shared_ptr<const AttributeLayout>& layoutPtr() const noexcept { return m_layout; }
+    /// Number of attributes (layout().size()).
     usize size() const noexcept { return m_size; }
 
     /// Base value; `slot` must be a valid slot of the layout.
@@ -275,13 +304,16 @@ public:
     /// kInvalidAttr from a failed find().
     bool setBase(AttrSlot slot, f64 value);
 
-    /// Adds a modifier. Fails on a bad slot, a formula bound to another layout, or a dependency
-    /// cycle (e.g. an attribute whose magnitude reads itself).
+    /// Adds a modifier. Fails on a bad slot, a modifier instantiated for another layout, a formula
+    /// bound to another layout, a requirement compiled against another tag registry, or a
+    /// dependency cycle (e.g. an attribute whose magnitude reads itself).
     Result<ModifierHandle> addModifier(Modifier modifier);
     /// Removes a modifier; false for a stale handle.
     bool removeModifier(ModifierHandle handle);
-    /// Removes every modifier with this sourceId; returns how many.
+    /// Removes every modifier with this sourceId; returns how many. Note that 0 is the sourceId of
+    /// every modifier added without one.
     usize removeModifiersFromSource(u64 sourceId);
+    /// Number of live modifiers.
     usize modifierCount() const noexcept { return m_liveMods; }
 
     /// Call when the entity's tags changed: marks attributes with tag requirements or tag-reading
@@ -290,7 +322,9 @@ public:
     /// Marks everything dirty (e.g. after hot reload of records).
     void markAllDirty();
 
+    /// True if recompute() has work to do.
     bool dirty() const noexcept { return m_anyDirty; }
+    /// True if the attribute will be recomputed by the next recompute(); `slot` must be valid.
     bool isDirty(AttrSlot slot) const noexcept { return (m_bits[slot >> 6] >> (slot & 63)) & 1; }
     /// Resolves dirty attributes in dependency order. `tags` answers requirements and tag() in
     /// formulas (nullptr: no tags held); it must use the layout's tag registry.
@@ -299,6 +333,7 @@ public:
     /// Attributes whose final value changed since the last clearChanged() (replication dirty bits).
     bool changed(AttrSlot slot) const noexcept { return (m_bits[m_words + (slot >> 6)] >> (slot & 63)) & 1; }
     std::span<const u64> changedBits() const noexcept { return std::span<const u64>(m_bits).subspan(m_words); }
+    /// Clears the changed bits (after replication has consumed them).
     void clearChanged() noexcept;
 
     /// Visits the modifiers of one attribute (or all when slot == kInvalidAttr) in handle order.
@@ -355,9 +390,10 @@ private:
 };
 
 /// Recomputes many sets, in parallel on `jobs` when given (chunks of 64 sets, one scratch per
-/// chunk). tags[i] belongs to sets[i] (the span may be empty: no tags). The sets must be distinct
-/// objects (a set listed twice would be recomputed by two threads at once). Deterministic: each
-/// set's result is independent of scheduling.
+/// chunk; fewer than 128 sets always run on the calling thread). tags[i] belongs to sets[i] (the
+/// span may be empty: no tags). The sets must be distinct objects (a set listed twice would be
+/// recomputed by two threads at once). Deterministic: each set's result is independent of
+/// scheduling. Null entries are skipped.
 void resolveAttributes(std::span<AttributeSet* const> sets, std::span<const TagContainer* const> tags,
                        jobs::JobSystem* jobs = nullptr);
 

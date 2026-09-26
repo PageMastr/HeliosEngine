@@ -25,7 +25,7 @@ import json
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
 
@@ -46,7 +46,7 @@ RUN_KEYS = {"os", "default", "description"}
 GATE_KEYS = {"runs", "min_seconds", "description"}
 METRIC_FIELDS = {"id", "criterion", "doctest", "case", "gate", "pattern", "unit", "better", "category", "run", "note"}
 METRIC_CATEGORIES = {"render", "runtime", "backend", "editor", "iteration"}
-ACCEPT_FIELDS = {"metric", "night", "run", "reason"}
+ACCEPT_FIELDS = {"metric", "night", "value", "run", "reason"}
 OWNER = re.compile(r"^(?:WP-\d+\.\d+[a-z0-9]*|User|Director)(?:, (?:WP-\d+\.\d+[a-z0-9]*|User|Director))*$")
 SOURCE = re.compile(r"^0\d §\d+(?:\.\d+)*[a-z]?$")
 EXIT_ID = re.compile(r"^EXIT-(\d)\.[a-z0-9][a-z0-9-]*$")
@@ -796,13 +796,17 @@ def _check_metrics(name: str, data: dict, errors: list[str]) -> None:
     _check_accepts(name, data, seen, errors)
 
 
-def _check_accepts(name: str, data: dict, metric_ids: set, errors: list[str]) -> None:
-    """perf_accept: the reviewed record that makes one night's value a metric's new baseline (perf.py)."""
+def _check_accepts(name: str, data: dict, metric_ids: set, errors: list[str], today: str | None = None) -> None:
+    """perf_accept: the reviewed record that makes one night's value a metric's new baseline and anchor
+    (perf.py). `today` (UTC, YYYY-MM-DD) bounds `night`: a reviewer accepts a level that was measured."""
     accepts = data.get("perf_accept", [])
     if not isinstance(accepts, list):
         errors.append(f"{name}:1: 'perf_accept' must be a list")
         return
+    today = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     runs = data.get("runs") if isinstance(data.get("runs"), dict) else {}
+    metric_runs = {m["id"]: m.get("run") for m in data.get("perf_metrics") or []
+                   if isinstance(m, dict) and isinstance(m.get("id"), str)}
     for a in accepts:
         if not isinstance(a, dict):
             errors.append(f"{name}:1: every perf_accept item must be an object")
@@ -818,9 +822,18 @@ def _check_accepts(name: str, data: dict, metric_ids: set, errors: list[str]) ->
         except ValueError:
             ok = False
         if not ok:
-            errors.append(f"{where}: 'night' must be the YYYY-MM-DD date of the nightly whose value is accepted")
-        if "run" in a and a["run"] not in runs:
-            errors.append(f"{where}: unknown run '{a['run']}'")
+            errors.append(f"{where}: 'night' must be the YYYY-MM-DD date (UTC) of the nightly whose value is accepted")
+        elif night > today:
+            errors.append(f"{where}: 'night' is after today ({today}); accept a night that has been measured")
+        value = a.get("value")
+        if not (isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0):
+            errors.append(f"{where}: needs the positive 'value' that night measured (the level being accepted)")
+        if "run" in a:
+            if a["run"] not in runs:
+                errors.append(f"{where}: unknown run '{a['run']}'")
+            elif metric_runs.get(a.get("metric")) not in (None, a["run"]):
+                errors.append(f"{where}: the metric is read only from run '{metric_runs[a['metric']]}', "
+                              f"so a record for '{a['run']}' could never match")
         if not isinstance(a.get("reason"), str) or not a["reason"].strip():
             errors.append(f"{where}: needs a 'reason' (why the new level is accepted, and who accepted it)")
 

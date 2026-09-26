@@ -593,18 +593,40 @@ class PerfMetricTests(Fixture):
         self.assertFinding(self.run_check(self.with_metric(case="NS-0.1: *")), "take no '*'")
 
     def test_perf_accept_is_checked(self):
-        good = {"metric": "net.pps", "night": "2026-10-03", "run": "linux-gcc", "reason": "new codec; accepted by the Director"}
+        good = {"metric": "net.pps", "night": "2026-01-05", "value": 1234.5, "run": "linux-gcc",
+                "reason": "new codec; accepted by the Director"}
         data = self.with_metric()
         data["perf_accept"] = [good]
         self.assertEqual(self.run_check(data), [])
         for bad, finding in (({"metric": "net.nope"}, "'metric' must name a declared perf metric"),
                              ({"night": "2026-13-01"}, "'night' must be the YYYY-MM-DD"),
-                             ({"night": "2026-10-3"}, "'night' must be the YYYY-MM-DD"),
+                             ({"night": "2026-01-5"}, "'night' must be the YYYY-MM-DD"),
+                             ({"night": "2999-01-01"}, "'night' is after today"),
+                             ({"value": 0}, "needs the positive 'value'"),
+                             ({"value": True}, "needs the positive 'value'"),
+                             ({"value": "1234"}, "needs the positive 'value'"),
                              ({"run": "linux-x"}, "unknown run 'linux-x'"),
                              ({"reason": " "}, "needs a 'reason'"),
                              ({"because": "x"}, "unknown field 'because'")):
             data["perf_accept"] = [dict(good, **bad)]
             self.assertFinding(self.run_check(data), finding)
+        no_value = dict(good)
+        del no_value["value"]
+        data["perf_accept"] = [no_value]
+        self.assertFinding(self.run_check(data), "needs the positive 'value'")
+        # A record for a run the metric is never read from could never match.
+        data = self.with_metric(run="linux-gcc")
+        data["perf_accept"] = [dict(good, run="windows-vs2026")]
+        self.assertFinding(self.run_check(data), "read only from run 'linux-gcc'")
+        data = self.with_metric()  # read from every run: any declared run may be named
+        data["perf_accept"] = [dict(good, run="windows-vs2026")]
+        self.assertEqual(self.run_check(data), [])
+        errors = []
+        tomorrow = {k: v for k, v in good.items() if k != "run"}
+        sc._check_accepts("s", {"perf_accept": [dict(tomorrow, night="2026-01-06")]}, {"net.pps"}, errors,
+                          today="2026-01-05")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("after today (2026-01-05)", errors[0])
         data["perf_accept"] = {"net.pps": good}
         self.assertFinding(self.run_check(data), "'perf_accept' must be a list")
         data["perf_accept"] = ["net.pps"]

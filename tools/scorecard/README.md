@@ -146,20 +146,37 @@ although every case passed (a sanitizer report at exit).
   criterion is W. The summary gives the green fraction of the phase, the 60 % part of the round score (§5.7).
   It is written to the job summary and the `scorecard-report` artifact.
 - **Perf history (09 §5.8).** `perf_metrics` name the numbers the perf gates print (a regex over a doctest
-  case's MESSAGE lines or a gate's output; the case by its exact name). `compare` flags a metric that is
-  worse than its baseline by more than its category's budget: render and runtime 5 % (02 §8.3 for runtime
-  benchmarks), backend, editor and iteration 10 %. The baseline is the median of the metric's last 5 values
-  that were not themselves regressions (every verdict is stored in the history). The median keeps one noisy
-  night from moving it; leaving flagged nights out means that a regression nobody fixes fails every night
-  instead of becoming the baseline, and that a creep of a few percent a night fails once it passes the
-  budget and keeps failing. Only a reviewed `perf_accept` record in `scorecard.jsonc` moves a baseline:
-  `{"metric": "<id>", "night": "YYYY-MM-DD", "run": "<optional run>", "reason": "…"}` makes that night's value,
-  and later ones, the new baseline (and tonight's value itself when `night` is tonight). A declared gated
-  metric that had a value and stops being produced (a renamed case, a changed message) is `missing` and stays
-  missing every night until it comes back or the registry drops the metric or its run. Wall times of every
-  `perf:` case are recorded but not gated. The history is the `perf-history` artifact, carried forward from
-  the previous nightly (90-day retention). Hosted runners are noisy, and the binding per-commit measurements
-  move to the fixed runner and the lab (WP-0.4).
+  case's MESSAGE lines or a gate's output; the case by its exact name). `compare` fails a gated metric that
+  is worse by more than its category's budget (render and runtime 5 %, 02 §8.3 for runtime benchmarks;
+  backend, editor and iteration 10 %) than either of two levels:
+  - the **rolling baseline**, the median of its last 5 values that were not regressions. It catches a step,
+    ignores one noisy night, and follows any change it does not flag;
+  - the **anchor**, which does not follow: the median of the metric's first 5 clean values, or the value of
+    the night a `perf_accept` record accepts. Drift the rolling baseline follows fails once it is over
+    budget against the anchor: a creep of 1.5 % a night at the 5 % budget fails on its 4th night, 3 % a
+    night at 10 % also on its 4th, and two sub-budget steps of 4 % fail together (all tested). Only the
+    worse direction counts, so an improvement leaves the anchor where it was; a later return to the old
+    level is judged by the rolling baseline.
+
+  Every verdict, rolling baseline and anchor is stored in the history and carried forward, so a
+  regression nobody fixes fails every night, including after its last clean night leaves the 60-night
+  history; a metric reads `new` only on its first night, and a history that has the metric but no usable
+  level fails (`no-baseline`). Only a reviewed `perf_accept` record in `scorecard.jsonc` moves the levels:
+  `{"metric": "<id>", "night": "YYYY-MM-DD", "value": <number>, "run": "<optional run>", "reason": "…"}`.
+  `night` is the UTC date of the nightly (the perf summary prints it at the top) and cannot be in the
+  future; `value` is what the reviewer saw that night measure. When the stored value of that night (or
+  tonight's, when `night` is tonight) is within the metric's budget of `value`, it becomes the anchor and
+  starts the rolling baseline; when that night has no stored value for the metric or measured something
+  else, the metric fails as `accept-unmatched` until the record is corrected. The latest record in force
+  wins, and a `run` may be named only when the metric is read from that run or from every run. A declared
+  gated metric that had a value and stops being produced (a renamed case, a changed message) is `missing`
+  every night until it comes back or the registry drops the metric, drops its run or moves it to another
+  run; a declared metric that has never produced a value is listed as `never measured`, not failed (the
+  PR tier's source check is what catches a wrong case name). Wall times of every `perf:` case are recorded
+  but not gated. The history is the `perf-history` artifact (90-day retention), fetched from the newest
+  earlier nightly that has one, separately from the report; after the first night the perf step fails
+  (`compare --require-history`) when no history can be fetched, rather than reset every level. Hosted
+  runners are noisy, and the binding per-commit measurements move to the fixed runner and the lab (WP-0.4).
 - **Expected red today.** `pcg_tests_perf` fails by design (K5b, armed by WP-0.9c's red outcome; 09 §8.1),
   so the GCC job's perf step is red every night, and `script_tests` is reported to abort under `linux-asan`
   (a mimalloc use-after-poison that predates the nightly; see #9). Both are real results, reported as such;

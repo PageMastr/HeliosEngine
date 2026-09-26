@@ -8,7 +8,11 @@ ninja -C build/<dir> ecs_bench
 ./build/<dir>/bin/ecs_bench --spikes-only   # spikes only
 ./build/<dir>/bin/ecs_bench --quick         # 60 ticks and smaller spikes (CI smoke, ~20 s)
 ./build/<dir>/bin/ecs_bench --inframe-dontfragment   # InFrame as a DontFragment pair (§2.3)
+./build/<dir>/bin/ecs_bench --per-command-creates    # burst creates as spawn() + set() (§5)
 ```
+
+§1–§4 are the Phase 0 results (WP-0.6, WP-0.8). §5 is WP-1.1a, the wrapper optimization of
+ADR-004a option A, and has the current numbers and the release-build and callgrind commands.
 
 **Machine.** The machine is a shared 4-vCPU cloud VM (Intel Xeon @ 2.8 GHz, 15 GB). It is not the
 RT-01 reference box. Other build jobs ran on it throughout, with a load average between 2.4 and 5.3.
@@ -317,7 +321,8 @@ How the World overhead breaks down:
      costs, but it currently triples create and destroy cost.
 
   A 3x reduction of the wrapper overhead would bring the burst to about 2–2.5 ms on this VM. Reaching
-  1.5 ms also needs faster hardware, or a relaxed budget of 9k ops per *two* sync points.
+  1.5 ms also needs faster hardware, or a relaxed budget of 9k ops per *two* sync points. (ADR-004a
+  rejected the second reading. The outcome of these items is §5.)
 * **The other RT-01 criteria pass with large margins:** iteration at 50% of budget, memory at 12%,
   tables at 48%, and deterministic parallel execution.
 
@@ -381,3 +386,168 @@ add fewer than 20 tables (`test_regressions.cpp`).
 * **TSan** (GCC; Clang's TSan runtime is not installed on this VM): 13 reports. All of them are in
   flecs' native worker pipeline, in the flecs task-thread test: `ecs_os_linc` statistics counters
   and `prev_match_count`, as in §3.5. None are in Helios code.
+
+---
+
+## 5. WP-1.1a: wrapper optimization (ADR-004a option A)
+
+### 5.1 What changed
+
+The items of §3.4, as ADR-004a numbers them. The structural log, identities, dirty bits, flecs ids,
+tables and row order are unchanged: `tests/test_structural_ops.cpp` digests a scripted workload over
+every structural command kind in four relation configurations and compares it with the digest of the
+pre-WP-1.1a World (commit f08cf5b, GCC 13 and Clang 18 alike).
+
+1. **Identity per spawn group.** EntityIds for a whole buffer come from `EntityIdMinter::allocateN`
+   (one CAS per run within a block; the same ids as one `allocate()` per spawn). The registry reserves
+   once and inserts with one lookup (`addNew`); NetHandles skip the lookup and the error object
+   (`tryAssignHandle`); NetIdentity is written in the same pass. Runtime block ids live in pages of 64
+   consecutive ids (§5.5), content-placed and client-local ids in the hash map.
+2. **`componentInfo()`** is an inline array lookup for component ids below 64k, and the flattened spawn
+   ops carry their `ComponentInfo` (which now points at its hooks).
+3. **No needless work.** Destroy walks children, frame members and docking pairs only when flecs has
+   flagged the entity as a pair target (`EcsEntityIsTarget`; `ecs_delete` relies on the same flag), and
+   a filter over DockRef hosts skips the reverse-index lookup for other entities. Add, remove and set
+   of a table-stored component compare the entity's table before and after instead of calling
+   `ecs_owns_id`. The command-buffer path checks liveness once per command and logs from the record.
+4. **Specialized command buffers.** `CommandBuffer::spawnN(desc, count, columns)` records homogeneous
+   spawns as column arrays; the World creates them with one bulk insert, identical to `count` `spawn()`
+   + `set()` commands (`tests/test_bulk_paths.cpp`). Buffers note at record time whether every Set/Add
+   directly follows its spawn, and then fuse those runs without the per-temp linked lists; buffers
+   without spawns skip fusion. Group values are copied column by column. Commands shrank from 48 to 32
+   bytes. Batched toggles were evaluated and not adopted (§5.6).
+5. **`InFrame` storage** stays fragmenting (§5.7, ADR-004a M5).
+
+### 5.2 How to measure
+
+M1 needs a release build with asserts off. The `linux-bench` preset is GCC `Release`, headless, with
+the bench CTests on:
+
+```
+cmake --preset linux-bench && cmake --build --preset linux-bench
+./build/linux-bench/bin/ecs_bench --no-spikes           # prints "ADR-004a M1 (World / raw flecs)"
+./build/linux-bench/bin/ecs_bench --no-spikes --m1-gate # exit code = the M1 verdict
+cmake -DECS_BENCH=build/linux-bench/bin/ecs_bench -P engine/ecs/bench/callgrind_burst.cmake
+ctest --test-dir build/linux-bench -L callgrind          # the same, as a CTest (valgrind found)
+```
+
+`ecs_bench` prints M1 per configuration for tag and DontFragment toggles, and the worst of all of them
+in the verdict. The callgrind job runs one single-threaded zone under
+`valgrind --tool=callgrind --toggle-collect='bench::timed::*'`, which collects only the timed burst
+phases: 6 warm World bursts and the 6 raw-flecs bursts with the same apply/revert mix. It prints the
+instructions per burst and phase and the World / raw ratios, and passes `-DEXTRA_ARGS=...` through
+(`--per-command-creates`, `--inframe-dontfragment`). A nightly hook belongs to WP-0.3's workflow.
+
+### 5.3 Bench corrections
+
+Every correction makes the World and the raw-flecs halves do the same work. None changes the zone,
+the ticks or the state hash (`e099e42eb09fc124`, the same as §4.2).
+
+* **Apply/revert parity.** The rounds alternate between applying and reverting the toggles, which cost
+  differently (a DontFragment set is dearer than its remove). The World's warm rounds 1–7 and the raw
+  rounds 8–14 had opposite mixes; one discarded raw burst now aligns them.
+* **Destroy victims.** The warm bursts were documented to destroy the previous round's projectiles but
+  took the first 3,000 in query order, the zone's older ones. The burst tables then grew every round,
+  a cost the raw burst never paid. They now destroy the previous round's creates, in creation order.
+* **Raw destroys.** The raw burst deleted its own creates, which sat at the ends of their tables, so
+  half its deletes moved no row. It now deletes the previous raw burst's creates, like the World.
+* **Raw creates** read 250-element arrays for all 12 frames; they now read 3,000 distinct values.
+* The burst's command buffers are kept across rounds, as the scheduler keeps its per-job buffers.
+* The burst creates are 12 `spawnN()` batches, one per frame: how a system records a volley.
+  `--per-command-creates` keeps the spawn() + 7 set() form, and both are reported below.
+
+### 5.4 Results
+
+The same shared 4-vCPU VM as §3–4 (Xeon at 2.8 GHz, 33 MB L3 shared by the host), GCC 13.3 `Release`
+(asserts off), flecs 4.1.6. "Before" is this branch's bench against the World of f08cf5b; that World
+has no `spawnN()`, so its creates are per command.
+
+**Instructions** (callgrind, per warm burst, mean of 6, 1 worker; per op):
+
+| | before | after, spawnN creates | after, per-command creates | raw flecs |
+|---|---|---|---|---|
+| 3k creates | 2,771 | 352 | 1,317 | 55 |
+| 3k destroys | 1,821 | 1,250 | 1,250 | 829 |
+| 3k tag toggles | 2,449 | 2,159 | 2,159 | 1,937 |
+| 3k DontFragment toggles | 2,578 | 2,347 | 2,347 | 1,880 |
+| **9k ops, tag toggles** | 21.13 M (2.50×) | **11.29 M (1.33×)** | 14.18 M (1.68×) | 8.46 M |
+| **9k ops, DontFragment toggles** | 21.51 M (2.59×) | **11.85 M (1.43×)** | 14.75 M (1.78×) | 8.30 M |
+
+**Wall clock** (7 runs of each binary, interleaved, full `--no-spikes` run each, load 1.7–2.2 from
+other jobs; median [min–max] over the runs):
+
+| | before | after, spawnN creates | after, per-command creates |
+|---|---|---|---|
+| **M1 (per run: worst of 0/1/2/4 workers and both toggle storages)** | 5.45× [5.14–6.67] | **2.05× [1.74–3.84]** | 2.99× [2.76–5.50] |
+| M1 per configuration, tag / DontFragment (medians, 0/1/2/4 workers) | 4.9–5.1 / 4.5–5.0 | 1.59–1.87 / 1.64–1.75 | 2.38–2.90 / 2.40–2.65 |
+| 9k World burst, worst configuration per run | 5.86 ms | 2.04 ms [1.44–4.15] | 3.04 ms |
+| 9k World burst, medians of the configurations | 4.83–5.31 ms | 1.44–1.77 ms | 2.24–2.74 ms |
+| same ops on raw flecs | 0.96 ms | 0.95 ms | 0.94 ms |
+| creates / destroys / tag toggles, World (medians over configurations) | 1.42 / 1.97 / 1.59 ms | 0.22 / 0.47 / 1.01 ms | 0.64 / 0.78 / 1.21 ms |
+| the same on raw flecs | 0.02 / 0.24 / 0.69 ms | 0.02 / 0.24 / 0.67 ms | 0.02 / 0.24 / 0.67 ms |
+
+Two earlier series of 5 runs with earlier builds of this branch (loads about 1.2 and 1.8) gave the
+same picture: 4.56× and 5.16× before, 2.12× and 2.08× with spawnN creates, and per-configuration
+medians of 1.56–1.94×.
+
+The other RT-01 clauses are unchanged (medians over configurations): iteration 0.206 ms, ECS peak
+45.0 MB (45.7 before: the paged registry is smaller), 2,384 tables, tick p50 1.67 ms and p99 3.1 ms at
+4 workers (the ECS-side stages only, as in §3.2), deterministic across 0/1/2/4 workers with the same
+state hash as before.
+
+### 5.5 Why the wall clock lags the instruction count
+
+With callgrind's cache model at an 8 MB last level, the World phases missed that level far more often
+than the raw ones. First, the registry's hash map: one random line per spawn and per destroy. Runtime
+ids are minted consecutively, so they now live in pages of 64 ids and a burst touches a few lines per
+64 ids. After that change the World toggles still missed about 5× as often as the raw toggles
+(16k against 3.3k read misses per 6 bursts), all of it in flecs' own row copies. The rows had been
+evicted by the World creates just before them: skipping those creates in an experiment removed the
+difference. With a 16 MB last level the World toggles miss 1.2k times (raw: under 10), and with 32 MB
+neither misses. So the remaining gap is capacity: the World's command buffers, payload arrays and structural
+log (12,000 events of 32 bytes per burst) are a larger footprint than the raw calls, and on this VM
+the 33 MB L3 is shared with the host's other tenants and with the other jobs. A quiet machine keeps more of the zone
+in its last-level cache, which is one reason M2 is measured on the SERVER box without other load.
+
+### 5.6 Batched toggles (item 4, second half): evaluated, not adopted
+
+flecs 4.1.6 has no public API that moves a list of entities between tables. Through the public API a
+batch can only skip the per-entity edge lookup, with `ecs_commit` and a cached destination table.
+On the raw burst's toggles (callgrind, 6 bursts): `ecs_add_id`/`ecs_remove_id` in command order took
+34.86 M instructions, `ecs_commit` with a cached edge in command order 36.65 M (+5 %), and the same
+sorted by (source table, id) 39.86 M (+14 %, the sort). The wall clock did not improve either (sorted
+0.72–0.85 ms against 0.61–0.79 ms). Sorting also changes the row order of the destination tables,
+which the digest pins. So the toggles keep per-entity moves. A real batched move would need an
+upstream flecs API: append n rows to the destination table, move the columns in bulk, and delete n
+rows from the source in command order. That is a request for upstream (K10); this WP did not file it.
+
+### 5.7 `InFrame` storage (ADR-004a M5)
+
+The zone and burst with `InFrame` as a DontFragment pair (`--inframe-dontfragment`), final code, spawnN
+creates, medians over configurations (3 runs; fragmenting from the 7 runs of §5.4):
+
+| InFrame | tables | chunks | tick p50 / p99 | iterate 50k×3 | ECS peak | 3k creates / 3k destroys | 9k burst (instructions) |
+|---|---|---|---|---|---|---|---|
+| fragmenting pair (default) | 2,384 | 1,757 | 1.67 / 3.06 ms | 0.206 ms | 45.0 MB | 0.22 / 0.47 ms | 1.70 ms (11.3 M) |
+| DontFragment pair | **440** | **163** | **0.63 / 1.12 ms** | **0.110 ms** | **28.0 MB** | 0.93 / 1.87 ms | 4.09 ms (23.5 M) |
+
+**Decision: `InFrame` stays a fragmenting exclusive pair.** The DontFragment pair halves tick,
+iteration and memory, but those clauses already pass with margins of 2× or more. It makes the one
+failing clause, the structural burst, 2.4× more expensive: every create adds the pair per entity and
+every destroy removes it from flecs' sparse relationship index, 3,434 instructions per destroy
+against 1,250. Revisit it if flecs makes non-fragmenting pair changes cheaper or frames become many.
+
+### 5.8 Verdict
+
+* **M1 is not met on the dev VM.** By the ADR's definition (worst of 0/1/2/4 workers and both toggle
+  storages, same run, release build), M1 is **2.05×** (median of 7 runs, 1.74–3.84), against ≤ 1.6× and
+  5.45× before. The per-configuration medians are 1.59–1.87×. In instructions the World burst is 1.33×
+  (tag toggles) and 1.43× (DontFragment toggles) the raw-flecs burst. With per-command creates M1 is
+  2.99× (1.68× and 1.78× in instructions).
+* The 9k-op burst takes 1.44–1.77 ms per configuration (median) on this VM, 2.04 ms in the worst
+  configuration of a run, against 4.8–5.9 ms before and the 1.5 ms budget. The formal clause is M2 on
+  SERVER.
+* ADR-004a's Phase 1 midpoint rule (a scoping spike for option B above 2.5×) is not triggered by
+  these numbers.
+* What is left: the World's toggles and destroys run at about 1.1× and 1.5× the raw instructions, and
+  creates at 6× (0.2 ms). The remaining wall-clock gap is mostly the cache footprint of §5.5.

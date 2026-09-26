@@ -731,3 +731,77 @@ TEST_CASE("ecs bulk paths: the World removes DontFragment and Sparse ids whose f
         CHECK_FALSE(ecs_owns_id(fw, c.id, cid));
     }
 }
+
+TEST_CASE("ecs bulk paths: Sparse and DontFragment ops log the identity of whoever holds a recycled index") {
+    // Their log entries take the identity through a per-index hint that the handle table confirms
+    // (IdentityHints). flecs hands a destroyed entity's index to the next new entity, so the hint the
+    // old entity left must not be used for the new one: one with another identity, one without a
+    // NetHandle, and one made by flecs directly, without identity. (No reuse delay: the new entity
+    // also gets the old one's handle slot, with the next generation.)
+    World w(WorldDesc{.handles = {.reuseDelay = 0}});
+    registerCommon(w);
+    const ComponentId status = w.registerComponent<Status>(ComponentFlags::DontFragment);
+    const ComponentId mark = w.registerComponent<Mark>(ComponentFlags::Sparse);
+    ecs_world_t* fw = w.flecsWorld();
+    auto logged = [&](Entity e, auto&& op, EntityId id, NetHandle handle) {
+        w.clearStructuralLog();
+        op(e);
+        REQUIRE(w.structuralLog().size() == 1);
+        CHECK(w.structuralLog()[0].entity == id);
+        CHECK(w.structuralLog()[0].handle == handle);
+    };
+    auto toggles = [&](Entity e, EntityId id, NetHandle handle) {
+        for (const ComponentId cid : {status, mark}) {
+            CAPTURE(cid);
+            const u32 v = 3;
+            logged(e, [&](Entity x) { w.setRaw(x, cid, &v, sizeof v); }, id, handle);
+            logged(e, [&](Entity x) { w.removeId(x, cid); }, id, handle);
+            logged(e, [&](Entity x) { w.addId(x, cid); }, id, handle); // (the default value)
+            logged(e, [&](Entity x) { // the command-buffer path
+                CommandBuffer cb(&w);
+                cb.removeId(x, cid);
+                w.apply(cb);
+            }, id, handle);
+        }
+    };
+    const Entity a = w.spawn();
+    toggles(a, w.entityId(a), w.netHandle(a)); // leaves a's hint
+    const u32 index = static_cast<u32>(a.id);
+    const NetHandle ha = w.netHandle(a);
+    w.destroy(a);
+    const Entity b = w.spawn();
+    REQUIRE(static_cast<u32>(b.id) == index); // flecs reused the index
+    REQUIRE(w.entityId(b) != EntityId());
+    CHECK(w.netHandle(b).index() == ha.index()); // a's slot, the next generation
+    CHECK(w.netHandle(b) != ha);
+    toggles(b, w.entityId(b), w.netHandle(b));
+    w.destroy(b);
+    const Entity c = w.spawn({.netHandle = false});
+    REQUIRE(static_cast<u32>(c.id) == index);
+    REQUIRE_FALSE(w.netHandle(c).isValid());
+    toggles(c, w.entityId(c), NetHandle());
+    w.destroy(c);
+    const Entity raw = helios::ecs::detail::he(ecs_new(fw));
+    REQUIRE(static_cast<u32>(raw.id) == index);
+    toggles(raw, EntityId(), NetHandle());
+}
+
+TEST_CASE("ecs bulk paths: the registry confirms a handle only for the entity it was issued to") {
+    EntityRegistry reg({.maxHandles = 16, .reuseDelay = 0});
+    const EntityId a = composeBlockId(7, 1, 20), b = composeBlockId(7, 1, 21);
+    REQUIRE(reg.addNew(a, Entity(0x100000001ull)));
+    const NetHandle ha = reg.tryAssignHandle(a, Entity(0x100000001ull));
+    EntityId id;
+    CHECK(reg.identityOfHandle(ha, Entity(0x100000001ull), id));
+    CHECK(id == a);
+    CHECK_FALSE(reg.identityOfHandle(ha, Entity(0x200000001ull), id)); // the same index, a newer generation
+    CHECK_FALSE(reg.identityOfHandle(NetHandle(), Entity(0x100000001ull), id));
+    CHECK(reg.remove(a, ha));
+    CHECK_FALSE(reg.identityOfHandle(ha, Entity(0x100000001ull), id)); // released
+    REQUIRE(reg.addNew(b, Entity(0x200000001ull)));
+    const NetHandle hb = reg.tryAssignHandle(b, Entity(0x200000001ull)); // reuse delay 0: a's slot
+    CHECK(hb.index() == ha.index());
+    CHECK_FALSE(reg.identityOfHandle(ha, Entity(0x100000001ull), id)); // a stale handle stays stale
+    CHECK(reg.identityOfHandle(hb, Entity(0x200000001ull), id));
+    CHECK(id == b);
+}

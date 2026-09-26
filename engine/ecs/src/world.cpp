@@ -63,6 +63,26 @@ LoggedIdentity identityAt(const ecs_world_t* w, ComponentId netIdentity, const e
     return ni ? LoggedIdentity{ni->id, ni->handle} : LoggedIdentity{};
 }
 
+// The identity a Sparse or DontFragment op logs for the live flecs entity `e`: through its hint once
+// the handle table confirms it (IdentityHints), else from its NetIdentity column, whose handle then
+// becomes the hint.
+LoggedIdentity sparseOpIdentity(IdentityHints& hints, const EntityRegistry& registry, const ecs_world_t* w,
+                                ComponentId netIdentity, u64 e) {
+    const NetHandle hint = hints.get(e);
+    EntityId id;
+    if (hint.isValid() && registry.identityOfHandle(hint, Entity(e), id)) {
+#if HELIOS_ENABLE_ASSERTS
+        const NetIdentity* ni = netIdentityAt(w, netIdentity, ecs_record_find(w, e));
+        HELIOS_ASSERT(ni && ni->id == id && ni->handle == hint, "identity hint disagrees with NetIdentity");
+#endif
+        return LoggedIdentity{id, hint};
+    }
+    const NetIdentity* ni = netIdentityAt(w, netIdentity, ecs_record_find(w, e));
+    if (!ni) return LoggedIdentity{};
+    if (ni->handle.isValid()) hints.set(e, ni->handle);
+    return LoggedIdentity{ni->id, ni->handle};
+}
+
 void logOp(std::vector<StructuralEvent>& log, StructuralOp op, LoggedIdentity who, u64 arg) {
     log.push_back(StructuralEvent{who.id, arg, who.handle, op});
 }
@@ -1037,16 +1057,21 @@ HELIOS_ECS_FLATTEN void World::addIdAlive(Entity e, ComponentId cid) {
         ecs_add_id(m_flecs, fe(e), cid); // pairs and ids of other modules: not logged
         return;
     }
-    const ecs_record_t* r = ecs_record_find(m_flecs, fe(e));
-    const LoggedIdentity who = identityAt(m_flecs, m_netIdentityId, r);
-    if (!info->isReplicated() && !info->defaultValue && !hasFlag(info->flags, kNotInTable)) {
+    const bool notInTable = hasFlag(info->flags, kNotInTable);
+    if (!info->isReplicated() && !info->defaultValue && !notInTable) {
         // Tags and components flecs constructs: the add changed something iff the entity moved to
-        // another table (ADR-004a item 3: no ecs_owns_id).
+        // another table (ADR-004a item 3: no ecs_owns_id). The identity is read from the row flecs
+        // is about to move, before the move.
+        const ecs_record_t* r = ecs_record_find(m_flecs, fe(e));
+        const LoggedIdentity who = identityAt(m_flecs, m_netIdentityId, r);
         const ecs_table_t* before = r->table;
         ecs_add_id(m_flecs, fe(e), cid);
         if (r->table != before) logOp(m_log, StructuralOp::Add, who, cid);
         return;
     }
+    const LoggedIdentity who =
+        notInTable ? sparseOpIdentity(m_impl->identityHints, m_registry, m_flecs, m_netIdentityId, fe(e))
+                   : identityAt(m_flecs, m_netIdentityId, ecs_record_find(m_flecs, fe(e)));
     const bool fresh = !ownsComponent(m_flecs, fe(e), *info, m_impl->sparseRecords);
     if (info->isReplicated() && fresh) ensureRepDirty(e);
     if (info->defaultValue && fresh) {
@@ -1072,16 +1097,19 @@ HELIOS_ECS_FLATTEN void World::removeIdAlive(Entity e, ComponentId cid) {
         ecs_remove_id(m_flecs, fe(e), cid); // pairs and ids of other modules: not logged
         return;
     }
-    const ecs_record_t* r = ecs_record_find(m_flecs, fe(e));
-    const LoggedIdentity who = identityAt(m_flecs, m_netIdentityId, r);
     if (!hasFlag(info->flags, kNotInTable)) {
-        // The component was owned iff the entity moved to another table (no ecs_owns_id).
+        // The component was owned iff the entity moved to another table (no ecs_owns_id). The
+        // identity is read from the row flecs is about to move, before the move.
+        const ecs_record_t* r = ecs_record_find(m_flecs, fe(e));
+        const LoggedIdentity who = identityAt(m_flecs, m_netIdentityId, r);
         const ecs_table_t* before = r->table;
         ecs_remove_id(m_flecs, fe(e), cid);
         if (r->table != before) logOp(m_log, StructuralOp::Remove, who, cid);
         return;
     }
     // Sparse and DontFragment components never move the entity: ask their sparse set.
+    const LoggedIdentity who =
+        sparseOpIdentity(m_impl->identityHints, m_registry, m_flecs, m_netIdentityId, fe(e));
     const bool owned = ownsComponent(m_flecs, fe(e), *info, m_impl->sparseRecords);
     ecs_remove_id(m_flecs, fe(e), cid);
     if (owned) logOp(m_log, StructuralOp::Remove, who, cid);
@@ -1134,9 +1162,8 @@ HELIOS_ECS_FLATTEN void World::setRawAlive(Entity e, ComponentId cid, const void
         // A plain sparse or DontFragment value: emplace finds or adds the slot and says which, so
         // there is no separate ownership lookup. The copy and ecs_modified_id() are what
         // ecs_set_id() does for a component without copy or replace hooks (OnSet observers run).
-        // The identity is read first, as on the toggle paths: its row load then overlaps the
-        // flecs calls (a DontFragment op never touches the entity's row otherwise).
-        const LoggedIdentity who = identityAt(m_flecs, m_netIdentityId, ecs_record_find(m_flecs, fe(e)));
+        const LoggedIdentity who =
+            sparseOpIdentity(m_impl->identityHints, m_registry, m_flecs, m_netIdentityId, fe(e));
         bool isNew = false;
         void* dst = ecs_emplace_id(m_flecs, fe(e), cid, size, &isNew);
         copyValue(dst, value, static_cast<u32>(size));

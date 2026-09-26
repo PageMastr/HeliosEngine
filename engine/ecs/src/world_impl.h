@@ -3,6 +3,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstring>
 #include <deque>
 #include <map>
 #include <memory>
@@ -11,8 +12,11 @@
 #include <vector>
 
 #include "flecs_internal.h"
+#include "helios/core/assert.h"
 #include "helios/core/hash.h"
 #include "helios/core/jobs.h"
+#include "helios/core/memory.h"
+#include "helios/ecs/heap.h"
 #include "helios/ecs/world.h"
 
 namespace helios::ecs {
@@ -88,6 +92,49 @@ struct SparseRecordCache {
         }
         return record;
     }
+};
+
+/// The NetHandle last seen for each flecs entity index (the low 32 bits of a flecs id): a hint for
+/// the log entries of Sparse and DontFragment ops. Such an op touches no part of the entity's table,
+/// so reading the identity from its NetIdentity row (through the table's component map and column
+/// array) cost it cache misses the raw flecs op does not have (SPIKES.md §5.10). A hint counts only
+/// once the handle table confirms that the handle is live and issued to exactly this entity (flecs
+/// id and generation), and the handle table then also gives the EntityId, so a stale hint is never
+/// used: hints are written by the op that misses (reading the NetIdentity column) and never cleared.
+/// Entities without a NetHandle always read the column. Main thread only.
+class IdentityHints {
+public:
+    IdentityHints() = default;
+    IdentityHints(const IdentityHints&) = delete;
+    IdentityHints& operator=(const IdentityHints&) = delete;
+    ~IdentityHints() {
+        for (u32* page : m_pages) alignedFree(page);
+    }
+    /// The hint for flecs entity `e` (invalid: none).
+    HELIOS_FORCEINLINE NetHandle get(u64 e) const noexcept {
+        const u32 index = static_cast<u32>(e);
+        const u32 page = index >> kPageBits;
+        if (page >= m_pages.size() || m_pages[page] == nullptr) return NetHandle();
+        return NetHandle(m_pages[page][index & kPageMask]);
+    }
+    void set(u64 e, NetHandle handle) {
+        const u32 index = static_cast<u32>(e);
+        const u32 page = index >> kPageBits;
+        if (page >= m_pages.size()) m_pages.resize(page + 1, nullptr);
+        if (m_pages[page] == nullptr) {
+            constexpr usize kBytes = sizeof(u32) << kPageBits;
+            auto* p = static_cast<u32*>(alignedAlloc(kBytes, 64, ecsMemoryTag()));
+            HELIOS_VERIFY(p != nullptr, "IdentityHints: out of memory");
+            std::memset(static_cast<void*>(p), 0, kBytes);
+            m_pages[page] = p;
+        }
+        m_pages[page][index & kPageMask] = handle.value;
+    }
+
+private:
+    static constexpr u32 kPageBits = 12; // 4096 hints (16 KiB) per page
+    static constexpr u32 kPageMask = (1u << kPageBits) - 1;
+    std::vector<u32*> m_pages;
 };
 
 struct World::Impl {
@@ -181,6 +228,7 @@ struct World::Impl {
     u32 flecsTaskThreads = 0;
 
     SparseRecordCache sparseRecords;
+    IdentityHints identityHints;
 
     // Stats.
     u64 structuralOps = 0;

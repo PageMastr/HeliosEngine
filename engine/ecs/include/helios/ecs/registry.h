@@ -240,6 +240,14 @@ public:
     }
 
     Entity find(EntityId id) const noexcept;
+    /// Whether `handle` is live and issued to `entity`; if so, `id` is the EntityId it was issued
+    /// for. Const: safe to call concurrently with other const lookups.
+    HELIOS_FORCEINLINE bool identityOfHandle(NetHandle handle, Entity entity, EntityId& id) const noexcept {
+        const NetHandleTable::Slot* slot = m_handles.liveSlot(handle);
+        if (!slot || slot->owner != entity.id) return false;
+        id = slot->id;
+        return true;
+    }
     Entity find(NetHandle handle) const noexcept { return Entity(m_handles.ownerOf(handle)); }
     EntityId resolve(NetHandle handle) const noexcept { return m_handles.resolve(handle); }
     bool contains(EntityId id) const noexcept { return find(id).isValid(); }

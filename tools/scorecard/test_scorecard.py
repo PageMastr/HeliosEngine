@@ -573,6 +573,43 @@ class PerfMetricTests(Fixture):
         self.assertFinding(self.run_check(self.with_metric(case="NS-0.1: renamed"), [INVENTORY]),
                            "doctest case doctest net_tests / NS-0.1: renamed does not exist")
 
+    def test_every_metric_source_is_checked_whether_or_not_it_names_a_criterion(self):
+        # The review's reproduction: a metric without a criterion whose case was renamed.
+        data = self.with_metric(case="NS-0.1: renamed")
+        del data["perf_metrics"][0]["criterion"]
+        errors = self.run_check(data, [INVENTORY])
+        self.assertEqual(len(errors), 1, errors)
+        self.assertFinding(errors, "perf metric 'net.pps': doctest case doctest net_tests / NS-0.1: renamed "
+                                   "does not exist in the linux inventory")
+        self.assertFinding(self.run_check(self.with_metric(doctest="gone_tests"), [INVENTORY]),
+                           "perf metric 'net.pps': doctest binary")
+        # A metric read from one run is checked only against inventories of that run's OS.
+        windows = dict(INVENTORY, os="windows", doctest={"net_tests": []})
+        metric_errors = (lambda data: [e for e in self.run_check(data, [windows]) if "perf metric" in e])
+        self.assertEqual(metric_errors(self.with_metric(run="linux-gcc")), [])
+        self.assertFinding(metric_errors(self.with_metric()), "perf metric 'net.pps': doctest case")
+
+    def test_metric_cases_are_exact(self):
+        self.assertFinding(self.run_check(self.with_metric(case="NS-0.1: *")), "take no '*'")
+
+    def test_perf_accept_is_checked(self):
+        good = {"metric": "net.pps", "night": "2026-10-03", "run": "linux-gcc", "reason": "new codec; accepted by the Director"}
+        data = self.with_metric()
+        data["perf_accept"] = [good]
+        self.assertEqual(self.run_check(data), [])
+        for bad, finding in (({"metric": "net.nope"}, "'metric' must name a declared perf metric"),
+                             ({"night": "2026-13-01"}, "'night' must be the YYYY-MM-DD"),
+                             ({"night": "2026-10-3"}, "'night' must be the YYYY-MM-DD"),
+                             ({"run": "linux-x"}, "unknown run 'linux-x'"),
+                             ({"reason": " "}, "needs a 'reason'"),
+                             ({"because": "x"}, "unknown field 'because'")):
+            data["perf_accept"] = [dict(good, **bad)]
+            self.assertFinding(self.run_check(data), finding)
+        data["perf_accept"] = {"net.pps": good}
+        self.assertFinding(self.run_check(data), "'perf_accept' must be a list")
+        data["perf_accept"] = ["net.pps"]
+        self.assertFinding(self.run_check(data), "every perf_accept item must be an object")
+
     def test_nightly_must_produce_every_run_and_gate(self):
         workflow = self.root / "nightly.yml"
         workflow.write_text("jobs:\n  a:\n    steps:\n      - run: echo linux-gcc linux-asan windows-vs2026 "

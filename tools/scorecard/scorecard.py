@@ -25,6 +25,7 @@ import json
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
@@ -40,11 +41,12 @@ TEST_KINDS = {"ctest", "doctest", "go", "gate"}  # references that run on a plat
 ENTRY_REQUIRED = {"id", "phase", "source", "owner", "title", "class", "platforms", "threshold", "status", "tests"}
 ENTRY_OPTIONAL = {"gaps", "notes"}
 GAP_KEYS = {"clause", "state", "owner", "pinned_by"}
-TOP_KEYS = {"version", "plan_rev", "covers", "runs", "gates", "criteria", "exit", "perf_metrics"}
+TOP_KEYS = {"version", "plan_rev", "covers", "runs", "gates", "criteria", "exit", "perf_metrics", "perf_accept"}
 RUN_KEYS = {"os", "default", "nightly", "description"}
 GATE_KEYS = {"runs", "min_seconds", "description"}
 METRIC_FIELDS = {"id", "criterion", "doctest", "case", "gate", "pattern", "unit", "better", "category", "run", "note"}
 METRIC_CATEGORIES = {"render", "runtime", "backend", "editor", "iteration"}
+ACCEPT_FIELDS = {"metric", "night", "run", "reason"}
 OWNER = re.compile(r"^(?:WP-\d+\.\d+[a-z0-9]*|User|Director)(?:, (?:WP-\d+\.\d+[a-z0-9]*|User|Director))*$")
 SOURCE = re.compile(r"^0\d §\d+(?:\.\d+)*[a-z]?$")
 EXIT_ID = re.compile(r"^EXIT-(\d)\.[a-z0-9][a-z0-9-]*$")
@@ -777,6 +779,8 @@ def _check_metrics(name: str, data: dict, errors: list[str]) -> None:
             continue
         if ("gate" in m) == ("doctest" in m) or ("doctest" in m) != ("case" in m):
             errors.append(f"{where}: needs either 'gate' or 'doctest' with 'case'")
+        if "*" in m.get("case", "") + m.get("doctest", ""):
+            errors.append(f"{where}: perf.py reads the case by its exact name, so 'doctest' and 'case' take no '*'")
         if "gate" in m and m["gate"] not in (data.get("gates") or {}):
             errors.append(f"{where}: gate '{m['gate']}' is not declared")
         if "run" in m and m["run"] not in (data.get("runs") or {}):
@@ -792,6 +796,36 @@ def _check_metrics(name: str, data: dict, errors: list[str]) -> None:
                 errors.append(f"{where}: 'pattern' must have exactly one group (the number)")
         except re.error as e:
             errors.append(f"{where}: bad 'pattern': {e}")
+    _check_accepts(name, data, seen, errors)
+
+
+def _check_accepts(name: str, data: dict, metric_ids: set, errors: list[str]) -> None:
+    """perf_accept: the reviewed record that makes one night's value a metric's new baseline (perf.py)."""
+    accepts = data.get("perf_accept", [])
+    if not isinstance(accepts, list):
+        errors.append(f"{name}:1: 'perf_accept' must be a list")
+        return
+    runs = data.get("runs") if isinstance(data.get("runs"), dict) else {}
+    for a in accepts:
+        if not isinstance(a, dict):
+            errors.append(f"{name}:1: every perf_accept item must be an object")
+            continue
+        where = f"{name}:1: perf_accept '{a.get('metric')}' ({a.get('night')})"
+        for key in sorted(set(a) - ACCEPT_FIELDS):
+            errors.append(f"{where}: unknown field '{key}'")
+        if a.get("metric") not in metric_ids:
+            errors.append(f"{where}: 'metric' must name a declared perf metric")
+        night = a.get("night")
+        try:
+            ok = isinstance(night, str) and datetime.strptime(night, "%Y-%m-%d").strftime("%Y-%m-%d") == night
+        except ValueError:
+            ok = False
+        if not ok:
+            errors.append(f"{where}: 'night' must be the YYYY-MM-DD date of the nightly whose value is accepted")
+        if "run" in a and a["run"] not in runs:
+            errors.append(f"{where}: unknown run '{a['run']}'")
+        if not isinstance(a.get("reason"), str) or not a["reason"].strip():
+            errors.append(f"{where}: needs a 'reason' (why the new level is accepted, and who accepted it)")
 
 
 def check_workflow(data: dict, path: Path, workflow: Path) -> list[str]:
@@ -821,9 +855,6 @@ def check_inventory(data: dict, text: str, path: Path, inventory: dict) -> list[
     for entry, line in zip(items, entry_lines(text, items)):
         refs = [r for r in entry.get("tests") or [] if isinstance(r, dict)]
         refs += [g["pinned_by"] for g in entry.get("gaps") or [] if isinstance(g, dict) and isinstance(g.get("pinned_by"), dict)]
-        refs += [{"doctest": m["doctest"], "case": m["case"], **({"run": m["run"]} if "run" in m else {})}
-                 for m in data.get("perf_metrics") or [] if isinstance(m, dict) and "doctest" in m and "case" in m
-                 and m.get("criterion") == entry.get("id")]
         for ref in refs:
             kind = ref_kind(ref)
             if kind is None or inv_os not in ref_oses(entry, ref, data) or \
@@ -840,6 +871,20 @@ def check_inventory(data: dict, text: str, path: Path, inventory: dict) -> list[
             if target:
                 errors.append(f"{name}:{line}: {entry.get('id')}: {target} {ref_label(ref)} does not exist "
                               f"in the {inv_os} inventory")
+    # Every perf metric's doctest source, whether or not it names a criterion: a renamed case would
+    # otherwise drop its metric from the history without the PR tier noticing.
+    metrics = [m for m in (data.get("perf_metrics") if isinstance(data.get("perf_metrics"), list) else [])
+               if isinstance(m, dict) and isinstance(m.get("doctest"), str) and isinstance(m.get("case"), str)]
+    runs = data.get("runs") if isinstance(data.get("runs"), dict) else {}
+    for m, line in zip(metrics, entry_lines(text, metrics)):
+        run = runs.get(m["run"]) if isinstance(m.get("run"), str) else None
+        oses = [run.get("os")] if isinstance(run, dict) else [] if "run" in m else list(OSES)
+        if doctest is None or inv_os not in oses:
+            continue
+        if m["case"] not in (doctest.get(m["doctest"]) or []):
+            what = "doctest case" if m["doctest"] in doctest else "doctest binary"
+            errors.append(f"{name}:{line}: perf metric '{m.get('id')}': {what} doctest {m['doctest']} / {m['case']} "
+                          f"does not exist in the {inv_os} inventory")
     return errors
 
 

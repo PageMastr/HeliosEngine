@@ -54,8 +54,11 @@ into annotations.
   `ci_job` names must be jobs of `.github/workflows/ci.yml` (matrix names expanded); a missing ci.yml is
   a finding. Every declared run (except those marked `"nightly": false`) and gate must be produced by
   `.github/workflows/nightly.yml`.
-- **Perf metrics.** Each has one source (a gate, or a doctest binary and case), a pattern with exactly one
-  group, a unit, `better` (`lower` or `higher`) and a budget category; a doctest source must exist.
+- **Perf metrics.** Each has one source (a gate, or a doctest binary and case, named exactly), a pattern with
+  exactly one group, a unit, `better` (`lower` or `higher`) and a budget category. Every doctest source must
+  exist in each inventory of its run's OS (every OS without a `run`), whether or not the metric names a
+  criterion. `perf_accept` records name a declared metric, a valid `night`, a declared `run` if any, and a
+  `reason`.
 
 ## Entry format
 
@@ -137,19 +140,31 @@ although every case passed (a sanitizer report at exit).
   every platform and it has no gap.
   A broken pin (a `pinned_by` test that now fails) is reported so that the registry is updated.
 - **Green (09 §5.6).** The report keeps a streak per criterion from last night's report: consecutive passing
-  *scheduled* nightlies. A manual run never extends it, and a failure resets it. N and H criteria are green
-  at 3 and W at 2; an M record is green once it exists. The summary gives the green fraction of the phase,
-  the 60 % part of the round score (§5.7). It is written to the job summary and the `scorecard-report`
-  artifact.
+  *scheduled* nightlies. A manual run never extends it, and a failure resets it. A scheduled report more than
+  36 h after the previous scheduled one restarts every streak, because the night in between left no report
+  (the report says so). N and H criteria are green at 3 and W at 2; an M record is green once it exists.
+  09 §5.6's further W rule ("the latest within 14 days of the exit streak") is not enforced yet; no Phase 0
+  criterion is W. The summary gives the green fraction of the phase, the 60 % part of the round score (§5.7).
+  It is written to the job summary and the `scorecard-report` artifact.
 - **Perf history (09 §5.8).** `perf_metrics` name the numbers the perf gates print (a regex over a doctest
-  case's MESSAGE lines or a gate's output). `compare` flags a metric that is worse than the median of its
-  last 5 nights by more than its category's budget: render and runtime 5 % (02 §8.3 for runtime
-  benchmarks), backend, editor and iteration 10 %. The median keeps one noisy night from moving the
-  baseline, and a creep of a few percent a night still fails once it passes the budget against the older
-  values. A declared metric that disappears fails too. Wall times of every `perf:` case are recorded but not
-  gated. The history is the `perf-history` artifact, carried forward from the previous nightly (90-day
-  retention). Hosted runners are noisy, and the binding per-commit measurements move to the fixed runner
-  and the lab (WP-0.4).
+  case's MESSAGE lines or a gate's output; the case by its exact name). `compare` flags a metric that is
+  worse than its baseline by more than its category's budget: render and runtime 5 % (02 §8.3 for runtime
+  benchmarks), backend, editor and iteration 10 %. The baseline is the median of the metric's last 5 values
+  that were not themselves regressions (every verdict is stored in the history). The median keeps one noisy
+  night from moving it; leaving flagged nights out means that a regression nobody fixes fails every night
+  instead of becoming the baseline, and that a creep of a few percent a night fails once it passes the
+  budget and keeps failing. Only a reviewed `perf_accept` record in `scorecard.jsonc` moves a baseline:
+  `{"metric": "<id>", "night": "YYYY-MM-DD", "run": "<optional run>", "reason": "…"}` makes that night's value,
+  and later ones, the new baseline (and tonight's value itself when `night` is tonight). A declared gated
+  metric that had a value and stops being produced (a renamed case, a changed message) is `missing` and stays
+  missing every night until it comes back or the registry drops the metric or its run. Wall times of every
+  `perf:` case are recorded but not gated. The history is the `perf-history` artifact, carried forward from
+  the previous nightly (90-day retention). Hosted runners are noisy, and the binding per-commit measurements
+  move to the fixed runner and the lab (WP-0.4).
+- **Expected red today.** `pcg_tests_perf` fails by design (K5b, armed by WP-0.9c's red outcome; 09 §8.1),
+  so the GCC job's perf step is red every night, and `script_tests` is reported to abort under `linux-asan`
+  (a mimalloc use-after-poison that predates the nightly; see #9). Both are real results, reported as such;
+  look for anything else first.
 
 The scorecard job also checks the registry against tonight's inventories, Go tests included. It uses the
 workflow's read-only token to read the previous nightly's artifacts and the jobs of the latest `ci.yml` run

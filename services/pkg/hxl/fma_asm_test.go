@@ -56,8 +56,9 @@ func TestNoFusedMultiplyAddInMachineCode(t *testing.T) {
 		out := listing(env, "./pkg/hxl/", "./pkg/hxl/det/")
 		muls, fmas := 0, 0
 		for _, line := range strings.Split(out, "\n") {
-			// Only code of the HXL packages (the listing also covers imported packages matched by
-			// the pattern, e.g. the generated gamedef codecs, which have no float arithmetic).
+			// Only code under pkg/hxl/ (the pattern also matches imported packages). That includes
+			// the generated gamedef package, whose one float product (a JSON duration in
+			// helios_runtime.go) must not fuse either.
 			if !strings.Contains(line, "/pkg/hxl/") {
 				continue
 			}

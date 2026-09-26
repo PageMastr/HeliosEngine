@@ -28,7 +28,10 @@ Every float multiplication is the direct operand of `float64()` (an explicit con
 point, so the compiler cannot fuse `x*y + z` into an FMA on arm64 or at `GOAMD64=v3`); constants
 are single hex-float literals (Go folds constant expressions exactly); only exact `math` functions
 (`Sqrt`, `Abs`, `Floor`, `Ceil`, `Trunc`, `Copysign`, bit conversions). `hxlfloat` enforces all three
-and its test checks 19 planted violations and a clean fixture. Services should still build with
+and its test checks 22 planted violations (including type parameters with float type sets) and a
+clean fixture. It skips test files and generated files (marker before the package clause); in
+`pkg/hxl` that exempts only `gamedef`, whose single float product (a JSON duration in
+`helios_runtime.go`) is not HXL arithmetic and is still covered by the machine-code FMA check. Services should still build with
 `GOAMD64=v1` and call `hxl.CheckGOAMD64(production)` at start (defence in depth, rule 6).
 
 Two deviations from 06 §1.2's tooling: the `det` constants are copied from

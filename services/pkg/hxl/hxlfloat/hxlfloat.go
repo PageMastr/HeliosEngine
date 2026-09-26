@@ -15,7 +15,10 @@
 //
 // It uses only the standard library (go/parser, go/types), so it runs as a unit test (see
 // hxlfloat_test.go, which also checks planted violations) and from `go run ./pkg/hxl/hxlfloat/cmd`.
-// Test files (_test.go) and generated files ("Code generated ... DO NOT EDIT.") are not checked.
+// Test files (_test.go) and generated files (a "Code generated ... DO NOT EDIT." line before the
+// package clause, ast.IsGenerated) are not checked. In pkg/hxl that exempts only gamedef, which
+// holds schemac's records and codecs; its one float product (a JSON duration in seconds, in
+// helios_runtime.go) is not HXL arithmetic.
 package hxlfloat
 
 import (
@@ -48,16 +51,9 @@ var allowedMath = map[string]bool{
 	"IsNaN": true, "IsInf": true, "Inf": true, "NaN": true, "Signbit": true,
 }
 
-func isGenerated(f *ast.File) bool {
-	for _, cg := range f.Comments {
-		for _, c := range cg.List {
-			if strings.HasPrefix(c.Text, "// Code generated ") && strings.HasSuffix(c.Text, " DO NOT EDIT.") {
-				return true
-			}
-		}
-	}
-	return false
-}
+// isGenerated follows the Go convention (ast.IsGenerated): the "Code generated ... DO NOT EDIT."
+// marker must come before the package clause. A marker anywhere else does not exempt a file.
+func isGenerated(f *ast.File) bool { return ast.IsGenerated(f) }
 
 // CheckDir type-checks the package in dir (non-test, non-generated files) and returns its findings,
 // sorted by position.
@@ -95,8 +91,31 @@ func CheckDir(dir string) ([]Finding, error) {
 	return CheckFiles(fset, files, info), nil
 }
 
+// isFloat reports a floating-point type, including a type parameter whose type set contains one
+// (T ~float64: gc instantiates such code with float arithmetic and fuses it like any other).
 func isFloat(t types.Type) bool {
 	if t == nil {
+		return false
+	}
+	if tp, ok := t.(*types.TypeParam); ok {
+		iface, ok := tp.Constraint().Underlying().(*types.Interface)
+		if !ok {
+			return false
+		}
+		for i := 0; i < iface.NumEmbeddeds(); i++ {
+			switch e := iface.EmbeddedType(i).(type) {
+			case *types.Union:
+				for j := 0; j < e.Len(); j++ {
+					if isFloat(e.Term(j).Type()) {
+						return true
+					}
+				}
+			default:
+				if isFloat(e) {
+					return true
+				}
+			}
+		}
 		return false
 	}
 	b, ok := t.Underlying().(*types.Basic)
@@ -135,8 +154,12 @@ func CheckFiles(fset *token.FileSet, files []*ast.File, info *types.Info) []Find
 			if !ok || len(call.Args) != 1 {
 				return true
 			}
+			// A conversion to a type parameter is not accepted as a rounding point: whether gc
+			// rounds there depends on how it instantiates the code, so it is flagged like a bare *.
 			if tv, ok := info.Types[call.Fun]; ok && tv.IsType() && isFloat(tv.Type) {
-				converted[unparen(call.Args[0])] = true
+				if _, generic := tv.Type.(*types.TypeParam); !generic {
+					converted[unparen(call.Args[0])] = true
+				}
 			}
 			return true
 		})

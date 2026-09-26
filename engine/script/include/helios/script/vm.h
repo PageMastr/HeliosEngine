@@ -68,10 +68,10 @@ struct VmConfig {
     const DilatableClock* clock = nullptr;
     /// Seed of the deterministic stream behind math.random.
     u64 randomSeed = 0x48454c494f53ull;
-    /// Opt-in native code generation for client and editor VMs (off by default). create() refuses it
-    /// on HostProfile::Cell, which cells and world-script hosts run (02 §7.4). Native code counts the
-    /// same fuel as the interpreter (vendored codegen-fornloop-fuel patch). Ignored when
-    /// luau_codegen_supported() is false.
+    /// Opt-in native code generation for client and editor VMs (off by default); native code counts
+    /// the same fuel as the interpreter (vendored codegen-fornloop-fuel patch). On client and editor
+    /// VMs it is ignored when luau_codegen_supported() is false. On HostProfile::Cell, which cells and
+    /// world-script hosts run, create() refuses it on every target (02 §7.4).
     bool enableNativeCodegen = false;
     CompileOptions compileOptions;
     /// Shared per content version; a private cache is created when null.

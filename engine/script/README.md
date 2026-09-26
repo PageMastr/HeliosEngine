@@ -175,12 +175,13 @@ builtin list); `BytecodeCache` (thread-safe, shareable between VMs of one conten
 bytecode by the XXH3-128 of the source plus the options fingerprint. Native codegen is opt-in on
 clients and editors: `VmConfig::enableNativeCodegen` (off by default), gated by
 `luau_codegen_supported()`, then per module with `ModuleOptions::native`. **Cells and world-script
-hosts (`HostProfile::Cell`) refuse it**: `create()` fails with `InvalidArgument` (02 §7.4). Native code
-counts the same fuel as the interpreter, because the vendored `codegen-fornloop-fuel` patch emits the
-numeric-`for` interrupt in `FORNLOOP` as the interpreter does (stock Luau 0.739 put it at the top of the
-loop body, so a loop left by `break` or `return` cost one extra fuel). That patch is the precondition
-for native code on cells, not the permission: 02 §8.1 schedules "codegen opt-in on cells" for P3, behind
-04 §10.2's interpreter-versus-native run over the script corpus.
+hosts (`HostProfile::Cell`) refuse it**: `create()` fails with `InvalidArgument` on every target (02 §7.4).
+Native code counts the same fuel as the interpreter and a kill stops it at the same program point,
+because the vendored `codegen-fornloop-fuel` patch emits the numeric-`for` interrupt in `FORNLOOP` as the
+interpreter does (stock Luau 0.739 put it at the top of the loop body, one body earlier, so a loop left by
+`break` or `return` cost one extra fuel). That patch is the precondition for native code on cells, not
+the permission: lifting the refusal is 02 §8.1's P3 "codegen opt-in on cells" item, behind 04 §10.2's
+interpreter-versus-native run over the script corpus.
 
 ### Vendored Luau patches
 
@@ -189,7 +190,7 @@ for native code on cells, not the permission: 02 §8.1 schedules "codegen opt-in
 
 | Patch | Effect here | Tests |
 |---|---|---|
-| `0001-codegen-fornloop-fuel` | Native code reaches the interpreter's safepoints, so fuel is identical in both (RT-13) | `determinism: numeric for loops left early count the same fuel in native code` (stock 0.739: +80 fuel), `luau patches: codegen-fornloop-fuel …` |
+| `0001-codegen-fornloop-fuel` | Native code reaches the interpreter's safepoints at the same program points, so fuel and kill positions are identical in both (RT-13) | `determinism: numeric for loops left early count the same fuel in native code` (stock 0.739: +80 fuel), `luau patches: codegen-fornloop-fuel …` (safepoint counts; a kill at every safepoint k stops both modes at one point) |
 | `0002-fuel-counter` | The inline counter above: the host runs only at decision points | `luau patches: fuel-counter …` (one decrement per safepoint in the VM, pattern matcher and native code), `fuel: the inline counter counts exactly what per-safepoint counting did`, `fuel: the host runs only at decision points`, `perf: fuel metering overhead and ns per fuel` (≤ 10 %) |
 
 Both are inputs of `sim_abi.script` (04 §6.7) with the planned `det-math` patch; `sim_abi` is computed by
@@ -215,7 +216,7 @@ WP-3.1, from the patch list in `third_party/MANIFEST.md`. They are rebased on ev
 
 ## Tests
 
-`script_tests` (doctest, `tests/*.cpp`, 85 cases): sandbox escapes; kills at `fuelKill` inside a
+`script_tests` (doctest, `tests/*.cpp`, 94 cases): sandbox escapes; kills at `fuelKill` inside a
 metamethod, a `table.sort` comparator and C++→Luau callbacks (RAII/lock release, VM usable
 afterwards); sticky kills through `pcall`/`xpcall`/coroutines/bindings; instrumented yields;
 `task.checkpoint`; lane bound; binding and builtin charges; wall budgets and backstop; the
@@ -223,8 +224,12 @@ three-kills rule; scheduler ordering; zone-time `wait` under dilation; async cal
 10k tasks in 16 MB; `StaleHandle` across a `wait` and slot recycling; `WorldPos` precision at
 10¹³ m; heap and module caps; hot reload; stack traces; determinism (golden fuel count, fuel
 independent of GC pacing, interpreter vs native fuel, including loops left early); `.d.luau` parse + API
-coverage; the vendored Luau patches at the API level; the inline counter (exact fuel, host calls only at
-decision points); the refused cell codegen config; fuel-metering overhead (≤ 10 %, `perf:`). Review
+coverage; the vendored Luau patches at the API level (one decrement per safepoint, host calls only at
+zero, the helpers' counter reset, kill positions interpreter vs native); the inline counter's
+bookkeeping (fuel identical with and without clock reads, around GC-forced reads, cheap bindings,
+charges landing exactly on a decision point, top-level runs, sticky re-raises and saturated charges,
+and the golden count under the production cell budgets); the refused cell codegen config;
+fuel-metering overhead (≤ 10 %, `perf:`). Review
 regressions: synchronous async completion, callbacks from async bindings cannot yield, charges of
 every input-proportional builtin, prompt wall kills on allocation-heavy loops, module categories of
 `task.spawn` children and resumed coroutines, `require` of a disabled module, bounded `print` and
@@ -238,12 +243,17 @@ ninja -C build/script helios_script script_tests && ./build/script/bin/script_te
 
 ## Known limitations (Phase 0)
 
-* **Metering cost.** On the perf workload (dev container, GCC 13 and Clang 18, RelWithDebInfo), the
-  Helios host reading the clock every 64 fuel, as on cells, runs ≈ 3–7 % slower than unmetered plain
-  Luau, and the counter alone costs ≈ 0–3 %. Calling the host at every safepoint cost ≈ 15–20 % in plain
-  Luau and ≈ 25–28 % for the host before `fuel-counter` (budget ≤ 10 %, asserted by the `perf:` case).
-  ≈ 11 ns per fuel. The A64 native-code half of `fuel-counter` is compiled on every target but runs only
-  on arm64 hosts, which CI does not have.
+* **Metering cost** (perf workload, interpreter, dev container, GCC 13 and Clang 18, RelWithDebInfo;
+  budget ≤ 10 %, asserted by the `perf:` case in optimized builds). The Helios host, reading the clock
+  every 64 fuel as on cells, runs ≈ 2–7 % slower than unmetered plain Luau, where calling the host at
+  every safepoint cost ≈ 25–28 % before `fuel-counter`. In plain Luau on the patched VM, a callback
+  every 64 safepoints costs ≈ 0–3 % and one at every safepoint (counter unarmed) ≈ 12–20 %. The
+  decrement itself is free: a standalone A/B against stock 0.739 measured stock unmetered 2.82 ms,
+  stock with a callback at every safepoint 3.19 ms (≈ +13 %), the patched VM unmetered 2.76–2.79 ms and
+  with the host every 64 safepoints 2.81–2.84 ms. ≈ 11 ns per fuel. Native code is not in the perf case:
+  it calls an out-of-line helper when the counter reaches zero, so a host that never arms the counter
+  pays that call at every native safepoint (Helios always arms it). The A64 native-code half of
+  `fuel-counter` is compiled on every target but runs only on arm64 hosts, which CI does not have.
 * Weak tables are rejected at `setmetatable` time only; adding `__mode` to a metatable after it is
   attached is left to the planned `simdet` Luau analyzer rule, as is iteration over tables keyed by
   tables/userdata/functions.
@@ -262,14 +272,17 @@ ninja -C build/script helios_script script_tests && ./build/script/bin/script_te
   needs), and no DAP adapter yet (WP-1.6).
 * Wrapping `coroutine.resume` with a plain call means a debugger break inside a nested coroutine
   cannot propagate through it; the DAP adapter must re-add a continuation.
+* `wallCheck` tests the 20 ms backstop before the 5 ms client budget, so a client resume preempted for
+  more than ≈ 15 ms between two clock reads is reported as `WallBackstop` rather than `WallBudget`. That
+  makes `fuel: client profile kills at the wall-time budget …` flaky under heavy load (≈ 1 in 12 runs at
+  load 12–15). Follow-up: report `WallBudget` when both limits are past at one read.
 
 ## Plan conformance
 
 Plan-Rev: 6
 
 Written to plan revision 6: WP-0.10r added the `codegen-fornloop-fuel` and `fuel-counter` Luau patches
-and made `create()` refuse native codegen on cells and world-script hosts (02 §7.4, 04 §10.2). Reading of
-02 §7.4's "refuses codegen on those hosts until then": the patch is the precondition for lifting the
-refusal, and the lift is 02 §8.1's P3 "codegen opt-in on cells" item, so the refusal stays after the patch
-(WP-0.10r's acceptance: "a cell `VmConfig` with codegen fails `create()`"). World-script hosts run the cell
-profile; a dedicated profile, if 05 §1.23 needs one, must keep the refusal.
+and made `create()` refuse native codegen on cells and world-script hosts. 02 §7.4 and 04 §10.2, as WP-0.10r
+amended them, say the refusal stays after the patch: the patch is its precondition, and lifting it is
+02 §8.1's P3 "codegen opt-in on cells" item. World-script hosts run the cell profile; a dedicated profile,
+if 05 §1.23 needs one, must keep the refusal.

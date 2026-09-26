@@ -58,10 +58,13 @@ void rearmingInterrupt(lua_State* L, int gc) {
     if (gc < 0) *lua_fuelcounter(L) = 64;
 }
 
+// All modes run the patched VM, so every safepoint pays the counter's decrement, the baseline too
+// (a standalone A/B against stock 0.739 found the decrement costs no more than stock's null check of
+// `interrupt`; engine/script/README.md, "Metering cost").
 enum class RawMode {
     Unmetered,      ///< Counter out of reach, no interrupt: the VM's cheapest safepoint (a decrement).
     EverySafepoint, ///< Counter never armed: a minimal callback at every safepoint (WP-0.10's model).
-    Counter64,      ///< Counter re-armed to 64 by the callback: the fuel-counter model.
+    Counter64,      ///< Counter re-armed to 64 by the callback: the fuel-counter callback cadence.
 };
 
 // Plain Luau state (no Helios sandbox) running the same bytecode.
@@ -122,11 +125,12 @@ TEST_CASE("perf: fuel metering overhead and ns per fuel") {
     }
     MESSAGE("workload: ", fuel, " fuel (", g_rawSafepoints, " raw safepoints); raw ", raw / 1000,
             " us, raw+callback per safepoint ", rawEvery / 1000, " us (", overhead(rawEvery, raw) * 100.0,
-            " %), raw+counter every 64 ", rawCounter / 1000, " us (", overhead(rawCounter, raw) * 100.0,
+            " %), raw+callback every 64 ", rawCounter / 1000, " us (", overhead(rawCounter, raw) * 100.0,
             " %), Helios ", metered / 1000, " us (metering overhead ", overhead(metered, raw) * 100.0,
             " %), ns/fuel ", static_cast<double>(metered) / static_cast<double>(fuel));
-    // RT-13's <= 10 %: the counter mechanism alone, and the whole Helios host (sandbox, charging
-    // wrappers, scheduler and resume, fuel counter) against unmetered plain Luau.
+    // RT-13's <= 10 %: the callback cadence alone (host called every 64 safepoints), and the whole
+    // Helios host (sandbox, charging wrappers, scheduler and resume, fuel counter, clock reads)
+    // against unmetered plain Luau.
     CHECK(overhead(metered, raw) < 1.0); // loose guard for every build
     if constexpr (kTimingGates) {
         CHECK(overhead(rawCounter, raw) <= 0.10);

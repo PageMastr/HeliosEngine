@@ -351,6 +351,11 @@ Result<ComponentId> World::registerComponent(const ComponentDesc& desc) {
     if (hasFlag(desc.flags, ComponentFlags::DontInherit)) ecs_add_pair(m_flecs, ent, EcsOnInstantiate, EcsDontInherit);
     if (hasFlag(desc.flags, ComponentFlags::DontFragment)) {
         ecs_add_id(m_flecs, ent, EcsDontFragment);
+        // Create the component record now. In flecs 4.1.6 a remove of a DontFragment id made before
+        // its record exists caches a table edge that removes nothing, so later removes from that
+        // table would silently fail (test_bulk_paths.cpp pins the upstream behaviour; K10). The
+        // record would be created by the id's first add anyway and lives as long.
+        flecs_components_ensure(m_flecs, ent);
     } else if (hasFlag(desc.flags, ComponentFlags::Sparse)) {
         ecs_add_id(m_flecs, ent, EcsSparse);
     }

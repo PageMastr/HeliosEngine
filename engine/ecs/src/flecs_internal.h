@@ -11,8 +11,11 @@
 #include "helios/ecs/types.h"
 
 // flecs 4.1.6 internals that flecs.h does not declare (defined in flecs.c, extern linkage). Keep
-// this list short: a flecs update must re-check each signature (a mismatch fails to link or the
-// DontFragment tests in test_bulk_paths.cpp).
+// this list short. A renamed or removed function fails to link, but a changed signature links
+// silently, so a flecs update must re-check each declaration: the static_assert makes it.
+static_assert(FLECS_VERSION_MAJOR == 4 && FLECS_VERSION_MINOR == 1 && FLECS_VERSION_PATCH == 6,
+              "flecs changed: re-check the internals declared in flecs_internal.h (and the DontFragment "
+              "record workaround in World::registerComponent), then update this version");
 extern "C" {
 /// Whether `entity` has a value in the sparse storage of `cr` (a Sparse or DontFragment component,
 /// not a wildcard): ecs_owns_id() for such components without its table-cache lookup.

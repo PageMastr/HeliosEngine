@@ -548,13 +548,13 @@ TEST_CASE("ecs bulk paths: a run of destroy commands matches one destroy at a ti
 
 TEST_CASE("ecs bulk paths: Sparse and DontFragment ownership comes from the sparse set") {
     // Every Add/Remove is logged exactly when ownership changes, as ecs_owns_id() reports it, for
-    // DontFragment and Sparse components. (Not DontFragment tags: in flecs 4.1.6 a first
-    // ecs_remove_id() of such a tag from an entity that lacks it caches a remove edge without the
-    // tag, and later removes from that table do nothing; SPIKES.md §5.)
+    // DontFragment components, DontFragment tags and Sparse components. The steps start with removes
+    // of ids the entity lacks, the case of the flecs 4.1.6 divergence pinned below.
     World w;
     registerCommon(w);
     const ComponentId status = w.registerComponent<Status>(ComponentFlags::DontFragment);
     const ComponentId mark = w.registerComponent<Mark>(ComponentFlags::Sparse);
+    const ComponentId flag = *w.registerComponent({.name = "test.DfFlag", .flags = ComponentFlags::DontFragment});
     const Entity e = w.spawn();
     const Entity other = w.spawn();
     w.set(other, Status{9}); // another entity owns the component too
@@ -563,15 +563,17 @@ TEST_CASE("ecs bulk paths: Sparse and DontFragment ownership comes from the spar
         CommandKind kind;
         ComponentId id;
     };
-    for (const ComponentId cid : {status, mark}) {
+    for (const ComponentId cid : {flag, status, mark}) {
         CAPTURE(cid);
-        const std::vector<Step> steps = {{CommandKind::Set, cid},    {CommandKind::Set, cid},
-                                         {CommandKind::Remove, cid}, {CommandKind::Remove, cid},
-                                         {CommandKind::Add, cid},    {CommandKind::Add, cid},
-                                         {CommandKind::Set, cid},    {CommandKind::Remove, cid}};
+        const std::vector<Step> steps = {{CommandKind::Remove, cid}, {CommandKind::Set, cid},
+                                         {CommandKind::Set, cid},    {CommandKind::Remove, cid},
+                                         {CommandKind::Remove, cid}, {CommandKind::Add, cid},
+                                         {CommandKind::Add, cid},    {CommandKind::Set, cid},
+                                         {CommandKind::Remove, cid}};
         for (usize si = 0; si < steps.size(); ++si) {
             const Step& step = steps[si];
             CAPTURE(si);
+            if (step.kind == CommandKind::Set && cid == flag) continue; // tags take Add
             const bool ownedBefore = ecs_owns_id(fw, e.id, cid);
             CommandBuffer cb(&w);
             const u32 v = 5;
@@ -592,7 +594,7 @@ TEST_CASE("ecs bulk paths: Sparse and DontFragment ownership comes from the spar
                 CHECK(ev.handle == w.netHandle(e));
                 CHECK(ev.arg == cid);
             }
-            if (ownedAfter && step.kind == CommandKind::Set) {
+            if (cid != flag && ownedAfter && step.kind == CommandKind::Set) {
                 CHECK(*static_cast<const u32*>(w.getRaw(e, cid)) == 5);
             }
         }
@@ -634,4 +636,98 @@ TEST_CASE("ecs bulk paths: the registry releases handles as the checked path doe
     CHECK_FALSE(reg.find(hc).isValid());
     CHECK(reg.resolve(hc) == EntityId());
     CHECK(reg.handles().liveCount() == 2); // hb and ha2
+}
+
+namespace {
+struct RvStatus { // DontFragment, value
+    u32 flags = 0;
+};
+struct RvMark { // Sparse, value
+    u32 value = 0;
+};
+struct RvFlag {}; // DontFragment tag
+
+// A remove of a DontFragment or Sparse id from entities of one table, the id's first use in the
+// world being a remove from another entity of that table. Returns whether `b` still owns the id
+// after its remove (true = the remove did nothing). `ensureRecord` creates the component record
+// first, as World::registerComponent does.
+bool rawRemoveAfterEarlyRemove(ecs_entity_t trait, bool valued, bool ensureRecord) {
+    ecs_world_t* fw = ecs_init();
+    ecs_entity_t id = ecs_new(fw);
+    if (valued) {
+        ecs_component_desc_t cd = {};
+        cd.entity = id;
+        cd.type.size = 4;
+        cd.type.alignment = 4;
+        ecs_component_init(fw, &cd);
+    }
+    ecs_add_id(fw, id, trait);
+    if (ensureRecord) flecs_components_ensure(fw, id);
+    const ecs_entity_t other = ecs_new(fw); // a, b share a table that is not the root table
+    const ecs_entity_t a = ecs_new_w_id(fw, other), b = ecs_new_w_id(fw, other);
+    ecs_remove_id(fw, a, id); // the id's first use: a remove
+    const u32 v = 7;
+    if (valued) {
+        ecs_set_id(fw, b, id, 4, &v);
+    } else {
+        ecs_add_id(fw, b, id);
+    }
+    ecs_remove_id(fw, b, id);
+    const bool stillOwned = ecs_owns_id(fw, b, id);
+    ecs_fini(fw);
+    return stillOwned;
+}
+} // namespace
+
+TEST_CASE("ecs bulk paths: known flecs 4.1.6 divergence: a DontFragment remove before the id's first add") {
+    // Upstream behaviour, pinned so that a flecs update that fixes it shows up here (then the
+    // component-record workaround in World::registerComponent can go; K10). The first remove of a
+    // DontFragment id, made before the id has a component record, caches a remove edge that does
+    // not remove it; later removes from entities of that table do nothing. It hits DontFragment
+    // components with values and DontFragment tags alike. Creating the record first avoids it.
+    CHECK(rawRemoveAfterEarlyRemove(EcsDontFragment, true, false));  // divergence
+    CHECK(rawRemoveAfterEarlyRemove(EcsDontFragment, false, false)); // divergence
+    CHECK_FALSE(rawRemoveAfterEarlyRemove(EcsDontFragment, true, true));
+    CHECK_FALSE(rawRemoveAfterEarlyRemove(EcsDontFragment, false, true));
+    CHECK_FALSE(rawRemoveAfterEarlyRemove(EcsSparse, true, false));
+    CHECK_FALSE(rawRemoveAfterEarlyRemove(EcsSparse, true, true));
+}
+
+TEST_CASE("ecs bulk paths: the World removes DontFragment and Sparse ids whose first use was a remove") {
+    // World::registerComponent creates the component record of such components, so the flecs
+    // divergence above does not reach the World: every remove removes, and the log says so.
+    World w;
+    registerCommon(w);
+    const ComponentId status = w.registerComponent<RvStatus>(ComponentFlags::DontFragment);
+    const ComponentId mark = w.registerComponent<RvMark>(ComponentFlags::Sparse);
+    const ComponentId flag = *w.registerComponent({.name = "test.RvFlag", .flags = ComponentFlags::DontFragment});
+    ecs_world_t* fw = w.flecsWorld();
+    for (const ComponentId cid : {status, mark, flag}) {
+        CAPTURE(cid);
+        const Entity a = w.spawn(), b = w.spawn(), c = w.spawn();
+        w.set(a, Counter{1});
+        w.set(b, Counter{2});
+        w.set(c, Counter{3});
+        w.removeId(a, cid); // the id's first use: a remove
+        const u32 v = 7;
+        for (const Entity e : {b, c}) {
+            if (cid == flag) {
+                w.addId(e, cid);
+            } else {
+                w.setRaw(e, cid, &v, 4);
+            }
+        }
+        w.clearStructuralLog();
+        w.removeId(b, cid);
+        CHECK(w.structuralLog().size() == 1);
+        CHECK_FALSE(w.hasId(b, cid));
+        CHECK_FALSE(ecs_owns_id(fw, b.id, cid));
+        CHECK(ecs_owns_id(fw, c.id, cid));
+        CommandBuffer cb(&w); // the command-buffer path too
+        cb.removeId(c, cid);
+        w.clearStructuralLog();
+        w.apply(cb);
+        CHECK(w.structuralLog().size() == 1);
+        CHECK_FALSE(ecs_owns_id(fw, c.id, cid));
+    }
 }

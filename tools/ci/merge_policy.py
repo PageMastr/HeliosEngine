@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -18,6 +19,10 @@ REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
 class PolicyError(Exception):
     """A push cannot be verified or violates the branch-class merge policy."""
+
+
+class VerificationError(PolicyError):
+    """External data was unavailable; investigate before treating this as a violation."""
 
 
 @dataclass(frozen=True)
@@ -78,16 +83,19 @@ def pr_commits(data: list[dict], checkout: Path) -> list[Commit]:
             commits.append(Commit(raw["tree"]["sha"], author["name"], author["email"],
                                   trailers(raw["message"], checkout)))
         except (KeyError, TypeError) as error:
-            raise PolicyError("GitHub returned incomplete PR commit metadata") from error
+            raise VerificationError("GitHub returned incomplete PR commit metadata") from error
     if not commits:
         raise PolicyError("merged PR has no commits")
     return commits
 
 
-def check_policy(branch: str, expected: list[Commit], landed: list[Commit]) -> None:
+def check_policy(branch: str, expected: list[Commit], landed: list[Commit],
+                 *, collab: bool | None = None) -> None:
     if not expected or not landed:
         raise PolicyError("cannot compare empty PR or landed commit history")
-    if branch.startswith("collab/"):
+    if collab is None:
+        collab = branch.startswith("collab/")
+    if collab:
         if len(landed) != len(expected):
             raise PolicyError(
                 f"collab/* PR has {len(expected)} commits but {len(landed)} landed; "
@@ -108,7 +116,10 @@ def check_policy(branch: str, expected: list[Commit], landed: list[Commit]) -> N
                 f"WP-class PR landed as {len(landed)} commits; squash it to exactly one commit"
             )
         if landed[0].tree != expected[-1].tree:
-            raise PolicyError("WP-class squash tree differs from the reviewed PR head tree")
+            raise PolicyError(
+                "WP-class squash tree differs from the reviewed PR head tree; "
+                "update the branch on main and re-merge after integration verification"
+            )
 
 
 def api_get(path: str, token: str) -> object:
@@ -118,23 +129,45 @@ def api_get(path: str, token: str) -> object:
         headers={
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {token}",
-            # The newer API version currently returns null merge_commit_sha for merged PRs.
+            # REST 2026-03-10 omits merge_commit_sha, which this audit needs.
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.load(response)
-    except (urllib.error.URLError, ValueError) as error:
-        raise PolicyError(f"GitHub API request failed for {path}: {error}") from error
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as error:
+            if error.code in (429, 500, 502, 503, 504) and attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            raise VerificationError(f"GitHub API {path}: HTTP {error.code}") from error
+        except urllib.error.URLError as error:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            raise VerificationError(f"GitHub API {path}: {error}") from error
+        except ValueError as error:
+            raise VerificationError(f"GitHub API {path}: {error}") from error
+    raise VerificationError(f"GitHub API {path} failed after retries")
 
 
 def merged_pr(repository: str, after: str, token: str) -> dict:
-    associated = api_get(f"repos/{repository}/commits/{after}/pulls?per_page=100", token)
-    if not isinstance(associated, list):
-        raise PolicyError("GitHub did not return a PR list for the landed commit")
-    matches = [pr for pr in associated if isinstance(pr, dict)
-               and pr.get("merged_at") and pr.get("merge_commit_sha") == after]
+    for attempt in range(3):
+        associated = api_get(f"repos/{repository}/commits/{after}/pulls?per_page=100", token)
+        if not isinstance(associated, list):
+            raise VerificationError("GitHub did not return a PR list for the landed commit")
+        matches = [pr for pr in associated if isinstance(pr, dict)
+                   and pr.get("merged_at") and pr.get("merge_commit_sha") == after]
+        if matches or attempt == 2:
+            break
+        # Commit-to-PR association can lag the push that triggered this job.
+        time.sleep(2 ** attempt)
+    if not matches:
+        raise VerificationError(
+            f"expected one merged PR associated with {after}, found 0 after retries; "
+            "investigate a direct push or GitHub association lag"
+        )
     if len(matches) != 1:
         raise PolicyError(
             f"expected one merged PR associated with {after}, found {len(matches)}; "
@@ -157,12 +190,12 @@ def all_pr_commits(repository: str, number: int, expected_count: int, token: str
     for page in range(1, 4):
         data = api_get(f"repos/{repository}/pulls/{number}/commits?per_page=100&page={page}", token)
         if not isinstance(data, list):
-            raise PolicyError(f"GitHub did not return commits for PR #{number}")
+            raise VerificationError(f"GitHub did not return commits for PR #{number}")
         found.extend(data)
         if len(data) < 100:
             break
     if len(found) != expected_count:
-        raise PolicyError(
+        raise VerificationError(
             f"PR #{number} reports {expected_count} commits, but the API returned {len(found)}"
         )
     return found
@@ -181,14 +214,27 @@ def audit(event: dict, repository: str, checkout: Path, token: str) -> str:
     landed = landed_commits(before, after, checkout)
     pr = merged_pr(repository, after, token)
     number = pr["number"]
-    branch = pr.get("head", {}).get("ref", "")
+    head = pr.get("head")
+    if not isinstance(head, dict):
+        raise PolicyError(f"PR #{number} has no head branch")
+    branch = head.get("ref", "")
     if not branch:
         raise PolicyError(f"PR #{number} has no head branch")
+    head_sha = head.get("sha", "")
+    if not isinstance(head_sha, str) or not SHA.fullmatch(head_sha):
+        raise PolicyError(f"PR #{number} has an invalid head SHA")
+    head_repository = head.get("repo")
+    head_repository_name = (head_repository.get("full_name")
+                            if isinstance(head_repository, dict) else None)
     expected_count = pr.get("commits")
     if not isinstance(expected_count, int) or expected_count < 1:
         raise PolicyError(f"PR #{number} has an invalid commit count")
-    expected = pr_commits(all_pr_commits(repository, number, expected_count, token), checkout)
-    check_policy(branch, expected, landed)
+    raw_commits = all_pr_commits(repository, number, expected_count, token)
+    if not isinstance(raw_commits[-1], dict) or raw_commits[-1].get("sha") != head_sha:
+        raise PolicyError(f"PR #{number} commit list does not end at its reviewed head SHA")
+    expected = pr_commits(raw_commits, checkout)
+    collab = branch.startswith("collab/") and head_repository_name == repository
+    check_policy(branch, expected, landed, collab=collab)
     return f"PR #{number} ({branch}): {len(landed)} landed commit(s) obey merge policy"
 
 
@@ -201,6 +247,9 @@ def main() -> int:
     try:
         event = json.loads(args.event.read_text(encoding="utf-8"))
         print(audit(event, args.repository, args.checkout, os.environ.get("GITHUB_TOKEN", "")))
+    except VerificationError as error:
+        print(f"merge-policy: could not verify: {error}", file=sys.stderr)
+        return 1
     except (OSError, ValueError, PolicyError) as error:
         print(f"merge-policy: {error}", file=sys.stderr)
         return 1

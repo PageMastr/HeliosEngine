@@ -10,26 +10,11 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  # Never cancel verification of main; superseded PR pushes may cancel their older run.
+  # Keep an active main matrix running; pending runs may be superseded. The
+  # per-push merge-policy audit has its own workflow so it cannot be displaced.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  merge-policy:
-    name: Post-merge policy
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - name: Verify landed PR history
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: python3 tools/ci/merge_policy.py --event "$GITHUB_EVENT_PATH" --checkout .
-
   # Primary Windows toolchain: VS 2026 / MSVC 14.5x on windows-latest.
   windows-msvc:
     name: Windows (MSVC, primary)

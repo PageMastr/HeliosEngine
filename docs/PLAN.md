@@ -1031,9 +1031,9 @@ built in CI. `cmake -P tools/status/check_status.cmake` checks that 09 §8.1 nam
   - Linux: GCC and Clang (GPU tests on lavapipe), headless, and the MinGW cross-build;
   - the Go backend on Windows and Linux, plus its integration suite (embedded PostgreSQL, non-root).
 
-  The nightly adds ASan and the MSBuild builds for VS 2026 and VS 2022. Still missing: SARIF, the libFuzzer
-  nightly, the scorecard and nightly perf (WP-0.3), the merge queue with its merge-policy check, and the
-  modular MSVC job (after WP-0.6c).
+  The nightly adds ASan and the MSBuild builds for VS 2026 and VS 2022. SARIF and the independent post-merge
+  `merge-policy` check are present. Still missing: the libFuzzer nightly, the scorecard and nightly perf
+  (WP-0.3), the merge queue and `main` ruleset, and the modular MSVC job (after WP-0.6c).
 
 **Windows (primary).** Install **Visual Studio 2026** (recommended) or **Visual Studio 2022 17.14 or later**,
 with "Desktop development with C++" and "C++ CMake tools"

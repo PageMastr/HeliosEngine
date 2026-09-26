@@ -3,8 +3,10 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -381,5 +383,172 @@ func TestResetForgetsEverything(t *testing.T) {
 	}
 	if _, err := f.reg.Register(ctx, cell("cell-b")); rpc.CodeOf(err) != rpc.CodeUnavailable {
 		t.Fatalf("register on a standby registry: %v", err)
+	}
+}
+
+func TestRegistrationRecordsFailureDomainAndServerBuild(t *testing.T) {
+	f := newReg(t)
+	ctx := context.Background()
+	info := cell("cell-a")
+	info.FD = FailureDomain{AZ: "eu1-a", Rack: "r12", Host: "sim-07"}
+	info.ServerBuild = 4711
+	a, err := f.reg.Register(ctx, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := cell("cell-b")
+	legacy.Host = "old-style-host" // processes that predate fd name only their host
+	b, _ := f.reg.Register(ctx, legacy)
+	ps := f.reg.Processes()
+	if len(ps) != 2 || ps[0].ID != a.ProcessID || ps[0].Info.FD != info.FD || ps[0].Info.ServerBuild != 4711 ||
+		ps[1].ID != b.ProcessID || ps[1].Info.FD != (FailureDomain{Host: "old-style-host"}) {
+		t.Fatalf("registrations: %+v", ps)
+	}
+	// Both travel in the directory listing and in process events.
+	raw, _ := json.Marshal(ps[0])
+	if !strings.Contains(string(raw), `"fd":{"az":"eu1-a","rack":"r12","host":"sim-07"}`) || !strings.Contains(string(raw), `"serverBuild":"4711"`) {
+		t.Fatalf("json: %s", raw)
+	}
+	long := strings.Repeat("x", MaxFDLabel+1)
+	for _, bad := range []func(*ProcessInfo){
+		func(p *ProcessInfo) { p.FD.AZ = long },
+		func(p *ProcessInfo) { p.FD.Rack = long },
+		func(p *ProcessInfo) { p.FD.Host = strings.Repeat("h", MaxFDHost+1) },
+		func(p *ProcessInfo) { p.ServerBuild = -1 },
+		func(p *ProcessInfo) { p.Version = strings.Repeat("v", 256) },
+		func(p *ProcessInfo) { p.Name = "cell\x00c" },
+		func(p *ProcessInfo) { p.Host, p.FD.Host = "h\x00", "h" }, // an explicit fd.host does not hide it
+		func(p *ProcessInfo) { p.FD.Host = "h\x00" },
+		func(p *ProcessInfo) { p.Address = "127.0.0.1\x00:1" },
+		func(p *ProcessInfo) { p.FD.Rack = "r\x001" },
+		func(p *ProcessInfo) { p.Version = "1.0\x00" },
+		func(p *ProcessInfo) { p.Zones = []string{strings.Repeat("z", 65)} },
+		func(p *ProcessInfo) { p.Zones = []string{""} },
+		func(p *ProcessInfo) { p.Zones = []string{"a\x00b"} },
+	} {
+		p := cell("cell-c")
+		bad(&p)
+		if _, err := f.reg.Register(ctx, p); rpc.CodeOf(err) != rpc.CodeInvalidArgument {
+			t.Errorf("%+v accepted: %v", p, err)
+		}
+	}
+}
+
+func TestHeartbeatRecordsHeldRegions(t *testing.T) {
+	f := newReg(t, Zone{ID: 1, Name: "a"}, Zone{ID: 2, Name: "b"})
+	ctx := context.Background()
+	a, _ := f.reg.Register(ctx, cell("cell-a"))
+	if p := f.reg.Processes()[0]; p.Held == nil || len(p.Held) != 0 {
+		t.Fatalf("nothing reported yet: %+v", p.Held)
+	}
+	held := []HeldRegion{{Region: 2, LeaseGen: 1}, {Region: 1, LeaseGen: 1}}
+	if _, err := f.reg.Heartbeat(ctx, a.ProcessID, a.Epoch, Load{}, held...); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.reg.Processes()[0].Held; len(got) != 2 || got[0] != held[1] || got[1] != held[0] {
+		t.Fatalf("held regions, by region: %+v", got)
+	}
+	// Each heartbeat replaces the report.
+	if _, err := f.reg.Heartbeat(ctx, a.ProcessID, a.Epoch, Load{}, HeldRegion{Region: 1, LeaseGen: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.reg.Processes()[0].Held; len(got) != 1 || got[0].Region != 1 {
+		t.Fatalf("second report: %+v", got)
+	}
+	// A bad report never blocks the renewal (PR #8 review, blocking 3): invalid, duplicate and
+	// over-cap entries are dropped and counted, the rest is recorded, and the lease renews.
+	big := []HeldRegion{{Region: 0, LeaseGen: 1}, {Region: 5, LeaseGen: -1}, {Region: 1, LeaseGen: 1}, {Region: 1, LeaseGen: 2}}
+	for i := 0; i < MaxHeldRegions+10; i++ {
+		big = append(big, HeldRegion{Region: int64(1000 + i), LeaseGen: 1})
+	}
+	f.clk.Advance(2 * time.Second)
+	if _, err := f.reg.Heartbeat(ctx, a.ProcessID, a.Epoch, Load{}, big...); err != nil {
+		t.Fatalf("oversized held list must still renew: %v", err)
+	}
+	got := f.reg.Processes()[0].Held
+	if len(got) != MaxHeldRegions || got[0] != (HeldRegion{Region: 1, LeaseGen: 2}) { // a duplicate keeps its highest generation
+		t.Fatalf("recorded %d entries, first %+v", len(got), got[0])
+	}
+	if d := testutil.ToFloat64(f.reg.m.heldDropped); d != float64(len(big)-MaxHeldRegions) {
+		t.Fatalf("dropped counter %v", d)
+	}
+	f.clk.Advance(1500 * time.Millisecond)
+	if n := f.reg.Sweep(ctx); n != 0 {
+		t.Fatal("the renewal with an oversized report did not renew the lease")
+	}
+	// A stale registration is told lease_lost whatever it reports, so it never lingers.
+	if _, err := f.reg.Heartbeat(ctx, a.ProcessID, a.Epoch+1, Load{}, big...); err != ErrLeaseLost {
+		t.Fatalf("stale epoch with an oversized report: %v", err)
+	}
+	f.clk.Advance(4 * time.Second)
+	if _, err := f.reg.Heartbeat(ctx, a.ProcessID, a.Epoch, Load{}, big...); err != ErrLeaseLost {
+		t.Fatalf("lapsed lease with an oversized report: %v", err)
+	}
+}
+
+func TestPlacementCapsRegionsPerCell(t *testing.T) {
+	zones := make([]Zone, MaxHeldRegions+5)
+	for i := range zones {
+		zones[i] = Zone{ID: int64(1 + i), Name: fmt.Sprintf("z%d", i)}
+	}
+	f := newReg(t, zones...)
+	ctx := context.Background()
+	a, _ := f.reg.Register(ctx, cell("cell-a"))
+	if len(a.Assignments) != MaxHeldRegions {
+		t.Fatalf("a cell got %d regions, cap %d", len(a.Assignments), MaxHeldRegions)
+	}
+	if n := testutil.ToFloat64(f.reg.m.zonesUnplaced); n != 5 {
+		t.Fatalf("zones left unplaced by the cap: gauge %v, want 5", n)
+	}
+	b, _ := f.reg.Register(ctx, cell("cell-b"))
+	if len(b.Assignments) != 5 {
+		t.Fatalf("the rest goes to the next cell: %d", len(b.Assignments))
+	}
+	if n := testutil.ToFloat64(f.reg.m.zonesUnplaced); n != 0 {
+		t.Fatalf("unplaced gauge %v after the second cell", n)
+	}
+}
+
+func TestPlacementWritesRegionLeases(t *testing.T) {
+	f := newReg(t)
+	ctx := context.Background()
+	rs, _ := f.store.ListRegions(ctx)
+	if len(rs) != 1 || rs[0] != (Region{ID: WholeRegion(1001), InstanceID: 1001}) {
+		t.Fatalf("a v0 zone has exactly one region_lease row: %+v", rs)
+	}
+	a, _ := f.reg.Register(ctx, cell("cell-a"))
+	rs, _ = f.store.ListRegions(ctx)
+	if rs[0].Holder != a.ProcessID || rs[0].LeaseGen != 1 || a.Assignments[0].LeaseGen != rs[0].LeaseGen {
+		t.Fatalf("assignment: %+v %+v", rs, a.Assignments)
+	}
+	_ = f.reg.Deregister(ctx, a.ProcessID, a.Epoch)
+	rs, _ = f.store.ListRegions(ctx)
+	if rs[0].Holder != 0 || rs[0].LeaseGen != 1 {
+		t.Fatalf("release keeps the generation: %+v", rs)
+	}
+	b, _ := f.reg.Register(ctx, cell("cell-b"))
+	rs, _ = f.store.ListRegions(ctx)
+	if rs[0].Holder != b.ProcessID || rs[0].LeaseGen != 2 || b.Assignments[0].LeaseGen != 2 {
+		t.Fatalf("reassignment bumps region_lease.lease_gen: %+v", rs)
+	}
+}
+
+func TestSanitizeHeldDropsInvalidAndDuplicateEntries(t *testing.T) {
+	got, dropped := sanitizeHeld([]HeldRegion{{Region: 7, LeaseGen: 2}, {Region: 0, LeaseGen: 1},
+		{Region: 5, LeaseGen: -1}, {Region: 3, LeaseGen: 0}, {Region: 7, LeaseGen: 9}})
+	if want := []HeldRegion{{Region: 3, LeaseGen: 0}, {Region: 7, LeaseGen: 9}}; !slices.Equal(got, want) || dropped != 3 {
+		t.Fatalf("got %v, dropped %d", got, dropped)
+	}
+	// Over the cap, the lowest regions stay, whatever the order of the report.
+	var asc, desc []HeldRegion
+	for i := int64(1); i <= MaxHeldRegions+4; i++ {
+		asc = append(asc, HeldRegion{Region: i, LeaseGen: 1})
+		desc = append([]HeldRegion{{Region: i, LeaseGen: 1}}, desc...)
+	}
+	a, da := sanitizeHeld(asc)
+	d, dd := sanitizeHeld(desc)
+	if !slices.Equal(a, d) || da != 4 || dd != 4 || a[0].Region != 1 || a[len(a)-1].Region != MaxHeldRegions {
+		t.Fatalf("order-dependent: %d..%d (%d dropped) vs %d..%d (%d dropped)", a[0].Region, a[len(a)-1].Region, da,
+			d[0].Region, d[len(d)-1].Region, dd)
 	}
 }

@@ -141,12 +141,16 @@ func (s *PGStore) CreateProcess(ctx context.Context, f Fence, p ProcessInfo, now
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('svc_orch.process:' || $1, 0))`, p.Name); err != nil {
 			return err
 		}
+		host := p.FD.Host
+		if host == "" {
+			host = p.Host
+		}
 		return tx.QueryRow(ctx, `INSERT INTO svc_orch.process
-			(process_id, name, kind, epoch, address, host, pid, version, registered_at)
+			(process_id, name, kind, epoch, address, host, pid, version, registered_at, az, rack, server_build)
 			SELECT nextval('svc_orch.process_id_seq'), $1, $2,
-			       COALESCE((SELECT MAX(epoch) FROM svc_orch.process WHERE name = $1), 0) + 1, $3, $4, $5, $6, $7
+			       COALESCE((SELECT MAX(epoch) FROM svc_orch.process WHERE name = $1), 0) + 1, $3, $4, $5, $6, $7, $8, $9, $10
 			RETURNING process_id, epoch`,
-			p.Name, p.Kind, p.Address, p.Host, p.PID, p.Version, now).Scan(&rec.ID, &rec.Epoch)
+			p.Name, p.Kind, p.Address, host, p.PID, p.Version, now, p.FD.AZ, p.FD.Rack, p.ServerBuild).Scan(&rec.ID, &rec.Epoch)
 	})
 	return rec, err
 }

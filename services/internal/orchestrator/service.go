@@ -50,11 +50,13 @@ const (
 // Subject returns the NATS subject of an orchestrator RPC for shard.
 func Subject(shard, method string) string { return "rpc." + shard + ".orch." + method }
 
-// HeartbeatRequest renews a lease.
+// HeartbeatRequest renews a lease and reports load and the regions held with their
+// generations (05 §1.4 Heartbeat).
 type HeartbeatRequest struct {
-	ProcessID int64 `json:"processId,string"`
-	Epoch     int64 `json:"epoch,string"`
-	Load      Load  `json:"load"`
+	ProcessID int64        `json:"processId,string"`
+	Epoch     int64        `json:"epoch,string"`
+	Load      Load         `json:"load"`
+	Held      []HeldRegion `json:"held,omitempty"`
 }
 
 // DeregisterRequest ends a registration.
@@ -427,7 +429,7 @@ func (s *Service) subscribe() ([]*nats.Subscription, error) {
 			leading(s, func(ctx context.Context, req *ProcessInfo) (*RegisterResult, error) { return s.reg.Register(ctx, *req) }))),
 		add(rpc.NATSHandle(s.nc, Subject(s.shard, MethodHeartbeat), queueGroup, s.log,
 			leading(s, func(ctx context.Context, req *HeartbeatRequest) (*HeartbeatResult, error) {
-				return s.reg.Heartbeat(ctx, req.ProcessID, req.Epoch, req.Load)
+				return s.reg.Heartbeat(ctx, req.ProcessID, req.Epoch, req.Load, req.Held...)
 			}))),
 		add(rpc.NATSHandle(s.nc, Subject(s.shard, MethodDeregister), queueGroup, s.log,
 			leading(s, func(ctx context.Context, req *DeregisterRequest) (*Empty, error) {

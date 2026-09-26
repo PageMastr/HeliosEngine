@@ -384,6 +384,77 @@ func TestResetForgetsEverything(t *testing.T) {
 	}
 }
 
+func TestRegistrationRecordsFailureDomainAndServerBuild(t *testing.T) {
+	f := newReg(t)
+	ctx := context.Background()
+	info := cell("cell-a")
+	info.FD = FailureDomain{AZ: "eu1-a", Rack: "r12", Host: "sim-07"}
+	info.ServerBuild = 4711
+	a, err := f.reg.Register(ctx, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := cell("cell-b")
+	legacy.Host = "old-style-host" // processes that predate fd name only their host
+	b, _ := f.reg.Register(ctx, legacy)
+	ps := f.reg.Processes()
+	if len(ps) != 2 || ps[0].ID != a.ProcessID || ps[0].Info.FD != info.FD || ps[0].Info.ServerBuild != 4711 ||
+		ps[1].ID != b.ProcessID || ps[1].Info.FD != (FailureDomain{Host: "old-style-host"}) {
+		t.Fatalf("registrations: %+v", ps)
+	}
+	// Both travel in the directory listing and in process events.
+	raw, _ := json.Marshal(ps[0])
+	if !strings.Contains(string(raw), `"fd":{"az":"eu1-a","rack":"r12","host":"sim-07"}`) || !strings.Contains(string(raw), `"serverBuild":"4711"`) {
+		t.Fatalf("json: %s", raw)
+	}
+	long := strings.Repeat("x", MaxFDLabel+1)
+	for _, bad := range []func(*ProcessInfo){
+		func(p *ProcessInfo) { p.FD.AZ = long },
+		func(p *ProcessInfo) { p.FD.Rack = long },
+		func(p *ProcessInfo) { p.FD.Host = strings.Repeat("h", MaxFDHost+1) },
+		func(p *ProcessInfo) { p.ServerBuild = -1 },
+		func(p *ProcessInfo) { p.Version = strings.Repeat("v", 256) },
+	} {
+		p := cell("cell-c")
+		bad(&p)
+		if _, err := f.reg.Register(ctx, p); rpc.CodeOf(err) != rpc.CodeInvalidArgument {
+			t.Errorf("%+v accepted: %v", p, err)
+		}
+	}
+}
+
+func TestHeartbeatRecordsHeldRegions(t *testing.T) {
+	f := newReg(t, Zone{ID: 1, Name: "a"}, Zone{ID: 2, Name: "b"})
+	ctx := context.Background()
+	a, _ := f.reg.Register(ctx, cell("cell-a"))
+	if p := f.reg.Processes()[0]; p.Held == nil || len(p.Held) != 0 {
+		t.Fatalf("nothing reported yet: %+v", p.Held)
+	}
+	held := []HeldRegion{{Region: 2, LeaseGen: 1}, {Region: 1, LeaseGen: 1}}
+	if _, err := f.reg.Heartbeat(ctx, a.ProcessID, a.Epoch, Load{}, held...); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.reg.Processes()[0].Held; len(got) != 2 || got[0] != held[1] || got[1] != held[0] {
+		t.Fatalf("held regions, by region: %+v", got)
+	}
+	// Each heartbeat replaces the report.
+	if _, err := f.reg.Heartbeat(ctx, a.ProcessID, a.Epoch, Load{}, HeldRegion{Region: 1, LeaseGen: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.reg.Processes()[0].Held; len(got) != 1 || got[0].Region != 1 {
+		t.Fatalf("second report: %+v", got)
+	}
+	// An oversized report is refused (and renews nothing).
+	f.clk.Advance(2 * time.Second)
+	if _, err := f.reg.Heartbeat(ctx, a.ProcessID, a.Epoch, Load{}, make([]HeldRegion, MaxHeldRegions+1)...); rpc.CodeOf(err) != rpc.CodeInvalidArgument {
+		t.Fatalf("oversized held list: %v", err)
+	}
+	f.clk.Advance(1500 * time.Millisecond)
+	if n := f.reg.Sweep(ctx); n != 1 {
+		t.Fatal("a refused heartbeat must not renew the lease")
+	}
+}
+
 func TestPlacementWritesRegionLeases(t *testing.T) {
 	f := newReg(t)
 	ctx := context.Background()

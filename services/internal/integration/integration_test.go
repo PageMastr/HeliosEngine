@@ -271,8 +271,9 @@ func TestGatewayCellReconnectOverNATS(t *testing.T) {
 	gw := orchestrator.NewAgent(gwConn, shard, orchestrator.ProcessInfo{Name: "gw-1", Kind: orchestrator.KindGateway,
 		Address: "127.0.0.1:47777", KeyID: ring.Current().ID, Capacity: 128}, nil)
 	gw.Load = func() orchestrator.Load { return orchestrator.Load{FreeSlots: 120} }
+	cellFD := orchestrator.FailureDomain{AZ: "it-a", Rack: "r7", Host: "sim-it-1"}
 	cell := orchestrator.NewAgent(cellConn, shard, orchestrator.ProcessInfo{Name: "cell-a", Kind: orchestrator.KindCell,
-		Address: "127.0.0.1:47800"}, nil)
+		Address: "127.0.0.1:47800", FD: cellFD, ServerBuild: 20260926}, nil)
 	var assigned atomic.Int64
 	cell.OnAssignments = func(a []orchestrator.Assignment) {
 		if len(a) > 0 {
@@ -292,12 +293,29 @@ func TestGatewayCellReconnectOverNATS(t *testing.T) {
 	if creg == nil || len(creg.IDBlocks) != 2 || creg.IDShard != stack.Cfg.ShardIndex {
 		t.Fatalf("cell id blocks: %+v", creg)
 	}
-	// The zone's region_lease row names the cell under the generation it was told.
+	// Registration persisted its failure domain and server build (05 §1.4 API), the zone's
+	// region_lease row names the cell under the generation it was told, and its heartbeats report
+	// that region and generation.
+	var az, rack, host string
+	var build int64
+	if err := stack.PG.Pool.QueryRow(ctx, `SELECT az, rack, host, server_build FROM svc_orch.process WHERE process_id = $1`,
+		creg.ProcessID).Scan(&az, &rack, &host, &build); err != nil || (orchestrator.FailureDomain{AZ: az, Rack: rack, Host: host}) != cellFD ||
+		build != 20260926 {
+		t.Fatalf("persisted registration: %q %q %q %d %v", az, rack, host, build, err)
+	}
 	var holder, gen int64
 	if err := stack.PG.Pool.QueryRow(ctx, `SELECT holder_proc, lease_gen FROM svc_orch.region_lease WHERE region_id = $1`,
 		orchestrator.WholeRegion(1001)).Scan(&holder, &gen); err != nil || holder != creg.ProcessID || gen != creg.Assignments[0].LeaseGen {
 		t.Fatalf("region_lease: holder %d gen %d (assignment %+v) %v", holder, gen, creg.Assignments, err)
 	}
+	eventually(t, "held regions reported", func() bool {
+		for _, p := range stack.Orchestrator.Registry().Processes() {
+			if p.ID == creg.ProcessID {
+				return len(p.Held) == 1 && p.Held[0] == orchestrator.HeldRegion{Region: orchestrator.WholeRegion(1001), LeaseGen: gen}
+			}
+		}
+		return false
+	})
 	minter, err := idgen.NewMinter(creg.IDShard, cell, idgen.Options{})
 	if err != nil {
 		t.Fatal(err)

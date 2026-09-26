@@ -1,13 +1,15 @@
 // Package orchestrator is the Phase 0 orchestrator / world directory (05 §1.4, 04 §1): one
 // leader per shard, anchored in PostgreSQL with term-fenced writes (§1.4.1); processes (cells and
 // gateways) register over NATS and prove liveness with a 1 Hz heartbeat; every registration gets
-// a per-name epoch, and minting processes get time-prefixed ID blocks (§1.4.5); zones are placed on
-// cells (v0: one cell per zone, one region per zone) under region_lease generations allocated in
-// PostgreSQL before the holder is told (§1.4.2); the world directory answers "which cell owns zone
-// X"; and a local supervisor spawns and restarts configured executables.
+// a per-name epoch and records its failure domain and server build, and minting processes get
+// time-prefixed ID blocks (§1.4.5); zones are placed on cells (v0: one cell per zone, one region
+// per zone) under region_lease generations allocated in PostgreSQL before the holder is told
+// (§1.4.2), and heartbeats report the regions held; the world directory answers "which cell owns
+// zone X"; and a local supervisor spawns and restarts configured executables.
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -33,17 +35,46 @@ const (
 	KindGateway = "gateway"
 )
 
-// ProcessInfo is what a process declares when it registers.
+// ProcessInfo is what a process declares when it registers (05 §1.4 RegisterProcess).
 type ProcessInfo struct {
 	Name     string   `json:"name"`              // logical name, e.g. "cell-a", "gw-1"
 	Kind     string   `json:"kind"`              // cell | gateway
 	Address  string   `json:"address,omitempty"` // gateway: public UDP ip:port; cell: trunk address
-	Host     string   `json:"host,omitempty"`
+	Host     string   `json:"host,omitempty"`    // superseded by FD.Host, which it fills when that is empty
 	PID      int      `json:"pid,omitempty"`
 	Version  string   `json:"version,omitempty"`
 	Zones    []string `json:"zones,omitempty"`    // cell: zones it serves; empty = any
 	KeyID    uint32   `json:"keyId,omitempty"`    // gateway: shard netcode key generation it runs with
 	Capacity int      `json:"capacity,omitempty"` // gateway: session slots
+	// FD is the failure domain (05 §1.4.3): from node labels under Agones, from helios.toml [fd]
+	// under helios-agent. Phase 0 stores it; Phase 2's detection and placement use it.
+	FD FailureDomain `json:"fd,omitzero"`
+	// ServerBuild is the server build the process runs (05 §1.4.6's poison-build brake).
+	ServerBuild int64 `json:"serverBuild,string,omitempty"`
+}
+
+// FailureDomain locates a process: availability zone, rack and host (05 §1.4.3).
+type FailureDomain struct {
+	AZ   string `json:"az,omitempty"`
+	Rack string `json:"rack,omitempty"`
+	Host string `json:"host,omitempty"`
+}
+
+// Input bounds for registrations and heartbeats (hostile or broken clients must not grow the
+// registry without limit).
+const (
+	MaxFDLabel      = 64  // az, rack
+	MaxFDHost       = 255 // a DNS name
+	MaxHeldRegions  = 256 // regions one heartbeat may report (a v1 zone has up to 64)
+	maxZones        = 256 // zones one cell may declare
+	maxProcessField = 255 // address, version
+)
+
+// HeldRegion is a region a process holds and the lease generation it holds it under, as its
+// heartbeats report them (05 §1.4). v0 regions are whole zones, so Region is the zone ID.
+type HeldRegion struct {
+	Region   int64 `json:"region,string"`
+	LeaseGen int64 `json:"leaseGen,string"`
 }
 
 // Load is reported with every heartbeat.
@@ -62,6 +93,9 @@ type Process struct {
 	RegisteredAt  time.Time   `json:"registeredAt"`
 	LastHeartbeat time.Time   `json:"lastHeartbeat"`
 	LeaseExpires  time.Time   `json:"leaseExpires"`
+	// Held is what the process's last heartbeat said it holds, by region. Phase 0 records it;
+	// the degraded-mode exit (05 §1.4.4) reconciles it against region_lease from Phase 2.
+	Held []HeldRegion `json:"held"`
 }
 
 // Assignment is a zone placed on a process under its region's lease generation (v0: the zone's
@@ -248,6 +282,17 @@ func validate(info *ProcessInfo) error {
 	if info.Name == "" || len(info.Name) > 64 {
 		return rpc.Errorf(rpc.CodeInvalidArgument, "name must be 1-64 characters")
 	}
+	if info.FD.Host == "" {
+		info.FD.Host = info.Host
+	}
+	switch {
+	case len(info.FD.AZ) > MaxFDLabel || len(info.FD.Rack) > MaxFDLabel || len(info.FD.Host) > MaxFDHost || len(info.Host) > MaxFDHost:
+		return rpc.Errorf(rpc.CodeInvalidArgument, "fd: az and rack are at most %d bytes, host at most %d", MaxFDLabel, MaxFDHost)
+	case info.ServerBuild < 0:
+		return rpc.Errorf(rpc.CodeInvalidArgument, "serverBuild must not be negative")
+	case len(info.Address) > maxProcessField || len(info.Version) > maxProcessField || len(info.Zones) > maxZones:
+		return rpc.Errorf(rpc.CodeInvalidArgument, "address or version too long, or too many zones")
+	}
 	switch info.Kind {
 	case KindCell:
 	case KindGateway:
@@ -337,7 +382,7 @@ func (r *Registry) Register(ctx context.Context, info ProcessInfo) (*RegisterRes
 		return nil, r.storeErr(err)
 	}
 	p := &Process{ID: rec.ID, Epoch: rec.Epoch, Info: info, RegisteredAt: now, LastHeartbeat: now,
-		LeaseExpires: now.Add(r.cfg.LeaseTTL)}
+		LeaseExpires: now.Add(r.cfg.LeaseTTL), Held: []HeldRegion{}}
 	if info.Kind == KindGateway {
 		p.Load.FreeSlots = info.Capacity
 	}
@@ -388,9 +433,13 @@ type HeartbeatResult struct {
 	Mode         string       `json:"mode"`
 }
 
-// Heartbeat renews a lease. A heartbeat that arrives after the lease lapsed is refused: the
-// zones may already have moved, so the holder is told lease_lost and registers again.
-func (r *Registry) Heartbeat(ctx context.Context, id, epoch int64, load Load) (*HeartbeatResult, error) {
+// Heartbeat renews a lease and records the regions the process says it holds. A heartbeat that
+// arrives after the lease lapsed is refused: the zones may already have moved, so the holder is
+// told lease_lost and registers again.
+func (r *Registry) Heartbeat(ctx context.Context, id, epoch int64, load Load, held ...HeldRegion) (*HeartbeatResult, error) {
+	if len(held) > MaxHeldRegions {
+		return nil, rpc.Errorf(rpc.CodeInvalidArgument, "at most %d held regions per heartbeat", MaxHeldRegions)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.clk.Now()
@@ -407,6 +456,8 @@ func (r *Registry) Heartbeat(ctx context.Context, id, epoch int64, load Load) (*
 	p.LastHeartbeat = now
 	p.LeaseExpires = now.Add(r.cfg.LeaseTTL)
 	p.Load = load
+	p.Held = append([]HeldRegion{}, held...)
+	slices.SortFunc(p.Held, func(a, b HeldRegion) int { return cmp.Compare(a.Region, b.Region) })
 	return &HeartbeatResult{LeaseExpires: p.LeaseExpires, Assignments: r.assignmentsLocked(id), Mode: ModeNormal}, nil
 }
 

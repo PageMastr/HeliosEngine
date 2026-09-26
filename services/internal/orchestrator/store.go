@@ -81,7 +81,8 @@ type Store interface {
 	// registration (new leader: the in-memory leases are gone, so live processes must
 	// re-register).
 	ResetOwners(ctx context.Context, f Fence, now time.Time) error
-	// CreateProcess records a registration and returns its ID and per-name epoch.
+	// CreateProcess records a registration, including its failure domain and server build,
+	// and returns its ID and per-name epoch.
 	CreateProcess(ctx context.Context, f Fence, p ProcessInfo, now time.Time) (ProcessRecord, error)
 	EndProcess(ctx context.Context, f Fence, id int64, reason string, now time.Time) error
 	// AssignRegion makes processID the region's holder and returns its new lease generation

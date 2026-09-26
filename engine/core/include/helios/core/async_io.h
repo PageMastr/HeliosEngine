@@ -12,7 +12,8 @@
 // A request is complete once its result is stored and its onComplete (if any) has returned and been
 // destroyed. isReady(), counter(), wait(), take() and bytesRead() all report that one moment, so
 // whoever observes a read as ready also observes everything its callback did, and may then free what
-// the callback captured. Only onComplete's own thread sees the request ready earlier, during the call.
+// the callback captured. Only onComplete's own thread sees the request ready earlier, while the
+// callback runs and while it is destroyed (see AsyncReadOptions::onComplete for what it must not do).
 // Fire-and-forget is allowed: the caller may drop every AsyncRead at once; the request keeps its
 // own state alive until its job (and onComplete) has finished.
 // Requests not yet started can be cancelled (their result is ErrorCode::Cancelled).
@@ -58,9 +59,16 @@ struct AsyncReadOptions {
     u64 offset = 0;
     u64 size = kReadToEnd; ///< Bytes to read; a range past the end of the file is truncated.
     jobs::Priority priority = jobs::Priority::Normal;
-    /// Runs on the IO thread once the result is stored, before the request completes. During the call,
-    /// on that thread only, the request already counts as ready (isReady() is true; wait(), take() and
-    /// bytesRead() return at once). Other threads see it ready only after the callback has returned.
+    /// Runs on the IO thread once the result is stored, before the request completes. While it runs
+    /// and while it (with its captures) is destroyed, on that thread only, the request already counts
+    /// as ready: isReady() is true; wait(), take() and bytesRead() return at once. Other threads see
+    /// it ready only after that. Hence onComplete (and its captures' destructors):
+    ///   * must not wait for another thread or job that waits for, polls or take()s this request:
+    ///     that deadlocks (handing the bytes or the handle to a job is fine; waiting for it is not);
+    ///   * must not call JobSystem::wait or anything else that runs other jobs on this thread: those
+    ///     jobs would see the request ready while the callback is still on the stack;
+    ///   * must not throw: exceptions do not cross module boundaries, and one escaping the IO thread
+    ///     terminates the process.
     std::function<void(AsyncRead&)> onComplete;
 };
 
@@ -71,15 +79,15 @@ public:
 
     bool isValid() const noexcept { return m_state != nullptr; }
     /// True once the read has finished, failed or been cancelled and its onComplete has returned (for
-    /// a valid handle, exactly when counter() is done). Inside this request's onComplete it is already
-    /// true.
+    /// a valid handle, exactly when counter() is done). Inside this request's onComplete (and while it
+    /// is destroyed) it is already true.
     bool isReady() const noexcept;
     /// Reaches zero when the request (including onComplete) has finished, at the moment isReady()
     /// turns true. JobSystem::wait() on it helps with other jobs; BackgroundPool::wait() sleeps.
     const jobs::Counter& counter() const noexcept;
     /// Blocks (sleeping) until ready, i.e. until onComplete has returned too. Returns at once from
-    /// this request's onComplete. Must not be called from another task of the pool doing the read
-    /// (it could wait for itself).
+    /// this request's onComplete (and while it is destroyed). Must not be called from another task of
+    /// the pool doing the read (it could wait for itself).
     void wait() const;
     /// Cancels the request if it has not started yet. Returns true if it will not run.
     bool cancel() noexcept;

@@ -106,7 +106,9 @@ positional reads on an IO `BackgroundPool` and return an `AsyncRead`: poll `isRe
 thread; `take()`/`bytesRead()` work inside it). A request completes only once its callback has returned:
 `isReady()`, the counter, `wait()`, `take()` and `bytesRead()` all report that same moment, so a thread
 that saw a read complete also sees the callback's effects and may free what the callback used (such as
-the destination memory). Queued requests can be cancelled. Fire-and-forget is
+the destination memory). The flip side: a callback must not wait for anything that waits on its own
+request, must not run other jobs (`JobSystem::wait`) and must not throw (see `async_io.h`). Queued
+requests can be cancelled. Fire-and-forget is
 safe: the request's job owns its state until the counter is released, so dropping every `AsyncRead`
 right away is fine. Phase 0 issues one blocking `pread`/`ReadFile` per
 request; the Phase 3 backends (Windows 11 IORing, Linux io_uring with fixed files and buffers, batched

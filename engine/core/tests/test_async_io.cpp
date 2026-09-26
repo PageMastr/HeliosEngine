@@ -188,6 +188,54 @@ TEST_CASE("async io: onComplete's captures are destroyed before the read becomes
     CHECK(read.take()->size() == file.bytes.size());
 }
 
+TEST_CASE("async io: a capture's destructor may wait on its own request") {
+    // The callable is destroyed on the IO thread before the counter is released, so a capture that owns
+    // a handle to its own request and waits on it while being destroyed must still see the request as
+    // ready there; otherwise the IO thread waits for itself.
+    struct Holder {
+        fs::AsyncRead read;
+        ManualResetEvent* done = nullptr;
+        std::atomic<bool>* readyThere = nullptr;
+        std::atomic<usize>* countThere = nullptr;
+        ~Holder() {
+            read.wait();
+            readyThere->store(read.isReady());
+            countThere->store(read.bytesRead().valueOr(0));
+            done->set();
+        }
+    };
+    TempFile file(4096);
+    // Leaked if the IO thread deadlocks: destroying a pool whose thread is stuck would hang the test.
+    auto* pool = new jobs::BackgroundPool(1, "IO");
+    ManualResetEvent unblock;
+    ManualResetEvent done;
+    std::atomic<bool> readyThere{false};
+    std::atomic<usize> countThere{0};
+    jobs::Counter blocker;
+    // Hold the only IO thread until the holder owns its handle and every temporary copy of the callback
+    // is gone.
+    pool->run([&] { (void)unblock.waitFor(std::chrono::seconds(20)); }, &blocker);
+    fs::AsyncRead read;
+    {
+        auto holder = std::make_shared<Holder>();
+        holder->done = &done;
+        holder->readyThere = &readyThere;
+        holder->countThere = &countThere;
+        fs::AsyncReadOptions options;
+        options.onComplete = [holder](fs::AsyncRead&) { (void)holder; };
+        holder->read = fs::readFileAsync(*pool, file.path, std::move(options));
+        read = holder->read;
+    } // the callback now owns the last reference to the holder
+    unblock.set();
+    REQUIRE(done.waitFor(std::chrono::seconds(20)));
+    CHECK(readyThere.load());
+    CHECK(countThere.load() == file.bytes.size());
+    read.wait();
+    CHECK(read.isReady());
+    pool->waitIdle();
+    delete pool;
+}
+
 TEST_CASE("async io: JobSystem::wait helps while a read completes") {
     TempFile file(64 * 1024);
     jobs::JobSystem js(jobs::JobSystemDesc{2, 1, "AsyncTest"});

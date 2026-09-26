@@ -35,8 +35,23 @@ using State = detail::AsyncReadState;
 
 // The request whose onComplete is running (or being destroyed) on this thread. Its result is already
 // stored, so here (and only here) it counts as ready before its counter is released: take()/bytesRead()
-// inside the callback must not wait for the callback itself.
+// inside the callback, or in a capture's destructor, must not wait for the callback itself. The marker
+// is per thread, not per call: jobs run on this thread meanwhile would see the request early, which is
+// why the header forbids JobSystem::wait inside onComplete.
 constinit thread_local const State* t_completing = nullptr;
+
+// Marks `st` as completing on this thread for the guard's lifetime; restores the outer marker even if
+// the callback unwinds, so the marker never outlives the state it points to.
+class CompletingScope {
+public:
+    explicit CompletingScope(const State* st) noexcept : m_outer(t_completing) { t_completing = st; }
+    ~CompletingScope() { t_completing = m_outer; }
+    CompletingScope(const CompletingScope&) = delete;
+    CompletingScope& operator=(const CompletingScope&) = delete;
+
+private:
+    const State* m_outer;
+};
 
 // True once the result may be read on this thread: the request is complete, or we are inside its
 // onComplete.
@@ -65,14 +80,14 @@ void finish(const std::shared_ptr<State>& st) {
     std::function<void(AsyncRead&)> onComplete = std::move(st->onComplete);
     st->onComplete = nullptr;
     if (onComplete) {
-        const State* const outer = t_completing;
-        t_completing = st.get();
+        const CompletingScope completing(st.get());
         {
             AsyncRead handle(st);
             onComplete(handle);
         }
-        onComplete = nullptr; // captures die before the request completes (still "inside" it)
-        t_completing = outer;
+        // Destroyed inside the scope: captures die before the request completes, and a capture's
+        // destructor that waits on its own request still sees it ready here.
+        onComplete = nullptr;
     }
     st->counter.decrement();
 }

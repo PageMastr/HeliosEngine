@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **Open.** Opened 2026-09-25, in the round-5 minor revisions. Decision so far: option A, time-boxed, re-evaluated at the Phase 1 RT-01 gate. WP-1.1a brought M1 to about 1.4× with both compilers as medians over runs on the shared dev VM (third round), against ≤ 1.6×, with 1 of 24 runs above it; M1 is not demonstrated per run until a quiet-VM series shows it (§7). It recorded M5 |
+| **Status** | **Open.** Opened 2026-09-25, in the round-5 minor revisions. Decision so far: option A, time-boxed, re-evaluated at the Phase 1 RT-01 gate. WP-1.1a brought M1 to about 1.4× with both compilers as medians over runs on the shared dev VM (third round), against ≤ 1.6×. A second quiet-VM series of that code had 1 of 24 runs above 1.6×, so M1 is not demonstrated per run (§7). It recorded M5 |
 | **Amends** | [ADR-004](../plan/00-decisions.md#adr-004-entity-model--reflection): "A custom ECS is the fallback only if the Phase 1 50k-entity zone benchmark fails". ADR-004 stands unchanged while this ADR is open |
 | **Trigger** | Risk K2 ([09 §7](../plan/09-roadmap-and-process.md#7-risk-register)) fired. Its trigger is a pre-bench above 2× the budget, and WP-0.6's acceptance opens this ADR in that case |
 | **Owner** | Runtime lead. The work is WP-1.1a ([09 §2.2](../plan/09-roadmap-and-process.md#22-phase-1--first-light)), and WP-1.1 runs the formal RT-01 gate |
@@ -213,7 +213,9 @@ it: per run, the worst of 0/1/2/4 workers and both toggle storages. The PR's ser
 binary (load 0.3–2.2). The first review's series has 31 runs per compiler (load 1.2–3.8). A third series
 ran after the review's fixes, with 15 runs per compiler (load 1.6–2.9). The quiet series ran 12 runs per
 compiler of head 0cc4347 with every other job paused. The third round's series ran 12 runs per compiler
-of its code and of head 0cc4347 (load 1.9–4.1).
+of its code and of head 0cc4347 (load 1.9–4.1). The second quiet series ran 12 runs per compiler of the
+third round's code (510c5d2), again with every other job paused (load 0.1–2.3, from the bench's own
+workers).
 
 | | Before WP-1.1a (GCC) | spawnN creates, GCC | spawnN creates, Clang | Per-command creates, GCC / Clang |
 |---|---|---|---|---|
@@ -222,7 +224,8 @@ of its code and of head 0cc4347 (load 1.9–4.1).
 | **the same, after the review's fixes** | — | 1.53× [1.42–1.80] | 1.57× [1.49–2.09] | — |
 | **the same, quiet series (head 0cc4347)** | — | 1.52× [1.47–1.70] | 1.55× [1.44–1.74] | — |
 | **the same, third round** (head 0cc4347 in the same series) | — | **1.42× [1.32–1.71]** (1.51×) | **1.41× [1.31–1.55]** (1.52×) | 2.24× / 2.68× (5 runs) |
-| **runs with M1 above 1.6×** (PR / review / after-fixes / quiet / third-round series) | all | 2 of 9 / 9 of 31 / 2 of 15 / 4 of 12 / 1 of 12 | 4 of 9 / 15 of 31 / 5 of 15 / 4 of 12 / 0 of 12 | all |
+| **the same, second quiet series (third-round code, 510c5d2)** | — | **1.40× [1.31–1.46]** | **1.415× [1.36–1.82]** | — |
+| **runs with M1 above 1.6×** (PR / review / after-fixes / quiet / third-round / second quiet series) | all | 2 of 9 / 9 of 31 / 2 of 15 / 4 of 12 / 1 of 12 / 0 of 12 | 4 of 9 / 15 of 31 / 5 of 15 / 4 of 12 / 0 of 12 / 1 of 12 | all |
 | M1 per configuration, tag / DontFragment (medians, PR series) | 3.1–3.3× / 3.6–3.8× | 1.28–1.32× / 1.40–1.47× | 1.24–1.32× / 1.38–1.49× | 1.9–2.0× / 2.1–2.2× (GCC) |
 | Callgrind beside it (tag / DontFragment toggles) | 2.52× / 2.58× | 1.24× / 1.29× (third round 1.22× / 1.26×) | 1.29× / 1.30× (third round 1.24× / 1.26×) | 1.65× / 1.69× (GCC), 2.02× / 2.03× (Clang) |
 | 9k-op burst on the VM, per configuration (budget 1.5 ms) | 2.9–3.3 ms | 1.26–1.27 ms | 0.96–0.98 ms | 1.7–1.9 ms (GCC) |
@@ -232,8 +235,9 @@ of its code and of head 0cc4347 (load 1.9–4.1).
 second round M1 failed in about a quarter of the GCC runs and nearly half of the Clang runs of three
 series, and in 4 of 12 runs of each compiler in the quiet series. After the third round it failed in 1 of
 the 24 runs of its series, at medians of about 1.4× with both compilers (an earlier, less loaded series
-of the same code: 1.36× and 1.41×). Whether it passes per run is for a repeat of the quiet series to
-show. Each run's M1 is the worst of eight noisy ratios, so it sits above the per-configuration medians
+of the same code: 1.36× and 1.41×). The second quiet series of that code failed in 1 of its 24 runs:
+Clang run 4, at 1.82× with DontFragment toggles and 1.22× with tag toggles, against 1.31–1.47× in the
+other 23. Each run's M1 is the worst of eight noisy ratios, so it sits above the per-configuration medians
 (third round: 1.31–1.32× with DontFragment toggles, 1.23–1.25× with tag toggles) and above the
 instruction ratio (1.22–1.26×). The spread is noise in time rather than memory placement: each side's
 seven bursts run back to back, the World's first, and in the configurations above 1.6× every World
@@ -248,8 +252,18 @@ entity's table row. More margin on destroys would need the identity and liveness
 the delete touches anyway: a user word in flecs' entity record (a vendored patch) or option B's own
 entity record.
 
+A fourth round (SPIKES §5.11) found no further change within this option's limits that moves the
+typical worst-configuration ratio by more than a few percent. An experiment build that drops all of the
+World's bookkeeping on the three measured paths (liveness, identity, registry, handles, ownership and
+the log; its log is wrong) measures 1.04× (GCC) and 1.10× (Clang) per configuration with DontFragment
+toggles, against 1.30–1.34× for the real World in the same runs. That bookkeeping is what the structural
+contract requires, and its remaining pieces cost 5–20 µs per 3,000 operations each. The micro-changes
+tried (prefetching the log ahead of its end, building log events in place) measured no difference
+beyond the run-to-run noise, which is ±30 µs per run on one phase.
+
 Open for the owner:
-- **The statistic.** How M1 is judged: per run, a median over N runs, or per run on an idle runner.
+- **The statistic.** How M1 is judged: per run, a median over N runs, or per run on an idle runner, or
+  with the measurement changed (for example World and raw bursts interleaved).
 - **The create form.** Which create form the Phase 1 midpoint check and M2 use. The burst's creates are
   homogeneous (one signature, one batch per frame), and item 4 names `spawnN` for such spawns. The
   raw-flecs floor has always been one bulk insert per frame table, so `spawnN` is the like-for-like

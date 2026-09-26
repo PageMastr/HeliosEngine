@@ -792,6 +792,75 @@ with Clang, against 2.33× and 2.81× in the second round's series. The state ha
 in every configuration of every run, and `ecs_tests` pins the log as before.
 
 What remains per op, Clang: about 25 ns per destroy (liveness, registry release, identity, log), 16 ns
-per DontFragment toggle and 14 ns per create. Whether M1 now passes per run is for the owner's quiet
-series to show; until then it stays "not demonstrated per run".
+per DontFragment toggle and 14 ns per create.
+
+**The second quiet series.** The coordinator paused every other job again and ran 12 alternating runs
+per compiler of 510c5d2 (fresh Release builds, `--m1-gate`; load 0.1–2.3, from the bench's own
+workers). GCC: 1.40× [1.31–1.46], none above 1.6×. Clang: 1.415× [1.36–1.82], one above: run 4, at
+1.82× with DontFragment toggles and 1.22× with tag toggles. So M1 stays "not demonstrated per run"
+(1 of 24). The failing run was a stretch of about 1.3× over the typical worst configuration, not a
+whole-window slowdown of 1.66× like the ones in the loaded series.
+
+### 5.11 Fourth round: what is left within option A
+
+After the second quiet series the owner asked for more optimization within the same limits: no flecs
+patch, no change to the measurement (burst order, number of bursts, statistic, worst of
+configurations) or to the thresholds. This round measured what is left and changed no code.
+
+**The bookkeeping floor.** An experiment build dropped all of the World's bookkeeping on the three
+measured paths: creates without EntityIds, registry, handles, NetIdentity or log; destroys as bare
+`ecs_delete` calls; DontFragment toggles as bare `ecs_set_id`/`ecs_remove_id` calls. Its log is wrong,
+so this is a bound, not a candidate. 6 interleaved runs per binary:
+
+| | real World (510c5d2), GCC / Clang | no bookkeeping, GCC / Clang |
+|---|---|---|
+| M1 per run, median | 1.38× / 1.44× | 1.16× / 1.17× |
+| per configuration, DontFragment / tag (medians) | 1.32× / 1.24×, 1.35× / 1.23× | 1.04× / 1.13×, 1.10× / 1.11× |
+| creates, over raw per 3,000 | +40 / +42 µs | ≈ 0 / ≈ 0 |
+| destroys | +91 / +79 µs | +22 / +30 µs |
+| DontFragment sets | +77 / +60 µs | +4 / +35 µs |
+| DontFragment removes | +68 / +48 µs | +10 / +21 µs |
+
+So the structural contract's bookkeeping (identity, registry and handles, liveness, ownership, the log)
+is about 0.2–0.25 of the ratio: roughly 45 µs on creates, 50 µs on destroys and 25 µs on DontFragment
+toggles per 3,000 operations with Clang. The rest, command iteration and dispatch plus the cache the
+World's other work displaces, is what a World without bookkeeping still pays.
+
+**Attribution of what is left** (Clang, experiment builds against 510c5d2 in the same series):
+
+* The structural log's appends on the three paths: about 7 µs on creates, 7 µs on destroys and 20 µs on
+  DontFragment toggles.
+* The registry release on destroys: about 17 µs, of which the NetHandle release is 8 µs and the page
+  entry 9 µs.
+* The rest of the destroy bookkeeping (liveness, identity and the log): about 30 µs, 7 of it the log.
+
+**Tried and not kept** (measured, no difference beyond the noise):
+
+* Prefetching the log a few events ahead of its end on every append: the log's new lines miss, but
+  hiding that latency changed nothing.
+* Building log events in place, with growth out of line: with Clang the out-of-line `push_back` cost a
+  store-forwarding stall per event, which this removes. Over 12 interleaved runs per compiler, the
+  per-configuration DontFragment medians were 1.325× against 1.31× (Clang) and 1.285× against
+  1.315× (GCC). Callgrind: 6 more instructions per op with Clang.
+* Writing the toggle runs' events to a separate array (an experiment: they never reach the log): the
+  DontFragment sets looked 25–28 µs cheaper in two series (6 and 12 runs), but the simulated cache
+  misses were identical and the instructions 8 fewer per op, so no mechanism could be confirmed against
+  the noise below.
+
+**The noise floor.** For one binary, the DontFragment-set overhead over raw varies between runs from 2
+to 70 µs (Clang, per-run medians over the four configurations), and the medians of 12-run series of the
+same binary vary by up to 20 µs. Changes worth under about 10 µs cannot be resolved with the series used
+here.
+
+**Why one slow burst can decide a configuration.** Each configuration's M1 uses the medians of 7 burst
+totals, 4 of them reverts and 3 applies, which cost differently. The median is then the slowest revert
+or the fastest apply, so a single slow revert burst moves it. That is a property of the measurement,
+which this round did not change. It is how a configuration reaches a DontFragment ratio of 1.82× while
+its tag ratio stays at 1.22×.
+
+**Verdict.** Within option A's limits nothing measured moves the typical worst-configuration ratio by
+more than a few percent. The bookkeeping that separates the World from the floor is required by the
+structural contract, and its remaining pieces are 5–20 µs each. More margin needs one of the options in
+ADR-004a §7 ("Open for the owner"): a statistic over runs, a changed measurement, a flecs patch that
+puts the identity in the record flecs already touches, or option B.
 

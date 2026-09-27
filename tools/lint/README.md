@@ -26,7 +26,7 @@ artifact. CTest's original pass/fail result remains the CI gate.
 | Licences | `licenses.cmake` + `license_policy.cmake` | a dependency without a top-level licence file, a licence file (nested ones too) that is copyleft/unknown (GPL family, MPL, EPL, Artistic, CC-BY-SA/NC/ND, JSON licence, …) and not one option of an explicit multi-licence choice naming a permissive licence, a dependency without its own row in `third_party/MANIFEST.md` (Name cell, its first word or the upstream repository name), a MANIFEST licence identifier outside MIT/BSD/zlib/Apache-2.0/Boost/ISC/PostgreSQL/public domain (CC0) | CLAUDE.md, 01 §5.2, ADR-012 |
 | Vendored patches | `vendor_patches.cmake` | a `third_party/<dep>/patches/` file not named `NNNN-<slug>.patch`, with no hunk, or not a row of the table under `third_party/MANIFEST.md`'s `### … (third_party/<dep>/patches/)` heading; a row there naming a missing file; a hunk whose post-image (context plus added lines) is not in the committed file, in hunk order; a truncated or malformed hunk; a patched file that is missing, or that the patch deletes but still exists. Line endings are normalized, so CRLF checkouts pass, and `\ No newline at end of file` markers are honoured (a post-image without a final newline must end the file); no git or network. It does not see an in-place edit outside every hunk: re-running `tools/vendor/fetch_third_party.sh <dep>` and diffing `third_party/` is the full proof | CLAUDE.md (vendored code), `third_party/MANIFEST.md` "Patches", K10 |
 | IP names | `ip_names.cmake` + `ip_names_policy.cmake` | a *Cinder Reach* name (Kestrel, Harrow, Tallis, …) outside `content/`, also inside identifiers and paths (`KestrelHull`, `cinder_reach`, `TALLIS_ORBIT`, `hull/kestrel`); an in-universe name from Star Wars, EVE, Destiny or Star Citizen anywhere; a franchise title inside `content/` | 01 §4.1 rule 2, §5.2 |
-| Test namespaces | `test_namespaces.cmake` | Scans the tracked files (`git ls-files`; every file when the tree is not a git checkout) under a `tests/` or `test/` directory of `engine/`, `tools/` and `apps/`. It fails on: a doctest test macro (`TEST_CASE*`, `TEST_SUITE*`, `SCENARIO*`, `SUBCASE`, `GIVEN`/`WHEN`/`THEN`/`AND_WHEN`/`AND_THEN`, or its `DOCTEST_` form) outside an unnamed namespace in any of these files, headers included; in a test source (a `.cpp`/`.cc`/`.cxx` file with a test macro), any top-level declaration or definition outside an unnamed namespace, except preprocessor lines, `using` directives and declarations, aliases, and `// helios-lint: outside-anon-namespace begin (<reason>)` … `end` waiver regions (printed on every run; test macros are never waived); anything the lexer cannot follow: unbalanced braces, an unterminated comment, literal, raw string or waiver, a line with more than 500 escapes, `*` or digit separators (the regex engine's recursion bound), no test macro at all in the repository run. Why: doctest's `DOCTEST_ANON_FUNC_<n>` names repeat across a test executable, and MSVC's `cl` names lambdas in them after the function alone and emits static member variable templates instantiated with them (`Job::kInlineOps<Fn>`) as external COMDATs, so the linker keeps one and a test runs another file's lambda (#15); a same-named file-scope helper collides the same way. `engine/core/tests/test_tu_isolation_{a,b}.cpp` probe it on the Windows jobs. **Limits:** macros are not expanded (a macro-generated test is caught only as a top-level macro call in a test source, not in a header, a waiver, or a file whose only tests are macro-generated); `#if 0` groups are skipped but other conditionals are not evaluated (both branches are lexed); headers and support sources without test macros are held to the test-macro rule only | CLAUDE.md (tests), AAA-PLT-1 |
+| Test namespaces | `test_namespaces.cmake` | a doctest test macro outside an unnamed namespace in any file under a `tests/` or `test/` directory; in a test source (a `.cpp`/`.cc`/`.cxx` file there with a test macro), any declaration or definition at namespace scope outside an unnamed namespace or a waiver region; anything its lexer cannot follow. Details, the waiver syntax and the limits are in "Test namespaces" below | CLAUDE.md (tests), AAA-PLT-1 |
 | Windows manifest | `windows_manifest.cmake` | `engine/platform/win/helios.manifest` without UTF-8 code page, PerMonitorV2, longPathAware, Windows 10/11 supportedOS or asInvoker; on Windows builds, `core_tests.exe` not embedding it | ADR-011, 02 §2.1 |
 
 Each lint has seeded-violation fixtures under `tests/` that must be rejected with a specific message
@@ -51,6 +51,67 @@ Waivers live next to the rules and carry a reason; every waiver is printed on ea
   `"tallis"`, test zones "tallis"/"harrow"; directory waivers). Their owners rename them, then the
   waivers go.
 
+## Test namespaces
+
+Why: doctest's `DOCTEST_ANON_FUNC_<n>` names repeat across a test executable. MSVC's `cl` names a
+lambda in such a function after the function alone, and emits static member variable templates
+instantiated with it (`Job::kInlineOps<Fn>`) as external COMDATs, so the linker keeps one and a test
+runs another file's lambda (#15). A same-named file-scope helper collides the same way. Names in an
+unnamed namespace carry a per-file hash. `engine/core/tests/test_tu_isolation_{a,b}.cpp` probe it on
+the Windows jobs.
+
+What it scans: the files under a `tests/` or `test/` directory of `engine/`, `tools/` and `apps/`,
+except `tools/prebuilt/` and its own fixtures. In a git checkout these are the files git tracks or
+would track (`git ls-files --cached --others --exclude-standard`), so a new test file counts before
+it is added and an ignored download does not; outside one, every file.
+
+What fails it (each finding is a `path:line`):
+
+- a doctest test macro (`TEST_CASE*`, `TEST_SUITE*`, `SCENARIO*`, `SUBCASE`,
+  `GIVEN`/`WHEN`/`THEN`/`AND_WHEN`/`AND_THEN`, or its `DOCTEST_` form) outside an unnamed
+  namespace, in any scanned file, headers included. No waiver covers a test macro;
+- in a test source, any declaration or definition at namespace scope outside an unnamed namespace,
+  including a macro call that ends one without a `;`. **The declaration rule applies only to test
+  sources:** `.cpp`/`.cc`/`.cxx` files that contain a test macro. Support sources without one (mains,
+  child processes, plugins, shared helpers) and headers are held to the test-macro rule only. This
+  narrowing was confirmed by the Director in the PR #17 review. Exempt: preprocessor lines,
+  comments, `using` directives and declarations, aliases, and waiver regions:
+  ```
+  // helios-lint: outside-anon-namespace begin (<reason>)
+  ...
+  // helios-lint: outside-anon-namespace end
+  ```
+  The reason must contain a letter or digit. Every waiver is printed on each run, and a region may
+  not nest, change brace depth, or be closed by a `}`;
+- anything the lexer cannot follow:
+  - unbalanced braces;
+  - an `#endif` without its `#if`, or an `#if` without its `#endif`;
+  - an unterminated block comment, literal, raw string or waiver region;
+  - a malformed `helios-lint` comment;
+  - a line over 500 characters with more than 500 backslashes, `*` and `'`, counted in comments too,
+    so a 600-`*` banner comment fails. This is CMake's regex recursion bound: a 1 MB stack
+    overflows at about 2,500;
+  - no test macro at all in the repository run.
+
+The lexer handles comments, string, character and raw string literals (with encoding prefixes),
+digit separators and line splices. A `#` first on its line, after blanks and comments, starts a
+preprocessing directive, and only its comments and literals are lexed. So a block comment that a
+directive opens hides the next line, as it does for the compiler. `#if 0` groups are skipped the
+same way: comment-aware, and with the conditionals nested in them counted.
+
+Limits:
+
+- **Macros are not expanded.** A macro-generated test is caught only as a macro call at namespace
+  scope in a test source. It is missed in a header, in a waiver region, and in a file whose only
+  tests are macro-generated. A macro that expands to a brace or to `namespace {` is not seen:
+  `#define CLOSE }` before a global `TEST_CASE`, and `#define OPEN namespace {` after it, pass.
+- **Conditionals other than `#if 0` are not evaluated.** Both branches are lexed, so an opener in
+  each is reported as unbalanced braces.
+- **Declarations in headers and support sources are not checked** (see above).
+- **Run time is quadratic in two constructed corners.** 20,000 nested braces take about 18 s, and
+  40,000 about 70 s. 4,000 raw strings on one line take about 19 s. Real code is far from both: the
+  repository run takes about 4 s.
+
 ## ISA audit on MSVC and clang-cl
 
 The flag check reads `compile_commands.json`, which the Ninja presets (`windows-msvc-*`,
@@ -74,5 +135,5 @@ Plan-Rev: 3
 
 `isa_audit.cmake` was written to plan revision 3, before the ADR-011 amendment (revision 4). Its open deltas
 are in 09 §5.10.4 (b), and WP-0.2r reworks them. The layering, licence, IP-name and manifest lints have no open
-delta. `vendor_patches.cmake` (WP-0.10r) was written to plan revision 6, `test_namespaces.cmake` (WP-0.1) to
-revision 9.
+delta. `vendor_patches.cmake` (WP-0.10r) was written to plan revision 6, and `test_namespaces.cmake`
+(WP-0.1) to revision 10.

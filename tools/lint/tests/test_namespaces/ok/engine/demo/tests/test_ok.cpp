@@ -11,6 +11,13 @@
         (void)(x);           \
     } while (false)
 #define HELIOS_DEMO_OPEN {
+#define HELIOS_DEMO_TEXT "a" \
+    }
+#define HELIOS_DEMO_SPAN 1 /* a comment that spans
+                              two lines */ + 1 }
+#define HELIOS_DEMO_REGISTER(T) template <> struct demo::Registered<T> {};
+#define HELIOS_DEMO_SPLICED "a \
+/* not a comment " 1
 
 // Using-directives, using-declarations and aliases may stay outside: they define nothing.
 using std::string;
@@ -21,18 +28,37 @@ using Probe = decltype(sizeof("a; b"));
 #if 0
 TEST_CASE("demo: skipped with its group") {
 namespace {
+It's prose with a lone " quote, which the preprocessor skips.
 #endif
+#if 0
+#ifdef HELIOS_DEMO_NESTED
+#endif
+TEST_CASE("demo: skipped, after a nested conditional") {}
+#endif
+/* a comment first */ #if 0
+namespace {
+#endif
+#if 0
+int skipped = 0; /* a comment in a skipped group, which hides
+#endif
+namespace { */
+// helios-lint: outside-anon-namespace begin (not a waiver: the group is skipped)
+#endif
+; // an empty declaration
 
 // helios-lint: outside-anon-namespace begin (explicit specializations cannot live in an unnamed namespace)
 namespace demo {
 template <class T>
 struct Traits {};
+template <class T>
+struct Registered;
 } // namespace demo
 
 template <>
 struct demo::Traits<int> {
     static constexpr int kValue = 1'000'000;
 };
+HELIOS_DEMO_REGISTER(int)
 // helios-lint: outside-anon-namespace end
 
 namespace

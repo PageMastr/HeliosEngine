@@ -69,8 +69,9 @@ class SarifConversionTests(unittest.TestCase):
 
     def test_test_namespaces_findings_and_fallback(self) -> None:
         output = "src/ship.cpp:4: TEST_CASE outside an unnamed namespace\n"
-        report = convert(self.junit([("lint_test_namespaces", output),
-                                     ("lint_test_namespaces_fixture_ok", "CMake Error: segfault")]), self.root)
+        cases = [("lint_test_namespaces", output),
+                 ("lint_test_namespaces_fixture_ok", "CMake Error: segfault")]
+        report = convert(self.junit(cases), self.root)
         located, unlocated = report["runs"][0]["results"]
         self.assertEqual(located["locations"][0]["physicalLocation"]["region"]["startLine"], 4)
         self.assertEqual(

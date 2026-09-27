@@ -137,8 +137,6 @@ function(helios_shaders target)
   endif()
 
   set(out_dir "${CMAKE_CURRENT_BINARY_DIR}/${target}_shaders")
-  # Every output directory, so one CTest can run spirv-val over every cooked shader (03 §1.7).
-  set_property(GLOBAL APPEND PROPERTY HELIOS_SHADER_OUTPUT_DIRS "${out_dir}")
   set(include_dir "${out_dir}/include")
   set(header "${include_dir}/${target}_shaders.h")
   file(MAKE_DIRECTORY "${out_dir}" "${include_dir}")
@@ -185,6 +183,8 @@ function(helios_shaders target)
     list(APPEND stems "${symbol}")
 
     set(spv "${out_dir}/${stem}.spv")
+    # Every module the build cooks, so one CTest runs spirv-val over exactly these (03 §1.7).
+    set_property(GLOBAL APPEND PROPERTY HELIOS_SHADER_MODULES "${spv}")
     set(dep "${out_dir}/${stem}.spv.d")
     set(cpp "${out_dir}/${stem}.spv.cpp")
     if(HELIOS_SHADER_DEPFILES)

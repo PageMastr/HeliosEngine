@@ -5,8 +5,10 @@
 #include <algorithm>
 #include <cstring>
 #include <format>
+#include <string>
 
 #include "helios/math/scalar.h"
+#include "helios/render/shader_library.h"
 #include "helios/render/shader_reflection.h"
 #include "helios/rhi/utils.h"
 #include "helios_render_shaders.h"
@@ -233,25 +235,28 @@ Result<std::unique_ptr<ForwardRenderer>> ForwardRenderer::create(rhi::Device& de
     geo.colorFormats[0] = kHdrFormat;
     geo.depthFormat = kDepthFormat;
     geo.name = "Forward.Geometry";
-    HELIOS_TRY_ASSIGN(r->m_geometry, device.createGraphicsPipeline(geo));
+    HELIOS_TRY_ASSIGN(r->m_geometry, createShippedPipeline(device, geo));
 
     rhi::GraphicsPipelineDesc normals = geo;
     normals.fragment = {helios_render_shaders::forward(), "psNormals"};
     normals.colorFormats[0] = rhi::Format::RGBA8Unorm;
     normals.name = "Forward.DebugNormals";
-    HELIOS_TRY_ASSIGN(r->m_debugNormals, device.createGraphicsPipeline(normals));
+    HELIOS_TRY_ASSIGN(r->m_debugNormals, createShippedPipeline(device, normals));
 
     rhi::ComputePipelineDesc expo;
     expo.compute = {helios_render_shaders::exposure(), "csExposure"};
     expo.name = "Forward.Exposure";
-    HELIOS_TRY_ASSIGN(r->m_exposure, device.createComputePipeline(expo));
+    HELIOS_TRY_ASSIGN(r->m_exposure, createShippedPipeline(device, expo));
     rhi::GraphicsPipelineDesc tone;
     tone.vertex = {helios_render_shaders::tonemap(), "vsFullscreen"};
     tone.fragment = {helios_render_shaders::tonemap(), "psTonemap"};
     tone.colorCount = 1;
     tone.colorFormats[0] = outputFormat;
-    tone.name = "Forward.Tonemap";
-    HELIOS_TRY_ASSIGN(r->m_tonemap, device.createGraphicsPipeline(tone));
+    // The attachment format is pipeline state, so each output format is its own recorded pipeline
+    // (one name, one pipeline) and needs its own golden to count as covered.
+    const std::string toneName = std::format("Forward.Tonemap.{}", rhi::formatName(outputFormat));
+    tone.name = toneName;
+    HELIOS_TRY_ASSIGN(r->m_tonemap, createShippedPipeline(device, tone));
     return r;
 }
 
@@ -373,6 +378,7 @@ RgTexture ForwardRenderer::addPasses(RenderGraph& graph, const ForwardScene& sce
                       });
         if (settings.markDebugOutput) graph.markOutput(f->normals);
     }
+    if (settings.debugNormals) *settings.debugNormals = f->normals;
 
     graph.addPass("Exposure", settings.asyncExposure ? PassFlags::AsyncCompute : PassFlags::Compute,
                   [&](RgBuilder& b) {

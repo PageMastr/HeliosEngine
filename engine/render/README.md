@@ -7,6 +7,7 @@ public `engine/rhi` API (ADR-003, `docs/plan/03-rendering.md` §1.7, §2, §8.4;
 |---|---|
 | `render_graph.h` | `RenderGraph`, `RgBuilder`, `RgContext`, `RgResourcePool`, the compiled `RgPlan`, `resolveEntryBarriers`, text/Graphviz dumps |
 | `shader_reflection.h` | Helios shader reflection (`.hsr` v1 binary format, documented in the header), SPIR-V reflection, JSONC rendering |
+| `shader_library.h` | The embedded (shipped) shader modules, `createShippedPipeline()` and the record of shipped pipelines behind RC-1's coverage check |
 | `forward.h` | Minimal forward pipeline (Upload → Clear → Geometry → async Exposure → Tonemap), meshes, deterministic infinite reverse-Z projection, camera-relative per-frame data |
 | `image.h` | RGBA8 images, PNG I/O (stb) |
 | `flip.h` | ꟻLIP (LDR) image difference, implemented from the paper |
@@ -53,8 +54,14 @@ device.present(swapchain, r.graphics());
 * `dumpText()` / `rgDumpPlan()` give deterministic plan dumps (used in trace goldens),
   `dumpGraphviz()` the pass/version DAG with queues, culled passes and waits (visualizer input).
 
-**Budget:** compile of a 200-pass graph ≤ 2 ms on REF (measured: ~0.35 ms on the 4-core dev
-container, `graph: compile budget`); the Phase 2 topology cache brings the unchanged case to ≤ 0.3 ms.
+**Budget:** a full compile of 200 passes, which is the topology-change case, ≤ 0.3 ms CPU on REF at
+60 fps (03 §2.2 item 7, §8.1.5). `perf: render graph compile of 200 passes <= 0.3 ms (no topology
+cache)` in `render_tests_perf` asserts it on the best of 10 batches of 5 compiles, in optimized builds
+without sanitizers, and reports the median batch and §8.1.5's 120 fps column (≤ 0.2 ms) without gating
+them. §8.1.5's rows are p50; on the 4-core dev container, which is not REF, 10 runs gave a best of
+0.210–0.243 ms and a median batch of 0.217–0.251 ms, never more than 0.02 ms apart (a review's 200
+single compiles: p50 0.212–0.215 ms against a best of 0.211–0.213 ms), so the two agree here. The Phase 2 topology cache has its own
+budget: a hit ≤ 0.05 ms.
 
 ## Shader reflection (03 §1.7)
 
@@ -67,6 +74,36 @@ rendering. Both parsers treat their input as untrusted: sparse member tables, a 
 type-graph walks (cyclic or exponentially shared types fail as `Corrupt`), linear-time
 entry-point interface lookup, and a bound on how far `.hsr` string references may expand. `helios-shaderc` (tools/shaderc) writes `.hsr` next to its SPIR-V. The forward pipeline
 checks its C++ push-constant structs against the reflected sizes at creation.
+
+**Shipped shaders.** Every `shaders/*.slang` file is embedded in `helios_render`, and features build
+their pipelines with `createShippedPipeline()` (`shader_library.h`), which records each pipeline's
+name with its module entry points and a fingerprint of its other state (raster, depth, blend, formats,
+topology, samples; structured bindings name every desc member, so a new one fails to compile until the
+fingerprint takes it), and rejects SPIR-V that is not embedded (by address) and a name reused with
+other shaders or other state: a state variant needs its own name and golden, and a pipeline that
+depends on an input is named per value (the tonemap per output format, `Forward.Tonemap.RGBA8Unorm`),
+so renderers for several formats coexist in one process (the same desc on another device is fine too).
+`helios-rendertest --coverage` (CTest `rendertest.coverage`) maps the pipelines bound in each golden
+scene's Null trace back to these entry points and fails when a shipped entry point or a pipeline the
+scenes create is bound by no scene with committed lavapipe and Null goldens (the scenes render to
+RGBA8Unorm, and `forward-srgb` to RGBA8Srgb, the tonemap's hardware-encoding path). The CTest
+`lint_shipped_pipelines` (label `lint`) keeps pipelines from bypassing the record: in `engine/`,
+`apps/` and `tools/` (except `engine/rhi/`, which implements the API), any identifier
+`create<X>Pipeline` other than `createShippedPipeline`/`createLocalPipeline` needs a reasoned
+`// shipped-pipelines-lint: allow <reason>` waiver, and only `src/shader_library.cpp` is exempt (waived
+today: rendertest's `createLocalPipeline()`, the raw-RHI sample and the pcg twin's test pipelines). The
+lint is a best-effort textual check against accidental direct creation, not against deliberately
+adversarial source; code review and the coverage check are the backstops. This is RC-1's "every
+shipped feature has a golden" for the pipelines the golden scenes create. What it cannot see, and the
+scorecard keeps as a gap: passes without a pipeline (uploads, copies, clears), whether a bound
+pipeline's output reaches the golden image, shaders not embedded in `helios_render` (cooked SPIR-V from
+content, Phase 1), pipelines created only for inputs no scene uses (the record is filled by the
+rendertest process, so e.g. a tonemap for a BGRA8Srgb swapchain is neither covered nor reported), and a
+pipeline the lint cannot see: a name built by token pasting, a creation path (wrapper or member
+pointer) defined outside the scanned files, which includes `engine/rhi/`, or source in a file with an
+extension it does not scan. Future costs: `createShippedPipeline()` reflects its module on every call
+(cache per module before 03 §1.7's thousands of PSOs), and a hot-reloaded pipeline whose entry points
+or state change must re-register its name (Phase 2).
 
 ## Forward pipeline v0
 
@@ -90,6 +127,9 @@ trigonometry, making the uploaded bytes (and the Null trace goldens) identical o
 * `test_graph_null.cpp` — trace golden of a small frame, parallel == serial recording, pool state
   carry-over and trimming, cross-frame waits, swapchain import, execute-time prologue, context validation.
 * `test_forward.cpp` — meshes, projection, camera-relative precision, Null trace golden.
+* `test_shader_library.cpp` — the embedded entry points, the forward renderer's pipeline record, and
+  rejection of unnamed, foreign (including copied), unknown-entry and conflicting pipelines.
+* `test_graph_perf.cpp` — `perf:` compile budget of a 200-pass graph, ≤ 0.3 ms (runs in `render_tests_perf`).
 * `test_reflection.cpp`, `test_shaderc.cpp` — reflection of Slang output, hostile SPIR-V / `.hsr`
   input (huge member indices, cyclic types, string amplification); the real `helios-shaderc` end
   to end (byte-identical to the build's slangc, spirv-val, depfiles, errors, paths with shell
@@ -97,8 +137,11 @@ trigonometry, making the uploaded bytes (and the Null trace goldens) identical o
 * `test_flip.cpp` — ꟻLIP stages against published CIELAB values, the analytic uniform case,
   properties, and agreement (~1e-6) with NVIDIA's reference implementation (flip-evaluator 1.7)
   on procedural images; PNG I/O.
-* CTest `shaderc.spirv-val` runs `spirv-val` over every SPIR-V module the renderer, its tests and
-  `helios-rendertest` embed (required when spirv-tools is installed, skipped otherwise).
+* CTest `shaderc.spirv-val` runs `spirv-val` over exactly the SPIR-V modules the build cooks (every
+  module declared by a `helios_shaders()` call: render, rhi, pcg, samples, rendertest), fails when a
+  declared module is missing or the list is empty (`shaderc.spirv-val.fixture_*`), and ignores stale
+  `.spv` files. It is required when configure finds spirv-tools (Linux CI installs it) and reports
+  Skipped, not Passed, otherwise.
 
 Trace goldens live in `tests/golden/`; re-bless with `HELIOS_UPDATE_GOLDENS=1` (review the diff).
 Golden images and GPU runs are in `tools/rendertest`.
@@ -126,7 +169,9 @@ ctest --test-dir build/render -R "render|rendertest" --output-on-failure
 
 ## Plan conformance
 
-Plan-Rev: 6
+Plan-Rev: 10
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
-`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.
+`docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked at revision 10 by WP-0.12 on
+2026-09-27: revisions 7–10 changed 06 §1.2, 02 §7.4, 04 §10.2, 09 §5.2a and ADR-004a, none of which
+maps here. No conformance delta is open; see §5.10.4 (c) there.

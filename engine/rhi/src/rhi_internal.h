@@ -32,8 +32,11 @@ AdapterInfo nullAdapterInfo();
 // -- Environment overrides ------------------------------------------------------------------------
 /// Value of an environment variable, or nullopt when unset/empty.
 std::optional<std::string> envVar(const char* name);
-/// DeviceDesc with HELIOS_RHI_VALIDATION / HELIOS_RHI_CAPS_MASK applied.
-DeviceDesc applyEnvironment(const DeviceDesc& desc);
+/// A variable lookup with envVar's contract (tests pass a fake environment).
+using EnvLookup = std::optional<std::string> (*)(const char* name);
+/// DeviceDesc with HELIOS_RHI_VALIDATION (ignored when desc.validationFromEnvironment is false) /
+/// HELIOS_RHI_CAPS_MASK applied, read through `lookup`.
+DeviceDesc applyEnvironment(const DeviceDesc& desc, EnvLookup lookup = envVar);
 
 /// Memory tags used when a desc leaves `tag` as Unknown (registered once, thread-safe).
 MemoryTag defaultBufferTag();

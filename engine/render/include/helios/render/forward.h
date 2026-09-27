@@ -7,7 +7,7 @@
 //                      device addresses, one drawIndexed per instance)
 //   Exposure (async)   average log luminance of the HDR color -> exposure buffer (async compute)
 //   Tonemap (raster)   fullscreen triangle: exposure, ACES fit, sRGB encode -> output
-//   [DebugNormals]     optional debug view, culled unless marked as output
+//   [DebugNormals]     optional debug view, culled unless marked as output or read by a later pass
 //
 // Precision (03 §2.7, ADR-005): instance and camera positions are frame-local f64; the CPU forms
 // `instance - camera` in f64 and uploads only camera-relative f32 matrices; the view matrix is
@@ -93,6 +93,9 @@ struct ForwardSettings {
     /// Adds the DebugNormals view (culled unless `markDebugOutput`).
     bool debugView = false;
     bool markDebugOutput = false;
+    /// Receives the DebugNormals texture (RGBA8, output-sized) when debugView is set and an invalid
+    /// handle otherwise, so a caller can present or capture the view (a read keeps it from culling).
+    RgTexture* debugNormals = nullptr;
 };
 
 /// GPU layouts shared with the shaders (scalar block layout).
@@ -113,7 +116,9 @@ class ForwardRenderer {
 public:
     /// Creates the pipelines from the embedded SPIR-V (forward, exposure, tonemap) for an output
     /// texture of `outputFormat` (an sRGB format gets hardware encoding, UNORM formats are encoded
-    /// in the shader). Checks the push-constant layouts against the shaders' reflection.
+    /// in the shader). Checks the push-constant layouts against the shaders' reflection. The tonemap
+    /// pipeline is named per output format ("Forward.Tonemap.RGBA8Unorm"), so renderers for several
+    /// formats can coexist in one process (see helios/render/shader_library.h).
     static Result<std::unique_ptr<ForwardRenderer>> create(rhi::Device& device, rhi::Format outputFormat);
     ~ForwardRenderer();
     ForwardRenderer(const ForwardRenderer&) = delete;

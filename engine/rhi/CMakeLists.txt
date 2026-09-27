@@ -28,6 +28,7 @@ file(GLOB HELIOS_RHI_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/
 helios_test(rhi_tests SOURCES ${HELIOS_RHI_TEST_SOURCES}
             DEPS helios::rhi helios::math helios::tp::headers helios::tp::sdl3)
 if(TARGET rhi_tests)
+  target_include_directories(rhi_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)  # detail:: helpers (test_environment.cpp)
   file(GLOB HELIOS_RHI_TEST_SHADERS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/shaders/*.slang)
   helios_shaders(rhi_tests NAMESPACE rhi_test_shaders FILES ${HELIOS_RHI_TEST_SHADERS})
   target_compile_definitions(rhi_tests PRIVATE

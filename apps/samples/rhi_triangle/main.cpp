@@ -51,6 +51,7 @@ Result<PipelineH> createPipeline(Device& device, Format colorFormat) {
     desc.colorCount = 1;
     desc.colorFormats[0] = colorFormat;
     desc.name = "SpinningTriangle";
+    // shipped-pipelines-lint: allow the raw-RHI sample uses its own shader and ships no render feature
     return device.createGraphicsPipeline(desc);
 }
 

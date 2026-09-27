@@ -48,6 +48,9 @@ struct DeviceDesc {
     /// on, =0 off). requireValidation fails creation when the layer is missing.
     bool validation = false;
     bool requireValidation = false;
+    /// false: HELIOS_RHI_VALIDATION does not override `validation`, for a device that must run
+    /// without the layer whatever the environment says (helios-rendertest's no-validation probe).
+    bool validationFromEnvironment = true;
     /// Object names and labels via VK_EXT_debug_utils when available.
     bool debugNames = true;
     AdapterPreference adapterPreference = AdapterPreference::HighPerformance;

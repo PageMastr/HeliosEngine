@@ -183,6 +183,8 @@ function(helios_shaders target)
     list(APPEND stems "${symbol}")
 
     set(spv "${out_dir}/${stem}.spv")
+    # Every module the build cooks, so one CTest runs spirv-val over exactly these (03 §1.7).
+    set_property(GLOBAL APPEND PROPERTY HELIOS_SHADER_MODULES "${spv}")
     set(dep "${out_dir}/${stem}.spv.d")
     set(cpp "${out_dir}/${stem}.spv.cpp")
     if(HELIOS_SHADER_DEPFILES)

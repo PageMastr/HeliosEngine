@@ -244,9 +244,14 @@ after a rename and a deletion):
   above `nextField`, duplicate names, malformed JSON.
 - Entries of types that are not part of the current compilation are kept, so several schema sets
   can share one lock.
-- Runs that may rewrite the lock serialize on a sibling directory `<lock>.writing` (created
-  atomically; one left behind by a killed run is taken over after 2 minutes), so parallel
-  `helios_schema()` calls sharing a lock never drop each other's entries.
+- Runs that may rewrite the lock serialize on a sibling directory `<lock>.writing`
+  (`src/lock_mutex.h`), so parallel `helios_schema()` calls sharing a lock never drop each other's
+  entries. It is created atomically. One left behind by a killed run is taken over after
+  2 minutes, by one waiter at a time (serialized on `<lock>.writing-takeover`). The errors that
+  racing runs cause for a moment are retried with a bounded back-off, for up to 10 s of
+  unbroken failures: the directory vanishing between the OS call and the standard library's
+  is-a-directory check, and Windows' delete-pending and sharing-violation states. Every wait
+  ends in a clear error, after 5 minutes at most.
 - The build updates the lock and always prints `updated schema lock …; commit it`. CI configures
   with `-DHELIOS_SCHEMA_CHECK_LOCK=ON` (or passes `--check-lock`), which fails on any change,
   including non-canonical formatting.
@@ -354,7 +359,9 @@ the lock (stability, renames, tombstones, widening, defaults, enums, `--check-lo
 the generated sample code (registration, metadata, JSONC/binary round trips compiled vs.
 reflection walker, evolution tolerance, fuzzed corrupt input, `Mut<C>`, property paths,
 diff/patch, record files, default-value and number-format consistency with the runtime), golden
-files, the CLI (incl. parallel runs sharing one lock), deterministic fuzzing of schemas and locks, Go interop (`go vet` + `go test` on the generated packages and byte-for-byte
+files, the CLI (incl. parallel runs sharing one lock), the lock mutex (the `create_directory()`
+races of each standard library, injected; bounded waits; release retries; stale takeover by one
+waiter; mutual exclusion under real contention), deterministic fuzzing of schemas and locks, Go interop (`go vet` + `go test` on the generated packages and byte-for-byte
 vectors in both directions; skipped when Go is missing or `HELIOS_SKIP_GO=1`) and the 2,000-type
 performance budget of 02 §3.5 (asserted in optimized builds without sanitizers).
 

@@ -20,6 +20,7 @@ add_library(helios_schemac_lib STATIC
   src/json_out.cpp
   src/lexer.cpp
   src/lock.cpp
+  src/lock_mutex.cpp
   src/model.cpp
   src/parser.cpp
   src/samples.cpp

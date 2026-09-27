@@ -313,6 +313,47 @@ TEST_CASE("server.zonehost: NS-0.6 an empty zone ticks in < 0.5 ms") {
     CHECK(zone->graph().stageStats(Stage::Input).overruns == 0);
 }
 
+TEST_CASE("perf: NS-0.6 an empty zone ticks in < 0.5 ms (p99 of 2,000 ticks)") {
+    // 04 §11.4 NS-0.6, the timing gate on an otherwise idle runner (label perf, serial). Budget:
+    // < 0.5 ms per empty-zone tick, read as the p99 of 2,000 ticks at 20 Hz after 100 warm-up
+    // ticks, for both the tick graph's own time (the eight 04 §3.3 stages with their ECS systems,
+    // inbox drain, graph bookkeeping) and the wall time of ZoneHost::runDue() around it (clock
+    // advance, EDF selection, TiDi). The clock is stepped straight to each deadline, so the run
+    // costs 2,000 ticks of CPU time, not 100 s. The maximum is reported, not gated: one preempted
+    // tick measures the scheduler, not the zone.
+    ZoneHost host(&testJobs());
+    ZoneInstance* zone = host.addZone(zoneDesc(1002, "tallis"), 0).value();
+    constexpr int kWarmup = 100;
+    constexpr int kTicks = 2000;
+    std::vector<i64> graphNs;
+    std::vector<i64> hostNs;
+    graphNs.reserve(kTicks);
+    hostNs.reserve(kTicks);
+    for (int i = 0; i < kWarmup + kTicks; ++i) {
+        const i64 due = zone->clock().nextTickWallNs();
+        const u64 t0 = monotonicNanos();
+        const Result<u32> ran = host.runDue(due);
+        const u64 t1 = monotonicNanos();
+        REQUIRE(ran);
+        REQUIRE(*ran == 1);
+        if (i < kWarmup) continue;
+        graphNs.push_back(zone->stats().lastTickNs);
+        hostNs.push_back(static_cast<i64>(t1 - t0));
+    }
+    auto pct = [](std::vector<i64> v, usize perMille) {
+        std::sort(v.begin(), v.end());
+        return v[std::min(v.size() - 1, (v.size() * perMille + 999) / 1000 - 1)]; // nearest rank
+    };
+    const f64 us = 1e-3;
+    MESSAGE("NS-0.6 empty zone: graph median " << pct(graphNs, 500) * us << " us, p99 " << pct(graphNs, 990) * us
+                                               << " us, max " << pct(graphNs, 1000) * us << " us; runDue p99 "
+                                               << pct(hostNs, 990) * us << " us, max " << pct(hostNs, 1000) * us << " us");
+    CHECK(pct(graphNs, 990) < 500'000);
+    CHECK(pct(hostNs, 990) < 500'000);
+    CHECK(zone->clock().dilationPpm() == authority::kDilationOne); // an empty zone never dilates
+    CHECK(zone->stats().ticks == static_cast<u64>(kWarmup + kTicks));
+}
+
 TEST_CASE("server.zonehost: several zones at their own rates, earliest deadline first") {
     ZoneHost host(&testJobs());
     REQUIRE(host.addZone(zoneDesc(1, "twenty", 20), 0));

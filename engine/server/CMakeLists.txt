@@ -27,4 +27,11 @@ if(TARGET server_tests)
   target_compile_definitions(server_tests PRIVATE
     HELIOS_SERVER_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
   set_tests_properties(server_tests PROPERTIES TIMEOUT 600)
+  # NS-0.3's cross-host half (tests/test_interop.cpp) as its own entry, so that without
+  # HELIOS_NS03_GATEWAY and HELIOS_NS03_KEYS (doctest skips the case and prints "test cases: 0")
+  # it reports Skipped rather than Passed.
+  add_test(NAME server_tests_ns03_remote
+    COMMAND server_tests "--test-case=server.interop: NS-0.3 a probe on this host*")
+  set_tests_properties(server_tests_ns03_remote PROPERTIES
+    TIMEOUT 60 SKIP_REGULAR_EXPRESSION "test cases: +0 \\|")
 endif()

@@ -16,6 +16,7 @@
 using std::string;
 using namespace std::string_literals;
 namespace str = std;
+using Probe = decltype(sizeof("a; b"));
 
 #if 0
 TEST_CASE("demo: skipped with its group") {

@@ -90,11 +90,11 @@ set(_waiverRe "^//[ \t]*helios-lint:[ \t]*outside-anon-namespace[ \t]+")
 set(_lineInterestRe "[{}/\"']|${_quickRe}")
 set(_tokInterestRe "^([{}]|/[*/]|(u8|u|U|L)?R\"|[\"']$|(DOCTEST_)?(${_quickRe}))|${_BS}$")
 
-# Maps the placeholder characters back, for messages.
+# Maps the placeholder characters back, for messages (a ';' is dropped: it would split the list).
 function(_tn_unmask var)
   set(s "${${var}}")
   string(REPLACE "${_BS}" "\\" s "${s}")
-  string(REPLACE "${_SC}" "," s "${s}")
+  string(REPLACE "${_SC}" "" s "${s}")
   string(REPLACE "${_LB}" "[" s "${s}")
   string(REPLACE "${_RB}" "]" s "${s}")
   set(${var} "${s}" PARENT_SCOPE)
@@ -439,7 +439,7 @@ function(_tn_scan_file path rel isSource)
             set(stmtAlias OFF)
           endif()
           math(EXPR stmtCount "${stmtCount} + 1")
-          if(tok MATCHES "${_SC}")
+          if(tok MATCHES "${_SC}" AND NOT tok MATCHES "^[\"'A-Za-z]")  # a ';' outside literals
             if(stmt AND NOT stmtMacro AND NOT stmtAlias AND NOT waiver AND NOT stmtFirst STREQUAL "using"
                AND NOT stmtFirst MATCHES "^${_SC}")
               _tn_decl()

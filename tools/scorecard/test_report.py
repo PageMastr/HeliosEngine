@@ -651,6 +651,41 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(res.doctest, {"fake_tests": {"True 1": "pass"}})
             self.assertEqual(json.loads((work / "out" / "fake_tests.status.json").read_text())["returncode"], 0)
 
+    def test_doctest_runner_skips_the_labels_ctest_excludes(self):
+        # A Windows nightly job has no GPU and its CTest step runs -LE "gpu|perf", so its doctest step must
+        # skip the same entries (nightly 36309067888 ran pcg_gpu_tests there, which exits 1 without Vulkan).
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d)
+            fake = work / "fake_doctest.py"
+            fake.write_text(
+                "import sys\n"
+                "out = next(a for a in sys.argv if a.startswith('--out='))[6:]\n"
+                "open(out, 'w').write('<doctest><TestCase name=\"c\"><OverallResultsAsserts "
+                "test_case_success=\"true\"/></TestCase></doctest>')\n", encoding="utf-8")
+            tests = [{"name": "cpu_tests", "command": [sys.executable, str(fake), "--test-case-exclude=perf:*"],
+                      "properties": [{"name": "LABELS", "value": ["unit"]}]},
+                     {"name": "gpu_tests",
+                      "command": [sys.executable, "-c", "raise SystemExit(7)", "--test-case-exclude=perf:*"],
+                      "properties": [{"name": "LABELS", "value": ["render", "gpu"]}]},
+                     # ctest -LE searches each label, as re.search does: "gpu" also excludes "vulkan-gpu".
+                     {"name": "vk_tests",
+                      "command": [sys.executable, "-c", "raise SystemExit(8)", "--test-case-exclude=perf:*"],
+                      "properties": [{"name": "LABELS", "value": ["vulkan-gpu"]}]}]
+            original = sc.ctest_tests
+            sc.ctest_tests = lambda *args: tests
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    skipped = runners.main(["doctest", "--build-dir", "build", "--label-exclude", "gpu|perf",
+                                            "--out", str(work / "skip")])
+                    every = runners.main(["doctest", "--build-dir", "build", "--out", str(work / "all")])
+            finally:
+                sc.ctest_tests = original
+            self.assertEqual(skipped, 0)
+            self.assertEqual(sorted(p.name for p in (work / "skip").iterdir()),
+                             ["cpu_tests.status.json", "cpu_tests.xml"])
+            self.assertEqual(every, 1)
+            self.assertEqual(json.loads((work / "all" / "gpu_tests.status.json").read_text())["returncode"], 7)
+
 
 if __name__ == "__main__":
     unittest.main()

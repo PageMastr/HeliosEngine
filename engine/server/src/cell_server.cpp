@@ -102,6 +102,9 @@ Result<void> CellServer::init(i64 nowNs) {
         oc.info.address = trunkAddress().toString();
         oc.info.version = m_config.version;
         oc.info.zones = m_config.declaredZones;
+        oc.info.fd = m_config.failureDomain;
+        oc.info.serverBuild = m_config.serverBuild;
+        HELIOS_TRY(orch::validateRegistration(oc.info));
         m_orch = std::make_unique<OrchestratorClient>(*m_config.bus, std::move(oc));
         m_orch->setLoadProvider([this] {
             orch::Load load;

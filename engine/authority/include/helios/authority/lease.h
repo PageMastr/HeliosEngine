@@ -27,6 +27,11 @@
 //
 // Every call returns the resulting events, Lost before Acquired, each list ordered by region.
 //
+// Time: none. LeaseHolder never reads a clock and takes no time input, so no region can expire
+// on a local timer (the holder rule). Keep it that way: the conformance tests
+// (`conformance/holder_rule`, `authority.lease: …`) run on simulated time and would not notice a
+// timer on the real clock.
+//
 // Threading: owned by one thread (the process's control-plane or main thread).
 
 #include <map>

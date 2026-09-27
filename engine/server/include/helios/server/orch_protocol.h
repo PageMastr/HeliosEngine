@@ -3,9 +3,12 @@
 // orchestrator's register / heartbeat / ID-block / directory calls and the Session service's
 // reconnect-ticket sealing and gateway control messages.
 //
-// The encoding matches services/internal/orchestrator and services/internal/session exactly:
-// JSON with lowerCamelCase names, 64-bit integers as JSON *strings* (Go `,string` tags, proto3 JSON
-// mapping), `omitempty` fields left out when empty, and times as RFC 3339 strings. Decoders accept
+// The encoding follows services/internal/orchestrator and services/internal/session: JSON with
+// lowerCamelCase names, 64-bit integers as JSON *strings* (Go `,string` tags, proto3 JSON mapping),
+// `omitempty` fields left out when empty, and times as RFC 3339 strings. Both sides write the same
+// JSON values, and the shared contract vectors (tests/data/go_contract_vectors.tsv) byte for byte;
+// in general the bytes can differ, because Go's encoder HTML-escapes `<`, `>` and `&` (\u003c …)
+// where yyjson writes them as they are, which every JSON decoder reads back the same. Decoders accept
 // 64-bit values as strings or numbers and ignore unknown fields (Go's json.Unmarshal does too), so
 // a newer backend can add fields. Errors travel in NATS headers (bus.h), not in the body.
 //
@@ -48,17 +51,55 @@ std::string sealTicketsSubject(std::string_view shard);
 /// ctl.<shard>.gateway.all.<verb> ("kick", "session_epoch").
 std::string gatewayControlSubject(std::string_view shard, std::string_view verb);
 
+/// Where a process runs (05 §1.4.3): availability zone, rack and host. The placer supplies it
+/// (Agones node labels, helios.toml [fd] under helios-agent); Phase 0 stores it and Phase 2's
+/// failure detection and placement use it. Empty fields are left out on the wire (Go `omitempty`),
+/// and an all-empty domain is left out entirely (Go `omitzero`).
+struct FailureDomain {
+    std::string az;
+    std::string rack;
+    std::string host;
+    bool empty() const noexcept { return az.empty() && rack.empty() && host.empty(); }
+    friend bool operator==(const FailureDomain&, const FailureDomain&) = default;
+};
+
+/// Go's registration bounds (services/internal/orchestrator/registry.go: MaxFDLabel, MaxFDHost,
+/// the name limit, maxProcessField, maxZones, and platform.MaxZoneName for zone names).
+inline constexpr usize kMaxFdLabel = 64;
+inline constexpr usize kMaxFdHost = 255;
+inline constexpr usize kMaxProcessName = 64;
+inline constexpr usize kMaxProcessField = 255;
+inline constexpr usize kMaxZones = 256;
+inline constexpr usize kMaxZoneName = 64;
+
 struct ProcessInfo {
     std::string name;
     std::string kind;              ///< "cell" | "gateway"
     std::string address;           ///< gateway: public UDP ip:port; cell: trunk address
-    std::string host;
+    std::string host;              ///< Superseded by fd.host (Go fills fd.host from it when empty).
     i64 pid = 0;
     std::string version;
     std::vector<std::string> zones; ///< cell: zone names it serves (empty = any)
     u32 keyId = 0;                 ///< gateway: shard netcode key generation
     i64 capacity = 0;              ///< gateway: session slots
+    FailureDomain fd;              ///< 05 §1.4 RegisterProcess `fd{az, rack, host}`.
+    i64 serverBuild = 0;           ///< 05 §1.4 `server_build` (0 = unknown; left out on the wire).
 };
+
+/// Checks a registration against every rule of Go's validate() (registry.go): name 1–64 bytes;
+/// address and version ≤ 255 bytes; host and fd.host ≤ 255 bytes (fd.host defaults to host), az
+/// and rack ≤ 64; no NUL in name, address, host, version or the fd fields; ≤ 256 zones of 1–64
+/// bytes without NUL; serverBuild ≥ 0; kind "cell" or "gateway"; a gateway's address an ip:port
+/// (net::Address::parse) and its keyId non-zero. It also requires valid UTF-8 in every string,
+/// which Go does not check but the encoder needs: yyjson writes no document for invalid UTF-8, so
+/// the request would go out empty and be refused as malformed on every retry. A process calls it
+/// at start, so a registration the orchestrator would refuse stops it there instead of leaving it
+/// retrying RegisterProcess forever. Returns InvalidArgument naming the rule (it never echoes
+/// invalid UTF-8).
+Result<void> validateRegistration(const ProcessInfo& info);
+/// The placer-supplied part of those rules: the fd bounds, NUL bytes and UTF-8 of `fd` (host as
+/// given, without the host fallback), and serverBuild ≥ 0.
+Result<void> validatePlacement(const FailureDomain& fd, i64 serverBuild);
 
 struct Assignment {
     u64 zoneId = 0;
@@ -82,10 +123,19 @@ struct Load {
     f64 tickP99Ms = 0.0;
 };
 
+/// A region the process holds and the lease generation it holds it under (05 §1.4 Heartbeat;
+/// v0 regions are whole zones, so `region` is the zone id).
+struct HeldRegion {
+    u64 region = 0;
+    u64 leaseGen = 0;
+    friend bool operator==(const HeldRegion&, const HeldRegion&) = default;
+};
+
 struct HeartbeatRequest {
     u64 processId = 0;
     u64 epoch = 0;
     Load load;
+    std::vector<HeldRegion> held; ///< Ordered by region; left out on the wire when empty.
 };
 
 struct HeartbeatResult {

@@ -62,4 +62,9 @@ Plan-Rev: 9
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
 `docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked at revision 9 by WP-0.14's PR on
 2026-09-27: revisions 7–9 changed 06 §1.2, 02 §7.4 with 04 §10.2 and 09 §5.2a, none of which this
-module implements. No conformance delta is open; see §5.10.4 (c) there.
+module implements. One deviation is recorded (PR #16): the TiDi load `L` is the tick's CPU time
+over the *dilated* interval `tick_dt / d` (see "TiDi control law"), where 04 §3.2 writes
+`L = tick_cpu_ms / (1000/tick_hz)`. The two agree at `d = 1`; read literally, 04 §3.2's form ratchets
+`d` to the floor under constant overload. The Director makes the 04 §3.2 Plan-Change after PLAN-REV
+10, with `authority.tidi: constant overload converges on the sustainable dilation (no ratchet)` as its
+test. No other conformance delta is open; see §5.10.4 (c) there.

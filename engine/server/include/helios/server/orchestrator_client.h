@@ -20,6 +20,12 @@
 // * ID blocks (05 §1.4.5): registration hands a cell its first block prefixes (a pool); later ones
 //   come from AllocateIdBlocks. OrchestratorIdBlockSource adapts this to an ecs::EntityIdMinter.
 // * ResolveZone answers "which cell owns zone X" for gateways.
+// * **Time is update(nowNs)'s.** Registration back-off and heartbeat pacing use only the
+//   caller's clock, and no lease decision uses any clock: a failed heartbeat is only counted,
+//   however long failures last. The class never reads a clock itself. The one real-time wait is
+//   shutdown()'s bounded wait for the Deregister reply; request timeouts belong to the bus. Keep
+//   it that way: `conformance/holder_rule` runs 60 s on simulated time, so it would not catch a
+//   timer on the real clock (monotonicNanos, std::chrono clocks, sleeps).
 //
 // Threading: update() and shutdown() on one owner thread; replies are queued by bus threads and
 // applied inside update(). allocateIdBlocks(), takePooledBlocks() and resolveZone() are

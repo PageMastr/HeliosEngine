@@ -30,7 +30,8 @@ helios-gateway probe [--connect 127.0.0.1:7777] [--token <base64 connect token>]
 (`connectToken`), otherwise it mints one with the shard key. It prints the Welcome, echo round
 trips, tick states, tickets and kicks, and exits non-zero if it was not routed or lost echoes. Run
 on Windows against a Linux gateway it is the NS-0.3 interop check by hand; `server_tests_ns03_remote`
-(`engine/server/README.md`, Acceptance) is the same check as a CTest. Walkthrough:
+(`engine/server/README.md`, Acceptance) is the same check as a CTest, which refuses a target on the
+probe's own host. Walkthrough:
 `engine/server/README.md`, "Run it locally".
 
 ## Plan conformance

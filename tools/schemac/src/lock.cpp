@@ -106,8 +106,9 @@ public:
             if (t.kind != "struct" && t.kind != "enum" && t.kind != "flags" && t.kind != "variant" && t.kind != "fn")
                 return fail(path + ".kind", std::format("unknown kind '{}'", t.kind));
             if (t.kind == "fn") { // a scriptlib fn: only its binding id (02 §3.5 `luau`, §7.4)
-                if (yyjson_obj_get(v, "fields") || yyjson_obj_get(v, "values") || yyjson_obj_get(v, "nextField"))
-                    return fail(path, "a fn entry has only 'id' and 'kind'");
+                for (const char* key : {"fields", "values", "nextField", "was", "version", "base", "sql"}) {
+                    if (yyjson_obj_get(v, key)) return fail(path, std::format("a fn entry has only 'id' and 'kind' (found '{}')", key));
+                }
                 out.types.emplace(name, std::move(t));
                 continue;
             }
@@ -226,8 +227,13 @@ public:
             d->typeId = lt->id;
             const std::string kind = lockKindOf(d);
             if (lt->kind != kind) {
-                D.error(d->loc, std::format("'{}' was a {} (lock id {}); a type cannot change kind — declare a new type instead",
-                                            d->qualifiedName, lt->kind, lt->id));
+                if (kind == "fn" || lt->kind == "fn")
+                    D.error(d->loc, std::format("'{}' was a {} (lock id {}) and is now a {}; a lock entry cannot change between a scriptlib "
+                                                "fn and a type — use another name",
+                                                d->qualifiedName, lt->kind, lt->id, kind));
+                else
+                    D.error(d->loc, std::format("'{}' was a {} (lock id {}); a type cannot change kind — declare a new type instead",
+                                                d->qualifiedName, lt->kind, lt->id));
                 continue;
             }
             if (d->kind == DeclKind::ScriptFn) continue; // a binding id only

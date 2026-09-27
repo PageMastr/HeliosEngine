@@ -798,6 +798,90 @@
       "attrs": []
     },
     {
+      "name": "golden.all.Pack",
+      "kind": "struct",
+      "file": "golden.hschema",
+      "doc": "A scriptlib argument: the glue gives fields a script omits their schema defaults.",
+      "id": 4067732932,
+      "layoutHash": "f74827dcb577b537",
+      "fields": [
+        {
+          "name": "slot",
+          "id": 1,
+          "type": "string",
+          "audience": "shared",
+          "attrs": [
+            {"name": "max", "args": [{"value": "16"}]}
+          ]
+        },
+        {
+          "name": "count",
+          "id": 2,
+          "type": "u16",
+          "default": 1,
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.Bag",
+      "kind": "struct",
+      "file": "golden.hschema",
+      "doc": "@max on struct fields bounds arguments and results alike.",
+      "id": 3071524453,
+      "layoutHash": "50acba592c22c109",
+      "fields": [
+        {
+          "name": "ids",
+          "id": 1,
+          "type": "list<u32>",
+          "audience": "shared",
+          "attrs": [
+            {"name": "max", "args": [{"value": "2"}]}
+          ]
+        },
+        {
+          "name": "tag",
+          "id": 2,
+          "type": "string",
+          "audience": "shared",
+          "attrs": [
+            {"name": "max", "args": [{"value": "4"}]}
+          ]
+        }
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.Tagged",
+      "kind": "struct",
+      "file": "golden.hschema",
+      "doc": "A result with Names: pushed as text; a set of Names in lexical order.",
+      "id": 295119369,
+      "layoutHash": "9300170ad043f299",
+      "fields": [
+        {
+          "name": "label",
+          "id": 1,
+          "type": "Name",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "names",
+          "id": 2,
+          "type": "set<Name>",
+          "audience": "shared",
+          "attrs": [
+            {"name": "max", "args": [{"value": "3"}]}
+          ]
+        }
+      ],
+      "attrs": []
+    },
+    {
       "name": "golden.all.ThingDef.Shape",
       "kind": "variant",
       "file": "golden.hschema",
@@ -1087,15 +1171,15 @@
             {"name": "delay", "type": "Duration", "attrs": []},
             {"name": "at", "type": "Tick", "attrs": []},
             {"name": "color", "type": "golden.all.Color", "attrs": []},
-            {"name": "item", "type": "golden.all.Item", "attrs": []},
-            {"name": "items", "type": "list<golden.all.Item>", "attrs": [{"name": "max", "args": [{"value": "4"}]}]},
+            {"name": "item", "type": "golden.all.Pack", "attrs": []},
+            {"name": "items", "type": "list<golden.all.Pack>", "attrs": [{"name": "max", "args": [{"value": "4"}]}]},
             {"name": "names", "type": "set<Name>", "attrs": []},
             {"name": "trio", "type": "f32[3]", "attrs": []},
             {"name": "maybe", "type": "u32?", "attrs": []},
             {"name": "label", "type": "LocString", "attrs": []},
             {"name": "query", "type": "TagQuery", "attrs": []}
           ],
-          "result": "golden.all.Item",
+          "result": "golden.all.Pack",
           "cost": {"base": 3, "each": 2, "of": "items"},
           "pure": true,
           "realms": ["server", "client"],
@@ -1133,6 +1217,54 @@
           "realms": ["server", "client"],
           "attrs": [
             {"name": "script", "args": [{"key": "cost", "value": "2"}, {"key": "each", "value": "1"}, {"key": "of", "value": "text"}]}
+          ]
+        },
+        {
+          "name": "clip",
+          "bindingId": 3068390829,
+          "doc": "@max on a string argument and result, and on struct fields.",
+          "params": [
+            {"name": "s", "type": "string", "attrs": [{"name": "max", "args": [{"value": "4"}]}]}
+          ],
+          "result": "string",
+          "cost": {"base": 1, "each": 0, "of": ""},
+          "pure": true,
+          "realms": ["server", "client"],
+          "attrs": [
+            {"name": "max", "args": [{"value": "4"}]},
+            {"name": "script", "args": [{"key": "cost", "value": "1"}]},
+            {"name": "pure", "args": []}
+          ]
+        },
+        {
+          "name": "bag",
+          "bindingId": 1608436731,
+          "params": [
+            {"name": "b", "type": "golden.all.Bag", "attrs": []}
+          ],
+          "result": "golden.all.Bag",
+          "cost": {"base": 1, "each": 0, "of": ""},
+          "pure": true,
+          "realms": ["server", "client"],
+          "attrs": [
+            {"name": "script", "args": [{"key": "cost", "value": "1"}]},
+            {"name": "pure", "args": []}
+          ]
+        },
+        {
+          "name": "tagged",
+          "bindingId": 2180087691,
+          "params": [
+            {"name": "names", "type": "set<Name>", "attrs": [{"name": "max", "args": [{"value": "8"}]}]},
+            {"name": "ratio", "type": "f32", "attrs": []}
+          ],
+          "result": "golden.all.Tagged",
+          "cost": {"base": 1, "each": 0, "of": ""},
+          "pure": true,
+          "realms": ["server", "client"],
+          "attrs": [
+            {"name": "script", "args": [{"key": "cost", "value": "1"}]},
+            {"name": "pure", "args": []}
           ]
         }
       ],

@@ -4,9 +4,12 @@
   "functions": {
     "453723727": {"name": "golden.all.Queries.nearest", "cost": 12, "each": 0},
     "1516378594": {"name": "golden.all.Queries.echo", "cost": 1, "each": 0},
+    "1608436731": {"name": "golden.all.Queries.bag", "cost": 1, "each": 0},
     "2006991982": {"name": "golden.all.Queries.inRadius", "cost": 20, "each": 1, "of": "result"},
+    "2180087691": {"name": "golden.all.Queries.tagged", "cost": 1, "each": 0},
     "2260578267": {"name": "golden.all.Queries.log", "cost": 2, "each": 1, "of": "text"},
     "2480763702": {"name": "golden.all.Queries.convert", "cost": 3, "each": 2, "of": "items"},
+    "3068390829": {"name": "golden.all.Queries.clip", "cost": 1, "each": 0},
     "3093412526": {"name": "golden.all.Queries.spawn", "cost": 50, "each": 4, "of": "thing"}
   }
 }

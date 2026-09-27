@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -78,13 +79,19 @@ func NATSRequest[Req, Res any](ctx context.Context, nc *nats.Conn, subject strin
 type NATSHandlerFunc[Req, Res any] func(ctx context.Context, req *Req) (*Res, error)
 
 // NATSHandle subscribes h to subject in queue group queue (the service name, so replicas share
-// the load). Each message runs with a context bounded by the caller's Helios-Deadline-Ms.
-// Messages on one subscription are handled sequentially.
+// the load) and returns once the server nc is connected to has registered the subscription, so
+// a request sent afterwards from any connection to that server reaches h instead of failing
+// with no responders. Other servers of a cluster learn the interest asynchronously, which is
+// why callers treat no responders as unavailable. If the server does not confirm within
+// DefaultNATSTimeout, the subscription is removed and an error is returned. It blocks for
+// that one round trip to the server and is safe for concurrent use.
+// Each message runs with a context bounded by the caller's Helios-Deadline-Ms. Messages on
+// one subscription are handled sequentially.
 func NATSHandle[Req, Res any](nc *nats.Conn, subject, queue string, log *slog.Logger, h NATSHandlerFunc[Req, Res]) (*nats.Subscription, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	return nc.QueueSubscribe(subject, queue, func(m *nats.Msg) {
+	sub, err := nc.QueueSubscribe(subject, queue, func(m *nats.Msg) {
 		budget := DefaultNATSTimeout
 		if m.Header != nil {
 			if ms, err := strconv.ParseInt(m.Header.Get(HeaderDeadlineMs), 10, 64); err == nil && ms > 0 {
@@ -130,4 +137,16 @@ func NATSHandle[Req, Res any](nc *nats.Conn, subject, queue string, log *slog.Lo
 			log.Warn("rpc reply failed", "subject", m.Subject, "err", err)
 		}
 	})
+	if err != nil {
+		return nil, err
+	}
+	// QueueSubscribe only queues the SUB in nc's write buffer. The server reads each connection
+	// on its own goroutine, so a request from another connection can be routed before this SUB
+	// arrives and be answered with no responders. The server answers a PING only after it has
+	// processed everything sent before it on this connection, the SUB included.
+	if err := nc.FlushTimeout(DefaultNATSTimeout); err != nil {
+		_ = sub.Unsubscribe() // best effort: on a closed connection the subscription is already gone
+		return nil, fmt.Errorf("rpc: subscribe %s: server did not confirm: %w", subject, err)
+	}
+	return sub, nil
 }

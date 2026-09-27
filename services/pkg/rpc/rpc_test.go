@@ -1,15 +1,19 @@
 package rpc_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -161,6 +165,100 @@ func TestNATSRoundTrip(t *testing.T) {
 	reply, err := client.Request("rpc.test.math.Double", []byte("{"), 2*time.Second)
 	if err != nil || reply.Header.Get(rpc.HeaderErrorCode) != string(rpc.CodeInvalidArgument) {
 		t.Fatalf("malformed body: %v %v", reply, err)
+	}
+}
+
+// seamConn is a handler's connection to the test server with two faults a test can inject:
+// writes carrying a SUB for an rpc.test.live.* subject are held back by subDelay (a loaded host
+// on which the client's flusher or the server's read loop runs late), and once dropPings is set
+// the client's PINGs are swallowed, so no flush can complete.
+type seamConn struct {
+	net.Conn
+	subDelay  time.Duration
+	dropPings atomic.Bool
+	dropped   chan struct{} // signalled when a PING was swallowed
+}
+
+func (c *seamConn) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte("SUB rpc.test.live.")) {
+		time.Sleep(c.subDelay)
+	}
+	if !c.dropPings.Load() || !bytes.Contains(p, []byte("PING\r\n")) {
+		return c.Conn.Write(p)
+	}
+	if rest := bytes.ReplaceAll(p, []byte("PING\r\n"), nil); len(rest) > 0 {
+		if _, err := c.Conn.Write(rest); err != nil {
+			return 0, err
+		}
+	}
+	select {
+	case c.dropped <- struct{}{}:
+	default:
+	}
+	return len(p), nil
+}
+
+type seamServer struct {
+	bus  *testkit.NATS
+	conn *seamConn
+}
+
+func (s *seamServer) InProcessConn() (net.Conn, error) {
+	c, err := s.bus.Server.InProcessConn()
+	if err != nil {
+		return nil, err
+	}
+	s.conn.Conn = c
+	return s.conn, nil
+}
+
+// connectSeam opens a non-reconnecting in-process connection through a seamConn.
+func connectSeam(t *testing.T, bus *testkit.NATS, subDelay time.Duration) (*nats.Conn, *seamConn) {
+	t.Helper()
+	sc := &seamConn{subDelay: subDelay, dropped: make(chan struct{}, 1)}
+	nc, err := nats.Connect("", nats.InProcessServer(&seamServer{bus: bus, conn: sc}), nats.NoReconnect(),
+		nats.Name("seam"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(nc.Close)
+	return nc, sc
+}
+
+// Regression test for the TestNATSRoundTrip flake (CI run 36297552364, about 1 in 1000 runs
+// locally): NATSHandle returned while its SUB still sat in the client's write buffer, so a
+// request from another connection could reach the server first and get no responders. Holding
+// the SUB back makes that ordering certain.
+func TestNATSHandleIsLiveOnReturn(t *testing.T) {
+	bus := testkit.StartNATS(t)
+	nc, _ := connectSeam(t, bus, 200*time.Millisecond)
+	client := bus.Connect(t, "client")
+	if _, err := rpc.NATSHandle(nc, "rpc.test.live.Double", "live", nil,
+		func(_ context.Context, req *natsReq) (*natsRes, error) { return &natsRes{Double: 2 * req.N}, nil }); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	res, err := rpc.NATSRequest[natsReq, natsRes](ctx, client, "rpc.test.live.Double", &natsReq{N: 4})
+	if err != nil || res.Double != 8 {
+		t.Fatalf("request right after NATSHandle returned: %+v %v", res, err)
+	}
+}
+
+// A subscription the server never confirmed must be reported as a failure, not handed back as
+// if it were serving.
+func TestNATSHandleUnconfirmed(t *testing.T) {
+	bus := testkit.StartNATS(t)
+	nc, sc := connectSeam(t, bus, 0)
+	sc.dropPings.Store(true)
+	go func() {
+		<-sc.dropped // NATSHandle is now waiting for a PONG that cannot come
+		nc.Close()
+	}()
+	sub, err := rpc.NATSHandle(nc, "rpc.test.live.Lost", "live", nil,
+		func(context.Context, *natsReq) (*natsRes, error) { return &natsRes{}, nil })
+	if sub != nil || !errors.Is(err, nats.ErrConnectionClosed) {
+		t.Fatalf("unconfirmed subscription: returned a subscription: %t, err: %v", sub != nil, err)
 	}
 }
 

@@ -45,7 +45,8 @@ rejoin, leader schedules; fence load / handoff / park, takeover + `released`, ar
 join / leave lockstep, depth-3 trees with subtree leave, all-or-nothing `advanceMany`, recovery of
 active rows only (dormant never resurrected, zombies refused), exact-manifest migration, deferred
 ordering, unavailability; futures across threads; lease holder events, the holder rule under
-unreachability, explicit fencing signals; AG table loads at tick boundaries, the fence gate,
+unreachability, explicit fencing signals (CONF-03's 60 s `conformance/holder_rule` runs the
+cell host above this in `engine/server`); AG table loads at tick boundaries, the fence gate,
 rejected loads, released notices and takeovers.
 
 ## Not yet
@@ -56,7 +57,9 @@ ghosts, handoff and `Authority::mutate` (v1); multi-cell zone leaders sending `Z
 
 ## Plan conformance
 
-Plan-Rev: 6
+Plan-Rev: 9
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
-`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.
+`docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked at revision 9 by WP-0.14's PR on
+2026-09-27: revisions 7–9 changed 06 §1.2, 02 §7.4 with 04 §10.2 and 09 §5.2a, none of which this
+module implements. No conformance delta is open; see §5.10.4 (c) there.

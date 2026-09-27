@@ -276,10 +276,16 @@
       "title": "Windows client ↔ Linux gateway interop",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Windows client ↔ Linux gateway interop",
-      "status": "unmeasured",
-      "tests": [],
+      "notes": "Two halves: every toolchain encodes and decodes the recorded client and trunk wire bytes (tests/data/wire_vectors.tsv) and runs the real-UDP loopback path; server_tests_ns03_remote connects a probe on this host to the gateway named by HELIOS_NS03_GATEWAY (keyring HELIOS_NS03_KEYS) and is Skipped without them",
+      "status": "partial",
+      "tests": [
+        {"doctest": "server_tests", "case": "server.interop: NS-0.3 wire bytes are the recorded ones on every toolchain"},
+        {"doctest": "server_tests", "case": "server.interop: NS-0.3 the recorded bytes decode to the same values"},
+        {"doctest": "server_tests", "case": "server.e2e: real UDP loopback sockets"},
+        {"ctest": "server_tests_ns03_remote", "platforms": ["windows"], "run": "windows-local"}
+      ],
       "gaps": [
-        {"clause": "No cross-host job pairs a Windows client with a Linux gateway (the e2e tests run both ends on one host)", "state": "unmeasured", "owner": "WP-0.14"}
+        {"clause": "No cross-host run yet: server_tests_ns03_remote on a Windows host (MSVC build) against helios-gateway and helios-cell on a Linux host, with HELIOS_NS03_GATEWAY and HELIOS_NS03_KEYS set; needs two machines on one network (CI and the agent container have one host each)", "state": "unmeasured", "owner": "User"}
       ]
     },
     {
@@ -322,9 +328,11 @@
       "title": "Empty-zone tick < 0.5 ms",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Empty-zone tick < 0.5 ms",
+      "notes": "The perf case gates the p99 of 2,000 ticks (the tick graph's time and ZoneHost::runDue's wall time) on the serial perf run and reports the max; the main-suite case checks the median and p90 of 400 ticks on every run, Windows included",
       "status": "measured",
       "tests": [
-        {"doctest": "server_tests", "case": "server.zonehost: NS-0.6 an empty zone ticks in < 0.5 ms"}
+        {"doctest": "server_tests", "case": "server.zonehost: NS-0.6 an empty zone ticks in < 0.5 ms"},
+        {"doctest": "server_tests", "case": "perf: NS-0.6 an empty zone ticks in < 0.5 ms (p99 of 2,000 ticks)", "platforms": ["linux"], "run": "linux-gcc"}
       ]
     },
     {

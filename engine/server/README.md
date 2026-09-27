@@ -92,8 +92,8 @@ errors arrive as `Helios-Error` / `Helios-Error-Message` headers.
 
 | Subject | Who | Use |
 |---|---|---|
-| `rpc.<shard>.orch.RegisterProcess` | cell, gateway | cells declare their zones and trunk address; gateways their UDP address, `keyId`, capacity |
-| `rpc.<shard>.orch.Heartbeat` | both, every `heartbeatIntervalMs` | load (players, free slots, tick p99); the reply's assignments drive the lease holder |
+| `rpc.<shard>.orch.RegisterProcess` | cell, gateway | cells declare their zones and trunk address; gateways their UDP address, `keyId`, capacity; both their failure domain `fd{az, rack, host}` and `serverBuild` (05 §1.4) when the placer sets them |
+| `rpc.<shard>.orch.Heartbeat` | both, every `heartbeatIntervalMs` | load (players, free slots, tick p99) and `held[{region, leaseGen}]`, the regions held with their generations (left out when none); the reply's assignments drive the lease holder |
 | `rpc.<shard>.orch.AllocateIdBlocks` | cell | ID-block prefixes for every zone's `EntityIdMinter` |
 | `rpc.<shard>.orch.ResolveZone` | gateway | zone → owning cell's trunk address and lease generation |
 | `rpc.<shard>.orch.Deregister` | both, on shutdown | hands zones back without waiting for the 12 s TTL |
@@ -108,6 +108,14 @@ zone; the cell then registers again (new epoch) and hosts what it is given, unde
 generations. Verified live: with the backend stopped for 6 s the zone kept ticking; the restarted
 orchestrator (empty registry) answered `lease_lost`, the cell fenced, re-registered as epoch 2 and
 hosted Tallis again at lease_gen 2.
+
+**Placement fields.** The placer tells a process where it runs and which build it is:
+`--fd-az`, `--fd-rack`, `--fd-host` (`HELIOS_FD_AZ`, `HELIOS_FD_RACK`, `HELIOS_FD_HOST`) and
+`--server-build` (`HELIOS_SERVER_BUILD`, decimal). Phase 0's `helios-backend` supervisor sets none
+of them, so they are left out and the orchestrator stores empty values; Agones node labels and
+`helios.toml [fd]` supply them from Phase 2 (05 §1.4.3). Values the orchestrator would refuse (az or
+rack over 64 bytes, host over 255, NUL bytes, a negative build) stop the process at start
+(`orch::validateRegistration`), because RegisterProcess would otherwise fail on every retry.
 
 ## Run it locally (Windows; Linux is the same with `/` paths)
 
@@ -177,7 +185,7 @@ evicts the first probe (`kicked: superseded`) at once.
 
 ## Tests
 
-`server_tests` (doctest, 55 cases, ≈ 2 s): wire contracts against Go's own JSON and user-data
+`server_tests` (doctest, 62 cases: 60 in the main entry, ≈ 1.5 s; one `perf:`; one cross-host): wire contracts against Go's own JSON and user-data
 bytes, keyrings, base64, RFC 3339, trunk and client codecs incl. 20k random inputs; tick-graph
 ordering (stage order, `after`, parallel hooks after tick hooks and before the next stage, cycles
 and invalid edges rejected), budgets and overruns; zone attach / echo / tick state / detach,
@@ -195,7 +203,10 @@ additions: slow seal replies vs. a reconnect through the same gateway, trunk ret
 before a re-route, `ZoneFenced` by acked generation (including a session acked by the old instance
 of a zone the directory already moved), the bounded zone inbox, cell config validation, the tick
 p99 report, Go-exact protocol ids, non-finite JSON numbers, and the CONF-03 holder rule over a 60 s
-outage. `server.nats-live` (two cases: the orchestrator and session contracts, and subscription
+outage. WP-0.14's PR: the `fd`/`serverBuild`/`held` vectors, their bounds and the placement
+options; held lists that follow generation changes, stay put while unreachable and restart after
+`lease_lost`; CONF-03 over four failure modes with a mid-outage re-placement; NS-0.3's wire vectors
+and cross-host case; NS-0.6's `perf:` gate. `server.nats-live` (two cases: the orchestrator and session contracts, and subscription
 lifetimes) runs against a real `helios-backend` when `HELIOS_NATS_URL` (and `HELIOS_NATS_USER` /
 `HELIOS_NATS_PASSWORD`) are set; it passed against the backend built from `services/`
 (orchestrator and session over TCP NATS as the `fleet` user).
@@ -222,14 +233,31 @@ lifetimes) runs against a real `helios-backend` when `HELIOS_NATS_URL` (and `HEL
 
 ## Acceptance (09 §2.1 WP-0.14)
 
-* **NS-0.6** empty-zone tick < 0.5 ms: automated (`server.zonehost: NS-0.6 …`).
-* **CONF-03** holder rule for the C++ cell host: `conformance/holder_rule: …` keeps both zones
-  ticking and serving through a 60 s control-plane outage and drops one only after seeing its
-  higher `lease_gen`.
-* **NS-0.3** Windows client ↔ Linux gateway: the protocol is little-endian and byte-exact, the
-  MinGW build compiles and links, and `helios-gateway probe --connect <linux-host>:7777 --keys
-  <netcode-shard.json>` on Windows against a Linux gateway is the check; it needs the Windows CI
-  runner (09 §5.4) and is not automated here.
+* **NS-0.6** empty-zone tick < 0.5 ms: `perf: NS-0.6 …` gates the p99 of 2,000 ticks, both the
+  tick graph's time and `ZoneHost::runDue()`'s wall time, on the serial perf run (≈ 1.4 µs p99 and
+  ≈ 25 µs max on this container's GCC 13 RelWithDebInfo build); `server.zonehost: NS-0.6 …` checks
+  the median and p90 on every run, Windows included (the Windows jobs run no perf label).
+* **CONF-03** holder rule for the C++ cell host: `conformance/holder_rule: …` runs 15 s each of no
+  responders, timeouts, `unavailable` and a dead bus, back to back on the simulated clock (≈ 0.3 s
+  of real time). One zone is re-placed at a higher generation half-way through. The cell keeps both
+  zone instances, its registration and its sessions throughout, and its heartbeats report what it
+  holds. Once the control plane answers, it drops exactly the re-placed zone and hosts it again at
+  the new generation. The case fails if the client fences on no responders or gives regions up
+  after 30 failed heartbeats.
+* **NS-0.3** Windows client ↔ Linux gateway, in two halves (`tests/test_interop.cpp`):
+  * *The bytes:* every client and trunk message and the trunk user data match
+    `tests/data/wire_vectors.tsv` and decode back, on every toolchain that runs `server_tests`
+    (GCC and Clang here; MSVC and clang-cl in CI), and the real-UDP loopback case runs on the Win32
+    sockets in CI.
+  * *The hosts:* the CTest `server_tests_ns03_remote` connects a probe to the gateway in
+    `HELIOS_NS03_GATEWAY` (ip:port), with tokens from the keyring in `HELIOS_NS03_KEYS`, which must
+    be the gateway's `--keys` file. It checks the Welcome, 10 echoes and 20 tick states, and reports
+    Skipped without the variables. It passed against a Linux `helios-cell` and `helios-gateway` pair
+    on loopback, but it has not yet run between two hosts. For that, the MSVC build runs it on a
+    Windows host against `helios-gateway --listen <lan-ip>:7777 --keys ring.json --trunk-keys
+    ring.json` and `helios-cell --trunk-keys ring.json` on a Linux host (a VM, WSL2 with mirrored
+    networking, or the WP-0.4 SERVER box). `helios-gateway probe --connect <linux-host>:7777 --keys
+    ring.json` is the same check by hand.
 
 ## Known limitations
 
@@ -251,7 +279,11 @@ lifetimes) runs against a real `helios-backend` when `HELIOS_NATS_URL` (and `HEL
 
 ## Plan conformance
 
-Plan-Rev: 6
+Plan-Rev: 9
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
-`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.
+`docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked at revision 9 by WP-0.14's PR on
+2026-09-27. Revisions 7–9 changed 06 §1.2, 02 §7.4 with 04 §10.2 (a cell `VmConfig` refuses native
+codegen; this module hosts no Luau VM yet) and 09 §5.2a, none of which this code implements. The one
+open §5.10.4 (a) row for this module, `fd`/`serverBuild` on registration and held regions in
+heartbeats, is closed by that PR. No conformance delta is open.

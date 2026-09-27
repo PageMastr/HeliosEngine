@@ -28,6 +28,10 @@ jobs:
         run: cmake --preset windows-msvc-release
       - name: Build
         run: cmake --build --preset windows-msvc-release
+      - name: "TEMP (reverted before merge): test-local COMDATs defined by several objects"
+        continue-on-error: true
+        shell: pwsh
+        run: tools/ci/tmp_comdat_probe.ps1 -BuildDir build/windows-msvc-release
       - name: Test (no GPU on hosted runners)
         run: ctest --preset windows-msvc-release -LE "gpu|perf"
 
@@ -45,6 +49,10 @@ jobs:
         run: cmake --preset windows-msvc-release
       - name: Build
         run: cmake --build --preset windows-msvc-release
+      - name: "TEMP (reverted before merge): test-local COMDATs defined by several objects"
+        continue-on-error: true
+        shell: pwsh
+        run: tools/ci/tmp_comdat_probe.ps1 -BuildDir build/windows-msvc-release
       - name: Test (no GPU on hosted runners)
         run: ctest --preset windows-msvc-release -LE "gpu|perf"
 
@@ -60,6 +68,10 @@ jobs:
         run: cmake --preset windows-clang-cl
       - name: Build
         run: cmake --build --preset windows-clang-cl
+      - name: "TEMP (reverted before merge): test-local COMDATs defined by several objects"
+        continue-on-error: true
+        shell: pwsh
+        run: tools/ci/tmp_comdat_probe.ps1 -BuildDir build/windows-clang-cl
       - name: Test (no GPU on hosted runners)
         run: ctest --test-dir build/windows-clang-cl -LE "gpu|perf" --output-on-failure
 

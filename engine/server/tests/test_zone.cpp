@@ -5,6 +5,7 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include "helios/core/jobs.h"
 #include "helios/core/time.h"
@@ -344,10 +345,10 @@ TEST_CASE("perf: NS-0.6 an empty zone ticks in < 0.5 ms (p99 of 2,000 ticks)") {
         std::sort(v.begin(), v.end());
         return v[std::min(v.size() - 1, (v.size() * perMille + 999) / 1000 - 1)]; // nearest rank
     };
-    const f64 us = 1e-3;
-    MESSAGE("NS-0.6 empty zone: graph median " << pct(graphNs, 500) * us << " us, p99 " << pct(graphNs, 990) * us
-                                               << " us, max " << pct(graphNs, 1000) * us << " us; runDue p99 "
-                                               << pct(hostNs, 990) * us << " us, max " << pct(hostNs, 1000) * us << " us");
+    auto us = [&](const std::vector<i64>& v, usize perMille) { return static_cast<f64>(pct(v, perMille)) * 1e-3; };
+    MESSAGE("NS-0.6 empty zone: graph median " << us(graphNs, 500) << " us, p99 " << us(graphNs, 990) << " us, max "
+                                               << us(graphNs, 1000) << " us; runDue p99 " << us(hostNs, 990) << " us, max "
+                                               << us(hostNs, 1000) << " us");
     CHECK(pct(graphNs, 990) < 500'000);
     CHECK(pct(hostNs, 990) < 500'000);
     CHECK(zone->clock().dilationPpm() == authority::kDilationOne); // an empty zone never dilates

@@ -52,7 +52,8 @@ into annotations.
   run (with their `//go:build integration` constraint) and against the inventory's `go` section when it
   has one (the nightly's). `gate` references must be declared and run on the reference's platforms.
   `ci_job` names must be jobs of `.github/workflows/ci.yml` (matrix names expanded); a missing ci.yml is
-  a finding. Every declared run and gate must be produced by `.github/workflows/nightly.yml`.
+  a finding. Every declared run (except those marked `"nightly": false`) and gate must be produced by
+  `.github/workflows/nightly.yml`.
 - **Perf metrics.** Each has one source (a gate, or a doctest binary and case, named exactly), a pattern with
   exactly one group, a unit, `better` (`lower` or `higher`) and a budget category. Every doctest source must
   exist in each inventory of its run's OS (every OS without a `run`), whether or not the metric names a

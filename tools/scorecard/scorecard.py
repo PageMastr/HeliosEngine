@@ -42,7 +42,7 @@ ENTRY_REQUIRED = {"id", "phase", "source", "owner", "title", "class", "platforms
 ENTRY_OPTIONAL = {"gaps", "notes"}
 GAP_KEYS = {"clause", "state", "owner", "pinned_by"}
 TOP_KEYS = {"version", "plan_rev", "covers", "runs", "gates", "criteria", "exit", "perf_metrics", "perf_accept"}
-RUN_KEYS = {"os", "default", "description"}
+RUN_KEYS = {"os", "default", "nightly", "description"}
 GATE_KEYS = {"runs", "min_seconds", "description"}
 METRIC_FIELDS = {"id", "criterion", "doctest", "case", "gate", "pattern", "unit", "better", "category", "run", "note"}
 METRIC_CATEGORIES = {"render", "runtime", "backend", "editor", "iteration"}
@@ -621,6 +621,9 @@ def _check_top(name: str, data: dict, errors: list[str]) -> list[int]:
             errors.append(f"{name}:1: run '{run_name}' needs 'os' (linux or windows) and a boolean 'default'")
         if not isinstance(run.get("description", ""), str):
             errors.append(f"{name}:1: run '{run_name}': 'description' must be a string")
+        if not isinstance(run.get("nightly", True), bool):
+            errors.append(f"{name}:1: run '{run_name}': 'nightly' (false for runs the nightly does not produce) "
+                          f"must be a boolean")
     gates = data.get("gates", {})
     if not isinstance(gates, dict):
         errors.append(f"{name}:1: 'gates' must be an object")
@@ -845,7 +848,8 @@ def check_workflow(data: dict, path: Path, workflow: Path) -> list[str]:
     """Every declared run and gate is produced by the nightly workflow (it names each one)."""
     text = workflow.read_text(encoding="utf-8")
     errors = []
-    for kind, names in (("run", data.get("runs") or {}), ("gate", data.get("gates") or {})):
+    runs = {k: v for k, v in (data.get("runs") or {}).items() if not isinstance(v, dict) or v.get("nightly", True)}
+    for kind, names in (("run", runs), ("gate", data.get("gates") or {})):
         for n in names:
             if not re.search(r"(?<![\w-])" + re.escape(n) + r"(?![\w-])", text):
                 errors.append(f"{display(path)}:1: {kind} '{n}' is never produced by {display(workflow)}")

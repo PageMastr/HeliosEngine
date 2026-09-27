@@ -970,13 +970,13 @@ func enc_list_f32___36(b []byte, id uint32, v []*float32) []byte {
 	}
 	for _, e := range v {
 		b = appendTag(b, id, wireLen)
-		{ var mk int; b, mk = beginLen(b); b = enc_f32__60(b, 1, e); b = endLen(b, mk) }
+		{ var mk int; b, mk = beginLen(b); b = enc_f32__67(b, 1, e); b = endLen(b, mk) }
 	}
 	return b
 }
 
 func dec_list_f32___36(r *wireReader, wt int, v *[]*float32) error {
-	e := zero_f32__60()
+	e := zero_f32__67()
 	if wt != wireLen {
 		return wireMismatch("wrapped element", wt, wireLen)
 	}
@@ -990,7 +990,7 @@ func dec_list_f32___36(r *wireReader, wt int, v *[]*float32) error {
 			return err
 		}
 		if eid == 1 {
-			if err := dec_f32__60(esub, ewt, &e); err != nil {
+			if err := dec_f32__67(esub, ewt, &e); err != nil {
 				return err
 			}
 		} else if err := esub.skip(ewt); err != nil {
@@ -1039,7 +1039,7 @@ func enc_map_string_golden_all_Scalars__38(b []byte, id uint32, v map[string]Sca
 		var mk int
 		b, mk = beginLen(b)
 		b = enc_string_21(b, 1, k)
-		b = enc_golden_all_Scalars_61(b, 2, v[k])
+		b = enc_golden_all_Scalars_68(b, 2, v[k])
 		b = endLen(b, mk)
 	}
 	return b
@@ -1054,7 +1054,7 @@ func dec_map_string_golden_all_Scalars__38(r *wireReader, wt int, v *map[string]
 		return err
 	}
 	key := zero_string_21()
-	val := zero_golden_all_Scalars_61()
+	val := zero_golden_all_Scalars_68()
 	for !sub.atEnd() {
 		fid, fwt, err := sub.tag()
 		if err != nil {
@@ -1066,7 +1066,7 @@ func dec_map_string_golden_all_Scalars__38(r *wireReader, wt int, v *map[string]
 					return err
 				}
 			case 2:
-				if err := dec_golden_all_Scalars_61(sub, fwt, &val); err != nil {
+				if err := dec_golden_all_Scalars_68(sub, fwt, &val); err != nil {
 					return err
 				}
 			default:
@@ -1094,7 +1094,7 @@ func enc_map_golden_all_Color_list_u64___39(b []byte, id uint32, v map[Color][]u
 		var mk int
 		b, mk = beginLen(b)
 		b = enc_golden_all_Color_30(b, 1, k)
-		b = enc_list_u64__62(b, 2, v[k])
+		b = enc_list_u64__69(b, 2, v[k])
 		b = endLen(b, mk)
 	}
 	return b
@@ -1109,7 +1109,7 @@ func dec_map_golden_all_Color_list_u64___39(r *wireReader, wt int, v *map[Color]
 		return err
 	}
 	key := zero_golden_all_Color_30()
-	val := zero_list_u64__62()
+	val := zero_list_u64__69()
 	for !sub.atEnd() {
 		fid, fwt, err := sub.tag()
 		if err != nil {
@@ -1121,7 +1121,7 @@ func dec_map_golden_all_Color_list_u64___39(r *wireReader, wt int, v *map[Color]
 					return err
 				}
 			case 2:
-				if err := dec_list_u64__62(sub, fwt, &val); err != nil {
+				if err := dec_list_u64__69(sub, fwt, &val); err != nil {
 					return err
 				}
 			default:
@@ -1147,15 +1147,15 @@ func enc_golden_all_Scalars__40(b []byte, id uint32, v *Scalars) []byte {
 	if v == nil {
 		return b
 	}
-	return enc_golden_all_Scalars_61(b, id, *v)
+	return enc_golden_all_Scalars_68(b, id, *v)
 }
 
 func dec_golden_all_Scalars__40(r *wireReader, wt int, v **Scalars) error {
 	if *v == nil {
-		x := zero_golden_all_Scalars_61()
+		x := zero_golden_all_Scalars_68()
 		*v = &x
 	}
-	return dec_golden_all_Scalars_61(r, wt, *v)
+	return dec_golden_all_Scalars_68(r, wt, *v)
 }
 
 func zero_vec3f__41() *Vec3 { return (*Vec3)(nil) }
@@ -1192,7 +1192,7 @@ func enc_keyed_golden_all_Item__42(b []byte, id uint32, v []Keyed[Item]) []byte 
 		b, mk = beginLen(b)
 		b = appendTag(b, 1, wireLen)
 		b = appendBytes(b, e.Key[:])
-		b = enc_golden_all_Item_63(b, 2, e.Value)
+		b = enc_golden_all_Item_62(b, 2, e.Value)
 		b = endLen(b, mk)
 	}
 	return b
@@ -1207,7 +1207,7 @@ func dec_keyed_golden_all_Item__42(r *wireReader, wt int, v *[]Keyed[Item]) erro
 		return err
 	}
 	var key Guid
-	val := zero_golden_all_Item_63()
+	val := zero_golden_all_Item_62()
 	for !sub.atEnd() {
 		fid, fwt, err := sub.tag()
 		if err != nil {
@@ -1219,7 +1219,7 @@ func dec_keyed_golden_all_Item__42(r *wireReader, wt int, v *[]Keyed[Item]) erro
 					return err
 				}
 			case 2:
-				if err := dec_golden_all_Item_63(sub, fwt, &val); err != nil {
+				if err := dec_golden_all_Item_62(sub, fwt, &val); err != nil {
 					return err
 				}
 			default:
@@ -1252,14 +1252,14 @@ func enc_list_golden_all_Item__43(b []byte, id uint32, v []Item) []byte {
 	}
 	for _, e := range v {
 		b = appendTag(b, id, wireLen)
-		b = encv_golden_all_Item_63(b, e)
+		b = encv_golden_all_Item_62(b, e)
 	}
 	return b
 }
 
 func dec_list_golden_all_Item__43(r *wireReader, wt int, v *[]Item) error {
-	e := zero_golden_all_Item_63()
-	if err := decv_golden_all_Item_63(r, wt, &e); err != nil {
+	e := zero_golden_all_Item_62()
+	if err := decv_golden_all_Item_62(r, wt, &e); err != nil {
 		return err
 	}
 	*v = append(*v, e)
@@ -1276,15 +1276,15 @@ func enc_Ref_golden_all_ThingDef___44(b []byte, id uint32, v *ThingRef) []byte {
 	if v == nil {
 		return b
 	}
-	return enc_Ref_golden_all_ThingDef__64(b, id, *v)
+	return enc_Ref_golden_all_ThingDef__61(b, id, *v)
 }
 
 func dec_Ref_golden_all_ThingDef___44(r *wireReader, wt int, v **ThingRef) error {
 	if *v == nil {
-		x := zero_Ref_golden_all_ThingDef__64()
+		x := zero_Ref_golden_all_ThingDef__61()
 		*v = &x
 	}
-	return dec_Ref_golden_all_ThingDef__64(r, wt, *v)
+	return dec_Ref_golden_all_ThingDef__61(r, wt, *v)
 }
 
 func zero_list_Ref_golden_all_ThingDef___45() []ThingRef { return ([]ThingRef)(nil) }
@@ -1300,7 +1300,7 @@ func enc_list_Ref_golden_all_ThingDef___45(b []byte, id uint32, v []ThingRef) []
 	b = appendTag(b, id, wireLen)
 	b, mk := beginLen(b)
 	for _, e := range v {
-		b = encv_Ref_golden_all_ThingDef__64(b, e)
+		b = encv_Ref_golden_all_ThingDef__61(b, e)
 	}
 	return endLen(b, mk)
 }
@@ -1313,16 +1313,16 @@ func dec_list_Ref_golden_all_ThingDef___45(r *wireReader, wt int, v *[]ThingRef)
 		}
 		sub := &wireReader{data: p, depth: r.depth}
 		for !sub.atEnd() {
-			e := zero_Ref_golden_all_ThingDef__64()
-			if err := decv_Ref_golden_all_ThingDef__64(sub, wireI64, &e); err != nil {
+			e := zero_Ref_golden_all_ThingDef__61()
+			if err := decv_Ref_golden_all_ThingDef__61(sub, wireI64, &e); err != nil {
 				return err
 			}
 			*v = append(*v, e)
 		}
 		return nil
 	}
-	e := zero_Ref_golden_all_ThingDef__64()
-	if err := decv_Ref_golden_all_ThingDef__64(r, wt, &e); err != nil {
+	e := zero_Ref_golden_all_ThingDef__61()
+	if err := decv_Ref_golden_all_ThingDef__61(r, wt, &e); err != nil {
 		return err
 	}
 	*v = append(*v, e)
@@ -1380,14 +1380,14 @@ func enc_list_golden_all_Late__47(b []byte, id uint32, v []Late) []byte {
 	}
 	for _, e := range v {
 		b = appendTag(b, id, wireLen)
-		b = encv_golden_all_Late_65(b, e)
+		b = encv_golden_all_Late_70(b, e)
 	}
 	return b
 }
 
 func dec_list_golden_all_Late__47(r *wireReader, wt int, v *[]Late) error {
-	e := zero_golden_all_Late_65()
-	if err := decv_golden_all_Late_65(r, wt, &e); err != nil {
+	e := zero_golden_all_Late_70()
+	if err := decv_golden_all_Late_70(r, wt, &e); err != nil {
 		return err
 	}
 	*v = append(*v, e)
@@ -1407,7 +1407,7 @@ func enc_keyed_golden_all_Late__48(b []byte, id uint32, v []Keyed[Late]) []byte 
 		b, mk = beginLen(b)
 		b = appendTag(b, 1, wireLen)
 		b = appendBytes(b, e.Key[:])
-		b = enc_golden_all_Late_65(b, 2, e.Value)
+		b = enc_golden_all_Late_70(b, 2, e.Value)
 		b = endLen(b, mk)
 	}
 	return b
@@ -1422,7 +1422,7 @@ func dec_keyed_golden_all_Late__48(r *wireReader, wt int, v *[]Keyed[Late]) erro
 		return err
 	}
 	var key Guid
-	val := zero_golden_all_Late_65()
+	val := zero_golden_all_Late_70()
 	for !sub.atEnd() {
 		fid, fwt, err := sub.tag()
 		if err != nil {
@@ -1434,7 +1434,7 @@ func dec_keyed_golden_all_Late__48(r *wireReader, wt int, v *[]Keyed[Late]) erro
 					return err
 				}
 			case 2:
-				if err := dec_golden_all_Late_65(sub, fwt, &val); err != nil {
+				if err := dec_golden_all_Late_70(sub, fwt, &val); err != nil {
 					return err
 				}
 			default:
@@ -1467,7 +1467,7 @@ func enc_map_Name_golden_all_Item__49(b []byte, id uint32, v map[string]Item) []
 		var mk int
 		b, mk = beginLen(b)
 		b = enc_Name_22(b, 1, k)
-		b = enc_golden_all_Item_63(b, 2, v[k])
+		b = enc_golden_all_Item_62(b, 2, v[k])
 		b = endLen(b, mk)
 	}
 	return b
@@ -1482,7 +1482,7 @@ func dec_map_Name_golden_all_Item__49(r *wireReader, wt int, v *map[string]Item)
 		return err
 	}
 	key := zero_Name_22()
-	val := zero_golden_all_Item_63()
+	val := zero_golden_all_Item_62()
 	for !sub.atEnd() {
 		fid, fwt, err := sub.tag()
 		if err != nil {
@@ -1494,7 +1494,7 @@ func dec_map_Name_golden_all_Item__49(r *wireReader, wt int, v *map[string]Item)
 					return err
 				}
 			case 2:
-				if err := dec_golden_all_Item_63(sub, fwt, &val); err != nil {
+				if err := dec_golden_all_Item_62(sub, fwt, &val); err != nil {
 					return err
 				}
 			default:
@@ -1785,19 +1785,239 @@ func dec_list_u8__58(r *wireReader, wt int, v *U8List) error {
 	return nil
 }
 
-func zero_golden_all_Req_59() Req { return NewReq() }
+func zero_golden_all_LedgerLine_Shape_Dot_59() LedgerLineShapeDot { return NewLedgerLineShapeDot() }
 
-func def_golden_all_Req_59(v Req) bool {
+func def_golden_all_LedgerLine_Shape_Dot_59(v LedgerLineShapeDot) bool {
 	return v.isDefault()
 }
 
-func encv_golden_all_Req_59(b []byte, v Req) []byte {
+func encv_golden_all_LedgerLine_Shape_Dot_59(b []byte, v LedgerLineShapeDot) []byte {
 	b, mk := beginLen(b)
 	b = v.appendFields(b)
 	return endLen(b, mk)
 }
 
-func decv_golden_all_Req_59(r *wireReader, wt int, v *Req) error {
+func decv_golden_all_LedgerLine_Shape_Dot_59(r *wireReader, wt int, v *LedgerLineShapeDot) error {
+	if wt != wireLen {
+		return wireMismatch("Dot", wt, wireLen)
+	}
+	sub, err := r.message()
+	if err != nil {
+		return err
+	}
+	return v.readFields(sub)
+}
+
+func enc_golden_all_LedgerLine_Shape_Dot_59(b []byte, id uint32, v LedgerLineShapeDot) []byte {
+	b = appendTag(b, id, wireLen)
+	return encv_golden_all_LedgerLine_Shape_Dot_59(b, v)
+}
+
+func dec_golden_all_LedgerLine_Shape_Dot_59(r *wireReader, wt int, v *LedgerLineShapeDot) error {
+	return decv_golden_all_LedgerLine_Shape_Dot_59(r, wt, v)
+}
+
+func zero_golden_all_LedgerLine_Shape_Line_60() LedgerLineShapeLine { return NewLedgerLineShapeLine() }
+
+func def_golden_all_LedgerLine_Shape_Line_60(v LedgerLineShapeLine) bool {
+	return v.isDefault()
+}
+
+func encv_golden_all_LedgerLine_Shape_Line_60(b []byte, v LedgerLineShapeLine) []byte {
+	b, mk := beginLen(b)
+	b = v.appendFields(b)
+	return endLen(b, mk)
+}
+
+func decv_golden_all_LedgerLine_Shape_Line_60(r *wireReader, wt int, v *LedgerLineShapeLine) error {
+	if wt != wireLen {
+		return wireMismatch("Line", wt, wireLen)
+	}
+	sub, err := r.message()
+	if err != nil {
+		return err
+	}
+	return v.readFields(sub)
+}
+
+func enc_golden_all_LedgerLine_Shape_Line_60(b []byte, id uint32, v LedgerLineShapeLine) []byte {
+	b = appendTag(b, id, wireLen)
+	return encv_golden_all_LedgerLine_Shape_Line_60(b, v)
+}
+
+func dec_golden_all_LedgerLine_Shape_Line_60(r *wireReader, wt int, v *LedgerLineShapeLine) error {
+	return decv_golden_all_LedgerLine_Shape_Line_60(r, wt, v)
+}
+
+func zero_Ref_golden_all_ThingDef__61() ThingRef { return ThingRef(0) }
+
+func def_Ref_golden_all_ThingDef__61(v ThingRef) bool {
+	return v == 0
+}
+
+func encv_Ref_golden_all_ThingDef__61(b []byte, v ThingRef) []byte {
+	return appendFixed64(b, uint64(v))
+}
+
+func decv_Ref_golden_all_ThingDef__61(r *wireReader, wt int, v *ThingRef) error {
+	x, err := readFixed64Field(r, wt, "record reference")
+	*v = ThingRef(x)
+	return err
+}
+
+func enc_Ref_golden_all_ThingDef__61(b []byte, id uint32, v ThingRef) []byte {
+	b = appendTag(b, id, wireI64)
+	return encv_Ref_golden_all_ThingDef__61(b, v)
+}
+
+func dec_Ref_golden_all_ThingDef__61(r *wireReader, wt int, v *ThingRef) error {
+	return decv_Ref_golden_all_ThingDef__61(r, wt, v)
+}
+
+func zero_golden_all_Item_62() Item { return NewItem() }
+
+func def_golden_all_Item_62(v Item) bool {
+	return v.isDefault()
+}
+
+func encv_golden_all_Item_62(b []byte, v Item) []byte {
+	b, mk := beginLen(b)
+	b = v.appendFields(b)
+	return endLen(b, mk)
+}
+
+func decv_golden_all_Item_62(r *wireReader, wt int, v *Item) error {
+	if wt != wireLen {
+		return wireMismatch("Item", wt, wireLen)
+	}
+	sub, err := r.message()
+	if err != nil {
+		return err
+	}
+	return v.readFields(sub)
+}
+
+func enc_golden_all_Item_62(b []byte, id uint32, v Item) []byte {
+	b = appendTag(b, id, wireLen)
+	return encv_golden_all_Item_62(b, v)
+}
+
+func dec_golden_all_Item_62(r *wireReader, wt int, v *Item) error {
+	return decv_golden_all_Item_62(r, wt, v)
+}
+
+func zero_golden_all_LedgerLine_Shape_63() LedgerLineShape { return NewLedgerLineShape() }
+
+func def_golden_all_LedgerLine_Shape_63(v LedgerLineShape) bool {
+	return v.isDefault()
+}
+
+func encv_golden_all_LedgerLine_Shape_63(b []byte, v LedgerLineShape) []byte {
+	return v.appendValue(b)
+}
+
+func decv_golden_all_LedgerLine_Shape_63(r *wireReader, wt int, v *LedgerLineShape) error {
+	return v.readValue(r, wt)
+}
+
+func enc_golden_all_LedgerLine_Shape_63(b []byte, id uint32, v LedgerLineShape) []byte {
+	b = appendTag(b, id, wireLen)
+	return encv_golden_all_LedgerLine_Shape_63(b, v)
+}
+
+func dec_golden_all_LedgerLine_Shape_63(r *wireReader, wt int, v *LedgerLineShape) error {
+	return decv_golden_all_LedgerLine_Shape_63(r, wt, v)
+}
+
+func zero_string__64() *string { return (*string)(nil) }
+
+func def_string__64(v *string) bool {
+	return v == nil
+}
+
+func enc_string__64(b []byte, id uint32, v *string) []byte {
+	if v == nil {
+		return b
+	}
+	return enc_string_21(b, id, *v)
+}
+
+func dec_string__64(r *wireReader, wt int, v **string) error {
+	if *v == nil {
+		x := zero_string_21()
+		*v = &x
+	}
+	return dec_string_21(r, wt, *v)
+}
+
+func zero_map_string_u8__65() map[string]uint8 { return (map[string]uint8)(nil) }
+
+func def_map_string_u8__65(v map[string]uint8) bool {
+	return len(v) == 0
+}
+
+func enc_map_string_u8__65(b []byte, id uint32, v map[string]uint8) []byte {
+	for _, k := range sortedKeys(v) {
+		b = appendTag(b, id, wireLen)
+		var mk int
+		b, mk = beginLen(b)
+		b = enc_string_21(b, 1, k)
+		b = enc_u8_16(b, 2, v[k])
+		b = endLen(b, mk)
+	}
+	return b
+}
+
+func dec_map_string_u8__65(r *wireReader, wt int, v *map[string]uint8) error {
+	if wt != wireLen {
+		return wireMismatch("map entry", wt, wireLen)
+	}
+	sub, err := r.message()
+	if err != nil {
+		return err
+	}
+	key := zero_string_21()
+	val := zero_u8_16()
+	for !sub.atEnd() {
+		fid, fwt, err := sub.tag()
+		if err != nil {
+			return err
+		}
+		switch fid {
+			case 1:
+				if err := dec_string_21(sub, fwt, &key); err != nil {
+					return err
+				}
+			case 2:
+				if err := dec_u8_16(sub, fwt, &val); err != nil {
+					return err
+				}
+			default:
+				if err := sub.skip(fwt); err != nil {
+					return err
+				}
+		}
+	}
+	if *v == nil {
+		*v = map[string]uint8{}
+	}
+	(*v)[key] = val
+	return nil
+}
+
+func zero_golden_all_Req_66() Req { return NewReq() }
+
+func def_golden_all_Req_66(v Req) bool {
+	return v.isDefault()
+}
+
+func encv_golden_all_Req_66(b []byte, v Req) []byte {
+	b, mk := beginLen(b)
+	b = v.appendFields(b)
+	return endLen(b, mk)
+}
+
+func decv_golden_all_Req_66(r *wireReader, wt int, v *Req) error {
 	if wt != wireLen {
 		return wireMismatch("Req", wt, wireLen)
 	}
@@ -1808,29 +2028,29 @@ func decv_golden_all_Req_59(r *wireReader, wt int, v *Req) error {
 	return v.readFields(sub)
 }
 
-func enc_golden_all_Req_59(b []byte, id uint32, v Req) []byte {
+func enc_golden_all_Req_66(b []byte, id uint32, v Req) []byte {
 	b = appendTag(b, id, wireLen)
-	return encv_golden_all_Req_59(b, v)
+	return encv_golden_all_Req_66(b, v)
 }
 
-func dec_golden_all_Req_59(r *wireReader, wt int, v *Req) error {
-	return decv_golden_all_Req_59(r, wt, v)
+func dec_golden_all_Req_66(r *wireReader, wt int, v *Req) error {
+	return decv_golden_all_Req_66(r, wt, v)
 }
 
-func zero_f32__60() *float32 { return (*float32)(nil) }
+func zero_f32__67() *float32 { return (*float32)(nil) }
 
-func def_f32__60(v *float32) bool {
+func def_f32__67(v *float32) bool {
 	return v == nil
 }
 
-func enc_f32__60(b []byte, id uint32, v *float32) []byte {
+func enc_f32__67(b []byte, id uint32, v *float32) []byte {
 	if v == nil {
 		return b
 	}
 	return enc_f32_19(b, id, *v)
 }
 
-func dec_f32__60(r *wireReader, wt int, v **float32) error {
+func dec_f32__67(r *wireReader, wt int, v **float32) error {
 	if *v == nil {
 		x := zero_f32_19()
 		*v = &x
@@ -1838,19 +2058,19 @@ func dec_f32__60(r *wireReader, wt int, v **float32) error {
 	return dec_f32_19(r, wt, *v)
 }
 
-func zero_golden_all_Scalars_61() Scalars { return NewScalars() }
+func zero_golden_all_Scalars_68() Scalars { return NewScalars() }
 
-func def_golden_all_Scalars_61(v Scalars) bool {
+func def_golden_all_Scalars_68(v Scalars) bool {
 	return v.isDefault()
 }
 
-func encv_golden_all_Scalars_61(b []byte, v Scalars) []byte {
+func encv_golden_all_Scalars_68(b []byte, v Scalars) []byte {
 	b, mk := beginLen(b)
 	b = v.appendFields(b)
 	return endLen(b, mk)
 }
 
-func decv_golden_all_Scalars_61(r *wireReader, wt int, v *Scalars) error {
+func decv_golden_all_Scalars_68(r *wireReader, wt int, v *Scalars) error {
 	if wt != wireLen {
 		return wireMismatch("Scalars", wt, wireLen)
 	}
@@ -1861,22 +2081,22 @@ func decv_golden_all_Scalars_61(r *wireReader, wt int, v *Scalars) error {
 	return v.readFields(sub)
 }
 
-func enc_golden_all_Scalars_61(b []byte, id uint32, v Scalars) []byte {
+func enc_golden_all_Scalars_68(b []byte, id uint32, v Scalars) []byte {
 	b = appendTag(b, id, wireLen)
-	return encv_golden_all_Scalars_61(b, v)
+	return encv_golden_all_Scalars_68(b, v)
 }
 
-func dec_golden_all_Scalars_61(r *wireReader, wt int, v *Scalars) error {
-	return decv_golden_all_Scalars_61(r, wt, v)
+func dec_golden_all_Scalars_68(r *wireReader, wt int, v *Scalars) error {
+	return decv_golden_all_Scalars_68(r, wt, v)
 }
 
-func zero_list_u64__62() []uint64 { return ([]uint64)(nil) }
+func zero_list_u64__69() []uint64 { return ([]uint64)(nil) }
 
-func def_list_u64__62(v []uint64) bool {
+func def_list_u64__69(v []uint64) bool {
 	return len(v) == 0
 }
 
-func enc_list_u64__62(b []byte, id uint32, v []uint64) []byte {
+func enc_list_u64__69(b []byte, id uint32, v []uint64) []byte {
 	if len(v) == 0 {
 		return b
 	}
@@ -1888,7 +2108,7 @@ func enc_list_u64__62(b []byte, id uint32, v []uint64) []byte {
 	return endLen(b, mk)
 }
 
-func dec_list_u64__62(r *wireReader, wt int, v *[]uint64) error {
+func dec_list_u64__69(r *wireReader, wt int, v *[]uint64) error {
 	if wt == wireLen {
 		p, err := r.lenBytes()
 		if err != nil {
@@ -1912,76 +2132,19 @@ func dec_list_u64__62(r *wireReader, wt int, v *[]uint64) error {
 	return nil
 }
 
-func zero_golden_all_Item_63() Item { return NewItem() }
+func zero_golden_all_Late_70() Late { return NewLate() }
 
-func def_golden_all_Item_63(v Item) bool {
+func def_golden_all_Late_70(v Late) bool {
 	return v.isDefault()
 }
 
-func encv_golden_all_Item_63(b []byte, v Item) []byte {
+func encv_golden_all_Late_70(b []byte, v Late) []byte {
 	b, mk := beginLen(b)
 	b = v.appendFields(b)
 	return endLen(b, mk)
 }
 
-func decv_golden_all_Item_63(r *wireReader, wt int, v *Item) error {
-	if wt != wireLen {
-		return wireMismatch("Item", wt, wireLen)
-	}
-	sub, err := r.message()
-	if err != nil {
-		return err
-	}
-	return v.readFields(sub)
-}
-
-func enc_golden_all_Item_63(b []byte, id uint32, v Item) []byte {
-	b = appendTag(b, id, wireLen)
-	return encv_golden_all_Item_63(b, v)
-}
-
-func dec_golden_all_Item_63(r *wireReader, wt int, v *Item) error {
-	return decv_golden_all_Item_63(r, wt, v)
-}
-
-func zero_Ref_golden_all_ThingDef__64() ThingRef { return ThingRef(0) }
-
-func def_Ref_golden_all_ThingDef__64(v ThingRef) bool {
-	return v == 0
-}
-
-func encv_Ref_golden_all_ThingDef__64(b []byte, v ThingRef) []byte {
-	return appendFixed64(b, uint64(v))
-}
-
-func decv_Ref_golden_all_ThingDef__64(r *wireReader, wt int, v *ThingRef) error {
-	x, err := readFixed64Field(r, wt, "record reference")
-	*v = ThingRef(x)
-	return err
-}
-
-func enc_Ref_golden_all_ThingDef__64(b []byte, id uint32, v ThingRef) []byte {
-	b = appendTag(b, id, wireI64)
-	return encv_Ref_golden_all_ThingDef__64(b, v)
-}
-
-func dec_Ref_golden_all_ThingDef__64(r *wireReader, wt int, v *ThingRef) error {
-	return decv_Ref_golden_all_ThingDef__64(r, wt, v)
-}
-
-func zero_golden_all_Late_65() Late { return NewLate() }
-
-func def_golden_all_Late_65(v Late) bool {
-	return v.isDefault()
-}
-
-func encv_golden_all_Late_65(b []byte, v Late) []byte {
-	b, mk := beginLen(b)
-	b = v.appendFields(b)
-	return endLen(b, mk)
-}
-
-func decv_golden_all_Late_65(r *wireReader, wt int, v *Late) error {
+func decv_golden_all_Late_70(r *wireReader, wt int, v *Late) error {
 	if wt != wireLen {
 		return wireMismatch("Late", wt, wireLen)
 	}
@@ -1992,12 +2155,12 @@ func decv_golden_all_Late_65(r *wireReader, wt int, v *Late) error {
 	return v.readFields(sub)
 }
 
-func enc_golden_all_Late_65(b []byte, id uint32, v Late) []byte {
+func enc_golden_all_Late_70(b []byte, id uint32, v Late) []byte {
 	b = appendTag(b, id, wireLen)
-	return encv_golden_all_Late_65(b, v)
+	return encv_golden_all_Late_70(b, v)
 }
 
-func dec_golden_all_Late_65(r *wireReader, wt int, v *Late) error {
-	return decv_golden_all_Late_65(r, wt, v)
+func dec_golden_all_Late_70(r *wireReader, wt int, v *Late) error {
+	return decv_golden_all_Late_70(r, wt, v)
 }
 

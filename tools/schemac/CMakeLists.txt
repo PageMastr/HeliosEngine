@@ -18,6 +18,7 @@ add_library(helios_schemac_lib STATIC
   src/gen_go.cpp
   src/gen_json.cpp
   src/gen_luau.cpp
+  src/gen_sql.cpp
   src/json_out.cpp
   src/lexer.cpp
   src/lock.cpp
@@ -86,4 +87,17 @@ if(HELIOS_BUILD_TESTS)
     HELIOS_CMAKE_COMMAND="${CMAKE_COMMAND}"
     HELIOS_TEST_WORK_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_work")
   set_tests_properties(schemac_tests PROPERTIES TIMEOUT 600)
+  # --emit sql on a real PostgreSQL (tests/sql_postgres.cmake): the migration stubs of two releases reach
+  # the snapshot, Down returns, the committed SQL goldens apply. Skipped without PostgreSQL binaries
+  # (PGBIN or /usr/lib/postgresql/*/bin); a host-only test (helios-schemac runs on the build host). Not
+  # registered on Windows yet: starting a private server on the hosted Windows runners is unverified.
+  if(NOT CMAKE_CROSSCOMPILING AND NOT WIN32)
+    set(HELIOS_SCHEMAC_GOLDEN ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden)
+    add_test(NAME schemac_sql_postgres
+      COMMAND ${CMAKE_COMMAND} -DSCHEMAC=$<TARGET_FILE:helios-schemac> -DSQL_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/sql
+              -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/sql_postgres
+              "-DSNAPSHOTS=${HELIOS_SCHEMAC_GOLDEN}/svc_golden.schema.sql.expected;${HELIOS_SCHEMAC_GOLDEN}/corpus/sample/svc_character.schema.sql.expected"
+              -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/sql_postgres.cmake)
+    set_tests_properties(schemac_sql_postgres PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED:" TIMEOUT 300)
+  endif()
 endif()

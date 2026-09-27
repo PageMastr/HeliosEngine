@@ -1,0 +1,30 @@
+/// Release N+1: a rename, widenings, an optional, new columns, a removed field and a new table.
+package sqltest;
+
+enum Tier : u8 { Bronze; Silver; Gold; Platinum }
+
+struct Account @store(character) @sql(schema="svc_sqltest") {
+  id:     u64 @key
+  level:  u8 = 1 @was("rank")
+  amount: i64
+  small:  u16 = 3
+  note:   string?
+  tier:   Tier = Silver
+  added:  bool = true
+  tags:   TagSet
+  pos:    vec3d = [0, 1, 0]
+}
+
+struct User @store(character) @sql(schema="svc_sqltest") @key(owner, order) {
+  owner: EntityId
+  order: u16
+  when:  Duration = 2s
+  label: LocString
+}
+
+struct Fresh @store(character) @sql(schema="svc_sqltest") {
+  id:    Guid @key
+  asset: AssetRef<Mesh>
+  kinds: map<Name, list<u8>>
+  ratio: f64 = 0.25
+}

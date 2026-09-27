@@ -100,7 +100,7 @@ public:
             if (!yyjson_is_obj(v)) return fail(path, "expected an object");
             LockType t;
             if (!readU32(v, "id", path, t.id) || !readString(v, "kind", path, t.kind) || !readU32(v, "version", path, t.version, false) ||
-                !readString(v, "base", path, t.base, false) || !readStrings(v, "was", path, t.was) ||
+                !readString(v, "base", path, t.base, false) || !readStrings(v, "was", path, t.was) || !readString(v, "sql", path, t.sql, false) ||
                 !readU32(v, "nextField", path, t.nextField, false))
                 return false;
             if (t.kind != "struct" && t.kind != "enum" && t.kind != "flags" && t.kind != "variant" && t.kind != "fn")
@@ -231,6 +231,17 @@ public:
                 continue;
             }
             if (d->kind == DeclKind::ScriptFn) continue; // a binding id only
+            if (!d->sqlTable.empty()) {
+                // The table is the type's SQL identity (--emit sql diffs against it): recorded once, never moved.
+                if (lt->sql.empty()) {
+                    lt->sql = d->sqlTable;
+                    C.push_back(std::format("{}: SQL table {}", d->qualifiedName, d->sqlTable));
+                } else if (lt->sql != d->sqlTable) {
+                    D.error(d->loc, std::format("'{}' is stored in the table {} (lock id {}); a table cannot move to {} — declare a new type and "
+                                                "migrate the rows by hand",
+                                                d->qualifiedName, lt->sql, lt->id, d->sqlTable));
+                }
+            }
             if (d->version < lt->version) {
                 D.error(d->loc, std::format("@version of '{}' decreased from {} to {}", d->qualifiedName, lt->version, d->version));
             } else if (d->version != lt->version) {
@@ -515,6 +526,10 @@ std::string writeLock(const Lock& lock) {
             o.beginArray(true);
             for (const std::string& w : t.was) o.str(w);
             o.endArray();
+        }
+        if (!t.sql.empty()) {
+            o.key("sql");
+            o.str(t.sql);
         }
         if (t.kind == "fn") {
             // Binding id only: fuel costs are calibrated per binding id (02 §7.4), nothing else is locked.

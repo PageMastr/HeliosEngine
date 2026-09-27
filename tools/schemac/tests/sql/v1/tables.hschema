@@ -1,0 +1,21 @@
+/// Release N of the tables that tests/sql_postgres.cmake migrates on a real PostgreSQL (see v2).
+package sqltest;
+
+enum Tier : u8 { Bronze; Silver; Gold }
+
+struct Account @store(character) @sql(schema="svc_sqltest") {
+  id:     u64 @key
+  rank:   u8 = 1
+  amount: i32
+  small:  u8 = 3
+  note:   string
+  legacy: u8
+  tier:   Tier = Silver
+}
+
+/// A reserved word as table and column name.
+struct User @store(character) @sql(schema="svc_sqltest") @key(owner, order) {
+  owner: EntityId
+  order: u16
+  when:  Duration = 2s
+}

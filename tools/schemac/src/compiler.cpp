@@ -264,7 +264,8 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
 
     if (!analyze(S, diags, SemaOptions{options.namingLints})) return result;
 
-    // Stable ids from the lock.
+    // Stable ids from the lock. `baseline` keeps the lock as it was, for --emit sql's migration stub.
+    Lock baseline;
     if (!options.lockPath.empty()) {
         Lock lock;
         std::string oldText;
@@ -280,6 +281,7 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
                                         options.lockPath));
             return result;
         }
+        baseline = lock;
         LockOptions lo;
         lo.allowDefaultChange = options.allowDefaultChange;
         if (!applyLock(S, lock, diags, lo, result.lockChanges)) return result;
@@ -299,6 +301,21 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
         assignEphemeralIds(S);
     }
     computeLayoutHashes(S);
+    if (options.emitSql && !options.sqlBaseline.empty()) {
+        if (options.lockPath.empty()) {
+            diags.error({}, "--sql-baseline needs --lock: the stub compares the baseline's field ids with the lock's");
+            return result;
+        }
+        baseline = Lock{};
+        auto text = fsys.read(options.sqlBaseline);
+        if (!text) {
+            diags.error({}, std::format("cannot read the SQL baseline lock '{}'", options.sqlBaseline));
+            return result;
+        }
+        const u32 file = diags.addFile(options.sqlBaseline, *text);
+        result.inputs.push_back(normalizePath(options.sqlBaseline));
+        if (!loadLock(diags.fileText(file), file, baseline, diags)) return result;
+    }
 
     if (options.emitCpp) {
         for (OutputFile& o : generateCpp(S, options)) result.outputs.push_back(std::move(o));
@@ -309,6 +326,9 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
     if (options.emitJson) result.outputs.push_back(OutputFile{options.jsonOut, generateSchemaJson(S)});
     if (options.emitLuau) {
         for (OutputFile& o : generateLuau(S, options, diags)) result.outputs.push_back(std::move(o));
+    }
+    if (options.emitSql) {
+        for (OutputFile& o : generateSql(S, baseline, options, diags)) result.outputs.push_back(std::move(o));
     }
     result.ok = !diags.hasErrors();
     return result;

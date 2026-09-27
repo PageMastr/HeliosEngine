@@ -1,8 +1,9 @@
 # helios-schemac — the Helios schema compiler
 
 `helios-schemac` compiles `.hschema` files into C++ (types, reflection, codecs), Go (types and a
-byte-identical codec), Luau glue (scriptlib bindings, `.d.luau` declarations, fuel defaults) and a
-machine-readable schema description. It implements ADR-004.
+byte-identical codec), Luau glue (scriptlib bindings, `.d.luau` declarations, fuel defaults),
+PostgreSQL DDL (table snapshots and goose migration stubs) and a machine-readable schema description.
+It implements ADR-004.
 
 **The normative specification is [docs/plan/02-engine-runtime.md §3](../../docs/plan/02-engine-runtime.md#3-schema-and-reflection-normative)**
 (§3.1 language, §3.2 attributes, §3.3 records and the client/server split, §3.4 versioning,
@@ -25,7 +26,8 @@ APIs) and lists what is not implemented yet.
 | `go` | Implemented: structs with JSON tags, byte-identical tagged codec, generated round-trip / cross-language test |
 | `json` | Implemented: schema description (types, ids, fields, attributes, defaults, layout hashes, services, constants, aliases, formulas, scriptlibs with fuel costs) |
 | `luau` | Implemented for `scriptlib`s: the C++ call glue on engine/script's `Binder` with the fuel charges, binding ids from the lock, `schema.d.luau` and `fuel_costs.defaults.json` ([Generated Luau](#generated-luau)). Tagged-userdata glue for components and records (`@script` fields) is WP-1.6's |
-| `repl`, `sql`, `proto`, `editor`, `records`, `lint`, `docs` | Planned; `--emit <name>` fails with exit code 2 "not yet implemented" |
+| `sql` | Implemented for structs marked `@sql(schema="svc_<service>")`: a PostgreSQL snapshot and a goose migration stub diffed against the baseline lock, per service schema ([Generated SQL](#generated-sql)) |
+| `repl`, `proto`, `editor`, `records`, `lint`, `docs` | Planned; `--emit <name>` fails with exit code 2 "not yet implemented" |
 
 The lints of the planned `lint` emitter (AAA-SEC-1, AAA-SEC-4, ledger/persist, keyed lists,
 naming) already run on every compilation.
@@ -63,8 +65,9 @@ helios-schemac -I schemas --lock schemas/schema.lock.jsonc --emit cpp,go,json \
 | `--lock <file>` | Schema lock (created if missing, updated in place). Without it ids are per-run (warning) |
 | `--check-lock` | Fail (exit 1) instead of updating an out-of-date lock (CI) |
 | `--allow-default-change` | Accept changed explicit defaults (they are part of the wire contract) |
-| `--emit cpp,go,json,luau` | Generators (default `cpp`) |
-| `--cpp-out`, `--go-out`, `--go-package`, `--json-out`, `--luau-out` | Output locations (`--luau-out`: `schema.d.luau` and `fuel_costs.defaults.json`; the Luau glue goes to `--cpp-out`) |
+| `--emit cpp,go,json,luau,sql` | Generators (default `cpp`) |
+| `--cpp-out`, `--go-out`, `--go-package`, `--json-out`, `--luau-out`, `--sql-out` | Output locations (`--luau-out`: `schema.d.luau` and `fuel_costs.defaults.json`; the Luau glue goes to `--cpp-out`. `--sql-out`: `<schema>/schema.sql` and `<schema>/migration.sql`) |
+| `--sql-baseline <lock>` | Lock the SQL migration stub starts from (default: `--lock` as it was before this run) |
 | `--samples` | Also emit `<file>.samples.gen.h` (deterministic sample values shared with the Go test) |
 | `--depfile <f>`, `--depfile-target <p>` | Makefile-style dependency file (every schema, import and the lock) |
 | `--Werror`, `--no-naming-lints`, `--quiet` | Diagnostics control |
@@ -180,6 +183,7 @@ and argument count; unknown attributes are warnings with a "did you mean" hint. 
 | `@timeout(500ms)` | valid duration |
 | `@reason_required` | the rpc must carry a `ReasonCodeRef` (directly or in a parameter struct) |
 | `@store(checkpoint\|ledger\|character\|activity\|config)`, `@persist`, `@ledger_policy` | ledger data is never `@persist` (ADR-008); `@ledger_policy` requires `@store(ledger)` |
+| `@sql(schema="svc_<service>"[, table=])`, `@key` | structs only; a PostgreSQL table for `--emit sql` ([Generated SQL](#generated-sql)); `@store(checkpoint)` is never a table; ledger data only in `svc_ledger` and only ledger data there |
 | `@server_only`, `server {}`, `@opaque` | **AAA-SEC-4**: a shared field may not reference a server-only type unless `@opaque` |
 | `@table`, `@exclusive`/`@acyclic`/`@target`, `@client`/`@server` | only on records, relations, viewmodels respectively |
 | `@range(min, max)`, `@step`, `@unit`, `@max(n)`, `@normalized`, `@asset` | numeric/vector/container/AssetRef field checks; typed payloads in TypeInfo (`attrs::Range`, …) |
@@ -231,6 +235,8 @@ after a rename and a deletion):
   containers use `fnv1a32` of their canonical name at runtime.
 - **Field ids** are sequential per type (`nextField`); they are the tagged field numbers. Variant
   alternatives get ids the same way; enum values keep their numbers.
+- **SQL tables**: the entry of a struct marked `@sql` records its table (`"sql": "svc_x.table"`),
+  once; a table cannot move to another name or schema.
 - **Binding ids**: every `scriptlib` fn has an entry of kind `"fn"` with only its id, minted like a
   type id from `<package>.<Lib>.<fn>` (`"sample.ship.ShipQueries.hullOf": {"id": …, "kind": "fn"}`).
   It keys the fn's calibrated fuel cost (02 §7.4). A renamed fn gets a new id; a removed fn keeps its
@@ -378,6 +384,68 @@ auto vm = ScriptVm::create(config, [&](Binder& b) { sample::ship::bindShipQuerie
   "each", "of"}}}`, sorted by id, the defaults `--calibrate-fuel` replaces in
   `content/profiles/fuel_costs.jsonc` (02 §7.4).
 
+## Generated SQL
+
+`--emit sql` (02 §3.5; 05 §3) writes PostgreSQL DDL for the structs marked
+`@sql(schema="svc_<service>"[, table="<name>"])`, one directory per service schema in `--sql-out`:
+
+| File | Contents |
+|---|---|
+| `<schema>/schema.sql` | Snapshot: `CREATE SCHEMA IF NOT EXISTS` and every table as the schemas define it now, for an empty database |
+| `<schema>/migration.sql` | goose v3 stub (`-- +goose Up` / `-- +goose Down`) from the **baseline lock** to now: the lock as it was before this run, or `--sql-baseline <lock>` (e.g. the lock of the last release, from version control) |
+
+```
+helios-schemac -I schemas --lock schemas/sample/schema.lock.jsonc --emit sql --sql-out build/sql \
+    --sql-baseline /tmp/lock-at-last-release.jsonc schemas/sample/*.hschema
+```
+
+- **Where tables live.** `schema` must be a service schema `svc_<service>` (05 §3, CONF-06); the table
+  defaults to the snake_case type name. `@sql` is valid on structs only (records cook to `.hrdb`,
+  components persist through checkpoints). `@store(checkpoint)` data is a blob in `ag_checkpoint`,
+  never a table; `@store(ledger)` data lives only in `svc_ledger`, and `svc_ledger` holds only
+  ledger data (ADR-008).
+- **Identity.** The lock records the table of each `@sql` struct (`"sql": "svc_x.table"` on its
+  entry). A table cannot move (an error); columns follow field ids, so renames (`@was`) are
+  `RENAME COLUMN`, and columns appear in lock-id order in the snapshot and in the migrated table alike.
+- **Key.** Every table has a primary key: the fields marked `@key`, or `@key(a, b)` on the struct.
+  Key fields are non-optional scalars. A new field cannot join the key of an existing table (a
+  hand-written migration changes a primary key).
+- **Columns** (names in snake_case; PostgreSQL's reserved words, as columns or tables, are quoted):
+
+  | Schema | Column |
+  |---|---|
+  | `bool` | `BOOLEAN` |
+  | `i8`, `i16`, `u8` / `i32`, `u16` / `i64`, `u32` | `SMALLINT` / `INTEGER` / `BIGINT`, with a `CHECK` of the unsigned or `i8` range |
+  | `u64` | `NUMERIC(20)` with a `CHECK` of the `u64` range (PostgreSQL has no unsigned `BIGINT`) |
+  | `f32`, `f64` | `REAL`, `DOUBLE PRECISION` |
+  | `string`, `Name`, `LocString` (key), `TagQuery`, `HxlExpr` | `TEXT` |
+  | `Guid`, `AssetRef<T>` | `UUID` |
+  | `EntityId`, record refs, `Tick` | `BIGINT` with `CHECK (x >= 0)` (63-bit ids, 05 §3.2) |
+  | `Duration` | `BIGINT` nanoseconds |
+  | enums, flags | their underlying integer (the value numbers, not names) |
+  | math tuples, `WorldPos`, `TagSet`, `list`, `set`, keyed lists, `T[N]` / structs, `map` / variants | `JSONB` holding the canonical JSONC, with `CHECK (jsonb_typeof(x) = 'array'` / `'object')` |
+  | `NetHandle` | an error: it is scoped to one zone instance (04 §4.6) |
+
+  Scalar columns are `NOT NULL DEFAULT <the schema default>` (explicit or implicit: 0, `FALSE`, `''`,
+  the nil UUID, the first enum value), so `ADD COLUMN` needs no backfill; key columns have no
+  default. `T?` columns are nullable without a default. `JSONB` columns are nullable, and NULL means
+  the field's default (none for `T?`), as writers omit defaults (§3.7). `CHECK` constraints are named
+  `<table>_<column>_check`.
+- **Migrations only expand** (05 §3.3: release N adds, contraction happens in N+2). A new struct is a
+  `CREATE TABLE`; a new field is an `ADD COLUMN` with its default; a renamed field is a `RENAME COLUMN`
+  (and of its `CHECK`); a widening (`i32→i64`, `u8→u16`, `f32→f64`, `T→T?`) is an `ALTER COLUMN TYPE`
+  with the new `CHECK`, or `DROP NOT NULL`; a changed explicit default is `SET DEFAULT`; a revived field
+  is `ADD COLUMN IF NOT EXISTS`. A removed field is only a comment listing the `DROP COLUMN` for the
+  contract release. Down reverses Up, last step first. Against an up-to-date baseline the stub is
+  empty (`SELECT 1;`). Copy a stub into `services/migrations/<service>/` and review it: indexes,
+  partitioning, grants and backfills are hand-written.
+- **Not generated** (hand-written, or later work packages): indexes, `UNIQUE` constraints,
+  partitioning, sequences, grants and backfills; timestamps (the language has no timestamp type, so
+  `TIMESTAMPTZ` columns such as 05's `created_at` are hand-written); byte columns (`BYTEA`, e.g. 05 §6.6's
+  `*_ct` ciphertext and `*_bidx` blind indexes); `@pii` column classes (05 §3.2, §6.6), which the language
+  does not have yet. Changing the key of an existing table is a hand-written migration (the lock does not
+  record keys). `helios_schema()` has no SQL option: run the CLI, since stubs are copied by hand.
+
 ## CMake: `helios_schema()`
 
 ```cmake
@@ -430,14 +498,22 @@ HELIOS_UPDATE_GOLDEN=1 build/<dir>/bin/schemac_tests -tc="golden*"
 
 and review the diff of `tests/golden/*.expected` like any code change.
 
-The golden fixture's expectations include the Luau outputs (`golden.luau.gen.*`, `schema.d.luau`,
+The golden fixture's expectations include the SQL outputs (`svc_golden.schema.sql` and a migration stub
+against `golden.sql-baseline.lock.jsonc`, the lock of the fixture's previous release), and the Luau outputs (`golden.luau.gen.*`, `schema.d.luau`,
 `fuel_costs.defaults.json`); `tests/golden/corpus/<set>/` holds the same for the committed
 `schemas/` corpus, compiled as CMake compiles it. `test_luau.cpp` runs the generated glue of the golden
 fixture and the sample schemas on a real engine/script VM (every value form, realms, the fuel charged
 per fn, hostile arguments: wrong types, out-of-range and inexact integers, oversized and cyclic tables,
 metatables that must not run), type-checks `schema.d.luau` with Luau.Analysis (a strict script passes;
 wrong argument and result types and unknown enum values fail), and covers binding ids in the lock and
-the signatures `--emit luau` rejects.
+the signatures `--emit luau` rejects. `test_sql.cpp` covers the column mapping, the migration stub
+(renames, widenings, `T→T?`, new columns and tables, removed fields as contract comments, Down in
+reverse, the empty stub, `--sql-baseline`) and the rules of `@sql`. The CTest `schemac_sql_postgres`
+(`tests/sql_postgres.cmake`) runs them on a real PostgreSQL: it compiles `tests/sql/v1` and `v2` as two
+releases, checks that v1's and v2's stubs (plus v2's contract step) build exactly v2's snapshot
+(`pg_dump --schema-only`), that v2's Down returns to v1's snapshot, and that the committed SQL goldens
+apply. It prints `SKIPPED:` without PostgreSQL binaries (`PGBIN`, `/usr/lib/postgresql/*/bin`), runs the
+server as `nobody` when started as root, and is not registered on Windows or when cross-compiling.
 
 ## Deviations and limitations
 
@@ -451,7 +527,7 @@ the signatures `--emit luau` rejects.
 - Not generated yet (later work packages): `registerComponents(ecs::World&)` / flecs traits,
   `ComponentRepDesc` and quantizers (`repl`), cooked layouts (`Cooked<T>`), NATS stubs, the Luau
   tagged-userdata glue for components and records (`@script(read|write)` fields; WP-1.6, with the
-  host's `Entity` type), SQL migrations, editor JSON, record cooking, HXL compilation of formulas and
+  host's `Entity` type), editor JSON, record cooking, HXL compilation of formulas and
   `@validate`, `upgrade<T>` hooks for `@version`.
 - **Luau, Phase 0 choices** (02 §3.5 leaves them open). The glue owns light-userdata tags 1 and 2 for
   `EntityId` and record refs, and `EntityId` is declared in `schema.d.luau`; both belong in
@@ -472,7 +548,7 @@ the signatures `--emit luau` rejects.
 
 Plan-Rev: 10
 
-Written to plan revision 10 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau` so far), after being
+Written to plan revision 10 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau` and `sql` so far), after being
 reconciled by hand with revision 6 on 2026-09-25 under `docs/plan/09-roadmap-and-process.md`
 §5.10.2 D7. Revisions 7–10 changed no anchor of this package. No conformance delta is open; see
 §5.10.4 (c) there.

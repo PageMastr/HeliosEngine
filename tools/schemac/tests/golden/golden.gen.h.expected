@@ -21,6 +21,7 @@ struct Owns;
 struct Fire;
 struct Req;
 struct Spellings;
+struct LedgerLine;
 struct StoreBuyRequest;
 /// Reference to a ThingDef record (serialized as its RecordId).
 using ThingRef = ::helios::refl::RecordRef<ThingDef>;
@@ -272,6 +273,54 @@ struct Spellings {
     [[nodiscard]] bool operator==(const Spellings& other) const noexcept;
 };
 
+/// A PostgreSQL table (`--emit sql`, 05 §3): every column form, a composite key and a reserved word
+/// as a column. Since tests/golden/golden.sql-baseline.lock.jsonc it gained a rename, widenings, an
+/// optional, new columns and a removed field, which the migration stub golden shows.
+struct LedgerLine {
+    struct ShapeDot {
+        /// Field-wise equality (floats compare bitwise).
+        [[nodiscard]] bool operator==(const ShapeDot& other) const noexcept;
+    };
+
+    struct ShapeLine {
+        ::helios::f32 length{};
+
+        /// Field-wise equality (floats compare bitwise).
+        [[nodiscard]] bool operator==(const ShapeLine& other) const noexcept;
+    };
+
+    using Shape = std::variant<ShapeDot, ShapeLine>;
+
+    ::helios::refl::EntityId owner{};
+    ::helios::u32 seq{};
+    ::helios::u8 order = 7u;
+    ::helios::i64 amount = -5ll;
+    ::helios::u16 small = 3u;
+    std::optional<std::string> note{};
+    bool flag = true;
+    ::helios::u64 big{};
+    ::helios::f32 ratio = 0.5f;
+    ::helios::f64 exact{};
+    std::string label = std::string("it's");
+    ::helios::Name tag{};
+    ::helios::refl::Duration delay = ::helios::refl::Duration(1500000000ll);
+    ::helios::refl::Tick at{};
+    ::helios::refl::RecordRef<::golden::all::ThingDef> thing{};
+    ::helios::Guid id{};
+    ::golden::all::Color color = ::golden::all::Color::Blue;
+    ::golden::all::Perm perm = static_cast<::golden::all::Perm>(1ull);
+    ::helios::refl::AssetRef mesh{};
+    ::helios::refl::LocString text{};
+    ::helios::refl::WorldPos pos{};
+    std::vector<::golden::all::Item> items;
+    ::golden::all::Item inner{};
+    std::map<std::string, ::helios::u8> bag;
+    ::golden::all::LedgerLine::Shape shape{};
+
+    /// Field-wise equality (floats compare bitwise).
+    [[nodiscard]] bool operator==(const LedgerLine& other) const noexcept;
+};
+
 using Money = ::helios::i64;
 
 struct Pair {
@@ -501,6 +550,19 @@ struct Codec<::golden::all::Spellings> : StructCodec<::golden::all::Spellings> {
     static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::Spellings& v, ReadCtx& ctx);
 };
 template <>
+struct TypeOf<::golden::all::LedgerLine> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct Codec<::golden::all::LedgerLine> : StructCodec<::golden::all::LedgerLine> {
+    static bool isDefault(const ::golden::all::LedgerLine& v) noexcept;
+    static bool equals(const ::golden::all::LedgerLine& a, const ::golden::all::LedgerLine& b) noexcept;
+    static void writeFields(TaggedWriter& w, const ::golden::all::LedgerLine& v);
+    static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::LedgerLine& v);
+    static void writeJsonFields(JsonWriter& w, const ::golden::all::LedgerLine& v);
+    static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::LedgerLine& v, ReadCtx& ctx);
+};
+template <>
 struct TypeOf<::golden::all::ThingDef::Shape> {
     static const TypeInfo& get() noexcept;
 };
@@ -585,6 +647,36 @@ struct Codec<::golden::all::StoreBuyRequest> : StructCodec<::golden::all::StoreB
     static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::StoreBuyRequest& v);
     static void writeJsonFields(JsonWriter& w, const ::golden::all::StoreBuyRequest& v);
     static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::StoreBuyRequest& v, ReadCtx& ctx);
+};
+template <>
+struct TypeOf<::golden::all::LedgerLine::Shape> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct TypeOf<::golden::all::LedgerLine::ShapeDot> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct Codec<::golden::all::LedgerLine::ShapeDot> : StructCodec<::golden::all::LedgerLine::ShapeDot> {
+    static bool isDefault(const ::golden::all::LedgerLine::ShapeDot& v) noexcept;
+    static bool equals(const ::golden::all::LedgerLine::ShapeDot& a, const ::golden::all::LedgerLine::ShapeDot& b) noexcept;
+    static void writeFields(TaggedWriter& w, const ::golden::all::LedgerLine::ShapeDot& v);
+    static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::LedgerLine::ShapeDot& v);
+    static void writeJsonFields(JsonWriter& w, const ::golden::all::LedgerLine::ShapeDot& v);
+    static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::LedgerLine::ShapeDot& v, ReadCtx& ctx);
+};
+template <>
+struct TypeOf<::golden::all::LedgerLine::ShapeLine> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct Codec<::golden::all::LedgerLine::ShapeLine> : StructCodec<::golden::all::LedgerLine::ShapeLine> {
+    static bool isDefault(const ::golden::all::LedgerLine::ShapeLine& v) noexcept;
+    static bool equals(const ::golden::all::LedgerLine::ShapeLine& a, const ::golden::all::LedgerLine::ShapeLine& b) noexcept;
+    static void writeFields(TaggedWriter& w, const ::golden::all::LedgerLine::ShapeLine& v);
+    static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::LedgerLine::ShapeLine& v);
+    static void writeJsonFields(JsonWriter& w, const ::golden::all::LedgerLine::ShapeLine& v);
+    static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::LedgerLine::ShapeLine& v, ReadCtx& ctx);
 };
 template <>
 struct TypeOf<::golden::all::Pair> {

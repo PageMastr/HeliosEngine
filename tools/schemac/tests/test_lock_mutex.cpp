@@ -88,7 +88,7 @@ TEST_CASE("lock mutex: acquire retries the errors a racing create_directory repo
         std::string err;
         REQUIRE_MESSAGE(mutex.acquire(lock, err), err);
         CHECK(err.empty());
-        CHECK(calls == injected.size() + 1);
+        CHECK(calls >= injected.size() + 1); // more if a real call meets a delete-pending directory
         CHECK(mutex.held());
         CHECK(fs::is_directory(mutexDirOf(lock)));
         mutex.release(err);
@@ -103,7 +103,7 @@ TEST_CASE("lock mutex: acquire retries the errors a racing create_directory repo
     std::string err;
     REQUIRE_MESSAGE(mutex.acquire(lock, err), err);
     CHECK(err.empty());
-    CHECK(calls == races.size() + 1);
+    CHECK(calls >= races.size() + 1);
 }
 
 TEST_CASE("lock mutex: a parent directory removed under a waiter is re-created") {
@@ -120,7 +120,7 @@ TEST_CASE("lock mutex: a parent directory removed under a waiter is re-created")
     std::string err;
     REQUIRE_MESSAGE(mutex.acquire(lock, err), err);
     CHECK(err.empty());
-    CHECK(calls == 2);
+    CHECK(calls >= 2);
     CHECK(fs::is_directory(mutexDirOf(lock)));
 }
 

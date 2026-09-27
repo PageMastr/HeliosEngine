@@ -1,5 +1,5 @@
 #pragma once
-// Code generators (02 §3.5): `--emit cpp`, `--emit go`, `--emit json`.
+// Code generators (02 §3.5): `--emit cpp`, `--emit go`, `--emit json`, `--emit luau`.
 
 #include <string>
 #include <vector>
@@ -16,6 +16,10 @@ std::vector<OutputFile> generateCpp(const Schema& schema, const CompileOptions& 
 std::vector<OutputFile> generateGo(const Schema& schema, const CompileOptions& options, DiagnosticEngine& diags);
 /// Machine-readable schema description (editor tools, later generators).
 std::string generateSchemaJson(const Schema& schema);
+/// `<logical>.luau.gen.h/.cpp` (scriptlib glue on engine/script's Binder) per generated file, plus
+/// `schema.d.luau` and `fuel_costs.defaults.json` in options.luauOut. Reports signatures that cannot
+/// cross the Luau boundary.
+std::vector<OutputFile> generateLuau(const Schema& schema, const CompileOptions& options, DiagnosticEngine& diags);
 
 /// C++ identifier for a schema field name (keywords get a trailing '_').
 std::string cppFieldName(const std::string& name);

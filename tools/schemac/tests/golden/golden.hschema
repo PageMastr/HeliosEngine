@@ -114,12 +114,19 @@ struct Spellings {
   r: f32 = 0.5 @range(-0x10, 1_000.5) @step(.25) @editor(category="Edge", order=1e1)
 }
 
-/// Script-callable functions (their Luau glue comes from `--emit luau`, a later work package).
+/// Script-callable functions (`--emit luau` generates their glue, schema.d.luau and fuel defaults).
 scriptlib Queries @realm(server, client) {
   /// Nearest thing within `radius`.
   fn nearest(at: WorldPos, radius: f32 @unit(m)) -> ThingRef? @script(cost=12) @pure;
   fn inRadius(at: WorldPos, radius: f32) -> list<EntityId> @max(64) @script(cost=20, each=1, of=result) @pure;
   fn spawn(thing: ThingRef, at: WorldPos) -> EntityId @realm(server) @script(cost=50, each=4, of=thing);
+  /// Every value form the glue converts; returns `item` with `count` replaced.
+  fn convert(flag: bool, small: i8, big: i64, count: u16, ratio: f64, name: Name, text: string, dir: vec3f,
+             delay: Duration, at: Tick, color: Color, item: Item, items: list<Item> @max(4), names: set<Name>,
+             trio: f32[3], maybe: u32?, label: LocString, query: TagQuery) -> Item @script(cost=3, each=2, of=items) @pure;
+  /// Recursive tables (a cyclic one stops at the glue's depth limit).
+  fn echo(tree: Late) -> Late @realm(editor) @script(cost=1) @pure;
+  fn log(text: string) @script(cost=2, each=1, of=text);
 }
 
 const Limit: u32 = 16;

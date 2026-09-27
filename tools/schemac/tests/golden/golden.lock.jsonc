@@ -151,6 +151,30 @@
         {"id": 1, "name": "value", "type": "i32"}
       ]
     },
+    "golden.all.Queries.convert": {
+      "id": 2480763702,
+      "kind": "fn"
+    },
+    "golden.all.Queries.echo": {
+      "id": 1516378594,
+      "kind": "fn"
+    },
+    "golden.all.Queries.inRadius": {
+      "id": 2006991982,
+      "kind": "fn"
+    },
+    "golden.all.Queries.log": {
+      "id": 2260578267,
+      "kind": "fn"
+    },
+    "golden.all.Queries.nearest": {
+      "id": 453723727,
+      "kind": "fn"
+    },
+    "golden.all.Queries.spawn": {
+      "id": 3093412526,
+      "kind": "fn"
+    },
     "golden.all.Req": {
       "id": 158644087,
       "kind": "struct",

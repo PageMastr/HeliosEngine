@@ -1019,10 +1019,11 @@
       "name": "golden.all.Queries",
       "kind": "scriptlib",
       "file": "golden.hschema",
-      "doc": "Script-callable functions (their Luau glue comes from `--emit luau`, a later work package).",
+      "doc": "Script-callable functions (`--emit luau` generates their glue, schema.d.luau and fuel defaults).",
       "fns": [
         {
           "name": "nearest",
+          "bindingId": 453723727,
           "doc": "Nearest thing within `radius`.",
           "params": [
             {"name": "at", "type": "WorldPos", "attrs": []},
@@ -1039,6 +1040,7 @@
         },
         {
           "name": "inRadius",
+          "bindingId": 2006991982,
           "params": [
             {"name": "at", "type": "WorldPos", "attrs": []},
             {"name": "radius", "type": "f32", "attrs": []}
@@ -1055,6 +1057,7 @@
         },
         {
           "name": "spawn",
+          "bindingId": 3093412526,
           "params": [
             {"name": "thing", "type": "Ref<golden.all.ThingDef>", "attrs": []},
             {"name": "at", "type": "WorldPos", "attrs": []}
@@ -1066,6 +1069,70 @@
           "attrs": [
             {"name": "realm", "args": [{"value": "server"}]},
             {"name": "script", "args": [{"key": "cost", "value": "50"}, {"key": "each", "value": "4"}, {"key": "of", "value": "thing"}]}
+          ]
+        },
+        {
+          "name": "convert",
+          "bindingId": 2480763702,
+          "doc": "Every value form the glue converts; returns `item` with `count` replaced.",
+          "params": [
+            {"name": "flag", "type": "bool", "attrs": []},
+            {"name": "small", "type": "i8", "attrs": []},
+            {"name": "big", "type": "i64", "attrs": []},
+            {"name": "count", "type": "u16", "attrs": []},
+            {"name": "ratio", "type": "f64", "attrs": []},
+            {"name": "name", "type": "Name", "attrs": []},
+            {"name": "text", "type": "string", "attrs": []},
+            {"name": "dir", "type": "vec3f", "attrs": []},
+            {"name": "delay", "type": "Duration", "attrs": []},
+            {"name": "at", "type": "Tick", "attrs": []},
+            {"name": "color", "type": "golden.all.Color", "attrs": []},
+            {"name": "item", "type": "golden.all.Item", "attrs": []},
+            {"name": "items", "type": "list<golden.all.Item>", "attrs": [{"name": "max", "args": [{"value": "4"}]}]},
+            {"name": "names", "type": "set<Name>", "attrs": []},
+            {"name": "trio", "type": "f32[3]", "attrs": []},
+            {"name": "maybe", "type": "u32?", "attrs": []},
+            {"name": "label", "type": "LocString", "attrs": []},
+            {"name": "query", "type": "TagQuery", "attrs": []}
+          ],
+          "result": "golden.all.Item",
+          "cost": {"base": 3, "each": 2, "of": "items"},
+          "pure": true,
+          "realms": ["server", "client"],
+          "attrs": [
+            {"name": "script", "args": [{"key": "cost", "value": "3"}, {"key": "each", "value": "2"}, {"key": "of", "value": "items"}]},
+            {"name": "pure", "args": []}
+          ]
+        },
+        {
+          "name": "echo",
+          "bindingId": 1516378594,
+          "doc": "Recursive tables (a cyclic one stops at the glue's depth limit).",
+          "params": [
+            {"name": "tree", "type": "golden.all.Late", "attrs": []}
+          ],
+          "result": "golden.all.Late",
+          "cost": {"base": 1, "each": 0, "of": ""},
+          "pure": true,
+          "realms": ["editor"],
+          "attrs": [
+            {"name": "realm", "args": [{"value": "editor"}]},
+            {"name": "script", "args": [{"key": "cost", "value": "1"}]},
+            {"name": "pure", "args": []}
+          ]
+        },
+        {
+          "name": "log",
+          "bindingId": 2260578267,
+          "params": [
+            {"name": "text", "type": "string", "attrs": []}
+          ],
+          "result": "",
+          "cost": {"base": 2, "each": 1, "of": "text"},
+          "pure": false,
+          "realms": ["server", "client"],
+          "attrs": [
+            {"name": "script", "args": [{"key": "cost", "value": "2"}, {"key": "each", "value": "1"}, {"key": "of", "value": "text"}]}
           ]
         }
       ],

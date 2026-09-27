@@ -17,6 +17,7 @@ add_library(helios_schemac_lib STATIC
   src/gen_cpp.cpp
   src/gen_go.cpp
   src/gen_json.cpp
+  src/gen_luau.cpp
   src/json_out.cpp
   src/lexer.cpp
   src/lock.cpp
@@ -42,7 +43,9 @@ helios_apply_warnings(helios-schemac)
 # ---------------------------------------------------------------------------------------------
 if(HELIOS_BUILD_TESTS)
   file(GLOB HELIOS_SCHEMAC_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp)
-  helios_test(schemac_tests SOURCES ${HELIOS_SCHEMAC_TEST_SOURCES} DEPS helios_schemac_lib helios::reflect)
+  # The generated Luau glue runs on the real script host, and Luau.Analysis type-checks schema.d.luau.
+  helios_test(schemac_tests SOURCES ${HELIOS_SCHEMAC_TEST_SOURCES}
+    DEPS helios_schemac_lib helios::reflect helios::script helios::tp::luau_analysis)
   set(HELIOS_SAMPLE_SCHEMAS
     ${PROJECT_SOURCE_DIR}/schemas/sample/common.hschema
     ${PROJECT_SOURCE_DIR}/schemas/sample/ship.hschema
@@ -55,6 +58,7 @@ if(HELIOS_BUILD_TESTS)
     GO_OUT ${HELIOS_SAMPLE_GO_OUT}
     GO_PACKAGE sample
     JSON_OUT ${CMAKE_CURRENT_BINARY_DIR}/sample.schema.json
+    LUAU_OUT ${CMAKE_CURRENT_BINARY_DIR}/luau/sample
     SAMPLES)
   # Golden fixture: its generated C++ and Go are compiled too (the golden test compares the text).
   set(HELIOS_GOLDEN_GO_OUT ${CMAKE_CURRENT_BINARY_DIR}/go/golden)
@@ -63,6 +67,7 @@ if(HELIOS_BUILD_TESTS)
     INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden
     LOCK ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/golden.lock.jsonc
     GO_OUT ${HELIOS_GOLDEN_GO_OUT}
+    LUAU_OUT ${CMAKE_CURRENT_BINARY_DIR}/luau/golden
     SAMPLES)
   find_program(HELIOS_GO_EXECUTABLE go HINTS $ENV{GOROOT}/bin /usr/local/go/bin "C:/Program Files/Go/bin")
   if(NOT HELIOS_GO_EXECUTABLE)
@@ -74,6 +79,9 @@ if(HELIOS_BUILD_TESTS)
     HELIOS_SAMPLE_GO_DIR="${HELIOS_SAMPLE_GO_OUT}"
     HELIOS_GOLDEN_GO_DIR="${HELIOS_GOLDEN_GO_OUT}"
     HELIOS_SAMPLE_SCHEMA_JSON="${CMAKE_CURRENT_BINARY_DIR}/sample.schema.json"
+    HELIOS_SAMPLE_LUAU_DIR="${CMAKE_CURRENT_BINARY_DIR}/luau/sample"
+    HELIOS_GOLDEN_LUAU_DIR="${CMAKE_CURRENT_BINARY_DIR}/luau/golden"
+    HELIOS_SCRIPT_DEFS_PATH="${PROJECT_SOURCE_DIR}/engine/script/defs/helios.d.luau"
     HELIOS_GO_EXECUTABLE="${HELIOS_GO_EXECUTABLE}"
     HELIOS_CMAKE_COMMAND="${CMAKE_COMMAND}"
     HELIOS_TEST_WORK_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_work")

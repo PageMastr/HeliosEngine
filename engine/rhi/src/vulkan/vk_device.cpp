@@ -268,12 +268,15 @@ Result<void> VulkanDevice::createInstance() {
     std::vector<const char*> enabledLayers;
     std::vector<const char*> enabledExts;
     if (m_desc.validation || m_desc.requireValidation) {
-        const bool available = std::any_of(layers.begin(), layers.end(), [](const VkLayerProperties& l) {
+        const auto layer = std::find_if(layers.begin(), layers.end(), [](const VkLayerProperties& l) {
             return std::strcmp(l.layerName, "VK_LAYER_KHRONOS_validation") == 0;
         });
-        if (available) {
+        if (layer != layers.end()) {
             enabledLayers.push_back("VK_LAYER_KHRONOS_validation");
             m_validationLayer = true;
+            // Reported so tests can log which layer checked them (helios-rendertest, CI logs).
+            m_caps.validationLayer = std::format("{} {} (implementation {})", layer->layerName,
+                                                 versionString(layer->specVersion), layer->implementationVersion);
         } else if (m_desc.requireValidation) {
             return Error{ErrorCode::Unsupported, "VK_LAYER_KHRONOS_validation is required but not installed"};
         } else {

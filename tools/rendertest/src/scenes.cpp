@@ -1,10 +1,12 @@
 // helios-rendertest scenes (see scenes.h). RC-1 requires triangle, compute and bindless; forward,
-// postchain and mips cover the forward pipeline, transient aliasing across queues and
-// per-subresource (mip) barriers on real GPUs.
+// forward-srgb, normals, postchain and mips cover the forward pipeline (both tonemap encodings) and
+// its debug view, transient aliasing across queues and per-subresource (mip) barriers on real GPUs.
 
 #include "scenes.h"
 
 #include <array>
+#include <mutex>
+#include <set>
 
 #include "helios-rendertest_shaders.h"
 #include "helios/render/forward.h"
@@ -16,6 +18,20 @@ using namespace helios::render;
 namespace shaders = rendertest_shaders;
 
 namespace {
+
+struct LocalNames {
+    std::mutex mutex;
+    std::set<std::string> names;
+};
+LocalNames& localNames() {
+    static LocalNames names;
+    return names;
+}
+void recordLocalName(std::string_view name) {
+    LocalNames& local = localNames();
+    std::lock_guard lock(local.mutex);
+    local.names.emplace(name);
+}
 
 constexpr rhi::Format kHdr = rhi::Format::RGBA16Float;
 
@@ -95,7 +111,7 @@ public:
         d.colorCount = 1;
         d.colorFormats[0] = format;
         d.name = "Triangle";
-        HELIOS_TRY_ASSIGN(m_pso, device.createGraphicsPipeline(d));
+        HELIOS_TRY_ASSIGN(m_pso, createLocalPipeline(device, d));
         return {};
     }
     void addPasses(RenderGraph& graph, RgTexture output, u32) override {
@@ -119,8 +135,8 @@ class ComputeScene final : public Scene {
 public:
     const SceneInfo& info() const noexcept override { return m_info; }
     Result<void> init(rhi::Device& device, rhi::Format format) override {
-        HELIOS_TRY_ASSIGN(m_pattern, device.createComputePipeline(computePipeline(shaders::pattern(), "csPattern", "Pattern")));
-        HELIOS_TRY_ASSIGN(m_blit, device.createGraphicsPipeline(fullscreenPipeline("psBlit", format, "Blit")));
+        HELIOS_TRY_ASSIGN(m_pattern, createLocalPipeline(device, computePipeline(shaders::pattern(), "csPattern", "Pattern")));
+        HELIOS_TRY_ASSIGN(m_blit, createLocalPipeline(device, fullscreenPipeline("psBlit", format, "Blit")));
         return {};
     }
     void addPasses(RenderGraph& graph, RgTexture output, u32) override {
@@ -150,7 +166,7 @@ public:
         d.colorCount = 1;
         d.colorFormats[0] = format;
         d.name = "Quads";
-        HELIOS_TRY_ASSIGN(m_pso, device.createGraphicsPipeline(d));
+        HELIOS_TRY_ASSIGN(m_pso, createLocalPipeline(device, d));
         for (u32 t = 0; t < 4; ++t) {
             HELIOS_TRY_ASSIGN(m_textures[t], (device.createTexture(rhi::TextureDesc::tex2D(
                                                  rhi::Format::RGBA8Unorm, 16, 16,
@@ -259,11 +275,38 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------
+/// Forward pipeline v0 scenes: "forward", "forward-srgb" (the same frame into an sRGB output, so the
+/// tonemap takes its hardware-encoding path) and "normals" (the DebugNormals view over the right half).
+enum class ForwardView { Plain, Normals, Srgb };
+
+SceneInfo forwardInfo(ForwardView view) {
+    switch (view) {
+    case ForwardView::Normals:
+        return {"normals",
+                "Forward pipeline v0 with its DebugNormals view in the right half (the view is read, so not culled)",
+                320, 180, 0.01, 0.5f, 0};
+    case ForwardView::Srgb:
+        return {"forward-srgb",
+                "Forward pipeline v0 into an RGBA8Srgb output: the tonemap leaves the sRGB encoding to the "
+                "hardware (encodeSrgb = 0)",
+                320, 180, 0.01, 0.5f, 0, rhi::Format::RGBA8Srgb};
+    case ForwardView::Plain: break;
+    }
+    return {"forward",
+            "Forward pipeline v0 at 10^7 m: clear, geometry with reverse-Z depth, async exposure, tonemap", 320,
+            180, 0.01, 0.5f, 0};
+}
+
 class ForwardTestScene final : public Scene {
 public:
+    explicit ForwardTestScene(ForwardView view) : m_normals(view == ForwardView::Normals), m_info(forwardInfo(view)) {}
     const SceneInfo& info() const noexcept override { return m_info; }
     Result<void> init(rhi::Device& device, rhi::Format format) override {
         HELIOS_TRY_ASSIGN(m_renderer, ForwardRenderer::create(device, format));
+        if (m_normals) {
+            HELIOS_TRY_ASSIGN(m_rightHalf,
+                              createLocalPipeline(device, fullscreenPipeline("psBlit", format, "RightHalf")));
+        }
         HELIOS_TRY_ASSIGN(GpuMesh cube, uploadMesh(device, makeCube(0.5f), "Cube"));
         m_scene.meshes.push_back(cube);
         HELIOS_TRY_ASSIGN(GpuMesh sphere, uploadMesh(device, makeUvSphere(0.5f, 32, 16), "Sphere"));
@@ -291,20 +334,50 @@ public:
         place(1, {1.0, 0.3, 1.8}, {0.3f, 0.85f, 0.4f, 1.0f}, 0.0f, 0.6f);
         return {};
     }
-    void addPasses(RenderGraph& graph, RgTexture output, u32) override { m_renderer->addPasses(graph, m_scene, output); }
+    void addPasses(RenderGraph& graph, RgTexture output, u32) override {
+        if (!m_normals) {
+            m_renderer->addPasses(graph, m_scene, output);
+            return;
+        }
+        RgTexture normals;
+        const RgTexture frame =
+            m_renderer->addPasses(graph, m_scene, output, {.debugView = true, .debugNormals = &normals});
+        struct Data {
+            RgTexture normals;
+        };
+        const rhi::PipelineH pso = m_rightHalf;
+        graph.addPass<Data>(
+            "RightHalf", PassFlags::Raster,
+            [&](RgBuilder& b, Data& data) {
+                data.normals = b.read(normals);
+                b.colorAttachment(frame, 0, rhi::LoadOp::Load);
+            },
+            [pso](const Data& data, RgContext& ctx) {
+                // A scissor, not `discard`: Slang lowers discard to OpDemoteToHelperInvocation, a
+                // Vulkan 1.3 feature the RHI does not enable.
+                rhi::Rect right = ctx.renderArea();
+                right.x = static_cast<i32>(right.width / 2);
+                right.width -= right.width / 2;
+                ctx.cmd().setScissor(right);
+                ctx.cmd().bindPipeline(pso);
+                ctx.cmd().pushConstants(BlitPush{ctx.srv(data.normals), 0, 0, 0});
+                ctx.cmd().draw(3);
+            });
+    }
     void destroy(rhi::Device& device) override {
         for (GpuMesh& m : m_scene.meshes) destroyMesh(device, m);
         m_scene.meshes.clear();
         m_scene.instances.clear();
         m_renderer.reset();
+        if (m_normals) device.destroy(m_rightHalf);
     }
 
 private:
-    SceneInfo m_info{"forward",
-                     "Forward pipeline v0 at 10^7 m: clear, geometry with reverse-Z depth, async exposure, tonemap",
-                     320, 180, 0.01, 0.5f, 0};
+    bool m_normals;
+    SceneInfo m_info;
     std::unique_ptr<ForwardRenderer> m_renderer;
     ForwardScene m_scene;
+    rhi::PipelineH m_rightHalf;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -312,9 +385,9 @@ class PostChainScene final : public Scene {
 public:
     const SceneInfo& info() const noexcept override { return m_info; }
     Result<void> init(rhi::Device& device, rhi::Format format) override {
-        HELIOS_TRY_ASSIGN(m_pattern, device.createComputePipeline(computePipeline(shaders::pattern(), "csPattern", "Pattern")));
-        HELIOS_TRY_ASSIGN(m_blur, device.createComputePipeline(computePipeline(shaders::blur(), "csBlur", "Blur")));
-        HELIOS_TRY_ASSIGN(m_blit, device.createGraphicsPipeline(fullscreenPipeline("psBlit", format, "Blit")));
+        HELIOS_TRY_ASSIGN(m_pattern, createLocalPipeline(device, computePipeline(shaders::pattern(), "csPattern", "Pattern")));
+        HELIOS_TRY_ASSIGN(m_blur, createLocalPipeline(device, computePipeline(shaders::blur(), "csBlur", "Blur")));
+        HELIOS_TRY_ASSIGN(m_blit, createLocalPipeline(device, fullscreenPipeline("psBlit", format, "Blit")));
         return {};
     }
     void addPasses(RenderGraph& graph, RgTexture output, u32) override {
@@ -369,9 +442,9 @@ class MipsScene final : public Scene {
 public:
     const SceneInfo& info() const noexcept override { return m_info; }
     Result<void> init(rhi::Device& device, rhi::Format format) override {
-        HELIOS_TRY_ASSIGN(m_pattern, device.createComputePipeline(computePipeline(shaders::pattern(), "csPattern", "Pattern")));
-        HELIOS_TRY_ASSIGN(m_down, device.createComputePipeline(computePipeline(shaders::blur(), "csDownsample", "Downsample")));
-        HELIOS_TRY_ASSIGN(m_view, device.createGraphicsPipeline(fullscreenPipeline("psMips", format, "MipView")));
+        HELIOS_TRY_ASSIGN(m_pattern, createLocalPipeline(device, computePipeline(shaders::pattern(), "csPattern", "Pattern")));
+        HELIOS_TRY_ASSIGN(m_down, createLocalPipeline(device, computePipeline(shaders::blur(), "csDownsample", "Downsample")));
+        HELIOS_TRY_ASSIGN(m_view, createLocalPipeline(device, fullscreenPipeline("psMips", format, "MipView")));
         rhi::SamplerDesc nearest;
         nearest.minFilter = nearest.magFilter = nearest.mipFilter = rhi::Filter::Nearest;
         nearest.addressU = nearest.addressV = nearest.addressW = rhi::AddressMode::ClampToEdge;
@@ -446,12 +519,32 @@ private:
 
 } // namespace
 
+Result<rhi::PipelineH> createLocalPipeline(rhi::Device& device, const rhi::GraphicsPipelineDesc& desc) {
+    recordLocalName(desc.name);
+    // shipped-pipelines-lint: allow rendertest's own test shaders; names recorded for measureCoverage()
+    return device.createGraphicsPipeline(desc);
+}
+
+Result<rhi::PipelineH> createLocalPipeline(rhi::Device& device, const rhi::ComputePipelineDesc& desc) {
+    recordLocalName(desc.name);
+    // shipped-pipelines-lint: allow rendertest's own test shaders; names recorded for measureCoverage()
+    return device.createComputePipeline(desc);
+}
+
+std::vector<std::string> localPipelineNames() {
+    LocalNames& local = localNames();
+    std::lock_guard lock(local.mutex);
+    return {local.names.begin(), local.names.end()};
+}
+
 std::vector<std::unique_ptr<Scene>> createScenes() {
     std::vector<std::unique_ptr<Scene>> scenes;
     scenes.push_back(std::make_unique<TriangleScene>());
     scenes.push_back(std::make_unique<ComputeScene>());
     scenes.push_back(std::make_unique<BindlessScene>());
-    scenes.push_back(std::make_unique<ForwardTestScene>());
+    scenes.push_back(std::make_unique<ForwardTestScene>(ForwardView::Plain));
+    scenes.push_back(std::make_unique<ForwardTestScene>(ForwardView::Srgb));
+    scenes.push_back(std::make_unique<ForwardTestScene>(ForwardView::Normals));
     scenes.push_back(std::make_unique<PostChainScene>());
     scenes.push_back(std::make_unique<MipsScene>());
     return scenes;

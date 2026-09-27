@@ -94,8 +94,10 @@ Result<std::unique_ptr<GpuTwin>> GpuTwin::create(bool preferSoftware) {
     rhi::Device& dev = *twin->m_impl->device;
     const std::span<const u32> spirv = pcg_twin_shaders::hnoise_tile();
     HELIOS_TRY_ASSIGN(twin->m_impl->tilePipeline,
+                      // shipped-pipelines-lint: allow the hnoise twin's test pipelines render nothing
                       dev.createComputePipeline(rhi::ComputePipelineDesc{rhi::ShaderDesc{spirv, "csTile"}, "hnoise csTile"}));
     HELIOS_TRY_ASSIGN(twin->m_impl->latticePipeline,
+                      // shipped-pipelines-lint: allow the hnoise twin's test pipelines render nothing
                       dev.createComputePipeline(rhi::ComputePipelineDesc{rhi::ShaderDesc{spirv, "csLattice"}, "hnoise csLattice"}));
     return twin;
 }

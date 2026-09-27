@@ -219,15 +219,15 @@ std::optional<std::string> envVar(const char* name) {
     return std::string(value);
 }
 
-DeviceDesc applyEnvironment(const DeviceDesc& desc) {
+DeviceDesc applyEnvironment(const DeviceDesc& desc, EnvLookup lookup) {
     DeviceDesc out = desc;
-    if (auto v = envVar("HELIOS_RHI_VALIDATION")) {
+    if (auto v = lookup("HELIOS_RHI_VALIDATION"); v && desc.validationFromEnvironment) {
         out.validation = (*v != "0" && *v != "off" && *v != "false");
     }
-    if (auto v = envVar("HELIOS_RHI_INJECT_DEVICE_LOST")) {
+    if (auto v = lookup("HELIOS_RHI_INJECT_DEVICE_LOST")) {
         out.debugDeviceLostAfterSubmits = static_cast<u32>(std::strtoul(v->c_str(), nullptr, 10));
     }
-    if (auto v = envVar("HELIOS_RHI_CAPS_MASK")) {
+    if (auto v = lookup("HELIOS_RHI_CAPS_MASK")) {
         char* end = nullptr;
         const unsigned long long mask = std::strtoull(v->c_str(), &end, 0);
         if (end && *end == '\0') {

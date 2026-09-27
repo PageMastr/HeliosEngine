@@ -41,6 +41,8 @@ if(MSVC)  # true for cl and clang-cl
 endif()
 
 if(HELIOS_SANITIZE)
+  # Timing gates ("perf:" tests) report but do not assert their budgets under sanitizers.
+  add_compile_definitions(HELIOS_SANITIZERS_ENABLED=1)
   if(MSVC)
     add_compile_options(/fsanitize=address)
   else()

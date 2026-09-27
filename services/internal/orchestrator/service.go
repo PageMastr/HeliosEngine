@@ -413,48 +413,53 @@ func leading[Req, Res any](s *Service, h rpc.NATSHandlerFunc[Req, Res]) rpc.NATS
 	}
 }
 
+// registration registers one handler on the bus.
+type registration func() (*nats.Subscription, error)
+
+// handle defers registering h for method so subscribe can stop at the first failure.
+func handle[Req, Res any](s *Service, method string, h rpc.NATSHandlerFunc[Req, Res]) registration {
+	return func() (*nats.Subscription, error) {
+		return rpc.NATSHandle(s.nc, Subject(s.shard, method), queueGroup, s.log, h)
+	}
+}
+
 // subscribe registers the leader's handlers and returns the subscriptions (also on error, so
-// the caller can drop partial ones).
+// the caller can drop partial ones). NATSHandle confirms each subscription with a round trip,
+// so subscribe stops at the first failure instead of waiting out one timeout per handler on a
+// bus that is down.
 func (s *Service) subscribe() ([]*nats.Subscription, error) {
 	var subs []*nats.Subscription
-	add := func(sub *nats.Subscription, err error) error {
-		if err != nil {
-			return err
-		}
-		subs = append(subs, sub)
-		return nil
-	}
-	err := errors.Join(
-		add(rpc.NATSHandle(s.nc, Subject(s.shard, MethodRegister), queueGroup, s.log,
-			leading(s, func(ctx context.Context, req *ProcessInfo) (*RegisterResult, error) { return s.reg.Register(ctx, *req) }))),
-		add(rpc.NATSHandle(s.nc, Subject(s.shard, MethodHeartbeat), queueGroup, s.log,
-			leading(s, func(ctx context.Context, req *HeartbeatRequest) (*HeartbeatResult, error) {
+	for _, register := range []registration{
+		handle(s, MethodRegister, leading(s, func(ctx context.Context, req *ProcessInfo) (*RegisterResult, error) {
+			return s.reg.Register(ctx, *req)
+		})),
+		handle(s, MethodHeartbeat, leading(s,
+			func(ctx context.Context, req *HeartbeatRequest) (*HeartbeatResult, error) {
 				return s.reg.Heartbeat(ctx, req.ProcessID, req.Epoch, req.Load, req.Held...)
-			}))),
-		add(rpc.NATSHandle(s.nc, Subject(s.shard, MethodDeregister), queueGroup, s.log,
-			leading(s, func(ctx context.Context, req *DeregisterRequest) (*Empty, error) {
-				return &Empty{}, s.reg.Deregister(ctx, req.ProcessID, req.Epoch)
-			}))),
-		add(rpc.NATSHandle(s.nc, Subject(s.shard, MethodResolveZone), queueGroup, s.log,
-			leading(s, func(_ context.Context, req *ResolveZoneRequest) (*Route, error) {
-				return s.reg.ResolveZone(req.ZoneID, req.ZoneName)
-			}))),
-		add(rpc.NATSHandle(s.nc, Subject(s.shard, MethodAllocateIdBlocks), queueGroup, s.log,
-			leading(s, func(ctx context.Context, req *AllocateIdBlocksRequest) (*AllocateIdBlocksResponse, error) {
+			})),
+		handle(s, MethodDeregister, leading(s, func(ctx context.Context, req *DeregisterRequest) (*Empty, error) {
+			return &Empty{}, s.reg.Deregister(ctx, req.ProcessID, req.Epoch)
+		})),
+		handle(s, MethodResolveZone, leading(s, func(_ context.Context, req *ResolveZoneRequest) (*Route, error) {
+			return s.reg.ResolveZone(req.ZoneID, req.ZoneName)
+		})),
+		handle(s, MethodAllocateIdBlocks, leading(s,
+			func(ctx context.Context, req *AllocateIdBlocksRequest) (*AllocateIdBlocksResponse, error) {
 				blocks, err := s.reg.AllocateIdBlocks(ctx, req.ProcessID, req.Epoch, req.N)
 				if err != nil {
 					return nil, err
 				}
 				return &AllocateIdBlocksResponse{IDShard: s.reg.cfg.IDShard, Prefixes: blocks}, nil
-			}))),
-		add(rpc.NATSHandle(s.nc, Subject(s.shard, MethodListProcesses), queueGroup, s.log,
-			func(context.Context, *Empty) (*ListProcessesResponse, error) { return s.list(), nil })),
-	)
-	if err == nil {
-		err = s.nc.Flush()
-	}
-	if err != nil {
-		return subs, fmt.Errorf("orchestrator: subscribe: %w", err)
+			})),
+		handle(s, MethodListProcesses, func(context.Context, *Empty) (*ListProcessesResponse, error) {
+			return s.list(), nil
+		}),
+	} {
+		sub, err := register()
+		if err != nil {
+			return subs, fmt.Errorf("orchestrator: subscribe: %w", err)
+		}
+		subs = append(subs, sub)
 	}
 	return subs, nil
 }

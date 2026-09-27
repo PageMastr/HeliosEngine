@@ -97,6 +97,9 @@ struct Caps {
     AdapterInfo adapter;
     CapBit bits = CapBit::None;
     Limits limits;
+    /// The Khronos validation layer enabled on this device, as reported by the loader:
+    /// "VK_LAYER_KHRONOS_validation 1.3.275 (implementation 1)". Empty when no layer is enabled.
+    std::string validationLayer;
 
     bool has(CapBit bit) const noexcept { return hasFlag(bits, bit); }
 };

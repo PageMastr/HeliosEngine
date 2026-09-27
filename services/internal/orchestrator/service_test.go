@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -317,5 +319,81 @@ func TestSubjectsFollowTheSpec(t *testing.T) {
 	// 05 §2.2's example subject, and §6.5's cell permission rpc.<shard>.orch.>.
 	if got := orchestrator.Subject("eu1", orchestrator.MethodHeartbeat); got != "rpc.eu1.orch.Heartbeat" {
 		t.Fatalf("subject %q", got)
+	}
+}
+
+// subscribe must stop at the first handler the bus refuses, and tryLead must drop the handlers
+// registered before it and give the leadership back. The bus user may not subscribe to the
+// second handler (Heartbeat) nor to the last one (ListProcesses); if subscribe went on after
+// the first failure, the ListProcesses SUB would be sent and refused too.
+func TestSubscribeStopsAtFirstRefusal(t *testing.T) {
+	heartbeat := orchestrator.Subject("t1", orchestrator.MethodHeartbeat)
+	list := orchestrator.Subject("t1", orchestrator.MethodListProcesses)
+	ns, err := server.NewServer(&server.Options{ServerName: "orch-perm", DontListen: true, JetStream: true,
+		StoreDir: t.TempDir(), NoLog: true, NoSigs: true,
+		Users: []*server.User{
+			{Username: "svc", Password: "pw"},
+			{Username: "orch", Password: "pw", Permissions: &server.Permissions{
+				Subscribe: &server.SubjectPermission{Deny: []string{heartbeat, list}}}},
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go ns.Start()
+	if !ns.ReadyForConnections(10 * time.Second) {
+		ns.Shutdown()
+		t.Fatal("permissions server not ready")
+	}
+	t.Cleanup(func() { ns.Shutdown(); ns.WaitForShutdown() })
+	connect := func(user string) *nats.Conn {
+		nc, err := nats.Connect("", nats.InProcessServer(ns), nats.UserInfo(user, "pw"),
+			nats.ErrorHandler(func(*nats.Conn, *nats.Subscription, error) {}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(nc.Close)
+		return nc
+	}
+	orch, svc := connect("orch"), connect("svc")
+
+	store := orchestrator.NewMemStore()
+	cfg := platform.Default().Orchestrator
+	cfg.Zones = []platform.ZoneConfig{{ID: 1001, Name: "alpha"}}
+	s, err := orchestrator.New(orchestrator.Deps{Config: cfg, Shard: "t1", ShardIndex: 2, Store: store,
+		NATS: orch, Holder: "replica-a", LeaderTTL: time.Second, RenewInterval: 200 * time.Millisecond,
+		Log: quiet, Metrics: prometheus.NewRegistry()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Start(context.Background())
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+	if !errors.Is(err, nats.ErrPermissionViolation) || !strings.Contains(err.Error(), heartbeat) {
+		t.Fatalf("Start: %v", err)
+	}
+	if strings.Contains(err.Error(), list) {
+		t.Fatalf("subscribe went on after the first failure: %v", err)
+	}
+	if last := orch.LastError(); last == nil || !strings.Contains(last.Error(), `"`+heartbeat+`"`) {
+		t.Fatalf("a SUB after the refused one reached the bus: LastError %v", last)
+	}
+	if ok, term := s.Leader(); ok || term != 0 {
+		t.Fatalf("still leader: %t term %d", ok, term)
+	}
+	// The Register handler subscribed before the refusal must be gone from the server. A leaked
+	// one would answer "unavailable" too (leading() refuses work), so check for no responders.
+	if err := orch.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = rpc.NATSRequest[orchestrator.ProcessInfo, orchestrator.RegisterResult](ctx, svc,
+		orchestrator.Subject("t1", orchestrator.MethodRegister), &orchestrator.ProcessInfo{})
+	if !errors.Is(err, nats.ErrNoResponders) {
+		t.Fatalf("the partial Register subscription was left behind: %v", err)
+	}
+	// The leadership was released: another holder can take it at once.
+	_, ok, err := store.AcquireLeadership(context.Background(), "t1", "replica-b", time.Second)
+	if err != nil || !ok {
+		t.Fatalf("leadership not released: ok=%t err=%v", ok, err)
 	}
 }

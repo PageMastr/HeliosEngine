@@ -1,8 +1,10 @@
 #pragma once
 // helios-rendertest scenes: deterministic test scenes rendered offscreen through the render graph
-// (fixed camera, time and seeds). Each renders into an imported RGBA8 output texture.
+// (fixed camera, time and seeds). Each renders into an imported 8-bit RGBA output texture
+// (SceneInfo::outputFormat).
 
 #include <memory>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -22,6 +24,8 @@ struct SceneInfo {
     f32 maxFlip = 0.5f;
     /// Frames rendered before the captured one (temporal warm-up).
     u32 warmupFrames = 0;
+    /// Format of the output texture (read back as 8-bit RGBA; an sRGB format stores encoded bytes).
+    rhi::Format outputFormat = rhi::Format::RGBA8Unorm;
 };
 
 class Scene {
@@ -38,5 +42,15 @@ public:
 
 /// All scenes, in suite order.
 std::vector<std::unique_ptr<Scene>> createScenes();
+
+/// Creates a pipeline from rendertest's own shaders and records its name. Scenes create every
+/// pipeline that is not engine/render's through these (tools/rendertest/tests/shipped_pipelines_lint.cmake
+/// allows no other direct call), so measureCoverage() can reject a local pipeline named like a
+/// shipped one, which would make a Null trace count as coverage of the shipped pipeline.
+/// Thread-safe like Device.
+Result<rhi::PipelineH> createLocalPipeline(rhi::Device& device, const rhi::GraphicsPipelineDesc& desc);
+Result<rhi::PipelineH> createLocalPipeline(rhi::Device& device, const rhi::ComputePipelineDesc& desc);
+/// Names passed to createLocalPipeline() so far in this process, sorted.
+std::vector<std::string> localPipelineNames();
 
 } // namespace helios::rendertest

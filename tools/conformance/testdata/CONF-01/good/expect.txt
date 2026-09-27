@@ -1,0 +1,2 @@
+#! -rules CONF-01 -strict
+# DIRECTORY is a read projection; the tests assert that LEASES and orch_leader are absent.

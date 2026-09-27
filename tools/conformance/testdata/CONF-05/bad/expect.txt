@@ -1,0 +1,3 @@
+#! -rules CONF-05 -strict
+services/cmd/tool/main.go:11: CONF-05
+services/internal/session/ids.go:4: CONF-05

@@ -1,0 +1,9 @@
+#! -rules CONF-01 -strict
+# Created by literal and by variable, bound through a constant of another package, bound in a test
+# that uses it, and the nats.c forms.
+engine/net/src/kv.cpp:6: CONF-01
+engine/net/src/kv.cpp:9: CONF-01
+services/internal/orch/kv.go:14: CONF-01
+services/internal/orch/kv.go:17: CONF-01
+services/internal/orch/kv.go:21: CONF-01
+services/internal/orch/kv_test.go:13: CONF-01

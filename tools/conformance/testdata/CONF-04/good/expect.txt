@@ -1,0 +1,2 @@
+#! -rules CONF-04 -strict
+# The minters compose 41/5/17 IDs; sizes, packing and task-graph NodeIds are not ID code.

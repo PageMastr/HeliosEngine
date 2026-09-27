@@ -38,12 +38,23 @@ type Pass struct {
 	Rule  *Rule
 	Tree  *Tree
 	Files []string // the files in the rule's scope
+	Scope []string // the scope globs: the table's, then the map's
 	Tests []string // conformance tests the map requires for the rule's anchors
 	out   *[]Finding
+	seen  map[string]bool
 }
 
-// Report records a finding. line 0 means the finding has no line (a missing file or test).
+// Report records a finding. line 0 means the finding has no line (a missing file or test). A rule
+// reports a line once, the unit a suppression covers; the first message wins.
 func (p *Pass) Report(file string, line int, format string, args ...any) {
+	key := fmt.Sprintf("%s:%d", file, line)
+	if p.seen == nil {
+		p.seen = map[string]bool{}
+	}
+	if line > 0 && p.seen[key] {
+		return
+	}
+	p.seen[key] = true
 	*p.out = append(*p.out, Finding{Rule: p.Rule.ID, Path: file, Line: line, Message: fmt.Sprintf(format, args...)})
 }
 
@@ -140,7 +151,7 @@ func Run(opts Options) (*Result, error) {
 			}
 		}
 		scopes[r.ID] = scope
-		p := &Pass{Rule: r, Tree: tree, Tests: dedupe(tests), out: &findings}
+		p := &Pass{Rule: r, Tree: tree, Scope: scope, Tests: dedupe(tests), out: &findings}
 		for _, f := range tree.Files {
 			if r.covers(scope, f) {
 				p.Files = append(p.Files, f)

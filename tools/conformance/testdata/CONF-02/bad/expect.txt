@@ -1,0 +1,10 @@
+#! -rules CONF-02 -strict
+# TTL and MaxAge on lease buckets, per-key TTLs (an unresolved key and a lease key), CAS on the leader
+# key, and the nats.c forms. (CONF-01 also fires on these buckets; this fixture runs CONF-02 alone.)
+apps/cell/lease.cpp:5: CONF-02
+apps/cell/lease.cpp:7: CONF-02
+services/internal/orch/kv.go:15: CONF-02
+services/internal/orch/kv.go:17: CONF-02
+services/internal/orch/kv.go:18: CONF-02
+services/internal/orch/kv.go:19: CONF-02
+services/internal/orch/kv.go:20: CONF-02

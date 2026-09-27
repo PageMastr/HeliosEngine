@@ -7,6 +7,29 @@
 // map on every run: unknown rules, non-anchor keys, bad globs and rules in no entry all fail.
 {
   // --- Checked by CONF rules -----------------------------------------------------------------------
+  // The backend's leases, leadership and IDs (ADR-004; 05 §1.4, §2.3). The C++ cell host and gateway
+  // (engine/server, apps/cellserver, apps/gateway; WP-0.14) talk to the control plane too.
+  "05 §2.3": {
+    "paths": ["services/**", "engine/server/**", "apps/cellserver/**", "apps/gateway/**"],
+    "rules": ["CONF-01"]
+  },
+  "05 §1.4.1": {
+    "paths": ["services/internal/orchestrator/**", "engine/server/**"],
+    "rules": ["CONF-02"]
+  },
+  "05 §1.4.2": {
+    "paths": ["services/internal/orchestrator/**", "engine/authority/**", "engine/server/**"],
+    "rules": ["CONF-02", "CONF-03"],
+    "tests": ["conformance/holder_rule"]
+  },
+  "ADR-004": {
+    "paths": ["services/pkg/idgen/**", "engine/ecs/**"],
+    "rules": ["CONF-04"]
+  },
+  "05 §1.4.5": {
+    "paths": ["services/pkg/idgen/**", "services/internal/orchestrator/**", "engine/ecs/**"],
+    "rules": ["CONF-04", "CONF-05"]
+  },
   "ADR-014": {
     "paths": ["services/go.mod", "tools/conformance/go.mod", ".github/**"],
     "rules": ["CONF-09"]

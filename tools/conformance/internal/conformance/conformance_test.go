@@ -161,3 +161,15 @@ func TestSuppressionReasons(t *testing.T) {
 		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), want)
 	}
 }
+
+func TestParenBody(t *testing.T) {
+	for in, want := range map[string]string{
+		"(a INT, b NUMERIC(10, 2)) PARTITION BY RANGE (a)": "a INT, b NUMERIC(10, 2)",
+		"(a INT) WITH (fillfactor = 70)":                   "a INT",
+		"(unterminated":                                    "unterminated",
+	} {
+		if got := parenBody(in); got != want {
+			t.Errorf("parenBody(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

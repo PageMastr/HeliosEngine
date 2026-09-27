@@ -1,0 +1,11 @@
+#! -rules CONF-06 -strict
+# A Go-declared schema without the svc_ prefix; the legacy name used after its rename; a schema not
+# named svc_<service>; a table in another service's schema; an unqualified table; a table moved out;
+# a rename to a non-svc_ name.
+services/migrations/chat/00002_rooms.sql:2: CONF-06
+services/migrations/chat/00002_rooms.sql:3: CONF-06
+services/migrations/chat/00002_rooms.sql:4: CONF-06
+services/migrations/chat/00002_rooms.sql:5: CONF-06
+services/migrations/chat/00002_rooms.sql:6: CONF-06
+services/migrations/chat/00002_rooms.sql:7: CONF-06
+services/migrations/migrations.go:11: CONF-06

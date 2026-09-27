@@ -1,0 +1,2 @@
+#! -rules CONF-06 -strict
+# Legacy files keep the legacy name; bodies, strings, comments and Down sections are not the net schema.

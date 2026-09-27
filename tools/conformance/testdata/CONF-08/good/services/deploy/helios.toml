@@ -1,0 +1,5 @@
+[bus]
+listen = "127.0.0.1:4222"  # embedded server port for nats.c cells/gateways
+
+[session]
+gateways = ["127.0.0.1:7777"]

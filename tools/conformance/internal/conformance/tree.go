@@ -20,10 +20,11 @@ import (
 // would track (`ls-files --cached --others --exclude-standard`), so working-tree code awaiting its
 // WP counts (§5.10.2 D7) and ignored build output does not; elsewhere, every file.
 type Tree struct {
-	Root  string
-	Files []string // slash-separated paths relative to Root, sorted
-	cache map[string][]string
-	gidx  *goIndex
+	Root   string
+	Files  []string // slash-separated paths relative to Root, sorted
+	cache  map[string][]string
+	gidx   *goIndex
+	schema *netSchema // CONF-06 and CONF-07 evaluate the migrations once
 }
 
 // ownFixtures are the lint's seeded violations: they fail by design, so a repository run skips them.

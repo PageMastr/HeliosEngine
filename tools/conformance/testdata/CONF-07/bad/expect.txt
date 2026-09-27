@@ -1,0 +1,11 @@
+#! -rules CONF-07 -strict
+# Plain-text real name, date of birth and an INET column; a column renamed to email; a plain client_ip
+# added later; ciphertext PII outside svc_identity; an @pii field outside Identity. (legacy_mail is a
+# known miss: "mail" alone is not one of the listed words.)
+schemas/sample/player.hschema:6: CONF-07
+services/migrations/chat/00001_messages.sql:2: CONF-07
+services/migrations/identity/00001_profile.sql:4: CONF-07
+services/migrations/identity/00001_profile.sql:5: CONF-07
+services/migrations/identity/00001_profile.sql:6: CONF-07
+services/migrations/identity/00002_rename.sql:2: CONF-07
+services/migrations/identity/00002_rename.sql:3: CONF-07

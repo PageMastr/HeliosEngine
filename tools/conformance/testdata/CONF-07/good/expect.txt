@@ -1,0 +1,2 @@
+#! -rules CONF-07 -strict
+# Plain-text columns that a later migration drops; @pii inside Identity.

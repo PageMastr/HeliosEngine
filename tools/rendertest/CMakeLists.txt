@@ -3,7 +3,8 @@
 # (bit-identical), compared with goldens using ꟻLIP (Vulkan) or command-stream traces (Null), with an
 # HTML/Markdown report. Registered as CTests: rendertest.vulkan.<scene> (label gpu),
 # rendertest.null.<scene> (every toolchain), rendertest.coverage (every toolchain), rendertest.report (gpu),
-# rendertest.validation-layer and rendertest.validation-required (gpu), lint_shipped_pipelines* (lint).
+# rendertest.validation-layer and rendertest.validation-required (gpu); lint_shipped_pipelines* (lint) is
+# registered through tools/lint/lint_tests.cmake (tests/shipped_pipelines_tests.cmake).
 
 if(TARGET helios-rendertest)
   return()  # already added (engine/render adds the tool until tools/CMakeLists.txt lists it)
@@ -109,33 +110,9 @@ if(HELIOS_BUILD_TESTS)
   add_test(NAME rendertest.coverage COMMAND helios-rendertest --coverage)
   set_tests_properties(rendertest.coverage PROPERTIES LABELS "rendertest" TIMEOUT 120)
   # ... which holds only if no pipeline bypasses the records: engine/, apps/ and tools/ (except the
-  # RHI itself) create pipelines only in createShippedPipeline() and createLocalPipeline(). The lint
-  # needs no build; tools/ci/run_lints.cmake runs it too.
-  set(pipeline_lint ${CMAKE_CURRENT_SOURCE_DIR}/tests/shipped_pipelines_lint.cmake)
-  set(pipeline_fixtures ${CMAKE_CURRENT_SOURCE_DIR}/tests/shipped_pipelines)
-  add_test(NAME lint_shipped_pipelines
-           COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR} -P ${pipeline_lint})
-  add_test(NAME lint_shipped_pipelines_fixture_clean
-           COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${pipeline_fixtures}/clean -P ${pipeline_lint})
-  # Seeded violations (tools/lint/expect_fail.cmake: the lint must exit non-zero AND say why).
-  foreach(case "c7_state_variant|engine/render/src/forward.cpp:[0-9]+: .*createGraphicsPipeline"
-               "sample_direct|apps/samples/demo/main.cpp:[0-9]+: .*createComputePipeline"
-               "waiver_without_reason|tools/rendertest/src/scenes.cpp:[0-9]+: .*waiver needs a reason"
-               "indirect|shipped-pipelines lint: 4 finding"
-               "waiver_leak|engine/vfx/src/trails.cpp:4: createGraphicsPipeline outside")
-    string(REPLACE "|" ";" parts "${case}")
-    list(GET parts 0 fixture)
-    list(GET parts 1 expect)
-    add_test(NAME lint_shipped_pipelines_fixture_${fixture}
-             COMMAND ${CMAKE_COMMAND} "-DEXPECT=${expect}" -DNARGS=4 -DARG0=${CMAKE_COMMAND}
-                     -DARG1=-DSOURCE_DIR=${pipeline_fixtures}/${fixture} -DARG2=-P -DARG3=${pipeline_lint}
-                     -P ${PROJECT_SOURCE_DIR}/tools/lint/expect_fail.cmake)
-  endforeach()
-  foreach(t lint_shipped_pipelines lint_shipped_pipelines_fixture_clean lint_shipped_pipelines_fixture_c7_state_variant
-          lint_shipped_pipelines_fixture_sample_direct lint_shipped_pipelines_fixture_waiver_without_reason
-          lint_shipped_pipelines_fixture_indirect lint_shipped_pipelines_fixture_waiver_leak)
-    set_tests_properties(${t} PROPERTIES LABELS lint TIMEOUT 120)
-  endforeach()
+  # RHI itself) create pipelines only in createShippedPipeline() and createLocalPipeline(). That lint
+  # (lint_shipped_pipelines*, label lint) needs no build and is registered by tools/lint/lint_tests.cmake
+  # through tests/shipped_pipelines_tests.cmake, headless configurations included; run_lints.cmake runs it too.
   # GPU-less CLI checks: skips overwrite stale results, removed scenes leave the report, --budget parsing,
   # and the coverage check fails when scenes or goldens are missing.
   add_test(NAME rendertest.cli

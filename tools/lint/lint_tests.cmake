@@ -268,3 +268,6 @@ foreach(case
     set_tests_properties(lint_layering_${fixture} PROPERTIES FAIL_REGULAR_EXPRESSION "HELIOS_FIXTURE_CONFIGURE_OK")
   endif()
 endforeach()
+
+# RC-1's shipped-pipelines lint (WP-0.12), registered by its owner.
+include(${PROJECT_SOURCE_DIR}/tools/rendertest/tests/shipped_pipelines_tests.cmake)

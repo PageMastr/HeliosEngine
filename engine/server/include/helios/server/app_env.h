@@ -74,7 +74,8 @@ Result<net::Address> parseAddress(std::string_view text, std::string_view what);
 /// domain from `--fd-az` / HELIOS_FD_AZ, `--fd-rack` / HELIOS_FD_RACK and `--fd-host` /
 /// HELIOS_FD_HOST, and the server build from `--server-build` / HELIOS_SERVER_BUILD (decimal).
 /// Unset fields stay empty or 0 and are left out of the registration. Fails on a malformed build
-/// number or a value the orchestrator would refuse (orch::validateRegistration).
+/// number or a value the orchestrator would refuse, or one that is not UTF-8 (on Windows, std::getenv
+/// returns the ANSI code page; orch::validatePlacement).
 struct Placement {
     orch::FailureDomain fd;
     i64 serverBuild = 0;

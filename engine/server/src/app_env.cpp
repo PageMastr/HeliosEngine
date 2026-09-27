@@ -172,10 +172,7 @@ Result<Placement> placementFromArgs(const ProcessArgs& args) {
         if (ec != std::errc{} || end != build.data() + build.size() || p.serverBuild < 0)
             return makeError(ErrorCode::InvalidArgument, "--server-build / HELIOS_SERVER_BUILD: '{}' is not a build number", build);
     }
-    orch::ProcessInfo check;
-    check.fd = p.fd;
-    check.serverBuild = p.serverBuild;
-    HELIOS_TRY(orch::validateRegistration(check));
+    HELIOS_TRY(orch::validatePlacement(p.fd, p.serverBuild));
     return p;
 }
 

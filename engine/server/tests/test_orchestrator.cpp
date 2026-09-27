@@ -327,6 +327,7 @@ TEST_CASE("server.app: placement options fill fd and serverBuild; malformed valu
     CHECK_FALSE(parse({"--fd-az=az-1", "--server-build=-3"}));
     CHECK_FALSE(parse({"--fd-az=az-1", "--server-build=99999999999999999999"}));
     CHECK_FALSE(parse({"--fd-rack=" + std::string(orch::kMaxFdLabel + 1, 'r')}));
+    CHECK_FALSE(parse({"--fd-host=srv\xff"})); // an ANSI-code-page value, not UTF-8
 
     // A cell or gateway with a registration the orchestrator would refuse does not start.
     FakeBus bus;
@@ -335,6 +336,16 @@ TEST_CASE("server.app: placement options fill fd and serverBuild; malformed valu
     cc.trunkBind = net::Address::ipv4(127, 0, 0, 1, 0);
     cc.failureDomain.host = std::string(orch::kMaxFdHost + 1, 'h');
     CHECK(CellServer::create(std::move(cc), 0).errorCode() == ErrorCode::InvalidArgument);
+    CellServerConfig latin1;
+    latin1.bus = &bus;
+    latin1.trunkBind = net::Address::ipv4(127, 0, 0, 1, 0);
+    latin1.failureDomain.host = "srv\xff";
+    CHECK(CellServer::create(std::move(latin1), 0).errorCode() == ErrorCode::InvalidArgument);
+    CellServerConfig longZone;
+    longZone.bus = &bus;
+    longZone.trunkBind = net::Address::ipv4(127, 0, 0, 1, 0);
+    longZone.declaredZones = {std::string(orch::kMaxZoneName + 1, 'z')};
+    CHECK(CellServer::create(std::move(longZone), 0).errorCode() == ErrorCode::InvalidArgument);
     GatewayConfig gc;
     gc.bus = &bus;
     gc.listen = net::Address::ipv4(127, 0, 0, 1, 0);

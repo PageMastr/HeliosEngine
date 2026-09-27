@@ -210,6 +210,64 @@ TEST_CASE("server.contracts: fd, serverBuild and held regions match Go (05 §1.4
     CHECK_FALSE(orch::validateRegistration(bad));
 }
 
+TEST_CASE("server.contracts: validateRegistration applies every rule of Go's validate() and requires UTF-8") {
+    orch::ProcessInfo cell;
+    cell.name = "cell-a";
+    cell.kind = "cell";
+    cell.address = "127.0.0.1:7810";
+    cell.version = "0.1.0 \xCE\xA9"; // non-ASCII UTF-8 is fine
+    cell.zones = {"tallis"};
+    orch::ProcessInfo gw;
+    gw.name = "gw-1";
+    gw.kind = "gateway";
+    gw.address = "[::1]:7777";
+    gw.keyId = 3;
+    REQUIRE(orch::validateRegistration(cell));
+    REQUIRE(orch::validateRegistration(gw));
+    auto refused = [](orch::ProcessInfo info, auto edit) {
+        edit(info);
+        auto r = orch::validateRegistration(info);
+        return !r && r.errorCode() == ErrorCode::InvalidArgument;
+    };
+    CHECK(refused(cell, [](auto& i) { i.name.clear(); }));
+    CHECK(refused(cell, [](auto& i) { i.name = std::string(orch::kMaxProcessName + 1, 'n'); }));
+    CHECK(refused(cell, [](auto& i) { i.name = std::string("c\0x", 3); }));
+    CHECK(refused(cell, [](auto& i) { i.kind = "bot"; }));
+    CHECK(refused(cell, [](auto& i) { i.address = std::string(orch::kMaxProcessField + 1, 'a'); }));
+    CHECK(refused(cell, [](auto& i) { i.version = std::string(orch::kMaxProcessField + 1, 'v'); }));
+    CHECK(refused(cell, [](auto& i) { i.host = std::string(orch::kMaxFdHost + 1, 'h'); }));
+    CHECK(refused(cell, [](auto& i) { i.zones.push_back(""); }));
+    CHECK(refused(cell, [](auto& i) { i.zones.push_back(std::string(orch::kMaxZoneName + 1, 'z')); }));
+    CHECK(refused(cell, [](auto& i) { i.zones.assign(orch::kMaxZones + 1, "z"); }));
+    CHECK_FALSE(refused(cell, [](auto& i) { i.zones.assign(orch::kMaxZones, "z"); }));
+    CHECK(refused(gw, [](auto& i) { i.address = "gw.example:7777"; }));
+    CHECK(refused(gw, [](auto& i) { i.address = "10.0.0.1"; })); // no port (Go needs ip:port)
+    CHECK(refused(gw, [](auto& i) { i.address = "::1"; }));      // IPv6 without brackets
+    CHECK(refused(gw, [](auto& i) { i.address = "[::1]"; }));
+    CHECK_FALSE(refused(gw, [](auto& i) { i.address = "10.0.0.1:7777"; }));
+    CHECK(refused(gw, [](auto& i) { i.keyId = 0; }));
+    CHECK_FALSE(refused(cell, [](auto& i) { i.address = "not checked for cells"; }));
+    // fd.host falls back to host, as in Go: a host with NUL is refused through the fd rules too.
+    CHECK(refused(cell, [](auto& i) { i.host = std::string("h\0", 2); }));
+
+    // Invalid UTF-8 anywhere (on Windows std::getenv returns the ANSI code page): refused at start,
+    // because the encoder would otherwise send an empty body on every retry.
+    orch::ProcessInfo latin1 = cell;
+    latin1.fd.host = "srv\xff";
+    CHECK(orch::encode(latin1).empty()); // why: yyjson writes no document for it
+    auto r = orch::validateRegistration(latin1);
+    REQUIRE_FALSE(r);
+    CHECK(r.errorCode() == ErrorCode::InvalidArgument);
+    CHECK(r.error().message.find("UTF-8") != std::string::npos);
+    CHECK(r.error().message.find('\xff') == std::string::npos); // the message names the rule, not the bytes
+    CHECK_FALSE(orch::validatePlacement(orch::FailureDomain{"az\xc3", {}, {}}, 0));
+    CHECK(refused(cell, [](auto& i) { i.name = "cell\xff"; }));
+    CHECK(refused(cell, [](auto& i) { i.host = "srv\xff"; }));
+    CHECK(refused(cell, [](auto& i) { i.version = "0.1\xc3"; }));
+    CHECK(refused(cell, [](auto& i) { i.zones = {"tal\xe2\x82"}; }));
+    CHECK(refused(cell, [](auto& i) { i.address = "\xed\xa0\x80:1"; })); // an encoded surrogate
+}
+
 TEST_CASE("server.contracts: connect-token user data matches Go's layout v1") {
     const auto go = loadGoVectors();
     const std::vector<u8> raw = fromHex(go.at("UserDataV1"));

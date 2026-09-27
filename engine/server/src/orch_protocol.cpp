@@ -5,8 +5,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <optional>
+#include <utility>
 
 #include <yyjson.h>
+
+#include "helios/core/utf.h"
+#include "helios/net/address.h"
+#include "server_log.h"
 
 namespace helios::server::orch {
 
@@ -68,13 +74,18 @@ public:
     yyjson_mut_val* arrObj(yyjson_mut_val* array) { return yyjson_mut_arr_add_obj(m_doc, array); }
     void arrStr(yyjson_mut_val* array, std::string_view v) { yyjson_mut_arr_add_strncpy(m_doc, array, v.data(), v.size()); }
 
+    /// The document's JSON, or empty when yyjson refuses it (invalid UTF-8 in a string), which is
+    /// logged: validateRegistration() keeps that from happening to a registration.
     std::vector<u8> bytes() const {
         usize len = 0;
-        char* text = yyjson_mut_write(m_doc, 0, &len);
+        yyjson_write_err err{};
+        char* text = yyjson_mut_write_opts(m_doc, 0, nullptr, &len, &err);
         std::vector<u8> out;
         if (text) {
             out.assign(reinterpret_cast<const u8*>(text), reinterpret_cast<const u8*>(text) + len);
             std::free(text);
+        } else {
+            HELIOS_LOG_ERROR(LogOrch, "control-plane JSON not written: {}", err.msg ? err.msg : "unknown error");
         }
         return out;
     }
@@ -424,16 +435,63 @@ Result<ProcessInfo> decodeProcessInfo(std::span<const u8> json) {
     });
 }
 
-Result<void> validateRegistration(const ProcessInfo& info) {
-    // The same checks as Go's validate() in services/internal/orchestrator/registry.go.
-    auto hasNul = [](std::string_view s) { return s.find('\0') != std::string_view::npos; };
-    if (info.fd.az.size() > kMaxFdLabel || info.fd.rack.size() > kMaxFdLabel || info.fd.host.size() > kMaxFdHost ||
-        info.host.size() > kMaxFdHost)
+namespace {
+bool hasNul(std::string_view s) noexcept { return s.find('\0') != std::string_view::npos; }
+Error invalid(std::string message) { return Error{ErrorCode::InvalidArgument, std::move(message)}; }
+} // namespace
+
+Result<void> validatePlacement(const FailureDomain& fd, i64 serverBuild) {
+    if (fd.az.size() > kMaxFdLabel || fd.rack.size() > kMaxFdLabel || fd.host.size() > kMaxFdHost)
         return makeError(ErrorCode::InvalidArgument, "fd: az and rack are at most {} bytes, host at most {}", kMaxFdLabel,
                          kMaxFdHost);
-    if (hasNul(info.fd.az) || hasNul(info.fd.rack) || hasNul(info.fd.host) || hasNul(info.host))
-        return Error{ErrorCode::InvalidArgument, "fd: text fields must not contain NUL"};
-    if (info.serverBuild < 0) return Error{ErrorCode::InvalidArgument, "serverBuild must not be negative"};
+    if (hasNul(fd.az) || hasNul(fd.rack) || hasNul(fd.host)) return invalid("fd: text fields must not contain NUL");
+    if (!isValidUtf8(fd.az) || !isValidUtf8(fd.rack) || !isValidUtf8(fd.host))
+        return invalid("fd: az, rack and host must be valid UTF-8 (a value read in another code page?)");
+    if (serverBuild < 0) return invalid("serverBuild must not be negative");
+    return {};
+}
+
+Result<void> validateRegistration(const ProcessInfo& info) {
+    // Go's validate() (services/internal/orchestrator/registry.go), rule for rule, plus valid UTF-8
+    // in every string: yyjson writes nothing for invalid UTF-8, so such a registration would go
+    // out as an empty body and be refused (malformed JSON) on every retry.
+    if (info.name.empty() || info.name.size() > kMaxProcessName)
+        return makeError(ErrorCode::InvalidArgument, "name must be 1-{} bytes", kMaxProcessName);
+    FailureDomain fd = info.fd;
+    if (fd.host.empty()) fd.host = info.host; // Go fills fd.host from host
+    if (info.host.size() > kMaxFdHost)
+        return makeError(ErrorCode::InvalidArgument, "host is at most {} bytes", kMaxFdHost);
+    HELIOS_TRY(validatePlacement(fd, info.serverBuild));
+    if (info.address.size() > kMaxProcessField || info.version.size() > kMaxProcessField ||
+        info.zones.size() > kMaxZones)
+        return makeError(ErrorCode::InvalidArgument, "address and version are at most {} bytes, zones at most {}",
+                         kMaxProcessField, kMaxZones);
+    if (hasNul(info.name) || hasNul(info.address) || hasNul(info.host) || hasNul(info.version))
+        return invalid("text fields must not contain NUL");
+    const std::pair<const char*, const std::string*> text[] = {
+        {"name", &info.name}, {"kind", &info.kind},       {"address", &info.address},
+        {"host", &info.host}, {"version", &info.version},
+    };
+    for (const auto& [field, value] : text)
+        if (!isValidUtf8(*value)) return makeError(ErrorCode::InvalidArgument, "{} is not valid UTF-8", field);
+    for (const std::string& z : info.zones)
+        if (z.empty() || z.size() > kMaxZoneName || hasNul(z) || !isValidUtf8(z))
+            return makeError(ErrorCode::InvalidArgument, "zone names are 1-{} bytes of UTF-8 without NUL",
+                             kMaxZoneName);
+    if (info.kind == kKindGateway) {
+        // Go's netip.ParseAddrPort wants the port spelled out: "a.b.c.d:port" or "[v6]:port"
+        // (net::Address::parse would take a bare address as port 0).
+        const std::string_view a = info.address;
+        const usize colon = a.rfind(':');
+        const bool spelled = colon != std::string_view::npos && colon + 1 < a.size() &&
+                             (a.starts_with('[') ? colon > 0 && a[colon - 1] == ']' : a.find(':') == colon);
+        const auto addr = spelled ? net::Address::parse(a) : std::nullopt;
+        if (!addr || !addr->isValid())
+            return makeError(ErrorCode::InvalidArgument, "gateway address must be ip:port, got '{}'", info.address);
+        if (info.keyId == 0) return invalid("gateway must report its shard key id");
+    } else if (info.kind != kKindCell) {
+        return invalid("kind must be cell or gateway");
+    }
     return {};
 }
 

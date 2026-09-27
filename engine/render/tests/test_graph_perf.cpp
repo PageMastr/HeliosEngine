@@ -3,7 +3,7 @@
 // Performance column; a topology-cache hit ≤ 0.05 ms, Phase 2). The graph has no topology cache yet,
 // so every compile() here is a full compile: the topology-change case. The gate is the 60 fps
 // number, applied to the best of 10 batches of 5 compiles; §8.1.5's rows are p50, and the median
-// batch (also reported) has stayed within 0.01 ms of the best on the dev container. The 120 fps
+// batch (also reported) has stayed within 0.02 ms of the best on the dev container. The 120 fps
 // number is reported, not asserted, because this machine is not REF. The timing is reported always
 // and asserted only in optimized builds without sanitizers; it runs in render_tests_perf (serial,
 // nightly).

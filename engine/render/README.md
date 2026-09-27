@@ -58,9 +58,9 @@ device.present(swapchain, r.graphics());
 60 fps (03 §2.2 item 7, §8.1.5). `perf: render graph compile of 200 passes <= 0.3 ms (no topology
 cache)` in `render_tests_perf` asserts it on the best of 10 batches of 5 compiles, in optimized builds
 without sanitizers, and reports the median batch and §8.1.5's 120 fps column (≤ 0.2 ms) without gating
-them. §8.1.5's rows are p50; on the 4-core dev container, which is not REF, the best of 10 is
-≈ 0.21–0.25 ms and the median batch ≈ 0.21–0.22 ms (a review's 200 single compiles: p50 0.212–0.215 ms
-against a best of 0.211–0.213 ms), so the two agree here. The Phase 2 topology cache has its own
+them. §8.1.5's rows are p50; on the 4-core dev container, which is not REF, 10 runs gave a best of
+0.210–0.243 ms and a median batch of 0.217–0.251 ms, never more than 0.02 ms apart (a review's 200
+single compiles: p50 0.212–0.215 ms against a best of 0.211–0.213 ms), so the two agree here. The Phase 2 topology cache has its own
 budget: a hit ≤ 0.05 ms.
 
 ## Shader reflection (03 §1.7)

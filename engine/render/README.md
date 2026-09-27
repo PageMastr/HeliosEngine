@@ -78,23 +78,32 @@ checks its C++ push-constant structs against the reflected sizes at creation.
 **Shipped shaders.** Every `shaders/*.slang` file is embedded in `helios_render`, and features build
 their pipelines with `createShippedPipeline()` (`shader_library.h`), which records each pipeline's
 name with its module entry points and a fingerprint of its other state (raster, depth, blend, formats,
-topology, samples), and rejects SPIR-V that is not embedded (by address) and a name reused with other
-shaders or other state: a state variant needs its own name and golden, also when a feature builds the
-same pipeline for several output formats in one process (the same desc on another device is fine). `helios-rendertest --coverage` (CTest `rendertest.coverage`) maps the
-pipelines bound in each golden scene's Null trace back to these entry points and fails when a shipped
-entry point or recorded pipeline is bound by no scene with committed lavapipe and Null goldens. The
-CTest `lint_shipped_pipelines` (label `lint`, a textual check) keeps pipelines from bypassing the
-record: in `engine/`, `apps/` and `tools/` (except `engine/rhi/`, which implements the API), any
-identifier `create<X>Pipeline` other than `createShippedPipeline`/`createLocalPipeline` needs a
-reasoned `// shipped-pipelines-lint: allow <reason>` waiver, and only `src/shader_library.cpp` is exempt
-(waived today: rendertest's `createLocalPipeline()`, the raw-RHI sample and the pcg twin's test
-pipelines). This is RC-1's "every shipped feature has a golden" for pipelines. What it cannot see, and
-the scorecard keeps as a gap: passes without a pipeline (uploads, copies, clears), whether a bound
+topology, samples; structured bindings name every desc member, so a new one fails to compile until the
+fingerprint takes it), and rejects SPIR-V that is not embedded (by address) and a name reused with
+other shaders or other state: a state variant needs its own name and golden, and a pipeline that
+depends on an input is named per value (the tonemap per output format, `Forward.Tonemap.RGBA8Unorm`),
+so renderers for several formats coexist in one process (the same desc on another device is fine too).
+`helios-rendertest --coverage` (CTest `rendertest.coverage`) maps the pipelines bound in each golden
+scene's Null trace back to these entry points and fails when a shipped entry point or a pipeline the
+scenes create is bound by no scene with committed lavapipe and Null goldens (the scenes render to
+RGBA8Unorm, and `forward-srgb` to RGBA8Srgb, the tonemap's hardware-encoding path). The CTest
+`lint_shipped_pipelines` (label `lint`) keeps pipelines from bypassing the record: in `engine/`,
+`apps/` and `tools/` (except `engine/rhi/`, which implements the API), any identifier
+`create<X>Pipeline` other than `createShippedPipeline`/`createLocalPipeline` needs a reasoned
+`// shipped-pipelines-lint: allow <reason>` waiver, and only `src/shader_library.cpp` is exempt (waived
+today: rendertest's `createLocalPipeline()`, the raw-RHI sample and the pcg twin's test pipelines). The
+lint is a best-effort textual check against accidental direct creation, not against deliberately
+adversarial source; code review and the coverage check are the backstops. This is RC-1's "every
+shipped feature has a golden" for the pipelines the golden scenes create. What it cannot see, and the
+scorecard keeps as a gap: passes without a pipeline (uploads, copies, clears), whether a bound
 pipeline's output reaches the golden image, shaders not embedded in `helios_render` (cooked SPIR-V from
-content, Phase 1), and a pipeline created through token pasting or a member pointer obtained outside the
-scanned files. Future costs: `createShippedPipeline()` reflects its module on every call (cache per
-module before 03 §1.7's thousands of PSOs), and a hot-reloaded pipeline whose entry points or state
-change must re-register its name (Phase 2).
+content, Phase 1), pipelines created only for inputs no scene uses (the record is filled by the
+rendertest process, so e.g. a tonemap for a BGRA8Srgb swapchain is neither covered nor reported), and a
+pipeline the lint cannot see: a name built by token pasting, a creation path (wrapper or member
+pointer) defined outside the scanned files, which includes `engine/rhi/`, or source in a file with an
+extension it does not scan. Future costs: `createShippedPipeline()` reflects its module on every call
+(cache per module before 03 §1.7's thousands of PSOs), and a hot-reloaded pipeline whose entry points
+or state change must re-register its name (Phase 2).
 
 ## Forward pipeline v0
 

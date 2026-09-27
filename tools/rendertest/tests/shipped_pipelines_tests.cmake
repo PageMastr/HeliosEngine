@@ -14,7 +14,7 @@ foreach(case "c7_state_variant|engine/render/src/forward.cpp:[0-9]+: .*createGra
              "waiver_without_reason|tools/rendertest/src/scenes.cpp:[0-9]+: .*waiver needs a reason"
              "indirect|shipped-pipelines lint: 4 finding"
              "waiver_leak|engine/vfx/src/trails.cpp:4: createGraphicsPipeline outside"
-             "splice_and_include|4 finding.*forward.cpp:4: createGraphicsPipeline.*forward.cpp:6: createComputePipeline.*forward.cpp:8: createGraphicsPipeline.*forward_variants.inc:2: createGraphicsPipeline")
+             "splice_and_include|5 finding.*forward.cpp:4: createGraphicsPipeline.*forward.cpp:6: createComputePipeline.*forward.cpp:8: createGraphicsPipeline.*forward_variants.inc:2: createGraphicsPipeline.*splice_only.cpp:3: createComputePipeline")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)
   list(GET parts 1 expect)

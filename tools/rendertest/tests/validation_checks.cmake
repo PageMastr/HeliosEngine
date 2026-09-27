@@ -13,7 +13,8 @@
 #      under HELIOS_RHI_VALIDATION=1 and when the loader forces the layer on every instance, the probe
 #      included (VK_INSTANCE_LAYERS, VK_LOADER_LAYERS_ENABLE); and with VK_ERROR_INCOMPATIBLE_DRIVER,
 #      a no-Vulkan error that the probe device, which ignores HELIOS_RHI_VALIDATION, tells apart, and
-#      that fails outright when the loader forces layers (the probe cannot tell then);
+#      that fails outright when the loader forces layers (the probe cannot tell then); a forced layer
+#      that fails also fails a run that does not require validation;
 #   5. without any layer requirement, a device error that is not a no-Vulkan error (no adapter matches
 #      HELIOS_RHI_ADAPTER) fails too.
 # Cases 1, 2 and 5 work whether or not the layer is installed. On a machine without any Vulkan device
@@ -103,6 +104,9 @@ if(FAKE_LAYER_INITFAIL AND FAKE_LAYER_NODRIVER)
   unset(ENV{HELIOS_RHI_VALIDATION})
   set(ENV{VK_INSTANCE_LAYERS} VK_LAYER_KHRONOS_validation)
   expect_layer_failure("a failing layer the loader forces on every instance (VK_INSTANCE_LAYERS)")
+  # Without a layer requirement only the no-Vulkan errors skip, so nothing but that rule fails this.
+  expect_failure_not_skip("a failing layer the loader forces on every instance, validation not required"
+                          --backend vulkan --scene triangle)
   unset(ENV{VK_INSTANCE_LAYERS})
   set(ENV{VK_LOADER_LAYERS_ENABLE} "*validation")
   expect_layer_failure("a failing layer the loader forces on every instance (VK_LOADER_LAYERS_ENABLE)")

@@ -13,6 +13,7 @@ directory is a `SOURCE_DIR` with the repository's layout; the `.cpp` files are n
 * `indirect` fails 4 times, in `engine/ui` (outside `engine/render`): a member-function pointer,
   `std::invoke`, a line break after `device.` and one before `(` (round-2 review L1, L5, L3, L3b).
 * `waiver_leak` fails on the second of two calls: a waiver after code does not cover the next line.
-* `splice_and_include` fails 4 times: backslash-newline splices inside the identifier, one with a
-  blank before the newline (line 6 ends in a space on purpose), reported at their first physical line,
-  a direct call after them at its own line, and one in an `.inc` file (round-3 review L8, L9).
+* `splice_and_include` fails 5 times: backslash-newline splices inside the identifier, one with a
+  blank before the newline (line 6 of `forward.cpp` ends in a space on purpose), reported at their
+  first physical line, a direct call after them at its own line, one in an `.inc` file, and a file
+  whose only direct call is spliced (round-3 review L8, L9).

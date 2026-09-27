@@ -49,13 +49,48 @@ if(HELIOS_BUILD_TESTS)
   endif()
   set_tests_properties(rendertest.validation-layer PROPERTIES LABELS "gpu;rendertest" TIMEOUT 120)
   # A layer that is required but does not load fails, and HELIOS_SKIP_GPU_TESTS=1 never turns that into a skip.
-  set(layer_arg "")
+  set(layer_args "")
   if(HELIOS_VK_VALIDATION_LAYER)
-    set(layer_arg "-DLAYER=${HELIOS_VK_VALIDATION_LAYER}")
+    list(APPEND layer_args "-DLAYER=${HELIOS_VK_VALIDATION_LAYER}")
+  endif()
+  # Two fake VK_LAYER_KHRONOS_validation layers for that check (Linux test builds; never installed):
+  # vkCreateInstance fails with VK_ERROR_INITIALIZATION_FAILED, or with VK_ERROR_INCOMPATIBLE_DRIVER,
+  # which reads like a machine without a driver until the probe device finds one.
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_CROSSCOMPILING)
+    foreach(variant "INITFAIL|VK_ERROR_INITIALIZATION_FAILED" "NODRIVER|VK_ERROR_INCOMPATIBLE_DRIVER")
+      string(REPLACE "|" ";" parts "${variant}")
+      list(GET parts 0 kind)
+      list(GET parts 1 result)
+      string(TOLOWER "${kind}" suffix)
+      set(fake helios_rendertest_fake_layer_${suffix})
+      add_library(${fake} MODULE ${CMAKE_CURRENT_SOURCE_DIR}/tests/fake_layer.c)
+      target_compile_definitions(${fake} PRIVATE FAKE_LAYER_RESULT=${result})
+      target_link_libraries(${fake} PRIVATE helios::tp::vulkan_headers)
+      set_target_properties(${fake} PROPERTIES FOLDER tests)
+      helios_apply_warnings(${fake})
+      set(fake_dir ${CMAKE_CURRENT_BINARY_DIR}/fake-layer-${suffix}/$<CONFIG>)
+      file(GENERATE OUTPUT ${fake_dir}/VkLayer_khronos_validation.json CONTENT "{
+    \"file_format_version\": \"1.1.2\",
+    \"layer\": {
+        \"name\": \"VK_LAYER_KHRONOS_validation\",
+        \"type\": \"GLOBAL\",
+        \"library_path\": \"$<TARGET_FILE:${fake}>\",
+        \"api_version\": \"1.3.275\",
+        \"implementation_version\": \"1\",
+        \"description\": \"rendertest.validation-required: vkCreateInstance fails with ${result}\",
+        \"functions\": {
+            \"vkGetInstanceProcAddr\": \"fakeGetInstanceProcAddr\",
+            \"vkGetDeviceProcAddr\": \"fakeGetDeviceProcAddr\"
+        }
+    }
+}
+")
+      list(APPEND layer_args "-DFAKE_LAYER_${kind}=${fake_dir}")
+    endforeach()
   endif()
   add_test(NAME rendertest.validation-required
            COMMAND ${CMAKE_COMMAND} -DRENDERTEST=$<TARGET_FILE:helios-rendertest>
-                   -DOUT=${CMAKE_CURRENT_BINARY_DIR}/rendertest-validation-output ${layer_arg}
+                   -DOUT=${CMAKE_CURRENT_BINARY_DIR}/rendertest-validation-output ${layer_args}
                    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/validation_checks.cmake)
   set_tests_properties(rendertest.validation-required PROPERTIES LABELS "gpu;rendertest" TIMEOUT 120
                        SKIP_REGULAR_EXPRESSION "SKIPPED: no Vulkan device")

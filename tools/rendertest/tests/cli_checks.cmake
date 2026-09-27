@@ -18,7 +18,10 @@ file(WRITE "${OUT}/vulkan/removed-scene.json"
      "{ \"scene\": \"removed-scene\", \"backend\": \"vulkan\", \"status\": \"fail\", \"milliseconds\": 1 }\n")
 
 set(ENV{HELIOS_SKIP_GPU_TESTS} 1)
-set(ENV{HELIOS_RHI_ADAPTER} "no-such-adapter-for-rendertest-cli-checks")
+# No Vulkan driver (the loader then fails with VK_ERROR_INCOMPATIBLE_DRIVER), also where lavapipe is
+# installed: one of the errors HELIOS_SKIP_GPU_TESTS=1 skips. Without a loader the run skips as well.
+set(ENV{VK_DRIVER_FILES} "${OUT}/no-such-driver.json")
+set(ENV{VK_ICD_FILENAMES} "${OUT}/no-such-driver.json")
 execute_process(COMMAND "${RENDERTEST}" --backend vulkan --scene triangle --out "${OUT}" --report
                 RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
 if(NOT rc EQUAL 0)

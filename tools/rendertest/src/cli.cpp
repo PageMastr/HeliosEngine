@@ -54,8 +54,9 @@ options:
                          no-validation probe device (it must not be, whatever the environment says)
   -h, --help             this text
 
-environment: HELIOS_SKIP_GPU_TESTS=1 skips (passes) Vulkan scenes when no Vulkan device can be created;
-HELIOS_RHI_ADAPTER selects an adapter (index or name substring).
+environment: HELIOS_SKIP_GPU_TESTS=1 skips (passes) Vulkan scenes on a machine without a Vulkan loader,
+driver or adapter (any other device error still fails); HELIOS_RHI_ADAPTER selects an adapter (index or
+name substring).
 )";
 
 bool envIs(const char* name, std::string_view value) {
@@ -75,20 +76,38 @@ std::vector<std::string> split(std::string_view list) {
     return out;
 }
 
-/// A device for a run, or why there is none: `skip` (HELIOS_SKIP_GPU_TESTS=1 and no Vulkan device at
-/// all) or `error`. A validation layer that fails is never a skip. A layer error (the loader's
-/// VK_ERROR_LAYER_NOT_PRESENT, the RHI's "required but not installed") always fails; for any other
-/// error with a required layer, a probe device without validation decides: if it exists, the layer
-/// is what failed.
+/// A device for a run, or why there is none: `skip` (HELIOS_SKIP_GPU_TESTS=1 on a machine without a
+/// Vulkan device) or `error`. Only the RHI's errors for a missing loader, driver or adapter can be a
+/// skip; any other error fails, so a validation layer that fails (a missing layer, a missing library,
+/// a layer whose vkCreateInstance fails, also when the loader forces it on every instance) is never a
+/// skip. A no-Vulkan error with a required layer is a skip only when the loader forces no layers and a
+/// probe device without validation fails too; otherwise the layer may have failed as if there were no
+/// driver.
 struct TestDevice {
     std::unique_ptr<rhi::Device> device;
     std::string skip;
     std::string error;
 };
 
-bool isLayerError(const std::string& error) {
-    return error.find("VK_ERROR_LAYER_NOT_PRESENT") != std::string::npos ||
-           error.find("VK_LAYER_KHRONOS_validation is required") != std::string::npos;
+/// The Vulkan RHI's errors for a machine without Vulkan (engine/rhi/src/vulkan/vk_device.cpp): no
+/// loader, no driver (the loader's VK_ERROR_INCOMPATIBLE_DRIVER), no physical device, or none that
+/// meets Helios' requirements.
+bool isNoVulkanError(const std::string& error) {
+    for (const char* marker : {"Vulkan loader not found", "VK_ERROR_INCOMPATIBLE_DRIVER", "no Vulkan physical devices",
+                               "no Vulkan adapter meets Helios' requirements"}) {
+        if (error.find(marker) != std::string::npos) return true;
+    }
+    return false;
+}
+
+/// The loader enables these layers on every instance, the probe's included, so the probe cannot tell a
+/// missing driver from a forced layer that fails as if there were none.
+bool loaderForcesLayers() {
+    for (const char* name : {"VK_INSTANCE_LAYERS", "VK_LOADER_LAYERS_ENABLE"}) {
+        const char* v = std::getenv(name);
+        if (v && *v) return true;
+    }
+    return false;
 }
 
 /// A Vulkan device without validation whatever HELIOS_RHI_VALIDATION says (the probe of openDevice).
@@ -103,8 +122,15 @@ TestDevice openDevice(Backend backend, bool validation, bool requireValidation) 
     if (backend != Backend::Vulkan || !envIs("HELIOS_SKIP_GPU_TESTS", "1")) {
         return {nullptr, {}, why + (backend == Backend::Vulkan ? " (HELIOS_SKIP_GPU_TESTS=1 skips machines without Vulkan)" : "")};
     }
-    if (isLayerError(why)) {
-        return {nullptr, {}, why + " (the Khronos validation layer failed to load; HELIOS_SKIP_GPU_TESTS does not skip that)"};
+    if (!isNoVulkanError(why)) {
+        return {nullptr, {}, why + " (not a missing Vulkan loader, driver or adapter" +
+                                 (requireValidation ? "; the required Khronos validation layer may be what failed" : "") +
+                                 "; HELIOS_SKIP_GPU_TESTS does not skip that)"};
+    }
+    if (requireValidation && loaderForcesLayers()) {
+        return {nullptr, {}, why + " (the loader forces layers on every instance, VK_INSTANCE_LAYERS or "
+                                   "VK_LOADER_LAYERS_ENABLE, so a failing layer cannot be told from a missing "
+                                   "driver; HELIOS_SKIP_GPU_TESTS does not skip that)"};
     }
     if (requireValidation && probeDevice()) {
         return {nullptr, {}, why + " (a Vulkan device exists, so the required Khronos validation layer is what failed; "

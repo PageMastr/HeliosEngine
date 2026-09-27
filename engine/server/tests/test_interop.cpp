@@ -6,11 +6,16 @@
 //   file, so a Windows build and a Linux build put identical bytes on the wire. Regenerate the
 //   file only for a deliberate wire change: HELIOS_WRITE_WIRE_VECTORS=<path> server_tests
 //   --test-case='server.interop: NS-0.3 wire*' writes it.
-// * The hosts. With HELIOS_NS03_GATEWAY=<ip:port> and HELIOS_NS03_KEYS=<the gateway's netcode
-//   keyring, e.g. the backend's keys/netcode-shard.json> set, the remote case connects a probe
-//   over real UDP to that gateway (on the other host: helios-gateway plus a helios-cell serving
-//   zone 0's default) and checks the Welcome, echo round trips and tick states. It is its own
-//   CTest entry, server_tests_ns03_remote, which reports Skipped without the variables.
+// * The hosts (09 §5.6 class H: WP-0.4's lab, the win-gpu runner against a Linux host). The
+//   remote case runs only as its own CTest entry, server_tests_ns03_remote. With
+//   HELIOS_NS03_GATEWAY=<ip:port> and HELIOS_NS03_KEYS=<the gateway's netcode keyring> it connects a
+//   probe over real UDP to the gateway on the other host (helios-gateway plus a helios-cell
+//   serving the default zone) and checks the Welcome, echo round trips and tick states. It
+//   refuses (fails) a target on this host: loopback, unspecified, or any address this host can
+//   bind, so a pass always comes from another machine. HELIOS_NS03_ALLOW_LOOPBACK=1 turns a
+//   same-host target into a smoke run, which reports Skipped when it passes. Without the
+//   variables the entry reports Skipped. server_tests_ns03_refusal seeds a loopback target and
+//   passes only if it is refused.
 #include <doctest/doctest.h>
 
 #include <cstdlib>
@@ -22,6 +27,7 @@
 
 #include "helios/core/fs.h"
 #include "helios/core/time.h"
+#include "helios/net/udp_socket.h"
 #include "helios/server/app_env.h"
 #include "helios/server/keys.h"
 #include "helios/server/probe_client.h"
@@ -102,6 +108,29 @@ std::map<std::string, std::vector<u8>> loadWireVectors() {
 }
 
 bool remoteConfigured() { return envVar("HELIOS_NS03_GATEWAY").has_value() && envVar("HELIOS_NS03_KEYS").has_value(); }
+
+/// True when this host can bind `a`, which means it is one of this host's own addresses (a bind to
+/// an address of another machine fails with EADDRNOTAVAIL / WSAEADDRNOTAVAIL). Portable through
+/// net::UdpSocket, and covers every interface: LAN, link-local, VPN, container bridges.
+bool boundOnThisHost(const net::Address& a) {
+    net::UdpSocketConfig c;
+    c.bindAddress = a.withPort(0);
+    c.dualStack = false;
+    c.sendBufferBytes = 64u * 1024;
+    c.receiveBufferBytes = 64u * 1024;
+    return net::UdpSocket::open(c).hasValue();
+}
+
+/// Why a target is on this host (so a pass would not be cross-host evidence), or empty. Only the
+/// loopback and unspecified ranges are refused by address; any other address, private ranges
+/// included, is refused only when this host holds it (`isBound`, a parameter for the tests).
+std::string sameHostReason(const net::Address& target, bool (*isBound)(const net::Address&) = boundOnThisHost) {
+    const net::Address a = target.unmapped();
+    if (a.isUnspecified()) return "an unspecified address";
+    if (a.isLoopback()) return "a loopback address";
+    if (isBound(a)) return "an address of this host";
+    return {};
+}
 } // namespace
 
 TEST_CASE("server.interop: NS-0.3 wire bytes are the recorded ones on every toolchain") {
@@ -183,12 +212,70 @@ TEST_CASE("server.interop: NS-0.3 the recorded bytes decode to the same values")
     CHECK((ts->tick == kTick && ts->dilationPpm == 560'000 && ts->sessions == 3));
 }
 
-TEST_CASE("server.interop: NS-0.3 a probe on this host is served by the remote gateway in HELIOS_NS03_GATEWAY" *
-          doctest::skip(!remoteConfigured())) {
-    // Run on the Windows host against a Linux gateway (or the other way round): the criterion's
-    // cross-host half, which needs two machines on one network and so is not part of CI.
+TEST_CASE("server.interop: NS-0.3 targets on this host are refused as cross-host evidence") {
+    // The loopback and unspecified ranges by address, in both families and v4-mapped.
+    const net::Address sameHost[] = {
+        net::Address::loopbackV4(7777),        net::Address::ipv4(127, 4, 5, 6, 7777), net::Address::loopbackV6(7777),
+        net::Address::loopbackV4(7777).toV4Mapped(), net::Address::anyV4(7777),     net::Address::anyV6(7777),
+        net::Address::anyV4(7777).toV4Mapped(),
+    };
+    for (const net::Address& a : sameHost) {
+        INFO(a.toString());
+        CHECK_FALSE(sameHostReason(a).empty());
+    }
+    // Any other address of this host is found by binding it (loopback is always bound). Beyond
+    // loopback the classification follows the bind: sandboxes do use documentation ranges (this
+    // container runs on 192.0.2.2), so each candidate is only required to be refused exactly
+    // when this host holds it, and at least one of them (RFC 5737, RFC 3849) must be foreign
+    // here so that the accepting path runs.
+    CHECK(boundOnThisHost(net::Address::loopbackV4(7777)));
+    int foreign = 0;
+    for (const char* text : {"192.0.2.1:7777", "198.51.100.7:7777", "203.0.113.9:7777", "[2001:db8::1]:7777"}) {
+        INFO(text);
+        const auto a = net::Address::parse(text);
+        REQUIRE(a);
+        const bool local = boundOnThisHost(*a);
+        CHECK(sameHostReason(*a).empty() == !local);
+        foreign += local ? 0 : 1;
+    }
+    CHECK(foreign >= 1);
+
+    // The owner's 2026-09-27 run: a Windows client against a Linux gateway in a WSL 2 VM behind
+    // NAT, whose private address on the Hyper-V switch the Windows host does not hold (a bind to
+    // it fails there with WSAEADDRNOTAVAIL). Such an address is accepted; the same address held
+    // by this host (WSL's mirrored mode shares the host's addresses) is refused.
+    const net::Address wsl = net::Address::ipv4(172, 28, 144, 2, 7777);
+    auto notHeld = [](const net::Address&) { return false; };
+    auto held = [](const net::Address&) { return true; };
+    CHECK(sameHostReason(wsl, notHeld).empty());
+    CHECK(sameHostReason(wsl, held) == "an address of this host");
+    CHECK(sameHostReason(net::Address::parse("[fd00:ab::2]:7777").value(), notHeld).empty()); // a ULA
+    // Loopback and unspecified are refused whatever the bind probe says.
+    CHECK(sameHostReason(net::Address::ipv4(127, 0, 0, 1, 7777), notHeld) == "a loopback address");
+    CHECK(sameHostReason(net::Address::anyV6(7777), notHeld) == "an unspecified address");
+    CHECK(sameHostReason(wsl) == (boundOnThisHost(wsl) ? "an address of this host" : ""));
+}
+
+TEST_CASE("server.interop: NS-0.3 a probe here is served by the gateway on another host (HELIOS_NS03_GATEWAY)") {
+    // Only its own CTest entries set HELIOS_NS03_ENTRY, so the main server_tests entry never
+    // touches the network, whatever the environment holds.
+    if (!envVar("HELIOS_NS03_ENTRY")) {
+        MESSAGE("NS-0.3 remote: runs only as the server_tests_ns03_remote CTest entry");
+        return;
+    }
+    if (!remoteConfigured()) {
+        // The entry's SKIP_REGULAR_EXPRESSION matches this line: unconfigured reports Skipped.
+        MESSAGE("NS-0.3 remote: not configured (set HELIOS_NS03_GATEWAY and HELIOS_NS03_KEYS)");
+        return;
+    }
     auto target = parseAddress(*envVar("HELIOS_NS03_GATEWAY"), "HELIOS_NS03_GATEWAY");
     REQUIRE(target);
+    const std::string sameHost = sameHostReason(*target);
+    const bool smoke = !sameHost.empty();
+    if (smoke && envVar("HELIOS_NS03_ALLOW_LOOPBACK").value_or("") != "1")
+        FAIL("NS-0.3 remote: refused: " << target->toString() << " is " << sameHost
+                                        << ", and a pass must come from another host (HELIOS_NS03_ALLOW_LOOPBACK=1"
+                                           " runs a same-host smoke test, which never reports Passed)");
     auto ring = loadKeyring(fs::pathFromUtf8(*envVar("HELIOS_NS03_KEYS")));
     REQUIRE(ring);
     auto key = netcodeKey(ring->current());
@@ -214,11 +301,17 @@ TEST_CASE("server.interop: NS-0.3 a probe on this host is served by the remote g
     MESSAGE("NS-0.3: welcomed by " << target->toString() << " into zone " << p->stats().welcome->zoneId << " '"
                                    << p->stats().welcome->zoneName << "' at " << p->stats().welcome->tickHz << " Hz");
     for (u32 i = 0; i < 10; ++i) p->sendEcho(bytesOf("ns03 " + std::to_string(i)), static_cast<i64>(monotonicNanos()));
-    CHECK(pumpUntil([&] { return p->stats().echoesReceived == 10 && p->stats().tickStates >= 20; }));
+    const bool served = pumpUntil([&] { return p->stats().echoesReceived == 10 && p->stats().tickStates >= 20; });
+    CHECK(served);
     CHECK(p->stats().echoMismatches == 0);
     CHECK(p->stats().tickRegressions == 0);
     MESSAGE("NS-0.3: echoes " << p->stats().echoesReceived << "/10, rtt max " << p->stats().maxRttMs << " ms, tick states "
                               << p->stats().tickStates);
     p->disconnect();
     p->update(static_cast<i64>(monotonicNanos()));
+    // A same-host smoke run is never evidence: the entry's SKIP_REGULAR_EXPRESSION matches this
+    // line, which is printed only when every check above held (a failing smoke run still fails).
+    if (smoke && served && p->stats().echoMismatches == 0 && p->stats().tickRegressions == 0)
+        MESSAGE("NS-0.3 remote: same-host smoke run passed against " << target->toString() << " (" << sameHost
+                                                                     << "); not NS-0.3 evidence");
 }

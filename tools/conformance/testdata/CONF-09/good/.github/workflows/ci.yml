@@ -1,0 +1,14 @@
+jobs:
+  go:
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: services/go.mod   # ADR-014
+          cache-dependency-path: services/go.sum
+      - name: Set up Go
+        uses: 'actions/setup-go@v6'
+        with:
+          cache: false
+          go-version-file: "services/go.mod"
+      - run: go test ./...

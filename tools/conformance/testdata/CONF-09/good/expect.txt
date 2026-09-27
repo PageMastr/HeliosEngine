@@ -1,0 +1,2 @@
+#! -rules CONF-09 -strict
+# go 1.27 with a comment, toolchain go1.27.1; setup-go reading services/go.mod, as the first key and later.

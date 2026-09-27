@@ -1,0 +1,4 @@
+#! -rules CONF-10 -strict
+apps/client/main.cpp:5: CONF-10
+engine/render/src/overlay.cpp:5: CONF-10
+engine/render/src/overlay.cpp:7: CONF-10

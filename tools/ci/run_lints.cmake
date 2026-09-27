@@ -1,6 +1,7 @@
 # Runs the repository lints that need no build (licences, vendored patches, IP names, shipped pipelines,
-# Windows manifest, test namespaces, and the D6 status check of 09 §5.10.2, which needs Python 3.10+), and
-# the ISA audit when a build directory is given. One entry point for CI jobs and pre-commit hooks:
+# Windows manifest, test namespaces, the D6 status check of 09 §5.10.2, which needs Python 3.10+, and the
+# conformance lint of 09 §5.10.3, which needs Go), and the ISA audit when a build directory is given. One
+# entry point for CI jobs and pre-commit hooks:
 #
 #   cmake -P tools/ci/run_lints.cmake                         # from the repository root
 #   cmake -DBUILD_DIR=build/linux-gcc -P tools/ci/run_lints.cmake
@@ -13,7 +14,12 @@ set(lint "${root}/tools/lint")
 set(failed "")
 
 function(_run_lint name)
-  execute_process(COMMAND ${CMAKE_COMMAND} ${ARGN} RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+  _run_command(${name} ${CMAKE_COMMAND} ${ARGN})
+  set(failed "${failed}" PARENT_SCOPE)
+endfunction()
+
+function(_run_command name)
+  execute_process(COMMAND ${ARGN} RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
   string(STRIP "${out}${err}" text)
   message("[${name}] ${text}")
   if(NOT rc EQUAL 0)
@@ -31,6 +37,15 @@ _run_lint(windows-manifest -DMANIFEST=${root}/engine/platform/win/helios.manifes
 _run_lint(test-namespaces -DSOURCE_DIR=${root} -DREQUIRE_TESTS=ON -P ${lint}/test_namespaces.cmake)
 # D6 (09 §5.10.2): every module directory named in 09 §8.1, every module README with its Plan-Rev.
 _run_lint(status -P ${root}/tools/status/check_status.cmake)
+# CONF-01…12 over the working tree, with tools/conformance/known_failing.jsonc applied (09 §5.10.3).
+find_program(HELIOS_CI_go go)
+if(HELIOS_CI_go)
+  _run_command(conformance ${CMAKE_COMMAND} -E chdir ${root}/tools/conformance
+               ${HELIOS_CI_go} run ./cmd/helios-conformance -root ${root})
+else()
+  message("[conformance] Go is not installed: the conformance lint needs Go 1.27 (ADR-014)")
+  set(failed "${failed} conformance")
+endif()
 if(BUILD_DIR)
   get_filename_component(buildDir "${BUILD_DIR}" ABSOLUTE BASE_DIR "${root}")
   set(tools "")

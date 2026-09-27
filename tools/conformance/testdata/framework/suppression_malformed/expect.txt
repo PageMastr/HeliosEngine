@@ -1,0 +1,8 @@
+#! -rules CONF-10
+# No reason, no rule ID, and a reason-less block comment: all malformed, and none suppresses its line.
+engine/x/a.cpp:1: CONF-10
+engine/x/a.cpp:1: conformance
+engine/x/a.cpp:2: CONF-10
+engine/x/a.cpp:2: conformance
+engine/x/a.cpp:3: CONF-10
+engine/x/a.cpp:3: conformance

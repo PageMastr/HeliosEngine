@@ -1,0 +1,2 @@
+#! -rules CONF-10 -strict
+# The launcher and engine/ui's SDL_Renderer backend may call it; comments may name it.

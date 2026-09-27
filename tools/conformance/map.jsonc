@@ -1,0 +1,32 @@
+// Anchor map (docs/plan/09-roadmap-and-process.md §5.10.2 D2). Each key is a normative anchor
+// (§5.10.1: an ADR ID, a criterion ID or `<section> §<n>`); its entry names the code that implements
+// it (`paths`, globs), the CONF rules that check it (`rules`) and the conformance tests it requires
+// (`tests`). A rule's scope is its 09 §5.10.3 Scope column plus the paths of every entry that names
+// it. An anchor that no CONF rule checks carries `why` instead (D5). DoD item 11 keeps the map
+// current: a WP that implements a normative anchor adds its paths. helios-conformance validates the
+// map on every run: unknown rules, non-anchor keys, bad globs and rules in no entry all fail.
+{
+  // --- Checked by CONF rules -----------------------------------------------------------------------
+  "ADR-014": {
+    "paths": ["services/go.mod", "tools/conformance/go.mod", ".github/**"],
+    "rules": ["CONF-09"]
+  },
+  "08 §1.16": {
+    "paths": ["apps/launcher/**", "engine/ui/**"],
+    "rules": ["CONF-10"]
+  },
+
+  // --- Enforced by other lints (§5.10.3: the layer and licence lints stay separate) ----------------
+  "02 §1.1": {
+    "paths": ["cmake/HeliosModule.cmake", "cmake/HeliosLayering.cmake", "engine/CMakeLists.txt", "apps/CMakeLists.txt"],
+    "why": "The layering DAG, HEADLESS and EDITOR_ONLY rules fail configure (cmake/HeliosLayering.cmake; lint_layering_* fixtures)"
+  },
+  "01 §4.1": {
+    "paths": ["tools/lint/ip_names.cmake", "tools/lint/ip_names_policy.cmake"],
+    "why": "Rule 2's reference-name grep is lint_ip_names (tools/lint), a CTest with seeded fixtures"
+  },
+  "01 §5.2": {
+    "paths": ["tools/lint/licenses.cmake", "tools/lint/license_policy.cmake", "third_party/MANIFEST.md"],
+    "why": "The licence allowlist is lint_licenses (tools/lint), a CTest with seeded fixtures"
+  }
+}

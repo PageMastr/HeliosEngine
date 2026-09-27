@@ -24,6 +24,16 @@ class ShipQueries {
 public:
     virtual ~ShipQueries() = default;
 
+    /// Per-call caps of the generated argument conversion (hostile input: a table referenced from many places
+    /// converts once per reference). A call over a cap fails with a script error before converting further. Set
+    /// them before the VM runs scripts. 02 §7.4 and 04 §10.2 give no default; these keep one call's conversion
+    /// well under 1 ms.
+    struct GlueLimits {
+        ::helios::u32 maxValues = 8192;         ///< values converted per call: numbers, strings, tables and elements
+        ::helios::usize maxStringBytes = 262144; ///< string bytes converted per call (256 KiB)
+    };
+    GlueLimits glueLimits;
+
     /// Hull record of a ship entity (none if the entity is not a ship).
     /// Fuel: 4; pure. Realms: server, client. Binding id 0x90ddf8ef.
     virtual std::optional<::sample::ship::ShipHullRef> hullOf(lua_State* L, ::helios::refl::EntityId ship) = 0;
@@ -36,9 +46,10 @@ public:
     static constexpr ::helios::u32 kDockedShipsBinding = 0xbf0dd70eu; ///< lock id of sample.ship.ShipQueries.dockedShips
 };
 
-/// Registers the ShipQueries functions whose @realm includes `realm` ("server", "client" or "editor") as
-/// the Luau library `ShipQueries` (call inside the ScriptVm::create registrar). `impl` must outlive the VM.
+/// Registers the ShipQueries functions whose @realm includes `realm` as the Luau library `ShipQueries` (call inside
+/// the ScriptVm::create registrar). `impl` must outlive the VM. `realm` must be "server" on a HostProfile::Cell VM,
+/// "client" on a Client VM and "editor" on an Editor VM; anything else is InvalidArgument and registers nothing.
 /// Returns how many functions were registered.
-::helios::u32 bindShipQueries(::helios::script::Binder& binder, ShipQueries& impl, std::string_view realm);
+::helios::Result<::helios::u32> bindShipQueries(::helios::script::Binder& binder, ShipQueries& impl, std::string_view realm);
 
 } // namespace sample::ship

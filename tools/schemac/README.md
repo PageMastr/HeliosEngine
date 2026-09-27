@@ -365,42 +365,88 @@ struct Ships final : sample::ship::ShipQueries {           // one virtual per fn
     std::optional<sample::ship::ShipHullRef> hullOf(lua_State* L, helios::refl::EntityId ship) override;
     std::vector<helios::refl::EntityId> dockedShips(lua_State* L, helios::refl::EntityId station) override;
 };
-Ships ships;
-auto vm = ScriptVm::create(config, [&](Binder& b) { sample::ship::bindShipQueries(b, ships, "server"); });
+Ships ships;                                               // ships.glueLimits: per-call caps (below)
+auto vm = ScriptVm::create(config, [&](Binder& b) {       // config.profile = HostProfile::Cell
+    if (auto r = sample::ship::bindShipQueries(b, ships, "server"); !r) HELIOS_LOG_ERROR(LogScript, "{}", r.error().message);
+});
 ```
 
-- **Interface.** Per scriptlib `Lib`, the abstract class `<pkg>::Lib` has one pure virtual per fn,
-  taking the `lua_State*` first, and `static constexpr u32 k<Fn>Binding` constants (the lock ids).
-  `bindLib(binder, impl, realm)` registers the fns whose effective `@realm` includes `realm`
-  (`"server"`, `"client"`, `"editor"`) as the Luau library `Lib`; `impl` must outlive the VM.
-  Implementations follow `binding.h`'s threading rules (owner thread; may raise Luau errors; call
-  back into Luau only through `callLuau`).
-- **Fuel** (02 §7.4). `cost` is the binding's `FuelCost::base`, charged by the host before the
-  call. `each` with `of=<list, set, string or integer argument>` is charged by the host from that
-  argument (`FuelCost::itemsArg`) before the call. `of=<any other argument>` (a record ref such as
-  a `PrefabRef`) adds a pure virtual `<fn>ItemCount(L, arg)` whose count the glue charges before the
-  call. `of=result` is charged right after the call, per result element. The glue uses the schema's
-  numbers; `--calibrate-fuel` (WP-1.6) replaces them by binding id.
-- **Values.** `bool`; integers (64-bit ones only within ±2⁵³, exact; others range-checked);
-  `f32`/`f64`; `string`/`Name`/`LocString`/`TagQuery`/`HxlExpr` as strings; `vec3f` as a Luau
-  `vector`; `WorldPos` as the host's `WorldPos` userdata (`helios::FramePos` in C++, with its frame;
-  not allowed inside structs, where it would lose the frame); `Duration` as seconds; `Tick` as a
-  number; enums as their value names; structs as tables (fields by schema name; missing fields take
-  their defaults, other keys are ignored); `list`/`set`/`T[N]` as arrays; `T?` as `T` or `nil`.
-  `EntityId` and record refs are **light userdata** with tags 1 (`EntityId`) and 2 (`RecordRef`):
-  exact 64-bit values, comparable with `==`, usable as table keys, and impossible to forge from a
-  script. Other types (maps, variants, flags, keyed lists, `Guid`, `AssetRef`, other math types,
-  `TagSet`, `NetHandle`) are errors in a signature under `--emit luau`.
-- **Hostile arguments.** Every conversion reads tables raw (`lua_rawgetfield`/`lua_rawgeti`), so no
-  metamethod or other Luau code runs inside a binding. A list argument has at most its `@max` or
-  65,536 elements (checked before any element is converted), a `T[N]` at most N, and a value nests at
-  most 32 tables (a cyclic table stops there). A result above the fn's `@max` fails the call.
-- **`schema.d.luau`** declares the scriptlib globals (each fn's doc comment and fuel charge, `--!strict`)
-  and the types their signatures reach: `EntityId` and `<Record>Ref` as opaque `declare extern type`s,
-  enums as string unions, structs as table types, named like the Go types (`ShipHullDefHandling`).
-  Load it after `engine/script/defs/helios.d.luau`. Names that collide with the host's (`WorldPos`,
-  `Task`, …), Luau keywords as fn, parameter or field names, and two declarations with one Luau name are
-  errors.
+- **Interface.** Per scriptlib `Lib`, the abstract class `<pkg>::Lib` has:
+  - one pure virtual per fn, taking the `lua_State*` first;
+  - `static constexpr u32 k<Fn>Binding` constants (the lock ids);
+  - `GlueLimits glueLimits`, the per-call conversion caps described below.
+
+  `bindLib(binder, impl, realm)` registers the fns whose effective `@realm` includes `realm` as the
+  Luau library `Lib`, and returns `Result<u32>` with the number registered. `impl` must outlive the VM.
+  The realm must be one the glue knows and the one the VM's host profile runs: `"server"` on
+  `HostProfile::Cell`, `"client"` on `Client`, `"editor"` on `Editor`. Anything else, such as a typo or
+  a client realm on a cell, is `InvalidArgument` and registers nothing. Implementations follow
+  `binding.h`'s threading rules: owner thread, may raise Luau errors, call back into Luau only through
+  `callLuau`.
+- **Fuel** (02 §7.4).
+  - `cost` is the binding's `FuelCost::base`, charged by the host before the call.
+  - `each` with `of=<list, set, string or integer argument>` is charged by the host from that argument
+    (`FuelCost::itemsArg`), before the call.
+  - `of=<any other argument>` (a record ref such as a `PrefabRef`) adds a pure virtual
+    `<fn>ItemCount(L, arg)`. The glue charges its count before the call.
+  - `of=result` is charged right after the call, per result element.
+  - The glue uses the schema's numbers. `--calibrate-fuel` (WP-1.6) replaces them by binding id; for
+    that, WP-1.6 must thread `k<Fn>Binding` through `Binder::function`, which takes no binding id today.
+- **Values.**
+  - `bool`, and `f64`.
+  - `f32` must be finite and within float's range; NaN, ±inf and 1e39 are rejected before the cast.
+  - Integers are exact and range-checked; 64-bit ones only within ±(2⁵³ − 1).
+  - `string`, `LocString`, `TagQuery` and `HxlExpr` are strings.
+  - **`Name` is `std::string` in C++** (sets of them `std::set<std::string>`, lexical). Script input is
+    never interned into the process-wide `Name` table, which never shrinks and is shared by every VM,
+    and the order of a set does not depend on what the process interned before, which replays need
+    (04 §10.2). An implementation that needs a `Name` interns deliberately. A `Name` inside a struct
+    *argument* is therefore an error. Inside a struct *result* it is pushed as text, and a `set<Name>`
+    field is pushed in lexical order.
+  - `vec3f` is a Luau `vector`.
+  - `WorldPos` is the host's `WorldPos` userdata (`helios::FramePos` in C++, with its frame). It is not
+    allowed inside structs, where it would lose the frame.
+  - `Duration` is seconds, and `Tick` a number.
+  - Enums are their value names.
+  - Structs are tables: fields by schema name, missing fields take their defaults, other keys are
+    ignored.
+  - `list` and `set` are arrays. `T[N]` is an array of exactly N elements. `T?` is `T` or `nil`.
+  - `EntityId` and record refs are **light userdata** with tags 1 (`EntityId`) and 2 (`RecordRef`):
+    exact 64-bit values, comparable with `==`, usable as table keys, and impossible to forge from a
+    script.
+  - Other types are errors in a signature under `--emit luau`: maps, variants, flags, keyed lists,
+    `Guid`, `AssetRef`, other math types, `TagSet` and `NetHandle`.
+- **Hostile arguments.**
+  - Every conversion reads tables raw (`lua_rawgetfield`/`lua_rawgeti`), so no metamethod or other Luau
+    code runs inside a binding.
+  - `@max` is enforced wherever sema accepts it, on the raw value before anything is converted. That
+    covers string (bytes), list and set (elements) parameters and the fields of struct parameters,
+    recursively. Results are checked the same way: the fn's `@max` and struct fields' `@max`.
+  - **Per-call budget.** One call converts at most `glueLimits.maxValues` values (8,192: every number,
+    string, table and element counts, so a table referenced from many places costs once per
+    reference) and `glueLimits.maxStringBytes` string bytes (256 KiB). A list longer than the values
+    left fails before its first element. The plan gives no default (02 §7.4, 04 §10.2), so these are
+    conservative and the host may change them.
+  - A value nests at most 32 tables; a cyclic table stops there.
+  - Every rejection is a script error naming the fn, the argument and the cap, and the implementation is
+    never called.
+  - **Budget:** a call rejected by the caps fails in < 1 ms (`perf: rejecting a call over the per-call
+    caps …`: ≈ 0.25 ms for the reviewer's 22-table DAG, ≈ 0.05 ms for 65,536 references to one 16 KiB
+    string, GCC RelWithDebInfo). A call within the caps converts at most 8,192 values; calibration
+    (WP-1.6) folds that into the fn's `cost`.
+- **`schema.d.luau`** declares the scriptlib globals (each fn's doc comment, fuel charge and realms,
+  `--!strict`) and the types their signatures reach:
+  - `EntityId` and `<Record>Ref` as opaque `declare extern type`s;
+  - enums as string unions;
+  - structs as table types, named like the Go types (`ShipHullDefHandling`). An argument uses
+    `<Type>Input`, whose fields are all optional because the glue defaults them; a result uses
+    `<Type>`, whose fields are all present.
+
+  Every realm's fns are declared, and in a host of another realm a fn is `nil` at runtime. Each fn's
+  doc lists its realms, since one definitions file serves luau-lsp for every host. Load it after
+  `engine/script/defs/helios.d.luau`. These are errors: names that collide with the host's
+  (`WorldPos`, `Task`, …), Luau reserved words as fn, parameter or field names, and two declarations
+  with one Luau name.
 - **`fuel_costs.defaults.json`**: `{"format": 1, "functions": {"<binding id>": {"name", "cost",
   "each", "of"}}}`, sorted by id, the defaults `--calibrate-fuel` replaces in
   `content/profiles/fuel_costs.jsonc` (02 §7.4).
@@ -575,7 +621,12 @@ fixture and the sample schemas on a real engine/script VM (every value form, rea
 per fn, hostile arguments: wrong types, out-of-range and inexact integers, oversized and cyclic tables,
 metatables that must not run), type-checks `schema.d.luau` with Luau.Analysis (a strict script passes;
 wrong argument and result types and unknown enum values fail), and covers binding ids in the lock and
-the signatures `--emit luau` rejects. `test_repl.cpp` runs the generated replication code of the golden
+the signatures `--emit luau` rejects. PR #22's review round 1 added: the per-call value and byte caps
+(the reviewer's 10-level DAG and 65,536 references to a 16 KiB string fail fast, with a `perf:` budget),
+Names never interned and sets of names in lexical order, `@max` on string parameters, struct fields and
+results, exact `T[N]`, exact integers up to 2⁵³ − 1, finite `f32`, and realm checks against the host
+profile. 22 mutants of the generator (the reviewer's 11 and 11 more) are each killed by a behavioural
+case. `test_repl.cpp` runs the generated replication code of the golden
 fixture and the sample schemas: descriptors against the schema and the `TypeInfo` (ids, offsets,
 change-mask indices), full-state round trips within each quantizer's precision (and re-encoding to the
 same bits), every truncated prefix and random input rejected cleanly, an undeclared enum value, the rpc

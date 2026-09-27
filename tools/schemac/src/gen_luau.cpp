@@ -3,7 +3,8 @@
 //     interface its hand-written functions implement and bind<Lib>(), which registers them on an
 //     engine/script Binder. The glue charges each fn's fuel (cost and `each` per element of an `of`
 //     argument before the call, `each` per result element right after it) and converts arguments
-//     and results without ever running Luau code (raw table access only);
+//     and results without ever running Luau code (raw table access only), within a per-call budget
+//     of converted values and string bytes, never interning script strings as Names;
 //   * schema.d.luau (--luau-out): Luau declarations for luau-lsp, each fn's charge in its doc;
 //   * fuel_costs.defaults.json (--luau-out): the schema's (cost, each) per binding id, the defaults
 //     that `--calibrate-fuel` replaces (02 §7.4).
@@ -108,10 +109,15 @@ private:
 
     // --- validation ----------------------------------------------------------------------------
     /// Why `t` cannot cross the Luau boundary ("" if it can). `inStruct`: a field of a struct passed by
-    /// value, where a WorldPos would lose its frame (only signature-level positions carry one).
-    std::string unsupported(const Type* t, bool inStruct, std::set<const Decl*>& seen) {
+    /// value, where a WorldPos would lose its frame (only signature-level positions carry one) and, for
+    /// arguments (`input`), a Name would intern script input into the process-wide Name table.
+    std::string unsupported(const Type* t, bool inStruct, bool input, std::set<const Decl*>& seen) {
         switch (t->kind) {
-        case TypeKind::Prim: return {};
+        case TypeKind::Prim:
+            if (t->prim == Prim::Name && inStruct && input)
+                return "a Name inside a struct argument (converting it would intern script input into the process-wide Name table; "
+                       "use string)";
+            return {};
         case TypeKind::Builtin:
             switch (t->builtin) {
             case Builtin::Vec3f:
@@ -131,7 +137,7 @@ private:
             for (const Field& f : t->decl->fields) {
                 if (!f.type) continue;
                 if (isLuauKeyword(f.name)) return std::format("field '{}' of '{}' (a Luau keyword)", f.name, t->decl->qualifiedName);
-                std::string why = unsupported(f.type, true, seen);
+                std::string why = unsupported(f.type, true, input, seen);
                 if (!why.empty()) return why + std::format(" in field '{}' of '{}'", f.name, t->decl->qualifiedName);
             }
             return {};
@@ -139,14 +145,14 @@ private:
         case TypeKind::List:
         case TypeKind::Set:
         case TypeKind::Array:
-        case TypeKind::Optional: return unsupported(t->element, inStruct, seen);
+        case TypeKind::Optional: return unsupported(t->element, inStruct, input, seen);
         default: return std::format("'{}'", t->signature);
         }
     }
 
-    void checkType(const Decl* fn, const Type* t, SourceLoc loc, const std::string& what) {
+    void checkType(const Decl* fn, const Type* t, SourceLoc loc, const std::string& what, bool input) {
         std::set<const Decl*> seen;
-        const std::string why = unsupported(t, false, seen);
+        const std::string why = unsupported(t, false, input, seen);
         if (!why.empty()) {
             D.error(loc, std::format("{} of fn '{}' cannot cross the Luau boundary: {} is not supported by --emit luau (supported: bool, "
                                      "integers, floats, string, Name, vec3f, WorldPos, EntityId, Duration, Tick, LocString, TagQuery, "
@@ -154,27 +160,32 @@ private:
                                      what, fn->name, why));
             return;
         }
-        collectNames(t, loc);
+        collectNames(t, loc, input);
     }
 
+    /// Luau name of the table type of struct `d` as an argument (`input`: every field optional,
+    /// because the glue defaults missing fields) or as a result.
+    static std::string structTypeName(const Decl* d, bool input) { return luauDeclName(d) + (input ? "Input" : ""); }
+
     /// Registers the Luau type names `t` needs and reports collisions.
-    void collectNames(const Type* t, SourceLoc loc) {
+    void collectNames(const Type* t, SourceLoc loc, bool input) {
         const Decl* d = nullptr;
         if (t->kind == TypeKind::Enum || t->kind == TypeKind::Struct || t->kind == TypeKind::RecordRef) d = t->decl;
-        if (t->element) collectNames(t->element, loc);
+        if (t->element) collectNames(t->element, loc, input);
         if (!d) return;
-        const std::string name = luauDeclName(d);
-        auto [it, fresh] = m_names.emplace(name, NameUse{d, t->kind == TypeKind::RecordRef});
+        const bool isStruct = t->kind == TypeKind::Struct;
+        const std::string name = isStruct ? structTypeName(d, input) : luauDeclName(d);
+        auto [it, fresh] = m_names.emplace(name, NameUse{d, t->kind == TypeKind::RecordRef, isStruct && input});
         if (!fresh) {
-            if (it->second.decl != d || it->second.ref != (t->kind == TypeKind::RecordRef))
+            if (it->second.decl != d || it->second.ref != (t->kind == TypeKind::RecordRef) || it->second.input != (isStruct && input))
                 D.error(loc, std::format("'{}' and '{}' both become the Luau type '{}'", it->second.decl->qualifiedName, d->qualifiedName, name));
             return;
         }
         if (isReserved(name) || name == "EntityId")
             D.error(loc, std::format("'{}' becomes the Luau type '{}', which the script host already declares", d->qualifiedName, name));
-        if (t->kind == TypeKind::Struct) {
+        if (isStruct) {
             for (const Field& f : d->fields) {
-                if (f.type) collectNames(f.type, loc);
+                if (f.type) collectNames(f.type, loc, input);
             }
         }
     }
@@ -199,9 +210,9 @@ private:
             for (const Field& p : fn->fields) {
                 if (isLuauKeyword(p.name)) D.error(p.loc, std::format("parameter name '{}' is a Luau keyword", p.name));
                 if (p.name == "L") D.error(p.loc, "parameter name 'L' is reserved for the lua_State of the generated C++ interface");
-                if (p.type) checkType(fn, p.type, p.loc, std::format("parameter '{}'", p.name));
+                if (p.type) checkType(fn, p.type, p.loc, std::format("parameter '{}'", p.name), true);
             }
-            if (fn->result) checkType(fn, fn->result, fn->loc, "the result");
+            if (fn->result) checkType(fn, fn->result, fn->loc, "the result", false);
             if (needsItemHook(fn) && methods.contains(itemHookName(fn)))
                 D.error(fn->loc, std::format("fn '{}' needs the item-count hook '{}', which is also the name of a fn", fn->name, itemHookName(fn)));
         }
@@ -232,9 +243,13 @@ private:
     static std::string itemHookName(const Decl* fn) { return fn->name + "ItemCount"; }
     static std::string methodName(const Decl* fn) { return cppFieldName(fn->name); }
 
-    /// C++ type of a signature-level value: WorldPos is the script host's frame-carrying FramePos.
-    static std::string sigCpp(const Type* t) {
+    /// C++ type of a value at the boundary. At signature level (`member` false) WorldPos is the script
+    /// host's frame-carrying FramePos and Name is std::string (never interned from script input; sets
+    /// of names order lexically); inside structs (`member`) values have their generated types.
+    static std::string sigCpp(const Type* t, bool member = false) {
+        if (member) return cppTypeName(t);
         switch (t->kind) {
+        case TypeKind::Prim: return t->prim == Prim::Name ? "std::string" : cppTypeName(t);
         case TypeKind::Builtin:
             if (t->builtin == Builtin::WorldPos) return "::helios::FramePos";
             return cppTypeName(t);
@@ -246,12 +261,26 @@ private:
         default: return cppTypeName(t);
         }
     }
+    /// True if sigCpp(t, member) depends on `member` (a Name or WorldPos outside any struct).
+    static bool contextual(const Type* t) {
+        for (; t; t = t->kind == TypeKind::Struct ? nullptr : t->element) {
+            if ((t->kind == TypeKind::Prim && t->prim == Prim::Name) || (t->kind == TypeKind::Builtin && t->builtin == Builtin::WorldPos))
+                return true;
+        }
+        return false;
+    }
     static bool byValue(const Type* t) {
-        return t->kind == TypeKind::Prim ? t->prim != Prim::String
+        return t->kind == TypeKind::Prim ? t->prim != Prim::String && t->prim != Prim::Name
                                          : t->kind == TypeKind::Enum || t->kind == TypeKind::RecordRef ||
                                                (t->kind == TypeKind::Builtin &&
                                                 (t->builtin == Builtin::EntityId || t->builtin == Builtin::Duration || t->builtin == Builtin::Tick ||
                                                  t->builtin == Builtin::Vec3f));
+    }
+    /// The @max of a field or parameter (0 = none).
+    static u64 maxOf(const Field& f) {
+        u64 n = 0;
+        if (const Attr* m = f.attr("max"); m && !m->args.empty()) parseSchemaUnsigned(m->args[0].value, n);
+        return n;
     }
     static std::string paramDecl(const Field& p) {
         return byValue(p.type) ? sigCpp(p.type) + " " + cppFieldName(p.name) : "const " + sigCpp(p.type) + "& " + cppFieldName(p.name);
@@ -296,6 +325,16 @@ private:
             w.line("public:");
             w.indent();
             w.line(std::format("virtual ~{}() = default;", lib->name));
+            w.line();
+            w.line("/// Per-call caps of the generated argument conversion (hostile input: a table referenced from many places");
+            w.line("/// converts once per reference). A call over a cap fails with a script error before converting further. Set");
+            w.line("/// them before the VM runs scripts. 02 §7.4 and 04 §10.2 give no default; these keep one call's conversion");
+            w.line("/// well under 1 ms.");
+            w.open("struct GlueLimits {");
+            w.line("::helios::u32 maxValues = 8192;         ///< values converted per call: numbers, strings, tables and elements");
+            w.line("::helios::usize maxStringBytes = 262144; ///< string bytes converted per call (256 KiB)");
+            w.close("};");
+            w.line("GlueLimits glueLimits;");
             for (const Decl* fn : lib->methods) {
                 w.line();
                 docLines(w, fn->doc, "/// ");
@@ -314,13 +353,13 @@ private:
                                    fn->qualifiedName));
             w.close("};");
             w.line();
-            w.line(std::format("/// Registers the {} functions whose @realm includes `realm` (\"server\", \"client\" or \"editor\") as",
-                               lib->name));
-            w.line(std::format("/// the Luau library `{}` (call inside the ScriptVm::create registrar). `impl` must outlive the VM.",
-                               lib->name));
+            w.line(std::format("/// Registers the {} functions whose @realm includes `realm` as the Luau library `{}` (call inside",
+                               lib->name, lib->name));
+            w.line("/// the ScriptVm::create registrar). `impl` must outlive the VM. `realm` must be \"server\" on a HostProfile::Cell VM,");
+            w.line("/// \"client\" on a Client VM and \"editor\" on an Editor VM; anything else is InvalidArgument and registers nothing.");
             w.line("/// Returns how many functions were registered.");
-            w.line(std::format("::helios::u32 bind{}(::helios::script::Binder& binder, {}& impl, std::string_view realm);", lib->name,
-                               lib->name));
+            w.line(std::format("::helios::Result<::helios::u32> bind{}(::helios::script::Binder& binder, {}& impl, std::string_view realm);",
+                               lib->name, lib->name));
         }
         w.line();
         w.line(std::format("}} // namespace {}", cppNamespace(f->ast.package)));
@@ -331,35 +370,42 @@ private:
     static constexpr u8 kPush = 1; ///< C++ -> Luau (results)
     static constexpr u8 kCheck = 2; ///< Luau -> C++ (arguments)
 
+    struct CodecKey {
+        const Type* type;
+        bool member; ///< a struct field's generated C++ type (only for contextual() types)
+        auto operator<=>(const CodecKey&) const = default;
+    };
+
     /// Index of the codec of `t`, noting the directions `dirs` it needs (and those of its parts).
-    usize codecOf(const Type* t, u8 dirs = 0) {
-        auto it = m_codecIndex.find(t);
+    usize codecOf(const Type* t, u8 dirs, bool member) {
+        const CodecKey key{t, member && contextual(t)};
+        auto it = m_codecIndex.find(key);
         if (it == m_codecIndex.end()) {
-            it = m_codecIndex.emplace(t, m_codecs.size()).first;
-            m_codecs.push_back(t);
+            it = m_codecIndex.emplace(key, m_codecs.size()).first;
+            m_codecs.push_back(key);
             m_dirs.push_back(0);
         }
         const usize index = it->second;
         if ((m_dirs[index] & dirs) == dirs) return index;
         m_dirs[index] |= dirs;
-        if (t->element) codecOf(t->element, dirs);
+        if (t->element) codecOf(t->element, dirs, key.member);
         if (t->kind == TypeKind::Struct) {
             for (const Field& f : t->decl->fields) {
-                if (f.type) codecOf(f.type, dirs);
+                if (f.type) codecOf(f.type, dirs, true);
             }
         }
         return index;
     }
 
-    static std::string typeLabel(const Type* t) {
+    static std::string typeLabel(const Type* t, bool input) {
         switch (t->kind) {
         case TypeKind::Enum:
-        case TypeKind::Struct:
         case TypeKind::RecordRef: return luauDeclName(t->decl);
-        case TypeKind::Optional: return typeLabel(t->element) + "?";
+        case TypeKind::Struct: return structTypeName(t->decl, input);
+        case TypeKind::Optional: return typeLabel(t->element, input) + "?";
         case TypeKind::List:
         case TypeKind::Set:
-        case TypeKind::Array: return "{" + typeLabel(t->element) + "}";
+        case TypeKind::Array: return "{" + typeLabel(t->element, input) + "}";
         case TypeKind::Builtin:
             if (t->builtin == Builtin::Vec3f) return "vector";
             if (t->builtin == Builtin::WorldPos || t->builtin == Builtin::EntityId) return std::string(builtinName(t->builtin));
@@ -370,23 +416,29 @@ private:
         }
     }
 
-    void emitCodec(CodeWriter& w, const Type* t, usize i) {
-        const std::string C = sigCpp(t);
-        const std::string label = cppQuote(typeLabel(t));
-        w.line(std::format("// {}", t->signature));
-        if (m_dirs[i] & kPush) emitPush(w, t, i, C);
-        if (m_dirs[i] & kCheck) emitCheck(w, t, i, C, label);
+    void emitCodec(CodeWriter& w, usize i) {
+        const CodecKey key = m_codecs[i];
+        const std::string C = sigCpp(key.type, key.member);
+        w.line(std::format("// {}{}", key.type->signature, key.member ? " (struct field)" : ""));
+        if (m_dirs[i] & kPush) emitPush(w, key, i, C);
+        if (m_dirs[i] & kCheck) emitCheck(w, key, i, C, cppQuote(typeLabel(key.type, true)));
         w.line();
     }
 
-    void emitPush(CodeWriter& w, const Type* t, usize i, const std::string& C) {
+    /// C++ expression of the length @max bounds: bytes of a string, elements of a container.
+    static std::string sizeExpr(const Type* t, const std::string& v, bool member) {
+        return t->kind == TypeKind::Prim && t->prim == Prim::Name && member ? v + ".view().size()" : v + ".size()";
+    }
+
+    void emitPush(CodeWriter& w, const CodecKey& key, usize i, const std::string& C) {
+        const Type* t = key.type;
         w.open(std::format("void push{}(lua_State* L, const {}& v, int depth) {{", i, C));
         switch (t->kind) {
         case TypeKind::Prim:
             w.line("(void)depth;");
             if (t->prim == Prim::Bool) {
                 w.line("lua_pushboolean(L, v ? 1 : 0);");
-            } else if (t->prim == Prim::String) {
+            } else if (t->prim == Prim::String || (t->prim == Prim::Name && !key.member)) {
                 w.line("lua_pushlstring(L, v.data(), v.size());");
             } else if (t->prim == Prim::Name) {
                 w.line("const std::string_view s = v.view();");
@@ -426,7 +478,15 @@ private:
             w.line(std::format("lua_createtable(L, 0, {});", t->decl->fields.size()));
             for (const Field& f : t->decl->fields) {
                 if (!f.type) continue;
-                w.line(std::format("push{}(L, v.{}, depth + 1);", codecOf(f.type, kPush), cppFieldName(f.name)));
+                const std::string v = "v." + cppFieldName(f.name);
+                if (const u64 max = maxOf(f)) { // a field's @max bounds results as it bounds arguments
+                    const bool opt = f.type->kind == TypeKind::Optional;
+                    const Type* inner = opt ? f.type->element : f.type;
+                    const std::string size = opt ? std::format("({0} ? {1} : 0)", v, sizeExpr(inner, "(*" + v + ")", true)) : sizeExpr(inner, v, true);
+                    w.line(std::format("if ({0} > {1}u) fail(L, std::format(\"result field '{2}.{3}' has {{}} elements or bytes; its @max is {1}\", {0}));",
+                                       size, max, t->decl->name, f.name));
+                }
+                w.line(std::format("push{}(L, {}, depth + 1);", codecOf(f.type, kPush, true), v));
                 w.line(std::format("lua_rawsetfield(L, -2, {});", cppQuote(f.name)));
             }
             break;
@@ -435,14 +495,24 @@ private:
             w.line("lua_pushnil(L);");
             w.line("return;");
             w.close();
-            w.line(std::format("push{}(L, *v, depth);", codecOf(t->element, kPush)));
+            w.line(std::format("push{}(L, *v, depth);", codecOf(t->element, kPush, key.member)));
             break;
         default: // list, set, array
             w.line("enter(L, depth);");
             w.line("lua_createtable(L, static_cast<int>(v.size()), 0);");
             w.line("int n = 0;");
-            w.open("for (const auto& e : v) {");
-            w.line(std::format("push{}(L, e, depth + 1);", codecOf(t->element, kPush)));
+            if (t->kind == TypeKind::Set && key.member && t->element->kind == TypeKind::Prim && t->element->prim == Prim::Name) {
+                // A generated struct's std::set<Name> orders by intern id, which depends on process history: push lexically.
+                w.line("std::vector<std::string_view> sorted;");
+                w.line("sorted.reserve(v.size());");
+                w.line("for (const auto& e : v) sorted.push_back(e.view());");
+                w.line("std::sort(sorted.begin(), sorted.end());");
+                w.open("for (const std::string_view e : sorted) {");
+                w.line("lua_pushlstring(L, e.data(), e.size());");
+            } else {
+                w.open("for (const auto& e : v) {");
+                w.line(std::format("push{}(L, e, depth + 1);", codecOf(t->element, kPush, key.member)));
+            }
             w.line("lua_rawseti(L, -2, ++n);");
             w.close();
             break;
@@ -450,90 +520,96 @@ private:
         w.close();
     }
 
-    void emitCheck(CodeWriter& w, const Type* t, usize i, const std::string& C, const std::string& label) {
-        w.open(std::format("{} check{}(lua_State* L, int idx, const char* what, int depth) {{", C, i));
+    /// Checks the @max of a field or parameter on the raw value at `idx` (a string's bytes or a table's
+    /// length) before anything is converted.
+    static void emitMaxCheck(CodeWriter& w, const Field& f, const std::string& idx, const std::string& name) {
+        if (const u64 max = maxOf(f)) w.line(std::format("checkMax(c, {}, {}u, {});", idx, max, cppQuote(name)));
+    }
+
+    void emitCheck(CodeWriter& w, const CodecKey& key, usize i, const std::string& C, const std::string& label) {
+        const Type* t = key.type;
+        w.open(std::format("{} check{}(Ctx& c, int idx) {{", C, i));
+        if (t->kind != TypeKind::Optional) w.line("take(c, 1);");
         switch (t->kind) {
         case TypeKind::Prim:
-            w.line("(void)depth;");
             if (t->prim == Prim::Bool) {
-                w.line("if (lua_type(L, idx) != LUA_TBOOLEAN) badType(L, idx, what, \"boolean\");");
-                w.line("return lua_toboolean(L, idx) != 0;");
+                w.line("if (lua_type(c.L, idx) != LUA_TBOOLEAN) badType(c, idx, \"boolean\");");
+                w.line("return lua_toboolean(c.L, idx) != 0;");
             } else if (t->prim == Prim::String || t->prim == Prim::Name) {
-                w.line(std::format("return {}(checkString(L, idx, what));", t->prim == Prim::Name ? "::helios::Name" : "std::string"));
-            } else if (isFloatPrim(t->prim)) {
-                w.line(std::format("return static_cast<{}>(checkNumber(L, idx, what));", C));
+                w.line("return std::string(checkString(c, idx));");
+            } else if (t->prim == Prim::F32) {
+                w.line("return checkF32(c, idx);");
+            } else if (t->prim == Prim::F64) {
+                w.line("return checkNumber(c, idx);");
             } else {
-                w.line(std::format("return checkInteger<{}>(L, idx, what, {});", C, cppQuote(primName(t->prim))));
+                w.line(std::format("return checkInteger<{}>(c, idx, {});", C, cppQuote(primName(t->prim))));
             }
             break;
         case TypeKind::Builtin:
-            w.line("(void)depth;");
             switch (t->builtin) {
             case Builtin::Vec3f:
-                w.line("const float* p = lua_tovector(L, idx);");
-                w.line("if (!p) badType(L, idx, what, \"vector\");");
+                w.line("const float* p = lua_tovector(c.L, idx);");
+                w.line("if (!p) badType(c, idx, \"vector\");");
                 w.line("return ::helios::Vec3(p[0], p[1], p[2]);");
                 break;
             case Builtin::WorldPos:
-                w.line("if (!::helios::script::toWorldPos(L, idx)) badType(L, idx, what, \"WorldPos\");");
-                w.line("return ::helios::script::checkWorldPos(L, idx);");
+                w.line("if (!::helios::script::toWorldPos(c.L, idx)) badType(c, idx, \"WorldPos\");");
+                w.line("return ::helios::script::checkWorldPos(c.L, idx);");
                 break;
-            case Builtin::EntityId: w.line("return ::helios::refl::EntityId(checkId(L, idx, what, kEntityIdTag, \"EntityId\"));"); break;
-            case Builtin::Duration: w.line("return checkDuration(L, idx, what);"); break;
-            case Builtin::Tick: w.line("return checkInteger<::helios::u64>(L, idx, what, \"Tick\");"); break;
-            case Builtin::LocString: w.line("return ::helios::refl::LocString{std::string(checkString(L, idx, what))};"); break;
-            default: w.line(std::format("return {}{{std::string(checkString(L, idx, what))}};", C)); break;
+            case Builtin::EntityId: w.line("return ::helios::refl::EntityId(checkId(c, idx, kEntityIdTag, \"EntityId\"));"); break;
+            case Builtin::Duration: w.line("return checkDuration(c, idx);"); break;
+            case Builtin::Tick: w.line("return checkInteger<::helios::u64>(c, idx, \"Tick\");"); break;
+            case Builtin::LocString: w.line("return ::helios::refl::LocString{std::string(checkString(c, idx))};"); break;
+            default: w.line(std::format("return {}{{std::string(checkString(c, idx))}};", C)); break;
             }
             break;
-        case TypeKind::RecordRef:
-            w.line("(void)depth;");
-            w.line(std::format("return {}(checkId(L, idx, what, kRecordRefTag, {}));", C, label));
-            break;
+        case TypeKind::RecordRef: w.line(std::format("return {}(checkId(c, idx, kRecordRefTag, {}));", C, label)); break;
         case TypeKind::Enum: {
-            w.line("(void)depth;");
-            w.line("const std::string_view s = checkString(L, idx, what);");
+            w.line("const std::string_view s = checkString(c, idx);");
             std::string names;
             for (const EnumVal& e : t->decl->values) {
                 w.line(std::format("if (s == {}) return {}::{};", cppQuote(e.name), C, cppFieldName(e.name)));
                 names += (names.empty() ? "" : ", ") + e.name;
             }
-            w.line(std::format("luaL_errorL(L, \"%s: '%s' is not a {} (expected one of {})\", what, std::string(s).c_str());", t->decl->name,
-                               names));
+            w.line(std::format("fail(c.L, std::format(\"{{}}: '{{}}' is not a {} (expected one of {})\", c.what, s));", t->decl->name, names));
             break;
         }
         case TypeKind::Struct:
-            w.line("enter(L, depth);");
-            w.line(std::format("if (lua_type(L, idx) != LUA_TTABLE) badType(L, idx, what, {});", label));
-            w.line("idx = lua_absindex(L, idx);");
+            w.line("const Nest nest(c);");
+            w.line(std::format("if (lua_type(c.L, idx) != LUA_TTABLE) badType(c, idx, {});", label));
+            w.line("idx = lua_absindex(c.L, idx);");
             w.line(std::format("{} out{{}};", C));
             for (const Field& f : t->decl->fields) {
                 if (!f.type) continue;
-                w.line(std::format("if (lua_rawgetfield(L, idx, {}) != LUA_TNIL) out.{} = check{}(L, -1, what, depth + 1);", cppQuote(f.name),
-                                   cppFieldName(f.name), codecOf(f.type, kCheck)));
-                w.line("lua_pop(L, 1);");
+                w.open(std::format("if (lua_rawgetfield(c.L, idx, {}) != LUA_TNIL) {{", cppQuote(f.name)));
+                emitMaxCheck(w, f, "-1", t->decl->name + "." + f.name);
+                w.line(std::format("out.{} = check{}(c, -1);", cppFieldName(f.name), codecOf(f.type, kCheck, true)));
+                w.close();
+                w.line("lua_pop(c.L, 1);");
             }
             w.line("return out;");
             break;
         case TypeKind::Optional:
-            w.line(std::format("if (lua_isnoneornil(L, idx)) return std::nullopt;"));
-            w.line(std::format("return check{}(L, idx, what, depth);", codecOf(t->element, kCheck)));
+            w.line("if (lua_isnoneornil(c.L, idx)) return std::nullopt;");
+            w.line(std::format("return check{}(c, idx);", codecOf(t->element, kCheck, key.member)));
             break;
         default: { // list, set, array
-            w.line("enter(L, depth);");
-            w.line(std::format("if (lua_type(L, idx) != LUA_TTABLE) badType(L, idx, what, {});", label));
-            w.line("idx = lua_absindex(L, idx);");
-            w.line("const int n = lua_objlen(L, idx);");
-            const std::string limit = t->kind == TypeKind::Array ? std::to_string(t->arraySize) : "kMaxListElements";
-            w.line(std::format("if (n > {}) fail(L, std::format(\"{{}}: {{}} elements, at most {{}} allowed\", what, n, {}));", limit, limit));
+            w.line("const Nest nest(c);");
+            w.line(std::format("if (lua_type(c.L, idx) != LUA_TTABLE) badType(c, idx, {});", label));
+            w.line("idx = lua_absindex(c.L, idx);");
+            w.line("const int n = lua_objlen(c.L, idx);");
+            if (t->kind == TypeKind::Array)
+                w.line(std::format("if (n != {0}) fail(c.L, std::format(\"{{}}: {{}} elements, exactly {0} required\", c.what, n));", t->arraySize));
+            w.line("reserve(c, n); // every element takes at least one value: fail before converting any");
             w.line(std::format("{} out{{}};", C));
             if (t->kind == TypeKind::List) w.line("out.reserve(static_cast<usize>(n));");
             w.open("for (int i = 1; i <= n; ++i) {");
-            w.line("lua_rawgeti(L, idx, i);");
-            const std::string elem = std::format("check{}(L, -1, what, depth + 1)", codecOf(t->element, kCheck));
+            w.line("lua_rawgeti(c.L, idx, i);");
+            const std::string elem = std::format("check{}(c, -1)", codecOf(t->element, kCheck, key.member));
             if (t->kind == TypeKind::List) w.line(std::format("out.push_back({});", elem));
             if (t->kind == TypeKind::Set) w.line(std::format("out.insert({});", elem));
             if (t->kind == TypeKind::Array) w.line(std::format("out[static_cast<usize>(i - 1)] = {};", elem));
-            w.line("lua_pop(L, 1);");
+            w.line("lua_pop(c.L, 1);");
             w.close();
             w.line("return out;");
             break;
@@ -549,9 +625,9 @@ private:
         for (const Decl* lib : libs) {
             for (const Decl* fn : lib->methods) {
                 for (const Field& p : fn->fields) {
-                    if (p.type) codecOf(p.type, kCheck);
+                    if (p.type) codecOf(p.type, kCheck, false);
                 }
-                if (fn->result) codecOf(fn->result, kPush);
+                if (fn->result) codecOf(fn->result, kPush, false);
             }
         }
         CodeWriter w;
@@ -565,7 +641,9 @@ private:
             return w.take();
         }
         w.line();
+        w.line("#include <algorithm>");
         w.line("#include <array>");
+        w.line("#include <cfloat>");
         w.line("#include <cmath>");
         w.line("#include <cstdint>");
         w.line("#include <format>");
@@ -576,6 +654,7 @@ private:
         w.line("#include <type_traits>");
         w.line("#include <vector>");
         w.line();
+        w.line("#include \"helios/script/vm.h\"");
         w.line("#include \"lualib.h\"");
         w.line();
         w.line("namespace {");
@@ -585,11 +664,12 @@ private:
         w.raw(kGlueRuntime);
         w.line();
         for (usize i = 0; i < m_codecs.size(); ++i) {
-            if (m_dirs[i] & kPush) w.line(std::format("void push{}(lua_State* L, const {}& v, int depth);", i, sigCpp(m_codecs[i])));
-            if (m_dirs[i] & kCheck) w.line(std::format("{} check{}(lua_State* L, int idx, const char* what, int depth);", sigCpp(m_codecs[i]), i));
+            const std::string C = sigCpp(m_codecs[i].type, m_codecs[i].member);
+            if (m_dirs[i] & kPush) w.line(std::format("void push{}(lua_State* L, const {}& v, int depth);", i, C));
+            if (m_dirs[i] & kCheck) w.line(std::format("{} check{}(Ctx& c, int idx);", C, i));
         }
         w.line();
-        for (usize i = 0; i < m_codecs.size(); ++i) emitCodec(w, m_codecs[i], i);
+        for (usize i = 0; i < m_codecs.size(); ++i) emitCodec(w, i);
         for (const Decl* lib : libs) {
             const std::string implType = "::" + cppNamespace(lib->package) + "::" + lib->name;
             for (const Decl* fn : lib->methods) emitGlue(w, lib, fn, implType);
@@ -599,7 +679,9 @@ private:
         w.line(std::format("namespace {} {{", cppNamespace(f->ast.package)));
         for (const Decl* lib : libs) {
             w.line();
-            w.open(std::format("::helios::u32 bind{}(::helios::script::Binder& binder, {}& impl, std::string_view realm) {{", lib->name, lib->name));
+            w.open(std::format("::helios::Result<::helios::u32> bind{}(::helios::script::Binder& binder, {}& impl, std::string_view realm) {{",
+                               lib->name, lib->name));
+            w.line("if (auto ok = checkRealm(binder, realm); !ok) return ok.error();");
             w.line("nameIdTags(binder.state());");
             w.line("::helios::u32 count = 0;");
             for (const Decl* fn : lib->methods) {
@@ -628,17 +710,12 @@ private:
         w.open(std::format("int {}(lua_State* L) {{", glueName(lib, fn)));
         w.line(std::format("auto& impl = *static_cast<{}*>(::helios::script::bindingUserdata(L));", implType));
         std::string args;
+        if (!fn->fields.empty()) w.line("Ctx c{L, \"\", 0, impl.glueLimits.maxValues, impl.glueLimits.maxStringBytes, impl.glueLimits.maxValues, impl.glueLimits.maxStringBytes};");
         for (usize i = 0; i < fn->fields.size(); ++i) {
             const Field& p = fn->fields[i];
-            const std::string what = cppQuote(std::format("{}.{} argument '{}'", lib->name, fn->name, p.name));
-            u64 max = 0;
-            if (const Attr* m = p.attr("max"); m && !m->args.empty() && parseSchemaUnsigned(m->args[0].value, max) &&
-                (p.type->kind == TypeKind::List || p.type->kind == TypeKind::Set)) {
-                // @max bounds the argument before any element is converted.
-                w.line(std::format("if (lua_type(L, {0}) == LUA_TTABLE && lua_objlen(L, {0}) > {1}) luaL_errorL(L, \"%s: more than {1} elements\", {2});",
-                                   i + 1, max, what));
-            }
-            w.line(std::format("const auto a{} = check{}(L, {}, {}, 0);", i, codecOf(p.type, kCheck), i + 1, what));
+            w.line(std::format("c.what = {};", cppQuote(std::format("{}.{} argument '{}'", lib->name, fn->name, p.name))));
+            emitMaxCheck(w, p, std::to_string(i + 1), p.name); // @max bounds the argument before any of it is converted
+            w.line(std::format("const auto a{} = check{}(c, {});", i, codecOf(p.type, kCheck, false), i + 1));
             args += std::format(", a{}", i);
         }
         if (needsItemHook(fn)) {
@@ -658,14 +735,11 @@ private:
         if (const Attr* m = fn->attr("max"); m && !m->args.empty()) {
             u64 max = 0;
             parseSchemaUnsigned(m->args[0].value, max);
-            const Type* r = fn->result->kind == TypeKind::Optional ? fn->result->element : fn->result;
-            const std::string dot = fn->result->kind == TypeKind::Optional ? "->" : ".";
-            const std::string one = std::format("result{}{}", dot, r->kind == TypeKind::Prim && r->prim == Prim::Name ? "view().size()" : "size()");
-            const std::string size = fn->result->kind == TypeKind::Optional ? std::format("(result ? {} : 0)", one) : one;
+            const std::string size = fn->result->kind == TypeKind::Optional ? "(result ? result->size() : 0)" : "result.size()";
             w.line(std::format("if ({0} > {1}u) fail(L, std::format(\"{2}.{3} returned {{}} elements; its @max is {1}\", {0}));", size, max,
                                lib->name, fn->name));
         }
-        w.line(std::format("push{}(L, result, 0);", codecOf(fn->result, kPush)));
+        w.line(std::format("push{}(L, result, 0);", codecOf(fn->result, kPush, false)));
         w.line("return 1;");
         w.close();
         w.line();
@@ -683,6 +757,9 @@ private:
         w.line("-- Luau declarations of the schemas' script-callable functions (scriptlib, 02 §3.1, §7.4) for luau-lsp;");
         w.line("-- load it after engine/script/defs/helios.d.luau. Fuel charges are the schema's defaults until");
         w.line("-- --calibrate-fuel replaces them (fuel_costs.defaults.json next to this file).");
+        w.line("-- Realms: every fn of every realm is declared here; in a host of another realm it is nil at runtime (each");
+        w.line("-- fn's doc lists its realms). Struct arguments use the <Type>Input tables, whose fields are optional");
+        w.line("-- because the glue gives missing fields their schema defaults; results are the <Type> tables.");
         bool any = false;
         for (const auto& [name, use] : m_names) any = any || use.ref;
         bool entity = false;
@@ -723,12 +800,16 @@ private:
                 w.line(std::format("export type {} = {}", name, alts));
                 continue;
             }
-            w.line(std::format("-- {} (a table; missing fields take their schema defaults, other keys are ignored).", d->qualifiedName));
+            w.line(use.input ? std::format("-- {} as an argument (missing fields take their schema defaults; other keys are ignored).",
+                                           d->qualifiedName)
+                             : std::format("-- {} as a result.", d->qualifiedName));
             w.open(std::format("export type {} = {{", name));
             for (const Field& f : d->fields) {
                 if (!f.type) continue;
                 docLines(w, f.doc, "-- ");
-                w.line(std::format("{}: {},", f.name, typeLabel(f.type)));
+                std::string label = typeLabel(f.type, use.input);
+                if (use.input && !label.ends_with("?")) label += "?";
+                w.line(std::format("{}: {},", f.name, label));
             }
             w.close("}");
         }
@@ -742,8 +823,8 @@ private:
                 docLines(w, fn->doc, "-- ");
                 w.line(std::format("-- {}. Realms: {}.", costText(fn), join(fn->cost.realms, ", ")));
                 std::string params;
-                for (const Field& p : fn->fields) params += (params.empty() ? "" : ", ") + p.name + ": " + typeLabel(p.type);
-                w.line(std::format("{}: ({}) -> {},", fn->name, params, fn->result ? typeLabel(fn->result) : "()"));
+                for (const Field& p : fn->fields) params += (params.empty() ? "" : ", ") + p.name + ": " + typeLabel(p.type, true);
+                w.line(std::format("{}: ({}) -> {},", fn->name, params, fn->result ? typeLabel(fn->result, false) : "()"));
             }
             w.close("}");
         }
@@ -789,70 +870,127 @@ private:
     struct NameUse {
         const Decl* decl;
         bool ref;
+        bool input; ///< a struct's argument form (<Type>Input)
     };
 
     // Helpers compiled into every glue file (internal linkage). The light-userdata tags are the Phase 0
     // contract with the script host (tools/schemac/README.md "Generated Luau").
-    static constexpr std::string_view kGlueRuntime = R"([[maybe_unused]] constexpr int kEntityIdTag = 1;  // light-userdata tag of EntityId values
+    static constexpr std::string_view kGlueRuntime = R"glue([[maybe_unused]] constexpr int kEntityIdTag = 1;  // light-userdata tag of EntityId values
 [[maybe_unused]] constexpr int kRecordRefTag = 2; // light-userdata tag of record references
 [[maybe_unused]] constexpr int kMaxDepth = 32;    // nesting of tables in one argument or result (cyclic tables stop here)
-[[maybe_unused]] constexpr int kMaxListElements = 1 << 16; // elements of one list or set argument
-[[maybe_unused]] constexpr double kMaxExactInteger = 9007199254740992.0; // 2^53: larger 64-bit values do not fit a Luau number
+// Integers a Luau number holds exactly: |x| <= 2^53 - 1 (2^53 + 1 would round to 2^53 and pass as exact).
+[[maybe_unused]] constexpr double kMaxExactInteger = 9007199254740991.0;
 static_assert(sizeof(void*) == 8, "ids travel as 64-bit light userdata");
 
-// Messages are formatted here, not by Luau's printf-style formatter, so no format depends on the C runtime.
+// Messages are formatted here with std::format; Luau only copies the text (up to its 512-byte buffer).
 [[noreturn, maybe_unused]] void fail(lua_State* L, const std::string& message) { luaL_errorL(L, "%s", message.c_str()); }
 
-[[noreturn, maybe_unused]] void badType(lua_State* L, int idx, const char* what, const char* expected) {
-    fail(L, std::format("{}: expected {}, got {}", what, expected, luaL_typename(L, idx)));
+// One call's argument conversion: the argument being converted, its table nesting, and the values and
+// string bytes still allowed. Every converted value and string byte counts, so a table referenced from
+// many places costs once per reference and one call's work stays within the caps (hostile input).
+struct Ctx {
+    lua_State* L;
+    const char* what;
+    int depth;
+    ::helios::u32 values;
+    ::helios::usize bytes;
+    ::helios::u32 maxValues;
+    ::helios::usize maxBytes;
+};
+
+[[noreturn, maybe_unused]] void badType(Ctx& c, int idx, const char* expected) {
+    fail(c.L, std::format("{}: expected {}, got {}", c.what, expected, luaL_typename(c.L, idx)));
 }
 
+[[noreturn, maybe_unused]] void overValues(Ctx& c) {
+    fail(c.L, std::format("{}: the arguments hold more than {} values (the glue's per-call limit)", c.what, c.maxValues));
+}
+
+[[maybe_unused]] void take(Ctx& c, ::helios::u32 n) {
+    if (n > c.values) overValues(c);
+    c.values -= n;
+}
+
+/// Fails at once when `n` more values cannot fit (a list's elements), before any is converted.
+[[maybe_unused]] void reserve(Ctx& c, int n) {
+    if (n > 0 && static_cast<::helios::u32>(n) > c.values) overValues(c);
+}
+
+/// Results: the C++ value is trusted, but a result nests tables at most kMaxDepth deep too.
 [[maybe_unused]] void enter(lua_State* L, int depth) {
-    if (depth >= kMaxDepth) fail(L, std::format("value nests more than {} tables deep", kMaxDepth));
+    if (depth >= kMaxDepth) fail(L, std::format("result nests more than {} tables deep", kMaxDepth));
     luaL_checkstack(L, 3, "schema glue");
+}
+
+struct Nest {
+    Ctx& c;
+    explicit Nest(Ctx& ctx) : c(ctx) {
+        if (++c.depth > kMaxDepth) fail(c.L, std::format("{}: the value nests more than {} tables deep", c.what, kMaxDepth));
+        luaL_checkstack(c.L, 3, "schema glue");
+    }
+    ~Nest() { --c.depth; }
+    Nest(const Nest&) = delete;
+    Nest& operator=(const Nest&) = delete;
+};
+
+/// @max on a string (bytes) or a list or set (elements), checked on the raw value before conversion.
+[[maybe_unused]] void checkMax(Ctx& c, int idx, ::helios::u64 max, const char* name) {
+    const int type = lua_type(c.L, idx);
+    if (type != LUA_TSTRING && type != LUA_TTABLE) return; // (the conversion reports a wrong type)
+    const auto n = static_cast<::helios::u64>(lua_objlen(c.L, idx));
+    if (n > max) fail(c.L, std::format("{}: '{}' has {} {}; its @max is {}", c.what, name, n, type == LUA_TSTRING ? "bytes" : "elements", max));
 }
 
 [[maybe_unused]] ::helios::u64 saturatingMul(::helios::u64 a, ::helios::u64 b) {
     return b != 0 && a > std::numeric_limits<::helios::u64>::max() / b ? std::numeric_limits<::helios::u64>::max() : a * b;
 }
 
-[[maybe_unused]] std::string_view checkString(lua_State* L, int idx, const char* what) {
-    if (lua_type(L, idx) != LUA_TSTRING) badType(L, idx, what, "string");
+[[maybe_unused]] std::string_view checkString(Ctx& c, int idx) {
+    if (lua_type(c.L, idx) != LUA_TSTRING) badType(c, idx, "string");
     size_t n = 0;
-    const char* s = lua_tolstring(L, idx, &n);
+    const char* s = lua_tolstring(c.L, idx, &n);
+    if (n > c.bytes) fail(c.L, std::format("{}: the arguments hold more than {} string bytes (the glue's per-call limit)", c.what, c.maxBytes));
+    c.bytes -= n;
     return std::string_view(s, n);
 }
 
-[[maybe_unused]] double checkNumber(lua_State* L, int idx, const char* what) {
-    if (lua_type(L, idx) != LUA_TNUMBER) badType(L, idx, what, "number");
-    return lua_tonumber(L, idx);
+[[maybe_unused]] double checkNumber(Ctx& c, int idx) {
+    if (lua_type(c.L, idx) != LUA_TNUMBER) badType(c, idx, "number");
+    return lua_tonumber(c.L, idx);
+}
+
+/// A finite number within float's range (a double outside it cast to float is undefined behaviour).
+[[maybe_unused]] ::helios::f32 checkF32(Ctx& c, int idx) {
+    const double d = checkNumber(c, idx);
+    if (!(std::fabs(d) <= static_cast<double>(FLT_MAX))) fail(c.L, std::format("{}: {} is not a finite f32", c.what, d));
+    return static_cast<::helios::f32>(d);
 }
 
 template <class T>
-T checkInteger(lua_State* L, int idx, const char* what, const char* type) {
-    const double d = checkNumber(L, idx, what);
+T checkInteger(Ctx& c, int idx, const char* type) {
+    const double d = checkNumber(c, idx);
     constexpr double lo = std::is_signed_v<T> ? std::max(static_cast<double>(std::numeric_limits<T>::min()), -kMaxExactInteger) : 0.0;
     constexpr double hi = std::min(static_cast<double>(std::numeric_limits<T>::max()), kMaxExactInteger);
-    if (!(d >= lo && d <= hi) || std::floor(d) != d) fail(L, std::format("{}: {} is not a {}", what, d, type));
+    if (!(d >= lo && d <= hi) || std::floor(d) != d) fail(c.L, std::format("{}: {} is not a {}", c.what, d, type));
     return static_cast<T>(d);
 }
 
 template <class T>
 void pushInteger(lua_State* L, T v) {
     if constexpr (sizeof(T) == 8) {
+        constexpr T kMax = static_cast<T>(9007199254740991ull);
         if constexpr (std::is_signed_v<T>) {
-            if (v > static_cast<T>(kMaxExactInteger) || v < -static_cast<T>(kMaxExactInteger))
-                fail(L, std::format("result {} does not fit a Luau number exactly", v));
-        } else if (v > static_cast<T>(kMaxExactInteger)) {
+            if (v > kMax || v < -kMax) fail(L, std::format("result {} does not fit a Luau number exactly", v));
+        } else if (v > kMax) {
             fail(L, std::format("result {} does not fit a Luau number exactly", v));
         }
     }
     lua_pushnumber(L, static_cast<double>(v));
 }
 
-[[maybe_unused]] ::helios::refl::Duration checkDuration(lua_State* L, int idx, const char* what) {
-    const double s = checkNumber(L, idx, what);
-    if (!(std::fabs(s) <= 9.2e9)) fail(L, std::format("{}: {} seconds is not a valid duration", what, s));
+[[maybe_unused]] ::helios::refl::Duration checkDuration(Ctx& c, int idx) {
+    const double s = checkNumber(c, idx);
+    if (!(std::fabs(s) <= 9.2e9)) fail(c.L, std::format("{}: {} seconds is not a valid duration", c.what, s));
     return ::helios::refl::Duration(static_cast<::helios::i64>(std::llround(s * 1e9)));
 }
 
@@ -860,25 +998,38 @@ void pushInteger(lua_State* L, T v) {
     lua_pushlightuserdatatagged(L, reinterpret_cast<void*>(static_cast<uintptr_t>(bits)), tag);
 }
 
-[[maybe_unused]] ::helios::u64 checkId(lua_State* L, int idx, const char* what, int tag, const char* type) {
-    if (lua_type(L, idx) != LUA_TLIGHTUSERDATA || lua_lightuserdatatag(L, idx) != tag) badType(L, idx, what, type);
-    return static_cast<::helios::u64>(reinterpret_cast<uintptr_t>(lua_tolightuserdatatagged(L, idx, tag)));
+[[maybe_unused]] ::helios::u64 checkId(Ctx& c, int idx, int tag, const char* type) {
+    if (lua_type(c.L, idx) != LUA_TLIGHTUSERDATA || lua_lightuserdatatag(c.L, idx) != tag) badType(c, idx, type);
+    return static_cast<::helios::u64>(reinterpret_cast<uintptr_t>(lua_tolightuserdatatagged(c.L, idx, tag)));
 }
 
 void nameIdTags(lua_State* L) {
     if (!lua_getlightuserdataname(L, kEntityIdTag)) lua_setlightuserdataname(L, kEntityIdTag, "EntityId");
     if (!lua_getlightuserdataname(L, kRecordRefTag)) lua_setlightuserdataname(L, kRecordRefTag, "RecordRef");
 }
-)";
+
+/// A realm the glue knows and the VM's host profile runs: Cell VMs run "server", Client "client", Editor "editor".
+::helios::Result<void> checkRealm(::helios::script::Binder& binder, std::string_view realm) {
+    using ::helios::script::HostProfile;
+    const HostProfile profile = ::helios::script::vmFromState(binder.state()).config().profile;
+    const std::string_view expected = profile == HostProfile::Cell ? "server" : profile == HostProfile::Client ? "client" : "editor";
+    if (realm != "server" && realm != "client" && realm != "editor")
+        return ::helios::Error(::helios::ErrorCode::InvalidArgument, std::format("unknown script realm '{}' (server, client or editor)", realm));
+    if (realm != expected)
+        return ::helios::Error(::helios::ErrorCode::InvalidArgument,
+                               std::format("script realm '{}' does not match this VM's host profile, which runs '{}'", realm, expected));
+    return {};
+}
+)glue";
 
     const Schema& S;
     const CompileOptions& O;
     DiagnosticEngine& D;
     std::map<std::string, NameUse> m_names;
     std::map<std::string, const Decl*> m_libs;
-    std::vector<const Type*> m_codecs;
+    std::vector<CodecKey> m_codecs;
     std::vector<u8> m_dirs;
-    std::map<const Type*, usize> m_codecIndex;
+    std::map<CodecKey, usize> m_codecIndex;
 };
 
 } // namespace

@@ -24,6 +24,16 @@ class Queries {
 public:
     virtual ~Queries() = default;
 
+    /// Per-call caps of the generated argument conversion (hostile input: a table referenced from many places
+    /// converts once per reference). A call over a cap fails with a script error before converting further. Set
+    /// them before the VM runs scripts. 02 §7.4 and 04 §10.2 give no default; these keep one call's conversion
+    /// well under 1 ms.
+    struct GlueLimits {
+        ::helios::u32 maxValues = 8192;         ///< values converted per call: numbers, strings, tables and elements
+        ::helios::usize maxStringBytes = 262144; ///< string bytes converted per call (256 KiB)
+    };
+    GlueLimits glueLimits;
+
     /// Nearest thing within `radius`.
     /// Fuel: 12; pure. Realms: server, client. Binding id 0x1b0b464f.
     virtual std::optional<::golden::all::ThingRef> nearest(lua_State* L, const ::helios::FramePos& at, ::helios::f32 radius) = 0;
@@ -38,7 +48,7 @@ public:
 
     /// Every value form the glue converts; returns `item` with `count` replaced.
     /// Fuel: 3 + 2 per item of 'items'; pure. Realms: server, client. Binding id 0x93dd7336.
-    virtual ::golden::all::Item convert(lua_State* L, bool flag, ::helios::i8 small, ::helios::i64 big, ::helios::u16 count, ::helios::f64 ratio, ::helios::Name name, const std::string& text, ::helios::Vec3 dir, ::helios::refl::Duration delay, ::helios::refl::Tick at, ::golden::all::Color color, const ::golden::all::Item& item, const std::vector<::golden::all::Item>& items, const std::set<::helios::Name>& names, const std::array<::helios::f32, 3>& trio, const std::optional<::helios::u32>& maybe, const ::helios::refl::LocString& label, const ::helios::refl::TagQuery& query) = 0;
+    virtual ::golden::all::Pack convert(lua_State* L, bool flag, ::helios::i8 small, ::helios::i64 big, ::helios::u16 count, ::helios::f64 ratio, const std::string& name, const std::string& text, ::helios::Vec3 dir, ::helios::refl::Duration delay, ::helios::refl::Tick at, ::golden::all::Color color, const ::golden::all::Pack& item, const std::vector<::golden::all::Pack>& items, const std::set<std::string>& names, const std::array<::helios::f32, 3>& trio, const std::optional<::helios::u32>& maybe, const ::helios::refl::LocString& label, const ::helios::refl::TagQuery& query) = 0;
 
     /// Recursive tables (a cyclic one stops at the glue's depth limit).
     /// Fuel: 1; pure. Realms: editor. Binding id 0x5a6219e2.
@@ -47,17 +57,31 @@ public:
     /// Fuel: 2 + 1 per item of 'text'. Realms: server, client. Binding id 0x86bdafdb.
     virtual void log(lua_State* L, const std::string& text) = 0;
 
+    /// @max on a string argument and result, and on struct fields.
+    /// Fuel: 1; pure. Realms: server, client. Binding id 0xb6e3edad.
+    virtual std::string clip(lua_State* L, const std::string& s) = 0;
+
+    /// Fuel: 1; pure. Realms: server, client. Binding id 0x5fdecbfb.
+    virtual ::golden::all::Bag bag(lua_State* L, const ::golden::all::Bag& b) = 0;
+
+    /// Fuel: 1; pure. Realms: server, client. Binding id 0x81f17f8b.
+    virtual ::golden::all::Tagged tagged(lua_State* L, const std::set<std::string>& names, ::helios::f32 ratio) = 0;
+
     static constexpr ::helios::u32 kNearestBinding = 0x1b0b464fu; ///< lock id of golden.all.Queries.nearest
     static constexpr ::helios::u32 kInRadiusBinding = 0x77a0446eu; ///< lock id of golden.all.Queries.inRadius
     static constexpr ::helios::u32 kSpawnBinding = 0xb861baaeu; ///< lock id of golden.all.Queries.spawn
     static constexpr ::helios::u32 kConvertBinding = 0x93dd7336u; ///< lock id of golden.all.Queries.convert
     static constexpr ::helios::u32 kEchoBinding = 0x5a6219e2u; ///< lock id of golden.all.Queries.echo
     static constexpr ::helios::u32 kLogBinding = 0x86bdafdbu; ///< lock id of golden.all.Queries.log
+    static constexpr ::helios::u32 kClipBinding = 0xb6e3edadu; ///< lock id of golden.all.Queries.clip
+    static constexpr ::helios::u32 kBagBinding = 0x5fdecbfbu; ///< lock id of golden.all.Queries.bag
+    static constexpr ::helios::u32 kTaggedBinding = 0x81f17f8bu; ///< lock id of golden.all.Queries.tagged
 };
 
-/// Registers the Queries functions whose @realm includes `realm` ("server", "client" or "editor") as
-/// the Luau library `Queries` (call inside the ScriptVm::create registrar). `impl` must outlive the VM.
+/// Registers the Queries functions whose @realm includes `realm` as the Luau library `Queries` (call inside
+/// the ScriptVm::create registrar). `impl` must outlive the VM. `realm` must be "server" on a HostProfile::Cell VM,
+/// "client" on a Client VM and "editor" on an Editor VM; anything else is InvalidArgument and registers nothing.
 /// Returns how many functions were registered.
-::helios::u32 bindQueries(::helios::script::Binder& binder, Queries& impl, std::string_view realm);
+::helios::Result<::helios::u32> bindQueries(::helios::script::Binder& binder, Queries& impl, std::string_view realm);
 
 } // namespace golden::all

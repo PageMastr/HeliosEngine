@@ -93,6 +93,15 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test (software Vulkan via lavapipe, the only ICD on GPU-less runners)
         run: xvfb-run -a ctest --preset ${{ matrix.preset }} -LE perf
+      # The goldens require the Khronos layer (configure found it); this shows which layer the device
+      # loaded and fails if the self-test did not print it (03 §1.5, RC-1).
+      - name: Validation layer and spirv-val versions
+        if: ${{ !cancelled() }}
+        run: |
+          dpkg-query -W spirv-tools vulkan-validationlayers mesa-vulkan-drivers
+          spirv-val --version | head -n 1
+          xvfb-run -a ctest --preset ${{ matrix.preset }} -R '^rendertest\.validation-layer$' -V | tee validation-layer.log
+          grep -E '^[0-9]+: validation layer: VK_LAYER_KHRONOS_validation [0-9]+\.[0-9]+' validation-layer.log
 
   # Dedicated-server configuration: no graphics modules may be required.
   linux-headless:

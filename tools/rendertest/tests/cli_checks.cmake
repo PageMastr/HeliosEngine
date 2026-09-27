@@ -4,7 +4,7 @@
 #   * results of scenes that no longer exist are left out of the report;
 #   * --budget rejects values that are not a positive number of seconds;
 #   * --coverage fails, naming what is uncovered, when the counted scenes do not bind every shipped
-#     entry point or when a scene's goldens are missing.
+#     entry point, when a scene's goldens are missing, or when a rendertest pipeline takes a shipped name.
 # Inputs: -DRENDERTEST=<exe> -DOUT=<scratch dir>
 
 if(NOT RENDERTEST OR NOT OUT)
@@ -55,6 +55,12 @@ execute_process(COMMAND "${RENDERTEST}" --coverage --scene forward
 if(NOT rc EQUAL 1 OR NOT err MATCHES "pipeline 'Forward.DebugNormals' is bound by no golden scene"
    OR NOT err MATCHES "forward:psNormals" OR err MATCHES "tonemap:psTonemap")
   message(FATAL_ERROR "--coverage --scene forward: expected only the debug view uncovered, got ${rc}:\n${out}\n${err}")
+endif()
+# A rendertest pipeline named like a shipped one would count as its coverage; the check rejects it.
+execute_process(COMMAND "${RENDERTEST}" --coverage --seed-name-collision
+                RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+if(NOT rc EQUAL 1 OR NOT err MATCHES "rendertest pipeline 'Forward.Geometry' reuses the name of a shipped pipeline")
+  message(FATAL_ERROR "--coverage --seed-name-collision: expected a name-collision failure, got ${rc}:\n${out}\n${err}")
 endif()
 # Scenes count only with committed goldens.
 file(MAKE_DIRECTORY "${OUT}/no-goldens")

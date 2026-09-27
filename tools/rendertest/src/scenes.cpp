@@ -5,6 +5,8 @@
 #include "scenes.h"
 
 #include <array>
+#include <mutex>
+#include <set>
 
 #include "helios-rendertest_shaders.h"
 #include "helios/render/forward.h"
@@ -16,6 +18,20 @@ using namespace helios::render;
 namespace shaders = rendertest_shaders;
 
 namespace {
+
+struct LocalNames {
+    std::mutex mutex;
+    std::set<std::string> names;
+};
+LocalNames& localNames() {
+    static LocalNames names;
+    return names;
+}
+void recordLocalName(std::string_view name) {
+    LocalNames& local = localNames();
+    std::lock_guard lock(local.mutex);
+    local.names.emplace(name);
+}
 
 constexpr rhi::Format kHdr = rhi::Format::RGBA16Float;
 
@@ -95,7 +111,7 @@ public:
         d.colorCount = 1;
         d.colorFormats[0] = format;
         d.name = "Triangle";
-        HELIOS_TRY_ASSIGN(m_pso, device.createGraphicsPipeline(d));
+        HELIOS_TRY_ASSIGN(m_pso, createLocalPipeline(device, d));
         return {};
     }
     void addPasses(RenderGraph& graph, RgTexture output, u32) override {
@@ -119,8 +135,8 @@ class ComputeScene final : public Scene {
 public:
     const SceneInfo& info() const noexcept override { return m_info; }
     Result<void> init(rhi::Device& device, rhi::Format format) override {
-        HELIOS_TRY_ASSIGN(m_pattern, device.createComputePipeline(computePipeline(shaders::pattern(), "csPattern", "Pattern")));
-        HELIOS_TRY_ASSIGN(m_blit, device.createGraphicsPipeline(fullscreenPipeline("psBlit", format, "Blit")));
+        HELIOS_TRY_ASSIGN(m_pattern, createLocalPipeline(device, computePipeline(shaders::pattern(), "csPattern", "Pattern")));
+        HELIOS_TRY_ASSIGN(m_blit, createLocalPipeline(device, fullscreenPipeline("psBlit", format, "Blit")));
         return {};
     }
     void addPasses(RenderGraph& graph, RgTexture output, u32) override {
@@ -150,7 +166,7 @@ public:
         d.colorCount = 1;
         d.colorFormats[0] = format;
         d.name = "Quads";
-        HELIOS_TRY_ASSIGN(m_pso, device.createGraphicsPipeline(d));
+        HELIOS_TRY_ASSIGN(m_pso, createLocalPipeline(device, d));
         for (u32 t = 0; t < 4; ++t) {
             HELIOS_TRY_ASSIGN(m_textures[t], (device.createTexture(rhi::TextureDesc::tex2D(
                                                  rhi::Format::RGBA8Unorm, 16, 16,
@@ -277,7 +293,7 @@ public:
         HELIOS_TRY_ASSIGN(m_renderer, ForwardRenderer::create(device, format));
         if (m_normals) {
             HELIOS_TRY_ASSIGN(m_rightHalf,
-                              device.createGraphicsPipeline(fullscreenPipeline("psBlit", format, "RightHalf")));
+                              createLocalPipeline(device, fullscreenPipeline("psBlit", format, "RightHalf")));
         }
         HELIOS_TRY_ASSIGN(GpuMesh cube, uploadMesh(device, makeCube(0.5f), "Cube"));
         m_scene.meshes.push_back(cube);
@@ -357,9 +373,9 @@ class PostChainScene final : public Scene {
 public:
     const SceneInfo& info() const noexcept override { return m_info; }
     Result<void> init(rhi::Device& device, rhi::Format format) override {
-        HELIOS_TRY_ASSIGN(m_pattern, device.createComputePipeline(computePipeline(shaders::pattern(), "csPattern", "Pattern")));
-        HELIOS_TRY_ASSIGN(m_blur, device.createComputePipeline(computePipeline(shaders::blur(), "csBlur", "Blur")));
-        HELIOS_TRY_ASSIGN(m_blit, device.createGraphicsPipeline(fullscreenPipeline("psBlit", format, "Blit")));
+        HELIOS_TRY_ASSIGN(m_pattern, createLocalPipeline(device, computePipeline(shaders::pattern(), "csPattern", "Pattern")));
+        HELIOS_TRY_ASSIGN(m_blur, createLocalPipeline(device, computePipeline(shaders::blur(), "csBlur", "Blur")));
+        HELIOS_TRY_ASSIGN(m_blit, createLocalPipeline(device, fullscreenPipeline("psBlit", format, "Blit")));
         return {};
     }
     void addPasses(RenderGraph& graph, RgTexture output, u32) override {
@@ -414,9 +430,9 @@ class MipsScene final : public Scene {
 public:
     const SceneInfo& info() const noexcept override { return m_info; }
     Result<void> init(rhi::Device& device, rhi::Format format) override {
-        HELIOS_TRY_ASSIGN(m_pattern, device.createComputePipeline(computePipeline(shaders::pattern(), "csPattern", "Pattern")));
-        HELIOS_TRY_ASSIGN(m_down, device.createComputePipeline(computePipeline(shaders::blur(), "csDownsample", "Downsample")));
-        HELIOS_TRY_ASSIGN(m_view, device.createGraphicsPipeline(fullscreenPipeline("psMips", format, "MipView")));
+        HELIOS_TRY_ASSIGN(m_pattern, createLocalPipeline(device, computePipeline(shaders::pattern(), "csPattern", "Pattern")));
+        HELIOS_TRY_ASSIGN(m_down, createLocalPipeline(device, computePipeline(shaders::blur(), "csDownsample", "Downsample")));
+        HELIOS_TRY_ASSIGN(m_view, createLocalPipeline(device, fullscreenPipeline("psMips", format, "MipView")));
         rhi::SamplerDesc nearest;
         nearest.minFilter = nearest.magFilter = nearest.mipFilter = rhi::Filter::Nearest;
         nearest.addressU = nearest.addressV = nearest.addressW = rhi::AddressMode::ClampToEdge;
@@ -490,6 +506,24 @@ private:
 };
 
 } // namespace
+
+Result<rhi::PipelineH> createLocalPipeline(rhi::Device& device, const rhi::GraphicsPipelineDesc& desc) {
+    recordLocalName(desc.name);
+    // shipped-pipelines-lint: allow rendertest's own test shaders; names recorded for measureCoverage()
+    return device.createGraphicsPipeline(desc);
+}
+
+Result<rhi::PipelineH> createLocalPipeline(rhi::Device& device, const rhi::ComputePipelineDesc& desc) {
+    recordLocalName(desc.name);
+    // shipped-pipelines-lint: allow rendertest's own test shaders; names recorded for measureCoverage()
+    return device.createComputePipeline(desc);
+}
+
+std::vector<std::string> localPipelineNames() {
+    LocalNames& local = localNames();
+    std::lock_guard lock(local.mutex);
+    return {local.names.begin(), local.names.end()};
+}
 
 std::vector<std::unique_ptr<Scene>> createScenes() {
     std::vector<std::unique_ptr<Scene>> scenes;

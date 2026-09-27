@@ -29,6 +29,8 @@ struct RunOptions {
     std::filesystem::path outDir;
     bool updateGoldens = false;
     bool validation = false;  ///< Khronos validation (when installed); errors fail the scene.
+    /// Fail instead of running without the layer (DeviceDesc::requireValidation).
+    bool requireValidation = false;
     jobs::JobSystem* jobs = nullptr;
 };
 
@@ -44,6 +46,7 @@ struct SceneResult {
     f64 maxMeanFlip = 0.0;  ///< Thresholds applied.
     f64 maxAllowedFlip = 0.0;
     bool renderedTwiceIdentical = false;
+    bool validation = false;  ///< Vulkan: the Khronos validation layer checked the renders.
     u64 differentPixels = 0;  ///< Pixels not bit-identical to the golden.
     f64 milliseconds = 0.0;
     std::string actualFile;  ///< Relative to the output directory.
@@ -53,8 +56,21 @@ struct SceneResult {
 };
 
 /// A device of `backend` for the tests (Vulkan prefers a software adapter so every machine compares
-/// against the same lavapipe goldens; HELIOS_RHI_ADAPTER overrides).
-Result<std::unique_ptr<rhi::Device>> createTestDevice(Backend backend, bool validation);
+/// against the same lavapipe goldens; HELIOS_RHI_ADAPTER overrides). With `requireValidation`,
+/// creation fails when the Khronos validation layer does not load.
+Result<std::unique_ptr<rhi::Device>> createTestDevice(Backend backend, bool validation, bool requireValidation = false);
+
+/// Seeded validation error (RC-1's goldens run under the layer): on a Vulkan device that requires
+/// the Khronos layer, records a barrier whose source state is wrong (the texture is in CopyDest, the
+/// barrier claims ShaderResource) and submits it. The Vulkan RHI does not track states, so only the
+/// layer can report it. Returns the layer's name and version and the first message it reported;
+/// fails when device creation fails or the layer reports nothing.
+struct ValidationSelfTest {
+    std::string layer;    ///< Caps::validationLayer.
+    std::string message;  ///< First "Validation Error: [ ... ]" message, trimmed.
+    u64 errors = 0;
+};
+Result<ValidationSelfTest> runValidationSelfTest();
 
 /// Runs one scene on `device`: init, render twice, compare with the golden (or update it), write
 /// artifacts and `<out>/<backend>/<scene>.json`.
@@ -77,7 +93,8 @@ struct CoverageReport {
 
 /// Renders each scene once on a fresh Null device (no GPU) and maps the pipelines bound in its
 /// captured frame to shipped entry points. A scene counts only when both of its goldens are
-/// committed: `<goldenDir>/vulkan-llvmpipe/<scene>.png` and `<goldenDir>/null/<scene>.txt`.
+/// committed: `<goldenDir>/vulkan-llvmpipe/<scene>.png` and `<goldenDir>/null/<scene>.txt`. Also
+/// fails when a scene's own pipeline (createLocalPipeline) reuses a shipped pipeline's name.
 Result<CoverageReport> measureCoverage(std::span<Scene* const> scenes, const std::filesystem::path& goldenDir);
 
 /// Collects every `<out>/*/*.json` result.

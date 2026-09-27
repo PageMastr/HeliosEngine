@@ -7,10 +7,12 @@
 #include <cstdlib>
 #include <format>
 #include <map>
+#include <mutex>
 #include <set>
 
 #include "helios/core/fs.h"
 #include "helios/core/jobs.h"
+#include "helios/core/log.h"
 #include "helios/core/time.h"
 #include "helios/render/flip.h"
 #include "helios/render/image.h"
@@ -144,14 +146,69 @@ std::string htmlEscape(std::string_view s) {
 
 std::string_view backendName(Backend backend) noexcept { return backend == Backend::Vulkan ? "vulkan" : "null"; }
 
-Result<std::unique_ptr<rhi::Device>> createTestDevice(Backend backend, bool validation) {
+Result<std::unique_ptr<rhi::Device>> createTestDevice(Backend backend, bool validation, bool requireValidation) {
     rhi::DeviceDesc desc;
     desc.appName = "helios-rendertest";
     desc.backend = backend == Backend::Vulkan ? rhi::Backend::Vulkan : rhi::Backend::Null;
     desc.enableSwapchain = false;  // offscreen only: no window system needed (CI, containers)
-    desc.validation = validation;
+    desc.validation = validation || requireValidation;
+    desc.requireValidation = requireValidation && backend == Backend::Vulkan;
     desc.adapterPreference = rhi::AdapterPreference::Software;
     return rhi::Device::create(desc);
+}
+
+Result<ValidationSelfTest> runValidationSelfTest() {
+    struct Messages {
+        std::mutex mutex;
+        std::vector<std::string> layer;
+    };
+    auto messages = std::make_shared<Messages>();
+    rhi::DeviceDesc desc;
+    desc.appName = "helios-rendertest";
+    desc.backend = rhi::Backend::Vulkan;
+    desc.enableSwapchain = false;
+    desc.validation = true;
+    desc.requireValidation = true;
+    desc.adapterPreference = rhi::AdapterPreference::Software;
+    desc.onMessage = [messages](const rhi::ValidationMessage& m) {
+        // The layer's own reports; the RHI's messages have no "[ VUID ]" part.
+        if (m.severity != rhi::ValidationMessage::Severity::Error || m.text.find("Validation Error: [") == std::string::npos) {
+            return;
+        }
+        std::lock_guard lock(messages->mutex);
+        messages->layer.push_back(m.text);
+    };
+    HELIOS_TRY_ASSIGN(std::unique_ptr<rhi::Device> device, rhi::Device::create(desc));
+    ValidationSelfTest result;
+    result.layer = device->caps().validationLayer;
+    if (!device->caps().has(rhi::CapBit::ValidationLayer) || result.layer.empty()) {
+        return Error{ErrorCode::Unsupported, "the device reports no active Khronos validation layer"};
+    }
+    HELIOS_TRY_ASSIGN(rhi::TextureH texture,
+                      (device->createTexture(rhi::TextureDesc::tex2D(
+                          kOutputFormat, 16, 16,
+                          rhi::TextureUsage::Sampled | rhi::TextureUsage::TransferDst | rhi::TextureUsage::TransferSrc,
+                          "SeededBarrier"))));
+    log::setChannelLevel("RHI", log::Level::Off);  // the error below is the point; keep it out of the log
+    rhi::CommandList* cmd = device->acquireCommandList(rhi::Queue::Graphics, "SeededBarrier");
+    cmd->barrier(rhi::Barrier::textureState(texture, rhi::ResourceState::Undefined, rhi::ResourceState::CopyDest));
+    cmd->clearTexture(texture, {0.0f, 0.0f, 0.0f, 1.0f});
+    // Seeded defect: the texture is in CopyDest, the barrier claims ShaderResource (a missed transition).
+    cmd->barrier(rhi::Barrier::textureState(texture, rhi::ResourceState::ShaderResource, rhi::ResourceState::CopySource));
+    Result<rhi::TimelinePoint> submitted = device->submit(rhi::Queue::Graphics, {&cmd, 1});
+    Result<void> idle = submitted ? device->waitIdle() : Result<void>{submitted.error()};
+    log::clearChannelLevel("RHI");
+    device->destroy(texture);
+    (void)device->waitIdle();
+    if (!idle) return Error{idle.error().code, "seeded frame: " + idle.error().toString()};
+    result.errors = device->validationErrorCount();
+    std::lock_guard lock(messages->mutex);
+    if (messages->layer.empty()) {
+        return Error{ErrorCode::InvalidState,
+                     std::format("the layer reported nothing for a barrier from the wrong state ({} RHI error(s))", result.errors)};
+    }
+    result.message = messages->layer.front().substr(0, 240);
+    return result;
 }
 
 SceneResult runScene(Scene& scene, rhi::Device& device, const RunOptions& options) {
@@ -171,6 +228,10 @@ SceneResult runScene(Scene& scene, rhi::Device& device, const RunOptions& option
         (void)writeResult(r, outDir / (r.scene + ".json"));
         return r;
     };
+    r.validation = options.backend == Backend::Vulkan && device.caps().has(rhi::CapBit::ValidationLayer);
+    if (options.backend == Backend::Vulkan && options.requireValidation && !r.validation) {
+        return fail("the Khronos validation layer is required (--require-validation) but not active on the device");
+    }
     const u64 validationBefore = device.validationErrorCount();
     Result<Capture> first = Error{ErrorCode::Unknown, "not run"};
     Result<Capture> second = Error{ErrorCode::Unknown, "not run"};
@@ -341,6 +402,14 @@ Result<CoverageReport> measureCoverage(std::span<Scene* const> scenes, const std
             byEntryPoint[e.module + ":" + e.entryPoint].insert(covering.begin(), covering.end());
         }
     }
+    // A local pipeline named like a shipped one would make its bindPipeline line count as coverage.
+    const std::vector<std::string> local = localPipelineNames();
+    for (const render::ShippedPipeline& pipeline : render::shippedPipelines()) {
+        if (std::binary_search(local.begin(), local.end(), pipeline.name)) {
+            report.problems.push_back(
+                std::format("rendertest pipeline '{}' reuses the name of a shipped pipeline", pipeline.name));
+        }
+    }
     HELIOS_TRY_ASSIGN(std::vector<render::ShippedEntryPoint> shipped, render::shippedEntryPoints());
     for (const render::ShippedEntryPoint& e : shipped) {
         const std::string key = e.module + ":" + e.entryPoint;
@@ -371,8 +440,10 @@ Result<void> writeResult(const SceneResult& r, const std::filesystem::path& file
     str("flipFile", r.flipFile);
     json += std::format("  \"meanFlip\": {},\n  \"maxFlip\": {},\n  \"maxMeanFlip\": {},\n  \"maxAllowedFlip\": {},\n",
                         r.meanFlip, r.maxFlip, r.maxMeanFlip, r.maxAllowedFlip);
-    json += std::format("  \"renderedTwiceIdentical\": {},\n  \"differentPixels\": {},\n  \"milliseconds\": {}\n}}\n",
-                        r.renderedTwiceIdentical ? "true" : "false", r.differentPixels, r.milliseconds);
+    json += std::format("  \"renderedTwiceIdentical\": {},\n  \"validation\": {},\n  \"differentPixels\": {},\n"
+                        "  \"milliseconds\": {}\n}}\n",
+                        r.renderedTwiceIdentical ? "true" : "false", r.validation ? "true" : "false", r.differentPixels,
+                        r.milliseconds);
     return fs::writeTextFile(file, json);
 }
 
@@ -406,6 +477,8 @@ Result<SceneResult> readResult(const std::filesystem::path& file) {
     r.maxAllowedFlip = getNum("maxAllowedFlip");
     yyjson_val* twice = yyjson_obj_get(root, "renderedTwiceIdentical");
     r.renderedTwiceIdentical = twice && yyjson_get_bool(twice);
+    yyjson_val* validated = yyjson_obj_get(root, "validation");
+    r.validation = validated && yyjson_get_bool(validated);
     r.differentPixels = static_cast<u64>(getNum("differentPixels"));
     r.milliseconds = getNum("milliseconds");
     yyjson_doc_free(doc);
@@ -434,25 +507,32 @@ std::vector<SceneResult> collectResults(const std::filesystem::path& outDir) {
 bool writeReport(const std::vector<SceneResult>& results, const std::filesystem::path& outDir, f64 budgetSeconds,
                  std::string& summary) {
     u32 failed = 0;
+    u32 unvalidated = 0;  // Vulkan renders the Khronos layer did not check (reported, not a failure)
     f64 totalMs = 0.0;
     for (const SceneResult& r : results) {
         failed += r.passed() ? 0u : 1u;
+        unvalidated += r.backend == "vulkan" && r.status != "skip" && !r.validation ? 1u : 0u;
         totalMs += r.milliseconds;
     }
     const bool overBudget = totalMs > budgetSeconds * 1000.0;
-    summary = std::format("{} result(s), {} failed, {:.1f} s total (budget {:.0f} s){}", results.size(), failed,
-                          totalMs / 1000.0, budgetSeconds, overBudget ? " — OVER BUDGET" : "");
+    summary = std::format("{} result(s), {} failed, {:.1f} s total (budget {:.0f} s){}{}", results.size(), failed,
+                          totalMs / 1000.0, budgetSeconds, overBudget ? " — OVER BUDGET" : "",
+                          unvalidated ? std::format(", {} Vulkan result(s) WITHOUT Khronos validation", unvalidated)
+                                      : std::string());
+    auto validated = [](const SceneResult& r) -> std::string_view {
+        return r.backend != "vulkan" || r.status == "skip" ? "n/a" : (r.validation ? "yes" : "NO");
+    };
 
     std::string md = "# helios-rendertest report\n\n" + summary + "\n\n";
     md += "Golden policy (03 §8.4): ꟻLIP mean <= 0.01 plus a per-scene maximum; every scene is rendered twice "
           "(serial and parallel recording) and must be bit-identical. Null runs compare command-stream traces.\n\n";
-    md += "| Scene | Backend | Status | mean ꟻLIP | max ꟻLIP | twice identical | pixels != golden | ms | Notes |\n";
-    md += "|---|---|---|---|---|---|---|---|---|\n";
+    md += "| Scene | Backend | Status | mean ꟻLIP | max ꟻLIP | twice identical | validated | pixels != golden | ms | Notes |\n";
+    md += "|---|---|---|---|---|---|---|---|---|---|\n";
     std::string rows;
     for (const SceneResult& r : results) {
-        md += std::format("| {} | {} | {} | {:.5f} | {:.4f} | {} | {} | {:.0f} | {} |\n", r.scene, r.backend, r.status,
-                          r.meanFlip, r.maxFlip, r.renderedTwiceIdentical ? "yes" : "NO", r.differentPixels,
-                          r.milliseconds, r.message.empty() ? r.goldenKey : r.message);
+        md += std::format("| {} | {} | {} | {:.5f} | {:.4f} | {} | {} | {} | {:.0f} | {} |\n", r.scene, r.backend,
+                          r.status, r.meanFlip, r.maxFlip, r.renderedTwiceIdentical ? "yes" : "NO", validated(r),
+                          r.differentPixels, r.milliseconds, r.message.empty() ? r.goldenKey : r.message);
         std::string images;
         if (r.backend == "vulkan") {
             auto img = [&](const std::string& file, std::string_view label) {
@@ -467,9 +547,9 @@ bool writeReport(const std::vector<SceneResult>& results, const std::filesystem:
             images = std::format("<a href=\"{}\">trace</a>", htmlEscape(r.actualFile));
         }
         rows += std::format("<tr class=\"{}\"><td>{}</td><td>{}</td><td>{}</td><td>{:.5f}</td><td>{:.4f}</td><td>{}</td>"
-                            "<td>{}</td><td>{:.0f}</td><td>{}</td><td class=\"imgs\">{}</td></tr>\n",
+                            "<td>{}</td><td>{}</td><td>{:.0f}</td><td>{}</td><td class=\"imgs\">{}</td></tr>\n",
                             r.passed() ? "ok" : "bad", htmlEscape(r.scene), r.backend, r.status, r.meanFlip, r.maxFlip,
-                            r.renderedTwiceIdentical ? "yes" : "NO", r.differentPixels, r.milliseconds,
+                            r.renderedTwiceIdentical ? "yes" : "NO", validated(r), r.differentPixels, r.milliseconds,
                             htmlEscape(r.message.empty() ? r.adapter : r.message), images);
     }
     const std::string html = std::format(R"(<!doctype html>
@@ -485,7 +565,7 @@ figcaption {{ font-size: 12px; color: #555; }}
 <p>Golden policy (03 §8.4): ꟻLIP mean &le; 0.01 plus a per-scene maximum; each scene is rendered twice (serial and
 parallel command recording) and must be bit-identical. Null runs compare command-stream traces.</p>
 <table><tr><th>Scene</th><th>Backend</th><th>Status</th><th>mean ꟻLIP</th><th>max ꟻLIP</th><th>twice identical</th>
-<th>pixels &ne; golden</th><th>ms</th><th>Adapter / message</th><th>Images</th></tr>
+<th>validated</th><th>pixels &ne; golden</th><th>ms</th><th>Adapter / message</th><th>Images</th></tr>
 {}</table></body></html>
 )",
                                          htmlEscape(summary), rows);

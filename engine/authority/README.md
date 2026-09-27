@@ -68,3 +68,6 @@ over the *dilated* interval `tick_dt / d` (see "TiDi control law"), where 04 §3
 `d` to the floor under constant overload. The Director makes the 04 §3.2 Plan-Change after PLAN-REV
 10, with `authority.tidi: constant overload converges on the sustainable dilation (no ratchet)` as its
 test. No other conformance delta is open; see §5.10.4 (c) there.
+
+Revision 10 (PR #14: ADR-004a §6–7 for `engine/ecs`, plus status rows) changes no anchor that
+maps here, so `Plan-Rev` stays 9 (checked 2026-09-27 against CONSISTENCY's revision-10 rows).

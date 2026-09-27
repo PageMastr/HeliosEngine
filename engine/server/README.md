@@ -339,3 +339,6 @@ Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09
 codegen; this module hosts no Luau VM yet) and 09 §5.2a, none of which this code implements. The one
 open §5.10.4 (a) row for this module, `fd`/`serverBuild` on registration and held regions in
 heartbeats, is closed by that PR. No conformance delta is open.
+
+Revision 10 (PR #14: ADR-004a §6–7 for `engine/ecs`, plus status rows) changes no anchor that
+maps here, so `Plan-Rev` stays 9 (checked 2026-09-27 against CONSISTENCY's revision-10 rows).

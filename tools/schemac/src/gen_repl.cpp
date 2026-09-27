@@ -5,6 +5,7 @@
 // them (04 §11.3's Phase 0: "descriptors, full state"; change masks and deltas are WP-1.10).
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <format>
 #include <optional>

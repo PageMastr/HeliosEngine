@@ -266,8 +266,7 @@ struct PhysicsGrid::Impl {
         JPH::BodyCreationSettings bcs(static_cast<const JPH::Shape*>(d.shape.native()), toJolt(d.position),
                                       toJolt(d.rotation).Normalized(), toJolt(d.motion), jolt::toJolt(d.layer));
         bcs.mUserData = d.key; // the stable key (02 §7.1): what the stable-order patch sorts by
-        bcs.mLinearVelocity = toJolt(d.linearVelocity);
-        bcs.mAngularVelocity = toJolt(d.angularVelocity);
+        // The velocities are applied after CreateBody, clamped to the body's caps (below).
         bcs.mFriction = d.friction;
         bcs.mRestitution = d.restitution;
         bcs.mLinearDamping = d.linearDamping;
@@ -285,6 +284,12 @@ struct PhysicsGrid::Impl {
         JPH::Body* body = bi.CreateBody(bcs);
         if (!body) {
             return makeError(ErrorCode::LimitExceeded, "grid '{}' is full ({} bodies)", desc.name, desc.maxBodies);
+        }
+        if (d.motion != MotionType::Static) {
+            // Jolt requires a new body's velocities to be within its caps: debug builds assert, release
+            // builds clamp at the first step. Clamp them now, as setVelocity() does through BodyInterface.
+            body->SetLinearVelocityClamped(toJolt(d.linearVelocity));
+            body->SetAngularVelocityClamped(toJolt(d.angularVelocity));
         }
         bi.AddBody(body->GetID(), d.motion == MotionType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
         const BodyHandle h = bodies.create(BodySlot{body->GetID(), d.layer, d.key});

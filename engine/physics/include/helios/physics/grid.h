@@ -82,7 +82,8 @@ struct BodyDesc {
     /// Mass in kg; 0 = from the shape's volume at 1000 kg/m^3.
     f32 mass = 0.0f;
     /// Speed cap in m/s. Jolt's own default (500 m/s) is below 06's NAV mode (1 km/s) and BENCH-2
-    /// (1.5 km/s), so Helios defaults to 10 km/s.
+    /// (1.5 km/s), so Helios defaults to 10 km/s. createBody() clamps linearVelocity to it, and
+    /// angularVelocity to Jolt's cap (0.25 * pi * 60 rad/s).
     f32 maxLinearVelocity = 10'000.0f;
     bool allowSleeping = true;
     /// Sensor: reports overlaps, never collides.

@@ -352,6 +352,35 @@ TEST_CASE("grid: bodies may exceed Jolt's default 500 m/s (06 NAV mode 1 km/s, B
     CHECK((*grid)->bodyState(capped).value().linearVelocity.x == doctest::Approx(100.0f));
 }
 
+TEST_CASE("grid: createBody clamps the initial velocities to the body's caps") {
+    // Jolt asserts that a new body starts within its caps (debug builds aborted here), and release
+    // builds only clamped at the first step, so bodyState() reported the uncapped speed until then.
+    PhysicsRuntime runtime;
+    GridDesc gd;
+    gd.gravity = Vec3{};
+    auto grid = PhysicsGrid::create(gd);
+    REQUIRE(grid.ok());
+    BodyDesc d = sphereAt(11, DVec3{}, createSphere(1.0f).value(), ObjectLayer::ShipHull);
+    d.linearVelocity = Vec3(0.0f, 0.0f, 300.0f);
+    d.maxLinearVelocity = 100.0f;
+    d.angularVelocity = Vec3(0.0f, 100.0f, 0.0f); // Jolt's angular cap is 0.25 * pi * 60 ~ 47.1 rad/s
+    d.linearDamping = 0.0f;
+    d.angularDamping = 0.0f;
+    const BodyHandle h = (*grid)->createBody(d).value();
+    const f32 joltAngularCap = 0.25f * kPi * 60.0f;
+    BodyState st = (*grid)->bodyState(h).value();
+    CHECK(st.linearVelocity.z == doctest::Approx(100.0f));
+    CHECK(st.angularVelocity.y == doctest::Approx(joltAngularCap));
+    REQUIRE((*grid)->step().ok());
+    st = (*grid)->bodyState(h).value();
+    CHECK(st.linearVelocity.z == doctest::Approx(100.0f));
+    CHECK(st.angularVelocity.y == doctest::Approx(joltAngularCap));
+    // Static bodies have no velocity to clamp and still accept any finite value.
+    BodyDesc ground = groundDesc();
+    ground.linearVelocity = Vec3(0.0f, 0.0f, 300.0f);
+    CHECK((*grid)->createBody(ground).ok());
+}
+
 TEST_CASE("grid: a step that outgrows the temp allocator falls back to the heap instead of aborting") {
     // Jolt's own TempAllocatorImpl JPH_CRASHes when a step needs more than it holds.
     PhysicsRuntime runtime;

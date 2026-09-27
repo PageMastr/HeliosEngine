@@ -54,10 +54,11 @@ device.present(swapchain, r.graphics());
 * `dumpText()` / `rgDumpPlan()` give deterministic plan dumps (used in trace goldens),
   `dumpGraphviz()` the pass/version DAG with queues, culled passes and waits (visualizer input).
 
-**Budget:** compile of a 200-pass graph ≤ 2 ms on REF (measured: ~0.2 ms, best of 10 batches, on the
-4-core dev container; `perf: render graph compile of 200 passes <= 2 ms (no topology cache)` in
-`render_tests_perf` asserts it in optimized builds); 03 §2.2's ≤ 0.3 ms for 200 passes is the
-Phase 2 topology cache's unchanged case.
+**Budget:** a full compile of 200 passes, which is the topology-change case, ≤ 0.3 ms CPU on REF at
+60 fps (03 §2.2 item 7, §8.1.5). `perf: render graph compile of 200 passes <= 0.3 ms (no topology
+cache)` in `render_tests_perf` asserts it in optimized builds without sanitizers and reports §8.1.5's
+120 fps column (≤ 0.2 ms) without gating it. The 4-core dev container, which is not REF, measures
+≈ 0.21–0.26 ms (best of 10 batches). The Phase 2 topology cache has its own budget: a hit ≤ 0.05 ms.
 
 ## Shader reflection (03 §1.7)
 
@@ -76,9 +77,17 @@ their pipelines with `createShippedPipeline()` (`shader_library.h`), which recor
 name with its module entry points and rejects SPIR-V that is not embedded (by address) and a name
 reused with other shaders. `helios-rendertest --coverage` (CTest `rendertest.coverage`) maps the
 pipelines bound in each golden scene's Null trace back to these entry points and fails when a shipped
-entry point or pipeline is bound by no scene with committed lavapipe and Null goldens: RC-1's
-"every shipped feature has a golden", checked mechanically. A pipeline created directly on the device
-leaves its entry points unreached, so it fails that check too.
+entry point or recorded pipeline is bound by no scene with committed lavapipe and Null goldens. The
+CTest `lint_shipped_pipelines` (label `lint`) keeps the record complete: under `engine/render`,
+`apps/samples` and `tools/rendertest`, only `src/shader_library.cpp` may call `create*Pipeline` on a
+device, and any other direct call needs a reasoned `// shipped-pipelines-lint: allow <reason>` waiver
+(today: rendertest's `createLocalPipeline()` and the raw-RHI sample). This is RC-1's "every shipped
+feature has a golden" for pipelines. What it cannot see, and the scorecard keeps as a gap: passes
+without a pipeline (uploads, copies, clears), whether a bound pipeline's output reaches the golden image,
+and shaders not embedded in `helios_render` (cooked SPIR-V from content, Phase 1). Future costs:
+`createShippedPipeline()` reflects its module on every call (cache per module before 03 §1.7's
+thousands of PSOs), and a hot-reloaded pipeline whose entry points change must re-register its name
+(Phase 2).
 
 ## Forward pipeline v0
 
@@ -104,7 +113,7 @@ trigonometry, making the uploaded bytes (and the Null trace goldens) identical o
 * `test_forward.cpp` — meshes, projection, camera-relative precision, Null trace golden.
 * `test_shader_library.cpp` — the embedded entry points, the forward renderer's pipeline record, and
   rejection of unnamed, foreign (including copied), unknown-entry and conflicting pipelines.
-* `test_graph_perf.cpp` — `perf:` compile budget of a 200-pass graph (runs in `render_tests_perf`).
+* `test_graph_perf.cpp` — `perf:` compile budget of a 200-pass graph, ≤ 0.3 ms (runs in `render_tests_perf`).
 * `test_reflection.cpp`, `test_shaderc.cpp` — reflection of Slang output, hostile SPIR-V / `.hsr`
   input (huge member indices, cyclic types, string amplification); the real `helios-shaderc` end
   to end (byte-identical to the build's slangc, spirv-val, depfiles, errors, paths with shell
@@ -112,9 +121,11 @@ trigonometry, making the uploaded bytes (and the Null trace goldens) identical o
 * `test_flip.cpp` — ꟻLIP stages against published CIELAB values, the analytic uniform case,
   properties, and agreement (~1e-6) with NVIDIA's reference implementation (flip-evaluator 1.7)
   on procedural images; PNG I/O.
-* CTest `shaderc.spirv-val` runs `spirv-val` over every SPIR-V module the build cooks (the output
-  directory of every `helios_shaders()` call: render, rhi, pcg, samples, rendertest). It is required
-  when configure finds spirv-tools (Linux CI installs it) and reports Skipped, not Passed, otherwise.
+* CTest `shaderc.spirv-val` runs `spirv-val` over exactly the SPIR-V modules the build cooks (every
+  module declared by a `helios_shaders()` call: render, rhi, pcg, samples, rendertest), fails when a
+  declared module is missing or the list is empty (`shaderc.spirv-val.fixture_*`), and ignores stale
+  `.spv` files. It is required when configure finds spirv-tools (Linux CI installs it) and reports
+  Skipped, not Passed, otherwise.
 
 Trace goldens live in `tests/golden/`; re-bless with `HELIOS_UPDATE_GOLDENS=1` (review the diff).
 Golden images and GPU runs are in `tools/rendertest`.

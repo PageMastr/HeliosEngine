@@ -4,11 +4,21 @@
 //
 // Every Slang file in engine/render/shaders/ is embedded in helios_render as one SPIR-V module.
 // Features create their pipelines through createShippedPipeline(), which records each pipeline's
-// name with the entry points it uses. `helios-rendertest --coverage` combines the two lists to check
-// RC-1's "every shipped feature has a lavapipe golden" mechanically: every shipped entry point and
-// every recorded pipeline must be bound in the captured frame of a scene that has a committed
-// lavapipe golden and a Null trace golden. A pipeline created without createShippedPipeline() leaves
-// its entry points unreached, so it fails that check instead of passing unnoticed.
+// name with the entry points it uses. `helios-rendertest --coverage` combines the two lists: every
+// shipped entry point and every recorded pipeline must be bound (a bindPipeline in the Null trace)
+// in the captured frame of a scene that has a committed lavapipe golden and a Null trace golden.
+// The CTest lint_shipped_pipelines keeps the record complete: under engine/render, apps/samples and
+// tools/rendertest, only this module's implementation may call Device::create*Pipeline directly
+// (rendertest's own shaders go through its createLocalPipeline(); any other direct call needs a
+// reasoned waiver). What the check cannot see:
+//   * passes without a pipeline (uploads, copies, clears);
+//   * whether a bound pipeline's output reaches the golden image (a pipeline bound only into a
+//     marked debug output counts as covered);
+//   * shaders that are not embedded in helios_render, such as cooked SPIR-V from content (03 §1.7's
+//     shipped SPIR-V + .psol, Phase 1).
+// Future cost: each call reflects its module (fine for today's handful of PSOs; cache per module
+// before 03 §1.7's thousands), and the name -> entry-points rule rejects a hot-reloaded pipeline
+// whose entry points change (Phase 2 hot reload must re-register the name).
 //
 // Threading: every function is thread-safe (the pipeline record is guarded by a mutex).
 

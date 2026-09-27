@@ -77,6 +77,8 @@ rhi::TimelinePoint done = device->submit(rhi::Queue::Graphics, {&cmd, 1}).value(
 * Object names and labels through `VK_EXT_debug_utils` (RenderDoc, Nsight, RGP); `ScopedLabel`.
 * Khronos validation with `DeviceDesc::validation` or `HELIOS_RHI_VALIDATION=1` when the layer is
   installed; messages go to the log and `DeviceDesc::onMessage`, errors to `validationErrorCount()`.
+  `Caps::validationLayer` names the enabled layer and its versions (empty without one), so tests can
+  log what checked them (WP-0.12's `helios-rendertest --validation-self-test`).
   RHI misuse that would be undefined behavior in the driver is reported the same way and the
   command dropped: stale handles, recording into a closed list, draws without a pipeline or index
   buffer, rendering-scope and queue violations, and out-of-range copies/fills/updates/indirect
@@ -170,6 +172,11 @@ Machines without Vulkan can skip the gpu suites with `HELIOS_SKIP_GPU_TESTS=1`.
 * Swapchain surfaces come from SDL3 (`SwapchainDesc::sdlWindow`); `HDR10`/colorspace selection is
   Phase 4. Device loss is reported, not recovered (Phase 4 per 03 §1.5).
 * The Null backend does not execute shaders or clears; texture contents only change through copies.
+* `shaderDemoteToHelperInvocation` (Vulkan 1.3) is not enabled; only `dynamicRendering`,
+  `synchronization2` and `maintenance4` are. Slang lowers `discard` to `OpDemoteToHelperInvocation`, so
+  a fragment shader with `discard` fails Khronos validation (VUID-VkShaderModuleCreateInfo-pCode-08740).
+  No shader in the tree uses it today. Follow-up for WP-0.11: enable the feature (it is core in 1.3) or
+  reject such modules at pipeline creation. Found by WP-0.12's validated goldens (PR #18).
 
 ## Plan conformance
 

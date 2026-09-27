@@ -57,10 +57,13 @@ posix_spawn; `src/tool_process.cpp`) with its output captured: no shell is invol
 spaces, quotes, `%`, `$`, `&` or `;` reach it verbatim (tested).
 
 Tests: `render_tests` (`engine/render/tests/test_shaderc.cpp`) drive the built executable. CTest
-`shaderc.spirv-val` (`tests/validate_spirv.cmake`) runs `--reflect-spirv --validate` over every SPIR-V
-module the build cooks, the output directory of every `helios_shaders()` call (03 §1.7: "`spirv-val`
-runs over every cooked shader in Linux CI"). Where configure finds spirv-tools (the Linux CI images
-install `spirv-tools`) it is required and uses that validator; elsewhere the test reports Skipped.
+`shaderc.spirv-val` (`tests/validate_spirv.cmake`) runs `--reflect-spirv --validate` over exactly the
+SPIR-V modules the build cooks: the list every `helios_shaders()` call declares
+(`<build>/helios_generated/shader_modules.txt`; 03 §1.7: "`spirv-val` runs over every cooked shader in
+Linux CI"). A declared module that is missing, or an empty list, fails (`shaderc.spirv-val.fixture_*`);
+a stale `.spv` left in an output directory is not counted; the output gives a count per directory.
+Where configure finds spirv-tools (the Linux CI images install `spirv-tools` and log its version) it
+is required and uses that validator; elsewhere the test reports Skipped.
 
 ## Plan conformance
 

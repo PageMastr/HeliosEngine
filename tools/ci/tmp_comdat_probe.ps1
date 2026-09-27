@@ -20,6 +20,10 @@ foreach ($d in Get-ChildItem -Path $BuildDir -Recurse -Directory -Filter '*_test
     }
     $dups = @($map.GetEnumerator() | Where-Object { $_.Value.Count -gt 1 } | Sort-Object Key)
     Write-Host "== $($d.Name): $($map.Count) external DOCTEST_ANON symbols, $($dups.Count) defined by more than one object"
+    foreach ($e in @($map.GetEnumerator() | Sort-Object Key)) {
+        $pretty = ((& undname $e.Key) | Select-String -Pattern 'is :- ' | Select-Object -First 1) -replace '^.*is :- ', ''
+        Write-Host "  all: [$($e.Value -join ' + ')] $pretty"
+    }
     foreach ($e in $dups) {
         $pretty = ((& undname $e.Key) | Select-String -Pattern 'is :- ' | Select-Object -First 1) -replace '^.*is :- ', ''
         Write-Host "  [$($e.Value -join ' + ')] $pretty"

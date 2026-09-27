@@ -1,6 +1,6 @@
 // helios-rendertest scenes (see scenes.h). RC-1 requires triangle, compute and bindless; forward,
-// postchain and mips cover the forward pipeline, transient aliasing across queues and
-// per-subresource (mip) barriers on real GPUs.
+// normals, postchain and mips cover the forward pipeline and its debug view, transient aliasing
+// across queues and per-subresource (mip) barriers on real GPUs.
 
 #include "scenes.h"
 
@@ -259,11 +259,26 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------
+/// `normals` (scene "normals"): the same frame with the DebugNormals view drawn over its right half.
 class ForwardTestScene final : public Scene {
 public:
+    explicit ForwardTestScene(bool normals)
+        : m_normals(normals),
+          m_info(normals ? SceneInfo{"normals",
+                                     "Forward pipeline v0 with its DebugNormals view in the right half (the view "
+                                     "is read, so not culled)",
+                                     320, 180, 0.01, 0.5f, 0}
+                         : SceneInfo{"forward",
+                                     "Forward pipeline v0 at 10^7 m: clear, geometry with reverse-Z depth, async "
+                                     "exposure, tonemap",
+                                     320, 180, 0.01, 0.5f, 0}) {}
     const SceneInfo& info() const noexcept override { return m_info; }
     Result<void> init(rhi::Device& device, rhi::Format format) override {
         HELIOS_TRY_ASSIGN(m_renderer, ForwardRenderer::create(device, format));
+        if (m_normals) {
+            HELIOS_TRY_ASSIGN(m_rightHalf,
+                              device.createGraphicsPipeline(fullscreenPipeline("psBlit", format, "RightHalf")));
+        }
         HELIOS_TRY_ASSIGN(GpuMesh cube, uploadMesh(device, makeCube(0.5f), "Cube"));
         m_scene.meshes.push_back(cube);
         HELIOS_TRY_ASSIGN(GpuMesh sphere, uploadMesh(device, makeUvSphere(0.5f, 32, 16), "Sphere"));
@@ -291,20 +306,50 @@ public:
         place(1, {1.0, 0.3, 1.8}, {0.3f, 0.85f, 0.4f, 1.0f}, 0.0f, 0.6f);
         return {};
     }
-    void addPasses(RenderGraph& graph, RgTexture output, u32) override { m_renderer->addPasses(graph, m_scene, output); }
+    void addPasses(RenderGraph& graph, RgTexture output, u32) override {
+        if (!m_normals) {
+            m_renderer->addPasses(graph, m_scene, output);
+            return;
+        }
+        RgTexture normals;
+        const RgTexture frame =
+            m_renderer->addPasses(graph, m_scene, output, {.debugView = true, .debugNormals = &normals});
+        struct Data {
+            RgTexture normals;
+        };
+        const rhi::PipelineH pso = m_rightHalf;
+        graph.addPass<Data>(
+            "RightHalf", PassFlags::Raster,
+            [&](RgBuilder& b, Data& data) {
+                data.normals = b.read(normals);
+                b.colorAttachment(frame, 0, rhi::LoadOp::Load);
+            },
+            [pso](const Data& data, RgContext& ctx) {
+                // A scissor, not `discard`: Slang lowers discard to OpDemoteToHelperInvocation, a
+                // Vulkan 1.3 feature the RHI does not enable.
+                rhi::Rect right = ctx.renderArea();
+                right.x = static_cast<i32>(right.width / 2);
+                right.width -= right.width / 2;
+                ctx.cmd().setScissor(right);
+                ctx.cmd().bindPipeline(pso);
+                ctx.cmd().pushConstants(BlitPush{ctx.srv(data.normals), 0, 0, 0});
+                ctx.cmd().draw(3);
+            });
+    }
     void destroy(rhi::Device& device) override {
         for (GpuMesh& m : m_scene.meshes) destroyMesh(device, m);
         m_scene.meshes.clear();
         m_scene.instances.clear();
         m_renderer.reset();
+        if (m_normals) device.destroy(m_rightHalf);
     }
 
 private:
-    SceneInfo m_info{"forward",
-                     "Forward pipeline v0 at 10^7 m: clear, geometry with reverse-Z depth, async exposure, tonemap",
-                     320, 180, 0.01, 0.5f, 0};
+    bool m_normals;
+    SceneInfo m_info;
     std::unique_ptr<ForwardRenderer> m_renderer;
     ForwardScene m_scene;
+    rhi::PipelineH m_rightHalf;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -451,7 +496,8 @@ std::vector<std::unique_ptr<Scene>> createScenes() {
     scenes.push_back(std::make_unique<TriangleScene>());
     scenes.push_back(std::make_unique<ComputeScene>());
     scenes.push_back(std::make_unique<BindlessScene>());
-    scenes.push_back(std::make_unique<ForwardTestScene>());
+    scenes.push_back(std::make_unique<ForwardTestScene>(false));
+    scenes.push_back(std::make_unique<ForwardTestScene>(true));
     scenes.push_back(std::make_unique<PostChainScene>());
     scenes.push_back(std::make_unique<MipsScene>());
     return scenes;

@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -61,6 +62,24 @@ SceneResult runScene(Scene& scene, rhi::Device& device, const RunOptions& option
 
 Result<void> writeResult(const SceneResult& result, const std::filesystem::path& file);
 Result<SceneResult> readResult(const std::filesystem::path& file);
+/// RC-1 coverage (helios/render/shader_library.h): the golden scenes that bind each shipped shader
+/// entry point and each shipped pipeline in their captured frame.
+struct CoverageItem {
+    std::string name;                 ///< "forward:vsMain (vertex)" or a pipeline name.
+    std::vector<std::string> scenes;  ///< Covering scenes, sorted; empty = not covered.
+};
+struct CoverageReport {
+    std::vector<CoverageItem> entryPoints;
+    std::vector<CoverageItem> pipelines;
+    std::vector<std::string> problems;  ///< Uncovered items and scenes without committed goldens.
+    bool ok() const noexcept { return problems.empty(); }
+};
+
+/// Renders each scene once on a fresh Null device (no GPU) and maps the pipelines bound in its
+/// captured frame to shipped entry points. A scene counts only when both of its goldens are
+/// committed: `<goldenDir>/vulkan-llvmpipe/<scene>.png` and `<goldenDir>/null/<scene>.txt`.
+Result<CoverageReport> measureCoverage(std::span<Scene* const> scenes, const std::filesystem::path& goldenDir);
+
 /// Collects every `<out>/*/*.json` result.
 std::vector<SceneResult> collectResults(const std::filesystem::path& outDir);
 /// Writes `<out>/report.html` and `<out>/report.md`. Returns false when a result failed or the

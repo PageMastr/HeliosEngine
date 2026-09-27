@@ -6,6 +6,8 @@
 #include <cctype>
 #include <cstdlib>
 #include <format>
+#include <map>
+#include <set>
 
 #include "helios/core/fs.h"
 #include "helios/core/jobs.h"
@@ -13,6 +15,7 @@
 #include "helios/render/flip.h"
 #include "helios/render/image.h"
 #include "helios/render/render_graph.h"
+#include "helios/render/shader_library.h"
 #include "helios/rhi/null_device.h"
 #include "helios/rhi/utils.h"
 
@@ -283,6 +286,73 @@ SceneResult runScene(Scene& scene, rhi::Device& device, const RunOptions& option
     r.milliseconds = timer.elapsedMillis();
     (void)writeResult(r, outDir / (r.scene + ".json"));
     return r;
+}
+
+namespace {
+
+/// Names of the pipelines a Null trace binds (`bindPipeline "Forward.Geometry"`).
+std::set<std::string, std::less<>> boundPipelines(std::string_view trace) {
+    constexpr std::string_view kBind = "bindPipeline \"";
+    std::set<std::string, std::less<>> names;
+    for (usize at = trace.find(kBind); at != std::string_view::npos; at = trace.find(kBind, at)) {
+        at += kBind.size();
+        const usize end = trace.find('"', at);
+        if (end == std::string_view::npos) break;
+        names.emplace(trace.substr(at, end - at));
+        at = end;
+    }
+    return names;
+}
+
+} // namespace
+
+Result<CoverageReport> measureCoverage(std::span<Scene* const> scenes, const std::filesystem::path& goldenDir) {
+    CoverageReport report;
+    std::map<std::string, std::set<std::string>, std::less<>> byPipeline;  // bound pipeline -> scenes
+    for (Scene* scene : scenes) {
+        const std::string name(scene->info().name);
+        HELIOS_TRY_ASSIGN(std::unique_ptr<rhi::Device> device, createTestDevice(Backend::Null, false));
+        if (auto init = scene->init(*device, kOutputFormat); !init) {
+            return Error{init.error().code, std::format("scene '{}': init: {}", name, init.error().toString())};
+        }
+        Result<Capture> capture = renderOnce(*scene, *device, nullptr);
+        scene->destroy(*device);
+        (void)device->waitIdle();
+        if (!capture) {
+            return Error{capture.error().code, std::format("scene '{}': {}", name, capture.error().toString())};
+        }
+        if (!fs::exists(goldenDir / "vulkan-llvmpipe" / (name + ".png")) ||
+            !fs::exists(goldenDir / "null" / (name + ".txt"))) {
+            report.problems.push_back(std::format("scene '{}' has no committed lavapipe and Null goldens", name));
+            continue;
+        }
+        for (const std::string& pipeline : boundPipelines(capture->trace)) byPipeline[pipeline].insert(name);
+    }
+    // Pipelines are recorded when scenes create them (init above), so this sees every feature a scene uses.
+    std::map<std::string, std::set<std::string>, std::less<>> byEntryPoint;  // "module:entry" -> scenes
+    for (const render::ShippedPipeline& pipeline : render::shippedPipelines()) {
+        const auto bound = byPipeline.find(pipeline.name);
+        const std::set<std::string> covering = bound == byPipeline.end() ? std::set<std::string>{} : bound->second;
+        report.pipelines.push_back({pipeline.name, {covering.begin(), covering.end()}});
+        if (covering.empty()) {
+            report.problems.push_back(std::format("pipeline '{}' is bound by no golden scene", pipeline.name));
+        }
+        for (const render::ShippedEntryPoint& e : pipeline.entryPoints) {
+            byEntryPoint[e.module + ":" + e.entryPoint].insert(covering.begin(), covering.end());
+        }
+    }
+    HELIOS_TRY_ASSIGN(std::vector<render::ShippedEntryPoint> shipped, render::shippedEntryPoints());
+    for (const render::ShippedEntryPoint& e : shipped) {
+        const std::string key = e.module + ":" + e.entryPoint;
+        const auto it = byEntryPoint.find(key);
+        CoverageItem item{std::format("{} ({})", key, render::shaderStageName(e.stage)), {}};
+        if (it != byEntryPoint.end()) item.scenes.assign(it->second.begin(), it->second.end());
+        if (item.scenes.empty()) {
+            report.problems.push_back(std::format("shipped entry point {} is bound by no golden scene", item.name));
+        }
+        report.entryPoints.push_back(std::move(item));
+    }
+    return report;
 }
 
 Result<void> writeResult(const SceneResult& r, const std::filesystem::path& file) {

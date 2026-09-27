@@ -2,7 +2,9 @@
 #   * a Vulkan run skipped with HELIOS_SKIP_GPU_TESTS=1 records "skip" results, so stale passing
 #     results of an earlier run in the same --out directory cannot stand in for it in the report;
 #   * results of scenes that no longer exist are left out of the report;
-#   * --budget rejects values that are not a positive number of seconds.
+#   * --budget rejects values that are not a positive number of seconds;
+#   * --coverage fails, naming what is uncovered, when the counted scenes do not bind every shipped
+#     entry point or when a scene's goldens are missing.
 # Inputs: -DRENDERTEST=<exe> -DOUT=<scratch dir>
 
 if(NOT RENDERTEST OR NOT OUT)
@@ -41,4 +43,24 @@ foreach(bad abc 0 -5 12x)
     message(FATAL_ERROR "--budget ${bad}: expected a usage error, got ${rc}:\n${out}\n${err}")
   endif()
 endforeach()
+# The triangle scene creates none of engine/render's pipelines: every shipped entry point is uncovered.
+execute_process(COMMAND "${RENDERTEST}" --coverage --scene triangle
+                RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+if(NOT rc EQUAL 1 OR NOT err MATCHES "shipped entry point tonemap:psTonemap \\(fragment\\) is bound by no golden scene")
+  message(FATAL_ERROR "--coverage --scene triangle: expected uncovered entry points, got ${rc}:\n${out}\n${err}")
+endif()
+# The forward scene creates the DebugNormals pipeline but never binds it (forward:psNormals uncovered).
+execute_process(COMMAND "${RENDERTEST}" --coverage --scene forward
+                RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+if(NOT rc EQUAL 1 OR NOT err MATCHES "pipeline 'Forward.DebugNormals' is bound by no golden scene"
+   OR NOT err MATCHES "forward:psNormals" OR err MATCHES "tonemap:psTonemap")
+  message(FATAL_ERROR "--coverage --scene forward: expected only the debug view uncovered, got ${rc}:\n${out}\n${err}")
+endif()
+# Scenes count only with committed goldens.
+file(MAKE_DIRECTORY "${OUT}/no-goldens")
+execute_process(COMMAND "${RENDERTEST}" --coverage --golden-dir "${OUT}/no-goldens"
+                RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+if(NOT rc EQUAL 1 OR NOT err MATCHES "scene 'forward' has no committed lavapipe and Null goldens")
+  message(FATAL_ERROR "--coverage without goldens: expected a failure, got ${rc}:\n${out}\n${err}")
+endif()
 message(STATUS "helios-rendertest CLI checks passed")

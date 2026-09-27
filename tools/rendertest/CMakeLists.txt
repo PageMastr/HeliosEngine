@@ -2,7 +2,7 @@
 # offscreen through the render graph on Vulkan (lavapipe in CI) and the Null backend, each twice
 # (bit-identical), compared with goldens using ꟻLIP (Vulkan) or command-stream traces (Null), with an
 # HTML/Markdown report. Registered as CTests: rendertest.vulkan.<scene> (label gpu),
-# rendertest.null.<scene> (every toolchain), rendertest.report (gpu).
+# rendertest.null.<scene> (every toolchain), rendertest.coverage (every toolchain), rendertest.report (gpu).
 
 if(TARGET helios-rendertest)
   return()  # already added (engine/render adds the tool until tools/CMakeLists.txt lists it)
@@ -19,21 +19,27 @@ helios_shaders(helios-rendertest NAMESPACE rendertest_shaders FILES ${HELIOS_REN
 
 if(HELIOS_BUILD_TESTS)
   # Keep in sync with createScenes() (checked by rendertest.scenes).
-  set(HELIOS_RENDERTEST_SCENES triangle compute bindless forward postchain mips)
+  set(HELIOS_RENDERTEST_SCENES triangle compute bindless forward normals postchain mips)
   set(out ${CMAKE_CURRENT_BINARY_DIR}/rendertest-output)
   string(REPLACE ";" "," scene_list "${HELIOS_RENDERTEST_SCENES}")
   add_test(NAME rendertest.scenes COMMAND helios-rendertest --list --expect-scenes ${scene_list})
   set(vulkan_tests "")
   foreach(scene ${HELIOS_RENDERTEST_SCENES})
+    # Khronos validation wherever the layer is installed (the Linux CI images): an error fails the scene.
     add_test(NAME rendertest.vulkan.${scene}
-             COMMAND helios-rendertest --backend vulkan --scene ${scene} --out ${out})
+             COMMAND helios-rendertest --backend vulkan --validation --scene ${scene} --out ${out})
     set_tests_properties(rendertest.vulkan.${scene} PROPERTIES LABELS "gpu;rendertest" TIMEOUT 300)
     add_test(NAME rendertest.null.${scene}
              COMMAND helios-rendertest --backend null --scene ${scene} --out ${out})
     set_tests_properties(rendertest.null.${scene} PROPERTIES LABELS "rendertest" TIMEOUT 120)
     list(APPEND vulkan_tests rendertest.vulkan.${scene} rendertest.null.${scene})
   endforeach()
-  # GPU-less CLI checks: skips overwrite stale results, removed scenes leave the report, --budget parsing.
+  # RC-1 coverage, GPU-less: every shipped shader entry point and pipeline of engine/render is bound by
+  # a scene whose lavapipe and Null goldens are committed (helios/render/shader_library.h).
+  add_test(NAME rendertest.coverage COMMAND helios-rendertest --coverage)
+  set_tests_properties(rendertest.coverage PROPERTIES LABELS "rendertest" TIMEOUT 120)
+  # GPU-less CLI checks: skips overwrite stale results, removed scenes leave the report, --budget parsing,
+  # and the coverage check fails when scenes or goldens are missing.
   add_test(NAME rendertest.cli
            COMMAND ${CMAKE_COMMAND} -DRENDERTEST=$<TARGET_FILE:helios-rendertest>
                    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/rendertest-cli-output

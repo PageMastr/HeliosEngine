@@ -39,6 +39,9 @@ options:
   --budget <seconds>     suite time budget checked by the report (default 600, RC-1)
   --validation           enable Khronos validation when installed (errors fail the scene)
   --expect-scenes <list> comma-separated scene names; fail if the built-in list differs
+  --coverage             check that every shipped shader entry point and pipeline of engine/render is
+                         bound by a scene with committed lavapipe and Null goldens (RC-1; Null
+                         backend, no GPU; --scene limits the scenes that count)
   -h, --help             this text
 
 environment: HELIOS_SKIP_GPU_TESTS=1 skips (passes) Vulkan scenes when no Vulkan device can be created;
@@ -74,6 +77,7 @@ int runCli(const std::vector<std::string>& args, std::string& out, std::string& 
     bool reportOnly = false;
     bool list = false;
     bool validation = false;
+    bool coverage = false;
     f64 budget = 600.0;
     std::optional<std::vector<std::string>> expected;
     for (usize i = 0; i < args.size(); ++i) {
@@ -125,6 +129,8 @@ int runCli(const std::vector<std::string>& args, std::string& out, std::string& 
             list = true;
         } else if (a == "--validation") {
             validation = true;
+        } else if (a == "--coverage") {
+            coverage = true;
         } else if (a == "-h" || a == "--help") {
             out += kUsage;
             return 0;
@@ -158,6 +164,30 @@ int runCli(const std::vector<std::string>& args, std::string& out, std::string& 
             err += "helios-rendertest: unknown scene '" + name + "' (see --list)\n";
             return 2;
         }
+    }
+    if (coverage) {
+        std::vector<Scene*> counted;
+        for (const auto& s : scenes) {
+            if (only.empty() || only.count(std::string(s->info().name))) counted.push_back(s.get());
+        }
+        auto report = measureCoverage(counted, goldenDir);
+        if (!report) {
+            err += "helios-rendertest: coverage: " + report.error().toString() + "\n";
+            return 1;
+        }
+        out += std::format("RC-1 coverage: {} shipped entry point(s), {} shipped pipeline(s), {} scene(s)\n",
+                           report->entryPoints.size(), report->pipelines.size(), counted.size());
+        auto print = [&](std::string_view kind, const std::vector<CoverageItem>& items) {
+            for (const CoverageItem& item : items) {
+                std::string scenesText;
+                for (const std::string& scene : item.scenes) scenesText += (scenesText.empty() ? "" : ", ") + scene;
+                out += std::format("  {} {}: {}\n", kind, item.name, scenesText.empty() ? "NOT COVERED" : scenesText);
+            }
+        };
+        print("entry point", report->entryPoints);
+        print("pipeline", report->pipelines);
+        for (const std::string& problem : report->problems) err += "helios-rendertest: coverage: " + problem + "\n";
+        return report->ok() ? 0 : 1;
     }
     if (auto made = fs::createDirectories(outDir); !made) {
         err += "helios-rendertest: " + made.error().toString() + "\n";

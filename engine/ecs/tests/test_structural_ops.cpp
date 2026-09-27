@@ -120,29 +120,69 @@ private:
     // tables they were built in. So in Debug and sanitizer builds every later flecs id was 14 higher,
     // and the table count 13 higher, than in the NDEBUG builds the goldens were recorded in (the
     // WP-1.1a state, log, EntityIds and values were identical). The digest hashes flecs ids as they
-    // are numbered without those entities, and the table count without those tables. There are none
-    // in NDEBUG builds, so both are the identity there.
+    // are numbered without those entities, and the table count without those tables. The discounting
+    // is compiled only where flecs creates them (FLECS_DEBUG, from the same NDEBUG as flecs.c), so
+    // NDEBUG builds hash exactly what they did before, and it matches flecs' creation site
+    // (flecs_register_singleton), so an entity anyone else names that way still counts.
     void collectDebugOnlyEntities() {
         m_debugOnly.clear();
-        m_debugOnlyParents.clear();
+        m_debugOnlyObservers.clear();
+#if defined(FLECS_DEBUG)
         ecs_world_t* fw = m_world.flecsWorld();
         const ecs_entities_t all = ecs_get_entities(fw);
         for (i32 i = 0; i < all.alive_count; ++i) {
-            const char* name = ecs_get_name(fw, all.ids[i]);
-            if (name && std::string_view(name).starts_with("debug_only_")) {
-                m_debugOnly.push_back(static_cast<u32>(all.ids[i]));
-                m_debugOnlyParents.push_back(ecs_get_parent(fw, all.ids[i]));
-            }
+            const ecs_entity_t e = all.ids[i];
+            if (!isFlecsDebugOnlyObserver(fw, e)) continue;
+            m_debugOnly.push_back(static_cast<u32>(e));
+            m_debugOnlyObservers.push_back({e, ecs_get_parent(fw, e)});
         }
         std::sort(m_debugOnly.begin(), m_debugOnly.end());
+#endif
+    }
+
+    /// One of the two invariant observers flecs_register_singleton creates in FLECS_DEBUG builds, as
+    /// a child of every entity that gets the Singleton trait (here flecs' own modules): that exact
+    /// name, an observer, and a Singleton parent.
+    static bool isFlecsDebugOnlyObserver(ecs_world_t* fw, ecs_entity_t e) {
+        const char* name = ecs_get_name(fw, e);
+        if (!name) return false;
+        const std::string_view n(name);
+        if (n != "debug_only_SingletonInvariantCheck" && n != "debug_only_SingletonPairInvariantCheck") {
+            return false;
+        }
+        if (!ecs_has_pair(fw, e, ecs_id(EcsPoly), EcsObserver)) return false;
+        const ecs_entity_t parent = ecs_get_parent(fw, e);
+        return parent != 0 && ecs_has_id(fw, parent, EcsSingleton);
     }
 
     bool isDebugOnly(ecs_entity_t e) const {
         return std::binary_search(m_debugOnly.begin(), m_debugOnly.end(), static_cast<u32>(e));
     }
 
-    /// Tables that exist only for the debug-only observers: observer tables under one of their
-    /// parents that hold nothing else (or nothing: the archetypes flecs passed them through).
+    /// Whether `it`'s table exists only for the debug-only observers: it holds only them, or it is
+    /// empty and its type is part of one of theirs, parent included (an archetype flecs passed that
+    /// observer through while building it).
+    bool isDebugOnlyTable(ecs_world_t* fw, const ecs_iter_t& it) const {
+        if (it.count > 0) {
+            for (i32 i = 0; i < it.count; ++i) {
+                if (!isDebugOnly(it.entities[i])) return false;
+            }
+            return true;
+        }
+        const ecs_type_t* type = ecs_table_get_type(it.table);
+        for (const DebugOnlyObserver& o : m_debugOnlyObservers) {
+            if (!ecs_table_has_id(fw, it.table, ecs_childof(o.parent))) continue;
+            const ecs_table_t* observerTable = ecs_get_table(fw, o.entity);
+            bool partOf = true;
+            for (i32 k = 0; k < type->count && partOf; ++k) {
+                partOf = ecs_table_has_id(fw, observerTable, type->array[k]);
+            }
+            if (partOf) return true;
+        }
+        return false;
+    }
+
+    /// Tables that exist only for the debug-only observers (0 when there are none).
     u32 debugOnlyTables() const {
         if (m_debugOnly.empty()) return 0;
         ecs_world_t* fw = m_world.flecsWorld();
@@ -159,13 +199,7 @@ private:
         ecs_iter_t it = ecs_query_iter(fw, q);
         while (ecs_query_next(&it)) {
             if (!ecs_table_has_id(fw, it.table, ecs_pair(ecs_id(EcsPoly), EcsObserver))) continue;
-            bool underDebugParent = false;
-            for (const ecs_entity_t parent : m_debugOnlyParents) {
-                underDebugParent = underDebugParent || ecs_table_has_id(fw, it.table, ecs_childof(parent));
-            }
-            bool onlyDebugOnly = true;
-            for (i32 i = 0; i < it.count; ++i) onlyDebugOnly = onlyDebugOnly && isDebugOnly(it.entities[i]);
-            if (underDebugParent && onlyDebugOnly) ++count;
+            if (isDebugOnlyTable(fw, it)) ++count;
         }
         ecs_query_fini(q);
         return count;
@@ -190,10 +224,15 @@ private:
         return (id & ~u64{0xFFFFFFFF}) | flecsIndex(static_cast<u32>(id));
     }
 
+    struct DebugOnlyObserver {
+        ecs_entity_t entity = 0;
+        ecs_entity_t parent = 0;
+    };
+
     World& m_world;
     Hasher64 m_h;
-    std::vector<u32> m_debugOnly;                 ///< sorted indices of flecs' debug-only entities
-    std::vector<ecs_entity_t> m_debugOnlyParents; ///< their parents
+    std::vector<u32> m_debugOnly;                       ///< sorted indices of flecs' debug-only entities
+    std::vector<DebugOnlyObserver> m_debugOnlyObservers; ///< the same entities, with their parents
 };
 
 struct Variant {
@@ -204,7 +243,9 @@ struct Variant {
 
 /// A scripted workload over every structural command kind the optimizations touch. Returns the
 /// digest after each step, and the final one.
-u64 runWorkload(const RelationConfig& relations) {
+/// `strayName`: an extra flecs entity with that name, created right after the World and before the
+/// workload's components and entities (Digest must see it: it shifts every later flecs id).
+u64 runWorkload(const RelationConfig& relations, const char* strayName = nullptr) {
     u64 fakeMs = 1'000'000;
     WorldDesc desc;
     desc.shard = 5;
@@ -212,6 +253,11 @@ u64 runWorkload(const RelationConfig& relations) {
     desc.handles.reservedCount = 64;
     desc.relations = relations;
     World w(desc);
+    if (strayName) {
+        ecs_entity_desc_t stray = {};
+        stray.name = strayName;
+        REQUIRE(ecs_entity_init(w.flecsWorld(), &stray) != 0);
+    }
     registerCommon(w);
     w.registerComponent<Status>(ComponentFlags::DontFragment);
     w.registerComponent<Mark>(ComponentFlags::Sparse);
@@ -389,6 +435,8 @@ u64 runWorkload(const RelationConfig& relations) {
     return d.value();
 }
 
+constexpr u64 kGoldenDefaults = 0x1f7d7fd7395e78f4ull; ///< runWorkload(RelationConfig{})
+
 TEST_CASE("ecs structural ops: the WP-1.1a paths leave the pre-WP-1.1a state, log and dirty bits") {
     // Digests of runWorkload() recorded with the World before WP-1.1a (commit f08cf5b, GCC 13 and
     // Clang 18 alike); they must not change on any toolchain, in optimized, Debug and sanitizer
@@ -401,7 +449,7 @@ TEST_CASE("ecs structural ops: the WP-1.1a paths leave the pre-WP-1.1a state, lo
     fragmenting.docking = DockStorage::PairDontFragment;
     RelationConfig inFrameDf;
     inFrameDf.inFrameDontFragment = true;
-    const Variant variants[] = {{"defaults", defaults, 0x1f7d7fd7395e78f4ull},
+    const Variant variants[] = {{"defaults", defaults, kGoldenDefaults},
                                 {"docking pairs", pairs, 0xbcb2a747c872444full},
                                 {"ChildOf + DontFragment docking", fragmenting, 0x2b7768115671757aull},
                                 {"InFrame DontFragment", inFrameDf, 0xdec015dc027efe97ull}};
@@ -411,6 +459,19 @@ TEST_CASE("ecs structural ops: the WP-1.1a paths leave the pre-WP-1.1a state, lo
         CAPTURE(std::format("{:#018x}", digest));
         CHECK(digest == v.golden);
         CHECK(digest == runWorkload(v.relations)); // deterministic
+    }
+}
+
+TEST_CASE("ecs structural ops: the parity digest discounts only flecs' own debug-only observers") {
+    // One stray entity shifts every later flecs id, so the digest must change however it is named.
+    // Digest discounts nothing in NDEBUG builds, and in FLECS_DEBUG builds only the observers flecs
+    // itself creates (exact names, observers under a Singleton entity), not look-alikes.
+    RelationConfig defaults;
+    REQUIRE(runWorkload(defaults) == kGoldenDefaults);
+    for (const char* name : {"debug_only_stray", "debug_only_SingletonInvariantCheck",
+                             "debug_only_SingletonPairInvariantCheck", "stray"}) {
+        CAPTURE(std::string(name));
+        CHECK(runWorkload(defaults, name) != kGoldenDefaults);
     }
 }
 

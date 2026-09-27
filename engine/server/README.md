@@ -348,5 +348,6 @@ dilated tick interval) maps here through D2's fallback: 04 §3.2 has no map entr
 column cites 04 §3. This module feeds the controller (`ZoneInstance` calls
 `ZoneClock::onTickMeasured`) and relays its dilation changes to sessions, but the load formula is
 `engine/authority`'s `TiDiController`, which already matched the new text. Re-checked on 2026-09-27
-with no delta, so `Plan-Rev` rises to 11. D7 keeps an earlier revision only while a delta is open,
-and none is: WP-0.14's PR closed this module's last one, the §5.10.4 (a) row named above.
+with no delta. D7 keeps the earlier revision while a delta is open; none is (WP-0.14's PR closed
+this module's last one, the §5.10.4 (a) row named above), so the re-check records 11, as
+`engine/authority`'s README does.

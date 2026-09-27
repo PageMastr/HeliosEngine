@@ -51,5 +51,5 @@ dilated tick interval) maps here through D2's fallback: 04 §3.2 has no map entr
 column cites 04 §3. This executable runs `engine/server`'s gateway, which only copies the dilation a
 cell reports into the client welcome (the probe mode prints it); the load formula is
 `engine/authority`'s `TiDiController`, which already matched the new text. Re-checked on 2026-09-27
-with no delta, so `Plan-Rev` rises to 11. D7 keeps an earlier revision only while a delta is open,
-and WP-0.14's review raised it from 6 to 9 the same way.
+with no delta. D7 keeps the earlier revision while a delta is open; none is, so the re-check records
+11, as `engine/authority`'s README does.

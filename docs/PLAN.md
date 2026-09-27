@@ -986,14 +986,16 @@ contention. Both are recorded under K3 and fixed by 02 §2.2's sharded, batched 
 
 ## 11. Building and running today (Windows and Linux)
 
-**Current state (2026-09-27, `main` at 1425608).** The Director refreshes this list every round
+**Current state (2026-09-27, `main` at 5f88be7).** The Director refreshes this list every round
 ([09 §5.10.2](plan/09-roadmap-and-process.md#5102-rules-for-the-director), rule D6), and
 [09 §8.1](plan/09-roadmap-and-process.md#81-phase-0-status-repository-on-2026-09-27) has the detail. The
-facts below were checked against that tree: test counts are doctest cases in a linux-gcc build and Go tests
-as `go test -list` gives them. CI run 36336602340 on 1425608 passed all ten jobs: the GCC, Clang and
-headless tests, the MinGW cross-build, MSVC at the primary and the floor, clang-cl, and Go.
+facts below were checked against that tree: test counts are doctest cases in a linux-gcc build of 1425608,
+plus #19's 12 `schemac_tests` cases counted from source, and Go tests as `go test -list` gives them.
+CI run 36344848217 on 5f88be7 was still queued at this snapshot. The last completed run on `main`,
+36336602340 on 1425608, passed all ten jobs: the GCC, Clang and headless tests, the MinGW cross-build, MSVC at
+the primary and the floor, clang-cl, and Go.
 `cmake -P tools/status/check_status.cmake` checks that 09 §8.1 names every module in the tree.
-- **Merged through review since round 5** (13 PRs: #7–#18 and #20):
+- **Merged through review since round 5** (14 PRs: #7–#20):
   - WP-0.15r, the backend's conformance rework (#8), and a NATS subscription flush that ends the
     `TestNATSRoundTrip` flake (#20);
   - WP-0.10r, the two Luau fuel patches (#9): RT-13's fuel-identity and overhead clauses pass, and native
@@ -1004,12 +1006,12 @@ headless tests, the MinGW cross-build, MSVC at the primary and the floor, clang-
   - WP-1.1a, ADR-004a's option A for RT-01's structural ops (#14);
   - WP-0.14, the cell and gateway (#16), and WP-0.12, the render graph with `helios-shaderc` and
     `helios-rendertest` (#18);
-  - WP-0.1's post-merge `merge-policy` check (#7) and doctest TU isolation (#17), and WP-0.5's async-read
-    fix (#15).
+  - WP-0.1's post-merge `merge-policy` check (#7) and doctest TU isolation (#17), WP-0.5's async-read
+    fix (#15), and WP-0.7's schemac lock under Windows races (#19).
 - **Committed and building:**
   - the vendored third-party tree (26 dependencies, including `nats.c`);
   - `engine/core` (187 tests) and `engine/math` (115), with WP-0.5's completion committed ahead of its review;
-  - `tools/schemac` with `engine/reflect` (121 tests: C++, byte-identical Go and JSON output; the other emitters
+  - `tools/schemac` with `engine/reflect` (133 tests: C++, byte-identical Go and JSON output; the other emitters
     are stubs);
   - `engine/ecs` on flecs (107 tests; `ecs_bench` runs the RT-01 zone and the spikes in `engine/ecs/SPIKES.md`);
   - `engine/script`, the Luau host (97 tests);
@@ -1029,9 +1031,11 @@ headless tests, the MinGW cross-build, MSVC at the primary and the floor, clang-
   ([09 §5.10.4](plan/09-roadmap-and-process.md#5104-applications-on-the-repository-of-2026-09-25-wp-015r-wp-02r-and-wp-05r)),
   brought it to the current plan: the `svc_identity` and `svc_orch` schemas, direct PII sealed under
   per-account keys, `region_lease` generations and CONF-03's holder rule.
-- **In progress:** #19 (WP-0.7: the schemac lock under Windows races). WP-0.2's lints and WP-0.5's core and
-  math completion, CPU gate included, are committed but still await their WP reviews. WP-0.2's review with its
-  conformance lint, and WP-0.7b, were dispatched this round (local branches, no PR yet).
+- **In progress** (open PRs at this snapshot, besides this refresh, #21): #22 and #30 (WP-0.7b: the `luau`
+  emitter, and the `sql` emitter stacked on it), #23 and #31 (WP-0.1: the nightly's Go-integration and
+  MSBuild-configure fixes), #24 (WP-0.10: the `script_tests` ASan fix), #25–#29 (WP-0.2's review of the
+  committed lints, and the conformance lint) and #32 (WP-0.3: the nightly's Windows doctest-XML step).
+  WP-0.5's core and math completion, CPU gate included, is committed and still awaits its WP review.
 - **Not yet present:** the launcher, client and editor, the patch pipeline, the link-model spike, the
   conformance lint, and the *Cinder Reach* `content/`.
 - **Failing gates and fired risks:**
@@ -1050,7 +1054,8 @@ headless tests, the MinGW cross-build, MSVC at the primary and the floor, clang-
     `physics_tests` (a Debug-only Jolt assert), `pcg_hnoise_bench_smoke` (a stack-use-after-scope),
     `rhi_triangle_smoke` (SDL3 X11 leaks), `script_tests` and `script_tests_perf` (so RT-13 cannot pass there),
     and the perf gates `net_tests_perf` and `pcg_tests_perf`. clang-cl's doctest-XML step and Linux Go's
-    integration step fail too. Each gets a bisect or a P0 fix (09 §5.8, §8.2).
+    integration step fail too. Each gets a bisect or a P0 fix (09 §5.8, §8.2). #31, #32, #23 and #24 are open
+    for the MSBuild configure, the Windows doctest-XML step, Go integration and `script_tests`.
 - **Known deltas from the plan** (09 §8.1, §5.10.4):
   - the vendored SDL3 is built without its renderers and Wayland (WP-0.17);
   - the in-tree ISA and CPU-gate code still uses the per-file AVX2 allowlist and the `.CRT$XIB` entry

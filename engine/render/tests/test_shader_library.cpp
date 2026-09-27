@@ -131,4 +131,60 @@ TEST_CASE("shader library: unnamed, foreign, unknown-entry and conflicting pipel
     CHECK(recordedStages("Test.Invalid").empty());
 }
 
+TEST_CASE("shader library: a state variant needs its own name; the same desc on another device is accepted") {
+    // Round-2 review mutant C11: a copy of a recorded desc with one state field changed, under the copied
+    // name, would be bound under that name in the Null trace and count as covered by the original's golden.
+    std::unique_ptr<rhi::Device> first = nullDevice();
+    std::unique_ptr<rhi::Device> second = nullDevice();
+    rhi::GraphicsPipelineDesc geo;
+    geo.vertex = {shippedModule("forward"), "vsMain"};
+    geo.fragment = {shippedModule("forward"), "psMain"};
+    geo.raster.cullMode = rhi::CullMode::Back;
+    geo.depth = {true, true, rhi::CompareOp::GreaterOrEqual};
+    geo.colorCount = 1;
+    geo.colorFormats[0] = rhi::Format::RGBA16Float;
+    geo.depthFormat = rhi::Format::D32Float;
+    geo.name = "Test.StateVariant";
+    auto original = createShippedPipeline(*first, geo);
+    REQUIRE(original.ok());
+
+    // Every part of the state counts, one field at a time.
+    std::vector<rhi::GraphicsPipelineDesc> variants(8, geo);
+    variants[0].raster.cullMode = rhi::CullMode::None;  // C11
+    variants[1].raster.depthBiasSlope = 1.0f;
+    variants[2].depth.writeEnable = false;
+    variants[3].blend[0] = rhi::BlendState::premultiplied();
+    variants[4].colorFormats[0] = rhi::Format::RGBA8Unorm;
+    variants[5].topology = rhi::PrimitiveTopology::LineList;
+    variants[6].sampleCount = 4;
+    variants[7].depthFormat = rhi::Format::Unknown;
+    variants[7].depth = {};
+    for (const rhi::GraphicsPipelineDesc& variant : variants) {
+        auto rejected = createShippedPipeline(*first, variant);
+        CHECK(rejected.errorCode() == ErrorCode::InvalidArgument);
+        if (!rejected) CHECK(rejected.error().message.find("other state") != std::string::npos);
+    }
+    // State of color attachments beyond colorCount is not part of the pipeline.
+    rhi::GraphicsPipelineDesc unused = geo;
+    unused.colorFormats[3] = rhi::Format::RGBA8Unorm;
+    unused.blend[3] = rhi::BlendState::premultiplied();
+    auto same = createShippedPipeline(*first, unused);
+    REQUIRE(same.ok());
+
+    // Every renderer builds its own pipelines: the identical desc on another device is the same pipeline.
+    auto onSecond = createShippedPipeline(*second, geo);
+    REQUIRE(onSecond.ok());
+    CHECK(recordedStages("Test.StateVariant") == Stages{"forward:vsMain", "forward:psMain"});
+    first->destroy(original.value());
+    first->destroy(same.value());
+    second->destroy(onSecond.value());
+
+    // A variant with its own name is its own pipeline (and needs its own golden).
+    rhi::GraphicsPipelineDesc twoSided = variants[0];
+    twoSided.name = "Test.StateVariant.TwoSided";
+    auto renamed = createShippedPipeline(*first, twoSided);
+    REQUIRE(renamed.ok());
+    first->destroy(renamed.value());
+}
+
 } // namespace

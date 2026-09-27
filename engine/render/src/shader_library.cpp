@@ -3,6 +3,7 @@
 #include "helios/render/shader_library.h"
 
 #include <algorithm>
+#include <bit>
 #include <format>
 #include <initializer_list>
 #include <map>
@@ -15,9 +16,15 @@ namespace helios::render {
 
 namespace {
 
+/// What a pipeline name stands for: its stages and a fingerprint of every other part of its desc.
+struct RecordedPipeline {
+    std::vector<ShippedEntryPoint> entries;
+    std::string state;
+};
+
 struct PipelineRecord {
     std::mutex mutex;
-    std::map<std::string, std::vector<ShippedEntryPoint>, std::less<>> pipelines;
+    std::map<std::string, RecordedPipeline, std::less<>> pipelines;
 };
 
 PipelineRecord& pipelineRecord() {
@@ -61,13 +68,50 @@ Result<std::vector<ShippedEntryPoint>> resolveStages(std::string_view pipeline,
     return out;
 }
 
-/// InvalidArgument when `name` is recorded with other entry points. Caller holds the record's mutex.
-Result<void> checkUnchanged(const PipelineRecord& record, std::string_view name,
-                            const std::vector<ShippedEntryPoint>& entries) {
+// stateKey() must see every field of the descs except the shaders and the name; these catch a new field.
+static_assert(sizeof(rhi::RasterState) == 16 && sizeof(rhi::DepthState) == 3 && sizeof(rhi::BlendState) == 8,
+              "a pipeline state struct changed: update stateKey()");
+static_assert(sizeof(rhi::GraphicsPipelineDesc) == 200 && sizeof(rhi::ComputePipelineDesc) == 48,
+              "a pipeline desc changed: update stateKey()");
+
+u32 bits(f32 value) noexcept { return std::bit_cast<u32>(value); }
+
+/// Fingerprint of a graphics desc without its shaders and name: topology, raster, depth, attachments
+/// (formats and blend of each used color attachment, depth format) and sample count.
+std::string stateKey(const rhi::GraphicsPipelineDesc& d) {
+    const rhi::RasterState& r = d.raster;
+    std::string key = std::format("graphics topology={} cull={} front={} fill={} clamp={} bias={:08x}/{:08x}/{:08x} "
+                                  "depth={}{}{} depthFormat={} samples={} colors={}",
+                                  static_cast<u32>(d.topology), static_cast<u32>(r.cullMode),
+                                  static_cast<u32>(r.frontFace), static_cast<u32>(r.polygonMode), r.depthClamp,
+                                  bits(r.depthBiasConstant), bits(r.depthBiasSlope), bits(r.depthBiasClamp),
+                                  d.depth.testEnable, d.depth.writeEnable, static_cast<u32>(d.depth.compareOp),
+                                  static_cast<u32>(d.depthFormat), d.sampleCount, d.colorCount);
+    for (u32 i = 0; i < d.colorCount && i < rhi::kMaxColorAttachments; ++i) {
+        const rhi::BlendState& b = d.blend[i];
+        key += std::format(" [{} blend={} {}/{}/{} {}/{}/{} mask={}]", static_cast<u32>(d.colorFormats[i]), b.enable,
+                           static_cast<u32>(b.srcColor), static_cast<u32>(b.dstColor), static_cast<u32>(b.colorOp),
+                           static_cast<u32>(b.srcAlpha), static_cast<u32>(b.dstAlpha), static_cast<u32>(b.alphaOp),
+                           static_cast<u32>(b.writeMask));
+    }
+    return key;
+}
+/// A compute desc has nothing but its shader and name.
+std::string stateKey(const rhi::ComputePipelineDesc&) { return "compute"; }
+
+/// InvalidArgument when `name` is recorded with other entry points or other state (a variant must
+/// have its own name, so the Null trace tells it apart). Caller holds the record's mutex.
+Result<void> checkUnchanged(const PipelineRecord& record, std::string_view name, const RecordedPipeline& pipeline) {
     const auto it = record.pipelines.find(name);
-    if (it != record.pipelines.end() && it->second != entries) {
+    if (it == record.pipelines.end()) return {};
+    if (it->second.entries != pipeline.entries) {
         return Error{ErrorCode::InvalidArgument,
                      std::format("pipeline name '{}' is already recorded with other shaders", name)};
+    }
+    if (it->second.state != pipeline.state) {
+        return Error{ErrorCode::InvalidArgument,
+                     std::format("pipeline name '{}' is already recorded with other state ({} before, {} now)", name,
+                                 it->second.state, pipeline.state)};
     }
     return {};
 }
@@ -78,9 +122,10 @@ template <class Desc>
 Result<rhi::PipelineH> createRecorded(rhi::Device& device, const Desc& desc, rhi::PsoPriority priority,
                                       std::vector<ShippedEntryPoint> entries) {
     PipelineRecord& record = pipelineRecord();
+    RecordedPipeline recorded{std::move(entries), stateKey(desc)};
     {
         std::lock_guard lock(record.mutex);
-        HELIOS_TRY(checkUnchanged(record, desc.name, entries));
+        HELIOS_TRY(checkUnchanged(record, desc.name, recorded));
     }
     rhi::PipelineH pipeline;
     if constexpr (std::is_same_v<Desc, rhi::GraphicsPipelineDesc>) {
@@ -89,11 +134,11 @@ Result<rhi::PipelineH> createRecorded(rhi::Device& device, const Desc& desc, rhi
         HELIOS_TRY_ASSIGN(pipeline, device.createComputePipeline(desc, priority));
     }
     std::lock_guard lock(record.mutex);
-    if (auto unchanged = checkUnchanged(record, desc.name, entries); !unchanged) {
+    if (auto unchanged = checkUnchanged(record, desc.name, recorded); !unchanged) {
         device.destroy(pipeline);
         return unchanged.error();
     }
-    record.pipelines.try_emplace(std::string(desc.name), std::move(entries));
+    record.pipelines.try_emplace(std::string(desc.name), std::move(recorded));
     return pipeline;
 }
 
@@ -122,7 +167,7 @@ std::vector<ShippedPipeline> shippedPipelines() {
     std::lock_guard lock(record.mutex);
     std::vector<ShippedPipeline> out;
     out.reserve(record.pipelines.size());
-    for (const auto& [name, entries] : record.pipelines) out.push_back({name, entries});
+    for (const auto& [name, recorded] : record.pipelines) out.push_back({name, recorded.entries});
     return out;
 }
 

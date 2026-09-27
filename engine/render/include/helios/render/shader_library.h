@@ -4,21 +4,28 @@
 //
 // Every Slang file in engine/render/shaders/ is embedded in helios_render as one SPIR-V module.
 // Features create their pipelines through createShippedPipeline(), which records each pipeline's
-// name with the entry points it uses. `helios-rendertest --coverage` combines the two lists: every
-// shipped entry point and every recorded pipeline must be bound (a bindPipeline in the Null trace)
-// in the captured frame of a scene that has a committed lavapipe golden and a Null trace golden.
-// The CTest lint_shipped_pipelines keeps the record complete: under engine/render, apps/samples and
-// tools/rendertest, only this module's implementation may call Device::create*Pipeline directly
-// (rendertest's own shaders go through its createLocalPipeline(); any other direct call needs a
-// reasoned waiver). What the check cannot see:
+// name with the entry points it uses and a fingerprint of the rest of its desc (raster, depth, blend,
+// attachment formats, topology, samples). One name stands for one pipeline: the same name with other
+// shaders or other state is rejected, so a state variant needs its own name (and its own golden),
+// also when a feature builds the same pipeline for several output formats in one process.
+// `helios-rendertest --coverage` combines the lists: every shipped entry point and every recorded
+// pipeline must be bound (a bindPipeline in the Null trace) in the captured frame of a scene that has
+// a committed lavapipe golden and a Null trace golden.
+// The CTest lint_shipped_pipelines (a textual check) keeps pipelines from bypassing the record: in
+// engine/, apps/ and tools/ (except engine/rhi, which implements the API, tools/prebuilt and the
+// lint's fixtures), any identifier create<X>Pipeline other than createShippedPipeline and
+// createLocalPipeline, whether called with `.`, `->`, across a line break, or named in a member
+// pointer or std::invoke, needs a reasoned waiver; only this module's implementation is exempt.
+// It cannot see a name built by token pasting or a member pointer obtained outside the scanned files.
+// What the coverage check cannot see:
 //   * passes without a pipeline (uploads, copies, clears);
 //   * whether a bound pipeline's output reaches the golden image (a pipeline bound only into a
 //     marked debug output counts as covered);
 //   * shaders that are not embedded in helios_render, such as cooked SPIR-V from content (03 §1.7's
 //     shipped SPIR-V + .psol, Phase 1).
 // Future cost: each call reflects its module (fine for today's handful of PSOs; cache per module
-// before 03 §1.7's thousands), and the name -> entry-points rule rejects a hot-reloaded pipeline
-// whose entry points change (Phase 2 hot reload must re-register the name).
+// before 03 §1.7's thousands), and the one-name-one-pipeline rule rejects a hot-reloaded pipeline
+// whose entry points or state change (Phase 2 hot reload must re-register the name).
 //
 // Threading: every function is thread-safe (the pipeline record is guarded by a mutex).
 
@@ -58,10 +65,11 @@ Result<std::vector<ShippedEntryPoint>> shippedEntryPoints();
 std::vector<ShippedPipeline> shippedPipelines();
 
 /// Creates a pipeline whose stages all come from helios_render's embedded modules and records its
-/// name with their entry points. Fails with InvalidArgument when the name is empty, a stage's SPIR-V
-/// is not an embedded module (compared by address), an entry point is not in its module, or the name
-/// was recorded before with other entry points; device errors pass through. Nothing stays created or
-/// recorded on failure. Thread-safe like Device.
+/// name with their entry points and the fingerprint of its other state. Fails with InvalidArgument
+/// when the name is empty, a stage's SPIR-V is not an embedded module (compared by address), an entry
+/// point is not in its module, or the name was recorded before with other entry points or other
+/// state (the same desc again, on any device, is accepted); device errors pass through. Nothing stays
+/// created or recorded on failure. Thread-safe like Device.
 Result<rhi::PipelineH> createShippedPipeline(rhi::Device& device, const rhi::GraphicsPipelineDesc& desc,
                                              rhi::PsoPriority priority = rhi::PsoPriority::Immediate);
 Result<rhi::PipelineH> createShippedPipeline(rhi::Device& device, const rhi::ComputePipelineDesc& desc,

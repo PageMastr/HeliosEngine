@@ -8,6 +8,8 @@ using namespace helios;
 using namespace helios::script;
 using helios::script::test::Harness;
 
+namespace {
+
 TEST_CASE("memory: exceeding the VM heap cap raises a memory error and the VM recovers") {
     VmConfig c = Harness::defaultConfig();
     c.heapLimitBytes = 2u << 20;
@@ -161,3 +163,5 @@ TEST_CASE("memory: tasks and coroutines allocate in the right module category") 
     CHECK(e->error->message.find("not enough memory") != std::string::npos);
     CHECK(h.vm->stats().heapPeakBytes < (8u << 20));
 }
+
+} // namespace

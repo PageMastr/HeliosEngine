@@ -29,7 +29,6 @@ std::string uniqueName(std::string_view prefix) {
     const net::Key k = net::generateKey();
     return std::string(prefix) + "-" + base64Encode(std::span<const u8>(k.data(), 6));
 }
-} // namespace
 
 TEST_CASE("server.nats-live: orchestrator and session contracts against helios-backend") {
     const auto url = envVar("HELIOS_NATS_URL");
@@ -171,3 +170,5 @@ TEST_CASE("server.nats-live: unsubscribe waits for a running handler; a handler 
         CHECK(open);
     }
 }
+
+} // namespace

@@ -35,8 +35,6 @@ usize findWord(const std::string& text, std::string_view word, usize from = 0) {
     return std::string::npos;
 }
 
-} // namespace
-
 TEST_CASE("defs: helios.d.luau parses with declaration syntax") {
     const std::string src = readDefs();
     REQUIRE_FALSE(src.empty());
@@ -71,3 +69,5 @@ TEST_CASE("defs: every built-in API name is declared in helios.d.luau") {
         CHECK(findWord(src, member, ownerPos) != std::string::npos);
     }
 }
+
+} // namespace

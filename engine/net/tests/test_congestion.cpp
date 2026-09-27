@@ -7,6 +7,8 @@
 using namespace helios;
 using namespace helios::net;
 
+namespace {
+
 TEST_SUITE("net.congestion") {
     TEST_CASE("token bucket refills, caps and borrows") {
         TokenBucket b(1000.0, 500.0, 0.0);
@@ -119,3 +121,5 @@ TEST_SUITE("net.congestion") {
         CHECK(aimd.budgetBps() == 128'000);
     }
 }
+
+} // namespace

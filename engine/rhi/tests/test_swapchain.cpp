@@ -113,8 +113,6 @@ std::pair<u8, u8> redBlue(const std::vector<u8>& pixels, const SwapchainInfo& in
     return bgra ? std::pair<u8, u8>{p[2], p[0]} : std::pair<u8, u8>{p[0], p[2]};
 }
 
-} // namespace
-
 TEST_SUITE("gpu") {
 
 TEST_CASE("gpu: windowless swapchain (SDL offscreen driver): acquire, present, resize, second device") {
@@ -180,3 +178,5 @@ TEST_CASE("gpu: windowless swapchain (SDL offscreen driver): acquire, present, r
 }
 
 } // TEST_SUITE("gpu")
+
+} // namespace

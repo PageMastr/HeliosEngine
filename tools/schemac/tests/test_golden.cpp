@@ -69,8 +69,6 @@ constexpr GoldenOutput kOutputs[] = {
     {"golden.schema.json", "golden.schema.json.expected"},
 };
 
-} // namespace
-
 TEST_CASE("golden: generator output matches the committed expectations") {
     const auto source = readText(kGoldenDir + "/golden.hschema");
     REQUIRE(source);
@@ -192,3 +190,5 @@ TEST_CASE("golden: the generated golden types round-trip in C++") {
         CHECK(walked.value == 9);
     }
 }
+
+} // namespace

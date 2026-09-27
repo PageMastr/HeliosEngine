@@ -83,8 +83,6 @@ double overhead(u64 metered, u64 base) {
     return static_cast<double>(metered) / static_cast<double>(base) - 1.0;
 }
 
-} // namespace
-
 TEST_CASE("perf: fuel metering overhead and ns per fuel") {
     const auto bc = compile(kWorkload, {}, "bench");
     REQUIRE(bc.ok());
@@ -152,3 +150,5 @@ TEST_CASE("perf: host cost of a trivial resume versus FuelBudget::resumeCost") {
             c.budget.resumeCost, ") -> ", nsPerResume / fuelPerResume, " ns per fuel");
     CHECK(nsPerResume < 100'000.0); // loose CI guard; calibration sets resumeCost from this figure
 }
+
+} // namespace

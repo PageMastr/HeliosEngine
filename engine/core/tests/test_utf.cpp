@@ -10,7 +10,6 @@ namespace {
 // "aé€😀": 1-, 2-, 3- and 4-byte sequences.
 const std::string kMixed = "a\xC3\xA9\xE2\x82\xAC\xF0\x9F\x98\x80";
 const std::string kFffd = "\xEF\xBF\xBD";
-} // namespace
 
 TEST_CASE("utf: UTF-8 <-> UTF-16 round trip including surrogate pairs") {
     const std::u16string u16 = utf8ToUtf16(kMixed);
@@ -65,3 +64,5 @@ TEST_CASE("utf: unpaired surrogates and invalid code points are replaced") {
     CHECK(utf32ToUtf8(std::u32string{0x7F, 0x80, 0x7FF, 0x800, 0xFFFF, 0x10000, 0x10FFFF}) ==
           "\x7F\xC2\x80\xDF\xBF\xE0\xA0\x80\xEF\xBF\xBF\xF0\x90\x80\x80\xF4\x8F\xBF\xBF");
 }
+
+} // namespace

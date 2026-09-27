@@ -87,8 +87,6 @@ BufferH makeStorageBuffer(Device& dev, u64 size, std::string_view name) {
         .value();
 }
 
-} // namespace
-
 TEST_SUITE("gpu") {
 
 TEST_CASE("gpu: device creation, adapter and capabilities") {
@@ -649,3 +647,5 @@ TEST_CASE("gpu: injected device loss runs the crash-diagnostics path") {
 }
 
 } // TEST_SUITE("gpu")
+
+} // namespace

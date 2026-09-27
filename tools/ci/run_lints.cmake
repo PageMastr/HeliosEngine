@@ -1,6 +1,6 @@
 # Runs the repository lints that need no build (licences, vendored patches, IP names, Windows
-# manifest), and the ISA audit when a build directory is given. One entry point for CI jobs and
-# pre-commit hooks:
+# manifest, test namespaces), and the ISA audit when a build directory is given. One entry point for
+# CI jobs and pre-commit hooks:
 #
 #   cmake -P tools/ci/run_lints.cmake                         # from the repository root
 #   cmake -DBUILD_DIR=build/linux-gcc -P tools/ci/run_lints.cmake
@@ -27,6 +27,7 @@ _run_lint(vendor-patches -DTHIRD_PARTY_DIR=${root}/third_party -DMANIFEST=${root
           -P ${lint}/vendor_patches.cmake)
 _run_lint(ip-names -DLINT_POLICY=${lint}/ip_names_policy.cmake -DSOURCE_DIR=${root} -P ${lint}/ip_names.cmake)
 _run_lint(windows-manifest -DMANIFEST=${root}/engine/platform/win/helios.manifest -P ${lint}/windows_manifest.cmake)
+_run_lint(test-namespaces -DSOURCE_DIR=${root} -DREQUIRE_TESTS=ON -P ${lint}/test_namespaces.cmake)
 if(BUILD_DIR)
   get_filename_component(buildDir "${BUILD_DIR}" ABSOLUTE BASE_DIR "${root}")
   set(tools "")

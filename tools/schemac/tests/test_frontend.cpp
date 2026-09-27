@@ -68,8 +68,6 @@ std::string parseErrors(std::string_view text) {
     return formatDiags(diags);
 }
 
-} // namespace
-
 TEST_CASE("lexer: tokens, doc comments, strings and locations") {
     DiagnosticEngine diags;
     const std::string text = "/// doc line\nstruct A { x: f32 = -1.5e3 } // tail\n/* block\n comment */ \"s\\\"q\" 0x1F 42 ±";
@@ -362,3 +360,5 @@ TEST_CASE("parser: one error per declaration, then recovery") {
     CHECK(f.decls[0].name == "B");
     CHECK(f.decls[1].name == "C");
 }
+
+} // namespace

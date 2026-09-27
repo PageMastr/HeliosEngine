@@ -9,6 +9,8 @@
 using namespace helios;
 using namespace helios::physics;
 
+namespace {
+
 TEST_CASE("runtime: reference-counted initialization") {
     CHECK_FALSE(PhysicsRuntime::initialized());
     {
@@ -100,3 +102,5 @@ TEST_CASE("shapes: compound children need a finite pose and a non-zero rotation"
     kids[0].position.x = 1.0f;
     CHECK(createStaticCompound(kids).ok());
 }
+
+} // namespace

@@ -30,8 +30,6 @@ struct MaybeThrows {
     }
 };
 
-} // namespace
-
 TEST_CASE("handle: value semantics and packing") {
     Handle<MeshTag> h;
     CHECK(!h.isValid());
@@ -157,3 +155,5 @@ TEST_CASE("handle pool: a throwing constructor leaves the pool unchanged") {
     }
     CHECK(visited == 2);
 }
+
+} // namespace

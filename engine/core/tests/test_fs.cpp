@@ -42,8 +42,6 @@ bool hasEvent(const std::vector<FileEvent>& events, std::initializer_list<FileAc
     });
 }
 
-} // namespace
-
 TEST_CASE("fs: UTF-8 path conversion round-trips") {
     const std::string utf8 = "content/\xC3\xBCn\xC3\xAF\x63\xC3\xB8\x64\xC3\xA9/\xE2\x82\xAC.txt"; // ünïcødé/€.txt
     const Path p = pathFromUtf8(utf8);
@@ -302,3 +300,5 @@ TEST_CASE("fs: polling file watcher reports changes") {
     CHECK(!FileWatcher().start(tmp.path / "missing"));
     CHECK(fileActionName(FileAction::RenamedNew) == "RenamedNew");
 }
+
+} // namespace

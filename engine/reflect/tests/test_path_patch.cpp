@@ -31,7 +31,6 @@ void checkDiffApply(const Everything& before, const Everything& after) {
     CHECK(*reparsed == patch);
     CHECK(diff(t, &after, &after).empty());
 }
-} // namespace
 
 TEST_CASE("path: parse and canonical formatting") {
     CHECK(parsed("Transform/position") == "Transform/position");
@@ -298,3 +297,5 @@ TEST_CASE("patch: property-based diff/apply over random edits") {
     }
     (void)t;
 }
+
+} // namespace

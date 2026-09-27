@@ -11,6 +11,7 @@
 
 #include "helios/reflect/reflect.h"
 
+// helios-lint: outside-anon-namespace begin (reflected htest types and their TypeOf<> specializations)
 namespace htest {
 using namespace helios;
 using namespace helios::refl;
@@ -65,6 +66,7 @@ const TypeInfo& helios::refl::TypeOf<Holder>::get() noexcept {
                                       .build();
     return *info;
 }
+// helios-lint: outside-anon-namespace end
 
 namespace {
 
@@ -77,8 +79,6 @@ std::string nestedTrees(usize depth) {
     for (usize i = 0; i < depth; ++i) out += "]}";
     return out;
 }
-
-} // namespace
 
 TEST_CASE("hardening: JSON nesting is limited at parse time (no stack overflow)") {
     CHECK(JsonDocument::parse(nestedArrays(kMaxJsonDepth)));
@@ -287,3 +287,5 @@ TEST_CASE("hardening: null reads as an empty container (Go writes nil slices and
     CHECK_FALSE(fromJson("null", n, ctx));
     CHECK_FALSE(fromJson(t, &h, "null", ctx));
 }
+
+} // namespace

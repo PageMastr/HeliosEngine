@@ -16,7 +16,6 @@ u32 count(const std::vector<LeaseEvent>& events, LeaseEventKind kind) {
     for (const auto& e : events) n += e.kind == kind ? 1u : 0u;
     return n;
 }
-} // namespace
 
 TEST_CASE("authority.lease: assignments acquire, repeat quietly, and lose on change") {
     LeaseHolder h;
@@ -239,3 +238,5 @@ TEST_CASE("authority.agtable: while loading from e, released notices up to e + 1
     CHECK_FALSE(table.onReleased(ship, 5));
     CHECK(table.onReleased(ship, 6));
 }
+
+} // namespace

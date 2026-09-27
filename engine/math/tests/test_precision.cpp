@@ -20,7 +20,6 @@ namespace {
 constexpr f64 kFar = 1.0e13;
 constexpr f64 kWidthPx = 3840.0;
 constexpr f64 kHeightPx = 2160.0;
-}  // namespace
 
 TEST_CASE("precision: f64 resolves positions at 1e13 m to sub-millimetre") {
     const f64 ulp = std::nextafter(kFar, 2.0 * kFar) - kFar;
@@ -156,3 +155,5 @@ TEST_CASE(
     const DVec3 camRebuilt = pointToParent(ship, camLocal);
     CHECK(std::fabs(distance(camRebuilt, ship.position) - length(camLocal)) < 2e-3);
 }
+
+} // namespace

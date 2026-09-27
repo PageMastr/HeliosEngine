@@ -46,7 +46,6 @@ OrchestratorClientConfig cellConfig(std::string name = "cell-a", std::vector<std
     c.info.zones = std::move(zones);
     return c;
 }
-} // namespace
 
 TEST_CASE("server.fakebus: request/reply, wildcards, no responders, timeouts and partitions") {
     FakeBus bus;
@@ -352,3 +351,5 @@ TEST_CASE("server.app: placement options fill fd and serverBuild; malformed valu
     gc.serverBuild = -1;
     CHECK(GatewayServer::create(std::move(gc), 0).errorCode() == ErrorCode::InvalidArgument);
 }
+
+} // namespace

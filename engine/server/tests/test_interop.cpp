@@ -133,7 +133,6 @@ std::string sameHostReason(const net::Address& target, bool (*isBound)(const net
     if (isBound(a)) return "an address of this host";
     return {};
 }
-} // namespace
 
 TEST_CASE("server.interop: NS-0.3 wire bytes are the recorded ones on every toolchain") {
     const Vectors vectors = wireVectors();
@@ -317,3 +316,5 @@ TEST_CASE("server.interop: NS-0.3 a probe here is served by the gateway on anoth
         MESSAGE("NS-0.3 remote: same-host smoke run passed against " << target->toString() << " (" << sameHost
                                                                      << "); not NS-0.3 evidence");
 }
+
+} // namespace

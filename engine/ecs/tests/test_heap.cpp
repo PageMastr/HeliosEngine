@@ -21,7 +21,6 @@ using namespace helios::ecs;
 
 namespace {
 MemoryTag testTag(const char* name) { return registerMemoryTag(name); }
-} // namespace
 
 TEST_CASE("ecs heap: allocation, accounting and ownership") {
     const MemoryTag tag = testTag("EcsTest.Heap.Basic");
@@ -217,3 +216,5 @@ TEST_CASE("ecs heap: the process ECS heap and allocator adapter") {
     for (int i = 0; i < 1000; ++i) v.push_back(i);
     CHECK(heap.owns(v.data()));
 }
+
+} // namespace

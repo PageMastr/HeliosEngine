@@ -9,6 +9,8 @@
 using namespace helios;
 using namespace helios::literals;
 
+namespace {
+
 // Reference values produced by the upstream xxHash 0.8.3 library (xxhsum / python-xxhash) and the
 // FNV reference test vectors.
 TEST_CASE("hash: XXH3-64 known vectors") {
@@ -98,3 +100,5 @@ TEST_CASE("hash: combine and mix") {
     CHECK(set.size() == 2);
     CHECK((Hash128{1, 0} < Hash128{0, 1}));
 }
+
+} // namespace

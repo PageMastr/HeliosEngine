@@ -26,7 +26,6 @@ JsonDocument parse(std::string_view text) {
     REQUIRE_MESSAGE(d, (d ? std::string() : d.error().message));
     return std::move(*d);
 }
-} // namespace
 
 TEST_CASE("json: shortest round-trip float formatting in JavaScript notation") {
     CHECK(f64s(0.0) == "0");
@@ -258,3 +257,5 @@ TEST_CASE("json: ReadCtx paths, warnings and strict mode") {
     ReadCtx::Scope s(strict, "zzz");
     CHECK_FALSE(strict.unknownField("zzz"));
 }
+
+} // namespace

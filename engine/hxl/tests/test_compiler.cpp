@@ -41,8 +41,6 @@ std::string errorOf(std::string_view src, const CompileOptions& opts = {}) {
     return std::format("{} {}:{}", statusName(d.status), d.line, d.column);
 }
 
-} // namespace
-
 TEST_CASE("hxl compiler: arithmetic precedence and associativity") {
     CHECK(evalNum("1 + 2 * 3") == 7.0);
     CHECK(evalNum("(1 + 2) * 3") == 9.0);
@@ -278,3 +276,5 @@ TEST_CASE("hxl compiler: the static cost bounds every evaluation") {
     // Const Const Lt JIF Const Exp Const Ln Add Jump Const Const Pow
     CHECK(p->cost() == 1 + 1 + 1 + 1 + 1 + 8 + 1 + 8 + 1 + 1 + 1 + 1 + 8);
 }
+
+} // namespace

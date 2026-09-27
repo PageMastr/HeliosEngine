@@ -7,6 +7,8 @@ using namespace helios;
 using namespace helios::script;
 using helios::script::test::Harness;
 
+namespace {
+
 TEST_CASE("sandbox: unsafe and nondeterministic globals are absent on cells") {
     Harness h;
     h.expectRuns("absent", R"(
@@ -181,3 +183,5 @@ TEST_CASE("sandbox: print output is bounded but charged on its full length") {
     CHECK(h.prints[0].rfind(std::string(4096, 'x'), 0) == 0);
     CHECK(h.prints[0].find("(195905 bytes truncated)") != std::string::npos);
 }
+
+} // namespace

@@ -24,7 +24,6 @@ struct Label {
     Label& operator=(const Label&) = default;
     ~Label() { --g_payloads; }
 };
-} // namespace
 
 TEST_CASE("ecs commands: temp entities, sets and relationships resolve at apply") {
     World world;
@@ -301,3 +300,5 @@ TEST_CASE("ecs commands: prefab instances spawned in a batch") {
         CHECK(world.get<Health>(e)->hp == 7.0f);
     }
 }
+
+} // namespace

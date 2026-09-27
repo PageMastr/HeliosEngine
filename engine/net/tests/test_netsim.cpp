@@ -37,8 +37,6 @@ std::vector<Delivered> run(NetSimPipe& pipe, u32 count, f64 interval, usize size
     return out;
 }
 
-} // namespace
-
 TEST_SUITE("net.netsim") {
     TEST_CASE("latency delays every datagram; order is kept without jitter") {
         NetSimLink link;
@@ -215,3 +213,5 @@ TEST_SUITE("net.netsim") {
         CHECK(net.bind(freed).hasValue()); // unbound on destruction
     }
 }
+
+} // namespace

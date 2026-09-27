@@ -74,8 +74,6 @@ TextureH makeTarget(Device& device, std::string_view name = "Color", u32 size = 
 
 std::span<const std::byte> bytesOf(const std::vector<u32>& v) { return std::as_bytes(std::span<const u32>(v)); }
 
-} // namespace
-
 TEST_CASE("null: device, caps and adapters") {
     NullFixture f;
     const Caps& caps = f.device->caps();
@@ -855,3 +853,5 @@ TEST_CASE("null: buffer/texture copies are validated like the Vulkan backend") {
     CHECK(dev.submit(Queue::Graphics, {&ro, 1}).ok());
     CHECK_NO_ERRORS(f);
 }
+
+} // namespace

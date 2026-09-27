@@ -42,7 +42,6 @@ const HalfReference& halfRef() {
     return ref;
 }
 bool isHalfNan(u16 h) { return (h & 0x7C00) == 0x7C00 && (h & 0x03FF) != 0; }
-}  // namespace
 
 TEST_CASE("pack: half float known values") {
     CHECK(floatToHalf(0.0f) == 0x0000);
@@ -272,13 +271,11 @@ TEST_CASE("pack: smallest-three quaternions") {
     CHECK(reindexed < 100);
 }
 
-namespace {
 bool q8kmValid(const DVec3& origin) {
     const PositionQuantizer q = PositionQuantizer::fromExtent(origin, 8000.0, 0.001);
     return q.isValid() && !PositionQuantizer{origin, 0.0, 24}.isValid() &&
            !PositionQuantizer{origin, 0.001, 33}.isValid() && !PositionQuantizer{origin, 0.001, 1}.isValid();
 }
-}  // namespace
 
 TEST_CASE("pack: fixed-point positions relative to a cell origin") {
     const DVec3 origin{1.0e9, -2.0e8, 3.0e10};
@@ -374,3 +371,5 @@ TEST_CASE("pack: golden encodings (cross-platform bit identity)") {
     // clang-format on
     for (const PosGolden& g : positions) CHECK(q.encode(g.p) == g.code);
 }
+
+} // namespace

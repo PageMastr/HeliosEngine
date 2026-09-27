@@ -18,8 +18,6 @@ ParseLimits permissive() {
     return l;
 }
 
-} // namespace
-
 TEST_SUITE("net.wire") {
     TEST_CASE("varint round trip and canonical form") {
         const u32 values[] = {0u, 1u, 127u, 128u, 300u, 16383u, 16384u, 0x0FFFFFFFu, 0xFFFFFFFFu};
@@ -180,3 +178,5 @@ TEST_SUITE("net.wire") {
         CHECK(writeStreamMessage(std::span<u8>(buf, 2), 0x123456789ull, payload) == 0);
     }
 }
+
+} // namespace

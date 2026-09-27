@@ -28,8 +28,6 @@ std::vector<std::string> paths(const std::vector<VfsEntry>& entries) {
     return out;
 }
 
-} // namespace
-
 TEST_CASE("vfs: path normalization and sandboxing") {
     CHECK(Vfs::normalizePath("/content/ships/a.json").value() == "/content/ships/a.json");
     CHECK(Vfs::normalizePath("/content//ships/./a.json").value() == "/content/ships/a.json");
@@ -252,3 +250,5 @@ TEST_CASE("vfs: watching a virtual directory reports virtual paths") {
     REQUIRE(memoryOnly.mount("/content", std::make_unique<MemoryMount>()));
     CHECK(memoryOnly.watch("/content", [](const VfsEvent&) {}).error().code == ErrorCode::Unsupported);
 }
+
+} // namespace

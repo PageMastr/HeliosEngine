@@ -41,7 +41,6 @@ i64 drive(ZoneClock& clock, i64 now, u32 ticks, F cpuNs) {
     }
     return now;
 }
-} // namespace
 
 TEST_CASE("authority.clock: validate rejects rates outside 1..60 Hz and bad floors") {
     CHECK(ZoneClock::validate(cfg(1)).ok());
@@ -272,3 +271,5 @@ TEST_CASE("authority.clock: follower zones take the leader's schedule, not their
     drive(clock, clock.wallNowNs(), 1, [](Tick) { return 0; }); // tick 5
     CHECK(clock.dilationPpm() == 700'000);
 }
+
+} // namespace

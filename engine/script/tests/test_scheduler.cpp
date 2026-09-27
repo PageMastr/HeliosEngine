@@ -94,8 +94,6 @@ void spawnNamed(Harness& h, u64 owner, const char* name, double delay) {
     REQUIRE(r.ok());
 }
 
-} // namespace
-
 TEST_CASE("scheduler: tasks resume in (wake tick, owner EntityId, sequence) order") {
     Harness h;
     loadOrderer(h);
@@ -383,3 +381,5 @@ TEST_CASE("scheduler: cancelled waits do not accumulate queue entries") {
     MESSAGE("max queued entries ", maxQueued, " for ", s.tasksCancelled, " cancelled waiters");
     CHECK(maxQueued <= 2 * 201 + 256 + 200);
 }
+
+} // namespace

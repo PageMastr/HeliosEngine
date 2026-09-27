@@ -11,6 +11,8 @@
 using namespace helios;
 using namespace helios::ecs;
 
+namespace {
+
 TEST_CASE("ecs registry: U64Map matches std::unordered_map under random churn") {
     U64Map map(MemoryTag::Unknown, 4);
     std::unordered_map<u64, u64> ref;
@@ -147,3 +149,5 @@ TEST_CASE("ecs registry: EntityRegistry bidirectional maps") {
     CHECK(reg.find(id2) == Entity(502));
     CHECK(reg.memoryBytes() > 0);
 }
+
+} // namespace

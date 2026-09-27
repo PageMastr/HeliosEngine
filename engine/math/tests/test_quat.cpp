@@ -6,7 +6,6 @@ using helios::test::Rng;
 namespace {
 bool near(const Vec3& a, const Vec3& b, f32 tol = 1e-5f) { return approxEqual(a, b, tol); }
 bool near(const DVec3& a, const DVec3& b, f64 tol = 1e-12) { return approxEqual(a, b, tol); }
-}  // namespace
 
 TEST_CASE("quat: identity and axis-angle follow the right-hand rule") {
     constexpr Quat id;
@@ -196,3 +195,5 @@ TEST_CASE("quat: precision conversion") {
     CHECK(sameRotation(toF64(f), d, 1e-6));
     CHECK(Quat(d) == f);
 }
+
+} // namespace

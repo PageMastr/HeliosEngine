@@ -41,8 +41,6 @@ ModifierHandle add(AttributeSet& s, Modifier m) {
     return *h;
 }
 
-} // namespace
-
 TEST_CASE("attributes: stacking penalty series S(i) = exp(-(i/2.67)^2)") {
     // Bit-identical with the HXL corpus (formula.stacking_penalty_series).
     const u64 expected[] = {0x3ff0000000000000ull, 0x3febcfd4b4bacfb6ull, 0x3fe2423794a0dafaull, 0x3fd21befef30ee5full,
@@ -445,8 +443,6 @@ TEST_CASE("attributes: ModifierDef records instantiate against a layout") {
     CHECK_FALSE(instantiateModifier(d, ctx).ok()); // no tag registry on the layout
 }
 
-namespace {
-
 // Deterministic random "ships": a 40-attribute layout (stacking-penalised, AdditiveBonus, derived and
 // max-clamped attributes) and constant Pre/Mod/Post arithmetic modifiers in two penalty groups, some
 // exempt, with every 50th a live attribute read. No assignments, formulas, requirements or min clamps
@@ -545,8 +541,6 @@ long double referenceValue(const AttributeSet& s, AttrSlot a, const std::vector<
     return v;
 }
 
-} // namespace
-
 TEST_CASE("attributes: 200 golden builds match a reference within 1e-9 and pin a golden hash") {
     u64 h = 0xcbf29ce484222325ull;
     for (u32 seed = 1; seed <= 200; ++seed) {
@@ -622,13 +616,11 @@ TEST_CASE("attributes: formulas bound with another tag registry are rejected (re
     CHECK(layoutBig2->hash() == layoutBig->hash());
 }
 
-namespace {
 int g_assertFailures = 0;
 AssertAction countAndContinue(const AssertInfo&) {
     ++g_assertFailures;
     return AssertAction::Continue;
 }
-} // namespace
 
 TEST_CASE("attributes: setBase ignores slots outside the layout (review regression)") {
     auto layout = layoutOf({attr("A", 1.0)});
@@ -787,3 +779,5 @@ TEST_CASE("attributes: Target/Snapshot magnitudes need a target of the context's
     ctx.target = &sameSizeTarget;
     CHECK(instantiateModifier(d, ctx).errorCode() == ErrorCode::InvalidArgument);
 }
+
+} // namespace

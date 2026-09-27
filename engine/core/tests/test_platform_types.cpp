@@ -11,7 +11,6 @@ using namespace helios::literals;
 namespace {
 enum class TestFlags : u32 { None = 0, A = 1, B = 2, C = 4 };
 HELIOS_ENUM_FLAGS(TestFlags)
-} // namespace
 
 TEST_CASE("platform: exactly one OS/compiler/arch is detected") {
     int platforms = 0;
@@ -106,3 +105,5 @@ TEST_CASE("types: enum flag operators") {
     f ^= TestFlags::B;
     CHECK(toUnderlying(f) == 6u);
 }
+
+} // namespace

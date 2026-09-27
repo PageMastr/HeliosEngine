@@ -15,6 +15,8 @@ using namespace helios;
 using namespace helios::ecs;
 using namespace ecs_test;
 
+namespace {
+
 static_assert(kFieldIndex<Health, &Health::hp> == 0);
 static_assert(kFieldIndex<Health, &Health::maxHp> == 1);
 static_assert(kFieldIndex<Health, &Health::armor> == 2);
@@ -111,8 +113,6 @@ TEST_CASE("ecs dirty: change list groups entities deterministically") {
     }
 }
 
-namespace {
-
 /// Two systems in the same stage write *different* replicated components of the same entities, so
 /// the scheduler runs them in parallel; both mark RepDirty of the same rows concurrently.
 void addParallelWriters(World& world) {
@@ -141,8 +141,6 @@ void addParallelWriters(World& world) {
             }
         }).hasValue());
 }
-
-} // namespace
 
 TEST_CASE("ecs dirty: parallel systems writing different components of one entity") {
     jobs::JobSystem js({.workerCount = 4});
@@ -227,3 +225,5 @@ TEST_CASE("ecs dirty: random-access Mut from a single-job system") {
     REQUIRE(changes.changes.size() == 1);
     CHECK(changes.changes[0].entity == world.entityId(target));
 }
+
+} // namespace

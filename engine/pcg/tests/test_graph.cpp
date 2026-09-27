@@ -15,7 +15,6 @@ using namespace helios::pcg;
 namespace {
 Q32 q32(f64 v) { return Q32::fromDouble(v); }
 Q16 q16(f64 v) { return Q16::fromDouble(v); }
-} // namespace
 
 TEST_CASE("graph: the WP-0.9c reference graph has 40 nodes, 10 generators and 80 octaves") {
     const TerrainGraph g = makeReferenceGraph40();
@@ -216,7 +215,6 @@ TEST_CASE("graph: remap scale is computed with helios::Q32 division") {
 
 // -- Review regressions (WP-0.9 adversarial review) --------------------------------------------------
 
-namespace {
 /// max |a - b| in metres over a tile.
 f64 maxAbsDiffMetres(const std::vector<i64>& a, const std::vector<i64>& b) {
     f64 m = 0.0;
@@ -229,7 +227,6 @@ std::vector<i64> evalTile(const TerrainProgram& p, const TileDomain& d) {
     REQUIRE(eval.evaluate(p, d, h).ok());
     return h;
 }
-} // namespace
 
 TEST_CASE("graph: level-adaptive skipping bounds the error of the OUTPUT, not of the generator") {
     // 03 §5.5a: an octave may be skipped only if the skipped amplitude stays below 0.5 px. What
@@ -313,3 +310,5 @@ TEST_CASE("graph: non-finite or negative CompileOptions are rejected") {
     CHECK(compileTerrainGraph(g, o).errorCode() == ErrorCode::InvalidArgument);
     CHECK(compileTerrainGraph(g, {.sampleSpacingMetres = 100.0}).ok());
 }
+
+} // namespace

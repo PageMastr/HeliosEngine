@@ -10,6 +10,8 @@
 using namespace helios;
 using namespace helios::rhi;
 
+namespace {
+
 TEST_CASE("rhi format: every format has a unique name and sane block data") {
     std::set<std::string> names;
     for (u32 i = 1; i < static_cast<u32>(Format::Count); ++i) {
@@ -88,3 +90,5 @@ TEST_CASE("rhi types: descriptor helpers") {
     CHECK(pm.dstColor == BlendFactor::OneMinusSrcAlpha);
     CHECK(TimelinePoint{}.isNull());
 }
+
+} // namespace

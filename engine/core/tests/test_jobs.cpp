@@ -14,6 +14,8 @@
 using namespace helios;
 using namespace helios::jobs;
 
+namespace {
+
 TEST_CASE("jobs: small lambdas are stored inline, large ones on the heap") {
     int x = 0;
     Job small([&x] { ++x; });
@@ -105,7 +107,6 @@ TEST_CASE("jobs: one million jobs spawned from inside jobs") {
     MESSAGE("1M nested jobs: " << sw.elapsedMillis() << " ms");
 }
 
-namespace {
 u64 fib(JobSystem& js, u32 n) {
     if (n < 2) return n;
     if (n < 12) return fib(js, n - 1) + fib(js, n - 2);
@@ -117,7 +118,6 @@ u64 fib(JobSystem& js, u32 n) {
     js.wait(c);
     return a + b;
 }
-} // namespace
 
 TEST_CASE("jobs: deeply nested waits (recursive fork/join) complete") {
     JobSystem js;
@@ -467,3 +467,5 @@ TEST_CASE("jobs: stress mix of nested waits, parallelFor and graphs") {
         CHECK(total.load() == 32ull * (256ull * 255ull / 2 + 16ull));
     }
 }
+
+} // namespace

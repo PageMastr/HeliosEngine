@@ -14,7 +14,6 @@ std::vector<u8> bytes(std::initializer_list<int> b) {
     for (int v : b) out.push_back(static_cast<u8>(v));
     return out;
 }
-} // namespace
 
 TEST_CASE("tagged: varints and zigzag match the protobuf encoding") {
     std::vector<u8> out;
@@ -219,3 +218,5 @@ TEST_CASE("tagged: random bytes never crash the reader") {
         CHECK(r.position() <= data.size());
     }
 }
+
+} // namespace

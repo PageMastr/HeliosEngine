@@ -11,7 +11,6 @@ using helios::test::Rng;
 namespace {
 constexpr CubeMapping kMappings[] = {CubeMapping::Gnomonic, CubeMapping::EquiAngular, CubeMapping::Nowell};
 CubeFace faceOf(int i) { return static_cast<CubeFace>(i); }
-}  // namespace
 
 TEST_CASE("spherical: cube face bases") {
     std::set<std::tuple<int, int, int>> normals;
@@ -313,3 +312,5 @@ TEST_CASE("spherical: golden values (deterministic mapping)") {
         CHECK(helios::test::bits(v.z) == g.z);
     }
 }
+
+} // namespace

@@ -29,8 +29,6 @@ f64 msPerTile(KernelKind kernel, const TerrainProgram& p, u32 tiles) {
     return times[times.size() / 2];
 }
 
-} // namespace
-
 TEST_CASE("perf: CPU VM ms per 65x65 tile per core on the dispatched AVX2 kernel (03 §5.5a budget 0.5 ms)") {
     if (!kernelSupported(KernelKind::Avx2)) {
         MESSAGE("AVX2 kernel not supported on this CPU; the budget is measured on AVX2 hardware only");
@@ -49,3 +47,5 @@ TEST_CASE("perf: CPU VM ms per 65x65 tile per core on the dispatched AVX2 kernel
     // (The binding measurement is on MIN and SERVER hardware; see docs/adr/ADR-0.9c-hnoise-throughput.md.)
     CHECK(avx2 <= 0.5);
 }
+
+} // namespace

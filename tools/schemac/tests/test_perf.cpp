@@ -34,8 +34,6 @@ std::map<std::string, std::string> bigSchemaSet() {
     return files;
 }
 
-} // namespace
-
 TEST_CASE("perf: 2,000 types regenerate within the 02 §3.5 budget") {
     const auto files = bigSchemaSet();
     CompileOptions options;
@@ -66,3 +64,5 @@ TEST_CASE("perf: 2,000 types regenerate within the 02 §3.5 budget") {
     CHECK(elapsed <= 1.0);
 #endif
 }
+
+} // namespace

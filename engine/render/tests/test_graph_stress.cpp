@@ -787,8 +787,6 @@ void resetImports(rhi::Device& device, rhi::NullDevice& null, const Imports& imp
     REQUIRE(device.submit(rhi::Queue::Graphics, {&cmd, 1}).ok());
 }
 
-} // namespace
-
 TEST_CASE("graph stress: random DAGs match the reference simulator and run clean on Null") {
     NullDeviceFixture fx;
     rhi::Device& device = *fx.device;
@@ -889,3 +887,5 @@ TEST_CASE("graph stress: random DAGs match the reference simulator and run clean
     CHECK(waits > 100);
     CHECK(culled > 50);
 }
+
+} // namespace

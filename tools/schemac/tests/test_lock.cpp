@@ -51,8 +51,6 @@ std::string changes(const Compiled& c) {
     return out;
 }
 
-} // namespace
-
 TEST_CASE("lock: a new lock mints fnv1a32 type ids and sequential field ids") {
     LockFixture fx;
     auto c = fx.run("struct A { x: u8; y: string = \"hi\" }\nenum E : u8 { P, Q = 5 }\n");
@@ -407,3 +405,5 @@ TEST_CASE("lock: layout hashes are transitive and independent of declaration and
     CHECK(refChanged.at("b.ByRef") == base.at("b.ByRef"));
     CHECK(refChanged.at("b.RDef") != base.at("b.RDef"));
 }
+
+} // namespace

@@ -13,6 +13,8 @@
 using namespace helios;
 using namespace helios::hxl::test;
 
+namespace {
+
 TEST_CASE("hxl corpus: every case matches bit for bit") {
     const CorpusStats stats = runCorpus(HELIOS_HXL_CORPUS_DIR);
     for (const std::string& f : stats.failures) FAIL_CHECK(f);
@@ -55,3 +57,5 @@ TEST_CASE("hxl corpus: number syntax") {
     CHECK_FALSE(parseCorpusNumber("1.5x", v));
     CHECK_FALSE(parseCorpusNumber("", v));
 }
+
+} // namespace

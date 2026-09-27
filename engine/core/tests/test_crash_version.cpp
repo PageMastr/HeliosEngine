@@ -33,7 +33,6 @@ int runCrashChild(const fs::Path& dir, std::string_view mode) {
     if constexpr (!platform::kIsWindows) command = "ulimit -c 0; " + command + " 2>/dev/null"; // no core files
     return std::system(command.c_str());
 }
-} // namespace
 
 TEST_CASE("crash: handler install, on-demand report and uninstall") {
     CHECK(!isCrashHandlerInstalled());
@@ -118,3 +117,5 @@ TEST_CASE("version: constants and build info") {
     CHECK(summary.find(std::string(info.compiler)) != std::string::npos);
     MESSAGE(summary);
 }
+
+} // namespace

@@ -27,8 +27,6 @@ void addNamedSystems(World& world, const std::vector<std::string>& names, Stage 
     }
 }
 
-} // namespace
-
 TEST_CASE("ecs scheduler: order is independent of registration order") {
     auto orderFor = [](std::vector<std::string> names) {
         World world;
@@ -98,8 +96,6 @@ TEST_CASE("ecs scheduler: conflict edges come from declared access") {
     CHECK(has("5-Health", "6-Exclusive"));
     CHECK(has("1-WritePos", "6-Exclusive"));
 }
-
-namespace {
 
 /// A small deterministic simulation touching every scheduler feature: parallel chunk writes,
 /// conflicting systems, random-access reads, spawns/destroys through command buffers, dirty marks.
@@ -207,8 +203,6 @@ u64 simulate(u32 workers, u32 ticks, std::vector<std::string>* order = nullptr) 
     return hasher.digest();
 }
 
-} // namespace
-
 TEST_CASE("ecs scheduler: results are bit-identical for 0, 1, 2 and 4 workers") {
     std::vector<std::string> order;
     const u64 reference = simulate(0, 40, &order);
@@ -293,13 +287,11 @@ TEST_CASE("ecs scheduler: stats, stage order and chunk splitting") {
 }
 
 #if HELIOS_ENABLE_ASSERTS
-namespace {
 std::atomic<int> g_asserts{0};
 AssertAction countingHandler(const AssertInfo&) {
     ++g_asserts;
     return AssertAction::Continue;
 }
-} // namespace
 
 TEST_CASE("ecs scheduler: undeclared random access and structural calls during a stage are caught") {
     World world;
@@ -318,3 +310,5 @@ TEST_CASE("ecs scheduler: undeclared random access and structural calls during a
     CHECK(g_asserts.load() >= 2);
 }
 #endif
+
+} // namespace

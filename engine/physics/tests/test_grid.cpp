@@ -31,8 +31,6 @@ BodyDesc groundDesc() {
     return d;
 }
 
-} // namespace
-
 TEST_CASE("grid: bodies are created, found by (layer, key) and destroyed") {
     PhysicsRuntime runtime;
     auto grid = PhysicsGrid::create({});
@@ -377,3 +375,5 @@ TEST_CASE("grid: a step that outgrows the temp allocator falls back to the heap 
     CHECK(g.stats().tempAllocatorFallbacks > 0);
     CHECK(g.stats().jobsInFlight == 0);
 }
+
+} // namespace

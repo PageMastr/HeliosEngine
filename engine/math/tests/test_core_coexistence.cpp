@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <type_traits>
 
+// helios-lint: outside-anon-namespace begin (re-declares helios/core names, as the test needs)
 namespace helios {
 // Same aliases as helios/core/types.h (redeclaring an alias to the same type is legal).
 using u32 = std::uint32_t;
@@ -17,10 +18,13 @@ constexpr u64 hashCombine(u64 seed, u64 value) noexcept {
     return seed ^ (value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2));
 }
 }  // namespace helios
+// helios-lint: outside-anon-namespace end
 
 #include "helios/math/all.h"
 
 #include <doctest/doctest.h>
+
+namespace {
 
 TEST_CASE("math headers coexist with helios/core declarations") {
     // Both calls would be ambiguous or re-routed if math declared another hashCombine overload.
@@ -31,3 +35,5 @@ TEST_CASE("math headers coexist with helios/core declarations") {
     static_assert(std::is_same_v<decltype(helios::hashCombineU32(1u, 2u)), helios::u32>);
     CHECK(helios::hashCombineU32(1u, 2u) != helios::hashCombineU32(2u, 1u));
 }
+
+} // namespace

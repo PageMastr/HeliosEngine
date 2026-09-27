@@ -12,9 +12,9 @@
 
 using namespace helios;
 
-HELIOS_LOG_CHANNEL(LogTestAlpha, "TestAlpha");
-
 namespace {
+
+HELIOS_LOG_CHANNEL(LogTestAlpha, "TestAlpha");
 
 // Not registered until first use: exercises name-based overrides applied at registration.
 constinit log::Channel g_lateChannel{"TestLateChannel"};
@@ -50,8 +50,6 @@ struct CaptureSink final : log::Sink {
                            r.location.line, r.threadId, std::string(r.threadName)});
     }
 };
-
-} // namespace
 
 TEST_CASE("log: messages reach sinks with channel, level, location and thread") {
     SinkScope scope;
@@ -248,3 +246,5 @@ TEST_CASE("log: sink management") {
     CHECK(b->records.size() == 1);
     CHECK(a->records.empty());
 }
+
+} // namespace

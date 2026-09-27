@@ -38,8 +38,6 @@ usize drain(UdpSocket& s, usize count, f64 timeout = 2.0) {
     return got;
 }
 
-} // namespace
-
 TEST_SUITE("net.udp") {
     TEST_CASE("bind, send and receive on IPv4 loopback") {
         UdpSocket a = openLoopback();
@@ -238,3 +236,5 @@ TEST_SUITE("net.udp") {
         CHECK(ppsPerCore >= 100'000.0);
     }
 }
+
+} // namespace

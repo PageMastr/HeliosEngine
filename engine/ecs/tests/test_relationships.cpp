@@ -20,7 +20,6 @@ WorldDesc hierarchyDesc(bool nonFragmenting) {
     d.relations.nonFragmentingHierarchy = nonFragmenting;
     return d;
 }
-} // namespace
 
 TEST_CASE("ecs relationships: hierarchy, reparenting and cycle checks") {
     for (const bool nonFragmenting : {true, false}) {
@@ -273,3 +272,5 @@ TEST_CASE("ecs prefabs: prefab children are instantiated with the prefab") {
     world.destroy(inst);
     CHECK_FALSE(world.find(childId).isValid());
 }
+
+} // namespace

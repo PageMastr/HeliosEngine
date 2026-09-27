@@ -142,7 +142,7 @@
       "title": "Every render feature has a lavapipe golden from the commit that ships it, rendered twice bit-identically",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Every render feature has a lavapipe golden from the commit that ships it, whatever its REN-6 phase; each renders twice bit-identically; a failing golden blocks the merge",
-      "notes": "Lavapipe goldens run on Linux CI; Windows runners have no Vulkan driver, so Windows is evidenced by the Null trace goldens. The PR-tier Linux jobs run the goldens, which is how a failing golden blocks the merge. rendertest.coverage reads 'every render feature' as every shader entry point embedded in helios_render and every pipeline engine/render records through createShippedPipeline(): each must be bound (a bindPipeline in the Null trace) in the captured frame of a scene with committed lavapipe and Null goldens. lint_shipped_pipelines keeps the record complete (no other direct pipeline creation under engine/render, apps/samples or tools/rendertest without a reasoned waiver), and a rendertest pipeline named like a shipped one fails the check",
+      "notes": "Lavapipe goldens run on Linux CI; Windows runners have no Vulkan driver, so Windows is evidenced by the Null trace goldens. The PR-tier Linux jobs run the goldens, which is how a failing golden blocks the merge. rendertest.coverage reads 'every render feature' as every shader entry point embedded in helios_render and every pipeline engine/render records through createShippedPipeline(), which gives one name one pipeline (a name reused with other shaders or other state is rejected): each must be bound (a bindPipeline in the Null trace) in the captured frame of a scene with committed lavapipe and Null goldens. lint_shipped_pipelines (textual) rejects any other create<X>Pipeline identifier in engine/, apps/ and tools/ outside engine/rhi without a reasoned waiver, and a rendertest pipeline named like a shipped one fails the check",
       "status": "partial",
       "tests": [
         {"ctest": "rendertest.vulkan.*", "platforms": ["linux"]},
@@ -158,7 +158,7 @@
         {"ci_job": "Linux (linux-clang)"}
       ],
       "gaps": [
-        {"clause": "Coverage that rendertest.coverage cannot see: passes without a pipeline (uploads, copies, clears); whether a bound pipeline's output reaches the golden image (a pipeline bound only into a marked debug output counts); shaders not embedded in helios_render (cooked SPIR-V from content, Phase 1)", "state": "unmeasured", "owner": "WP-0.12"},
+        {"clause": "Coverage that rendertest.coverage cannot see: passes without a pipeline (uploads, copies, clears); whether a bound pipeline's output reaches the golden image (a pipeline bound only into a marked debug output counts); shaders not embedded in helios_render (cooked SPIR-V from content, Phase 1); pipelines whose creation the textual lint_shipped_pipelines cannot see (an identifier built by token pasting, a member pointer obtained outside the scanned files)", "state": "unmeasured", "owner": "WP-0.12"},
         {"clause": "MinGW: the cross-built binaries are never executed, so the Null traces are not checked on MinGW", "state": "unmeasured", "owner": "WP-0.1"}
       ]
     },
@@ -167,7 +167,7 @@
       "title": "Lavapipe goldens for every shipped feature, rendered twice; suite within 10 min; Null traces on all toolchains",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Every shipped feature has a lavapipe golden (ꟻLIP mean ≤ 0.01), rendered twice bit-identically; suite ≤ 10 min; Null traces on all toolchains",
-      "notes": "rendertest.report checks the 10-minute budget (--budget 600). rendertest.coverage reads 'every shipped feature' as every shader entry point embedded in helios_render and every pipeline engine/render records through createShippedPipeline(): each must be bound (a bindPipeline in the Null trace) in the captured frame of a scene with committed lavapipe and Null goldens; lint_shipped_pipelines keeps that record complete. Where configure finds the Khronos layer (the Linux CI images), the Vulkan goldens require it (--require-validation) and rendertest.validation-layer checks that it loads and reports a seeded barrier error; without it that test reports Skipped and each result says validation: false. rendertest.validation-required checks that a required layer that does not load fails, never skips. shaderc.spirv-val reports Skipped where spirv-tools is not installed",
+      "notes": "rendertest.report checks the 10-minute budget (--budget 600). rendertest.coverage reads 'every shipped feature' as every shader entry point embedded in helios_render and every pipeline engine/render records through createShippedPipeline(), which gives one name one pipeline (a name reused with other shaders or other state is rejected): each must be bound (a bindPipeline in the Null trace) in the captured frame of a scene with committed lavapipe and Null goldens; lint_shipped_pipelines (textual) rejects other create<X>Pipeline uses in engine/, apps/ and tools/ outside engine/rhi without a reasoned waiver. Where configure finds the Khronos layer (the Linux CI images), the Vulkan goldens require it (--require-validation) and rendertest.validation-layer checks that it loads and reports a seeded barrier error; without it that test reports Skipped and each result says validation: false. rendertest.validation-required checks that a required layer that does not load (hidden by the loader, or a broken manifest with HELIOS_RHI_VALIDATION=1) fails, never skips, even with HELIOS_SKIP_GPU_TESTS=1. shaderc.spirv-val reports Skipped where spirv-tools is not installed",
       "status": "partial",
       "tests": [
         {"ctest": "rendertest.vulkan.*", "platforms": ["linux"]},
@@ -183,7 +183,7 @@
         {"ctest": "shaderc.spirv-val", "platforms": ["linux"]}
       ],
       "gaps": [
-        {"clause": "Coverage that rendertest.coverage cannot see: passes without a pipeline (uploads, copies, clears); whether a bound pipeline's output reaches the golden image (a pipeline bound only into a marked debug output counts); shaders not embedded in helios_render (cooked SPIR-V from content, Phase 1)", "state": "unmeasured", "owner": "WP-0.12"},
+        {"clause": "Coverage that rendertest.coverage cannot see: passes without a pipeline (uploads, copies, clears); whether a bound pipeline's output reaches the golden image (a pipeline bound only into a marked debug output counts); shaders not embedded in helios_render (cooked SPIR-V from content, Phase 1); pipelines whose creation the textual lint_shipped_pipelines cannot see (an identifier built by token pasting, a member pointer obtained outside the scanned files)", "state": "unmeasured", "owner": "WP-0.12"},
         {"clause": "MinGW: the cross-built binaries are never executed, so the Null traces are not checked on MinGW", "state": "unmeasured", "owner": "WP-0.1"}
       ]
     },

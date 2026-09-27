@@ -56,9 +56,12 @@ device.present(swapchain, r.graphics());
 
 **Budget:** a full compile of 200 passes, which is the topology-change case, ≤ 0.3 ms CPU on REF at
 60 fps (03 §2.2 item 7, §8.1.5). `perf: render graph compile of 200 passes <= 0.3 ms (no topology
-cache)` in `render_tests_perf` asserts it in optimized builds without sanitizers and reports §8.1.5's
-120 fps column (≤ 0.2 ms) without gating it. The 4-core dev container, which is not REF, measures
-≈ 0.21–0.26 ms (best of 10 batches). The Phase 2 topology cache has its own budget: a hit ≤ 0.05 ms.
+cache)` in `render_tests_perf` asserts it on the best of 10 batches of 5 compiles, in optimized builds
+without sanitizers, and reports the median batch and §8.1.5's 120 fps column (≤ 0.2 ms) without gating
+them. §8.1.5's rows are p50; on the 4-core dev container, which is not REF, the best of 10 is
+≈ 0.21–0.25 ms and the median batch ≈ 0.21–0.22 ms (a review's 200 single compiles: p50 0.212–0.215 ms
+against a best of 0.211–0.213 ms), so the two agree here. The Phase 2 topology cache has its own
+budget: a hit ≤ 0.05 ms.
 
 ## Shader reflection (03 §1.7)
 
@@ -74,20 +77,24 @@ checks its C++ push-constant structs against the reflected sizes at creation.
 
 **Shipped shaders.** Every `shaders/*.slang` file is embedded in `helios_render`, and features build
 their pipelines with `createShippedPipeline()` (`shader_library.h`), which records each pipeline's
-name with its module entry points and rejects SPIR-V that is not embedded (by address) and a name
-reused with other shaders. `helios-rendertest --coverage` (CTest `rendertest.coverage`) maps the
+name with its module entry points and a fingerprint of its other state (raster, depth, blend, formats,
+topology, samples), and rejects SPIR-V that is not embedded (by address) and a name reused with other
+shaders or other state: a state variant needs its own name and golden, also when a feature builds the
+same pipeline for several output formats in one process (the same desc on another device is fine). `helios-rendertest --coverage` (CTest `rendertest.coverage`) maps the
 pipelines bound in each golden scene's Null trace back to these entry points and fails when a shipped
 entry point or recorded pipeline is bound by no scene with committed lavapipe and Null goldens. The
-CTest `lint_shipped_pipelines` (label `lint`) keeps the record complete: under `engine/render`,
-`apps/samples` and `tools/rendertest`, only `src/shader_library.cpp` may call `create*Pipeline` on a
-device, and any other direct call needs a reasoned `// shipped-pipelines-lint: allow <reason>` waiver
-(today: rendertest's `createLocalPipeline()` and the raw-RHI sample). This is RC-1's "every shipped
-feature has a golden" for pipelines. What it cannot see, and the scorecard keeps as a gap: passes
-without a pipeline (uploads, copies, clears), whether a bound pipeline's output reaches the golden image,
-and shaders not embedded in `helios_render` (cooked SPIR-V from content, Phase 1). Future costs:
-`createShippedPipeline()` reflects its module on every call (cache per module before 03 §1.7's
-thousands of PSOs), and a hot-reloaded pipeline whose entry points change must re-register its name
-(Phase 2).
+CTest `lint_shipped_pipelines` (label `lint`, a textual check) keeps pipelines from bypassing the
+record: in `engine/`, `apps/` and `tools/` (except `engine/rhi/`, which implements the API), any
+identifier `create<X>Pipeline` other than `createShippedPipeline`/`createLocalPipeline` needs a
+reasoned `// shipped-pipelines-lint: allow <reason>` waiver, and only `src/shader_library.cpp` is exempt
+(waived today: rendertest's `createLocalPipeline()`, the raw-RHI sample and the pcg twin's test
+pipelines). This is RC-1's "every shipped feature has a golden" for pipelines. What it cannot see, and
+the scorecard keeps as a gap: passes without a pipeline (uploads, copies, clears), whether a bound
+pipeline's output reaches the golden image, shaders not embedded in `helios_render` (cooked SPIR-V from
+content, Phase 1), and a pipeline created through token pasting or a member pointer obtained outside the
+scanned files. Future costs: `createShippedPipeline()` reflects its module on every call (cache per
+module before 03 §1.7's thousands of PSOs), and a hot-reloaded pipeline whose entry points or state
+change must re-register its name (Phase 2).
 
 ## Forward pipeline v0
 

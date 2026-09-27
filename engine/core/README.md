@@ -153,9 +153,10 @@ loading a plugin DLL/.so (`tests/support/test_plugin.cpp`), processes against
 whitelist) and the CPU gate's pre-initializer against `tests/support/cpugate_child.cpp`.
 `tests/test_tu_isolation_{a,b}.cpp` probe an MSVC hazard that affects every test file: without an
 unnamed namespace, a `Job` built from a lambda in one test file can run another file's lambda
-(`tests/tu_isolation.h` explains it). `lint_test_namespaces` requires every test source's (a `tests/`
-.cpp with a test case) test cases and declarations to be in an unnamed namespace or a waiver region;
-`tools/lint/README.md` lists its limits.
+(`tests/tu_isolation.h` explains it). `lint_test_namespaces` checks, on a best-effort basis against
+accidental omissions, that every test source (a `.cpp`, `.cc` or `.cxx` file with a test case under a
+`tests/` or `test/` directory) keeps its declarations in an unnamed namespace or a waiver region, and
+its test cases always in one; `tools/lint/README.md` gives its threat model and limits.
 
 ```
 cmake -S . -B build/core -G Ninja -DHELIOS_BUILD_GRAPHICS=OFF

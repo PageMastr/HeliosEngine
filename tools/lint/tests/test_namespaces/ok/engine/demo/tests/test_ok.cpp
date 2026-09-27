@@ -18,6 +18,12 @@
 #define HELIOS_DEMO_REGISTER(T) template <> struct demo::Registered<T> {};
 #define HELIOS_DEMO_SPLICED "a \
 /* not a comment " 1
+#define HELIOS_DEMO_RAW_COMMENT R"(/*)"
+#define HELIOS_DEMO_RAW_LINES R"(
+} TEST_CASE("x") {
+)"
+#define HELIOS_DEMO_HASH \
+#if 0
 
 // Using-directives, using-declarations and aliases may stay outside: they define nothing.
 using std::string;
@@ -43,6 +49,20 @@ int skipped = 0; /* a comment in a skipped group, which hides
 #endif
 namespace { */
 // helios-lint: outside-anon-namespace begin (not a waiver: the group is skipped)
+#endif
+#if 0
+namespace {
+# endif
+#if 0 // off
+namespace {
+#endif
+#if false
+namespace {
+#endif
+#if 0
+#ifdef HELIOS_DEMO_NESTED
+#else
+#endif
 #endif
 ; // an empty declaration
 
@@ -86,6 +106,8 @@ struct Inner {};
 } // namespace v1
 const char* const kSpliced = "a { \
 b";
+const std::string kRawAtEol = std::string(R"({"a": 1},)"
+                                          );
 // A spliced comment \
 { still the comment
 /* A block comment in the unnamed scope

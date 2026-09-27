@@ -60,6 +60,12 @@ runs another file's lambda (#15). A same-named file-scope helper collides the sa
 unnamed namespace carry a per-file hash. `engine/core/tests/test_tu_isolation_{a,b}.cpp` probe it on
 the Windows jobs.
 
+Threat model: `lint_test_namespaces` is a best-effort textual check against *accidental* omissions,
+such as a new test file or a helper left outside the namespace. It is not a guarantee against
+deliberately adversarial source: digraphs, form feeds, spliced directive names, macro-generated
+braces and the like are documented limits (below). The backstops are code review and the MSVC
+TU-isolation probe in CI.
+
 What it scans: the files under a `tests/` or `test/` directory of `engine/`, `tools/` and `apps/`,
 except `tools/prebuilt/` and its own fixtures. In a git checkout these are the files git tracks or
 would track (`git ls-files --cached --others --exclude-standard`), so a new test file counts before
@@ -88,16 +94,20 @@ What fails it (each finding is a `path:line`):
   - an `#endif` without its `#if`, or an `#if` without its `#endif`;
   - an unterminated block comment, literal, raw string or waiver region;
   - a malformed `helios-lint` comment;
-  - a line over 500 characters with more than 500 backslashes, `*` and `'`, counted in comments too,
-    so a 600-`*` banner comment fails. This is CMake's regex recursion bound: a 1 MB stack
-    overflows at about 2,500;
+  - a line the lexer tokenizes that is over 500 characters and has more than 500 backslashes, `*`
+    and `'`, counted in its comments too, so a 600-`*` banner comment fails. This is CMake's regex
+    recursion bound: a 1 MB stack overflows at about 2,500. Lines the lexer only searches for a
+    terminator (inside a block comment, raw string or spliced `//` comment, and directive or
+    `#if 0` lines without a comment or quote) are not bounded and need not be;
   - no test macro at all in the repository run.
 
 The lexer handles comments, string, character and raw string literals (with encoding prefixes),
 digit separators and line splices. A `#` first on its line, after blanks and comments, starts a
 preprocessing directive, and only its comments and literals are lexed. So a block comment that a
-directive opens hides the next line, as it does for the compiler. `#if 0` groups are skipped the
-same way: comment-aware, and with the conditionals nested in them counted.
+directive opens hides the next line, as it does for the compiler, and a `#` on a line that a
+splice continues is not a directive. `#if 0` groups are skipped the same way: comment-aware, and
+with the conditionals nested in them counted. The conditionals are counted, so a file whose
+conditionals do not pair up as the lint sees them fails.
 
 Limits:
 
@@ -107,9 +117,15 @@ Limits:
   `#define CLOSE }` before a global `TEST_CASE`, and `#define OPEN namespace {` after it, pass.
 - **Conditionals other than `#if 0` are not evaluated.** Both branches are lexed, so an opener in
   each is reported as unbalanced braces.
+- **Directives it does not recognize can pair differently.** A directive name split by a line
+  splice (`#en\` then `dif`), a `%:` digraph, or a form feed or vertical tab before the `#` is not
+  a directive to the lint, so an `#if`/`#endif` pairing that relies on one can differ from the
+  compiler's and pass. A directive inside a macro call's arguments is undefined behaviour in C++;
+  the lint treats it as a directive, as GCC does.
 - **Declarations in headers and support sources are not checked** (see above).
-- **Run time is quadratic in two constructed corners.** 20,000 nested braces take about 18 s, and
-  40,000 about 70 s. 4,000 raw strings on one line take about 19 s. Real code is far from both: the
+- **Run time is quadratic in three constructed corners.** 20,000 nested braces take about 18 s, and
+  40,000 about 70 s. 4,000 raw strings on one line take about 19 s. 50,000 `/**/` comments at the
+  start of one line take about 3 s (5,000 take 0.1 s). Real code is far from all three: the
   repository run takes about 4 s.
 
 ## ISA audit on MSVC and clang-cl

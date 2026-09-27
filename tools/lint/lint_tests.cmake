@@ -262,7 +262,11 @@ foreach(case
     "waiver_stray_end|test_waiver_stray_end.cpp:9: waiver end without a begin"
     "string_unterminated|test_string_unterminated.cpp:5: unterminated string literal"
     "raw_long_delim|test_raw_long_delim.cpp:5: raw string delimiter longer than 16 characters"
-    "waiver_paren_reason|test_waiver_paren_reason.cpp:4: malformed helios-lint comment")
+    "waiver_paren_reason|test_waiver_paren_reason.cpp:4: malformed helios-lint comment"
+    "waiver_body_after_end|end.cpp:11: declaration outside.*end.cpp:17: declaration.*end.cpp:22: decl"
+    "raw_eol|test_raw_eol.cpp:10: TEST_CASE outside.*test_raw_eol.cpp:14: TEST_CASE outside"
+    "pp_spliced_code|test_pp_spliced_code.cpp:14: TEST_CASE outside an unnamed namespace"
+    "if0_expression|test_if0_expression.cpp:10: TEST_CASE outside an unnamed namespace")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)
   list(GET parts 1 expect)

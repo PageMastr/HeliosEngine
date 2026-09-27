@@ -23,6 +23,22 @@ foreach(helios_render_tool shaderc rendertest)
   endif()
 endforeach()
 
+# Deferred to the end of the top-level directory (see the call below): by then every helios_shaders()
+# call has appended its output directory to HELIOS_SHADER_OUTPUT_DIRS.
+function(helios_render_add_spirv_val_test)
+  get_property(dirs GLOBAL PROPERTY HELIOS_SHADER_OUTPUT_DIRS)
+  get_property(require GLOBAL PROPERTY HELIOS_REQUIRE_SPIRV_VAL)
+  set(validator "")
+  if(require)
+    set(validator "-DSPIRV_VAL=${HELIOS_SPIRV_VAL_EXE}")  # the one configure found, even off PATH
+  endif()
+  add_test(NAME shaderc.spirv-val
+           COMMAND ${CMAKE_COMMAND} -DSHADERC=$<TARGET_FILE:helios-shaderc> "-DDIRS=${dirs}" -DREQUIRE=${require}
+                   ${validator} -P ${PROJECT_SOURCE_DIR}/tools/shaderc/tests/validate_spirv.cmake)
+  set_tests_properties(shaderc.spirv-val PROPERTIES LABELS "shaders" TIMEOUT 300
+                       SKIP_REGULAR_EXPRESSION "spirv-val not found: validation skipped")
+endfunction()
+
 file(GLOB HELIOS_RENDER_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp)
 helios_test(render_tests SOURCES ${HELIOS_RENDER_TEST_SOURCES} DEPS helios::render helios::tp::headers)
 if(TARGET render_tests)
@@ -32,22 +48,18 @@ if(TARGET render_tests)
     HELIOS_RENDER_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/golden"
     HELIOS_RENDER_TEST_OUTPUT_DIR="${CMAKE_CURRENT_BINARY_DIR}/render_test_output")
   set_tests_properties(render_tests PROPERTIES TIMEOUT 600)
-  if(TARGET helios-shaderc AND TARGET helios-rendertest)
-    # spirv-val over every module the renderer, its tests and helios-rendertest embed (required on
-    # Linux CI images, where spirv-tools is installed; skipped elsewhere when it is missing).
+  if(TARGET helios-shaderc)
+    # spirv-val over every SPIR-V module the build cooks (03 §1.7): the output directory of every
+    # helios_shaders() call in the tree, so the test is added once the top-level directory has been
+    # processed. Required where spirv-tools is installed (the Linux CI images); without spirv-val the
+    # test reports Skipped, never Passed.
     find_program(HELIOS_SPIRV_VAL_EXE spirv-val)
-    set(helios_render_spv_dirs ${CMAKE_CURRENT_BINARY_DIR}/helios_render_shaders
-        ${CMAKE_CURRENT_BINARY_DIR}/render_tests_shaders
-        ${CMAKE_CURRENT_BINARY_DIR}/tools/rendertest/helios-rendertest_shaders)
     set(helios_require_spirv_val OFF)
     if(HELIOS_SPIRV_VAL_EXE AND NOT CMAKE_CROSSCOMPILING)
       set(helios_require_spirv_val ON)
     endif()
-    add_test(NAME shaderc.spirv-val
-             COMMAND ${CMAKE_COMMAND} -DSHADERC=$<TARGET_FILE:helios-shaderc> "-DDIRS=${helios_render_spv_dirs}"
-                     -DREQUIRE=${helios_require_spirv_val}
-                     -P ${PROJECT_SOURCE_DIR}/tools/shaderc/tests/validate_spirv.cmake)
-    set_tests_properties(shaderc.spirv-val PROPERTIES LABELS "shaders" TIMEOUT 300)
+    set_property(GLOBAL PROPERTY HELIOS_REQUIRE_SPIRV_VAL ${helios_require_spirv_val})
+    cmake_language(DEFER DIRECTORY ${PROJECT_SOURCE_DIR} CALL helios_render_add_spirv_val_test)
   endif()
   if(TARGET helios-shaderc)
     # End-to-end tests drive the real tool (tests/test_shaderc.cpp).

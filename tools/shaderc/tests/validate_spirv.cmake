@@ -1,7 +1,9 @@
 # Runs spirv-val (through helios-shaderc --reflect-spirv, which also reflects each module) over every
-# SPIR-V module the build compiled in the given directories (03 §1.7: "spirv-val runs over every
-# cooked shader in Linux CI"). With -DREQUIRE=ON a missing spirv-val fails; otherwise it is skipped.
-# Inputs: -DSHADERC=<exe> -DDIRS=<dir;dir;...> [-DREQUIRE=ON]
+# SPIR-V module the build compiled in the given directories: engine/render passes every helios_shaders()
+# output directory (03 §1.7: "spirv-val runs over every cooked shader in Linux CI"). With -DREQUIRE=ON
+# a missing spirv-val fails; otherwise the script prints the line that the CTest's
+# SKIP_REGULAR_EXPRESSION reports as Skipped.
+# Inputs: -DSHADERC=<exe> -DDIRS=<dir;dir;...> [-DREQUIRE=ON] [-DSPIRV_VAL=<spirv-val>]
 
 if(NOT SHADERC OR NOT DIRS)
   message(FATAL_ERROR "usage: cmake -DSHADERC=<exe> -DDIRS=<dirs> [-DREQUIRE=ON] -P validate_spirv.cmake")
@@ -10,11 +12,15 @@ set(mode auto)
 if(REQUIRE)
   set(mode on)
 endif()
+set(validator "")
+if(SPIRV_VAL)
+  set(validator --spirv-val "${SPIRV_VAL}")
+endif()
 set(count 0)
 foreach(dir ${DIRS})
   file(GLOB modules "${dir}/*.spv")
   foreach(spv ${modules})
-    execute_process(COMMAND "${SHADERC}" --reflect-spirv "${spv}" --no-hsr --validate ${mode}
+    execute_process(COMMAND "${SHADERC}" --reflect-spirv "${spv}" --no-hsr --validate ${mode} ${validator}
                     RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
     if(NOT rc EQUAL 0)
       message(FATAL_ERROR "${spv}: helios-shaderc/spirv-val failed (${rc}):\n${out}${err}")

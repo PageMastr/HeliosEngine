@@ -38,6 +38,13 @@ struct ZoneConfig {
     u32 grids = 12;
     u32 dockedShips = 400;       ///< Ships docked (DockedTo) at station modules.
     u64 seed = 0x5EED;
+    /// The burst's 3,000 creates as spawn() + 7 set() commands each instead of 12 spawnN() batches.
+    bool perCommandCreates = false;
+    /// The burst exactly as the pre-WP-1.1a bench (f08cf5b) ran it, for comparison (SPIKES.md
+    /// §5.3): per-command creates, the first 3,000 projectiles in query order as victims, fresh
+    /// buffers every round, and a raw floor that writes no create values, reuses 250 values for
+    /// every frame and deletes its own creates. ecs_bench also skips the raw parity alignment.
+    bool legacyBurst = false;
 };
 
 struct ZoneInfo {
@@ -57,6 +64,8 @@ struct BurstResult {
     f64 toggleMs = 0;
     f64 toggleDontFragmentMs = 0;
     f64 totalMs() const noexcept { return createMs + destroyMs + toggleMs; }
+    /// The same burst with the toggles on the DontFragment component instead of tags.
+    f64 totalDontFragmentMs() const noexcept { return createMs + destroyMs + toggleDontFragmentMs; }
 };
 
 /// Per-tick damage events: one vector per job of the producing system, consumed in job order.
@@ -84,20 +93,24 @@ public:
     /// Single-thread pass over all 50k entities touching 3 components (RT-01 "50k×3 iteration").
     /// Returns the number of entities visited.
     u32 iterate3(u64* collectNs = nullptr, u32* chunkCount = nullptr);
-    /// 9,000 structural operations: 3,000 creates (projectile archetype, 7 components each),
+    /// 9,000 structural operations: 3,000 creates (projectile archetype, 7 components each; one
+    /// spawnN() batch per frame, or per-command spawns with ZoneConfig::perCommandCreates),
     /// 3,000 destroys and 3,000 tag adds/removes on NPCs (a table move each), each set applied as
     /// one sync point; plus the same 3,000 toggles on a DontFragment component for comparison.
     /// Round 0 creates new tag-combination tables ("cold"); rounds >= 1 destroy the previous
     /// round's projectiles and alternately revert / re-apply the tag changes, using only existing
     /// tables ("warm").
-    BurstResult structuralBurst(u32 round);
+    /// `profiled` routes the timed work through bench::timed:: functions, the ones the callgrind
+    /// job collects (SPIKES.md §5.2); the timings are the same either way.
+    BurstResult structuralBurst(u32 round, bool profiled = true);
     /// The same 9k operations issued directly through the flecs C API (bulk init into the final
     /// tables with values, ecs_delete, ecs_add_id/ecs_remove_id, ecs_set_id/ecs_remove_id on the
     /// DontFragment status), without World bookkeeping (ids, handles, registry, logs, dirty
-    /// tracking, command buffers). This is the floor any flecs-based wrapper pays; the entities it
-    /// creates are unregistered and destroyed again in the same call. Continue the round numbering
-    /// of structuralBurst() so the NPC tag toggles keep alternating.
-    BurstResult rawFlecsBurst(u32 round);
+    /// tracking, command buffers). This is the floor any flecs-based wrapper pays. The entities it
+    /// creates are unregistered; like structuralBurst(), each call deletes the previous call's
+    /// creates (the first deletes none). Continue the round numbering of structuralBurst() so the
+    /// NPC tag toggles keep alternating.
+    BurstResult rawFlecsBurst(u32 round, bool profiled = true);
 
     u32 liveProjectiles();
 

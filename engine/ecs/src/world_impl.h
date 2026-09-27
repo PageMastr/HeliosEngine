@@ -3,6 +3,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstring>
 #include <deque>
 #include <map>
 #include <memory>
@@ -11,7 +12,11 @@
 #include <vector>
 
 #include "flecs_internal.h"
+#include "helios/core/assert.h"
+#include "helios/core/hash.h"
 #include "helios/core/jobs.h"
+#include "helios/core/memory.h"
+#include "helios/ecs/heap.h"
 #include "helios/ecs/world.h"
 
 namespace helios::ecs {
@@ -70,6 +75,68 @@ struct StageSchedule {
     u64 lastSyncNs = 0;
 };
 
+/// The flecs component record of the Sparse or DontFragment component used last (their ownership
+/// checks go to its sparse set): a toggle run on one component skips flecs_components_get(). The
+/// record stays valid while flecs frees none (ecs_world_info_t::id_delete_total is unchanged).
+struct SparseRecordCache {
+    const ecs_world_info_t* info = nullptr; // flecs' counters (stable for the world's lifetime)
+    ComponentId id = 0;
+    ecs_component_record_t* record = nullptr;
+    int64_t epoch = -1;
+
+    ecs_component_record_t* get(const ecs_world_t* w, ComponentId cid) noexcept {
+        if (cid != id || record == nullptr || info->id_delete_total != epoch) {
+            id = cid;
+            record = flecs_components_get(w, cid);
+            epoch = info->id_delete_total;
+        }
+        return record;
+    }
+};
+
+/// The NetHandle last seen for each flecs entity index (the low 32 bits of a flecs id): a hint for
+/// the log entries of Sparse and DontFragment ops. Such an op touches no part of the entity's table,
+/// so reading the identity from its NetIdentity row (through the table's component map and column
+/// array) cost it cache misses the raw flecs op does not have (SPIKES.md §5.10). A hint counts only
+/// once the handle table confirms that the handle is live and issued to exactly this entity (flecs
+/// id and generation), and the handle table then also gives the EntityId, so a stale hint is never
+/// used: hints are written by the op that misses (reading the NetIdentity column) and never cleared.
+/// Entities without a NetHandle always read the column. Main thread only.
+class IdentityHints {
+public:
+    IdentityHints() = default;
+    IdentityHints(const IdentityHints&) = delete;
+    IdentityHints& operator=(const IdentityHints&) = delete;
+    ~IdentityHints() {
+        for (u32* page : m_pages) alignedFree(page);
+    }
+    /// The hint for flecs entity `e` (invalid: none).
+    HELIOS_FORCEINLINE NetHandle get(u64 e) const noexcept {
+        const u32 index = static_cast<u32>(e);
+        const u32 page = index >> kPageBits;
+        if (page >= m_pages.size() || m_pages[page] == nullptr) return NetHandle();
+        return NetHandle(m_pages[page][index & kPageMask]);
+    }
+    void set(u64 e, NetHandle handle) {
+        const u32 index = static_cast<u32>(e);
+        const u32 page = index >> kPageBits;
+        if (page >= m_pages.size()) m_pages.resize(page + 1, nullptr);
+        if (m_pages[page] == nullptr) {
+            constexpr usize kBytes = sizeof(u32) << kPageBits;
+            auto* p = static_cast<u32*>(alignedAlloc(kBytes, 64, ecsMemoryTag()));
+            HELIOS_VERIFY(p != nullptr, "IdentityHints: out of memory");
+            std::memset(static_cast<void*>(p), 0, kBytes);
+            m_pages[page] = p;
+        }
+        m_pages[page][index & kPageMask] = handle.value;
+    }
+
+private:
+    static constexpr u32 kPageBits = 12; // 4096 hints (16 KiB) per page
+    static constexpr u32 kPageMask = (1u << kPageBits) - 1;
+    std::vector<u32*> m_pages;
+};
+
 struct World::Impl {
     explicit Impl(World& w) : self(w) {}
 
@@ -90,17 +157,36 @@ struct World::Impl {
     /// DockStorage::Field reverse index: host -> docked entities. Entries are validated (alive and
     /// DockRef still pointing at the host) and pruned lazily in dockedAt().
     std::unordered_map<u64, std::vector<u64>> dockIndex;
+    /// Bloom filter over dockIndex's hosts: destroys skip the lookup for entities that never hosted
+    /// a dock (bits are only set; rebuilt from dockIndex every kDockFilterRebuild host removals).
+    std::array<u64, 64> dockHostFilter{};
+    u32 dockHostsErased = 0;
+    static constexpr u32 kDockFilterRebuild = 1024;
+    static u64 dockFilterBit(u64 host) noexcept { return (host * 0x9E3779B97F4A7C15ull) >> 52; } // 12 bits
+    bool mayHostDocks(u64 host) const noexcept {
+        const u64 b = dockFilterBit(host);
+        return (dockHostFilter[b >> 6] >> (b & 63)) & 1;
+    }
+    void addDockHost(u64 host) noexcept {
+        const u64 b = dockFilterBit(host);
+        dockHostFilter[b >> 6] |= u64(1) << (b & 63);
+    }
 
     // Command application scratch (reused; main thread only).
     std::vector<u32> fusedHead, fusedTail, fusedNext;
     std::vector<u8> fusedClosed, fused;
     std::vector<u32> lateOps, opIndex;
     std::vector<Entity> destroyScratch;
+    static constexpr u32 kDestroyChunk = 256;
+    std::array<ecs_entity_t, kDestroyChunk> destroyRun; // World::destroyRun(): the targets (0: dead)
     std::vector<u64> typeScratch;
     std::vector<u32> spawnOpBegin;           // per spawn: first index into flatOps
     std::vector<u32> spawnOpEnd;             // per spawn: one past its last op
+    std::vector<u32> runEnd;                 // per spawn: one past its fused run (contiguous fusion)
     std::vector<World::SpawnOp> flatOps;      // fused ops of every spawn, grouped per spawn
     std::vector<EntityId> spawnIds;           // allocated in command order
+    std::vector<u32> mintTemps;               // temps whose EntityId is minted, in command order
+    std::vector<EntityId> mintedIds;
     std::vector<u32> spawnGroup;              // per spawn: group index or ~0
     struct SpawnGroupData {
         std::vector<u32> members; // spawn indices in command order
@@ -112,10 +198,13 @@ struct World::Impl {
     U64Map groupByKey{MemoryTag::Unknown, 16};
     std::vector<ecs_entity_t> bulkEntities;
     std::vector<ecs_entity_t> bulkDropped;
+    std::vector<u8> bulkRegistered;       // per spawnN entity: registered (0 = dropped)
+    std::vector<NetHandle> handleScratch; // per spawnN entity
     std::vector<std::byte*> groupColumns;
     std::vector<u32> groupSizes;
     std::vector<const ComponentHooks*> groupHooks;
     std::vector<u32> groupDirtyOffsets; // ~0u = not replicated
+    std::vector<const World::SpawnOp*> groupMemberOps; // per member: its first flat op
 
     // Systems.
     std::vector<std::unique_ptr<SystemRuntime>> systems;
@@ -131,6 +220,9 @@ struct World::Impl {
 
     // flecs native path.
     u32 flecsTaskThreads = 0;
+
+    SparseRecordCache sparseRecords;
+    IdentityHints identityHints;
 
     // Stats.
     u64 structuralOps = 0;

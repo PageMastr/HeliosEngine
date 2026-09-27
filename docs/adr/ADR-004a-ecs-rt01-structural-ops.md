@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **Open.** Opened 2026-09-25, in the round-5 minor revisions. Decision so far: option A, time-boxed, re-evaluated at the Phase 1 RT-01 gate |
+| **Status** | **Open.** Opened 2026-09-25, in the round-5 minor revisions. Decision so far: option A, time-boxed, re-evaluated at the Phase 1 RT-01 gate. WP-1.1a brought M1 to about 1.4× with both compilers as medians over runs on the shared dev VM (third round), against ≤ 1.6×. **M1 is met by the owner's decision of 2026-09-27** (§7): on the shared dev VM a run skewed by a VM stall is discarded, and a second quiet-VM series of that code had 23 of 24 runs ≤ 1.6× (the one run above, at 1.82×, is discarded and still reported). It recorded M5. The create form stays open, and M2 on SERVER stays the formal decision at the Phase 1 gate |
 | **Amends** | [ADR-004](../plan/00-decisions.md#adr-004-entity-model--reflection): "A custom ECS is the fallback only if the Phase 1 50k-entity zone benchmark fails". ADR-004 stands unchanged while this ADR is open |
 | **Trigger** | Risk K2 ([09 §7](../plan/09-roadmap-and-process.md#7-risk-register)) fired. Its trigger is a pre-bench above 2× the budget, and WP-0.6's acceptance opens this ADR in that case |
 | **Owner** | Runtime lead. The work is WP-1.1a ([09 §2.2](../plan/09-roadmap-and-process.md#22-phase-1--first-light)), and WP-1.1 runs the formal RT-01 gate |
@@ -179,11 +179,152 @@ within A through item 4, without splitting the structural contract. flecs stays 
 
 | # | Measurement | Where | Pass |
 |---|---|---|---|
-| M1 | **Indicator.** World burst divided by the raw-flecs burst for the same 9k ops in the same `ecs_bench` run. Release build, asserts off, warm median of 7 bursts, worst of 0/1/2/4 workers | Dev runner, per WP-1.1a PR, with a callgrind instruction count beside it | ≤ 1.6× (raw flecs uses about 0.9 ms of the 1.5 ms). Today it is 3.7–4.6× |
+| M1 | **Indicator.** World burst divided by the raw-flecs burst for the same 9k ops in the same `ecs_bench` run. Release build, asserts off, warm median of 7 bursts, worst of 0/1/2/4 workers | Dev runner, per WP-1.1a PR, with a callgrind instruction count beside it | ≤ 1.6× per run (raw flecs uses about 0.9 ms of the 1.5 ms). On the shared dev VM a run skewed by a VM stall is discarded as an outlier, and still reported (owner decision, §7). Results: §7 |
 | M2 | **The formal RT-01 structural clause.** 9k ops (3k creates, 3k destroys, 3k toggles) applied at one sync point. `HELIOS_ENABLE_ASSERTS=0`, no other load, 0/1/2/4/8 workers, both toggle storages. Warm median of 7 bursts, with the maximum reported | SERVER reference box (the H1/H2 lab, 09 §4.3.1–4.3.2) | ≤ 1.5 ms in the worst configuration and storage |
 | M3 | **The other RT-01 clauses, rerun.** Stages p99 including Jolt and the replication encode once they exist (02; SPIKES §3.2 notes), iteration, memory, tables, and determinism across worker counts | SERVER | As RT-01 |
 | M4 | **The raw-flecs floor** for the same ops | SERVER | Reported. If it exceeds 1.5 ms, the B spike must show that a custom table move beats it before B is chosen |
-| M5 | **The `InFrame` storage choice** (fragmenting or DontFragment pair), measured with item 4 | Dev runner, then SERVER | Recorded in this ADR with its tick, iteration, memory and create/destroy numbers |
+| M5 | **The `InFrame` storage choice** (fragmenting or DontFragment pair), measured with item 4 | Dev runner, then SERVER | Recorded in this ADR with its tick, iteration, memory and create/destroy numbers. Dev runner: fragmenting kept (§7) |
 
 When M2 and M3 pass, this ADR closes as accepted (A) and ADR-004 gains a one-line reference to it. When M2
 fails at the Phase 1 gate with WP-1.1a merged, it closes with B decided, as §4 describes.
+
+## 7. WP-1.1a results (2026-09-26)
+
+WP-1.1a implemented option A's items 1–4 and decided item 5, in three rounds: the first missed M1
+(2.05×), the second cut the per-command overhead further, and the third, after a quiet-VM series the
+owner asked for still failed a third of its runs, took the identity read off the DontFragment toggles
+and trimmed the destroy path. A fourth round measured what is left and changed no code, and on
+2026-09-27 the owner ruled on how M1 is judged (below). The evidence is in
+[`engine/ecs/SPIKES.md`](../../engine/ecs/SPIKES.md) §5. The dev runner was the same shared 4-vCPU VM
+as §1 (load 0.3–2.2 from other jobs), `Release` with asserts off (the `linux-bench` preset). The
+structural log, identities, dirty bits, flecs ids, tables and row order are unchanged, as a digest of
+the pre-WP-1.1a World pins in `ecs_tests`, and so is the zone's state hash.
+
+Before measuring, the bench was corrected so that the World and raw-flecs halves do the same work: the
+same apply/revert mix, the documented destroy victims, raw destroys that move rows as the World's do,
+raw creates that write their values (they wrote none: `bd.ids` was missing), and raw toggles that
+choose their tags before timing, as the World does while recording (SPIKES §5.3). Those corrections
+alone move M1 about 10 % in the World's favour (the pre-WP-1.1a World: 4.40× on the old burst, 3.98×
+on the corrected one); `--legacy-burst` keeps the old burst runnable. The burst's creates are one
+`spawnN()` batch per frame, which is item 4's path for homogeneous spawns; the per-command form is
+reported next to it.
+
+Interleaved series of runs, each a full `ecs_bench --no-spikes` run, measured M1 as `ecs_bench` prints
+it: per run, the worst of 0/1/2/4 workers and both toggle storages. The PR's series has 9 runs of each
+binary (load 0.3–2.2). The first review's series has 31 runs per compiler (load 1.2–3.8). A third series
+ran after the review's fixes, with 15 runs per compiler (load 1.6–2.9). The quiet series ran 12 runs per
+compiler of head 0cc4347 with every other job paused. The third round's series ran 12 runs per compiler
+of its code and of head 0cc4347 (load 1.9–4.1). The second quiet series ran 12 runs per compiler of the
+third round's code (510c5d2), again with every other job paused (load 0.1–2.3, from the bench's own
+workers). The fourth round's check ran 12 alternating runs per compiler of bit-identical binaries (head
+4442f19; load 0.1–2.4, not a quiet series).
+
+| | Before WP-1.1a (GCC) | spawnN creates, GCC | spawnN creates, Clang | Per-command creates, GCC / Clang |
+|---|---|---|---|---|
+| **M1 per run, median over runs [min–max]**, PR series | 3.98× [3.71–4.65] | 1.54× [1.48–1.73] | 1.59× [1.51–1.80] | 2.33× / 2.81× (5 runs) |
+| **the same, review series** | — | 1.53× [1.41–3.90] | 1.60× [1.42–3.91] | 2.34× / 2.91× (5 runs) |
+| **the same, after the review's fixes** | — | 1.53× [1.42–1.80] | 1.57× [1.49–2.09] | — |
+| **the same, quiet series (head 0cc4347)** | — | 1.52× [1.47–1.70] | 1.55× [1.44–1.74] | — |
+| **the same, third round** (head 0cc4347 in the same series) | — | **1.42× [1.32–1.71]** (1.51×) | **1.41× [1.31–1.55]** (1.52×) | 2.24× / 2.68× (5 runs) |
+| **the same, second quiet series (third-round code, 510c5d2)** | — | **1.40× [1.31–1.46]** | **1.415× [1.36–1.82]** | — |
+| the same, fourth-round check (the same binaries; supporting data) | — | 1.42× [1.37–1.63] | 1.41× [1.29–1.75] | — |
+| **runs with M1 above 1.6×** (PR / review / after-fixes / quiet / third-round / second quiet / fourth-round check series) | all | 2 of 9 / 9 of 31 / 2 of 15 / 4 of 12 / 1 of 12 / 0 of 12 / 1 of 12 | 4 of 9 / 15 of 31 / 5 of 15 / 4 of 12 / 0 of 12 / 1 of 12 / 1 of 12 | all |
+| M1 per configuration, tag / DontFragment (medians, PR series) | 3.1–3.3× / 3.6–3.8× | 1.28–1.32× / 1.40–1.47× | 1.24–1.32× / 1.38–1.49× | 1.9–2.0× / 2.1–2.2× (GCC) |
+| Callgrind beside it (tag / DontFragment toggles) | 2.52× / 2.58× | 1.24× / 1.29× (third round 1.22× / 1.26×) | 1.29× / 1.30× (third round 1.24× / 1.26×) | 1.65× / 1.69× (GCC), 2.02× / 2.03× (Clang) |
+| 9k-op burst on the VM, per configuration (budget 1.5 ms) | 2.9–3.3 ms | 1.26–1.27 ms | 0.96–0.98 ms | 1.7–1.9 ms (GCC) |
+| Same ops on raw flecs | 0.94–0.98 ms | 0.96–0.99 ms | 0.75–0.79 ms | 0.94–0.99 ms (GCC) |
+
+**M1 per run, as measured.** §6 defines M1 per run; until the owner's decision below it said nothing
+about outlier runs. After the second round M1 failed in about a quarter of the GCC runs and nearly half
+of the Clang runs of three series, and in 4 of 12 runs of each compiler in the quiet series. After the
+third round it failed in 1 of the 24 runs of its series, at medians of about 1.4× with both compilers
+(an earlier, less loaded series of the same code: 1.36× and 1.41×). The second quiet series of that code failed in 1 of its 24 runs:
+Clang run 4, at 1.82× with DontFragment toggles and 1.22× with tag toggles, against 1.31–1.47× in the
+other 23. Each run's M1 is the worst of eight noisy ratios, so it sits above the per-configuration medians
+(third round: 1.31–1.32× with DontFragment toggles, 1.23–1.25× with tag toggles) and above the
+instruction ratio (1.22–1.26×). The spread is noise in time rather than memory placement: each side's
+seven bursts run back to back, the World's first, and in the configurations above 1.6× every World
+phase is slower while the raw phases are not (SPIKES §5.10). DontFragment storage decides it: its raw
+toggles are cheap, so the World's create and destroy bookkeeping weighs more there than against the tag
+toggles.
+
+What remains per op (SPIKES §5.5, §5.10), with Clang, is about 25 ns per destroy (liveness check,
+registry release, identity, log), 16 ns per DontFragment toggle and 14 ns per create. The DontFragment
+toggles now take the identity through a per-entity hint that the handle table confirms, instead of the
+entity's table row. More margin on destroys would need the identity and liveness in the flecs record
+the delete touches anyway: a user word in flecs' entity record (a vendored patch) or option B's own
+entity record.
+
+A fourth round (SPIKES §5.11) found no further change within this option's limits that moves the
+typical worst-configuration ratio by more than a few percent. An experiment build that drops all of the
+World's bookkeeping on the three measured paths (liveness, identity, registry, handles, ownership and
+the log; its log is wrong) measures 1.04× (GCC) and 1.10× (Clang) per configuration with DontFragment
+toggles, against 1.32× and 1.35× for the real World in the same runs. That bookkeeping is what the structural
+contract requires, and its remaining pieces cost 5–20 µs per 3,000 operations each. The micro-changes
+tried (prefetching the log ahead of its end, building log events in place) measured no difference
+beyond the run-to-run noise, which is ±30 µs per run on one phase.
+
+**The statistic: owner decision of 2026-09-27. M1 is met.** Asked how M1 is judged (per run, a median
+over N runs, per run on an idle runner, or with the measurement changed), the owner ruled:
+
+> "Go ahead and approve it as is, if its 1 in 24 runs and the cause is related to vm slow downs/stalls
+> then those arent the norm and should not be counted thus it meets criteria, and the skewed runs can be
+> discarded"
+
+So on the shared dev VM M1 is judged per run, and a run skewed by a VM stall is discarded as an outlier.
+A discarded run is still reported: the table above shows and counts it. The threshold, the measurement
+(burst order, 7 bursts per side, their median, the worst of the configurations and toggle storages) and
+M2 are unchanged.
+
+- **The deciding series** is the second quiet series (510c5d2, every other job paused): 23 of its 24
+  runs are ≤ 1.6×. The medians over all 12 runs of each compiler are 1.40× (GCC) and 1.415× (Clang;
+  1.41× over the 11 kept runs). The discarded run is Clang run 4: 1.82× with DontFragment toggles and
+  1.22× with tag toggles.
+- **Why that run reads as a stall and not as the code** (SPIKES §5.10, §5.11):
+  - it ran the same binary as the other 23 runs, whose worst configurations were 1.31–1.47×;
+  - its tag ratio in the same run was normal, so only its DontFragment measurements were slow;
+  - in series recorded burst by burst, configurations above 1.6× had slow World bursts while the raw
+    bursts of the same configuration were not slow, and single slow bursts are about as frequent on
+    either side: a disturbance in time, not a code path;
+  - a configuration's median of 4 revert and 3 apply bursts is the slowest revert or the fastest apply,
+    so one slow burst moves it;
+  - the instruction ratio (1.22–1.26×) does not vary between runs.
+
+  That run printed no per-burst times, so the stall is inferred from its signature, not observed.
+- **Supporting data, not the deciding series:** the fourth round's check of bit-identical binaries (not
+  quiet) had 1 of 12 runs per compiler above 1.6× (GCC 1.63×, Clang 1.75×), each with the same
+  signature: a high DontFragment ratio beside a normal tag ratio (1.33× and 1.28×).
+- **What the decision does not change.** It covers M1 as `ecs_bench` measures it, with `spawnN` creates.
+  With per-command creates M1 is 2.24× (GCC) and 2.68× (Clang), which is not met, and the create form
+  stays open (below). M2 on SERVER stays the formal RT-01 decision at the Phase 1 gate (§4, §6), and K2
+  retires only when that passes.
+
+Open for the owner:
+- **The create form.** Which create form the Phase 1 midpoint check and M2 use. The burst's creates are
+  homogeneous (one signature, one batch per frame), and item 4 names `spawnN` for such spawns. The
+  raw-flecs floor has always been one bulk insert per frame table, so `spawnN` is the like-for-like
+  comparison, and producers of homogeneous spawns are expected to use it. But nothing in the tree
+  calls `spawnN` yet outside the bench and the tests. The zone's own `WeaponFire` still records
+  projectiles per command. With per-command creates M1 is 2.3× (GCC) and 2.8–2.9× (Clang), 2.24× and
+  2.68× after the third round, and the Clang figure is above the midpoint rule's 2.5× trigger.
+
+On the legacy burst, which has per-command creates and the old raw floor's bugs, M1 is not met (2.49×).
+The formal decision stays with M2 on SERVER at the Phase 1 gate.
+
+Item 4's second half, toggles sorted by (source table, id) and moved in batches, was evaluated and not
+adopted. flecs 4.1.6 has no public bulk move for entity lists, and the public-API version (a cached edge
+with `ecs_commit`) costs 5 % more instructions unsorted and 14 % more sorted, without a wall-clock gain.
+Sorting would also change the destination tables' row order. A real batched move needs an upstream API
+(K10).
+
+**M5: `InFrame` stays a fragmenting exclusive pair.** On the dev VM, with spawnN creates (first-round
+code):
+
+| InFrame | Tables | Chunks | Tick p50 / p99 | Iterate 50k×3 | ECS peak | 3k creates / 3k destroys | 9k burst |
+|---|---|---|---|---|---|---|---|
+| Fragmenting pair (kept) | 2,384 | 1,757 | 1.67 / 3.06 ms | 0.206 ms | 45.0 MB | 0.22 / 0.47 ms | 1.70 ms (11.3 M instructions) |
+| DontFragment pair | 440 | 163 | 0.63 / 1.12 ms | 0.110 ms | 28.0 MB | 0.93 / 1.87 ms | 4.09 ms (23.5 M instructions) |
+
+The DontFragment pair improves the clauses that already pass with margins of 2× or more, and makes the
+failing structural clause 2.4× more expensive. It should be measured again on SERVER (M5's second site)
+and whenever flecs makes changes to non-fragmenting pairs cheaper.

@@ -34,8 +34,17 @@ helios_executable(ecs_bench
 target_include_directories(ecs_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/bench ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set_target_properties(ecs_bench PROPERTIES FOLDER bench)
 
+# The linux-bench preset (Release, asserts off) turns this on: the ADR-004a M1 build.
 option(HELIOS_ECS_BENCH_CTEST "Register ecs_bench (RT-01, --quick) as a CTest with label 'bench'" OFF)
 if(HELIOS_ECS_BENCH_CTEST AND HELIOS_BUILD_TESTS)
   add_test(NAME ecs_bench_rt01 COMMAND ecs_bench --quick)
   set_tests_properties(ecs_bench_rt01 PROPERTIES LABELS bench TIMEOUT 900)
+  # Instruction counts of the 9k-op burst (SPIKES.md §5.2), where valgrind exists.
+  find_program(HELIOS_VALGRIND valgrind)
+  if(HELIOS_VALGRIND)
+    add_test(NAME ecs_bench_callgrind
+      COMMAND ${CMAKE_COMMAND} -DECS_BENCH=$<TARGET_FILE:ecs_bench> -DVALGRIND=${HELIOS_VALGRIND}
+              -DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/bench/callgrind_burst.cmake)
+    set_tests_properties(ecs_bench_callgrind PROPERTIES LABELS "bench;callgrind" TIMEOUT 1800)
+  endif()
 endif()

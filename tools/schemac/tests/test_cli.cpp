@@ -61,7 +61,7 @@ TEST_CASE("cli: help, version and usage errors") {
     Run help = cli({"--help"});
     CHECK(help.status == 0);
     CHECK(help.out.starts_with("usage: helios-schemac [options] <file.hschema>..."));
-    CHECK(help.out.find("planned generators (not yet implemented): repl, proto, editor, records, lint") != std::string::npos);
+    CHECK(help.out.find("planned generators (not yet implemented): proto, editor, records, lint") != std::string::npos);
     Run version = cli({"--version"});
     CHECK(version.status == 0);
     CHECK(version.out.starts_with("helios-schemac "));
@@ -77,11 +77,11 @@ TEST_CASE("cli: help, version and usage errors") {
     CHECK(none.err == "helios-schemac: error: no input files (see --help)\n");
     Run badGen = cli({"--emit=cpp,rust", "x.hschema"});
     CHECK(badGen.status == 2);
-    CHECK(badGen.err == "helios-schemac: error: unknown generator 'rust' (available: cpp, go, json, luau, sql)\n");
+    CHECK(badGen.err == "helios-schemac: error: unknown generator 'rust' (available: cpp, go, json, luau, sql, repl)\n");
 }
 
 TEST_CASE("cli: planned generators fail with 'not yet implemented'") {
-    for (const char* gen : {"repl", "proto", "editor", "records", "lint", "docs"}) {
+    for (const char* gen : {"proto", "editor", "records", "lint", "docs"}) {
         Run r = cli({"--emit", std::string("cpp,") + gen, "x.hschema"});
         CHECK(r.status == 2);
         CHECK_MESSAGE(r.err.starts_with(std::string("helios-schemac: error: --emit ") + gen + " is not yet implemented"), r.err);
@@ -187,6 +187,20 @@ TEST_CASE("cli: --emit sql writes a snapshot and a migration stub per service sc
     args.insert(args.begin(), {"--sql-baseline", (dir / "v1.lock.jsonc").string()});
     REQUIRE(cli(args).status == 0);
     CHECK(readFile(dir / "sql" / "svc_cli" / "migration.sql").find("ADD COLUMN m SMALLINT") != std::string::npos);
+}
+
+TEST_CASE("cli: --emit repl writes descriptors and full-state codecs next to the C++") {
+    const fs::path dir = freshDir("repl");
+    const fs::path schema = dir / "schemas" / "cli" / "mover.hschema";
+    writeFile(schema, "package cli.mover;\ncomponent Mover replicate(all) { v: vec3f @quant(range=±8, bits=10) }\n");
+    Run r = cli({"-I", (dir / "schemas").string(), "--emit", "cpp,repl", "--cpp-out", (dir / "cpp").string(), "--quiet", schema.string()});
+    REQUIRE_MESSAGE(r.status == 0, r.err);
+    CHECK(readFile(dir / "cpp" / "cli" / "mover.repl.gen.h").find("struct RepOf<::cli::mover::Mover>") != std::string::npos);
+    CHECK(readFile(dir / "cpp" / "cli" / "mover.repl.gen.cpp").find("quantizeRange(c.v.x, -8.0, 8.0, 10)") != std::string::npos);
+    writeFile(schema, "package cli.mover;\ncomponent Mover replicate(all) { v: vec3f @quant(range=±8, bits=99) }\n");
+    Run bad = cli({"-I", (dir / "schemas").string(), "--emit", "repl", "--cpp-out", (dir / "cpp").string(), schema.string()});
+    CHECK(bad.status == 1);
+    CHECK(bad.err.find("bits= needs 1 to 32") != std::string::npos);
 }
 
 TEST_CASE("cli: schema errors exit 1 with file:line:col and a source excerpt") {

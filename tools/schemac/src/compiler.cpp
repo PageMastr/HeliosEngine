@@ -330,6 +330,9 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
     if (options.emitSql) {
         for (OutputFile& o : generateSql(S, baseline, options, diags)) result.outputs.push_back(std::move(o));
     }
+    if (options.emitRepl) {
+        for (OutputFile& o : generateRepl(S, options, diags)) result.outputs.push_back(std::move(o));
+    }
     result.ok = !diags.hasErrors();
     return result;
 }

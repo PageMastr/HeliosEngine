@@ -18,6 +18,7 @@ add_library(helios_schemac_lib STATIC
   src/gen_go.cpp
   src/gen_json.cpp
   src/gen_luau.cpp
+  src/gen_repl.cpp
   src/gen_sql.cpp
   src/json_out.cpp
   src/lexer.cpp
@@ -61,6 +62,7 @@ if(HELIOS_BUILD_TESTS)
     GO_PACKAGE sample
     JSON_OUT ${CMAKE_CURRENT_BINARY_DIR}/sample.schema.json
     LUAU_OUT ${CMAKE_CURRENT_BINARY_DIR}/luau/sample
+    REPL
     SAMPLES)
   # Golden fixture: its generated C++ and Go are compiled too (the golden test compares the text).
   set(HELIOS_GOLDEN_GO_OUT ${CMAKE_CURRENT_BINARY_DIR}/go/golden)
@@ -70,6 +72,7 @@ if(HELIOS_BUILD_TESTS)
     LOCK ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/golden.lock.jsonc
     GO_OUT ${HELIOS_GOLDEN_GO_OUT}
     LUAU_OUT ${CMAKE_CURRENT_BINARY_DIR}/luau/golden
+    REPL
     SAMPLES)
   find_program(HELIOS_GO_EXECUTABLE go HINTS $ENV{GOROOT}/bin /usr/local/go/bin "C:/Program Files/Go/bin")
   if(NOT HELIOS_GO_EXECUTABLE)

@@ -2,7 +2,8 @@
 
 `helios-schemac` compiles `.hschema` files into C++ (types, reflection, codecs), Go (types and a
 byte-identical codec), Luau glue (scriptlib bindings, `.d.luau` declarations, fuel defaults),
-PostgreSQL DDL (table snapshots and goose migration stubs) and a machine-readable schema description.
+PostgreSQL DDL (table snapshots and goose migration stubs), replication descriptors with full-state
+codecs, and a machine-readable schema description.
 It implements ADR-004.
 
 **The normative specification is [docs/plan/02-engine-runtime.md §3](../../docs/plan/02-engine-runtime.md#3-schema-and-reflection-normative)**
@@ -27,7 +28,8 @@ APIs) and lists what is not implemented yet.
 | `json` | Implemented: schema description (types, ids, fields, attributes, defaults, layout hashes, services, constants, aliases, formulas, scriptlibs with fuel costs) |
 | `luau` | Implemented for `scriptlib`s: the C++ call glue on engine/script's `Binder` with the fuel charges, binding ids from the lock, `schema.d.luau` and `fuel_costs.defaults.json` ([Generated Luau](#generated-luau)). Tagged-userdata glue for components and records (`@script` fields) is WP-1.6's |
 | `sql` | Implemented for structs marked `@sql(schema="svc_<service>")`: a PostgreSQL snapshot and a goose migration stub diffed against the baseline lock, per service schema ([Generated SQL](#generated-sql)) |
-| `repl`, `proto`, `editor`, `records`, `lint`, `docs` | Planned; `--emit <name>` fails with exit code 2 "not yet implemented" |
+| `repl` | Implemented for Phase 0 (04 §11.3: descriptors, full state): `ComponentRepDesc` tables with quantizers, typed full-state codecs, rpc and event tables and a protocol hash per file ([Generated replication](#generated-replication)). Change masks, deltas and variable-size fields are WP-1.10 |
+| `proto`, `editor`, `records`, `lint`, `docs` | Planned; `--emit <name>` fails with exit code 2 "not yet implemented" |
 
 The lints of the planned `lint` emitter (AAA-SEC-1, AAA-SEC-4, ledger/persist, keyed lists,
 naming) already run on every compilation.
@@ -65,7 +67,7 @@ helios-schemac -I schemas --lock schemas/schema.lock.jsonc --emit cpp,go,json \
 | `--lock <file>` | Schema lock (created if missing, updated in place). Without it ids are per-run (warning) |
 | `--check-lock` | Fail (exit 1) instead of updating an out-of-date lock (CI) |
 | `--allow-default-change` | Accept changed explicit defaults (they are part of the wire contract) |
-| `--emit cpp,go,json,luau,sql` | Generators (default `cpp`) |
+| `--emit cpp,go,json,luau,sql,repl` | Generators (default `cpp`; `repl` writes next to the C++ output) |
 | `--cpp-out`, `--go-out`, `--go-package`, `--json-out`, `--luau-out`, `--sql-out` | Output locations (`--luau-out`: `schema.d.luau` and `fuel_costs.defaults.json`; the Luau glue goes to `--cpp-out`. `--sql-out`: `<schema>/schema.sql` and `<schema>/migration.sql`) |
 | `--sql-baseline <lock>` | Lock the SQL migration stub starts from (default: `--lock` as it was before this run) |
 | `--samples` | Also emit `<file>.samples.gen.h` (deterministic sample values shared with the Go test) |
@@ -465,6 +467,50 @@ helios-schemac -I schemas --lock schemas/sample/schema.lock.jsonc --emit sql --s
   does not have yet. Changing the key of an existing table is a hand-written migration (the lock does not
   record keys). `helios_schema()` has no SQL option: run the CLI, since stubs are copied by hand.
 
+## Generated replication
+
+`--emit repl` (02 §3.5; 04 §4.1, §4.5, §4.6) writes `<file>.repl.gen.h` and `<file>.repl.gen.cpp` next
+to the C++ output for every generated file. The runtime is `helios/reflect/repl.h`
+(engine/reflect).
+
+- **`RepOf<C>`** for each replicated component `C`:
+  - `desc()` returns a `ComponentRepDesc`: qualified name, lock type id, audience (`all`, `owner`,
+    `server`), LOD group, and per replicated field (never `server {}` fields) the name, lock id, byte
+    offset, change-mask index (`FieldInfo::repIndex`, the `Mut<C>` dirty bit), LOD (`lod(near)` on the
+    field overrides the component's), `@predicted`, `@interp(linear|slerp)`, quantizer and worst-case
+    bits. It also holds the component's worst case and a descriptor hash.
+  - `writeFullState(BitWriter&, const C&)` and `readFullState(BitReader&, C&)` carry every replicated
+    field in change-mask order. This is 04 §4.2's full-state chunk; masks and deltas are WP-1.10.
+- **`@quant`** forms:
+
+  | Form | Fields | Wire |
+  |---|---|---|
+  | `range=±x, bits=n` | `f32`, `f64`, `vec2f`, `vec3f`, `vec4f`, `vec3d`, `color` | each component clamped to [−x, x] on 2ⁿ−1 steps |
+  | `smallest3, bits=n` | `quatf` | index of the largest component (2 bits) and the other three in ±1/√2 at n bits |
+  | `frame_cell, cell=<m>, res=<m>` | `WorldPos` | the position rounded to `res`, per axis a zigzag varint cell index and the offset in ⌈log₂(cell/res)⌉ bits (04 §4.5: `cell=4096m, res=1/256m` is 20 bits per axis) |
+  | none | fixed-size values | raw: `bool` 1 bit, integers and enums at their width, floats as IEEE bits, ids at 64 (`NetHandle` 32) |
+
+  `bits` is 1 to 32, and `cell` must be a whole multiple of `res` (2 to 2³² steps). Units (`m`),
+  fractions (`1/256m`) and `±` are accepted. The Phase 0 codec carries no strings, `Name`s,
+  containers, structs or variants: a replicated field of those types is an error under
+  `--emit repl`.
+- **Determinism.** Quantizers use f64 arithmetic with round-half-up, and frame cells use integer
+  steps, so a cell and a client produce the same bits (04 §4.5), and a decoded state re-encodes to
+  identical bits.
+- **Hostile input.** Readers are bounds-checked and never overread. They reject truncated streams,
+  varints longer than 10 bytes or overlong, frame-cell offsets of a whole cell or more, cell indices
+  whose position would overflow, and enum values the schema does not declare.
+- **`<stem>Replication()`** returns the file's `FileRepTables`:
+  - its replicated components;
+  - its top-level rpcs, with direction, reliability, `@ratelimit` per second and `@intent` (service
+    rpcs are backend calls, 05, not netcode);
+  - its events, with `@audience(owner|relevant|party)`, default `relevant`;
+  - a **protocol hash**, which is `protocolHash()` over the descriptor, rpc and event hashes.
+  `protocolHash()` over several files' hashes gives a build's hash, independent of order; it is an
+  input of 05 §1.14.1's compat fingerprint. The hash covers type and field ids, names, types, audience,
+  LOD, prediction, interpolation and every quantizer parameter, so any wire change changes it, and
+  comments or declaration order do not.
+
 ## CMake: `helios_schema()`
 
 ```cmake
@@ -477,6 +523,7 @@ helios_schema(<target>
     [JSON_OUT <file>]               # also write the schema description
     [LUAU_OUT <dir>]                # also generate the Luau glue (links helios::script), schema.d.luau
                                     # and fuel_costs.defaults.json
+    [REPL]                          # also generate <file>.repl.gen.h/.cpp (replication descriptors)
     [SAMPLES])                      # also generate <file>.samples.gen.h
 ```
 
@@ -528,7 +575,12 @@ fixture and the sample schemas on a real engine/script VM (every value form, rea
 per fn, hostile arguments: wrong types, out-of-range and inexact integers, oversized and cyclic tables,
 metatables that must not run), type-checks `schema.d.luau` with Luau.Analysis (a strict script passes;
 wrong argument and result types and unknown enum values fail), and covers binding ids in the lock and
-the signatures `--emit luau` rejects. `test_sql.cpp` covers the column mapping, the migration stub
+the signatures `--emit luau` rejects. `test_repl.cpp` runs the generated replication code of the golden
+fixture and the sample schemas: descriptors against the schema and the `TypeInfo` (ids, offsets,
+change-mask indices), full-state round trips within each quantizer's precision (and re-encoding to the
+same bits), every truncated prefix and random input rejected cleanly, an undeclared enum value, the rpc
+and event tables, the protocol hash (stable under comments and the order of files, changed by a
+quantizer or an audience), and 18 `@quant` / field diagnostics. `test_sql.cpp` covers the column mapping, the migration stub
 (renames, widenings, `T→T?`, new columns and tables, removed fields as contract comments, Down in
 reverse, the empty stub, `--sql-baseline`) and the rules of `@sql`. The CTest `schemac_sql_postgres`
 (`tests/sql_postgres.cmake`) runs them on a real PostgreSQL: it compiles `tests/sql/v1` and `v2` as two
@@ -547,7 +599,7 @@ server as `nobody` when started as root, and is not registered on Windows or whe
   `ecs::NetHandle{u32}` and `ecs::Tick = u64`; `engine/ecs` should alias the `refl` vocabulary
   types (or vice versa) so generated components use one set.
 - Not generated yet (later work packages): `registerComponents(ecs::World&)` / flecs traits,
-  `ComponentRepDesc` and quantizers (`repl`), cooked layouts (`Cooked<T>`), NATS stubs, the Luau
+  replication change masks, deltas and variable-size replicated fields (WP-1.10), cooked layouts (`Cooked<T>`), NATS stubs, the Luau
   tagged-userdata glue for components and records (`@script(read|write)` fields; WP-1.6, with the
   host's `Entity` type), editor JSON, record cooking, HXL compilation of formulas and
   `@validate`, `upgrade<T>` hooks for `@version`.
@@ -570,7 +622,7 @@ server as `nobody` when started as root, and is not registered on Windows or whe
 
 Plan-Rev: 10
 
-Written to plan revision 10 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau` and `sql` so far), after being
+Written to plan revision 10 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau`, `sql` and `repl` so far), after being
 reconciled by hand with revision 6 on 2026-09-25 under `docs/plan/09-roadmap-and-process.md`
 §5.10.2 D7. Revisions 7–10 changed no anchor of this package. No conformance delta is open; see
 §5.10.4 (c) there.

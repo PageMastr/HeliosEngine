@@ -1480,6 +1480,167 @@ func (m *Plain) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Every raw full-state form (`--emit repl`) and a range-quantized f64.
+type Status struct {
+	Mode Color `json:"mode"`
+	Alive bool `json:"alive"`
+	Level int16 `json:"level"`
+	Perm Perm `json:"perm"`
+	Who EntityId `json:"who"`
+	Ref ThingRef `json:"ref"`
+	At Tick `json:"at"`
+	Wait Duration `json:"wait"`
+	Handle NetHandle `json:"handle"`
+	Rot Quat `json:"rot"`
+	Flat Vec2 `json:"flat"`
+	Tint RGBA `json:"tint"`
+	Far DVec3 `json:"far"`
+	Where WorldPos `json:"where"`
+	Score float64 `json:"score"`
+}
+
+var dfltStatusMode = ColorGreen
+var dfltStatusAlive = true
+var dfltStatusLevel = int16(-3)
+// NewStatus returns a Status with every field at its schema default.
+func NewStatus() Status {
+	return Status{Mode: dfltStatusMode, Alive: dfltStatusAlive, Level: dfltStatusLevel, Perm: zero_golden_all_Perm_31(), Who: zero_EntityId_5(), Ref: zero_Ref_golden_all_ThingDef__58(), At: zero_Tick_7(), Wait: zero_Duration_29(), Handle: zero_NetHandle_6(), Rot: zero_quatf_27(), Flat: zero_vec2f_24(), Tint: zero_color_28(), Far: zero_vec3d_26(), Where: zero_WorldPos_4(), Score: zero_f64_20(), }
+}
+
+func (m *Status) isDefault() bool {
+	return m.Mode == dfltStatusMode &&
+		m.Alive == dfltStatusAlive &&
+		m.Level == dfltStatusLevel &&
+		def_golden_all_Perm_31(m.Perm) &&
+		def_EntityId_5(m.Who) &&
+		def_Ref_golden_all_ThingDef__58(m.Ref) &&
+		def_Tick_7(m.At) &&
+		def_Duration_29(m.Wait) &&
+		def_NetHandle_6(m.Handle) &&
+		def_quatf_27(m.Rot) &&
+		def_vec2f_24(m.Flat) &&
+		def_color_28(m.Tint) &&
+		def_vec3d_26(m.Far) &&
+		def_WorldPos_4(m.Where) &&
+		def_f64_20(m.Score)
+}
+
+func (m *Status) appendFields(b []byte) []byte {
+	if !(m.Mode == dfltStatusMode) {
+		b = enc_golden_all_Color_30(b, 1, m.Mode)
+	}
+	if !(m.Alive == dfltStatusAlive) {
+		b = enc_bool_12(b, 2, m.Alive)
+	}
+	if !(m.Level == dfltStatusLevel) {
+		b = enc_i16_0(b, 3, m.Level)
+	}
+	if !(def_golden_all_Perm_31(m.Perm)) {
+		b = enc_golden_all_Perm_31(b, 4, m.Perm)
+	}
+	if !(def_EntityId_5(m.Who)) {
+		b = enc_EntityId_5(b, 5, m.Who)
+	}
+	if !(def_Ref_golden_all_ThingDef__58(m.Ref)) {
+		b = enc_Ref_golden_all_ThingDef__58(b, 6, m.Ref)
+	}
+	if !(def_Tick_7(m.At)) {
+		b = enc_Tick_7(b, 7, m.At)
+	}
+	if !(def_Duration_29(m.Wait)) {
+		b = enc_Duration_29(b, 8, m.Wait)
+	}
+	if !(def_NetHandle_6(m.Handle)) {
+		b = enc_NetHandle_6(b, 9, m.Handle)
+	}
+	if !(def_quatf_27(m.Rot)) {
+		b = enc_quatf_27(b, 10, m.Rot)
+	}
+	if !(def_vec2f_24(m.Flat)) {
+		b = enc_vec2f_24(b, 11, m.Flat)
+	}
+	if !(def_color_28(m.Tint)) {
+		b = enc_color_28(b, 12, m.Tint)
+	}
+	if !(def_vec3d_26(m.Far)) {
+		b = enc_vec3d_26(b, 13, m.Far)
+	}
+	if !(def_WorldPos_4(m.Where)) {
+		b = enc_WorldPos_4(b, 14, m.Where)
+	}
+	if !(def_f64_20(m.Score)) {
+		b = enc_f64_20(b, 15, m.Score)
+	}
+	return b
+}
+
+func (m *Status) readFields(r *wireReader) error {
+	for !r.atEnd() {
+		id, wt, err := r.tag()
+		if err != nil {
+			return err
+		}
+		switch id {
+			case 1:
+				err = dec_golden_all_Color_30(r, wt, &m.Mode)
+			case 2:
+				err = dec_bool_12(r, wt, &m.Alive)
+			case 3:
+				err = dec_i16_0(r, wt, &m.Level)
+			case 4:
+				err = dec_golden_all_Perm_31(r, wt, &m.Perm)
+			case 5:
+				err = dec_EntityId_5(r, wt, &m.Who)
+			case 6:
+				err = dec_Ref_golden_all_ThingDef__58(r, wt, &m.Ref)
+			case 7:
+				err = dec_Tick_7(r, wt, &m.At)
+			case 8:
+				err = dec_Duration_29(r, wt, &m.Wait)
+			case 9:
+				err = dec_NetHandle_6(r, wt, &m.Handle)
+			case 10:
+				err = dec_quatf_27(r, wt, &m.Rot)
+			case 11:
+				err = dec_vec2f_24(r, wt, &m.Flat)
+			case 12:
+				err = dec_color_28(r, wt, &m.Tint)
+			case 13:
+				err = dec_vec3d_26(r, wt, &m.Far)
+			case 14:
+				err = dec_WorldPos_4(r, wt, &m.Where)
+			case 15:
+				err = dec_f64_20(r, wt, &m.Score)
+			default:
+				err = r.skip(wt)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MarshalHelios encodes the tagged binary message (identical bytes to the C++ codec).
+func (m *Status) MarshalHelios() []byte { return m.appendFields(nil) }
+
+// UnmarshalHelios decodes a tagged message; missing fields take their schema defaults.
+func (m *Status) UnmarshalHelios(b []byte) error {
+	*m = NewStatus()
+	return m.readFields(newWireReader(b))
+}
+
+// UnmarshalJSON reads JSON (e.g. canonical JSONC written by the C++ codec); missing fields keep defaults.
+func (m *Status) UnmarshalJSON(b []byte) error {
+	type plain Status
+	p := plain(NewStatus())
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*m = Status(p)
+	return nil
+}
+
 type Exploded struct {
 	At WorldPos `json:"at"`
 	Radius float32 `json:"radius"`
@@ -1870,13 +2031,13 @@ func NewSpellings() Spellings {
 }
 
 func (m *Spellings) isDefault() bool {
-	return def_list_u8__58(m.N) &&
+	return def_list_u8__59(m.N) &&
 		f32Bits(m.R, dfltSpellingsR)
 }
 
 func (m *Spellings) appendFields(b []byte) []byte {
-	if !(def_list_u8__58(m.N)) {
-		b = enc_list_u8__58(b, 1, m.N)
+	if !(def_list_u8__59(m.N)) {
+		b = enc_list_u8__59(b, 1, m.N)
 	}
 	if !(f32Bits(m.R, dfltSpellingsR)) {
 		b = enc_f32_19(b, 2, m.R)
@@ -1892,7 +2053,7 @@ func (m *Spellings) readFields(r *wireReader) error {
 		}
 		switch id {
 			case 1:
-				err = dec_list_u8__58(r, wt, &m.N)
+				err = dec_list_u8__59(r, wt, &m.N)
 			case 2:
 				err = dec_f32_19(r, wt, &m.R)
 			default:
@@ -2072,11 +2233,11 @@ func (m *LedgerLineShape) appendValue(b []byte) []byte {
 	b, mk := beginLen(b)
 	switch m.index() {
 		case -1:
-			b = enc_golden_all_LedgerLine_Shape_Dot_59(b, 1, NewLedgerLineShapeDot())
+			b = enc_golden_all_LedgerLine_Shape_Dot_60(b, 1, NewLedgerLineShapeDot())
 		case 0:
-			b = enc_golden_all_LedgerLine_Shape_Dot_59(b, 1, *m.Dot)
+			b = enc_golden_all_LedgerLine_Shape_Dot_60(b, 1, *m.Dot)
 		case 1:
-			b = enc_golden_all_LedgerLine_Shape_Line_60(b, 2, *m.Line)
+			b = enc_golden_all_LedgerLine_Shape_Line_61(b, 2, *m.Line)
 	}
 	return endLen(b, mk)
 }
@@ -2100,13 +2261,13 @@ func (m *LedgerLineShape) readValue(r *wireReader, wt int) error {
 					x := NewLedgerLineShapeDot()
 					*m = LedgerLineShape{Dot: &x}
 				}
-				err = dec_golden_all_LedgerLine_Shape_Dot_59(sub, awt, m.Dot)
+				err = dec_golden_all_LedgerLine_Shape_Dot_60(sub, awt, m.Dot)
 			case 2:
 				if m.Line == nil {
 					x := NewLedgerLineShapeLine()
 					*m = LedgerLineShape{Line: &x}
 				}
-				err = dec_golden_all_LedgerLine_Shape_Line_60(sub, awt, m.Line)
+				err = dec_golden_all_LedgerLine_Shape_Line_61(sub, awt, m.Line)
 			default:
 				err = sub.skip(awt)
 		}
@@ -2204,7 +2365,7 @@ var dfltLedgerLineColor = ColorBlue
 var dfltLedgerLinePerm = Perm(1)
 // NewLedgerLine returns a LedgerLine with every field at its schema default.
 func NewLedgerLine() LedgerLine {
-	return LedgerLine{Owner: zero_EntityId_5(), Seq: zero_u32_17(), Order: dfltLedgerLineOrder, Amount: dfltLedgerLineAmount, Small: dfltLedgerLineSmall, Flag: dfltLedgerLineFlag, Big: zero_u64_18(), Ratio: dfltLedgerLineRatio, Exact: zero_f64_20(), Label: dfltLedgerLineLabel, Tag: zero_Name_22(), Delay: dfltLedgerLineDelay, At: zero_Tick_7(), Thing: zero_Ref_golden_all_ThingDef__61(), Id: zero_Guid_23(), Color: dfltLedgerLineColor, Perm: dfltLedgerLinePerm, Mesh: zero_AssetRef_Mesh__32(), Text: zero_LocString_8(), Pos: zero_WorldPos_4(), Inner: zero_golden_all_Item_62(), Shape: zero_golden_all_LedgerLine_Shape_63(), }
+	return LedgerLine{Owner: zero_EntityId_5(), Seq: zero_u32_17(), Order: dfltLedgerLineOrder, Amount: dfltLedgerLineAmount, Small: dfltLedgerLineSmall, Flag: dfltLedgerLineFlag, Big: zero_u64_18(), Ratio: dfltLedgerLineRatio, Exact: zero_f64_20(), Label: dfltLedgerLineLabel, Tag: zero_Name_22(), Delay: dfltLedgerLineDelay, At: zero_Tick_7(), Thing: zero_Ref_golden_all_ThingDef__58(), Id: zero_Guid_23(), Color: dfltLedgerLineColor, Perm: dfltLedgerLinePerm, Mesh: zero_AssetRef_Mesh__32(), Text: zero_LocString_8(), Pos: zero_WorldPos_4(), Inner: zero_golden_all_Item_62(), Shape: zero_golden_all_LedgerLine_Shape_63(), }
 }
 
 func (m *LedgerLine) isDefault() bool {
@@ -2222,7 +2383,7 @@ func (m *LedgerLine) isDefault() bool {
 		def_Name_22(m.Tag) &&
 		m.Delay == dfltLedgerLineDelay &&
 		def_Tick_7(m.At) &&
-		def_Ref_golden_all_ThingDef__61(m.Thing) &&
+		def_Ref_golden_all_ThingDef__58(m.Thing) &&
 		def_Guid_23(m.Id) &&
 		m.Color == dfltLedgerLineColor &&
 		m.Perm == dfltLedgerLinePerm &&
@@ -2278,8 +2439,8 @@ func (m *LedgerLine) appendFields(b []byte) []byte {
 	if !(def_Tick_7(m.At)) {
 		b = enc_Tick_7(b, 15, m.At)
 	}
-	if !(def_Ref_golden_all_ThingDef__61(m.Thing)) {
-		b = enc_Ref_golden_all_ThingDef__61(b, 16, m.Thing)
+	if !(def_Ref_golden_all_ThingDef__58(m.Thing)) {
+		b = enc_Ref_golden_all_ThingDef__58(b, 16, m.Thing)
 	}
 	if !(def_Guid_23(m.Id)) {
 		b = enc_Guid_23(b, 17, m.Id)
@@ -2350,7 +2511,7 @@ func (m *LedgerLine) readFields(r *wireReader) error {
 			case 15:
 				err = dec_Tick_7(r, wt, &m.At)
 			case 16:
-				err = dec_Ref_golden_all_ThingDef__61(r, wt, &m.Thing)
+				err = dec_Ref_golden_all_ThingDef__58(r, wt, &m.Thing)
 			case 17:
 				err = dec_Guid_23(r, wt, &m.Id)
 			case 18:

@@ -20,7 +20,7 @@ helios_shaders(helios-rendertest NAMESPACE rendertest_shaders FILES ${HELIOS_REN
 
 if(HELIOS_BUILD_TESTS)
   # Keep in sync with createScenes() (checked by rendertest.scenes).
-  set(HELIOS_RENDERTEST_SCENES triangle compute bindless forward normals postchain mips)
+  set(HELIOS_RENDERTEST_SCENES triangle compute bindless forward forward-srgb normals postchain mips)
   set(out ${CMAKE_CURRENT_BINARY_DIR}/rendertest-output)
   string(REPLACE ";" "," scene_list "${HELIOS_RENDERTEST_SCENES}")
   add_test(NAME rendertest.scenes COMMAND helios-rendertest --list --expect-scenes ${scene_list})

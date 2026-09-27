@@ -1,6 +1,6 @@
 // helios-rendertest scenes (see scenes.h). RC-1 requires triangle, compute and bindless; forward,
-// normals, postchain and mips cover the forward pipeline and its debug view, transient aliasing
-// across queues and per-subresource (mip) barriers on real GPUs.
+// forward-srgb, normals, postchain and mips cover the forward pipeline (both tonemap encodings) and
+// its debug view, transient aliasing across queues and per-subresource (mip) barriers on real GPUs.
 
 #include "scenes.h"
 
@@ -275,19 +275,31 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------
-/// `normals` (scene "normals"): the same frame with the DebugNormals view drawn over its right half.
+/// Forward pipeline v0 scenes: "forward", "forward-srgb" (the same frame into an sRGB output, so the
+/// tonemap takes its hardware-encoding path) and "normals" (the DebugNormals view over the right half).
+enum class ForwardView { Plain, Normals, Srgb };
+
+SceneInfo forwardInfo(ForwardView view) {
+    switch (view) {
+    case ForwardView::Normals:
+        return {"normals",
+                "Forward pipeline v0 with its DebugNormals view in the right half (the view is read, so not culled)",
+                320, 180, 0.01, 0.5f, 0};
+    case ForwardView::Srgb:
+        return {"forward-srgb",
+                "Forward pipeline v0 into an RGBA8Srgb output: the tonemap leaves the sRGB encoding to the "
+                "hardware (encodeSrgb = 0)",
+                320, 180, 0.01, 0.5f, 0, rhi::Format::RGBA8Srgb};
+    case ForwardView::Plain: break;
+    }
+    return {"forward",
+            "Forward pipeline v0 at 10^7 m: clear, geometry with reverse-Z depth, async exposure, tonemap", 320,
+            180, 0.01, 0.5f, 0};
+}
+
 class ForwardTestScene final : public Scene {
 public:
-    explicit ForwardTestScene(bool normals)
-        : m_normals(normals),
-          m_info(normals ? SceneInfo{"normals",
-                                     "Forward pipeline v0 with its DebugNormals view in the right half (the view "
-                                     "is read, so not culled)",
-                                     320, 180, 0.01, 0.5f, 0}
-                         : SceneInfo{"forward",
-                                     "Forward pipeline v0 at 10^7 m: clear, geometry with reverse-Z depth, async "
-                                     "exposure, tonemap",
-                                     320, 180, 0.01, 0.5f, 0}) {}
+    explicit ForwardTestScene(ForwardView view) : m_normals(view == ForwardView::Normals), m_info(forwardInfo(view)) {}
     const SceneInfo& info() const noexcept override { return m_info; }
     Result<void> init(rhi::Device& device, rhi::Format format) override {
         HELIOS_TRY_ASSIGN(m_renderer, ForwardRenderer::create(device, format));
@@ -530,8 +542,9 @@ std::vector<std::unique_ptr<Scene>> createScenes() {
     scenes.push_back(std::make_unique<TriangleScene>());
     scenes.push_back(std::make_unique<ComputeScene>());
     scenes.push_back(std::make_unique<BindlessScene>());
-    scenes.push_back(std::make_unique<ForwardTestScene>(false));
-    scenes.push_back(std::make_unique<ForwardTestScene>(true));
+    scenes.push_back(std::make_unique<ForwardTestScene>(ForwardView::Plain));
+    scenes.push_back(std::make_unique<ForwardTestScene>(ForwardView::Srgb));
+    scenes.push_back(std::make_unique<ForwardTestScene>(ForwardView::Normals));
     scenes.push_back(std::make_unique<PostChainScene>());
     scenes.push_back(std::make_unique<MipsScene>());
     return scenes;

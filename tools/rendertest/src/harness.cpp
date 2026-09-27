@@ -36,8 +36,6 @@ using namespace helios::render;
 
 namespace {
 
-constexpr rhi::Format kOutputFormat = rhi::Format::RGBA8Unorm;
-
 /// "llvmpipe (LLVM 19.1.7, 256 bits)" -> "llvmpipe".
 std::string driverKey(const rhi::AdapterInfo& adapter) {
     std::string key;
@@ -68,7 +66,7 @@ Result<Capture> renderOnce(Scene& scene, rhi::Device& device, jobs::JobSystem* j
     rhi::NullDevice* null = rhi::NullDevice::from(device);
     HELIOS_TRY_ASSIGN(rhi::TextureH output,
                       (device.createTexture(rhi::TextureDesc::tex2D(
-                          kOutputFormat, info.width, info.height,
+                          info.outputFormat, info.width, info.height,
                           rhi::TextureUsage::ColorAttachment | rhi::TextureUsage::TransferSrc, "Output"))));
     const rhi::TextureDesc outputDesc = device.textureDesc(output);
     Capture capture;
@@ -188,7 +186,7 @@ Result<ValidationSelfTest> runValidationSelfTest() {
     }
     HELIOS_TRY_ASSIGN(rhi::TextureH texture,
                       (device->createTexture(rhi::TextureDesc::tex2D(
-                          kOutputFormat, 16, 16,
+                          rhi::Format::RGBA8Unorm, 16, 16,
                           rhi::TextureUsage::Sampled | rhi::TextureUsage::TransferDst | rhi::TextureUsage::TransferSrc,
                           "SeededBarrier"))));
     log::setChannelLevel("RHI", log::Level::Off);  // the error below is the point; keep it out of the log
@@ -247,7 +245,9 @@ SceneResult runScene(Scene& scene, rhi::Device& device, const RunOptions& option
         for (int run = 0; run < 2; ++run) {
             auto fresh = createTestDevice(Backend::Null, false);
             if (!fresh) return fail("Null device: " + fresh.error().toString());
-            if (auto init = scene.init(*fresh.value(), kOutputFormat); !init) return fail("init: " + init.error().toString());
+            if (auto init = scene.init(*fresh.value(), scene.info().outputFormat); !init) {
+                return fail("init: " + init.error().toString());
+            }
             (run == 0 ? first : second) = renderOnce(scene, *fresh.value(), run == 0 ? nullptr : options.jobs);
             scene.destroy(*fresh.value());
             (void)fresh.value()->waitIdle();
@@ -261,7 +261,9 @@ SceneResult runScene(Scene& scene, rhi::Device& device, const RunOptions& option
         }
     } else {
         // Render twice on one device: serial recording, then parallel recording on the job system.
-        if (auto init = scene.init(device, kOutputFormat); !init) return fail("init: " + init.error().toString());
+        if (auto init = scene.init(device, scene.info().outputFormat); !init) {
+            return fail("init: " + init.error().toString());
+        }
         first = renderOnce(scene, device, nullptr);
         if (first) second = renderOnce(scene, device, options.jobs);
         scene.destroy(device);
@@ -379,7 +381,7 @@ Result<CoverageReport> measureCoverage(std::span<Scene* const> scenes, const std
     for (Scene* scene : scenes) {
         const std::string name(scene->info().name);
         HELIOS_TRY_ASSIGN(std::unique_ptr<rhi::Device> device, createTestDevice(Backend::Null, false));
-        if (auto init = scene->init(*device, kOutputFormat); !init) {
+        if (auto init = scene->init(*device, scene->info().outputFormat); !init) {
             return Error{init.error().code, std::format("scene '{}': init: {}", name, init.error().toString())};
         }
         Result<Capture> capture = renderOnce(*scene, *device, nullptr);

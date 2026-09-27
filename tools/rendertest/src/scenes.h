@@ -1,6 +1,7 @@
 #pragma once
 // helios-rendertest scenes: deterministic test scenes rendered offscreen through the render graph
-// (fixed camera, time and seeds). Each renders into an imported RGBA8 output texture.
+// (fixed camera, time and seeds). Each renders into an imported 8-bit RGBA output texture
+// (SceneInfo::outputFormat).
 
 #include <memory>
 #include <string>
@@ -23,6 +24,8 @@ struct SceneInfo {
     f32 maxFlip = 0.5f;
     /// Frames rendered before the captured one (temporal warm-up).
     u32 warmupFrames = 0;
+    /// Format of the output texture (read back as 8-bit RGBA; an sRGB format stores encoded bytes).
+    rhi::Format outputFormat = rhi::Format::RGBA8Unorm;
 };
 
 class Scene {

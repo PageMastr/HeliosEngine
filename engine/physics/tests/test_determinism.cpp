@@ -30,8 +30,6 @@ std::string hex(u64 v) {
     return buf;
 }
 
-} // namespace
-
 TEST_CASE("determinism: the scripted scene matches its golden hash (RT-03 Phase 0)") {
     PhysicsRuntime runtime;
     Scene s({});
@@ -92,3 +90,5 @@ TEST_CASE("determinism: KNOWN DIVERGENCE: permuted BodyIDs change multi-contact 
     CHECK(a == kGoldenFullScene600);
     CHECK(a != b);
 }
+
+} // namespace

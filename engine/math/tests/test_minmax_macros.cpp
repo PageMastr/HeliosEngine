@@ -26,6 +26,8 @@
 #error "helios/math headers must restore the caller's min/max macros"
 #endif
 
+namespace {
+
 TEST_CASE("headers: tolerate and restore min/max macros") {
     // Parenthesized names suppress function-like macro expansion.
     CHECK((helios::min)(3, 5) == 3);
@@ -37,3 +39,5 @@ TEST_CASE("headers: tolerate and restore min/max macros") {
 
 #undef min
 #undef max
+
+} // namespace

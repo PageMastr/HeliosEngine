@@ -23,8 +23,6 @@ ShaderReflection reflect(std::span<const u32> words) {
     return std::move(r).value();
 }
 
-} // namespace
-
 TEST_CASE("reflection: compute module (push constants, specialization constants, bindings)") {
     const ShaderReflection r = reflect(render_test_shaders::reflect_compute());
     CHECK(r.spirvVersion == 0x00010600u);
@@ -198,7 +196,6 @@ TEST_CASE("reflection: JSONC rendering") {
 // Hostile input (review regressions): SPIR-V and .hsr come from files, so malformed data must fail
 // cleanly with time and memory linear in its size.
 // ---------------------------------------------------------------------------------------------
-namespace {
 
 constexpr u32 spvOp(u32 opcode, u32 wordCount) { return (wordCount << 16) | opcode; }
 
@@ -207,8 +204,6 @@ std::vector<u32> spvHeader(u32 bound) { return {0x07230203u, 0x00010600u, 0u, bo
 f64 secondsSince(std::chrono::steady_clock::time_point t0) {
     return std::chrono::duration<f64>(std::chrono::steady_clock::now() - t0).count();
 }
-
-} // namespace
 
 TEST_CASE("reflection: huge SPIR-V member indices neither crash nor allocate per index") {
     // OpMemberName %5 0xFFFFFFFF "A": used to resize a vector to index + 1 == 0 and write past it.
@@ -343,3 +338,5 @@ TEST_CASE("reflection: mutated modules fail cleanly or round-trip exactly throug
     }
     CHECK(reflected > 100);  // the mutations must also exercise the success path
 }
+
+} // namespace

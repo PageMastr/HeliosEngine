@@ -6,6 +6,8 @@
 using namespace helios;
 using namespace helios::gameplay;
 
+namespace {
+
 TEST_CASE("items: ItemDef validation") {
     TagRegistry::Builder tb;
     REQUIRE(tb.add("Item.Weapon.Laser").ok());
@@ -106,3 +108,5 @@ TEST_CASE("items: ItemInstance validation") {
     g.payload.rolled[AttributeRef(5)] = std::numeric_limits<f64>::infinity();
     CHECK_FALSE(validateItemInstance(g, gun).ok());
 }
+
+} // namespace

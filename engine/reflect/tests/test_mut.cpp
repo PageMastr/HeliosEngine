@@ -44,6 +44,8 @@ public:
     }
 };
 
+namespace {
+
 TEST_CASE("mut: setters mark field bits and the entity summary") {
     Motion m;
     u64 summary = 0;
@@ -67,3 +69,5 @@ TEST_CASE("mut: setters mark field bits and the entity summary") {
     noSummary.setVel(Vec3(0, 1, 0));
     CHECK(dirtyFields(n) == Mut<Motion>::kVel);
 }
+
+} // namespace

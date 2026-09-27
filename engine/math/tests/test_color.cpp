@@ -3,6 +3,8 @@
 using namespace helios;
 using helios::test::Rng;
 
+namespace {
+
 TEST_CASE("color: sRGB transfer functions follow IEC 61966-2-1") {
     CHECK(srgbToLinear(0.0f) == 0.0f);
     CHECK(approxEqual(srgbToLinear(1.0f), 1.0f, 1e-6f));
@@ -212,3 +214,5 @@ TEST_CASE("color: HSV and luminance") {
     CHECK(lerp(Color::black(), Color::white(), 0.5f) == Color(0.5f, 0.5f, 0.5f, 1.0f));
     CHECK(Color(Vec3(1.0f, 2.0f, 3.0f), 0.5f).rgba() == Vec4(1.0f, 2.0f, 3.0f, 0.5f));
 }
+
+} // namespace

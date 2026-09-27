@@ -126,7 +126,6 @@ struct Cluster {
 };
 
 ZoneInstance* zoneOf(Cluster& c, u64 id) { return c.cell ? c.cell->host().find(id) : nullptr; }
-} // namespace
 
 TEST_CASE("server.e2e: standalone client -> gateway -> cell: welcome, echo, tick state, ping, detach") {
     Cluster c;
@@ -411,7 +410,6 @@ TEST_CASE("server.e2e: the cell drops forwards from a trunk that no longer carri
     CHECK(p2->stats().echoesReceived == 1);
 }
 
-namespace {
 /// A hand-driven "cell" that speaks the trunk protocol, to check what the gateway does with
 /// deliveries from a superseded lease generation and for sessions it did not attach there.
 struct ScriptedCell final : net::IEndpointHandler {
@@ -479,7 +477,6 @@ struct ScriptedRig {
         (void)cell.server->send(cell.trunk, channel, msg);
     }
 };
-} // namespace
 
 TEST_CASE("server.e2e: gateways fence deliveries below the attached lease generation") {
     net::VirtualNetwork network;
@@ -833,3 +830,5 @@ TEST_CASE("server.e2e: a session routed at a new generation but acked by the old
     p.sendEcho(std::vector<u8>{6}, c.now);
     REQUIRE(c.stepUntil([&] { return p.stats().echoesReceived == 1; }, 500));
 }
+
+} // namespace

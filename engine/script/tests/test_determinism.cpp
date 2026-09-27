@@ -74,8 +74,6 @@ RunResult runPure(bool native, HostProfile profile = HostProfile::Cell) {
     return runSource(kPureScript, native, profile);
 }
 
-} // namespace
-
 TEST_CASE("determinism: a pure script gives identical output and fuel across runs") {
     const RunResult a = runPure(false);
     const RunResult b = runPure(false);
@@ -184,3 +182,5 @@ TEST_CASE("determinism: charges never depend on the printed length of heap addre
         assert(c == d, "string.format charged " .. c .. " vs " .. d)
     )");
 }
+
+} // namespace

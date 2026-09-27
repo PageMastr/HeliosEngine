@@ -3,6 +3,8 @@
 using namespace helios;
 using helios::test::Rng;
 
+namespace {
+
 TEST_CASE("geometry: AABB basics") {
     DAABB b;
     CHECK(b.isEmpty());
@@ -407,3 +409,5 @@ TEST_CASE("geometry: f64 frustum culls far from the origin and matches sampling"
     }
     CHECK(inside > 100);
 }
+
+} // namespace

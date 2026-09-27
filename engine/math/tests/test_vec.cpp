@@ -5,6 +5,8 @@
 using namespace helios;
 using helios::test::Rng;
 
+namespace {
+
 TEST_CASE("vec: construction, layout and conversion") {
     constexpr Vec3 zero;
     static_assert(zero.x == 0.0f && zero.y == 0.0f && zero.z == 0.0f);
@@ -186,3 +188,5 @@ TEST_CASE("vec: orthonormal basis is right-handed and continuous") {
     CHECK(std::fabs(p.y) < 1e-7f);
     CHECK(approxEqual(length(p), 1.0f, 1e-6f));
 }
+
+} // namespace

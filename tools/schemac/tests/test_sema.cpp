@@ -89,8 +89,6 @@ void checkCases(std::initializer_list<Case> cases) {
     }
 }
 
-} // namespace
-
 TEST_CASE("sema: the normative example of 02 §3.1 compiles without diagnostics") {
     std::map<std::string, std::string> files = kSpecStubs;
     files.emplace("schemas/game/ship.hschema", kSpecExampleWithDeps);
@@ -659,3 +657,5 @@ struct Uses { e: EffectRef }
     CHECK(uses->fields[0].type->kind == TypeKind::RecordRef); // record EffectDef declares EffectRef
     CHECK(uses->fields[0].type->decl == c->decl("test.EffectDef"));
 }
+
+} // namespace

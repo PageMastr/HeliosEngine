@@ -40,8 +40,6 @@ bool refHas(const std::set<std::string>& held, const std::string& tag) {
     return false;
 }
 
-} // namespace
-
 TEST_CASE("tags: names are validated") {
     CHECK(isValidTagName("State.Debuff.Stun"));
     CHECK(isValidTagName("A_1.b2"));
@@ -301,13 +299,11 @@ TEST_CASE("tags: registry from TagDef records") {
     CHECK_FALSE(TagRegistry::fromRecords(defs).ok());
 }
 
-namespace {
 int g_tagAsserts = 0;
 AssertAction countTagAssert(const AssertInfo&) {
     ++g_tagAsserts;
     return AssertAction::Continue;
 }
-} // namespace
 
 TEST_CASE("tags: untrusted replication input and foreign indices are rejected safely (review regression)") {
     // assign() used to trust indices from the wire (only a debug assert): an out-of-range index was
@@ -383,3 +379,5 @@ TEST_CASE("tags: replicatedTags filters explicit tags by declared audience (06 Â
     CHECK(added.empty());
     CHECK(removed.empty());
 }
+
+} // namespace

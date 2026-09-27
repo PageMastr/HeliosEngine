@@ -43,7 +43,6 @@ OrchestratorClientConfig cellConfig(std::string name = "cell-a", std::vector<std
     c.info.zones = std::move(zones);
     return c;
 }
-} // namespace
 
 TEST_CASE("server.fakebus: request/reply, wildcards, no responders, timeouts and partitions") {
     FakeBus bus;
@@ -256,3 +255,5 @@ TEST_CASE("server.orch: ResolveZone and graceful deregistration") {
     CHECK(rig.orch.processes().empty()); // deregistered: the zones are free again
     CHECK(rig.orch.zone(1002).owner == 0);
 }
+
+} // namespace

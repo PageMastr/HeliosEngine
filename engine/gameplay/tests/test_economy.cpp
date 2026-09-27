@@ -15,7 +15,6 @@ ReasonCodeDef code(const char* c, ReasonKind k) {
     d.kind = k;
     return d;
 }
-} // namespace
 
 TEST_CASE("economy: reason codes are validated, indexed and hashed deterministically") {
     std::vector<ReasonCodeDef> defs = {code("Sink.Tax.Market.Broker", ReasonKind::Sink), code("Faucet.Bounty.NPC", ReasonKind::Faucet),
@@ -84,3 +83,5 @@ TEST_CASE("economy: two reason codes with one record id are rejected (review reg
     CHECK(ReasonCodeRegistry::build(recs).ok());
     CHECK(ReasonCodeRegistry::build(unknown).ok());
 }
+
+} // namespace

@@ -40,8 +40,6 @@ const Corpus& corpus() {
     return c;
 }
 
-} // namespace
-
 TEST_CASE("gpu twin: lattice hashes and noise values match the corpus") {
     GpuTwin* gpu = twin();
     if (!gpu) return;
@@ -133,3 +131,5 @@ TEST_CASE("gpu twin: programs and domains are validated before upload (review re
     REQUIRE(eval.evaluate(good, ok, cpu).ok());
     CHECK(std::equal(cpu.begin(), cpu.end(), heights.begin()));
 }
+
+} // namespace

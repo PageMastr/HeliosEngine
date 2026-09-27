@@ -11,6 +11,8 @@
 
 using namespace helios;
 
+namespace {
+
 // Static registration, as engine modules do it.
 HELIOS_CVAR(bool, cvarTestVsync, "test.r.vsync", true, "Synchronize to the display", CVarFlags::Saved);
 HELIOS_CVAR(i32, cvarTestMaxFps, "test.r.maxFps", 144, "Frame rate cap", CVarFlags::Saved);
@@ -20,7 +22,6 @@ HELIOS_CVAR(bool, cvarTestGodMode, "test.cheat.god", false, "Invulnerability", C
 HELIOS_CVAR(i32, cvarTestBuild, "test.sys.build", 7, "Build number", CVarFlags::ReadOnly);
 HELIOS_CVAR(f32, cvarTestGravity, "test.sv.gravity", 9.81f, "World gravity", CVarFlags::Replicated);
 
-namespace {
 CVarRegistry& reg() { return CVarRegistry::instance(); }
 
 struct QuietLogs {
@@ -28,7 +29,6 @@ struct QuietLogs {
     QuietLogs() { log::setLevel(log::Level::Off); }
     ~QuietLogs() { log::setLevel(saved); }
 };
-} // namespace
 
 TEST_CASE("cvar: static registration and typed access") {
     CHECK(cvarTestVsync.isRegistered());
@@ -256,3 +256,5 @@ TEST_CASE("cvar: duplicate names are rejected") {
     CHECK(!dup.isRegistered());
     CHECK(reg().find("test.r.vsync") == &cvarTestVsync);
 }
+
+} // namespace

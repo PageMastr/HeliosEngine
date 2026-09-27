@@ -12,6 +12,8 @@
 
 using namespace helios;
 
+namespace {
+
 TEST_CASE("memory: tag registry") {
     const MemoryTag t = registerMemoryTag("TestTagRegistry");
     CHECK(static_cast<u32>(t) >= static_cast<u32>(MemoryTag::FirstUser));
@@ -382,3 +384,5 @@ TEST_CASE("memory: a budget crossing on one thread is detected immediately under
     setMemoryBudget(tag, 0);
     log::setLevel(saved);
 }
+
+} // namespace

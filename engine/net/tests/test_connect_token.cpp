@@ -136,8 +136,6 @@ std::vector<Vector> loadVectors() {
     return out;
 }
 
-} // namespace
-
 TEST_SUITE("net.connect_token") {
     TEST_CASE("generate, parse and open round trip") {
         ConnectTokenParams p;
@@ -303,3 +301,5 @@ TEST_SUITE("net.connect_token") {
         CHECK(server->stats().preFilter.accepted > 0); // requests arrived; netcode refused the expiry
     }
 }
+
+} // namespace

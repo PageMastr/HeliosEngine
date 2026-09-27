@@ -74,8 +74,6 @@ std::vector<std::string> linesOf(const std::string& text) {
     return out;
 }
 
-} // namespace
-
 TEST_CASE("cpu gate: requirement sets") {
     const CpuFeatureSet v2 = cpuRequiredFeatures(CpuRequirement::X86_64_V2);
     const CpuFeatureSet avx2 = cpuRequiredFeatures(CpuRequirement::Avx2Image);
@@ -283,3 +281,5 @@ TEST_CASE("cpu gate: deliberate traps (ud2) are not reported as an unsupported C
     CHECK(r->exitCode == 128 + 4); // killed by SIGILL, as without the gate
 #endif
 }
+
+} // namespace

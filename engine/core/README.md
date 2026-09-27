@@ -151,6 +151,9 @@ Before the change, `alignedAlloc` + free cost 42 / 94 / 230 ns at 1 / 2 / 4 thre
 loading a plugin DLL/.so (`tests/support/test_plugin.cpp`), processes against
 `tests/support/process_child.cpp` (argument round trips, pipes, env, cwd, kill, inherited-handle
 whitelist) and the CPU gate's pre-initializer against `tests/support/cpugate_child.cpp`.
+`tests/test_tu_isolation_{a,b}.cpp` probe an MSVC hazard that affects every test file: without an
+unnamed namespace, a `Job` built from a lambda in one test file can run another file's lambda
+(`tests/tu_isolation.h` explains it; `lint_test_namespaces` keeps every test file in one).
 
 ```
 cmake -S . -B build/core -G Ninja -DHELIOS_BUILD_GRAPHICS=OFF

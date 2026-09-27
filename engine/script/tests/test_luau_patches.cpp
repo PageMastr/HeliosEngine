@@ -105,8 +105,6 @@ std::vector<bool> modes() {
     return m;
 }
 
-} // namespace
-
 TEST_CASE("luau patches: fuel-counter counts every gc < 0 safepoint once, in the VM and native code") {
     const auto bc = compile(kSafepointMix, {}, "mix");
     REQUIRE(bc.ok());
@@ -156,8 +154,6 @@ TEST_CASE("luau patches: codegen-fornloop-fuel — native code reaches the inter
     CHECK(native.result == interp.result);
     CHECK(native.calls == interp.calls);
 }
-
-namespace {
 
 // Numeric loops left by continue, run with negative, constant and variable steps, nested and left by
 // break or return, generic loops left by break, and while loops. W records progress, so a kill at a
@@ -216,8 +212,6 @@ double wAfterStopAt(const Bytecode& bc, bool native, i64 k, bool& stopped) {
     return w;
 }
 
-} // namespace
-
 TEST_CASE("luau patches: codegen-fornloop-fuel — a kill at safepoint k stops both modes at one point") {
     if (!luau_codegen_supported()) {
         MESSAGE("native codegen not supported on this target; skipped");
@@ -246,3 +240,5 @@ TEST_CASE("luau patches: codegen-fornloop-fuel — a kill at safepoint k stops b
          mismatches.empty() ? std::string("none") : mismatches.front());
     CHECK(mismatches.empty());
 }
+
+} // namespace

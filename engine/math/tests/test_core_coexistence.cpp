@@ -22,6 +22,8 @@ constexpr u64 hashCombine(u64 seed, u64 value) noexcept {
 
 #include <doctest/doctest.h>
 
+namespace {
+
 TEST_CASE("math headers coexist with helios/core declarations") {
     // Both calls would be ambiguous or re-routed if math declared another hashCombine overload.
     constexpr helios::u64 mixed = helios::hashCombine(helios::u64{1}, 2u);
@@ -31,3 +33,5 @@ TEST_CASE("math headers coexist with helios/core declarations") {
     static_assert(std::is_same_v<decltype(helios::hashCombineU32(1u, 2u)), helios::u32>);
     CHECK(helios::hashCombineU32(1u, 2u) != helios::hashCombineU32(2u, 1u));
 }
+
+} // namespace

@@ -24,7 +24,6 @@ constexpr bool kCrtReducesHugeArgs = true;
 constexpr u64 kCrtSlackUlp = 1;
 constexpr bool kCrtReducesHugeArgs = false;
 #endif
-}  // namespace
 
 TEST_CASE("scalar: constants") {
     CHECK(kPiD == std::numbers::pi);
@@ -347,3 +346,5 @@ TEST_CASE("det: golden values (cross-platform bit identity)") {
         CHECK(helios::test::bits(det::atan2(g.x, 0.75)) == g.atanBits);
     }
 }
+
+} // namespace

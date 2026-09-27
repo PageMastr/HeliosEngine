@@ -13,6 +13,8 @@ using namespace helios;
 using namespace helios::script;
 using helios::script::test::Harness;
 
+namespace {
+
 TEST_CASE("compiler: valid source compiles; errors carry the chunk name and line") {
     const auto ok = compile("local x = 1\nreturn x + 1", {}, "good");
     REQUIRE(ok.ok());
@@ -218,3 +220,5 @@ TEST_CASE("compiler: a cell VmConfig with native codegen fails create()") {
         CHECK((*created)->nativeCodegenActive() == (luau_codegen_supported() != 0));
     }
 }
+
+} // namespace

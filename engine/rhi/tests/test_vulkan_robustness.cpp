@@ -46,8 +46,6 @@ struct ErrorLedger {
     }
 };
 
-} // namespace
-
 TEST_SUITE("gpu") {
 
 TEST_CASE("gpu: devices keep their own Vulkan function tables (several devices, adapter enumeration)") {
@@ -368,3 +366,5 @@ TEST_CASE("gpu: a destroyed texture's bindless slot falls back to the default te
 }
 
 } // TEST_SUITE("gpu")
+
+} // namespace

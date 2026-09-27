@@ -56,8 +56,6 @@ i64 runTicks(ZoneInstance& z, i64 now, u32 ticks) {
     return now;
 }
 
-} // namespace
-
 TEST_CASE("server.tickgraph: stages run in order; hooks honour `after`") {
     TickGraph g;
     std::mutex mu;
@@ -404,3 +402,5 @@ TEST_CASE("server.zone: recent tick durations feed the heartbeat's tick p99") {
     CHECK(recent.back() == zone->stats().lastTickNs);
     (void)now;
 }
+
+} // namespace

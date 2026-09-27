@@ -120,8 +120,6 @@ f64 ulpError(f64 got, long double ref) {
 }
 #endif
 
-} // namespace
-
 TEST_CASE("det::exp/ln/pow/asinh: special values follow C99 Annex F") {
     CHECK(det::exp(0.0) == 1.0);
     CHECK(det::exp(-0.0) == 1.0);
@@ -274,3 +272,5 @@ TEST_CASE("det::exp/ln/pow/asinh: golden hashes (bit-identical on every compiler
     CHECK(hp.h == 0x0a9d6178cd84387bULL);
     CHECK(ha.h == 0x8f30fd19714fe5f7ULL);
 }
+
+} // namespace

@@ -78,8 +78,6 @@ std::string nestedTrees(usize depth) {
     return out;
 }
 
-} // namespace
-
 TEST_CASE("hardening: JSON nesting is limited at parse time (no stack overflow)") {
     CHECK(JsonDocument::parse(nestedArrays(kMaxJsonDepth)));
     auto deep = JsonDocument::parse(nestedArrays(kMaxJsonDepth + 1));
@@ -287,3 +285,5 @@ TEST_CASE("hardening: null reads as an empty container (Go writes nil slices and
     CHECK_FALSE(fromJson("null", n, ctx));
     CHECK_FALSE(fromJson(t, &h, "null", ctx));
 }
+
+} // namespace

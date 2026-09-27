@@ -70,8 +70,6 @@ const FieldInfo& fieldOf(const TypeInfo& t, std::string_view name) {
     return t.fields[0];
 }
 
-} // namespace
-
 TEST_CASE("generated: registration and ids from the committed lock") {
     TypeRegistry& reg = sampleRegistry();
     CHECK(reg.size() >= 35);
@@ -638,3 +636,5 @@ TEST_CASE("generated: registerXTypes() defaults to the global registry (02 §3.6
     CHECK(refl::find(typeOf<sc::Transform>().id) == &typeOf<sc::Transform>());
     CHECK(refl::find("sample.common.Nope") == nullptr);
 }
+
+} // namespace

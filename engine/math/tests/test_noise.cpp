@@ -125,8 +125,6 @@ const nz::FbmParams kFbmPerlin{5, 0.5, 2.03, 0.55, nz::Basis::Perlin};
 const nz::RidgedParams kRidged{};
 const nz::WarpParams kWarp{4.0, {3, 0.25, 2.0, 0.5, nz::Basis::Simplex}};
 
-}  // namespace
-
 TEST_CASE("noise: golden values are bit-identical (f64)") {
     for (int i = 0; i < 20; ++i) {
         const Sample& s = kSamples[i];
@@ -456,3 +454,5 @@ TEST_CASE("noise throughput (budget report)") {
     CHECK(simplex3 < 2000.0);
     CHECK(cell3 < 5000.0);
 }
+
+} // namespace

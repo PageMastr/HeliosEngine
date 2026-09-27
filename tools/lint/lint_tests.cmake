@@ -1,6 +1,6 @@
 # Repository lints (WP-0.2, 09 §5.3 DoD item 5): ISA audit, licence scanner, vendored-patch check,
-# IP-name grep, Windows manifest check and the module-layering fixtures. Every lint is a CMake script
-# (`cmake -P`), so it runs on Windows developer machines without Python. Included by
+# IP-name grep, test-namespace check, Windows manifest check and the module-layering fixtures. Every
+# lint is a CMake script (`cmake -P`), so it runs on Windows developer machines without Python. Included by
 # helios_finalize_build() (cmake/HeliosLayering.cmake) at the end of the top-level CMakeLists.txt,
 # once every target exists (a deferred call cannot add_subdirectory, hence an include). All tests
 # carry the CTest label `lint`.
@@ -207,6 +207,34 @@ foreach(case
 endforeach()
 helios_lint_test(lint_ip_names_fixture_clean COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_TESTS}/ip_names/clean
   -DLINT_POLICY=${LINT}/ip_names_policy.cmake -P ${LINT}/ip_names.cmake)
+
+# ---------------------------------------------------------------------------------------------
+# Test namespaces (AAA-PLT-1): every doctest test macro in a tests/ source sits in an unnamed
+# namespace, so MSVC cannot merge one test file's lambdas with another's (#15). The ok fixture hides
+# braces, test macros and `namespace {` in comments and literals; literal_brace is the reverse trap.
+# ---------------------------------------------------------------------------------------------
+helios_lint_test(lint_test_namespaces COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
+  -DREQUIRE_TESTS=ON -P ${LINT}/test_namespaces.cmake)
+helios_lint_test(lint_test_namespaces_fixture_ok COMMAND ${CMAKE_COMMAND}
+  -DSOURCE_DIR=${LINT_TESTS}/test_namespaces/ok -DREQUIRE_TESTS=ON -P ${LINT}/test_namespaces.cmake)
+foreach(case
+    "outside|test_outside.cpp:4: TEST_CASE outside an unnamed namespace"
+    "closed_early|test_closed_early.cpp:11: TEST_CASE outside an unnamed namespace"
+    "named_only|test_named_only.cpp:6: TEST_CASE outside an unnamed namespace"
+    "suite|test_suite.cpp:4: TEST_SUITE outside an unnamed namespace"
+    "literal_brace|test_literal_brace.cpp:16: TEST_CASE outside an unnamed namespace"
+    "doctest_prefix|test_doctest_prefix.cpp:10: DOCTEST_TEST_CASE_FIXTURE outside an unnamed namespace"
+    "subcase_helper|test_subcase_helper.cpp:6: SUBCASE outside an unnamed namespace"
+    "unbalanced|test_unbalanced.cpp:4: unbalanced braces"
+    "crlf|test_crlf.cpp:6: TEST_CASE outside an unnamed namespace"
+    "empty|no doctest test macro under")
+  string(REPLACE "|" ";" parts "${case}")
+  list(GET parts 0 fixture)
+  list(GET parts 1 expect)
+  helios_lint_test(lint_test_namespaces_fixture_${fixture} EXPECT_FAIL "${expect}"
+    COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_TESTS}/test_namespaces/${fixture} -DREQUIRE_TESTS=ON
+            -P ${LINT}/test_namespaces.cmake)
+endforeach()
 
 # ---------------------------------------------------------------------------------------------
 # Windows manifest (ADR-011): the source manifest's settings, and on Windows builds that a built

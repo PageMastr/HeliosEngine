@@ -26,8 +26,6 @@ std::unique_ptr<PhysicsGrid> flatWorld() {
     return grid;
 }
 
-} // namespace
-
 TEST_CASE("character: lands, stands on the ground and reports the ground's key") {
     PhysicsRuntime runtime;
     auto grid = flatWorld();
@@ -181,3 +179,5 @@ TEST_CASE("character: non-finite or negative mover parameters are rejected") {
     cd.rotation = Quat(0.0f, 0.0f, 0.0f, 0.0f);
     CHECK(grid->createCharacter(cd).errorCode() == ErrorCode::InvalidArgument);
 }
+
+} // namespace

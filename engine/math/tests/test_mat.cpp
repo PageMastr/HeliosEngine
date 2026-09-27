@@ -16,7 +16,6 @@ DMat4 randomTRS(Rng& rng, bool uniformScale = false) {
     const DVec3 s = uniformScale ? DVec3(s0) : DVec3(s0, rng.range(0.2, 3.0), rng.range(0.2, 3.0));
     return DMat4::trs(rng.dvec3(-100.0, 100.0), rng.quatD(), s);
 }
-}  // namespace
 
 TEST_CASE("mat: layout is column-major with column vectors") {
     constexpr Mat4 id;
@@ -240,3 +239,5 @@ TEST_CASE("mat: Vulkan Y flip") {
     CHECK(b.w == a.w);
     CHECK(flipClipY(f) == p);
 }
+
+} // namespace

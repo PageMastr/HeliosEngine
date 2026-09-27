@@ -44,8 +44,6 @@ std::string mutate(std::string text, SplitMix64& rng) {
     return text;
 }
 
-} // namespace
-
 TEST_CASE("fuzz: mutated schemas produce diagnostics, never crashes") {
     const std::string golden = readText(std::string(HELIOS_SCHEMAC_TEST_DIR) + "/golden/golden.hschema");
     const std::string common = readText(std::string(HELIOS_SOURCE_DIR) + "/schemas/sample/common.hschema");
@@ -95,3 +93,5 @@ TEST_CASE("fuzz: mutated locks are rejected or applied, never crash") {
         if (!c->ok()) CHECK(c->diags.hasErrors());
     }
 }
+
+} // namespace

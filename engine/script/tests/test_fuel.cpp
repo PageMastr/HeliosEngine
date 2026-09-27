@@ -150,8 +150,6 @@ constexpr const char* kSafepointsOnly = R"(
     acc += n
 )";
 
-} // namespace
-
 TEST_CASE("fuel: a runaway loop is killed at exactly fuel_kill and the VM stays usable") {
     Harness h;
     const TaskId id = h.run("runaway", "local x = 0\nwhile true do x += 1 end");
@@ -608,7 +606,6 @@ TEST_CASE("fuel: a pure builtin whose result trips fuel_kill is killed right aft
     CHECK(h.prints.empty());
 }
 
-namespace {
 // Runs `source` (which must bump `require("probe").n` once per iteration of a loop whose body is one
 // large allocation) until the wall limit kills it. Returns how many iterations ran past the limit,
 // estimated from the measured time per iteration: machine-speed independent.
@@ -642,7 +639,6 @@ double iterationsPastLimit(VmConfig config, u64 limitNanos, KillReason expected)
     MESSAGE("killed after ", wall / 1e6, " ms and ", n, " iterations (", past, " past the limit)");
     return past;
 }
-} // namespace
 
 TEST_CASE("fuel: wall limits fire promptly when single operations are slow (GC steps force a clock read)") {
     // The clock is read every 64 fuel; a loop whose every iteration is one multi-MB allocation used to
@@ -805,7 +801,6 @@ TEST_CASE("fuel: the host runs only at decision points (inline fuel counter)") {
 // (a wall limit makes the host read the clock every 64 fuel, before every binding and after every
 // GC step, as a cell's 20 ms backstop does) and around decision points.
 // ---------------------------------------------------------------------------------------------
-namespace {
 
 u64 g_probeFuel = 0;
 int g_probeCalls = 0;
@@ -869,8 +864,6 @@ VmConfig unlimited() {
     c.budget.fuelPerTick = 0;
     return c;
 }
-
-} // namespace
 
 TEST_CASE("fuel: GC-forced clock reads do not change the fuel count (counter armed at 0)") {
     constexpr const char* kAllocating = R"(
@@ -1030,3 +1023,5 @@ TEST_CASE("fuel: a saturated top-level run never wraps the VM's fuel total") {
     CHECK_FALSE(h.vm->callExport("m", "f", {}, {}, 0).ok());
     CHECK(h.vm->stats().fuelTotal == ~u64(0));
 }
+
+} // namespace

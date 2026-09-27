@@ -150,8 +150,6 @@ TerrainGraph randomGraph(u64 seed) {
     return g;
 }
 
-} // namespace
-
 TEST_CASE("kernels: selection reports the compiled kernels and honours CPUID") {
     const CpuGateReport& gate = cpuGate();
     MESSAGE("CPU: " << gate.brand << " (" << gate.usable.toString() << ")");
@@ -400,3 +398,5 @@ TEST_CASE("kernels: tile domains outside the cube-sphere lattice are rejected, n
     CHECK(evaluateSampleReference(wild, TileDomain::planar({}, i64(1) << 32, 0, 0), 5) == 0);
     CHECK(evaluateSampleReference(p, TileDomain::cubeSphere({CubeFace::PosX, 26, 0, 0}, r), 5) == 0);
 }
+
+} // namespace

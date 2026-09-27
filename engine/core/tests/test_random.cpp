@@ -8,6 +8,8 @@
 
 using namespace helios;
 
+namespace {
+
 // Golden sequences pin the exact output on every platform/compiler. Reference values come from the
 // published reference implementations (pcg32-demo, splitmix64.c, xoshiro256starstar.c) and an
 // independent Python model of the distribution algorithms.
@@ -73,13 +75,11 @@ TEST_CASE("random: distributions are exact and platform-stable") {
     CHECK(items == std::array<int, 10>{2, 7, 0, 6, 1, 4, 8, 9, 5, 3});
 }
 
-namespace {
 /// Generator stub that always returns all-one bits: the largest possible unit value 1 - 2^-24/-53.
 struct MaxBitsRng {
     constexpr u32 nextU32() noexcept { return 0xFFFFFFFFu; }
     constexpr u64 nextU64() noexcept { return ~0ull; }
 };
-} // namespace
 
 TEST_CASE("random: float ranges stay half-open even when rounding reaches hi") {
     // Regression: 1 + (2 - 1) * (1 - 2^-24) rounds (ties-to-even) to exactly 2.0f, so a value "in
@@ -144,3 +144,5 @@ TEST_CASE("random: ranges, bounds and rough uniformity") {
     s2.jump();
     CHECK(s1.next() != s2.next());
 }
+
+} // namespace

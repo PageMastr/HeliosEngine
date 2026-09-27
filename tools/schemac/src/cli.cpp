@@ -1,15 +1,13 @@
 #include "cli.h"
 
-#include <chrono>
 #include <filesystem>
 #include <format>
 #include <map>
-#include <optional>
 #include <set>
-#include <thread>
 
 #include "compiler.h"
 #include "helios/core/fs.h"
+#include "lock_mutex.h"
 #include "text.h"
 
 namespace helios::schemac {
@@ -74,75 +72,6 @@ std::string escapeMake(const std::string& path) {
     }
     return out;
 }
-
-/// Cross-process mutex for a schema lock file: several helios_schema() calls (possibly running in
-/// parallel in one build) may share one lock, and each run reads, extends and rewrites it — without
-/// mutual exclusion a concurrent run would overwrite another's new ids, tombstones and renames.
-/// Portable: creating a directory is atomic on every OS. A directory older than kStaleAfter is left
-/// over from a killed run and is taken over.
-class LockFileMutex {
-public:
-    static constexpr auto kStaleAfter = std::chrono::seconds(120);
-    static constexpr auto kGiveUpAfter = std::chrono::seconds(300);
-    static constexpr auto kDeniedRetryFor = std::chrono::seconds(5);
-
-    ~LockFileMutex() {
-        if (!m_dir.empty()) {
-            std::error_code ec;
-            std::filesystem::remove(m_dir, ec);
-        }
-    }
-
-    bool acquire(const std::string& lockPath, std::string& err) {
-        const std::filesystem::path dir = fs::pathFromUtf8(lockPath + ".writing");
-        if (dir.has_parent_path()) {
-            std::error_code ignored; // a new lock may live in a directory that does not exist yet
-            std::filesystem::create_directories(dir.parent_path(), ignored);
-        }
-        const auto start = std::chrono::steady_clock::now();
-        std::optional<std::chrono::steady_clock::time_point> deniedSince;
-        auto delay = std::chrono::milliseconds(2);
-        for (;;) {
-            std::error_code ec;
-            if (std::filesystem::create_directory(dir, ec)) {
-                m_dir = dir;
-                return true;
-            }
-            if (ec == std::errc::permission_denied) {
-                // Windows: a directory another run has just removed while a third still holds a handle to it
-                // (e.g. its stale check below) is "delete pending", and creating it fails with
-                // ERROR_ACCESS_DENIED until that handle closes. Treat it as contention unless it persists.
-                const auto now = std::chrono::steady_clock::now();
-                if (!deniedSince) deniedSince = now;
-                if (now - *deniedSince > kDeniedRetryFor) {
-                    err += std::format("helios-schemac: error: cannot create '{}': {}\n", fs::pathToUtf8(dir), ec.message());
-                    return false;
-                }
-            } else if (ec) {
-                err += std::format("helios-schemac: error: cannot create '{}': {}\n", fs::pathToUtf8(dir), ec.message());
-                return false;
-            } else {
-                deniedSince.reset();
-                const auto modified = std::filesystem::last_write_time(dir, ec);
-                if (!ec && std::filesystem::file_time_type::clock::now() - modified > kStaleAfter) {
-                    std::filesystem::remove(dir, ec); // stale: a killed run left it behind
-                    continue;
-                }
-            }
-            if (std::chrono::steady_clock::now() - start > kGiveUpAfter) {
-                err += std::format("helios-schemac: error: timed out waiting for '{}' (another helios-schemac is updating the lock; "
-                                   "remove the directory if none is running)\n",
-                                   fs::pathToUtf8(dir));
-                return false;
-            }
-            std::this_thread::sleep_for(delay);
-            delay = std::min(delay * 2, std::chrono::milliseconds(100));
-        }
-    }
-
-private:
-    std::filesystem::path m_dir;
-};
 
 /// Writes `content` unless the file already holds it (keeps timestamps, avoids rebuilds).
 bool writeIfChanged(const std::string& path, const std::string& content, std::string& err, bool& written) {
@@ -292,7 +221,10 @@ int runCli(std::span<const std::string> args, std::string& out, std::string& err
     DiagnosticEngine diags;
     CompileResult result = compile(options, fsys, diags);
     err += diags.formatAll();
-    if (!result.ok) return 1;
+    if (!result.ok) {
+        lockMutex.release(err);
+        return 1;
+    }
 
     int status = 0;
     usize written = 0;
@@ -313,6 +245,7 @@ int runCli(std::span<const std::string> args, std::string& out, std::string& err
             if (result.lockChanges.size() > kMaxListed) out += std::format("  ... and {} more\n", result.lockChanges.size() - kMaxListed);
         }
     }
+    lockMutex.release(err); // the lock is written; the depfile is this run's own
     if (!depfile.empty()) {
         if (depTarget.empty() && !result.outputs.empty()) depTarget = result.outputs.front().path;
         std::string text = escapeMake(depTarget) + ":";

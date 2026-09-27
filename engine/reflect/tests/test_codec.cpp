@@ -54,7 +54,6 @@ void checkRoundTrip(const T& v) {
     CHECK_MESSAGE(valuesEqual(fromText, v), text);
     CHECK(toJson(fromText) == text);
 }
-} // namespace
 
 TEST_CASE("codec: scalar encodings") {
     CHECK(fieldBytes<bool>(1, true) == bytes({0x08, 0x01}));
@@ -370,3 +369,5 @@ TEST_CASE("codec: TypeOf for containers") {
     CHECK(typeOf<Guid>().kind == Kind::Builtin);
     CHECK(typeOf<i32>().id == fnv1a32("i32"));
 }
+
+} // namespace

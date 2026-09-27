@@ -11,6 +11,8 @@ using namespace helios;
 using namespace helios::net;
 using namespace helios::net::test;
 
+namespace {
+
 TEST_SUITE("net.trunk") {
     TEST_CASE("trunk profile values") {
         const ConnectionConfig t = ConnectionConfig::trunk();
@@ -118,3 +120,5 @@ TEST_SUITE("net.trunk") {
         CHECK(r.receiverCores <= 1.0);
     }
 }
+
+} // namespace

@@ -10,6 +10,8 @@ using namespace helios;
 using namespace helios::refl;
 using namespace rtest;
 
+namespace {
+
 TEST_CASE("record: minted ids are non-zero 63-bit and unique") {
     std::set<RecordId> seen;
     for (int i = 0; i < 1000; ++i) {
@@ -65,3 +67,5 @@ TEST_CASE("record: $rid is mandatory and validated") {
     CHECK(h.rid == 5);
     CHECK(v.a == 2);
 }
+
+} // namespace

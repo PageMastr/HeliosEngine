@@ -56,8 +56,6 @@ void addShipModifiers(AttributeSet& s, u32 count, u32 seed) {
     }
 }
 
-} // namespace
-
 TEST_CASE("perf: 300-modifier ship: full recompute <= 50 us, incremental change <= 5 us") {
     auto layout = shipLayout();
     AttributeSet s(layout);
@@ -99,7 +97,6 @@ TEST_CASE("perf: 300-modifier ship: full recompute <= 50 us, incremental change 
 //    min(8, cores) threads, unasserted.
 // PR CI skips `perf` tests and the nightly runner has fewer than 8 vCPUs, so the budget itself still
 // needs a run on 8-core hardware (09 §8.1).
-namespace {
 
 constexpr u32 kBudgetThreads = 8;
 
@@ -149,8 +146,6 @@ std::unique_ptr<jobs::JobSystem> resolveJobs(u32 threads) {
     return js;
 }
 
-} // namespace
-
 TEST_CASE("perf: 10k entities x 40 attributes at 5 % dirty <= 1 ms on 8 workers" *
           doctest::skip(hardwareThreadCount() < kBudgetThreads)) {
     TenThousandShips ships;
@@ -174,3 +169,5 @@ TEST_CASE("perf: 10k entities x 40 attributes at 5 % dirty: 1 thread <= 8 ms (pr
     CHECK(seqMs <= 8.0); // 8 workers x 1 ms of single-thread work
 #endif
 }
+
+} // namespace

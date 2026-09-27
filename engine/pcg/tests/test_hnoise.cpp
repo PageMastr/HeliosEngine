@@ -24,7 +24,6 @@ u64 splitmix(u64& s) {
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
     return z ^ (z >> 31);
 }
-} // namespace
 
 TEST_CASE("hnoise: the lattice hash is xxHash32 of the little-endian cell") {
     u64 rng = 1;
@@ -234,3 +233,5 @@ TEST_CASE("hnoise: positions scale with the radius in Q32.32 metres") {
     CHECK(hnoise::faceCoordQ30(0, 64, 0) == (1 << 30));
     CHECK(hnoise::faceCoordQ30((1u << 25) - 1u, 64, 25) == (1 << 30));
 }
+
+} // namespace

@@ -26,6 +26,8 @@ def fallback_file(test_name: str) -> str:
         return "tools/lint/windows_manifest.cmake"
     if test_name.startswith("lint_layering"):
         return "cmake/HeliosLayering.cmake"
+    if test_name.startswith("lint_test_namespaces"):
+        return "tools/lint/test_namespaces.cmake"
     return "tools/lint/lint_tests.cmake"
 
 

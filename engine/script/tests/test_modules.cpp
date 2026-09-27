@@ -18,8 +18,6 @@ std::string callString(Harness& h, const char* module, const char* fn) {
     return out;
 }
 
-} // namespace
-
 TEST_CASE("modules: require runs a chunk once and caches its exports") {
     Harness h;
     h.load("lib", R"(
@@ -257,3 +255,5 @@ TEST_CASE("modules: huge error messages are truncated when extracted to the host
         assert(not ok and #err == 100000)
     )");
 }
+
+} // namespace

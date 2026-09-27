@@ -38,7 +38,6 @@ std::vector<u8> fromHex(std::string_view h) {
     for (usize i = 0; i + 1 < h.size(); i += 2) out.push_back(static_cast<u8>(std::stoi(std::string(h.substr(i, 2)), nullptr, 16)));
     return out;
 }
-} // namespace
 
 TEST_CASE("server.contracts: requests the C++ side sends are byte-identical to Go's encoding") {
     const auto go = loadGoVectors();
@@ -524,3 +523,5 @@ TEST_CASE("server.contracts: non-finite and out-of-range numbers stay defined an
     CHECK(whole->pid == 12);
     CHECK_FALSE(orch::decodeRegisterResult(bytes(R"({"processId":"7","leaseTtlMs":1e19})")));
 }
+
+} // namespace

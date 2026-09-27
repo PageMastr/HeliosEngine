@@ -46,8 +46,6 @@ struct HandlerScope {
     HELIOS_UNREACHABLE("value {}", v); // compiles as a no-return statement
 }
 
-} // namespace
-
 TEST_CASE("assert: passing assertions do not call the handler and evaluate once") {
     HandlerScope scope;
     int evaluations = 0;
@@ -101,3 +99,5 @@ TEST_CASE("assert: handler installation returns the previous handler") {
     CHECK(assertHandler() == &defaultAssertHandler);
     CHECK(unreachableAfterSwitch(0) == 1);
 }
+
+} // namespace

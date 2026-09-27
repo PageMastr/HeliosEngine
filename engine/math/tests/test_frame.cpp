@@ -23,7 +23,6 @@ bool sameFrame(const FrameTransform& a, const FrameTransform& b, f64 posTol, f64
            approxEqual(a.linearVelocity, b.linearVelocity, velTol) &&
            approxEqual(a.angularVelocity, b.angularVelocity, 1e-15);
 }
-}  // namespace
 
 TEST_CASE("frame: ids and positions") {
     constexpr FrameId none;
@@ -218,3 +217,5 @@ TEST_CASE("frame: frame motion is bit-identical across platforms (golden)") {
     CHECK(bits(r.x) == 0x3e81db5fu);
     CHECK(bits(r.w) == 0x3ea171efu);
 }
+
+} // namespace

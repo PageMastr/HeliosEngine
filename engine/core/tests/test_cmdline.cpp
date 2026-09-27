@@ -7,6 +7,8 @@
 
 using namespace helios;
 
+namespace {
+
 TEST_CASE("cmdline: flags, options and positionals from argv") {
     const char* argv[] = {"game.exe", "-windowed", "--width=1920", "-Height=1080", "save1",
                           "-map=/content/maps/a.json", "-5",  "--", "--not-an-option", "-x"};
@@ -80,3 +82,5 @@ TEST_CASE("cmdline: the current process command line is available") {
     const auto cl = CommandLine::fromProcess();
     CHECK(!cl.program().empty());
 }
+
+} // namespace

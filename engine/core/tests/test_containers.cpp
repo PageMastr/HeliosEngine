@@ -9,6 +9,8 @@
 
 using namespace helios;
 
+namespace {
+
 TEST_CASE("small vector: inline storage then heap growth") {
     const i64 before = memoryTagStats(MemoryTag::Containers).liveBytes;
     {
@@ -186,3 +188,5 @@ TEST_CASE("spsc queue: ordered hand-off between two threads") {
     SpscQueue<std::string> strings(2);
     CHECK(strings.tryPush(std::string("leftover")));
 }
+
+} // namespace

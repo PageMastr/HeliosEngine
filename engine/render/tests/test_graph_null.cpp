@@ -88,8 +88,6 @@ struct SmallFrameFixture : NullDeviceFixture {
     }
 };
 
-} // namespace
-
 TEST_CASE("graph null: small frame trace golden (plan + command stream)") {
     SmallFrameFixture fx;
     RgResourcePool pool(*fx.device);
@@ -479,3 +477,5 @@ TEST_CASE("graph null: extra waits, context validation and execute errors") {
     CHECK(fx.null->trace().starts_with("submit Graphics #1 waits=[Transfer:1]"));
     CHECK_NULL_CLEAN(fx);
 }
+
+} // namespace

@@ -11,6 +11,8 @@
 using namespace helios;
 using namespace helios::literals;
 
+namespace {
+
 TEST_CASE("name: interning yields stable ids and text") {
     const Name a("ship.hull");
     const Name b(std::string("ship.hull"));
@@ -95,3 +97,5 @@ TEST_CASE("string id: constexpr hashing and debug registry") {
     std::unordered_set<StringId> set{a, made, a};
     CHECK(set.size() == 2);
 }
+
+} // namespace

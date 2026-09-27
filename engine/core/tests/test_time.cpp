@@ -6,6 +6,8 @@
 
 using namespace helios;
 
+namespace {
+
 TEST_CASE("time: monotonic clock and stopwatch") {
     const u64 a = monotonicNanos();
     const u64 b = monotonicNanos();
@@ -146,3 +148,5 @@ TEST_CASE("dilatable clock: NaN scales are ignored instead of converting NaN to 
     clock.setScale(-std::numeric_limits<f64>::infinity());
     CHECK(clock.scale() == doctest::Approx(0.1)); // clamped to the floor
 }
+
+} // namespace

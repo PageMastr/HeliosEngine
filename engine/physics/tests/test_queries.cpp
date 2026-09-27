@@ -39,8 +39,6 @@ std::unique_ptr<PhysicsGrid> twinBoxes(BodyKey first, ObjectLayer firstLayer, Bo
     return grid;
 }
 
-} // namespace
-
 TEST_CASE("queries: closest ray hit, point, normal and fraction") {
     PhysicsRuntime runtime;
     auto grid = PhysicsGrid::create({}).value();
@@ -212,3 +210,5 @@ TEST_CASE("queries: zero-length rays and casts return finite results or none") {
         }
     }
 }
+
+} // namespace

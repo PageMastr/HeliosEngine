@@ -35,8 +35,6 @@ struct Opaque16 {
     u64 a = 0, b = 0;
 };
 
-} // namespace
-
 TEST_CASE("ecs components: template registration binds types to ids") {
     World world;
     const ComponentId pos = world.registerComponent<Position>();
@@ -242,11 +240,17 @@ TEST_CASE("ecs components: content-placed NetHandle slots") {
     CHECK(world.netHandle(d).index() == 101);
 }
 
+} // namespace
+
+// helios-lint: outside-anon-namespace begin (a test checks the qualified name ecs_test_names.Thruster)
 namespace ecs_test_names {
 struct Thruster {
     float force = 0;
 };
 } // namespace ecs_test_names
+// helios-lint: outside-anon-namespace end
+
+namespace {
 
 TEST_CASE("ecs components: default names are the qualified C++ names") {
     CHECK(defaultComponentName<ecs_test_names::Thruster>() == "ecs_test_names.Thruster");
@@ -278,3 +282,5 @@ TEST_CASE("ecs components: plain components keep flecs tables on the fast path")
     CHECK(reinterpret_cast<const Health*>(info->defaultValue)->maxHp == 100.0f);
     CHECK(world.componentInfo(world.id<Named>())->defaultValue == nullptr);
 }
+
+} // namespace

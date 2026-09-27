@@ -57,8 +57,6 @@ struct Thing { a: u8 = 1; b: string }
 enum Kind : u8 { X, Y }
 )";
 
-} // namespace
-
 TEST_CASE("cli: help, version and usage errors") {
     Run help = cli({"--help"});
     CHECK(help.status == 0);
@@ -228,3 +226,5 @@ TEST_CASE("cli: a lock mutex left behind by a killed run is taken over") {
     CHECK(fs::exists(lock));
     CHECK_FALSE(fs::exists(mutexDir));
 }
+
+} // namespace

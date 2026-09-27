@@ -79,8 +79,6 @@ U128 mul128x64(U128 a, u64 b, bool& overflow) {
     return sum;
 }
 
-} // namespace
-
 TEST_CASE("fixed: 128-bit helpers match independent references") {
     Rng r{7};
     for (int i = 0; i < 20000; ++i) {
@@ -291,3 +289,5 @@ TEST_CASE("fixed: golden hash over mixed operations") {
     }
     CHECK(h == 0x12f8a5d2d681ac08ULL);
 }
+
+} // namespace

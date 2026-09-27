@@ -24,7 +24,6 @@ BulkFenceResult now(const Future<BulkFenceResult>& f) {
     REQUIRE(f.isReady());
     return f.get();
 }
-} // namespace
 
 TEST_CASE("authority.fence: load a dormant row, then handoff and park") {
     InMemoryFence fence;
@@ -258,3 +257,5 @@ TEST_CASE("authority.future: continuations run once, before or after set, on the
     CHECK(makeReadyFuture(7).get() == 7);
     CHECK_FALSE(Future<int>{}.isValid());
 }
+
+} // namespace

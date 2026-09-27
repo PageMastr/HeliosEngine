@@ -61,8 +61,6 @@ std::string_view str(yyjson_val* v) {
     return std::string_view(yyjson_get_str(v), yyjson_get_len(v));
 }
 
-} // namespace
-
 TEST_CASE("ecs ids: kinds and packing") {
     CHECK(EntityId().kind() == EntityIdKind::Invalid);
     CHECK(EntityId(1).kind() == EntityIdKind::Runtime);
@@ -378,3 +376,5 @@ TEST_CASE("ecs ids: client-local allocator") {
     CHECK(a.kind() == EntityIdKind::ClientLocal);
     CHECK(b.value == a.value + 1);
 }
+
+} // namespace

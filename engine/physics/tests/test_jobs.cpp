@@ -23,7 +23,6 @@ u64 singleThreadedReference() {
     }();
     return hash;
 }
-} // namespace
 
 TEST_CASE("jobs: the Helios job system gives the single-threaded result at 1, 2 and 3 workers") {
     PhysicsRuntime runtime;
@@ -121,3 +120,5 @@ TEST_CASE("jobs: two grids step concurrently on one job system") {
     CHECK(a == reference);
     CHECK(b == reference);
 }
+
+} // namespace

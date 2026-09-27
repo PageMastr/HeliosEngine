@@ -78,8 +78,6 @@ private:
     ConnectTokenBytes m_token{};
 };
 
-} // namespace
-
 TEST_SUITE("net.endpoint") {
     TEST_CASE("loopback connect via connect token; messages both ways; session info") {
         Harness h;
@@ -660,3 +658,5 @@ TEST_SUITE("net.endpoint") {
         CHECK(h.server().findSession(4242) != old);
     }
 }
+
+} // namespace

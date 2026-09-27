@@ -191,8 +191,6 @@ void checkPackage(const std::string& name, const fs::path& goDir, const std::vec
     CHECK(checked == samples.size());
 }
 
-} // namespace
-
 TEST_CASE("go interop: generated Go matches the C++ codecs byte for byte") {
     if (!goAvailable()) {
         MESSAGE("skipped: no Go toolchain (configure found none, or HELIOS_SKIP_GO=1)");
@@ -323,3 +321,5 @@ func TestHandWritten(t *testing.T) {
     CHECK(walked == *compiled);
 
 }
+
+} // namespace

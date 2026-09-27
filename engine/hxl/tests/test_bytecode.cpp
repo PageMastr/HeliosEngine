@@ -61,8 +61,6 @@ public:
 // Offset of the code bytes in an encoding (the u32 length precedes them).
 usize codeOffset(const Program& p) { return p.encode().size() - p.code().size(); }
 
-} // namespace
-
 TEST_CASE("hxl bytecode: encode/decode round trip is canonical") {
     const char* sources[] = {
         "1",
@@ -193,8 +191,6 @@ TEST_CASE("hxl bytecode: mutation fuzz never crashes and decoded programs stay w
     CHECK(acceptedHash == kAcceptedMutantsHash);
 }
 
-namespace {
-
 // Hand-assembled `stacks() + stacks() + ...` in postfix order: n Stacks ops, then n - 1 Adds, so the
 // stack is n deep and the cost is 2n - 1. The header claims exactly that.
 std::vector<u8> deepStackProgram(u32 n) {
@@ -209,8 +205,6 @@ std::vector<u8> deepStackProgram(u32 n) {
     b.insert(b.end(), n - 1, static_cast<u8>(Op::Add));
     return b;
 }
-
-} // namespace
 
 // Review regression (WP-0.19 round 1): the verifier's stack bound is the only guard of eval()'s
 // fixed limits::kMaxStack-slot stack (the VM has no runtime checks), and no test pinned it. The Go
@@ -259,3 +253,5 @@ TEST_CASE("hxl bytecode: decode reports size and cost limits as E_BYTECODE at 0:
     CHECK(cd.line == 1);
     CHECK(cd.column == 1);
 }
+
+} // namespace

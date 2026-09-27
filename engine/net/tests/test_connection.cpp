@@ -120,8 +120,6 @@ void runTicks(LinkedPair& pair, f64 seconds, f64 clientHz, f64 serverHz, u32 inp
     }
 }
 
-} // namespace
-
 TEST_SUITE("net.connection") {
     TEST_CASE("reliable-ordered channels: exactly once, in order, under 10% loss + reorder + dup") {
         LinkedPair pair(fastConfig(), fastConfig(), hostileLink(), hostileLink(), 101);
@@ -903,3 +901,5 @@ TEST_SUITE("net.connection") {
         CHECK(both.voice == 500u * 90);
     }
 }
+
+} // namespace

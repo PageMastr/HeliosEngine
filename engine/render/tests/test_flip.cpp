@@ -45,8 +45,6 @@ FlipResult flip(const ImageRgba8& a, const ImageRgba8& b) {
     return std::move(r).value();
 }
 
-} // namespace
-
 TEST_CASE("flip: viewing conditions and filter radii") {
     CHECK(flipDefaultPixelsPerDegree() == doctest::Approx(3840.0 * std::numbers::pi / 180.0));
     CHECK(flipDefaultPixelsPerDegree() == doctest::Approx(67.0206).epsilon(1e-5));
@@ -244,3 +242,5 @@ TEST_CASE("flip: matches NVIDIA's reference implementation on procedural images"
     check(flip(noise(), edited), {0.1006335, 0.7495291, 0.0173516, 0.2270817, 0.4830123});
     check(flip(gradient(0), gradient(3)), {0.0925208, 0.1253008, 0.0408122, 0.0756577, 0.1136432});
 }
+
+} // namespace

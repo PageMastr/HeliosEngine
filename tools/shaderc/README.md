@@ -56,11 +56,20 @@ reflection wrappers (link-time exports) are avoided.
 posix_spawn; `src/tool_process.cpp`) with its output captured: no shell is involved, so paths with
 spaces, quotes, `%`, `$`, `&` or `;` reach it verbatim (tested).
 
-Tests: `render_tests` (`engine/render/tests/test_shaderc.cpp`) drive the built executable.
+Tests: `render_tests` (`engine/render/tests/test_shaderc.cpp`) drive the built executable. CTest
+`shaderc.spirv-val` (`tests/validate_spirv.cmake`) runs `--reflect-spirv --validate` over every SPIR-V
+module the build cooks, the output directory of every `helios_shaders()` call (03 §1.7: "`spirv-val`
+runs over every cooked shader in Linux CI"). Where configure finds spirv-tools (the Linux CI images
+install `spirv-tools`) it is required and uses that validator; elsewhere the test reports Skipped.
 
 ## Plan conformance
 
-Plan-Rev: 6
+Plan-Rev: 10
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
-`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.
+`docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked at revision 10 by WP-0.12 on
+2026-09-27 (revisions 7–10 changed no anchor that maps here). No conformance delta is open; see
+§5.10.4 (c) there. Not yet built, by phase: the material parameter layout in `.hsr` (T16, with
+materials in Phase 1), per-binding checks of declared accesses against graph declarations (with
+materials), and the SPIRV-Reflect cross-check, which R10 §3 lists as optional and which is not vendored.
+The tool lives in `tools/shaderc`, not 03 §9.1's `apps/tools/` (like `tools/schemac`).

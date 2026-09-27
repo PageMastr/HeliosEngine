@@ -140,12 +140,13 @@
       "title": "Every render feature has a lavapipe golden from the commit that ships it, rendered twice bit-identically",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Every render feature has a lavapipe golden from the commit that ships it, whatever its REN-6 phase; each renders twice bit-identically; a failing golden blocks the merge",
-      "notes": "Lavapipe goldens run on Linux CI; Windows runners have no Vulkan driver, so Windows is evidenced by the Null trace goldens. The PR-tier Linux jobs run the goldens, which is how a failing golden blocks the merge",
+      "notes": "Lavapipe goldens run on Linux CI; Windows runners have no Vulkan driver, so Windows is evidenced by the Null trace goldens. The PR-tier Linux jobs run the goldens, which is how a failing golden blocks the merge. rendertest.coverage reads 'every render feature' as every shader entry point embedded in helios_render and every pipeline engine/render builds from them: each must be bound in the captured frame of a scene with committed lavapipe and Null goldens",
       "status": "partial",
       "tests": [
         {"ctest": "rendertest.vulkan.*", "platforms": ["linux"]},
         {"ctest": "rendertest.report", "platforms": ["linux"]},
         {"ctest": "rendertest.scenes"},
+        {"ctest": "rendertest.coverage"},
         {"ctest": "rendertest.null.*"},
         {"doctest": "render_tests", "case": "graph null: small frame trace golden (plan + command stream)"},
         {"doctest": "render_tests", "case": "forward: a frame on the Null backend (trace golden)"},
@@ -154,7 +155,6 @@
         {"ci_job": "Linux (linux-clang)"}
       ],
       "gaps": [
-        {"clause": "Coverage: nothing checks mechanically that every shipped render feature has a golden (rendertest.scenes only checks that the CMake scene list equals createScenes())", "state": "unmeasured", "owner": "WP-0.12"},
         {"clause": "MinGW: the cross-built binaries are never executed, so the Null traces are not checked on MinGW", "state": "unmeasured", "owner": "WP-0.1"}
       ]
     },
@@ -163,19 +163,19 @@
       "title": "Lavapipe goldens for every shipped feature, rendered twice; suite within 10 min; Null traces on all toolchains",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Every shipped feature has a lavapipe golden (ꟻLIP mean ≤ 0.01), rendered twice bit-identically; suite ≤ 10 min; Null traces on all toolchains",
-      "notes": "rendertest.report checks the 10-minute budget (--budget 600)",
+      "notes": "rendertest.report checks the 10-minute budget (--budget 600). rendertest.coverage reads 'every shipped feature' as every shader entry point embedded in helios_render and every pipeline engine/render builds from them: each must be bound in the captured frame of a scene with committed lavapipe and Null goldens. shaderc.spirv-val reports Skipped where spirv-tools is not installed",
       "status": "partial",
       "tests": [
         {"ctest": "rendertest.vulkan.*", "platforms": ["linux"]},
         {"ctest": "rendertest.report", "platforms": ["linux"]},
         {"ctest": "rendertest.null.*"},
+        {"ctest": "rendertest.coverage"},
         {"ctest": "rendertest.cli"},
         {"ctest": "render_tests"},
         {"ctest": "rhi_tests"},
         {"ctest": "shaderc.spirv-val", "platforms": ["linux"]}
       ],
       "gaps": [
-        {"clause": "Coverage: nothing checks mechanically that every shipped feature has a golden (rendertest.scenes only checks that the CMake scene list equals createScenes())", "state": "unmeasured", "owner": "WP-0.12"},
         {"clause": "MinGW: the cross-built binaries are never executed, so the Null traces are not checked on MinGW", "state": "unmeasured", "owner": "WP-0.1"}
       ]
     },

@@ -1,7 +1,10 @@
-// Render-graph compile budget (engine/render/README.md): a 200-pass graph compiles in <= 2 ms of CPU
-// on REF without a topology cache. 03 §2.2's <= 0.3 ms for 200 passes is the Phase 2 cached case
-// (an unchanged topology skips steps 1-5). The timing is reported always and asserted only in
-// optimized builds without sanitizers; it runs in render_tests_perf (serial, nightly).
+// Render-graph compile budget: 03 §2.2 item 7 ("Budget ≤ 0.3 ms CPU for 200 passes") and §8.1.5's
+// "Graph compile on a topology change" row, ≤ 0.3 ms on REF at 60 fps (≤ 0.2 ms in the 120 fps
+// Performance column; a topology-cache hit ≤ 0.05 ms, Phase 2). The graph has no topology cache yet,
+// so every compile() here is a full compile: the topology-change case. The gate is the 60 fps
+// number; the 120 fps number is reported, not asserted, because this machine is not REF. The timing
+// is reported always and asserted only in optimized builds without sanitizers; it runs in
+// render_tests_perf (serial, nightly).
 
 #include <doctest/doctest.h>
 
@@ -22,11 +25,13 @@ constexpr bool kAssertBudget = true;
 #else
 constexpr bool kAssertBudget = false;
 #endif
-constexpr f64 kBudgetMs = 2.0;
+constexpr f64 kBudgetMs = 0.3;           // 03 §8.1.5, REF 60 fps: the gate
+constexpr f64 kPerformanceModeMs = 0.2;  // 03 §8.1.5, REF 120 fps: reported only
+constexpr u32 kPasses = 200;
 
-/// 200 passes of every kind with a read window of three, a shared counter buffer every tenth pass,
-/// periodic NeverCull roots and every fifth pass on async compute (the shape of the functional test
-/// "graph: compile budget (200 passes)").
+/// Exactly kPasses passes of every kind: Init, a chain with a read window of three, a shared counter
+/// buffer every tenth pass, periodic NeverCull roots, every fifth pass on async compute, and Final
+/// (the shape of the functional test "graph: compile budget (200 passes)").
 void buildGraph(RenderGraph& graph) {
     const RgBufferDesc buffer{4096};
     const RgTextureDesc ldr = RgTextureDesc::tex2D(rhi::Format::RGBA8Unorm, 256, 256);
@@ -35,7 +40,7 @@ void buildGraph(RenderGraph& graph) {
     RgBuffer counter;
     graph.addPass(
         "Init", PassFlags::Compute, [&](RgBuilder& b) { counter = b.write(b.create("Counter", buffer)); }, {});
-    for (u32 i = 0; i < 200; ++i) {
+    for (u32 i = 0; i < kPasses - 2; ++i) {
         const PassFlags kind =
             i % 5 == 4 ? PassFlags::AsyncCompute : (i % 3 == 0 ? PassFlags::Raster : PassFlags::Compute);
         graph.addPass(std::format("P{}", i), kind | (i % 17 == 0 ? PassFlags::NeverCull : PassFlags::None),
@@ -54,10 +59,11 @@ void buildGraph(RenderGraph& graph) {
     }, {});
 }
 
-TEST_CASE("perf: render graph compile of 200 passes <= 2 ms (no topology cache)") {
+TEST_CASE("perf: render graph compile of 200 passes <= 0.3 ms (no topology cache)") {
     RenderGraph graph("Budget");
     buildGraph(graph);
     REQUIRE(graph.errors().empty());
+    REQUIRE(graph.passCount() == kPasses);
     REQUIRE(graph.compile().ok());  // warm-up
     // Best of 10 batches of 5 compiles: robust against other processes on a shared machine.
     f64 best = 1e30;
@@ -67,8 +73,11 @@ TEST_CASE("perf: render graph compile of 200 passes <= 2 ms (no topology cache)"
         best = std::min(best, timer.elapsedMillis() / 5.0);
     }
     const RgPlan& plan = graph.plan();
-    MESSAGE(std::format("graph compile: {} passes in {:.3f} ms (budget {} ms), {} batches, {} barriers",
-                        plan.stats.passCount, best, kBudgetMs, plan.stats.batchCount, plan.stats.barrierCount));
+    MESSAGE(std::format("graph compile: {} passes in {:.3f} ms (gate {} ms at REF 60 fps; REF 120 fps budget {} ms, "
+                        "{} here), {} batches, {} barriers",
+                        plan.stats.passCount, best, kBudgetMs, kPerformanceModeMs,
+                        best <= kPerformanceModeMs ? "within" : "over", plan.stats.batchCount,
+                        plan.stats.barrierCount));
     if (kAssertBudget) CHECK(best <= kBudgetMs);
 }
 

@@ -52,7 +52,13 @@ into annotations.
   run (with their `//go:build integration` constraint) and against the inventory's `go` section when it
   has one (the nightly's). `gate` references must be declared and run on the reference's platforms.
   `ci_job` names must be jobs of `.github/workflows/ci.yml` (matrix names expanded); a missing ci.yml is
-  a finding.
+  a finding. Every declared run (except those marked `"nightly": false`) and gate must be produced by
+  `.github/workflows/nightly.yml`.
+- **Perf metrics.** Each has one source (a gate, or a doctest binary and case, named exactly), a pattern with
+  exactly one group, a unit, `better` (`lower` or `higher`) and a budget category. Every doctest source must
+  exist in each inventory of its run's OS (every OS without a `run`), whether or not the metric names a
+  criterion. `perf_accept` records name a declared metric, a valid `night`, a declared `run` if any, and a
+  `reason`.
 
 ## Entry format
 
@@ -106,6 +112,120 @@ accepted in either.
 **Gaps** are clauses without a passing test: `state` is `unmeasured` (no test yet) or `failing` (measured
 and red), with the `owner` WP. `pinned_by` names a test that pins a known divergence (such a test
 *passes* while the clause fails), so it is never evidence of a pass. An entry with a gap is never green.
+
+## The nightly report
+
+`.github/workflows/nightly.yml` builds and tests on Linux (GCC, Clang, ASan/UBSan), Windows (VS 2026, VS 2022,
+clang-cl) and Go (Linux, Windows), runs `net_bench --gate` on GCC and VS 2026, and runs each engine/net fuzz
+target under libFuzzer for 1 h (NS-0.4). Each job uploads a result set; the `scorecard` job evaluates them:
+
+```
+python3 tools/scorecard/runners.py doctest --build-dir B [--config C] [--perf] --out R/doctest   # per-case XML
+python3 tools/scorecard/runners.py gate --name net_bench_gate --build-dir B --out R/gates -- net_bench --gate
+python3 tools/scorecard/report.py --results results --ci-jobs ci-jobs.json --previous last/scorecard-report.json \
+        [--scheduled] --out scorecard-report.json --markdown scorecard.md
+python3 tools/scorecard/perf.py extract --results results --sha SHA --out perf-entry.json
+python3 tools/scorecard/perf.py compare --entry perf-entry.json --history last/perf-history.json --out perf-history.json
+```
+
+A result set is a directory with `run.json` (`{"run": "<a declared run>"}`) and any of `ctest*.xml`
+(`ctest --output-junit`), `doctest/<binary>[.perf].xml` with its `.status.json`, `go*.json` (`go test -json`)
+and `gates/<gate>.xml`. The runner uses the working directory, environment and timeout that CTest would. A
+doctest binary whose XML is unreadable (a crash) fails every case it cites. So does one that exits non-zero
+although every case passed (a sanitizer report at exit).
+
+- **Per criterion.** On each platform, a reference passes when it has results in the runs that count for it
+  and none failed. A missing result or a skip is *unmeasured*. A gate that ran shorter than its
+  `min_seconds` fails, and so does a gate without one. The criterion passes when every reference passes on
+  every platform and it has no gap.
+  A broken pin (a `pinned_by` test that now fails) is reported so that the registry is updated.
+- **Green (09 §5.6).** The report keeps a streak per criterion from last night's report: consecutive passing
+  *scheduled* nightlies. A manual run never extends it, and a failure resets it. A scheduled report more than
+  36 h after the previous scheduled one restarts every streak, because the night in between left no report
+  (the report says so). N and H criteria are green at 3 and W at 2; an M record is green once it exists.
+  09 §5.6's further W rule ("the latest within 14 days of the exit streak") is not enforced yet; no Phase 0
+  criterion is W. The summary gives the green fraction of the phase, the 60 % part of the round score (§5.7).
+  It is written to the job summary and the `scorecard-report` artifact.
+- **Perf history (09 §5.8).** `perf_metrics` name the numbers the perf gates print (a regex over a doctest
+  case's MESSAGE lines or a gate's output; the case by its exact name). `compare` fails a gated metric that
+  is worse than its **anchor** by more than its category's budget (render and runtime 5 %, 02 §8.3 for
+  runtime benchmarks; backend, editor and iteration 10 %).
+  - The anchor does not follow: it is the median of the metric's first 5 values, or the value of the night
+    a `perf_accept` record accepted. A metric's first night reads `new` and its next 4 read `calibrating`:
+    they are recorded, not gated, and one outlier among them (a lucky or a bad night) does not set the
+    anchor. A step, a slow creep and sub-budget steps that stack all fail once they are over budget: a
+    creep of 1.5 % a night at the 5 % budget fails on its 4th night, 3 % a night at 10 % also on its 4th,
+    and two steps of 4 % fail together (all tested).
+  - The summary also shows the **rolling baseline**, the median of the last 5 values that were not
+    regressions, held so that it is never better than the anchor, and tonight's change against it. Because
+    it is never better than the anchor, a night over budget against it is over budget against the anchor
+    too, so it decides nothing on its own: it tells a step (over budget against both) from drift (noted
+    "drift against the anchor"). Holding it at the anchor means that a dip (three fast nights) or an
+    improvement nobody accepted does not make the normal level fail afterwards; an improvement is
+    protected only once it is accepted, which moves the anchor. While a gated metric is better than its
+    anchor by more than its budget, its row says so ("accept it with perf_accept to protect it"), without
+    failing.
+
+  Every verdict, both levels and the applied accept are stored in the history and carried forward, and a
+  missing metric carries its levels too, so no level heals or expires as old entries leave the history (60
+  entries, one per nightly run, dispatch runs included): a regression nobody fixes fails every night, and
+  a history that has the metric but no usable level fails (`no-baseline`). (The one exception: a metric
+  that goes missing during its calibration keeps only how many calibration nights it had, so after 60
+  entries it calibrates again from its return.) Within a history, only a reviewed `perf_accept` record in
+  `scorecard.jsonc` moves the levels:
+  `{"metric": "<id>", "night": "YYYY-MM-DD", "value": <number>, "run": "<run>", "reason": "…"}`.
+  - `night` is the UTC date of the nightly (the perf summary prints it at the top) and cannot be in the
+    future; `value` is what the reviewer saw that night measure; `run` is required when the metric is read
+    from every run (each run has its own level) and must be the metric's run when it has one.
+  - When the stored value of that night (or tonight's, when `night` is tonight) is within the metric's
+    budget of `value`, the record is applied: that value becomes the anchor and starts the rolling
+    baseline. It stays applied whether the record is kept or removed, including after its night has left
+    the history. The latest record in force wins; a record older than the applied accept has no effect,
+    and its row says so. Accept a typical night: the anchor is that one night's value (not a median of
+    several), so a noisy night makes a noisy anchor. Anchoring an accept at the median of the accepted
+    night and the nights after it is a follow-up.
+  - A record whose night is inside the history but has no stored value for the metric, or measured
+    something else, fails the metric as `accept-unmatched` until it is corrected. A record older than the
+    whole history (after a restart) cannot be applied and is reported as stale, not failed: remove it.
+
+  A declared gated metric that had a value and stops being produced (a renamed case, a changed message) is
+  `missing` every night until it comes back or the registry drops the metric, drops its run or moves it to
+  another run; a declared metric that has never produced a value is listed as `never measured`, not failed
+  (the PR tier's source check is what catches a wrong case name). Wall times of every `perf:` case are
+  recorded but not gated.
+- **The perf-history artifact** (90-day retention) is fetched from the newest earlier nightly that has one,
+  separately from the report, among the last 100 completed runs; an API error or a failed download fails
+  the fetch. The history starts without a predecessor only when none of those runs lists a `perf-history`
+  artifact at all, expired or not, and the summary then opens with "First night of the perf history". If
+  one is listed but cannot be fetched (it expired, for example after a long pause), the perf step fails
+  every night (`compare --require-history`) rather than reset every level, until the history is restarted
+  on purpose: run the Nightly workflow by hand (Actions → Nightly → Run workflow) with
+  `restart_perf_history` checked. The restart is honoured only when no history can be fetched, so it never
+  replaces usable levels: while one can be fetched, the fetch step fails ("restart_perf_history refused")
+  and tonight is compared with that history as usual; new levels are accepted with `perf_accept`. An
+  honoured restart shows a warning on the run page and opens that night's summary with "Perf history
+  restarted on request"; every metric then starts again with its calibration nights, and old `perf_accept`
+  records read stale.
+- **The two resets that need no review.** Besides the restart, a history starts afresh only when none of
+  the last 100 completed nightly runs lists a `perf-history` artifact (the very first night, or 100
+  nights on which the perf step crashed before writing one, cancelled runs included). Both show a warning
+  on the run page, and a new history records the night it started and why ("History since …" heads every
+  later perf summary), so a reset stays visible for as long as that history lasts.
+- **Known limitation: hosted-runner noise.** Budgets are per night and hosted runners are noisy. A
+  simulation of this comparator (one gated metric at the 5 % budget, Gaussian noise per night, 200 seeded
+  years) gives a median of 0 red nights a year at σ = 1.5 % (90th percentile 2, worst 14) and 7 at
+  σ = 2.5 % (90th percentile 36, worst 112, longest red streak 7). With the 13 gated keys of today's
+  registry, σ = 2.5 % would make the perf step red on a large share of nights from noise alone. The gating
+  and the thresholds stay as the plan sets them; the real noise should be measured in the first weeks, and
+  the binding per-commit measurements move to the fixed runner and the lab (WP-0.4).
+- **Expected red today.** `pcg_tests_perf` fails by design (K5b, armed by WP-0.9c's red outcome; 09 §8.1),
+  so the GCC job's perf step is red every night, and `script_tests` is reported to abort under `linux-asan`
+  (a mimalloc use-after-poison that predates the nightly; see #9). Both are real results, reported as such;
+  look for anything else first.
+
+The scorecard job also checks the registry against tonight's inventories, Go tests included. It uses the
+workflow's read-only token to read the previous nightly's artifacts and the jobs of the latest `ci.yml` run
+on `main` (for `ci_job` references). The workflow uses no secret and has no write permission.
 
 ## Adding or changing a criterion
 

@@ -246,12 +246,26 @@ after a rename and a deletion):
   can share one lock.
 - Runs that may rewrite the lock serialize on a sibling directory `<lock>.writing`
   (`src/lock_mutex.h`), so parallel `helios_schema()` calls sharing a lock never drop each other's
-  entries. It is created atomically. One left behind by a killed run is taken over after
-  2 minutes, by one waiter at a time (serialized on `<lock>.writing-takeover`). The errors that
-  racing runs cause for a moment are retried with a bounded back-off, for up to 10 s of
-  unbroken failures: the directory vanishing between the OS call and the standard library's
-  is-a-directory check, and Windows' delete-pending and sharing-violation states. Every wait
-  ends in a clear error, after 5 minutes at most.
+  entries. It is created atomically and removed on release; a removal that fails for a moment
+  (an indexer or virus scanner holding it) is retried for 2 s, then reported as a warning.
+- **Killed runs.** A `.writing` older than 2 minutes was left behind by a killed run. It is
+  removed, and so taken over, only by the waiter holding `<lock>.writing-takeover`, after
+  re-checking its age there. A `-takeover` left behind itself (by a run killed within those few
+  calls, or one that could not remove it and warned) is removed the same way under
+  `<lock>.writing-takeover2`. A stale `-takeover2` would need a failure inside that second
+  recovery; it is never removed automatically, and the run fails asking you to delete it by hand
+  once no build is running.
+- **Staleness is decided by age alone,** which assumes two things. A live run finishes within
+  2 minutes (it holds the mutex for milliseconds); one suspended for longer, e.g. in a debugger or
+  a paused VM, loses the mutex, and its release then removes the next holder's. And the lock is on
+  a local file system: on a network share, clock skew over 2 minutes makes every mutex look stale.
+  OS file locks would remove both assumptions; they need a core platform API that does not exist
+  yet.
+- The errors that racing runs cause for a moment are retried with a bounded back-off, for up to
+  10 s of unbroken failures: the directory vanishing between the OS call and the standard
+  library's is-a-directory check, and Windows' delete-pending and sharing-violation states.
+  Something in the way (a file or a symlink, even a dangling one) fails at once, naming the path.
+  Every wait ends in a clear error, after 5 minutes at most.
 - The build updates the lock and always prints `updated schema lock …; commit it`. CI configures
   with `-DHELIOS_SCHEMA_CHECK_LOCK=ON` (or passes `--check-lock`), which fails on any change,
   including non-canonical formatting.
@@ -360,8 +374,9 @@ the generated sample code (registration, metadata, JSONC/binary round trips comp
 reflection walker, evolution tolerance, fuzzed corrupt input, `Mut<C>`, property paths,
 diff/patch, record files, default-value and number-format consistency with the runtime), golden
 files, the CLI (incl. parallel runs sharing one lock), the lock mutex (the `create_directory()`
-races of each standard library, injected; bounded waits; release retries; stale takeover by one
-waiter; mutual exclusion under real contention), deterministic fuzzing of schemas and locks, Go interop (`go vet` + `go test` on the generated packages and byte-for-byte
+races of each standard library, injected; bounded waits; release retries; takeover of a stale
+mutex and of a left-behind takeover directory by one waiter, with the re-checks injected;
+mutual exclusion under real contention), deterministic fuzzing of schemas and locks, Go interop (`go vet` + `go test` on the generated packages and byte-for-byte
 vectors in both directions; skipped when Go is missing or `HELIOS_SKIP_GO=1`) and the 2,000-type
 performance budget of 02 §3.5 (asserted in optimized builds without sanitizers).
 

@@ -9,22 +9,25 @@
 
 #include "helios/core/assert.h"
 #include "helios/core/fs.h"
+#include "helios/core/types.h"
 
 namespace helios::schemac {
 
 namespace {
 
+namespace stdfs = std::filesystem;
 using Clock = std::chrono::steady_clock;
+using FailingSince = std::optional<Clock::time_point>; // start of an unbroken run of transient errors
 
-// Errors that other runs' create/remove cycles cause for a moment. acquire() and release() retry
-// them (for at most LockMutexTiming::transientFor / releaseFor) instead of failing the build:
+// Errors that other runs' create/remove cycles cause for a moment. They are retried (for at most
+// LockMutexTiming::transientFor, or releaseFor when removing) instead of failing the build:
 // - no_such_file_or_directory: MSVC's create_directory() gets ERROR_ALREADY_EXISTS from
 //   CreateDirectoryW, then checks with GetFileAttributesExW that the path is a directory. If the
 //   holder removed it in between, that check fails with ERROR_FILE_NOT_FOUND and the STL returns
 //   it (CI run 36292817769: "cannot create '...writing': The system cannot find the file
-//   specified."). Also a parent directory removed under us, which acquire() re-creates.
+//   specified."). Also a parent directory removed under us, which is re-created.
 // - file_exists: the same race in libstdc++ and libc++, which report mkdir()'s EEXIST when their
-//   follow-up is-a-directory check finds nothing. A file in the way is detected separately.
+//   follow-up is-a-directory check finds nothing. Something in the way is detected separately.
 // - permission_denied: Windows reports ERROR_ACCESS_DENIED for a "delete pending" directory
 //   (removed while another handle to it is still open), and the STLs map ERROR_SHARING_VIOLATION
 //   (an indexer or virus scanner holding it) to the same condition.
@@ -36,17 +39,194 @@ bool isTransient(const std::error_code& ec) {
            ec == std::errc::interrupted;
 }
 
-/// True if something other than a directory occupies `path`; create_directory() then reports
-/// file_exists for good rather than because of a race.
-bool occupiedByNonDirectory(const std::filesystem::path& path) {
+/// True if something other than a directory occupies `path`: a file, or a symlink even if it
+/// dangles. create_directory() then fails for good but reports what the race reports (file_exists,
+/// or no_such_file_or_directory from MSVC for a dangling symlink).
+bool occupiedByNonDirectory(const stdfs::path& path) {
     std::error_code ec;
-    const std::filesystem::file_status st = std::filesystem::status(path, ec);
-    return !ec && std::filesystem::exists(st) && !std::filesystem::is_directory(st);
+    const stdfs::file_status st = stdfs::symlink_status(path, ec);
+    return !ec && stdfs::exists(st) && !stdfs::is_directory(st);
 }
 
 std::chrono::milliseconds nextDelay(std::chrono::milliseconds delay, const LockMutexTiming& timing) {
     return std::min(delay * 2, timing.maxDelay);
 }
+
+void appendCannotCreate(std::string& err, const stdfs::path& dir, std::string_view why) {
+    err += std::format("helios-schemac: error: cannot create '{}': {}\n", fs::pathToUtf8(dir), why);
+}
+
+/// The protocol's directories for one lock file.
+struct Dirs {
+    stdfs::path mutex;     ///< `<lock>.writing`: held while a run reads and rewrites the lock.
+    stdfs::path takeover;  ///< `<lock>.writing-takeover`: held while removing a stale mutex.
+    stdfs::path takeover2; ///< `<lock>.writing-takeover2`: held while removing a stale takeover.
+};
+
+Dirs dirsOf(const std::string& lockPath) {
+    return {fs::pathFromUtf8(lockPath + ".writing"), fs::pathFromUtf8(lockPath + ".writing-takeover"),
+            fs::pathFromUtf8(lockPath + ".writing-takeover2")};
+}
+
+enum class Created : u8 {
+    Yes,    ///< The caller now holds the directory.
+    Exists, ///< Another run holds it, or one left it behind.
+    Retry,  ///< A transient error; try again later.
+    Failed, ///< A permanent error, appended to the error text.
+};
+
+enum class Takeover : u8 {
+    None,     ///< Nothing removed; poll again after the back-off.
+    Progress, ///< A stale directory was removed; try again at once.
+    Failed,   ///< A permanent error, appended to the error text.
+};
+
+/// The file-system steps of the protocol for one acquire() or release(), with that object's
+/// timing, file ops and error text.
+class Protocol {
+public:
+    Protocol(const LockMutexTiming& timing, const LockMutexFileOps& ops, std::string& err)
+        : m_timing(timing), m_ops(ops), m_err(err) {}
+
+    /// Creates `dir`. A transient error may persist for at most transientFor, tracked in `since`
+    /// (which a success or an existing directory resets); after that, or for any other error, it
+    /// fails with a message naming `dir`.
+    Created create(const stdfs::path& dir, FailingSince& since) {
+        std::error_code ec;
+        if (m_ops.createDirectory(dir, ec)) {
+            since.reset();
+            return Created::Yes;
+        }
+        if (!ec) {
+            since.reset();
+            return Created::Exists;
+        }
+        if (!isTransient(ec)) {
+            appendCannotCreate(m_err, dir, ec.message());
+            return Created::Failed;
+        }
+        const bool maybeInTheWay = ec == std::errc::file_exists || ec == std::errc::no_such_file_or_directory;
+        if (maybeInTheWay && occupiedByNonDirectory(dir)) {
+            appendCannotCreate(m_err, dir, "a file of that name is in the way (remove it)");
+            return Created::Failed;
+        }
+        if (ec == std::errc::no_such_file_or_directory) ensureParent(dir);
+        const Clock::time_point now = Clock::now();
+        if (!since) since = now;
+        if (now - *since > m_timing.transientFor) {
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - *since).count();
+            appendCannotCreate(m_err, dir, std::format("{} (still failing after {} ms)", ec.message(), ms));
+            return Created::Failed;
+        }
+        return Created::Retry;
+    }
+
+    /// A new lock may live in a directory that does not exist yet, and one may be removed under us.
+    static void ensureParent(const stdfs::path& dir) {
+        std::error_code ignored;
+        if (dir.has_parent_path()) stdfs::create_directories(dir.parent_path(), ignored);
+    }
+
+    /// Older than staleAfter (see LockMutexTiming for what that assumes). Missing is not stale.
+    bool isStale(const stdfs::path& dir) {
+        std::error_code ec;
+        const stdfs::file_time_type modified = m_ops.lastWriteTime(dir, ec);
+        return !ec && stdfs::file_time_type::clock::now() - modified > m_timing.staleAfter;
+    }
+
+    /// Removes `dir`, retrying transient errors for up to releaseFor. Already gone counts as removed.
+    bool removeRetrying(const stdfs::path& dir, std::error_code& ec) {
+        const Clock::time_point start = Clock::now();
+        std::chrono::milliseconds delay = m_timing.firstDelay;
+        for (;;) {
+            if (m_ops.remove(dir, ec) || !ec) return true;
+            if (!isTransient(ec) || Clock::now() - start > m_timing.releaseFor) return false;
+            std::this_thread::sleep_for(delay);
+            delay = nextDelay(delay, m_timing);
+        }
+    }
+
+    /// Removes a directory this run holds, with a warning if it stays behind: it then blocks the
+    /// others until it is stale, and is taken over as described below.
+    void release(const stdfs::path& dir) {
+        std::error_code ec;
+        if (removeRetrying(dir, ec)) return;
+        using std::chrono::seconds;
+        const auto staleS = std::chrono::duration_cast<seconds>(m_timing.staleAfter).count();
+        m_err += std::format("helios-schemac: warning: cannot remove '{}': {} (later runs wait until it is "
+                             "{} s old; remove it)\n",
+                             fs::pathToUtf8(dir), ec.message(), staleS);
+    }
+
+    // A stale directory may be removed only if the directory checked is the directory removed.
+    // Two waiters that both saw the stale mutex must not both remove "it": the second would remove
+    // the fresh mutex the first had just created, and both would hold the lock. So the check is
+    // repeated, and the removal done, only while holding `takeover`, which one waiter at a time
+    // holds (see reapStaleTakeover). While the stale mutex exists nobody can create a new one, and
+    // nobody else removes it (its owner is gone, by the staleAfter assumption), so what the holder
+    // checked is what it removes.
+    Takeover takeOverStaleMutex(const Dirs& d) {
+        switch (create(d.takeover, m_takeoverSince)) {
+        case Created::Failed:
+            return Takeover::Failed;
+        case Created::Retry:
+            return Takeover::None;
+        case Created::Exists:
+            // Another waiter is taking over, or a run left `takeover` behind: it was killed within
+            // the few calls below, or release() could not remove it and warned. Only a stale one
+            // is reaped.
+            return isStale(d.takeover) ? reapStaleTakeover(d) : Takeover::None;
+        case Created::Yes:
+            break;
+        }
+        const Takeover result = removeIfStale(d.mutex, "a killed run left it behind");
+        release(d.takeover);
+        return result;
+    }
+
+private:
+    // A stale `takeover` is reaped the same way one level up, while holding `takeover2`, so two
+    // waiters cannot both reap it: the second would remove the first's fresh `takeover`, and two
+    // waiters could then both remove "the" stale mutex. A stale `takeover2` is never reaped, since
+    // that would need a third level. It is left behind only by a run killed, or unable to remove
+    // it, within the few calls below, which run only after a `takeover` was itself left behind;
+    // a person removes it.
+    Takeover reapStaleTakeover(const Dirs& d) {
+        switch (create(d.takeover2, m_takeover2Since)) {
+        case Created::Failed:
+            return Takeover::Failed;
+        case Created::Retry:
+            return Takeover::None;
+        case Created::Exists:
+            if (!isStale(d.takeover2)) return Takeover::None; // another waiter is reaping `takeover`
+            m_err += std::format("helios-schemac: error: '{}' was left behind by a run that was recovering "
+                                 "the lock from a killed run; delete it by hand once no build is running\n",
+                                 fs::pathToUtf8(d.takeover2));
+            return Takeover::Failed;
+        case Created::Yes:
+            break;
+        }
+        const Takeover result = removeIfStale(d.takeover, "a run left it behind");
+        release(d.takeover2);
+        return result;
+    }
+
+    /// Re-checks, under the next level's directory, that `dir` is stale, and removes it.
+    Takeover removeIfStale(const stdfs::path& dir, std::string_view leftBy) {
+        if (!isStale(dir)) return Takeover::None; // taken over, or removed, since the caller looked
+        std::error_code ec;
+        if (m_ops.remove(dir, ec)) return Takeover::Progress;
+        if (!ec || isTransient(ec)) return Takeover::None; // polled again after the back-off
+        appendCannotCreate(m_err, dir, std::format("{} and it cannot be removed: {}", leftBy, ec.message()));
+        return Takeover::Failed;
+    }
+
+    const LockMutexTiming& m_timing;
+    const LockMutexFileOps& m_ops;
+    std::string& m_err;
+    FailingSince m_takeoverSince;
+    FailingSince m_takeover2Since;
+};
 
 } // namespace
 
@@ -78,57 +258,34 @@ LockFileMutex::~LockFileMutex() {
 
 bool LockFileMutex::acquire(const std::string& lockPath, std::string& err) {
     HELIOS_ASSERT(!held(), "LockFileMutex::acquire() while already held");
-    const std::filesystem::path dir = fs::pathFromUtf8(lockPath + ".writing");
-    const std::filesystem::path takeover = fs::pathFromUtf8(lockPath + ".writing-takeover");
-    const std::filesystem::path parent = dir.parent_path();
-    const auto ensureParent = [&parent] {
-        std::error_code ignored; // a new lock may live in a directory that does not exist yet
-        if (!parent.empty()) std::filesystem::create_directories(parent, ignored);
-    };
-    const auto fail = [&err, &dir](std::string_view why) {
-        err += std::format("helios-schemac: error: cannot create '{}': {}\n", fs::pathToUtf8(dir), why);
-        return false;
-    };
-    ensureParent();
+    const Dirs dirs = dirsOf(lockPath);
+    Protocol protocol(m_timing, m_ops, err);
+    Protocol::ensureParent(dirs.mutex);
     const Clock::time_point start = Clock::now();
-    std::optional<Clock::time_point> failingSince; // start of an unbroken run of transient errors
+    FailingSince mutexSince;
     std::chrono::milliseconds delay = m_timing.firstDelay;
     for (;;) {
-        std::error_code ec;
-        if (m_ops.createDirectory(dir, ec)) {
-            m_dir = dir;
-            return true;
-        }
-        const Clock::time_point now = Clock::now();
         bool retryNow = false;
-        if (!ec) { // another run holds it
-            failingSince.reset();
-            if (isStale(dir)) {
-                std::error_code removeEc;
-                retryNow = takeOverStale(dir, takeover, removeEc);
-                if (removeEc && !isTransient(removeEc)) {
-                    return fail(std::format("a killed run left it behind and it cannot be removed: {}",
-                                            removeEc.message()));
-                }
+        switch (protocol.create(dirs.mutex, mutexSince)) {
+        case Created::Yes:
+            m_dir = dirs.mutex;
+            return true;
+        case Created::Failed:
+            return false;
+        case Created::Retry:
+            break;
+        case Created::Exists: // another run holds it
+            if (protocol.isStale(dirs.mutex)) {
+                const Takeover takeover = protocol.takeOverStaleMutex(dirs);
+                if (takeover == Takeover::Failed) return false;
+                retryNow = takeover == Takeover::Progress;
             }
-        } else if (isTransient(ec)) {
-            if (ec == std::errc::file_exists && occupiedByNonDirectory(dir)) {
-                return fail("a file of that name is in the way (remove it)");
-            }
-            if (ec == std::errc::no_such_file_or_directory) ensureParent();
-            if (!failingSince) failingSince = now;
-            if (now - *failingSince > m_timing.transientFor) {
-                const auto ms =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(now - *failingSince).count();
-                return fail(std::format("{} (still failing after {} ms)", ec.message(), ms));
-            }
-        } else {
-            return fail(ec.message());
+            break;
         }
-        if (now - start > m_timing.giveUpAfter) {
+        if (Clock::now() - start > m_timing.giveUpAfter) {
             err += std::format("helios-schemac: error: timed out waiting for '{}' (another helios-schemac is "
                                "updating the lock; remove the directory if none is running)\n",
-                               fs::pathToUtf8(dir));
+                               fs::pathToUtf8(dirs.mutex));
             return false;
         }
         if (!retryNow) {
@@ -140,53 +297,7 @@ bool LockFileMutex::acquire(const std::string& lockPath, std::string& err) {
 
 void LockFileMutex::release(std::string& err) {
     if (m_dir.empty()) return;
-    const std::filesystem::path dir = std::exchange(m_dir, {});
-    std::error_code ec;
-    if (removeRetrying(dir, ec)) return;
-    const auto staleSeconds = std::chrono::duration_cast<std::chrono::seconds>(m_timing.staleAfter).count();
-    err += std::format("helios-schemac: warning: cannot remove '{}': {} (later runs wait until it is {} s "
-                       "old; remove it)\n",
-                       fs::pathToUtf8(dir), ec.message(), staleSeconds);
-}
-
-bool LockFileMutex::isStale(const std::filesystem::path& dir) {
-    std::error_code ec;
-    const std::filesystem::file_time_type modified = m_ops.lastWriteTime(dir, ec);
-    return !ec && std::filesystem::file_time_type::clock::now() - modified > m_timing.staleAfter;
-}
-
-// Two waiters that both saw the stale mutex must not both remove "it": the second would remove
-// the fresh mutex the first had just created, and both would hold the lock. So the check and the
-// removal happen while holding a second directory, `takeover`. While a stale mutex exists nobody
-// can create a new one, and only the takeover holder removes it (its owner is dead: a live run
-// holds the mutex for milliseconds, far below staleAfter), so the directory checked is the one
-// removed. Returns true if it removed `dir`; `ec` is the error removing it, if any.
-bool LockFileMutex::takeOverStale(const std::filesystem::path& dir, const std::filesystem::path& takeover,
-                                  std::error_code& ec) {
-    ec.clear();
-    std::error_code takeoverEc;
-    if (!m_ops.createDirectory(takeover, takeoverEc)) {
-        // Another waiter is taking over. A takeover directory is left behind only by a run killed
-        // within the few calls below; it goes stale like the mutex.
-        if (!takeoverEc && isStale(takeover)) m_ops.remove(takeover, takeoverEc);
-        return false;
-    }
-    const bool removed = isStale(dir) && m_ops.remove(dir, ec);
-    std::error_code ignored; // if it stays behind, it goes stale and is removed like the mutex
-    removeRetrying(takeover, ignored);
-    return removed;
-}
-
-bool LockFileMutex::removeRetrying(const std::filesystem::path& dir, std::error_code& ec) {
-    const Clock::time_point start = Clock::now();
-    std::chrono::milliseconds delay = m_timing.firstDelay;
-    for (;;) {
-        // false without an error: already gone (a waiter took it over as stale).
-        if (m_ops.remove(dir, ec) || !ec) return true;
-        if (!isTransient(ec) || Clock::now() - start > m_timing.releaseFor) return false;
-        std::this_thread::sleep_for(delay);
-        delay = nextDelay(delay, m_timing);
-    }
+    Protocol(m_timing, m_ops, err).release(std::exchange(m_dir, {}));
 }
 
 } // namespace helios::schemac

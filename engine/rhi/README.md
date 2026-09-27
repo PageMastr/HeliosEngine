@@ -79,6 +79,8 @@ rhi::TimelinePoint done = device->submit(rhi::Queue::Graphics, {&cmd, 1}).value(
   installed; messages go to the log and `DeviceDesc::onMessage`, errors to `validationErrorCount()`.
   `Caps::validationLayer` names the enabled layer and its versions (empty without one), so tests can
   log what checked them (WP-0.12's `helios-rendertest --validation-self-test`).
+  `DeviceDesc::validationFromEnvironment = false` makes a device ignore `HELIOS_RHI_VALIDATION` (a probe
+  that must run without the layer whatever the environment says).
   RHI misuse that would be undefined behavior in the driver is reported the same way and the
   command dropped: stale handles, recording into a closed list, draws without a pipeline or index
   buffer, rendering-scope and queue violations, and out-of-range copies/fills/updates/indirect

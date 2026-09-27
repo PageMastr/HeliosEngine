@@ -221,7 +221,7 @@ std::optional<std::string> envVar(const char* name) {
 
 DeviceDesc applyEnvironment(const DeviceDesc& desc) {
     DeviceDesc out = desc;
-    if (auto v = envVar("HELIOS_RHI_VALIDATION")) {
+    if (auto v = envVar("HELIOS_RHI_VALIDATION"); v && desc.validationFromEnvironment) {
         out.validation = (*v != "0" && *v != "off" && *v != "false");
     }
     if (auto v = envVar("HELIOS_RHI_INJECT_DEVICE_LOST")) {

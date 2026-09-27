@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -259,6 +261,203 @@ func TestNATSHandleUnconfirmed(t *testing.T) {
 		func(context.Context, *natsReq) (*natsRes, error) { return &natsRes{}, nil })
 	if sub != nil || !errors.Is(err, nats.ErrConnectionClosed) {
 		t.Fatalf("unconfirmed subscription: returned a subscription: %t, err: %v", sub != nil, err)
+	}
+}
+
+// The timeout branch on a live connection: the PING is swallowed but nc stays open, so the
+// subscription must be removed from nc and from the server.
+func TestNATSHandleTimeoutRemovesSubscription(t *testing.T) {
+	const timeout = 100 * time.Millisecond
+	defer rpc.SetNATSConfirmTimeout(timeout)()
+	bus := testkit.StartNATS(t)
+	nc, sc := connectSeam(t, bus, 0)
+	client := bus.Connect(t, "client")
+	marker, err := client.SubscribeSync("test.marker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	sc.dropPings.Store(true)
+	start := time.Now()
+	sub, err := rpc.NATSHandle(nc, "rpc.test.live.Slow", "live", nil, double)
+	if sub != nil || !errors.Is(err, nats.ErrTimeout) {
+		t.Fatalf("returned a subscription: %t, err: %v", sub != nil, err)
+	}
+	if took := time.Since(start); took < timeout {
+		t.Fatalf("returned after %v, before the %v confirm timeout", took, timeout)
+	}
+	if n := nc.NumSubscriptions(); n != 0 {
+		t.Fatalf("nc still holds %d subscriptions", n)
+	}
+	// nc cannot flush any more (the swallowed PING leaves its PONG queue one entry behind), so
+	// order through the connection instead: once the server forwards a message nc published
+	// after the UNSUB, it has processed the UNSUB.
+	if err := nc.Publish("test.marker", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := marker.NextMsg(3 * time.Second); err != nil {
+		t.Fatalf("marker: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err = rpc.NATSRequest[natsReq, natsRes](ctx, client, "rpc.test.live.Slow", &natsReq{N: 1})
+	if rpc.CodeOf(err) != rpc.CodeUnavailable {
+		t.Fatalf("the server still routes to the unconfirmed handler: %v", err)
+	}
+}
+
+func double(_ context.Context, req *natsReq) (*natsRes, error) {
+	return &natsRes{Double: 2 * req.N}, nil
+}
+
+func permOptions(fleetDeny ...string) *server.Options {
+	return &server.Options{ServerName: "perm", DontListen: true, NoLog: true, NoSigs: true,
+		Users: []*server.User{
+			{Username: "svc", Password: "pw"},
+			{Username: "fleet", Password: "pw", Permissions: &server.Permissions{
+				Subscribe: &server.SubjectPermission{Deny: fleetDeny}}},
+		}}
+}
+
+// startPermNATS boots an in-process server on which "svc" may do anything and "fleet" may not
+// subscribe to rpc.> nor join queue group "other" on grp.test.Double.
+func startPermNATS(t *testing.T) *server.Server {
+	t.Helper()
+	ns, err := server.NewServer(permOptions("rpc.>", "grp.test.Double other"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	go ns.Start()
+	if !ns.ReadyForConnections(10 * time.Second) {
+		ns.Shutdown()
+		t.Fatal("permissions server not ready")
+	}
+	t.Cleanup(func() { ns.Shutdown(); ns.WaitForShutdown() })
+	return ns
+}
+
+// connectAs connects user to ns. Refusals only go to a silent async error handler (the
+// default one prints them).
+func connectAs(t *testing.T, ns *server.Server, user string) *nats.Conn {
+	t.Helper()
+	nc, err := nats.Connect("", nats.InProcessServer(ns), nats.UserInfo(user, "pw"), nats.Name(user),
+		nats.ErrorHandler(func(*nats.Conn, *nats.Subscription, error) {}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(nc.Close)
+	return nc
+}
+
+// requestDouble asks subject to double n from nc and fails the test unless it gets 2n back.
+func requestDouble(t *testing.T, nc *nats.Conn, subject string, n int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	res, err := rpc.NATSRequest[natsReq, natsRes](ctx, nc, subject, &natsReq{N: n})
+	if err != nil || res.Double != 2*n {
+		t.Fatalf("request to %s: %+v %v", subject, res, err)
+	}
+}
+
+// A SUB the server refuses is followed by a PONG like any other, so the round trip alone would
+// hand back a dead handler as serving.
+func TestNATSHandleRefusedSubscription(t *testing.T) {
+	ns := startPermNATS(t)
+	fleet := connectAs(t, ns, "fleet")
+	for _, c := range []struct{ subject, queue string }{
+		{"rpc.test.perm.Double", "perm"}, // subject denied
+		{"grp.test.Double", "other"},     // only this queue group denied
+	} {
+		sub, err := rpc.NATSHandle(fleet, c.subject, c.queue, nil, double)
+		if sub != nil || !errors.Is(err, nats.ErrPermissionViolation) {
+			t.Fatalf("%s in %s: returned a subscription: %t, err: %v", c.subject, c.queue, sub != nil, err)
+		}
+		if n := fleet.NumSubscriptions(); n != 0 {
+			t.Fatalf("%s in %s: fleet still holds %d subscriptions", c.subject, c.queue, n)
+		}
+	}
+}
+
+// An earlier refusal of another SUB that LastError still holds must not fail NATSHandle.
+func TestNATSHandleIgnoresUnrelatedRefusal(t *testing.T) {
+	ns := startPermNATS(t)
+	fleet, svc := connectAs(t, ns, "fleet"), connectAs(t, ns, "svc")
+	for _, c := range []struct{ subject, queue string }{
+		{"rpc.test.perm.Other", "perm"}, // another subject
+		{"grp.test.Double", "other"},    // the same subject in another queue group
+	} {
+		if _, err := fleet.QueueSubscribe(c.subject, c.queue, func(*nats.Msg) {}); err != nil {
+			t.Fatal(err)
+		}
+		if err := fleet.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		if !errors.Is(fleet.LastError(), nats.ErrPermissionViolation) {
+			t.Fatalf("setup: %s in %s was not refused: %v", c.subject, c.queue, fleet.LastError())
+		}
+		sub, err := rpc.NATSHandle(fleet, "grp.test.Double", "live", nil, double)
+		if err != nil {
+			t.Fatalf("after a refusal of %s in %s: %v", c.subject, c.queue, err)
+		}
+		requestDouble(t, svc, "grp.test.Double", 3)
+		if err := sub.Unsubscribe(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A refusal of the same subject and queue from an earlier attempt, still held by LastError,
+// must not fail a later SUB that the server accepts (here after a permissions reload).
+func TestNATSHandleIgnoresStaleRefusal(t *testing.T) {
+	ns := startPermNATS(t)
+	fleet, svc := connectAs(t, ns, "fleet"), connectAs(t, ns, "svc")
+	_, err := rpc.NATSHandle(fleet, "rpc.test.perm.Double", "perm", nil, double)
+	if !errors.Is(err, nats.ErrPermissionViolation) {
+		t.Fatalf("setup: not refused: %v", err)
+	}
+	if err := ns.ReloadOptions(permOptions()); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(fleet.LastError(), nats.ErrPermissionViolation) {
+		t.Fatalf("setup: LastError no longer holds the refusal: %v", fleet.LastError())
+	}
+	if _, err := rpc.NATSHandle(fleet, "rpc.test.perm.Double", "perm", nil, double); err != nil {
+		t.Fatalf("accepted after the reload: %v", err)
+	}
+	requestDouble(t, svc, "rpc.test.perm.Double", 5)
+}
+
+// refusedSubscription must match only a permissions violation for this subject, and for this
+// queue group when the text names one. The texts are the server's (nats-server client.go), as
+// nats.go wraps them.
+func TestRefusedSubscriptionMatch(t *testing.T) {
+	violation := func(text string) error { return fmt.Errorf("%w: %s", nats.ErrPermissionViolation, text) }
+	cases := []struct {
+		err   error
+		queue string
+		want  bool
+	}{
+		{violation(`Permissions Violation for Subscription to "a.b" using queue "q"`), "q", true},
+		{violation(`Permissions Violation for Subscription to "a.b" using queue "q" (sid "7")`), "q", true},
+		{violation(`Permissions Violation for Subscription to "a.b", too many tokens`), "q", true},
+		{violation(`Permissions Violation for Subscription to "a.b"`), "q", true},
+		{violation(`Permissions Violation for Subscription to "a.b"`), "", true},
+		{violation(`Permissions Violation for Subscription to "a.b" using queue "other"`), "q", false},
+		{violation(`Permissions Violation for Subscription to "a.b" using queue "q"`), "", false},
+		{violation(`Permissions Violation for Subscription to "a.b.c" using queue "q"`), "q", false},
+		{violation(`Permissions Violation for Subscription to "a"`), "q", false},
+		{violation(`Permissions Violation for Publish to "a.b"`), "q", false},
+		{errors.New(`Permissions Violation for Subscription to "a.b" using queue "q"`), "q", false}, // not nats's
+		{nats.ErrMaxSubscriptionsExceeded, "q", false},
+		{nil, "q", false},
+	}
+	for _, c := range cases {
+		if got := rpc.RefusedSubscription(c.err, "a.b", c.queue); got != c.want {
+			t.Errorf("%v with queue %q: got %t", c.err, c.queue, got)
+		}
 	}
 }
 

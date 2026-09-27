@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -78,19 +79,34 @@ func NATSRequest[Req, Res any](ctx context.Context, nc *nats.Conn, subject strin
 // NATSHandlerFunc handles one decoded NATS request.
 type NATSHandlerFunc[Req, Res any] func(ctx context.Context, req *Req) (*Res, error)
 
+// natsConfirmTimeout bounds NATSHandle's round trip; a variable only so tests can shorten it.
+var natsConfirmTimeout = DefaultNATSTimeout
+
 // NATSHandle subscribes h to subject in queue group queue (the service name, so replicas share
-// the load) and returns once the server nc is connected to has registered the subscription, so
-// a request sent afterwards from any connection to that server reaches h instead of failing
-// with no responders. Other servers of a cluster learn the interest asynchronously, which is
-// why callers treat no responders as unavailable. If the server does not confirm within
-// DefaultNATSTimeout, the subscription is removed and an error is returned. It blocks for
-// that one round trip to the server and is safe for concurrent use.
-// Each message runs with a context bounded by the caller's Helios-Deadline-Ms. Messages on
-// one subscription are handled sequentially.
+// the load) and returns once the server nc is connected to has processed the SUB. If the server
+// accepted it, a request sent afterwards from any connection to that server reaches h or another
+// member of queue instead of getting no responders. Other servers of a cluster learn the
+// interest asynchronously; NATSRequest reports no responders as unavailable, which callers retry.
+//
+// If the round trip does not complete within DefaultNATSTimeout, or nc disconnects meanwhile
+// (the error then says "connection closed" even though nc may be reconnecting), the
+// subscription is removed and an error is returned.
+//
+// A refused SUB is still followed by a PONG, so refusals are detected best-effort only: if
+// nc.LastError changed during the round trip to a permissions violation for subject and queue,
+// the subscription is removed and an error wrapping nats.ErrPermissionViolation is returned.
+// LastError holds only the latest error, so a refusal overwritten by another error on nc is
+// missed, and a SUB over the account's subscription limit is never detected; those reach only
+// nc's async error handler.
+//
+// NATSHandle blocks for that one round trip and is safe for concurrent use. Each message runs
+// with a context bounded by the caller's Helios-Deadline-Ms. Messages on one subscription are
+// handled sequentially.
 func NATSHandle[Req, Res any](nc *nats.Conn, subject, queue string, log *slog.Logger, h NATSHandlerFunc[Req, Res]) (*nats.Subscription, error) {
 	if log == nil {
 		log = slog.Default()
 	}
+	prevErr := nc.LastError()
 	sub, err := nc.QueueSubscribe(subject, queue, func(m *nats.Msg) {
 		budget := DefaultNATSTimeout
 		if m.Header != nil {
@@ -144,9 +160,37 @@ func NATSHandle[Req, Res any](nc *nats.Conn, subject, queue string, log *slog.Lo
 	// on its own goroutine, so a request from another connection can be routed before this SUB
 	// arrives and be answered with no responders. The server answers a PING only after it has
 	// processed everything sent before it on this connection, the SUB included.
-	if err := nc.FlushTimeout(DefaultNATSTimeout); err != nil {
+	if err := nc.FlushTimeout(natsConfirmTimeout); err != nil {
 		_ = sub.Unsubscribe() // best effort: on a closed connection the subscription is already gone
-		return nil, fmt.Errorf("rpc: subscribe %s: server did not confirm: %w", subject, err)
+		return nil, fmt.Errorf("rpc: subscription to %s not confirmed: %w", subject, err)
+	}
+	// nc's read loop records the server's -ERR for a refused SUB as LastError before it handles
+	// the PONG that follows. nats.go makes a new error pointer for every -ERR, so comparing with
+	// prevErr tells a refusal of this SUB from an older refusal of the same subject.
+	if last := nc.LastError(); refusedSubscription(last, subject, queue) && last != prevErr {
+		_ = sub.Unsubscribe()
+		return nil, fmt.Errorf("rpc: subscription to %s refused: %w", subject, last)
 	}
 	return sub, nil
+}
+
+// The server's refusal text, "Permissions Violation for Subscription to "subj" using queue
+// "q"", parsed the way nats.go matches refusals to its own subscriptions.
+var (
+	refusedSubjectRe = regexp.MustCompile(`Subscription to "(\S+)"`)
+	refusedQueueRe   = regexp.MustCompile(`using queue "(\S+)"`)
+)
+
+// refusedSubscription reports whether err is a permissions violation for a SUB to subject and,
+// if the text names a queue group (some refusals, such as "too many tokens", never do), queue.
+func refusedSubscription(err error, subject, queue string) bool {
+	if !errors.Is(err, nats.ErrPermissionViolation) {
+		return false
+	}
+	msg := err.Error()
+	if m := refusedSubjectRe.FindStringSubmatch(msg); m == nil || m[1] != subject {
+		return false
+	}
+	m := refusedQueueRe.FindStringSubmatch(msg)
+	return m == nil || m[1] == queue
 }

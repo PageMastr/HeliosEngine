@@ -206,9 +206,19 @@ func Run(opts Options) (*Result, error) {
 			continue
 		}
 		for _, k := range known {
-			if k.Rule == f.Rule && MatchAny(k.Paths, f.Path) {
-				f.Known = k
-				k.hits++
+			if k.Rule != f.Rule {
+				continue
+			}
+			for _, g := range k.Paths {
+				if Match(g, f.Path) {
+					if k.hits == nil {
+						k.hits = map[string]int{}
+					}
+					k.hits[g]++
+					f.Known = k
+				}
+			}
+			if f.Known != nil {
 				break
 			}
 		}
@@ -220,10 +230,21 @@ func Run(opts Options) (*Result, error) {
 		}
 	}
 	for _, k := range known {
-		if selected[k.Rule] != nil && k.hits == 0 {
+		if selected[k.Rule] == nil {
+			continue
+		}
+		if len(k.hits) == 0 {
 			findings = append(findings, Finding{Rule: ToolRule, Path: "tools/conformance/known_failing.jsonc",
 				Line: k.line, Message: fmt.Sprintf("stale record: %s (owner %s) matches no finding; remove it "+
 					"and the scorecard gap", k.Rule, k.Owner)})
+			continue
+		}
+		for _, g := range k.Paths {
+			if k.hits[g] == 0 {
+				findings = append(findings, Finding{Rule: ToolRule, Path: "tools/conformance/known_failing.jsonc",
+					Line: k.line, Message: fmt.Sprintf("stale path: %s (owner %s) has no %s finding under %s any "+
+						"more; remove the path", k.Rule, k.Owner, k.Rule, g)})
+			}
 		}
 	}
 	sort.SliceStable(findings, func(i, j int) bool {

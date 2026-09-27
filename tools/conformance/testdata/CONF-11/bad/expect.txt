@@ -1,0 +1,16 @@
+#! -rules CONF-11 -strict
+# Today's lists, helios_avx2_sources() and tp_jolt's PUBLIC options (verbatim), and other per-file,
+# per-target and global AVX grants.
+cmake/HeliosIsa.cmake:15: CONF-11
+cmake/HeliosIsa.cmake:24: CONF-11
+cmake/isa_allowlist.cmake:12: CONF-11
+cmake/isa_allowlist.cmake:16: CONF-11
+engine/demo/CMakeLists.txt:2: CONF-11
+engine/demo/CMakeLists.txt:4: CONF-11
+engine/demo/CMakeLists.txt:5: CONF-11
+engine/demo/CMakeLists.txt:6: CONF-11
+engine/demo/CMakeLists.txt:7: CONF-11
+engine/demo/CMakeLists.txt:8: CONF-11
+third_party/CMakeLists.txt:6: CONF-11
+third_party/CMakeLists.txt:8: CONF-11
+third_party/CMakeLists.txt:10: CONF-11

@@ -501,12 +501,12 @@
       "title": "The conformance lint is clean on the full tree with the rework WPs merged",
       "class": "N", "platforms": ["any"],
       "threshold": "The conformance lint clean on the full tree with WP-0.15r, WP-0.2r, WP-0.5r and WP-0.10r merged (§5.10)",
-      "notes": "The CI job runs every rule over the full tree with tools/conformance/known_failing.jsonc applied, and each rule's seeded fixtures; a record that no longer matches fails it, so each known-failing gap below closes with its record",
+      "notes": "The CI job runs CONF-01…12 over the full tree with tools/conformance/known_failing.jsonc applied, and each rule's seeded fixtures; a record or path that no longer matches fails it, so each gap below closes with its record. WP-0.15r and WP-0.10r are merged and CONF-01…10 pass",
       "status": "partial",
       "tests": [{"ci_job": "Conformance lint (tools/conformance)"}, {"evidence": "tools/conformance/known_failing.jsonc"}],
       "gaps": [
-        {"clause": "CONF-11 and CONF-12 are not implemented yet (the next PR of WP-0.2's stack)", "state": "unmeasured", "owner": "WP-0.2"},
-        {"clause": "CONF-11 and CONF-12 are expected to fail on the tree until the ISA and gate rework (09 §5.10.4 (b))", "state": "unmeasured", "owner": "WP-0.2r, WP-0.5r"}
+        {"clause": "CONF-11 fails on the tree (known_failing.jsonc: the per-file AVX2 lists, helios_avx2_sources() and tp_jolt's PUBLIC ISA options; 09 §5.10.4 (b))", "state": "failing", "owner": "WP-0.2r"},
+        {"clause": "CONF-12 fails on the tree (known_failing.jsonc: the Windows gate in .CRT$XIB with ExitProcess and no /INCLUDE:; 09 §5.10.4 (b))", "state": "failing", "owner": "WP-0.5r"}
       ]
     },
     {

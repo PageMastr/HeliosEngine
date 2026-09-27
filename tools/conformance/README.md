@@ -51,6 +51,8 @@ a `good/` tree for their exemptions; `go test` compares both exactly, and CTest 
 | CONF-08 | 04 §2; reconciliation #12 | a default gateway address or port other than 7777: Go values named for the gateway (keyed fields, var and const specs, assignments, calls with a `"gateway"` argument, and `…GatewayPort` integers); TOML keys or tables named for the gateway (`gateways = […]`, `[gateway] port`); a published `…/udp` port in YAML; C++ `k…GatewayPort` constants, and in files named for the gateway the `listen`/`connect` defaults (`"host:port"`, `Address::ipv4(…, port)`). Tests and fuzzers are skipped: they choose their own ports | Go syntax; TOML, YAML and C scans | passes |
 | CONF-09 | ADR-014 | a `go.mod` `go` directive other than 1.27.x or a `toolchain` other than go1.27.x; an `actions/setup-go` step without `go-version-file: services/go.mod`, or with `go-version` | go.mod and workflow YAML lines | passes |
 | CONF-10 | 08 §1.16; reconciliation #19 | `SDL_CreateRenderer` (and SDL3's other renderer constructors: `SDL_CreateRenderer*`, `SDL_CreateWindowAndRenderer`, `SDL_CreateSoftwareRenderer`, `SDL_CreateGPURenderer`) in C-family code, including by name in a string, outside `apps/launcher/**` and engine/ui's SDL_Renderer backend (`engine/ui/**` paths containing `sdl_renderer`; WP-0.17 names the real files) | comment-aware token scan | passes |
+| CONF-11 | ADR-011 amendment; 02 §1.1; reconciliation #25 | in CMake code (comments stripped): `HELIOS_ISA_AVX2_TARGETS` or `HELIOS_ISA_AVX2_SOURCE_PATTERNS`, and any other `set`/`list` of an `*avx*_{targets,sources,patterns,files,kernels,allowlist}` variable; `helios_avx2_sources()`, defined or called; `set_source_files_properties` or `set_property(SOURCE …)` carrying `/arch:AVX*`, `-mavx*`, `-mbmi*`, `-mf16c`, `-mlzcnt`, `-mfma` or a `-march=` other than `x86-64`, literally or through a variable set from them or from `helios_isa_avx2_flags()` in the same function; the same flags in `target_compile_options`, `add_compile_options`, `set_target_properties`/`set_property(TARGET …)` `COMPILE_OPTIONS` or `CMAKE_<LANG>_FLAGS*` outside `cmake/HeliosIsa.cmake` (the level sets). The bad fixture is a verbatim copy of today's two lists, `helios_isa_avx2_flags()`, `helios_avx2_sources()` and `tp_jolt`'s options | CMake command scan | **known failing, owned by WP-0.2r** (12 findings in 6 files) |
+| CONF-12 | 02 §1.1 (gate placement and gate-TU rules); reconciliation #25 | in the gate objects (`engine/core/src/cpugate/**`, `engine/core/src/platform/*/cpu_gate_hook.c`): a `.CRT$X*` section other than `.CRT$XLA0`, or `#pragma init_seg`; `ExitProcess`; no `/INCLUDE:_tls_used` or `/INCLUDE:helios_cpu_gate_tls_entry` in the Windows hook, `cmake/**` or `engine/**/CMakeLists.txt`; an `#include` other than `cpu_gate.h`, `<stdint.h>`, `<intrin.h>`, `<cpuid.h>`, `<windows.h>`, `<signal.h>`, `<unistd.h>`; a file-scope definition without `static` other than `helios_cpu_gate_run`, `helios_cpu_gate_verdict` and `helios_cpu_gate_tls_entry`. Elsewhere in scope (vendored patches too): a `.CRT$XLA*` contribution, a `.preinit_array` entry, `constructor(n)`/`init_priority(n)` with n < 101, `ifunc` or `target_clones` | C token scan | **known failing, owned by WP-0.5r** (7 findings in the Windows hook) |
 
 ## The net schema (CONF-06, CONF-07)
 
@@ -72,8 +74,11 @@ not a finding.
   ID or a reason is malformed, and one on a line where its rule reports nothing is unused: both fail.
 - **Known failing** (`known_failing.jsonc`): findings of a rule under the record's paths are reported as
   "known failing, owned by `<WP>`" and do not fail the run. Each record names its rework WP, its §5.10.4 row
-  and a reason, and the scorecard carries the same clause as a gap (`EXIT-0.conformance`). A record that
-  matches no finding fails the run, so the WP that closes it must remove it. `-strict` ignores the file.
+  and a reason, and the scorecard carries the same clause as a gap (`EXIT-0.conformance`). A record, or one of
+  its paths, that matches no finding fails the run, so the WP that closes a gap must remove it (and the gap).
+  `-strict` ignores the file: `go run ./cmd/helios-conformance -root ../.. -strict -rules CONF-11` is how
+  WP-0.2r shows CONF-11 clean. Today's records: CONF-11 (WP-0.2r) and CONF-12 (WP-0.5r), the open rows of
+  09 §5.10.4 (b).
 - **Map** (`map.jsonc`): anchors to paths, rules and required tests. The run fails on a key that is not an
   anchor, an unknown rule, a bad glob, an entry with neither rules nor `why` (D5), and a rule in no entry.
 

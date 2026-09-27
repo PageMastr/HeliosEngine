@@ -30,7 +30,7 @@ type Known struct {
 	Reason string   `json:"reason"`
 	Paths  []string `json:"paths"`
 	line   int
-	hits   int
+	hits   map[string]int // path glob -> findings it covers
 }
 
 // stripJSONC removes // and /* */ comments and trailing commas outside strings, keeping line breaks

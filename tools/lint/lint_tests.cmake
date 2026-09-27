@@ -37,7 +37,6 @@ set(imageLines "")
 foreach(t IN LISTS gated)
   string(APPEND imageLines "$<TARGET_FILE:${t}>\n")
 endforeach()
-file(GENERATE OUTPUT ${CMAKE_BINARY_DIR}/helios_generated/isa_images.txt CONTENT "${imageLines}")
 set(isaTools "")
 if(CMAKE_OBJDUMP AND NOT MSVC)
   list(APPEND isaTools -DOBJDUMP=${CMAKE_OBJDUMP})
@@ -54,6 +53,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" AND NOT CMAKE_GENERATOR M
                  "Visual Studio builds are audited by the Ninja CI presets")
 endif()
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
+  # Generated only where lint_isa_audit reads it. The Visual Studio generators evaluate it once per
+  # configuration, $<TARGET_FILE> differs between them, and one path cannot hold differing content.
+  file(GENERATE OUTPUT ${CMAKE_BINARY_DIR}/helios_generated/isa_images.txt CONTENT "${imageLines}")
   # Sanitizer runtimes add their own .preinit_array entries, so the image check (exactly one
   # pre-initializer: the gate) only runs in normal builds.
   set(isaImages -DIMAGES_FILE=${CMAKE_BINARY_DIR}/helios_generated/isa_images.txt)

@@ -1030,7 +1030,8 @@ headless tests, the MinGW cross-build, MSVC at the primary and the floor, clang-
   brought it to the current plan: the `svc_identity` and `svc_orch` schemas, direct PII sealed under
   per-account keys, `region_lease` generations and CONF-03's holder rule.
 - **In progress:** #19 (WP-0.7: the schemac lock under Windows races). WP-0.2's lints and WP-0.5's core and
-  math completion, CPU gate included, are committed but still await their WP reviews.
+  math completion, CPU gate included, are committed but still await their WP reviews. WP-0.2's review with its
+  conformance lint, and WP-0.7b, were dispatched this round (local branches, no PR yet).
 - **Not yet present:** the launcher, client and editor, the patch pipeline, the link-model spike, the
   conformance lint, and the *Cinder Reach* `content/`.
 - **Failing gates and fired risks:**
@@ -1043,9 +1044,13 @@ headless tests, the MinGW cross-build, MSVC at the primary and the floor, clang-
   - WP-0.9c's `hnoise` CPU clause is red (F3; K5b), so `pcg_tests_perf` fails by design;
   - K39 (RT-13) fired on 2026-09-25, and both its mitigations have merged (#9);
   - the first nightly on WP-0.3's workflow (2026-09-27) is red. The VS 2026 and VS 2022 MSBuild builds do not
-    configure, NS-0.2's gate fails on the hosted Linux runner (88k packets per core against 100k),
-    `script_tests` aborts under ASan (so RT-13 cannot pass there), and clang-cl's doctest-XML step and Linux
-    Go's integration step fail. Each gets a bisect or a P0 fix (09 §5.8, §8.2).
+    configure, so the registry check reports 80 findings: the tests it cites are missing from their inventories
+    (124 CTests and 0 doctest cases each). NS-0.2's gate fails on the hosted Linux runner (88k packets per core
+    against 100k). The Debug-ASan build fails 8 of 140 CTests: `ecs_tests` (WP-1.1a's parity golden),
+    `physics_tests` (a Debug-only Jolt assert), `pcg_hnoise_bench_smoke` (a stack-use-after-scope),
+    `rhi_triangle_smoke` (SDL3 X11 leaks), `script_tests` and `script_tests_perf` (so RT-13 cannot pass there),
+    and the perf gates `net_tests_perf` and `pcg_tests_perf`. clang-cl's doctest-XML step and Linux Go's
+    integration step fail too. Each gets a bisect or a P0 fix (09 §5.8, §8.2).
 - **Known deltas from the plan** (09 §8.1, §5.10.4):
   - the vendored SDL3 is built without its renderers and Wayland (WP-0.17);
   - the in-tree ISA and CPU-gate code still uses the per-file AVX2 allowlist and the `.CRT$XIB` entry

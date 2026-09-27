@@ -12,6 +12,8 @@
 using namespace helios;
 using namespace helios::net;
 
+namespace {
+
 TEST_SUITE("net.address") {
     TEST_CASE("IPv4 parse and format") {
         auto a = Address::parse("127.0.0.1:40000");
@@ -114,3 +116,5 @@ TEST_SUITE("net.address") {
         CHECK(nc.port == 5);
     }
 }
+
+} // namespace

@@ -241,7 +241,11 @@ contributions also follow the extra rules in the next section.
   that reach graphics libraries, and on editor-only code linked into client or server builds.
 - **Tests with every behaviour change.** Add doctest cases that fail without your change. Name timing and
   throughput checks `perf: ...` so they run in the serial nightly tier. Rendering changes add or update
-  golden images.
+  golden images. In a test source, keep the test cases and everything else it declares in an unnamed
+  namespace (anything that cannot be goes in a waiver region with a reason): MSVC can otherwise merge one
+  test file's lambdas or helpers with another's. `lint_test_namespaces` checks it on a best-effort
+  basis, against accidental omissions rather than deliberately adversarial source
+  (`tools/lint/README.md` gives its threat model and limits).
 - **Warning-clean** with `-Wall -Wextra` on GCC and Clang, and `/W4` on MSVC.
 - **No untrusted-input shortcuts.** Anything that parses network packets, files, scripts or user content
   must bound its memory, recursion and CPU, and needs fuzz or hostile-input tests.

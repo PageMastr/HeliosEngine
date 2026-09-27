@@ -38,8 +38,6 @@ f64 num(std::string_view src, MapEnv& env) {
     return e.value.number;
 }
 
-} // namespace
-
 TEST_CASE("hxl vm: min/max propagate NaN and order -0 < +0") {
     const f64 nan = std::numeric_limits<f64>::quiet_NaN();
     CHECK(bits(hxlMin(-0.0, 0.0)) == bits(-0.0));
@@ -227,3 +225,5 @@ TEST_CASE("hxl vm: MapEnv binds invalid curves as missing inputs (review regress
     REQUIRE(eval(*p, good, v) == Status::Ok);
     CHECK(v.number == 2.0);
 }
+
+} // namespace

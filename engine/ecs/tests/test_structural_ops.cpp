@@ -309,8 +309,6 @@ u64 runWorkload(const RelationConfig& relations) {
     return d.value();
 }
 
-} // namespace
-
 TEST_CASE("ecs structural ops: the WP-1.1a paths leave the pre-WP-1.1a state, log and dirty bits") {
     // Digests of runWorkload() recorded with the World before WP-1.1a (commit f08cf5b, GCC 13 and
     // Clang 18 alike); they must not change on any toolchain.
@@ -334,3 +332,5 @@ TEST_CASE("ecs structural ops: the WP-1.1a paths leave the pre-WP-1.1a state, lo
         CHECK(digest == runWorkload(v.relations)); // deterministic
     }
 }
+
+} // namespace

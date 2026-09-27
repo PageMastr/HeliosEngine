@@ -48,8 +48,6 @@ u32 countChanges(World& world, Entity e, u64 replIndex, FieldMask* fields = null
     return n;
 }
 
-} // namespace
-
 TEST_CASE("ecs regressions: queries over Sparse and DontFragment components") {
     // Before the fix, ecs_field on a sparse field read a bogus shared source and crashed.
     for (const ComponentFlags flag : {ComponentFlags::Sparse, ComponentFlags::DontFragment}) {
@@ -410,7 +408,6 @@ TEST_CASE("ecs regressions: staggered systems with a once function") {
     CHECK(values == std::set<u64>{3});
 }
 
-namespace {
 /// External block source that records calls (stands in for the orchestrator client).
 class CountingSource final : public IdBlockSource {
 public:
@@ -423,7 +420,6 @@ public:
         return inner.allocateIdBlocks(n, out);
     }
 };
-} // namespace
 
 TEST_CASE("ecs regressions: World mints block ids from its source and refills between ticks") {
     CountingSource src;
@@ -462,11 +458,9 @@ TEST_CASE("ecs regressions: World mints block ids from its source and refills be
     CHECK(zero.entityId(first).isValid());
 }
 
-namespace {
 struct Named2 {
     std::string text = "default";
 };
-} // namespace
 
 TEST_CASE("ecs regressions: component names that resolve to existing flecs entities are refused") {
     World world;
@@ -568,3 +562,5 @@ TEST_CASE("ecs regressions: grouped spawns write every member's values even if t
     CHECK(world.get<Named2>(cb.resolved(b))->text == "second-member-value-long-enough-to-allocate");
     CHECK(world.get<Counter>(cb.resolved(b))->value == 2);
 }
+
+} // namespace

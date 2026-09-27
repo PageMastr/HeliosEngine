@@ -73,8 +73,6 @@ void csA(uint3 id : SV_DispatchThreadID) { if (id.x < gPush.count) gPush.data[id
 void csB(uint3 id : SV_DispatchThreadID) { if (id.x < gPush.count) gPush.data[id.x] += 1u; }
 )";
 
-} // namespace
-
 TEST_CASE("shaderc: output is byte-identical to the build's slangc and reflects the same") {
     Temp t;
     const std::filesystem::path spv = t.dir / "out" / "reflect_compute.spv";
@@ -232,3 +230,5 @@ TEST_CASE("shaderc: shell metacharacters and non-ASCII names reach the tools ver
         CHECK(v.ok());
     }
 }
+
+} // namespace

@@ -9,7 +9,6 @@ Transform randomTransform(Rng& rng, bool uniform) {
     return {rng.vec3(-50.0f, 50.0f), rng.quat(),
             uniform ? Vec3(s) : Vec3(s, rng.rangef(0.3f, 3.0f), rng.rangef(0.3f, 3.0f))};
 }
-}  // namespace
 
 TEST_CASE("transform: point/vector mapping matches the matrix") {
     Rng rng(40);
@@ -114,3 +113,5 @@ TEST_CASE("transform: camera-relative conversion") {
     const DVec3 refInView = conjugate(toF64(camRot)) * relWorld;
     CHECK(approxEqual(toF64(inView), refInView, 1e-5));
 }
+
+} // namespace

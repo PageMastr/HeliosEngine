@@ -56,8 +56,6 @@ ScriptVm::ApiRegistrar probeApi(ProbeWorld& w) {
     };
 }
 
-} // namespace
-
 TEST_CASE("handles: a handle invalidated across a wait raises StaleHandle") {
     ProbeWorld w;
     Harness h(Harness::defaultConfig(), probeApi(w));
@@ -176,3 +174,5 @@ TEST_CASE("WorldPos: C++ push/check round trip keeps every bit") {
     CHECK(seen.local.x == 123456789012.345678);
     CHECK(seen.local.y == -0.1);
 }
+
+} // namespace

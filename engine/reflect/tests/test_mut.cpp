@@ -20,6 +20,7 @@ struct Motion {
 } // namespace
 
 // Hand-written copy of what the generator emits.
+// helios-lint: outside-anon-namespace begin (an explicit specialization of helios::refl::Mut)
 template <>
 class helios::refl::Mut<Motion> : public helios::refl::detail::MutBase<Motion> {
 public:
@@ -43,6 +44,9 @@ public:
         return *m_c;
     }
 };
+// helios-lint: outside-anon-namespace end
+
+namespace {
 
 TEST_CASE("mut: setters mark field bits and the entity summary") {
     Motion m;
@@ -67,3 +71,5 @@ TEST_CASE("mut: setters mark field bits and the entity summary") {
     noSummary.setVel(Vec3(0, 1, 0));
     CHECK(dirtyFields(n) == Mut<Motion>::kVel);
 }
+
+} // namespace

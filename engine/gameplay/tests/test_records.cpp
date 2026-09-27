@@ -14,6 +14,8 @@
 using namespace helios;
 using namespace helios::gameplay;
 
+namespace {
+
 TEST_CASE("records: generated kernel types register and round-trip") {
     REQUIRE(registerTagsTypes().ok());
     REQUIRE(registerAttributesTypes().ok());
@@ -103,3 +105,5 @@ TEST_CASE("records: TagDef and AttributeDef records feed the runtime") {
     s.recompute(&held);
     CHECK(s.value(1) == 2000.0);
 }
+
+} // namespace

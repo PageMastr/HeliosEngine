@@ -12,6 +12,8 @@ using namespace helios;
 using namespace helios::refl;
 using namespace rtest;
 
+namespace {
+
 TEST_CASE("walker: builder TypeInfo describes fields, ids, offsets and defaults") {
     const TypeInfo& t = typeOf<Inner>();
     CHECK(t.qualifiedName == "rtest.Inner");
@@ -265,3 +267,5 @@ TEST_CASE("registry: lookups are safe while another thread registers") {
     CHECK(hits.load() >= 1000);
     CHECK_FALSE(sawNull.load());
 }
+
+} // namespace

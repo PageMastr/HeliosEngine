@@ -82,8 +82,6 @@ struct ForwardFixture : NullDeviceFixture {
     }
 };
 
-} // namespace
-
 TEST_CASE("forward: built-in meshes are closed, counter-clockwise from outside, with unit normals") {
     const MeshData cube = makeCube(0.5f);
     CHECK(cube.vertices.size() == 24);
@@ -180,3 +178,5 @@ TEST_CASE("forward: synchronous exposure and marked debug output") {
     REQUIRE(graph.execute(*fx.device, fx.pool).ok());
     CHECK_NULL_CLEAN(fx);
 }
+
+} // namespace

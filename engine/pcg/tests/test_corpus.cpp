@@ -30,8 +30,6 @@ const Corpus& checkedInCorpus() {
     return corpus;
 }
 
-} // namespace
-
 TEST_CASE("corpus: lattice hashes and noise values") {
     const Corpus& c = checkedInCorpus();
     REQUIRE(c.lattice.size() >= 200);
@@ -89,3 +87,5 @@ TEST_CASE("corpus: the checked-in files equal what the scalar reference generate
         CHECK(fresh.tiles[i].programHash == c.tiles[i].programHash);
     }
 }
+
+} // namespace

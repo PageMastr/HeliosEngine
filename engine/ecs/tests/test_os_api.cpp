@@ -24,6 +24,8 @@
 using namespace helios;
 using namespace helios::ecs;
 
+namespace {
+
 TEST_CASE("ecs os api: installed by World and idempotent") {
     World world;
     CHECK(flecsOsApiInstalled());
@@ -114,7 +116,6 @@ TEST_CASE("ecs os api: flecs time is the Helios monotonic clock") {
     CHECK(monotonicNanos() - s0 >= 1'500'000);
 }
 
-namespace {
 struct TaskProbe {
     std::mutex m;
     std::set<i32> workers;
@@ -132,7 +133,6 @@ void probeSystem(ecs_iter_t* it) {
     for (int32_t i = 0; i < it->count; ++i) counters[i].value += 1;
     probe->rows.fetch_add(static_cast<u64>(it->count));
 }
-} // namespace
 
 TEST_CASE("ecs os api: flecs task threads run as JobSystem jobs") {
     jobs::JobSystem js({.workerCount = 3});
@@ -186,3 +186,5 @@ TEST_CASE("ecs os api: task threads are clamped to the job system and refused wi
     CHECK(ecs_get_stage_count(world.flecsWorld()) == 3); // 2 workers + the calling thread
     world.progressFlecs(0.016f);
 }
+
+} // namespace

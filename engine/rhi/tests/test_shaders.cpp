@@ -49,8 +49,6 @@ bool hasEntry(const std::vector<EntryPoint>& eps, u32 model, std::string_view na
     return std::any_of(eps.begin(), eps.end(), [&](const EntryPoint& e) { return e.model == model && e.name == name; });
 }
 
-} // namespace
-
 TEST_CASE("shaders: every module is embedded SPIR-V 1.6") {
     const auto names = rhi_test_shaders::names();
     REQUIRE(names.size() >= 6);
@@ -115,3 +113,5 @@ TEST_CASE("shaders: the matrix push block uses column-major scalar layout") {
     CHECK(stride16);
     CHECK(vAt64);
 }
+
+} // namespace

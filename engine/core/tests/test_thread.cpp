@@ -10,6 +10,8 @@
 
 using namespace helios;
 
+namespace {
+
 TEST_CASE("thread: named threads report their id and name") {
     CHECK(hardwareThreadCount() >= 1);
     CHECK(currentThreadId() != 0);
@@ -118,3 +120,5 @@ TEST_CASE("thread: manual reset event wakes all waiters and stays set") {
     event.reset();
     CHECK(!event.isSet());
 }
+
+} // namespace

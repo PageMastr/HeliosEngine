@@ -1,6 +1,6 @@
 # Repository lints (WP-0.2, 09 §5.3 DoD item 5): ISA audit, licence scanner, vendored-patch check,
-# IP-name grep, Windows manifest check and the module-layering fixtures. Every lint is a CMake script
-# (`cmake -P`), so it runs on Windows developer machines without Python. Included by
+# IP-name grep, test-namespace check, Windows manifest check and the module-layering fixtures. Every
+# lint is a CMake script (`cmake -P`), so it runs on Windows developer machines without Python. Included by
 # helios_finalize_build() (cmake/HeliosLayering.cmake) at the end of the top-level CMakeLists.txt,
 # once every target exists (a deferred call cannot add_subdirectory, hence an include). All tests
 # carry the CTest label `lint`.
@@ -207,6 +207,140 @@ foreach(case
 endforeach()
 helios_lint_test(lint_ip_names_fixture_clean COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_TESTS}/ip_names/clean
   -DLINT_POLICY=${LINT}/ip_names_policy.cmake -P ${LINT}/ip_names.cmake)
+
+# ---------------------------------------------------------------------------------------------
+# Test namespaces (AAA-PLT-1): in a tests/ source with a doctest test macro, every declaration sits in
+# an unnamed namespace (or a waiver region), and test macros do so in every tests/ file, so MSVC
+# cannot merge one test file's lambdas or helpers with another's (#15). The ok fixture hides braces,
+# test macros and `namespace {` in comments, literals, directives and #if 0; literal_brace,
+# raw_comment_hides, directive_comment and if0_comment_endif are the reverse traps. long_tokens
+# (128 KB comments, literals, raw string and directive) and spliced_escapes are written here rather
+# than committed, and also run under a 1 MB stack where `ulimit` exists.
+# ---------------------------------------------------------------------------------------------
+set(tnLint ${CMAKE_COMMAND} -DREQUIRE_TESTS=ON -P ${LINT}/test_namespaces.cmake)
+helios_lint_test(lint_test_namespaces COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR} ${tnLint})
+foreach(fixture ok raw_comment_mention)
+  helios_lint_test(lint_test_namespaces_fixture_${fixture} COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_DIR=${LINT_TESTS}/test_namespaces/${fixture} ${tnLint})
+endforeach()
+foreach(case
+    "outside|test_outside.cpp:4: TEST_CASE outside an unnamed namespace"
+    "closed_early|test_closed_early.cpp:11: TEST_CASE outside an unnamed namespace"
+    "named_only|test_named_only.cpp:6: TEST_CASE outside an unnamed namespace"
+    "suite|test_suite.cpp:4: TEST_SUITE outside an unnamed namespace"
+    "literal_brace|test_literal_brace.cpp:16: TEST_CASE outside an unnamed namespace"
+    "doctest_prefix|test_doctest_prefix.cpp:10: DOCTEST_TEST_CASE_FIXTURE outside an unnamed namespace"
+    "subcase_helper|test_subcase_helper.cpp:6: SUBCASE outside an unnamed namespace"
+    "unbalanced|test_unbalanced.cpp:4: unbalanced braces"
+    "stray_close|test_stray_close.cpp:9: unbalanced braces: '}' closes nothing"
+    "crlf|test_crlf.cpp:6: TEST_CASE outside an unnamed namespace"
+    "empty|no doctest test macro under"
+    "helper_outside|test_helper_outside.cpp:5: declaration outside .* .starts with 'static'."
+    "header_macro|tests/cases.h:5: TEST_CASE outside an unnamed namespace"
+    "if0_opener|test_if0_opener.cpp:8: TEST_CASE outside an unnamed namespace"
+    "macro_generated|test_macro_generated.cpp:6: declaration outside .* .starts with 'MAKE_TEST'."
+    "bdd_helper|test_bdd_helper.cpp:5: GIVEN outside an unnamed namespace"
+    "test_dir|engine/demo/test/test_singular.cpp:4: TEST_CASE outside an unnamed namespace"
+    "raw_unterminated|test_raw_unterminated.cpp:5: unterminated raw string literal"
+    "raw_comment_hides|test_raw_comment_hides.cpp:7: TEST_CASE outside an unnamed namespace"
+    "waiver_test_macro|test_waiver_test_macro.cpp:5: TEST_CASE outside an unnamed namespace"
+    "waiver_no_reason|test_waiver_no_reason.cpp:4: malformed helios-lint comment"
+    "waiver_unclosed|test_waiver_unclosed.cpp:10: waiver region not closed"
+    "after_waiver|test_after_waiver.cpp:9: declaration outside an unnamed namespace"
+    "unterminated_literal|test_unterminated_literal.cpp:5: unterminated literal"
+    "waiver_nested|test_waiver_nested.cpp:11: waiver regions do not nest"
+    "waiver_scope|test_waiver_scope.cpp:9: this '}' closes the scope of the waiver opened on line 8"
+    "waiver_end_depth|test_waiver_end_depth.cpp:7: waiver end at another brace depth than its begin"
+    "macro_at_end|test_macro_at_end.cpp:12: declaration outside .* .starts with 'MAKE_TEST'."
+    "split_macro|test_split_macro.cpp:5: declaration outside an unnamed namespace"
+    "macro_in_named_ns|test_macro_in_named_ns.cpp:10: declaration outside .* .starts with 'DEFINE_HELPER'."
+    "macro_before_waiver|test_macro_before_waiver.cpp:7: declaration outside .* .starts with 'HELPER'."
+    "if0_comment_endif|test_if0_comment_endif.cpp:10: TEST_CASE outside an unnamed namespace"
+    "pp_after_comment|test_pp_after_comment.cpp:7: TEST_CASE outside.*test_pp_after_comment.cpp:13: TEST_CASE"
+    "directive_comment|test_directive_comment.cpp:5: TEST_CASE outside an unnamed namespace"
+    "pp_unbalanced|test_pp_unbalanced.cpp:4: #endif without #if.*test_pp_unbalanced.cpp:6: #if without #endif"
+    "waiver_stray_end|test_waiver_stray_end.cpp:9: waiver end without a begin"
+    "string_unterminated|test_string_unterminated.cpp:5: unterminated string literal"
+    "raw_long_delim|test_raw_long_delim.cpp:5: raw string delimiter longer than 16 characters"
+    "waiver_paren_reason|test_waiver_paren_reason.cpp:4: malformed helios-lint comment"
+    "waiver_body_after_end|end.cpp:11: declaration outside.*end.cpp:17: declaration.*end.cpp:22: decl"
+    "raw_eol|test_raw_eol.cpp:10: TEST_CASE outside.*test_raw_eol.cpp:14: TEST_CASE outside"
+    "pp_spliced_code|test_pp_spliced_code.cpp:14: TEST_CASE outside an unnamed namespace"
+    "if0_expression|test_if0_expression.cpp:10: TEST_CASE outside an unnamed namespace")
+  string(REPLACE "|" ";" parts "${case}")
+  list(GET parts 0 fixture)
+  list(GET parts 1 expect)
+  helios_lint_test(lint_test_namespaces_fixture_${fixture} EXPECT_FAIL "${expect}"
+    COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_TESTS}/test_namespaces/${fixture} ${tnLint})
+endforeach()
+# Generated fixtures: each construct 128 KB long (a single-class repeat in the regex engine, however
+# long), and a line with more escapes than the lexer's recursion bound.
+string(REPEAT "x" 131072 tnBig)
+string(REPEAT "x123456789 123456789 123456789 123456789 123456789 123456789 123456789 123456789\n"
+       1638 tnBigLines)
+string(REPLACE "\\n" "\n" tnBigLines "${tnBigLines}")
+string(REPEAT "\\x41" 400 tnEscapes)
+file(WRITE ${LINT_WORK}/test_namespaces/long_tokens/engine/demo/tests/test_long_tokens.cpp
+  "// Generated by tools/lint/lint_tests.cmake: 128 KB tokens must lex without deep recursion.\n"
+  "#include <doctest/doctest.h>\n#define HELIOS_DEMO_LONG \"${tnBig}\"\n"
+  "namespace {\n// ${tnBig}\n/* ${tnBig} */\n/*\n${tnBigLines}*/\n"
+  "const char* const kLong = \"${tnBig}\";\nconst char* const kEscapes = \"${tnEscapes}\";\n"
+  "const char* const kRaw = R\"(${tnBig}\n${tnBigLines})\";\n"
+  "TEST_CASE(\"demo: long tokens\") { CHECK(kLong != nullptr); }\n} // namespace\n")
+string(REPEAT "\\x41" 600 tnEscapes)
+file(WRITE ${LINT_WORK}/test_namespaces/too_many_escapes/engine/demo/tests/test_too_many_escapes.cpp
+  "#include <doctest/doctest.h>\nnamespace {\nconst char* const kEscapes = \"${tnEscapes}\";\n"
+  "TEST_CASE(\"demo: escapes\") { CHECK(kEscapes != nullptr); }\n} // namespace\n")
+# A spliced string's continuation line with 5000 escapes: without the bound, matching it overflows a
+# 1 MB stack (and on an 8 MB one the lint misses the bound).
+string(REPEAT "\\x41" 5000 tnEscapes)
+file(WRITE ${LINT_WORK}/test_namespaces/spliced_escapes/engine/demo/tests/test_spliced_escapes.cpp
+  "#include <doctest/doctest.h>\nnamespace {\nconst char* const kSpliced = \"a\\\n${tnEscapes}\";\n"
+  "TEST_CASE(\"demo: escapes\") { CHECK(kSpliced != nullptr); }\n} // namespace\n")
+unset(tnBig)
+unset(tnBigLines)
+unset(tnEscapes)
+helios_lint_test(lint_test_namespaces_fixture_long_tokens COMMAND ${CMAKE_COMMAND}
+  -DSOURCE_DIR=${LINT_WORK}/test_namespaces/long_tokens ${tnLint})
+helios_lint_test(lint_test_namespaces_fixture_too_many_escapes
+  EXPECT_FAIL "test_too_many_escapes.cpp:3: more than 500 escapes"
+  COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_WORK}/test_namespaces/too_many_escapes ${tnLint})
+set(tnSplicedExpect "test_spliced_escapes.cpp:4: more than 500 escapes on one line")
+helios_lint_test(lint_test_namespaces_fixture_spliced_escapes EXPECT_FAIL "${tnSplicedExpect}"
+  COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_WORK}/test_namespaces/spliced_escapes ${tnLint})
+# git mode, in two small repositories written here: an untracked test file is scanned; an ignored
+# one, and a tracked one deleted from the working tree, are not.
+find_program(HELIOS_LINT_GIT git)
+if(HELIOS_LINT_GIT)
+  set(tnGit ${LINT_WORK}/test_namespaces/git)
+  set(tnOutside ${LINT_TESTS}/test_namespaces/outside/engine/demo/tests/test_outside.cpp)
+  file(REMOVE_RECURSE ${tnGit})
+  foreach(repo untracked skipped)
+    file(COPY ${LINT_TESTS}/test_namespaces/ok/engine DESTINATION ${tnGit}/${repo})
+    file(WRITE ${tnGit}/${repo}/.gitignore "/engine/demo/tests/ignored/\n")
+    file(COPY ${tnOutside} DESTINATION ${tnGit}/${repo}/engine/demo/tests/deleted)
+    execute_process(COMMAND ${HELIOS_LINT_GIT} init -q WORKING_DIRECTORY ${tnGit}/${repo}
+                    OUTPUT_QUIET ERROR_QUIET)
+    execute_process(COMMAND ${HELIOS_LINT_GIT} add -A WORKING_DIRECTORY ${tnGit}/${repo}
+                    OUTPUT_QUIET ERROR_QUIET)
+    file(REMOVE_RECURSE ${tnGit}/${repo}/engine/demo/tests/deleted)
+  endforeach()
+  file(COPY ${tnOutside} DESTINATION ${tnGit}/untracked/engine/demo/tests/new)
+  file(COPY ${tnOutside} DESTINATION ${tnGit}/skipped/engine/demo/tests/ignored)
+  helios_lint_test(lint_test_namespaces_git_untracked EXPECT_FAIL "tests/new/test_outside.cpp:4: TEST_CASE"
+    COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${tnGit}/untracked ${tnLint})
+  helios_lint_test(lint_test_namespaces_git_skipped COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${tnGit}/skipped
+    ${tnLint})
+endif()
+find_program(HELIOS_LINT_SH sh)
+if(HELIOS_LINT_SH AND NOT WIN32)
+  set(tn1mb "ulimit -s 1024 && exec \"$0\" -DSOURCE_DIR=\"$1\" -DREQUIRE_TESTS=ON -P \"$2\"")
+  helios_lint_test(lint_test_namespaces_fixture_long_tokens_1mb_stack COMMAND ${HELIOS_LINT_SH} -c "${tn1mb}"
+    ${CMAKE_COMMAND} ${LINT_WORK}/test_namespaces/long_tokens ${LINT}/test_namespaces.cmake)
+  helios_lint_test(lint_test_namespaces_fixture_spliced_escapes_1mb_stack EXPECT_FAIL "${tnSplicedExpect}"
+    COMMAND ${HELIOS_LINT_SH} -c "${tn1mb}"
+    ${CMAKE_COMMAND} ${LINT_WORK}/test_namespaces/spliced_escapes ${LINT}/test_namespaces.cmake)
+endif()
 
 # ---------------------------------------------------------------------------------------------
 # Windows manifest (ADR-011): the source manifest's settings, and on Windows builds that a built

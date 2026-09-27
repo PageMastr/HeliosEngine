@@ -36,8 +36,6 @@ Result<std::unique_ptr<int>> makeOwned(int v) {
     return std::make_unique<int>(v);
 }
 
-} // namespace
-
 TEST_CASE("result: value and error states") {
     Result<int> ok = 5;
     CHECK(ok.hasValue());
@@ -105,3 +103,5 @@ TEST_CASE("result: error codes and formatting") {
     CHECK(std::format("{}", ErrorCode::IoError) == "IoError");
     CHECK(e == Error{ErrorCode::ParseError, "line 3"});
 }
+
+} // namespace

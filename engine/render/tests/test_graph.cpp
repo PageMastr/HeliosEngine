@@ -39,8 +39,6 @@ std::vector<std::vector<ResourceState>> initialStates(const RgPlan& plan) {
     return states;
 }
 
-} // namespace
-
 TEST_CASE("graph: culling keeps only what side-effect passes need") {
     for (bool cull : {true, false}) {
         CAPTURE(cull);
@@ -665,3 +663,5 @@ TEST_CASE("graph: compile budget (200 passes)") {
     CHECK(ms < 50.0);
     CHECK(plan.stats.pooledBytes * 10 < plan.stats.transientBytes * 7);  // >= 30 % saved (03 §2.2 target)
 }
+
+} // namespace

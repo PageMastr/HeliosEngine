@@ -148,8 +148,6 @@ void record(CommandBuffer& cb, Setup& s, bool batched, bool sparse, std::vector<
     cb.destroy(temps[5]);
 }
 
-} // namespace
-
 TEST_CASE("ecs bulk paths: spawnN leaves the state of the same spawn() + set() commands") {
     for (const bool inFrameDf : {false, true}) {
         for (const bool sparse : {false, true}) {
@@ -648,7 +646,6 @@ TEST_CASE("ecs bulk paths: the registry releases handles as the checked path doe
     CHECK(reg.handles().liveCount() == 2); // hb and ha2
 }
 
-namespace {
 struct RvStatus { // DontFragment, value
     u32 flags = 0;
 };
@@ -687,7 +684,6 @@ bool rawRemoveAfterEarlyRemove(ecs_entity_t trait, bool valued, bool ensureRecor
     ecs_fini(fw);
     return stillOwned;
 }
-} // namespace
 
 TEST_CASE("ecs bulk paths: known flecs 4.1.6 divergence: a DontFragment remove before the id's first add") {
     // Upstream behaviour, pinned so that a flecs update that fixes it shows up here (then the
@@ -815,3 +811,5 @@ TEST_CASE("ecs bulk paths: the registry confirms a handle only for the entity it
     CHECK(reg.identityOfHandle(hb, Entity(0x200000001ull), id));
     CHECK(id == b);
 }
+
+} // namespace

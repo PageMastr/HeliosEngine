@@ -71,8 +71,6 @@ const std::vector<std::string> kTrickyArgs = {
     "$HOME `x` ;|&",
 };
 
-} // namespace
-
 TEST_CASE("process: Windows argument quoting round-trips through the MSVC CRT rules") {
     for (const std::string& a : kTrickyArgs) {
         const std::string line = buildWindowsCommandLine("C:\\Program Files\\Helios\\helios-cell.exe", {a, "next"});
@@ -385,3 +383,5 @@ TEST_CASE("process: descriptors opened without close-on-exec do not leak into th
     CHECK(fs::removeAll(*dir).ok());
 }
 #endif
+
+} // namespace

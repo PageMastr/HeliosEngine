@@ -9,6 +9,8 @@
 
 using namespace helios;
 
+namespace {
+
 TEST_CASE("guid: generation is random version 4") {
     std::unordered_set<Guid> seen;
     for (int i = 0; i < 10000; ++i) {
@@ -73,3 +75,5 @@ TEST_CASE("guid: bytes, ordering and hashing") {
     CHECK(g.hash() == std::hash<Guid>{}(g));
     CHECK(Guid::generate() != Guid::generate());
 }
+
+} // namespace

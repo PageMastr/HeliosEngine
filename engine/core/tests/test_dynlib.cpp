@@ -11,6 +11,8 @@ using namespace helios;
 #error "HELIOS_TEST_PLUGIN_PATH must be defined by the build"
 #endif
 
+namespace {
+
 TEST_CASE("dynlib: load a plugin and resolve exported symbols") {
     auto lib = DynamicLibrary::loadUtf8(HELIOS_TEST_PLUGIN_PATH);
     REQUIRE_MESSAGE(lib, (lib ? "" : lib.error().toString()));
@@ -58,3 +60,5 @@ TEST_CASE("dynlib: platform naming") {
         CHECK(DynamicLibrary::decoratedName("game") == std::string("libgame") + std::string(DynamicLibrary::extension()));
     }
 }
+
+} // namespace

@@ -145,6 +145,13 @@ struct LedgerLine @store(character) @sql(schema="svc_golden") @key(owner, seq) {
   shape:  variant { Dot; Line { length: f32 } }
 }
 
+/// A scriptlib argument: the glue gives fields a script omits their schema defaults.
+struct Pack { slot: string @max(16); count: u16 = 1 }
+/// @max on struct fields bounds arguments and results alike.
+struct Bag { ids: list<u32> @max(2); tag: string @max(4) }
+/// A result with Names: pushed as text; a set of Names in lexical order.
+struct Tagged { label: Name; names: set<Name> @max(3) }
+
 /// Script-callable functions (`--emit luau` generates their glue, schema.d.luau and fuel defaults).
 scriptlib Queries @realm(server, client) {
   /// Nearest thing within `radius`.
@@ -153,11 +160,15 @@ scriptlib Queries @realm(server, client) {
   fn spawn(thing: ThingRef, at: WorldPos) -> EntityId @realm(server) @script(cost=50, each=4, of=thing);
   /// Every value form the glue converts; returns `item` with `count` replaced.
   fn convert(flag: bool, small: i8, big: i64, count: u16, ratio: f64, name: Name, text: string, dir: vec3f,
-             delay: Duration, at: Tick, color: Color, item: Item, items: list<Item> @max(4), names: set<Name>,
-             trio: f32[3], maybe: u32?, label: LocString, query: TagQuery) -> Item @script(cost=3, each=2, of=items) @pure;
+             delay: Duration, at: Tick, color: Color, item: Pack, items: list<Pack> @max(4), names: set<Name>,
+             trio: f32[3], maybe: u32?, label: LocString, query: TagQuery) -> Pack @script(cost=3, each=2, of=items) @pure;
   /// Recursive tables (a cyclic one stops at the glue's depth limit).
   fn echo(tree: Late) -> Late @realm(editor) @script(cost=1) @pure;
   fn log(text: string) @script(cost=2, each=1, of=text);
+  /// @max on a string argument and result, and on struct fields.
+  fn clip(s: string @max(4)) -> string @max(4) @script(cost=1) @pure;
+  fn bag(b: Bag) -> Bag @script(cost=1) @pure;
+  fn tagged(names: set<Name> @max(8), ratio: f32) -> Tagged @script(cost=1) @pure;
 }
 
 const Limit: u32 = 16;

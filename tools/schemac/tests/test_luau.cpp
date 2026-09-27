@@ -4,14 +4,17 @@
 // type-check the generated schema.d.luau with Luau.Analysis, and check the lock's binding ids and
 // the emitter's diagnostics.
 
+#include <chrono>
 #include <format>
 #include <fstream>
+#include <tuple>
 #include <limits>
 #include <sstream>
 
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/Frontend.h"
 #include "golden.luau.gen.h"
+#include "helios/core/name.h"
 #include "helios/core/time.h"
 #include "helios/script/script.h"
 #include "sample/ship.luau.gen.h"
@@ -23,8 +26,10 @@ using namespace schemac_test;
 namespace {
 
 namespace hs = helios::script;
-using golden::all::Item;
+using golden::all::Bag;
 using golden::all::Late;
+using golden::all::Pack;
+using golden::all::Tagged;
 using golden::all::ThingRef;
 using helios::FramePos;
 using helios::refl::EntityId;
@@ -42,10 +47,16 @@ std::string readFile(const std::string& path) {
 struct FakeQueries final : golden::all::Queries {
     usize inRadiusCount = 3;
     u64 spawnItems = 0;
+    usize calls = 0; ///< implementation calls (none may happen when the glue rejects the arguments)
     FramePos lastAt;
     f32 lastRadius = 0;
     ThingRef lastThing;
     std::string logged;
+    Bag bagResult;
+    bool echoBag = true;
+    std::string clipResult;
+    Tagged taggedResult;
+    std::vector<std::string> taggedNames;
     struct Converted {
         bool flag = false;
         i8 small = 0;
@@ -57,41 +68,64 @@ struct FakeQueries final : golden::all::Queries {
         helios::refl::Duration delay;
         u64 at = 0;
         golden::all::Color color = golden::all::Color::Red;
-        Item item;
-        std::vector<Item> items;
-        std::set<helios::Name> names;
+        Pack item;
+        std::vector<Pack> items;
+        std::vector<std::string> names; ///< in the set's order
         std::array<f32, 3> trio{};
         std::optional<u32> maybe;
     } converted;
 
     std::optional<ThingRef> nearest(lua_State*, const FramePos& at, f32 radius) override {
+        ++calls;
         lastAt = at;
         lastRadius = radius;
         return ThingRef(kRefId);
     }
     std::vector<EntityId> inRadius(lua_State*, const FramePos&, f32) override {
+        ++calls;
         std::vector<EntityId> out;
         for (usize i = 0; i < inRadiusCount; ++i) out.push_back(EntityId(kBigId - i));
         return out;
     }
     EntityId spawn(lua_State*, ThingRef thing, const FramePos& at) override {
+        ++calls;
         lastThing = thing;
         lastAt = at;
         return EntityId(kBigId);
     }
     u64 spawnItemCount(lua_State*, ThingRef) override { return spawnItems; }
-    Item convert(lua_State*, bool flag, i8 small, i64 big, u16 count, f64 ratio, helios::Name name, const std::string& text,
-                 helios::Vec3 dir, helios::refl::Duration delay, u64 at, golden::all::Color color, const Item& item,
-                 const std::vector<Item>& items, const std::set<helios::Name>& names, const std::array<f32, 3>& trio,
+    Pack convert(lua_State*, bool flag, i8 small, i64 big, u16 count, f64 ratio, const std::string& name, const std::string& text,
+                 helios::Vec3 dir, helios::refl::Duration delay, u64 at, golden::all::Color color, const Pack& item,
+                 const std::vector<Pack>& items, const std::set<std::string>& names, const std::array<f32, 3>& trio,
                  const std::optional<u32>& maybe, const helios::refl::LocString& label, const helios::refl::TagQuery& query) override {
-        converted = Converted{flag, small, big, count, ratio, std::string(name.view()), text, label.key, query.text, dir, delay, at, color,
-                              item, items, names, trio, maybe};
-        Item out = item;
+        ++calls;
+        converted = Converted{flag, small, big, count, ratio, name, text, label.key, query.text, dir, delay, at, color, item, items,
+                              std::vector<std::string>(names.begin(), names.end()), trio, maybe};
+        Pack out = item;
         out.count = static_cast<u16>(items.size() + 5);
         return out;
     }
-    Late echo(lua_State*, const Late& tree) override { return tree; }
-    void log(lua_State*, const std::string& text) override { logged = text; }
+    Late echo(lua_State*, const Late& tree) override {
+        ++calls;
+        return tree;
+    }
+    void log(lua_State*, const std::string& text) override {
+        ++calls;
+        logged = text;
+    }
+    std::string clip(lua_State*, const std::string& s) override {
+        ++calls;
+        return clipResult.empty() ? s : clipResult;
+    }
+    Bag bag(lua_State*, const Bag& b) override {
+        ++calls;
+        return echoBag ? b : bagResult;
+    }
+    Tagged tagged(lua_State*, const std::set<std::string>& names, f32) override {
+        ++calls;
+        taggedNames.assign(names.begin(), names.end());
+        return taggedResult;
+    }
 };
 
 struct FakeShips final : sample::ship::ShipQueries {
@@ -107,8 +141,12 @@ int nop(lua_State* L) {
     return 1;
 }
 
-/// A cell-profile VM with the golden and sample glue bound for `realm`, plus Probe.nop (no charge),
-/// the reference that fuel deltas are measured against.
+hs::HostProfile profileOf(std::string_view realm) {
+    return realm == "client" ? hs::HostProfile::Client : realm == "editor" ? hs::HostProfile::Editor : hs::HostProfile::Cell;
+}
+
+/// A VM of the realm's host profile with the golden and sample glue bound for `realm`, plus Probe.nop
+/// (no charge), the reference that fuel deltas are measured against. Fuel only: no wall-time limits.
 struct Vm {
     helios::DilatableClock clock{helios::DilatableClock::Config{50'000'000, 100'000, 1'000'000}};
     FakeQueries queries;
@@ -117,14 +155,19 @@ struct Vm {
     u32 boundShips = 0;
     std::unique_ptr<hs::ScriptVm> vm;
 
-    explicit Vm(std::string_view realm = "server") {
+    explicit Vm(std::string_view realm = "server", bool wallBackstop = false) {
         hs::VmConfig config;
         config.name = "schemac-luau";
         config.clock = &clock;
-        config.budget.wallBackstopNanos = 0; // fuel only: deterministic
+        config.profile = profileOf(realm);
+        if (!wallBackstop) config.budget.wallBackstopNanos = 0;
         auto created = hs::ScriptVm::create(config, [&](hs::Binder& b) {
-            boundQueries = golden::all::bindQueries(b, queries, realm);
-            boundShips = sample::ship::bindShipQueries(b, ships, realm);
+            auto q = golden::all::bindQueries(b, queries, realm);
+            auto s = sample::ship::bindShipQueries(b, ships, realm);
+            REQUIRE(q);
+            REQUIRE(s);
+            boundQueries = *q;
+            boundShips = *s;
             b.function("Probe", "nop", &nop, hs::FuelCost{0, 0, 0});
         });
         REQUIRE_MESSAGE(created.ok(), (created.ok() ? std::string() : created.error().toString()));
@@ -153,9 +196,17 @@ std::string fuelDelta(const std::string& call, const std::string& args) {
            "local c = task.fuel(); Probe.nop(" + args + "); local d = task.fuel()\nreturn (b - a) - (d - c)";
 }
 
+/// Queries.convert with defaults, argument `index` (0-based) replaced by `value`.
+std::string convertWith(int index, const std::string& value) {
+    std::vector<std::string> parts = {"true", "0", "0", "0", "0", "'n'", "'t'", "vector.create(0, 0, 0)", "0", "0", "'Red'", "{}", "{}",
+                                      "{}", "{1, 2, 3}", "nil", "'l'", "'q'"};
+    if (index >= 0) parts[static_cast<usize>(index)] = value;
+    return "Queries.convert(" + helios::schemac::join(parts, ", ") + ")";
+}
+
 TEST_CASE("luau: the generated glue converts arguments and results through a script VM") {
     Vm v;
-    CHECK(v.boundQueries == 5); // echo is editor-only
+    CHECK(v.boundQueries == 8); // echo is editor-only
     CHECK(v.boundShips == 2);
     const std::string err = v.run(R"(
   local p = WorldPos.new(1.5, -2, 3, 7)
@@ -172,10 +223,13 @@ TEST_CASE("luau: the generated glue converts arguments and results through a scr
   assert(hull ~= nil and ShipQueries.hullOf(near[2]) == nil)
   local docked = ShipQueries.dockedShips(e)
   assert(#docked == 2 and docked[2] == e)
-  local item = Queries.convert(true, -8, 2^53, 65535, 0.25, "a.b", "text", vector.create(1, 2, 3), 1.5, 42, "Blue",
-    {slot = "s", count = 3}, {{slot = "x"}, {slot = "y", count = 9}}, {"n2", "n1", "n2"}, {1, 2}, nil, "loc.key", "A & B")
+  local item = Queries.convert(true, -8, 2^53 - 1, 65535, 0.25, "a.b", "text", vector.create(1, 2, 3), 1.5, 42, "Blue",
+    {slot = "s", count = 3}, {{slot = "x"}, {slot = "y", count = 9}}, {"n2", "n1", "n2"}, {1, 2, 3}, nil, "loc.key", "A & B")
   assert(item.slot == "s" and item.count == 7)
   Queries.log("hello")
+  assert(Queries.clip("abcd") == "abcd")
+  local b = Queries.bag({ids = {1, 2}, tag = "t"})
+  assert(#b.ids == 2 and b.tag == "t")
 )");
     REQUIRE_MESSAGE(err.empty(), err);
     CHECK(v.queries.lastAt.frame.value == 7);
@@ -186,7 +240,7 @@ TEST_CASE("luau: the generated glue converts arguments and results through a scr
     const auto& c = v.queries.converted;
     CHECK(c.flag);
     CHECK(c.small == -8);
-    CHECK(c.big == (i64(1) << 53));
+    CHECK(c.big == (i64(1) << 53) - 1);
     CHECK(c.count == 65535);
     CHECK(c.ratio == 0.25);
     CHECK(c.name == "a.b");
@@ -195,13 +249,13 @@ TEST_CASE("luau: the generated glue converts arguments and results through a scr
     CHECK(c.delay == helios::refl::Duration::fromMillis(1500));
     CHECK(c.at == 42);
     CHECK(c.color == golden::all::Color::Blue);
-    CHECK(c.item.slot == helios::Name("s"));
+    CHECK(c.item.slot == "s");
     CHECK(c.item.count == 3);
     REQUIRE(c.items.size() == 2);
     CHECK(c.items[0].count == 1); // a missing field takes its schema default
     CHECK(c.items[1].count == 9);
-    CHECK(c.names.size() == 2);
-    CHECK(c.trio == std::array<f32, 3>{1, 2, 0});
+    CHECK(c.names == std::vector<std::string>{"n1", "n2"});
+    CHECK(c.trio == std::array<f32, 3>{1, 2, 3});
     CHECK_FALSE(c.maybe.has_value());
     CHECK(c.label == "loc.key");
     CHECK(c.query == "A & B");
@@ -216,6 +270,33 @@ TEST_CASE("luau: the generated glue converts arguments and results through a scr
   assert(Queries.nearest == nil)
 )");
     CHECK_MESSAGE(echoed.empty(), echoed);
+    Vm client("client");
+    CHECK(client.boundQueries == 7); // neither spawn (server) nor echo (editor)
+}
+
+TEST_CASE("luau: bind checks the realm against the known realms and the VM's host profile") {
+    for (const auto& [realm, profile, expected] :
+         {std::tuple{"Server", hs::HostProfile::Cell, "unknown script realm 'Server'"},
+          std::tuple{"world", hs::HostProfile::Cell, "unknown script realm 'world'"},
+          std::tuple{"client", hs::HostProfile::Cell, "script realm 'client' does not match this VM's host profile, which runs 'server'"},
+          std::tuple{"server", hs::HostProfile::Editor, "does not match this VM's host profile, which runs 'editor'"}}) {
+        INFO(realm);
+        helios::DilatableClock clock;
+        FakeQueries queries;
+        hs::VmConfig config;
+        config.clock = &clock;
+        config.profile = profile;
+        std::string error;
+        u32 registered = 99;
+        auto created = hs::ScriptVm::create(config, [&](hs::Binder& b) {
+            auto r = golden::all::bindQueries(b, queries, realm);
+            if (!r) error = r.error().message;
+            registered = r ? *r : 0;
+        });
+        REQUIRE(created.ok());
+        CHECK(registered == 0);
+        CHECK_MESSAGE(error.find(expected) != std::string::npos, error);
+    }
 }
 
 TEST_CASE("luau: the generated glue charges each fn's schema fuel") {
@@ -237,51 +318,34 @@ TEST_CASE("luau: the generated glue charges each fn's schema fuel") {
     CHECK(delta("Queries.spawn", "Queries.nearest(p, 1), p") == 50 + 4 * 10);
     CHECK(delta("Queries.log", "'hello'") == 2 + 5); // `of` a string: its length
     CHECK(delta("ShipQueries.dockedShips", "Queries.spawn(Queries.nearest(p, 1), p)") == 10 + 2);
-    const std::string convert =
-        "true, 0, 0, 0, 0, 'n', 't', vector.create(0, 0, 0), 0, 0, 'Red', {}, {{}, {}, {}}, {}, {}, nil, 'l', 'q'";
-    CHECK(delta("Queries.convert", convert) == 3 + 2 * 3); // `of` a list: its length
+    const std::string convert = convertWith(12, "{{}, {}, {}}").substr(std::string_view("Queries.convert(").size());
+    CHECK(delta("Queries.convert", convert.substr(0, convert.size() - 1)) == 3 + 2 * 3); // `of` a list: its length
 }
 
 TEST_CASE("luau: the generated glue rejects hostile arguments without running Luau code") {
     Vm v;
-    struct Case {
-        const char* body;
-        const char* error;
-    };
-    const std::string args = "true, 0, 0, 0, 0, 'n', 't', vector.create(0, 0, 0), 0, 0, 'Red', {}, {}, {}, {}, nil, 'l', 'q'";
-    auto convertWith = [&](int index, const std::string& value) {
-        std::vector<std::string> parts;
-        std::string cur;
-        int depth = 0;
-        for (const char ch : args) {
-            if (ch == '(' || ch == '{') ++depth;
-            if (ch == ')' || ch == '}') --depth;
-            if (ch == ',' && depth == 0) {
-                parts.push_back(cur);
-                cur.clear();
-                continue;
-            }
-            cur += ch;
-        }
-        parts.push_back(cur);
-        parts[static_cast<usize>(index)] = value;
-        std::string out;
-        for (usize i = 0; i < parts.size(); ++i) out += (i ? "," : "") + parts[i];
-        return "Queries.convert(" + out + ")";
-    };
     const std::vector<std::pair<std::string, std::string>> cases = {
         {convertWith(0, "1"), "argument 'flag': expected boolean, got number"},
         {convertWith(1, "200"), "200 is not a i8"},
-        {convertWith(2, "2^53 + 2"), "is not a i64"},
+        {convertWith(2, "2^53"), "9007199254740992 is not a i64"}, // 2^53 + 1 would round to it: not exact
+        {convertWith(2, "-2^53"), "is not a i64"},
         {convertWith(3, "1.5"), "1.5 is not a u16"},
         {convertWith(3, "'7'"), "argument 'count': expected number, got string"},
         {convertWith(5, "{}"), "argument 'name': expected string, got table"},
         {convertWith(7, "{1, 2, 3}"), "argument 'dir': expected vector, got table"},
         {convertWith(8, "1e300"), "seconds is not a valid duration"},
         {convertWith(10, "'Purple'"), "'Purple' is not a Color (expected one of Red, Green, Blue)"},
-        {convertWith(11, "5"), "argument 'item': expected Item, got number"},
-        {convertWith(12, "{{}, {}, {}, {}, {}}"), "argument 'items': more than 4 elements"},
-        {convertWith(14, "{1, 2, 3, 4}"), "4 elements, at most 3 allowed"},
+        {convertWith(11, "5"), "argument 'item': expected PackInput, got number"},
+        {convertWith(12, "{{}, {}, {}, {}, {}}"), "argument 'items': 'items' has 5 elements; its @max is 4"},
+        {convertWith(11, "{slot = string.rep('x', 17)}"), "'Pack.slot' has 17 bytes; its @max is 16"},
+        {convertWith(14, "{1, 2, 3, 4}"), "4 elements, exactly 3 required"},
+        {convertWith(14, "{1, 2}"), "2 elements, exactly 3 required"},
+        {"Queries.tagged({}, 0/0)", "nan is not a finite f32"},
+        {"Queries.tagged({}, math.huge)", "inf is not a finite f32"},
+        {"Queries.tagged({}, 1e39)", "1e+39 is not a finite f32"},
+        {"Queries.clip('abcde')", "argument 's': 's' has 5 bytes; its @max is 4"},
+        {"Queries.bag({ids = {1, 2, 3}})", "'Bag.ids' has 3 elements; its @max is 2"},
+        {"Queries.bag({tag = 'abcde'})", "'Bag.tag' has 5 bytes; its @max is 4"},
         {"Queries.spawn(1, WorldPos.new(0, 0, 0))", "argument 'thing': expected ThingRef, got number"},
         {"local p = WorldPos.new(0, 0, 0); Queries.spawn(Queries.spawn(Queries.nearest(p, 1), p), p)", "expected ThingRef, got EntityId"},
         {"Queries.nearest(vector.create(0, 0, 0), 1)", "argument 'at': expected WorldPos, got vector"},
@@ -289,15 +353,23 @@ TEST_CASE("luau: the generated glue rejects hostile arguments without running Lu
     };
     for (const auto& [body, expected] : cases) {
         INFO(body);
+        const usize calls = v.queries.calls;
         const std::string err = v.run(body);
         CHECK_MESSAGE(err.find(expected) != std::string::npos, err);
+        if (body.find("Queries.", body.find("Queries.") + 1) == std::string::npos)
+            CHECK(v.queries.calls == calls); // rejected before the implementation runs
     }
     // Struct fields and list elements are read raw: a metatable's __index never runs.
     const std::string raw = v.run(convertWith(11, "setmetatable({}, {__index = function() error('metamethod ran') end})"));
     CHECK_MESSAGE(raw.empty(), raw);
-    // A result above the fn's @max fails the call instead of reaching the script.
+    // Results: a result above the fn's @max, or a struct field above its @max, fails the call.
     v.queries.inRadiusCount = 65;
     CHECK(v.run("Queries.inRadius(WorldPos.new(0, 0, 0), 1)").find("returned 65 elements; its @max is 64") != std::string::npos);
+    v.queries.clipResult = "abcdefgh";
+    CHECK(v.run("Queries.clip('a')").find("Queries.clip returned 8 elements; its @max is 4") != std::string::npos);
+    v.queries.echoBag = false;
+    v.queries.bagResult.ids = {1, 2, 3};
+    CHECK(v.run("Queries.bag({})").find("result field 'Bag.ids' has 3 elements or bytes; its @max is 2") != std::string::npos);
 
     // A cyclic table stops at the depth limit instead of overflowing the C++ stack; the VM stays usable.
     Vm editor("editor");
@@ -305,6 +377,92 @@ TEST_CASE("luau: the generated glue rejects hostile arguments without running Lu
     CHECK_MESSAGE(cyclic.find("nests more than 32 tables deep") != std::string::npos, cyclic);
     const std::string after = editor.run("assert(Queries.echo({n = 4}).n == 4)");
     CHECK_MESSAGE(after.empty(), after);
+}
+
+TEST_CASE("luau: one call's conversion work is bounded by the per-call value and byte caps") {
+    // The reviewer's DAG: 22 Luau tables whose conversion would visit 4^10 nodes.
+    Vm editor("editor", /*wallBackstop=*/true);
+    const std::string dag = editor.run(R"(
+  local t = {n = 0, tree = {}}
+  for i = 1, 10 do t = {n = i, tree = {t, t, t, t}} end
+  Queries.echo(t))");
+    CHECK_MESSAGE(dag.find("the arguments hold more than 8192 values (the glue's per-call limit)") != std::string::npos, dag);
+    CHECK(editor.queries.calls == 0);
+    // The reviewer's 65,536 references to one 16 KiB string fail at the value cap before any element is
+    // converted; 17 references fail at the byte cap (272 KiB of copies from one 16 KiB Luau string).
+    Vm v("server", /*wallBackstop=*/true);
+    const std::string refs = v.run("local s = string.rep('x', 16384)\n" + convertWith(13, "table.create(65536, s)"));
+    CHECK_MESSAGE(refs.find("more than 8192 values") != std::string::npos, refs);
+    const std::string strings = v.run("local s = string.rep('x', 16384)\n" + convertWith(13, "table.create(17, s)"));
+    CHECK_MESSAGE(strings.find("more than 262144 string bytes") != std::string::npos, strings);
+    const std::string list = v.run("Queries.log(string.rep('x', 262145))");
+    CHECK_MESSAGE(list.find("more than 262144 string bytes") != std::string::npos, list);
+    CHECK(v.queries.calls == 0);
+    // Exactly at the caps is fine; the caps are the host's to change.
+    v.queries.glueLimits.maxValues = 4;
+    CHECK(v.run("Queries.tagged({'a', 'b'}, 0)").empty()); // 1 set + 2 names + 1 number
+    CHECK(v.run("Queries.tagged({'a', 'b', 'c'}, 0)").find("more than 4 values") != std::string::npos);
+    v.queries.glueLimits = {};
+    CHECK(v.run("Queries.log(string.rep('x', 262144))").empty());
+}
+
+TEST_CASE("perf: rejecting a call over the per-call caps takes well under 1 ms") {
+    // Budget: a call whose arguments exceed the caps fails in < 1 ms (asserted in optimized builds
+    // without sanitizers); the tables are built beforehand, so only the glue's conversion is timed.
+    Vm editor("editor");
+    REQUIRE(editor.vm->loadModule("hostile", R"(
+local M = {}
+function M.dag() local t = {n = 0, tree = {}} for i = 1, 10 do t = {n = i, tree = {t, t, t, t}} end return t end
+function M.strings() return table.create(65536, string.rep("x", 16384)) end
+function M.echo(x) Queries.echo(x) end
+function M.convert(x) Queries.convert(true, 0, 0, 0, 0, 'n', 't', vector.create(0, 0, 0), 0, 0, 'Red', {}, {}, x, {1, 2, 3}, nil, 'l', 'q') end
+return M
+)").ok());
+    for (const auto& [make, call] : {std::pair{"dag", "echo"}, std::pair{"strings", "convert"}}) {
+        INFO(call);
+        int ref = LUA_NOREF;
+        REQUIRE(editor.vm->callExport("hostile", make, {}, [&](lua_State* L, int base, int) { ref = lua_ref(L, base); }, 1).ok());
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto rejected = editor.vm->callExport("hostile", call, [&](lua_State* L) {
+            lua_getref(L, ref);
+            return 1;
+        });
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        CHECK_FALSE(rejected.ok());
+        MESSAGE(std::format("{}: rejected in {:.3f} ms", call, ms));
+#if defined(NDEBUG) && !defined(HELIOS_SANITIZERS_ENABLED) && !defined(__SANITIZE_ADDRESS__)
+        CHECK(ms < 1.0);
+#endif
+    }
+    CHECK(editor.queries.calls == 0);
+}
+
+TEST_CASE("luau: Name arguments are never interned, and sets of names order lexically") {
+    Vm v;
+    const usize before = helios::Name::internedCount();
+    const std::string err = v.run(R"(
+  local names = {}
+  for i = 1, 2000 do names[i] = "luau-fresh-name-" .. i end
+  Queries.convert(true, 0, 0, 0, 0, "luau-fresh-single", "t", vector.create(0, 0, 0), 0, 0, "Red", {}, {}, names, {1, 2, 3}, nil, "l", "q"))");
+    REQUIRE_MESSAGE(err.empty(), err);
+    CHECK(helios::Name::internedCount() == before);
+    // Order is lexical whatever the process interned first.
+    (void)helios::Name("zz-luau-order-2");
+    REQUIRE(v.run(convertWith(13, "{'zz-luau-order-1', 'zz-luau-order-2', 'a'}")).empty());
+    CHECK(v.queries.converted.names == std::vector<std::string>{"a", "zz-luau-order-1", "zz-luau-order-2"});
+    REQUIRE(v.run("Queries.tagged({'zz-luau-order-2', 'zz-luau-order-1'}, 0)").empty());
+    CHECK(v.queries.taggedNames == std::vector<std::string>{"zz-luau-order-1", "zz-luau-order-2"});
+    // A struct result's set<Name> reaches the script in lexical order too (its C++ set orders by intern id).
+    v.queries.taggedResult.label = helios::Name("label");
+    v.queries.taggedResult.names = {helios::Name("zz-luau-order-2"), helios::Name("zz-luau-order-1"), helios::Name("b")};
+    const std::string order = v.run(R"(
+  local t = Queries.tagged({}, 0)
+  assert(t.label == "label")
+  assert(#t.names == 3 and t.names[1] == "b" and t.names[2] == "zz-luau-order-1" and t.names[3] == "zz-luau-order-2", table.concat(t.names, ","))
+)");
+    CHECK_MESSAGE(order.empty(), order);
+    v.queries.taggedResult.names.insert(helios::Name("d"));
+    CHECK(v.run("Queries.tagged({}, 0)").find("result field 'Tagged.names' has 4 elements or bytes; its @max is 3") != std::string::npos);
 }
 
 // --- schema.d.luau under Luau.Analysis ------------------------------------------------------------
@@ -354,8 +512,9 @@ local ref: ThingRef? = Queries.nearest(p, 1)
 if ref then
   local e: EntityId = Queries.spawn(ref, p)
   local near: {EntityId} = Queries.inRadius(p, 2)
-  local item: Item = Queries.convert(true, 0, 0, 0, 0, "n", "t", vector.create(0, 0, 0), 0, 0, "Green",
-    {slot = "s", count = 1}, {}, {"a"}, {1, 2, 3}, nil, "l", "q")
+  local item: Pack = Queries.convert(true, 0, 0, 0, 0, "n", "t", vector.create(0, 0, 0), 0, 0, "Green",
+    {slot = "s"}, {{}, {count = 2}}, {"a"}, {1, 2, 3}, nil, "l", "q")
+  local b: Bag = Queries.bag({})
   local t: Late = Queries.echo({n = 1, tree = {}})
   Queries.log(item.slot .. tostring(#near) .. tostring(t.n) .. tostring(e == near[1]))
 end
@@ -410,18 +569,26 @@ TEST_CASE("luau: scriptlib fns get stable binding ids from the lock") {
     fs.files["schemas/lock.jsonc"] = "{\"format\": 1, \"types\": {\"test.Lib.a\": {\"id\": 5, \"kind\": \"fn\", \"fields\": []}}}";
     auto broken = compileFiles({{"schemas/test/t.hschema", text}}, options, &fs);
     CHECK_FALSE(broken->ok());
-    CHECK(broken->messages.find("a fn entry has only 'id' and 'kind'") != std::string::npos);
+    CHECK(broken->messages.find("a fn entry has only 'id' and 'kind' (found 'fields')") != std::string::npos);
+    fs.files["schemas/lock.jsonc"] = "{\"format\": 1, \"types\": {\"test.Lib.a\": {\"id\": 5, \"kind\": \"fn\", \"was\": [\"x\"]}}}";
+    CHECK(compileFiles({{"schemas/test/t.hschema", text}}, options, &fs)->messages.find("(found 'was')") != std::string::npos);
+    // A fn and a type cannot trade a lock entry.
+    fs.files["schemas/lock.jsonc"] = "{\"format\": 1, \"types\": {\"test.Lib.a\": {\"id\": 5, \"kind\": \"struct\", \"nextField\": 1, "
+                                     "\"fields\": []}}}";
+    CHECK(compileFiles({{"schemas/test/t.hschema", text}}, options, &fs)->messages.find("cannot change between a scriptlib fn and a type") !=
+          std::string::npos);
 }
 
 TEST_CASE("luau: signatures that cannot cross the Luau boundary are errors") {
     CompileOptions options;
     options.emitLuau = true;
-    const std::string pre = "struct S { p: WorldPos }\nstruct V { v: variant { A; B } }\nrecord R { x: u8 }\n";
+    const std::string pre = "struct S { p: WorldPos }\nstruct V { v: variant { A; B } }\nrecord R { x: u8 }\nstruct Named { n: Name }\n";
     const std::vector<std::pair<std::string, std::string>> cases = {
         {"fn f(m: map<string, u8>) @script(cost=1);", "parameter 'm' of fn 'f' cannot cross the Luau boundary: 'map<string,u8>'"},
         {"fn f(g: Guid) @script(cost=1);", "'Guid' is not supported by --emit luau"},
         {"fn f() -> S @script(cost=1);", "a WorldPos inside a struct"},
         {"fn f(v: V) @script(cost=1);", "in field 'v' of 'test.V'"},
+        {"fn f(n: list<Named>) @script(cost=1);", "a Name inside a struct argument (converting it would intern script input"},
         {"fn end() @script(cost=1);", "fn name 'end' is a Luau keyword"},
         {"fn f(then: u8) @script(cost=1);", "parameter name 'then' is a Luau keyword"},
         {"fn f(L: u8) @script(cost=1);", "parameter name 'L' is reserved"},
@@ -438,6 +605,8 @@ TEST_CASE("luau: signatures that cannot cross the Luau boundary are errors") {
           std::string::npos);
     CHECK(diagnosticsOf("struct Task { x: u8 }\nscriptlib L2 @realm(server) { fn f() -> Task @script(cost=1); }\n", options)
               .find("which the script host already declares") != std::string::npos);
+    // A Name inside a struct result is fine: it is pushed as text, never interned.
+    CHECK(diagnosticsOf("struct Named { n: Name }\nscriptlib Lib @realm(server) { fn f() -> Named @script(cost=1); }\n", options).empty());
     // Luau's contextual keywords stay usable as names.
     CHECK(diagnosticsOf("struct K { type: u8 }\nscriptlib Lib @realm(server) { fn f(type: u8, k: K) @script(cost=1); }\n", options).empty());
     // Without --emit luau the same schema compiles (only the Luau glue cannot represent it).

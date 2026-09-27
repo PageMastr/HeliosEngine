@@ -3,6 +3,9 @@
 -- Luau declarations of the schemas' script-callable functions (scriptlib, 02 §3.1, §7.4) for luau-lsp;
 -- load it after engine/script/defs/helios.d.luau. Fuel charges are the schema's defaults until
 -- --calibrate-fuel replaces them (fuel_costs.defaults.json next to this file).
+-- Realms: every fn of every realm is declared here; in a host of another realm it is nil at runtime (each
+-- fn's doc lists its realms). Struct arguments use the <Type>Input tables, whose fields are optional
+-- because the glue gives missing fields their schema defaults; results are the <Type> tables.
 
 -- An entity id (opaque: compare with ==, use as a table key; scripts cannot make one).
 declare extern type EntityId with

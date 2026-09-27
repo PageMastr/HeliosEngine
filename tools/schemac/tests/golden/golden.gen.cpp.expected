@@ -69,6 +69,18 @@ bool LedgerLine::operator==(const LedgerLine& other) const noexcept {
     return ::helios::refl::Codec<::golden::all::LedgerLine>::equals(*this, other);
 }
 
+bool Pack::operator==(const Pack& other) const noexcept {
+    return ::helios::refl::Codec<::golden::all::Pack>::equals(*this, other);
+}
+
+bool Bag::operator==(const Bag& other) const noexcept {
+    return ::helios::refl::Codec<::golden::all::Bag>::equals(*this, other);
+}
+
+bool Tagged::operator==(const Tagged& other) const noexcept {
+    return ::helios::refl::Codec<::golden::all::Tagged>::equals(*this, other);
+}
+
 bool ThingDef::ShapePoint::operator==(const ThingDef::ShapePoint& other) const noexcept {
     return ::helios::refl::Codec<::golden::all::ThingDef::ShapePoint>::equals(*this, other);
 }
@@ -129,6 +141,9 @@ bool Motion::Server::operator==(const Motion::Server& other) const noexcept {
         &::helios::refl::typeOf<::golden::all::Req>(),
         &::helios::refl::typeOf<::golden::all::Spellings>(),
         &::helios::refl::typeOf<::golden::all::LedgerLine>(),
+        &::helios::refl::typeOf<::golden::all::Pack>(),
+        &::helios::refl::typeOf<::golden::all::Bag>(),
+        &::helios::refl::typeOf<::golden::all::Tagged>(),
         &::helios::refl::typeOf<::golden::all::ThingDef::Shape>(),
         &::helios::refl::typeOf<::golden::all::ThingDef::ShapePoint>(),
         &::helios::refl::typeOf<::golden::all::ThingDef::ShapeBox>(),
@@ -353,6 +368,22 @@ constexpr ::helios::refl::AttrArg kArgs20_0[] = {{"", "character"}, };
 constexpr ::helios::refl::AttrArg kArgs20_1[] = {{"schema", "svc_golden"}, };
 constexpr ::helios::refl::AttrArg kArgs20_2[] = {{"", "owner"}, {"", "seq"}, };
 constexpr ::helios::refl::Attr kAttrs20[] = {{"store", kArgs20_0, nullptr, 0}, {"sql", kArgs20_1, nullptr, 0}, {"key", kArgs20_2, nullptr, 0}, };
+constexpr ::helios::refl::AttrArg kArgs21_0[] = {{"", "16"}, };
+constexpr ::helios::refl::attrs::Max kTyped21_0{16ull};
+constexpr ::helios::refl::Attr kAttrs21[] = {{"max", kArgs21_0, &kTyped21_0, ::helios::refl::attrs::Max::kKind}, };
+const ::helios::u16& dflt_Pack_count() {
+    static const ::helios::u16 value = 1u;
+    return value;
+}
+constexpr ::helios::refl::AttrArg kArgs22_0[] = {{"", "2"}, };
+constexpr ::helios::refl::attrs::Max kTyped22_0{2ull};
+constexpr ::helios::refl::Attr kAttrs22[] = {{"max", kArgs22_0, &kTyped22_0, ::helios::refl::attrs::Max::kKind}, };
+constexpr ::helios::refl::AttrArg kArgs23_0[] = {{"", "4"}, };
+constexpr ::helios::refl::attrs::Max kTyped23_0{4ull};
+constexpr ::helios::refl::Attr kAttrs23[] = {{"max", kArgs23_0, &kTyped23_0, ::helios::refl::attrs::Max::kKind}, };
+constexpr ::helios::refl::AttrArg kArgs24_0[] = {{"", "3"}, };
+constexpr ::helios::refl::attrs::Max kTyped24_0{3ull};
+constexpr ::helios::refl::Attr kAttrs24[] = {{"max", kArgs24_0, &kTyped24_0, ::helios::refl::attrs::Max::kKind}, };
 const ::helios::Vec3& dflt_ThingDef_ShapeBox_size() {
     static const ::helios::Vec3 value = ::helios::Vec3(1.0f, 1.0f, 1.0f);
     return value;
@@ -361,8 +392,8 @@ const ::helios::f32& dflt_ThingDef_ShapeSphere_radius() {
     static const ::helios::f32 value = 0.5f;
     return value;
 }
-constexpr ::helios::refl::AttrArg kArgs21_1[] = {{"", "2s"}, };
-constexpr ::helios::refl::Attr kAttrs21[] = {{"idempotent", {}, nullptr, 0}, {"timeout", kArgs21_1, nullptr, 0}, };
+constexpr ::helios::refl::AttrArg kArgs25_1[] = {{"", "2s"}, };
+constexpr ::helios::refl::Attr kAttrs25[] = {{"idempotent", {}, nullptr, 0}, {"timeout", kArgs25_1, nullptr, 0}, };
 
 } // namespace
 
@@ -3291,6 +3322,278 @@ const TypeInfo& TypeOf<::golden::all::LedgerLine>::get() noexcept {
     return info;
 }
 
+bool Codec<::golden::all::Pack>::isDefault([[maybe_unused]] const ::golden::all::Pack& v) noexcept {
+    return ::helios::refl::isDefaultValue(v.slot)
+        && ::helios::refl::valuesEqual(v.count, dflt_Pack_count());
+}
+
+bool Codec<::golden::all::Pack>::equals([[maybe_unused]] const ::golden::all::Pack& a, [[maybe_unused]] const ::golden::all::Pack& b) noexcept {
+    return ::helios::refl::valuesEqual(a.slot, b.slot)
+        && ::helios::refl::valuesEqual(a.count, b.count);
+}
+
+void Codec<::golden::all::Pack>::writeFields([[maybe_unused]] TaggedWriter& w, [[maybe_unused]] const ::golden::all::Pack& v) {
+    if (!::helios::refl::isDefaultValue(v.slot)) ::helios::refl::writeField(w, 1u, v.slot);
+    if (!::helios::refl::valuesEqual(v.count, dflt_Pack_count())) ::helios::refl::writeField(w, 2u, v.count);
+}
+
+Result<bool> Codec<::golden::all::Pack>::readField([[maybe_unused]] TaggedReader& r, [[maybe_unused]] FieldTag tag, [[maybe_unused]] ::golden::all::Pack& v) {
+    switch (tag.id) {
+        case 1u: return ::helios::refl::readKnownField(r, tag.wire, v.slot);
+        case 2u: return ::helios::refl::readKnownField(r, tag.wire, v.count);
+        default: return false;
+    }
+}
+
+void Codec<::golden::all::Pack>::writeJsonFields([[maybe_unused]] JsonWriter& w, [[maybe_unused]] const ::golden::all::Pack& v) {
+    if (!::helios::refl::isDefaultValue(v.slot)) {
+        w.key("slot");
+        ::helios::refl::writeJsonValue(w, v.slot);
+    }
+    if (!::helios::refl::valuesEqual(v.count, dflt_Pack_count())) {
+        w.key("count");
+        ::helios::refl::writeJsonValue(w, v.count);
+    }
+}
+
+Result<bool> Codec<::golden::all::Pack>::readJsonMember([[maybe_unused]] std::string_view key, [[maybe_unused]] JsonValue in, [[maybe_unused]] ::golden::all::Pack& v, [[maybe_unused]] ReadCtx& ctx) {
+    if (key == "slot") return ::helios::refl::readKnownMember(in, v.slot, ctx);
+    if (key == "count") return ::helios::refl::readKnownMember(in, v.count, ctx);
+    return false;
+}
+
+const TypeInfo& TypeOf<::golden::all::Pack>::get() noexcept {
+    HELIOS_GEN_OFFSETOF_BEGIN
+    static const FieldInfo fields[] = {
+        {
+            .name = "slot",
+            .id = 1u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::Pack, slot)),
+            .typeFn = &TypeOf<std::string>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = kAttrs21,
+            .doc = "",
+        },
+        {
+            .name = "count",
+            .id = 2u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::Pack, count)),
+            .typeFn = &TypeOf<::helios::u16>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .defaultValue = &dflt_Pack_count(),
+            .defaultJson = "1",
+            .attrs = {},
+            .doc = "",
+        },
+    };
+    HELIOS_GEN_OFFSETOF_END
+    static const TypeInfo info{
+        .qualifiedName = "golden.all.Pack",
+        .name = "Pack",
+        .id = 0xf274adc4u,
+        .size = static_cast<::helios::u32>(sizeof(::golden::all::Pack)),
+        .align = static_cast<::helios::u32>(alignof(::golden::all::Pack)),
+        .kind = Kind::Struct,
+        .wire = WireType::Len,
+        .decl = DeclKind::Struct,
+        .flags = ::helios::refl::TypeFlags::None,
+        .version = 0u,
+        .layoutHash = 0xf74827dcb577b537ull,
+        .fields = fields,
+        .enumValues = {},
+        .alternatives = {},
+        .elementFn = nullptr,
+        .ops = &makeOps<::golden::all::Pack>(),
+        .attrs = {},
+        .doc = "A scriptlib argument: the glue gives fields a script omits their schema defaults.",
+    };
+    return info;
+}
+
+bool Codec<::golden::all::Bag>::isDefault([[maybe_unused]] const ::golden::all::Bag& v) noexcept {
+    return ::helios::refl::isDefaultValue(v.ids)
+        && ::helios::refl::isDefaultValue(v.tag);
+}
+
+bool Codec<::golden::all::Bag>::equals([[maybe_unused]] const ::golden::all::Bag& a, [[maybe_unused]] const ::golden::all::Bag& b) noexcept {
+    return ::helios::refl::valuesEqual(a.ids, b.ids)
+        && ::helios::refl::valuesEqual(a.tag, b.tag);
+}
+
+void Codec<::golden::all::Bag>::writeFields([[maybe_unused]] TaggedWriter& w, [[maybe_unused]] const ::golden::all::Bag& v) {
+    if (!::helios::refl::isDefaultValue(v.ids)) ::helios::refl::writeField(w, 1u, v.ids);
+    if (!::helios::refl::isDefaultValue(v.tag)) ::helios::refl::writeField(w, 2u, v.tag);
+}
+
+Result<bool> Codec<::golden::all::Bag>::readField([[maybe_unused]] TaggedReader& r, [[maybe_unused]] FieldTag tag, [[maybe_unused]] ::golden::all::Bag& v) {
+    switch (tag.id) {
+        case 1u: return ::helios::refl::readKnownField(r, tag.wire, v.ids);
+        case 2u: return ::helios::refl::readKnownField(r, tag.wire, v.tag);
+        default: return false;
+    }
+}
+
+void Codec<::golden::all::Bag>::writeJsonFields([[maybe_unused]] JsonWriter& w, [[maybe_unused]] const ::golden::all::Bag& v) {
+    if (!::helios::refl::isDefaultValue(v.ids)) {
+        w.key("ids");
+        ::helios::refl::writeJsonValue(w, v.ids);
+    }
+    if (!::helios::refl::isDefaultValue(v.tag)) {
+        w.key("tag");
+        ::helios::refl::writeJsonValue(w, v.tag);
+    }
+}
+
+Result<bool> Codec<::golden::all::Bag>::readJsonMember([[maybe_unused]] std::string_view key, [[maybe_unused]] JsonValue in, [[maybe_unused]] ::golden::all::Bag& v, [[maybe_unused]] ReadCtx& ctx) {
+    if (key == "ids") return ::helios::refl::readKnownMember(in, v.ids, ctx);
+    if (key == "tag") return ::helios::refl::readKnownMember(in, v.tag, ctx);
+    return false;
+}
+
+const TypeInfo& TypeOf<::golden::all::Bag>::get() noexcept {
+    HELIOS_GEN_OFFSETOF_BEGIN
+    static const FieldInfo fields[] = {
+        {
+            .name = "ids",
+            .id = 1u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::Bag, ids)),
+            .typeFn = &TypeOf<std::vector<::helios::u32>>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = kAttrs22,
+            .doc = "",
+        },
+        {
+            .name = "tag",
+            .id = 2u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::Bag, tag)),
+            .typeFn = &TypeOf<std::string>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = kAttrs23,
+            .doc = "",
+        },
+    };
+    HELIOS_GEN_OFFSETOF_END
+    static const TypeInfo info{
+        .qualifiedName = "golden.all.Bag",
+        .name = "Bag",
+        .id = 0xb713be65u,
+        .size = static_cast<::helios::u32>(sizeof(::golden::all::Bag)),
+        .align = static_cast<::helios::u32>(alignof(::golden::all::Bag)),
+        .kind = Kind::Struct,
+        .wire = WireType::Len,
+        .decl = DeclKind::Struct,
+        .flags = ::helios::refl::TypeFlags::None,
+        .version = 0u,
+        .layoutHash = 0x50acba592c22c109ull,
+        .fields = fields,
+        .enumValues = {},
+        .alternatives = {},
+        .elementFn = nullptr,
+        .ops = &makeOps<::golden::all::Bag>(),
+        .attrs = {},
+        .doc = "@max on struct fields bounds arguments and results alike.",
+    };
+    return info;
+}
+
+bool Codec<::golden::all::Tagged>::isDefault([[maybe_unused]] const ::golden::all::Tagged& v) noexcept {
+    return ::helios::refl::isDefaultValue(v.label)
+        && ::helios::refl::isDefaultValue(v.names);
+}
+
+bool Codec<::golden::all::Tagged>::equals([[maybe_unused]] const ::golden::all::Tagged& a, [[maybe_unused]] const ::golden::all::Tagged& b) noexcept {
+    return ::helios::refl::valuesEqual(a.label, b.label)
+        && ::helios::refl::valuesEqual(a.names, b.names);
+}
+
+void Codec<::golden::all::Tagged>::writeFields([[maybe_unused]] TaggedWriter& w, [[maybe_unused]] const ::golden::all::Tagged& v) {
+    if (!::helios::refl::isDefaultValue(v.label)) ::helios::refl::writeField(w, 1u, v.label);
+    if (!::helios::refl::isDefaultValue(v.names)) ::helios::refl::writeField(w, 2u, v.names);
+}
+
+Result<bool> Codec<::golden::all::Tagged>::readField([[maybe_unused]] TaggedReader& r, [[maybe_unused]] FieldTag tag, [[maybe_unused]] ::golden::all::Tagged& v) {
+    switch (tag.id) {
+        case 1u: return ::helios::refl::readKnownField(r, tag.wire, v.label);
+        case 2u: return ::helios::refl::readKnownField(r, tag.wire, v.names);
+        default: return false;
+    }
+}
+
+void Codec<::golden::all::Tagged>::writeJsonFields([[maybe_unused]] JsonWriter& w, [[maybe_unused]] const ::golden::all::Tagged& v) {
+    if (!::helios::refl::isDefaultValue(v.label)) {
+        w.key("label");
+        ::helios::refl::writeJsonValue(w, v.label);
+    }
+    if (!::helios::refl::isDefaultValue(v.names)) {
+        w.key("names");
+        ::helios::refl::writeJsonValue(w, v.names);
+    }
+}
+
+Result<bool> Codec<::golden::all::Tagged>::readJsonMember([[maybe_unused]] std::string_view key, [[maybe_unused]] JsonValue in, [[maybe_unused]] ::golden::all::Tagged& v, [[maybe_unused]] ReadCtx& ctx) {
+    if (key == "label") return ::helios::refl::readKnownMember(in, v.label, ctx);
+    if (key == "names") return ::helios::refl::readKnownMember(in, v.names, ctx);
+    return false;
+}
+
+const TypeInfo& TypeOf<::golden::all::Tagged>::get() noexcept {
+    HELIOS_GEN_OFFSETOF_BEGIN
+    static const FieldInfo fields[] = {
+        {
+            .name = "label",
+            .id = 1u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::Tagged, label)),
+            .typeFn = &TypeOf<::helios::Name>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "names",
+            .id = 2u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::Tagged, names)),
+            .typeFn = &TypeOf<std::set<::helios::Name>>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = kAttrs24,
+            .doc = "",
+        },
+    };
+    HELIOS_GEN_OFFSETOF_END
+    static const TypeInfo info{
+        .qualifiedName = "golden.all.Tagged",
+        .name = "Tagged",
+        .id = 0x11972a09u,
+        .size = static_cast<::helios::u32>(sizeof(::golden::all::Tagged)),
+        .align = static_cast<::helios::u32>(alignof(::golden::all::Tagged)),
+        .kind = Kind::Struct,
+        .wire = WireType::Len,
+        .decl = DeclKind::Struct,
+        .flags = ::helios::refl::TypeFlags::None,
+        .version = 0u,
+        .layoutHash = 0x9300170ad043f299ull,
+        .fields = fields,
+        .enumValues = {},
+        .alternatives = {},
+        .elementFn = nullptr,
+        .ops = &makeOps<::golden::all::Tagged>(),
+        .attrs = {},
+        .doc = "A result with Names: pushed as text; a set of Names in lexical order.",
+    };
+    return info;
+}
+
 const TypeInfo& TypeOf<::golden::all::ThingDef::Shape>::get() noexcept {
     static const VariantAlt alternatives[] = {
         {"Point", 1u, &TypeOf<::golden::all::ThingDef::ShapePoint>::get},
@@ -3762,7 +4065,7 @@ const TypeInfo& TypeOf<::golden::all::StoreBuyRequest>::get() noexcept {
         .alternatives = {},
         .elementFn = nullptr,
         .ops = &makeOps<::golden::all::StoreBuyRequest>(),
-        .attrs = kAttrs21,
+        .attrs = kAttrs25,
         .doc = "",
     };
     return info;

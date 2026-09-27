@@ -7,9 +7,11 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <bit>
 #include <format>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "flecs_internal.h"
@@ -62,18 +64,19 @@ public:
     /// component values (dirty masks included), plus the world's counters.
     void state() {
         ecs_world_t* fw = m_world.flecsWorld();
+        collectDebugOnlyEntities();
         u64 entities = 0;
         Query all(m_world, {Term{m_world.netIdentityId(), TermAccess::Read}});
         all.forEachChunk([&](ChunkView& ch) {
             for (u32 r = 0; r < ch.count(); ++r) {
                 const Entity e = ch.entity(r);
                 ++entities;
-                m_h.updateValue(e.id);
+                m_h.updateValue(flecsId(e.id));
                 m_h.updateValue(m_world.entityId(e).value);
                 m_h.updateValue(m_world.netHandle(e).value);
                 m_h.updateValue(m_world.authorityGroup(e));
                 const ecs_type_t* type = ecs_get_type(fw, e.id);
-                for (i32 k = 0; k < type->count; ++k) m_h.updateValue(static_cast<u64>(type->array[k]));
+                for (i32 k = 0; k < type->count; ++k) m_h.updateValue(flecsId(type->array[k]));
                 if (const Position* p = m_world.get<Position>(e)) {
                     m_h.updateValue(std::bit_cast<u64>(p->value.x));
                     m_h.updateValue(p->_dirty);
@@ -95,14 +98,14 @@ public:
                     m_h.updateValue(rd->componentMask);
                     m_h.updateValue(rd->changed);
                 }
-                m_h.updateValue(m_world.parentOf(e).id);
-                m_h.updateValue(m_world.frameOf(e).id);
-                m_h.updateValue(m_world.dockedTo(e).id);
+                m_h.updateValue(flecsId(m_world.parentOf(e).id));
+                m_h.updateValue(flecsId(m_world.frameOf(e).id));
+                m_h.updateValue(flecsId(m_world.dockedTo(e).id));
             }
         });
         const WorldStats s = m_world.stats();
         m_h.updateValue(entities);
-        m_h.updateValue(s.tableCount);
+        m_h.updateValue(s.tableCount - debugOnlyTables());
         m_h.updateValue(s.entityCount);
         m_h.updateValue(s.structuralOpsApplied);
         m_h.updateValue(s.commandsDiscarded);
@@ -112,8 +115,85 @@ public:
     u64 value() const noexcept { return m_h.digest(); }
 
 private:
+    // Flecs built without NDEBUG (FLECS_DEBUG) gives every singleton component two
+    // `debug_only_*InvariantCheck` observers while the World bootstraps: 14 entities and the 13
+    // tables they were built in. So in Debug and sanitizer builds every later flecs id was 14 higher,
+    // and the table count 13 higher, than in the NDEBUG builds the goldens were recorded in (the
+    // WP-1.1a state, log, EntityIds and values were identical). The digest hashes flecs ids as they
+    // are numbered without those entities, and the table count without those tables. There are none
+    // in NDEBUG builds, so both are the identity there.
+    void collectDebugOnlyEntities() {
+        m_debugOnly.clear();
+        m_debugOnlyParents.clear();
+        ecs_world_t* fw = m_world.flecsWorld();
+        const ecs_entities_t all = ecs_get_entities(fw);
+        for (i32 i = 0; i < all.alive_count; ++i) {
+            const char* name = ecs_get_name(fw, all.ids[i]);
+            if (name && std::string_view(name).starts_with("debug_only_")) {
+                m_debugOnly.push_back(static_cast<u32>(all.ids[i]));
+                m_debugOnlyParents.push_back(ecs_get_parent(fw, all.ids[i]));
+            }
+        }
+        std::sort(m_debugOnly.begin(), m_debugOnly.end());
+    }
+
+    bool isDebugOnly(ecs_entity_t e) const {
+        return std::binary_search(m_debugOnly.begin(), m_debugOnly.end(), static_cast<u32>(e));
+    }
+
+    /// Tables that exist only for the debug-only observers: observer tables under one of their
+    /// parents that hold nothing else (or nothing: the archetypes flecs passed them through).
+    u32 debugOnlyTables() const {
+        if (m_debugOnly.empty()) return 0;
+        ecs_world_t* fw = m_world.flecsWorld();
+        ecs_query_desc_t qd = {};
+        qd.terms[0].id = EcsAny;
+        qd.cache_kind = EcsQueryCacheNone; // an uncached query creates no entity
+        qd.flags = EcsQueryMatchEmptyTables | EcsQueryMatchDisabled | EcsQueryMatchPrefab;
+        ecs_query_t* q = ecs_query_init(fw, &qd);
+        if (!q) {
+            FAIL("could not create the table query");
+            return 0;
+        }
+        u32 count = 0;
+        ecs_iter_t it = ecs_query_iter(fw, q);
+        while (ecs_query_next(&it)) {
+            if (!ecs_table_has_id(fw, it.table, ecs_pair(ecs_id(EcsPoly), EcsObserver))) continue;
+            bool underDebugParent = false;
+            for (const ecs_entity_t parent : m_debugOnlyParents) {
+                underDebugParent = underDebugParent || ecs_table_has_id(fw, it.table, ecs_childof(parent));
+            }
+            bool onlyDebugOnly = true;
+            for (i32 i = 0; i < it.count; ++i) onlyDebugOnly = onlyDebugOnly && isDebugOnly(it.entities[i]);
+            if (underDebugParent && onlyDebugOnly) ++count;
+        }
+        ecs_query_fini(q);
+        return count;
+    }
+
+    u32 flecsIndex(u32 index) const {
+        const auto below = std::lower_bound(m_debugOnly.begin(), m_debugOnly.end(), index);
+        return index - static_cast<u32>(below - m_debugOnly.begin());
+    }
+
+    /// An entity id (generation kept), component id or pair, with its entity indices renumbered.
+    u64 flecsId(u64 id) const {
+        const u64 flags = id & ECS_ID_FLAGS_MASK;
+        if (flags == ECS_PAIR) {
+            return flags | (u64{flecsIndex(static_cast<u32>(ECS_PAIR_FIRST(id)))} << 32) |
+                   flecsIndex(static_cast<u32>(ECS_PAIR_SECOND(id)));
+        }
+        if (flags == ECS_VALUE_PAIR) { // (relationship, value): only the relationship is an entity
+            return flags | (u64{flecsIndex(static_cast<u32>(ECS_PAIR_FIRST(id)))} << 32) |
+                   static_cast<u32>(ECS_PAIR_SECOND(id));
+        }
+        return (id & ~u64{0xFFFFFFFF}) | flecsIndex(static_cast<u32>(id));
+    }
+
     World& m_world;
     Hasher64 m_h;
+    std::vector<u32> m_debugOnly;                 ///< sorted indices of flecs' debug-only entities
+    std::vector<ecs_entity_t> m_debugOnlyParents; ///< their parents
 };
 
 struct Variant {
@@ -311,7 +391,8 @@ u64 runWorkload(const RelationConfig& relations) {
 
 TEST_CASE("ecs structural ops: the WP-1.1a paths leave the pre-WP-1.1a state, log and dirty bits") {
     // Digests of runWorkload() recorded with the World before WP-1.1a (commit f08cf5b, GCC 13 and
-    // Clang 18 alike); they must not change on any toolchain.
+    // Clang 18 alike); they must not change on any toolchain, in optimized, Debug and sanitizer
+    // builds alike (Digest discounts flecs' debug-only entities, which only Debug builds create).
     RelationConfig defaults;
     RelationConfig pairs;
     pairs.docking = DockStorage::Pair;

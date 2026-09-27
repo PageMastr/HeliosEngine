@@ -321,11 +321,15 @@ func permOptions(fleetDeny ...string) *server.Options {
 		}}
 }
 
+// fleetDeny keeps "fleet" from subscribing to rpc.> and from joining queue group "other" on
+// grp.test.Double.
+var fleetDeny = []string{"rpc.>", "grp.test.Double other"}
+
 // startPermNATS boots an in-process server on which "svc" may do anything and "fleet" may not
-// subscribe to rpc.> nor join queue group "other" on grp.test.Double.
-func startPermNATS(t *testing.T) *server.Server {
+// subscribe to the subjects (or "subject queue" pairs) in deny.
+func startPermNATS(t *testing.T, deny ...string) *server.Server {
 	t.Helper()
-	ns, err := server.NewServer(permOptions("rpc.>", "grp.test.Double other"))
+	ns, err := server.NewServer(permOptions(deny...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +369,7 @@ func requestDouble(t *testing.T, nc *nats.Conn, subject string, n int) {
 // A SUB the server refuses is followed by a PONG like any other, so the round trip alone would
 // hand back a dead handler as serving.
 func TestNATSHandleRefusedSubscription(t *testing.T) {
-	ns := startPermNATS(t)
+	ns := startPermNATS(t, fleetDeny...)
 	fleet := connectAs(t, ns, "fleet")
 	for _, c := range []struct{ subject, queue string }{
 		{"rpc.test.perm.Double", "perm"}, // subject denied
@@ -383,7 +387,7 @@ func TestNATSHandleRefusedSubscription(t *testing.T) {
 
 // An earlier refusal of another SUB that LastError still holds must not fail NATSHandle.
 func TestNATSHandleIgnoresUnrelatedRefusal(t *testing.T) {
-	ns := startPermNATS(t)
+	ns := startPermNATS(t, fleetDeny...)
 	fleet, svc := connectAs(t, ns, "fleet"), connectAs(t, ns, "svc")
 	for _, c := range []struct{ subject, queue string }{
 		{"rpc.test.perm.Other", "perm"}, // another subject
@@ -412,7 +416,7 @@ func TestNATSHandleIgnoresUnrelatedRefusal(t *testing.T) {
 // A refusal of the same subject and queue from an earlier attempt, still held by LastError,
 // must not fail a later SUB that the server accepts (here after a permissions reload).
 func TestNATSHandleIgnoresStaleRefusal(t *testing.T) {
-	ns := startPermNATS(t)
+	ns := startPermNATS(t, fleetDeny...)
 	fleet, svc := connectAs(t, ns, "fleet"), connectAs(t, ns, "svc")
 	_, err := rpc.NATSHandle(fleet, "rpc.test.perm.Double", "perm", nil, double)
 	if !errors.Is(err, nats.ErrPermissionViolation) {
@@ -430,33 +434,78 @@ func TestNATSHandleIgnoresStaleRefusal(t *testing.T) {
 	requestDouble(t, svc, "rpc.test.perm.Double", 5)
 }
 
+// A refusal of a different SUB that lands in LastError during NATSHandle's round trip must not
+// fail an accepted SUB whose subject or queue is a prefix of, or extends, the refused one. The
+// raw SUB is queued just before NATSHandle's own SUB and PING, so its -ERR normally arrives after
+// NATSHandle's LastError snapshot and only the subject and queue match can tell it apart.
+func TestNATSHandleIgnoresPrefixRefusalDuringRoundTrip(t *testing.T) {
+	ns := startPermNATS(t, "rpc.ab", "rpc.c", "grp.x sess", "grp.y session")
+	svc := connectAs(t, ns, "svc")
+	for _, c := range []struct{ refSubj, refQueue, subj, queue string }{
+		{"rpc.ab", "q", "rpc.a", "q"},         // accepted subject is a prefix of the refused one
+		{"rpc.c", "q", "rpc.cd", "q"},         // refused subject is a prefix of the accepted one
+		{"grp.x", "sess", "grp.x", "session"}, // refused queue is a prefix of ours
+		{"grp.y", "session", "grp.y", "sess"}, // our queue is a prefix of the refused one
+	} {
+		fleet := connectAs(t, ns, "fleet")
+		if _, err := fleet.QueueSubscribe(c.refSubj, c.refQueue, func(*nats.Msg) {}); err != nil {
+			t.Fatal(err)
+		}
+		sub, err := rpc.NATSHandle(fleet, c.subj, c.queue, nil, double)
+		if last := fleet.LastError(); !errors.Is(last, nats.ErrPermissionViolation) {
+			t.Fatalf("setup: the %s/%s refusal was not in LastError at the check: %v", c.refSubj, c.refQueue, last)
+		}
+		if err != nil {
+			t.Fatalf("%s in %s after a refusal of %s in %s during the round trip: %v",
+				c.subj, c.queue, c.refSubj, c.refQueue, err)
+		}
+		requestDouble(t, svc, c.subj, 4)
+		if err := sub.Unsubscribe(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // refusedSubscription must match only a permissions violation for this subject, and for this
 // queue group when the text names one. The texts are the server's (nats-server client.go), as
 // nats.go wraps them.
 func TestRefusedSubscriptionMatch(t *testing.T) {
 	violation := func(text string) error { return fmt.Errorf("%w: %s", nats.ErrPermissionViolation, text) }
+	// The server formats both names with %q.
+	refusal := func(subject, queue string) error {
+		return violation(fmt.Sprintf("Permissions Violation for Subscription to %q using queue %q", subject, queue))
+	}
 	cases := []struct {
-		err   error
-		queue string
-		want  bool
+		err            error
+		subject, queue string
+		want           bool
 	}{
-		{violation(`Permissions Violation for Subscription to "a.b" using queue "q"`), "q", true},
-		{violation(`Permissions Violation for Subscription to "a.b" using queue "q" (sid "7")`), "q", true},
-		{violation(`Permissions Violation for Subscription to "a.b", too many tokens`), "q", true},
-		{violation(`Permissions Violation for Subscription to "a.b"`), "q", true},
-		{violation(`Permissions Violation for Subscription to "a.b"`), "", true},
-		{violation(`Permissions Violation for Subscription to "a.b" using queue "other"`), "q", false},
-		{violation(`Permissions Violation for Subscription to "a.b" using queue "q"`), "", false},
-		{violation(`Permissions Violation for Subscription to "a.b.c" using queue "q"`), "q", false},
-		{violation(`Permissions Violation for Subscription to "a"`), "q", false},
-		{violation(`Permissions Violation for Publish to "a.b"`), "q", false},
-		{errors.New(`Permissions Violation for Subscription to "a.b" using queue "q"`), "q", false}, // not nats's
-		{nats.ErrMaxSubscriptionsExceeded, "q", false},
-		{nil, "q", false},
+		{violation(`Permissions Violation for Subscription to "a.b" using queue "q"`), "a.b", "q", true},
+		{violation(`Permissions Violation for Subscription to "a.b" using queue "q" (sid "7")`), "a.b", "q", true},
+		{violation(`Permissions Violation for Subscription to "a.b", too many tokens`), "a.b", "q", true},
+		{violation(`Permissions Violation for Subscription to "a.b"`), "a.b", "q", true},
+		{violation(`Permissions Violation for Subscription to "a.b"`), "a.b", "", true},
+		{violation(`Permissions Violation for Subscription to "a.b" using queue "other"`), "a.b", "q", false},
+		{violation(`Permissions Violation for Subscription to "a.b" using queue "q"`), "a.b", "", false},
+		{violation(`Permissions Violation for Subscription to "a.b" using queue "q"`), "a.b", "qq", false},
+		{violation(`Permissions Violation for Subscription to "a.b" using queue "qq"`), "a.b", "q", false},
+		{violation(`Permissions Violation for Subscription to "a.b.c" using queue "q"`), "a.b", "q", false},
+		{violation(`Permissions Violation for Subscription to "a"`), "a.b", "q", false},
+		{violation(`Permissions Violation for Publish to "a.b"`), "a.b", "q", false},
+		// Not nats's error, only its text.
+		{errors.New(`Permissions Violation for Subscription to "a.b" using queue "q"`), "a.b", "q", false},
+		{nats.ErrMaxSubscriptionsExceeded, "a.b", "q", false},
+		{nil, "a.b", "q", false},
+		// Names the server has to escape.
+		{refusal(`rpc.a\b`, "q"), `rpc.a\b`, "q", true},
+		{refusal(`rpc.a"b`, "q"), `rpc.a"b`, "q", true},
+		{refusal("rpc.a\x01b", "q"), "rpc.a\x01b", "q", true},
+		{refusal("a.b", `q"x`), "a.b", `q"x`, true},
+		{refusal(`rpc.a\b`, "q"), `rpc.a\\b`, "q", false},
 	}
 	for _, c := range cases {
-		if got := rpc.RefusedSubscription(c.err, "a.b", c.queue); got != c.want {
-			t.Errorf("%v with queue %q: got %t", c.err, c.queue, got)
+		if got := rpc.RefusedSubscription(c.err, c.subject, c.queue); got != c.want {
+			t.Errorf("%v for %q in %q: got %t", c.err, c.subject, c.queue, got)
 		}
 	}
 }

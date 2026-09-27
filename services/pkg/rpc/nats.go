@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -174,23 +174,23 @@ func NATSHandle[Req, Res any](nc *nats.Conn, subject, queue string, log *slog.Lo
 	return sub, nil
 }
 
-// The server's refusal text, "Permissions Violation for Subscription to "subj" using queue
-// "q"", parsed the way nats.go matches refusals to its own subscriptions.
-var (
-	refusedSubjectRe = regexp.MustCompile(`Subscription to "(\S+)"`)
-	refusedQueueRe   = regexp.MustCompile(`using queue "(\S+)"`)
-)
-
-// refusedSubscription reports whether err is a permissions violation for a SUB to subject and,
-// if the text names a queue group (some refusals, such as "too many tokens", never do), queue.
+// refusedSubscription reports whether err is the server's permissions violation for a SUB to
+// subject in queue. The server's text reads `Permissions Violation for Subscription to "subj"`,
+// then ` using queue "q"` if it names the queue group, with both names formatted by %q, so they
+// are compared in the same quoting (which also keeps "rpc.a" from matching "rpc.ab").
+//
+// A text that names no queue group matches whatever queue is, on purpose: the server's "too
+// many tokens" refusal never names the queue, yet it refuses queue subscriptions too. The price
+// is that a refused plain SUB to the same subject on nc, landing during the round trip, is
+// taken for this one.
 func refusedSubscription(err error, subject, queue string) bool {
 	if !errors.Is(err, nats.ErrPermissionViolation) {
 		return false
 	}
 	msg := err.Error()
-	if m := refusedSubjectRe.FindStringSubmatch(msg); m == nil || m[1] != subject {
+	if !strings.Contains(msg, "Subscription to "+strconv.Quote(subject)) {
 		return false
 	}
-	m := refusedQueueRe.FindStringSubmatch(msg)
-	return m == nil || m[1] == queue
+	namesQueue := strings.Contains(msg, `" using queue "`)
+	return !namesQueue || strings.Contains(msg, " using queue "+strconv.Quote(queue))
 }

@@ -6,10 +6,12 @@
 # the wrong directory cannot pass by checking nothing.
 #
 # doctest names each test function DOCTEST_ANON_FUNC_<n>, with n counted per file, so the test files of
-# one executable define functions of the same names. MSVC's cl mangles a lambda or local class in such
-# a function with nothing unique to the file. A template instantiated with it is then a COMDAT of the
-# same name in two objects, the linker keeps one copy, and a test silently runs another file's lambda
-# (#15: "jobs: higher priorities run first" hung). Names in an unnamed namespace are unique per file.
+# one executable define functions of the same names. MSVC's cl names a lambda or local class in such a
+# function after the function alone, and emits a static member variable template instantiated with it
+# (helios::jobs::Job::kInlineOps<Fn>, for one) as an external COMDAT: two objects define a symbol of
+# the same name, the linker keeps one, and a test silently runs another file's lambda (#15: "jobs:
+# higher priorities run first" hung). Names in an unnamed namespace carry a per-file hash on MSVC.
+# engine/core/tests/test_tu_isolation_{a,b}.cpp are the regression probe.
 #
 # Scans the *.cpp, *.cc and *.cxx files under a tests/ directory of engine/, tools/ and apps/ (not the
 # lint fixtures in tools/lint/tests/) and fails on:
@@ -28,15 +30,16 @@ get_filename_component(SOURCE_DIR "${SOURCE_DIR}" ABSOLUTE)
 # Lexical elements, tried leftmost-first, so a comment, literal or directive swallows any brace,
 # `namespace` or macro name inside it. In order: // comment (with line splices), /* comment */,
 # string literal, a number with digit separators (so 1'000 is not a character literal), character
-# literal, preprocessor line (with splices), unnamed namespace opener, named namespace opener, an
-# identifier containing a keyword (compared exactly below), a brace, a newline.
+# literal (with its u8/u/U/L prefix, so u8'{' is not the number 8' and a brace), preprocessor line
+# (with splices), unnamed namespace opener, named namespace opener, an identifier containing a
+# keyword (compared exactly below), a brace, a newline.
 set(_ws "[ \t\n]")
 set(_splice "([^\\\\\n]|\\\\[^\n]|\\\\\n)*")
 set(_lexRe "//${_splice}")
 string(APPEND _lexRe "|/\\*([^*]|\\*+[^*/])*\\*+/")
 string(APPEND _lexRe "|\"([^\"\\\\\n]|\\\\[^\n]|\\\\\n)*\"")
-string(APPEND _lexRe "|[0-9][0-9A-Za-z_.]*'[0-9A-Za-z_.']*")
-string(APPEND _lexRe "|'([^'\\\\\n]|\\\\[^\n])*'")
+string(APPEND _lexRe "|[0-9][0-9A-Za-z_.]*('[0-9A-Za-z_.]+)+")
+string(APPEND _lexRe "|(u8|u|U|L)?'([^'\\\\\n]|\\\\[^\n])*'")
 string(APPEND _lexRe "|#${_splice}")
 string(APPEND _lexRe "|namespace${_ws}*{")
 string(APPEND _lexRe "|namespace${_ws}+[A-Za-z_][A-Za-z0-9_:]*${_ws}*{")

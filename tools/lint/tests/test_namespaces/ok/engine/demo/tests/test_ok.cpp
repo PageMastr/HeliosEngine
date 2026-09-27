@@ -34,6 +34,8 @@ const std::string kEscaped = "\"}\" and \\";
 const std::string kFooBar = "FOOBAR"; // a string that ends in R"
 constexpr long long kBig = 0xFF'FF'FF'FFLL;
 constexpr int kSep = 10'000; const char kBrace = '}';
+const char8_t kU8Open = u8'{';
+const wchar_t kWideClose = L'}';
 int MY_TEST_CASE_HELPER = 0;
 namespace namespace_like = demo;
 

@@ -99,6 +99,25 @@ EntityId EntityIdMinter::allocate() noexcept {
     }
 }
 
+void EntityIdMinter::allocateN(std::span<EntityId> out) noexcept {
+    usize done = 0;
+    while (done < out.size()) {
+        u64 cur = m_state.load(std::memory_order_relaxed);
+        const u64 offset = cur & kStateOffsetMask;
+        if (offset >= L::kBlockSize) {
+            out[done++] = allocateSlow(); // block switch or exhaustion, exactly as allocate()
+            continue;
+        }
+        const u64 take = std::min<u64>(out.size() - done, L::kBlockSize - offset);
+        if (!m_state.compare_exchange_weak(cur, cur + take, std::memory_order_relaxed, std::memory_order_relaxed)) continue;
+        const u64 prefix = cur >> kStateOffsetBits;
+        for (u64 k = 0; k < take; ++k) {
+            out[done + k] = composeBlockId(prefix, m_shard, static_cast<u32>(offset + k));
+        }
+        done += static_cast<usize>(take);
+    }
+}
+
 EntityId EntityIdMinter::allocateSlow() noexcept {
     std::lock_guard lock(m_mutex);
     for (;;) {

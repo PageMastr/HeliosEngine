@@ -3,7 +3,7 @@
 `helios-schemac` compiles `.hschema` files into C++ (types, reflection, codecs), Go (types and a
 byte-identical codec), Luau glue (scriptlib bindings, `.d.luau` declarations, fuel defaults),
 PostgreSQL DDL (table snapshots and goose migration stubs), replication descriptors with full-state
-codecs, and a machine-readable schema description.
+codecs, a lint report, and a machine-readable schema description.
 It implements ADR-004.
 
 **The normative specification is [docs/plan/02-engine-runtime.md §3](../../docs/plan/02-engine-runtime.md#3-schema-and-reflection-normative)**
@@ -29,10 +29,11 @@ APIs) and lists what is not implemented yet.
 | `luau` | Implemented for `scriptlib`s: the C++ call glue on engine/script's `Binder` with the fuel charges, binding ids from the lock, `schema.d.luau` and `fuel_costs.defaults.json` ([Generated Luau](#generated-luau)). Tagged-userdata glue for components and records (`@script` fields) is WP-1.6's |
 | `sql` | Implemented for structs marked `@sql(schema="svc_<service>")`: a PostgreSQL snapshot and a goose migration stub diffed against the baseline lock, per service schema ([Generated SQL](#generated-sql)) |
 | `repl` | Implemented for Phase 0 (04 §11.3: descriptors, full state): `ComponentRepDesc` tables with quantizers, typed full-state codecs, rpc and event tables and a protocol hash per file ([Generated replication](#generated-replication)). Change masks, deltas and variable-size fields are WP-1.10 |
-| `proto`, `editor`, `records`, `lint`, `docs` | Planned; `--emit <name>` fails with exit code 2 "not yet implemented" |
+| `lint` | Implemented: the size-budget lints and a report of what every lint checked, the SEC-1 classification of client→server rpcs and every finding ([Lint report](#lint-report)); the rule lints below already fail every compilation |
+| `proto`, `editor`, `records`, `docs` | Planned; `--emit <name>` fails with exit code 2 "not yet implemented" |
 
-The lints of the planned `lint` emitter (AAA-SEC-1, AAA-SEC-4, ledger/persist, keyed lists,
-naming) already run on every compilation.
+The rule lints (AAA-SEC-1, AAA-SEC-4, ledger/persist, keyed lists, naming, script fuel) run on every
+compilation; `--emit lint` adds the size budgets and the report.
 
 ## Quick start
 
@@ -67,7 +68,8 @@ helios-schemac -I schemas --lock schemas/schema.lock.jsonc --emit cpp,go,json \
 | `--lock <file>` | Schema lock (created if missing, updated in place). Without it ids are per-run (warning) |
 | `--check-lock` | Fail (exit 1) instead of updating an out-of-date lock (CI) |
 | `--allow-default-change` | Accept changed explicit defaults (they are part of the wire contract) |
-| `--emit cpp,go,json,luau,sql,repl` | Generators (default `cpp`; `repl` writes next to the C++ output) |
+| `--emit cpp,go,json,luau,sql,repl,lint` | Generators (default `cpp`; `repl` writes next to the C++ output) |
+| `--lint-out <file>` | Lint report of `--emit lint` (default `schema.lint.json`) |
 | `--cpp-out`, `--go-out`, `--go-package`, `--json-out`, `--luau-out`, `--sql-out` | Output locations (`--luau-out`: `schema.d.luau` and `fuel_costs.defaults.json`; the Luau glue goes to `--cpp-out`. `--sql-out`: `<schema>/schema.sql` and `<schema>/migration.sql`) |
 | `--sql-baseline <lock>` | Lock the SQL migration stub starts from (default: `--lock` as it was before this run) |
 | `--samples` | Also emit `<file>.samples.gen.h` (deterministic sample values shared with the Go test) |
@@ -511,6 +513,31 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
   LOD, prediction, interpolation and every quantizer parameter, so any wire change changes it, and
   comments or declaration order do not.
 
+## Lint report
+
+`--emit lint` (02 §3.5: "SEC-1/SEC-4, ledger/persist, keyed lists, naming, size budgets"; for CI):
+
+- **Size budgets** are warnings, printed like any diagnostic with the rule id in brackets. `--Werror`
+  makes them errors.
+  - `size.unbounded`: a `string`, `Name`, text builtin (`LocString`, `TagQuery`, `HxlExpr`), `TagSet`,
+    `list`, `set`, keyed list or `map` needs `@max(n)` when it is network input. That means it is
+    reachable from rpc arguments (top-level and service rpcs), events, messages, or the replicated
+    fields of components, through struct and variant fields. Otherwise one peer could make the
+    receiver allocate at will. A struct reached from several network types is reported once.
+    `T[N]` is bounded by its type. `@max` bounds a field's own length or count; the language cannot
+    yet bound the elements of a `list<string>`.
+  - `size.unreliable`: an unreliable rpc's worst-case tagged payload fits one netcode payload,
+    1,200 B (04 §1), since an unreliable message is never fragmented. The worst case counts tags,
+    length prefixes, 10-byte varints and `@max` bytes per string and elements per container.
+- **Report** (`--lint-out`, canonical JSON):
+  - `checked`: counts per rule (rpcs, client→server rpcs, fields under the SEC-4 check, ledger
+    types, keyed lists, scriptlib fns with charges, fields under `size.unbounded`, unreliable rpcs);
+  - `clientToServer`: every client→server rpc with its `@ratelimit`, `@intent` and reliability.
+    This is AAA-SEC-1's "every client→server message is classified", and a compilation fails before
+    the report if one is missing;
+  - `findings`: every finding with rule id, include-relative file, line, column and message, sorted.
+    Other compiler warnings, such as naming, appear under rule `schemac`.
+
 ## CMake: `helios_schema()`
 
 ```cmake
@@ -575,7 +602,9 @@ fixture and the sample schemas on a real engine/script VM (every value form, rea
 per fn, hostile arguments: wrong types, out-of-range and inexact integers, oversized and cyclic tables,
 metatables that must not run), type-checks `schema.d.luau` with Luau.Analysis (a strict script passes;
 wrong argument and result types and unknown enum values fail), and covers binding ids in the lock and
-the signatures `--emit luau` rejects. `test_repl.cpp` runs the generated replication code of the golden
+the signatures `--emit luau` rejects. `test_lint.cpp` covers both size budgets (what counts as network
+input, `server {}` fields, `T[N]`, one report per struct, the exact worst case against 1,200 B), the
+report's positions and SEC-1 table, and `--Werror`. `test_repl.cpp` runs the generated replication code of the golden
 fixture and the sample schemas: descriptors against the schema and the `TypeInfo` (ids, offsets,
 change-mask indices), full-state round trips within each quantizer's precision (and re-encoding to the
 same bits), every truncated prefix and random input rejected cleanly, an undeclared enum value, the rpc
@@ -622,7 +651,7 @@ server as `nobody` when started as root, and is not registered on Windows or whe
 
 Plan-Rev: 10
 
-Written to plan revision 10 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau`, `sql` and `repl` so far), after being
+Written to plan revision 10 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau`, `sql`, `repl` and `lint`), after being
 reconciled by hand with revision 6 on 2026-09-25 under `docs/plan/09-roadmap-and-process.md`
 §5.10.2 D7. Revisions 7–10 changed no anchor of this package. No conformance delta is open; see
 §5.10.4 (c) there.

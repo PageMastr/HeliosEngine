@@ -1,5 +1,6 @@
 #pragma once
-// Code generators (02 §3.5): `--emit cpp`, `--emit go`, `--emit json`, `--emit luau`, `--emit sql`, `--emit repl`.
+// Code generators (02 §3.5): `--emit cpp`, `--emit go`, `--emit json`, `--emit luau`, `--emit sql`, `--emit repl`,
+// `--emit lint`.
 
 #include <string>
 #include <vector>
@@ -28,6 +29,9 @@ std::vector<OutputFile> generateSql(const Schema& schema, const Lock& baseline, 
 /// rpc and event tables and the file's protocol hash (helios/reflect/repl.h). Reports @quant errors
 /// and replicated fields the Phase 0 full-state codec cannot carry.
 std::vector<OutputFile> generateRepl(const Schema& schema, const CompileOptions& options, DiagnosticEngine& diags);
+/// Runs the size-budget lints (warnings) and returns the lint report (options.lintOut): rule counts,
+/// the SEC-1 classification of client->server rpcs and every finding. Call after the other generators.
+std::vector<OutputFile> generateLint(const Schema& schema, const CompileOptions& options, DiagnosticEngine& diags);
 
 /// C++ identifier for a schema field name (keywords get a trailing '_').
 std::string cppFieldName(const std::string& name);

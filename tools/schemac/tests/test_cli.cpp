@@ -61,7 +61,7 @@ TEST_CASE("cli: help, version and usage errors") {
     Run help = cli({"--help"});
     CHECK(help.status == 0);
     CHECK(help.out.starts_with("usage: helios-schemac [options] <file.hschema>..."));
-    CHECK(help.out.find("planned generators (not yet implemented): proto, editor, records, lint") != std::string::npos);
+    CHECK(help.out.find("planned generators (not yet implemented): proto, editor, records, docs") != std::string::npos);
     Run version = cli({"--version"});
     CHECK(version.status == 0);
     CHECK(version.out.starts_with("helios-schemac "));
@@ -77,11 +77,11 @@ TEST_CASE("cli: help, version and usage errors") {
     CHECK(none.err == "helios-schemac: error: no input files (see --help)\n");
     Run badGen = cli({"--emit=cpp,rust", "x.hschema"});
     CHECK(badGen.status == 2);
-    CHECK(badGen.err == "helios-schemac: error: unknown generator 'rust' (available: cpp, go, json, luau, sql, repl)\n");
+    CHECK(badGen.err == "helios-schemac: error: unknown generator 'rust' (available: cpp, go, json, luau, sql, repl, lint)\n");
 }
 
 TEST_CASE("cli: planned generators fail with 'not yet implemented'") {
-    for (const char* gen : {"proto", "editor", "records", "lint", "docs"}) {
+    for (const char* gen : {"proto", "editor", "records", "docs"}) {
         Run r = cli({"--emit", std::string("cpp,") + gen, "x.hschema"});
         CHECK(r.status == 2);
         CHECK_MESSAGE(r.err.starts_with(std::string("helios-schemac: error: --emit ") + gen + " is not yet implemented"), r.err);
@@ -201,6 +201,19 @@ TEST_CASE("cli: --emit repl writes descriptors and full-state codecs next to the
     Run bad = cli({"-I", (dir / "schemas").string(), "--emit", "repl", "--cpp-out", (dir / "cpp").string(), schema.string()});
     CHECK(bad.status == 1);
     CHECK(bad.err.find("bits= needs 1 to 32") != std::string::npos);
+}
+
+TEST_CASE("cli: --emit lint writes the report and prints the budget warnings") {
+    const fs::path dir = freshDir("lint");
+    const fs::path schema = dir / "say.hschema";
+    writeFile(schema, "package cli.say;\nrpc Say(text: string) client->server reliable @ratelimit(1/s) @intent(chat);\n");
+    const fs::path report = dir / "out" / "lint.json";
+    Run r = cli({"--emit", "lint", "--lint-out", report.string(), "--quiet", schema.string()});
+    REQUIRE_MESSAGE(r.status == 0, r.err);
+    CHECK(r.err.find("warning: [size.unbounded] 'Say.text'") != std::string::npos);
+    CHECK(readFile(report).find(R"({"rpc": "cli.say.Say", "ratelimit": "1/s", "intent": "chat", "reliable": true})") != std::string::npos);
+    Run strict = cli({"--emit", "lint", "--lint-out", report.string(), "--Werror", schema.string()});
+    CHECK(strict.status == 1);
 }
 
 TEST_CASE("cli: schema errors exit 1 with file:line:col and a source excerpt") {

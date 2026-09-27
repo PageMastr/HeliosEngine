@@ -75,6 +75,7 @@ constexpr GoldenOutput kOutputs[] = {
     {"sql/svc_golden/migration.sql", "svc_golden.migration.sql.expected"},
     {"cpp/golden.repl.gen.h", "golden.repl.gen.h.expected"},
     {"cpp/golden.repl.gen.cpp", "golden.repl.gen.cpp.expected"},
+    {"golden.lint.json", "golden.lint.json.expected"},
 };
 
 TEST_CASE("golden: generator output matches the committed expectations") {
@@ -99,6 +100,8 @@ TEST_CASE("golden: generator output matches the committed expectations") {
     options.emitLuau = true;
     options.emitSql = true;
     options.emitRepl = true;
+    options.emitLint = true;
+    options.lintOut = "golden.lint.json";
     options.cppOut = "cpp";
     options.goOut = "go";
     options.jsonOut = "golden.schema.json";
@@ -135,7 +138,7 @@ struct CorpusSet {
     std::vector<std::pair<const char*, const char*>> outputs; ///< output suffix -> expected file
 };
 
-TEST_CASE("golden: the schemas/ corpus generates the committed Luau, SQL and replication outputs") {
+TEST_CASE("golden: the schemas/ corpus generates the committed Luau, SQL, replication and lint outputs") {
     const std::vector<CorpusSet> sets = {
         {"sample",
          {"schemas/sample/common.hschema", "schemas/sample/ship.hschema", "schemas/sample/items.hschema"},
@@ -148,7 +151,8 @@ TEST_CASE("golden: the schemas/ corpus generates the committed Luau, SQL and rep
           {"sql/svc_character/migration.sql", "svc_character.migration.sql.expected"},
           {"cpp/sample/common.repl.gen.cpp", "common.repl.gen.cpp.expected"},
           {"cpp/sample/ship.repl.gen.h", "ship.repl.gen.h.expected"},
-          {"cpp/sample/ship.repl.gen.cpp", "ship.repl.gen.cpp.expected"}}},
+          {"cpp/sample/ship.repl.gen.cpp", "ship.repl.gen.cpp.expected"},
+          {"schema.lint.json", "schema.lint.json.expected"}}},
     };
     for (const CorpusSet& set : sets) {
         INFO(set.name);
@@ -169,6 +173,7 @@ TEST_CASE("golden: the schemas/ corpus generates the committed Luau, SQL and rep
         options.emitLuau = true;
         options.emitSql = true;
         options.emitRepl = true;
+        options.emitLint = true;
         options.cppOut = "cpp";
         options.luauOut = "luau";
         options.sqlOut = "sql";
@@ -205,6 +210,7 @@ TEST_CASE("golden: generation is deterministic and independent of declaration-ir
     options.emitLuau = true;
     options.emitSql = true;
     options.emitRepl = true;
+    options.emitLint = true;
     auto a = compileFiles({{"golden/golden.hschema", *source}}, options);
     // Comments and whitespace do not change the output.
     std::string reformatted;

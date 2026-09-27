@@ -17,6 +17,7 @@ add_library(helios_schemac_lib STATIC
   src/gen_cpp.cpp
   src/gen_go.cpp
   src/gen_json.cpp
+  src/gen_lint.cpp
   src/gen_luau.cpp
   src/gen_repl.cpp
   src/gen_sql.cpp

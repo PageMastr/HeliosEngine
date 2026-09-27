@@ -48,17 +48,40 @@ std::string sealTicketsSubject(std::string_view shard);
 /// ctl.<shard>.gateway.all.<verb> ("kick", "session_epoch").
 std::string gatewayControlSubject(std::string_view shard, std::string_view verb);
 
+/// Where a process runs (05 §1.4.3): availability zone, rack and host. The placer supplies it
+/// (Agones node labels, helios.toml [fd] under helios-agent); Phase 0 stores it and Phase 2's
+/// failure detection and placement use it. Empty fields are left out on the wire (Go `omitempty`),
+/// and an all-empty domain is left out entirely (Go `omitzero`).
+struct FailureDomain {
+    std::string az;
+    std::string rack;
+    std::string host;
+    bool empty() const noexcept { return az.empty() && rack.empty() && host.empty(); }
+    friend bool operator==(const FailureDomain&, const FailureDomain&) = default;
+};
+
+/// Go's registration bounds (services/internal/orchestrator MaxFDLabel, MaxFDHost).
+inline constexpr usize kMaxFdLabel = 64;
+inline constexpr usize kMaxFdHost = 255;
+
 struct ProcessInfo {
     std::string name;
     std::string kind;              ///< "cell" | "gateway"
     std::string address;           ///< gateway: public UDP ip:port; cell: trunk address
-    std::string host;
+    std::string host;              ///< Superseded by fd.host (Go fills fd.host from it when empty).
     i64 pid = 0;
     std::string version;
     std::vector<std::string> zones; ///< cell: zone names it serves (empty = any)
     u32 keyId = 0;                 ///< gateway: shard netcode key generation
     i64 capacity = 0;              ///< gateway: session slots
+    FailureDomain fd;              ///< 05 §1.4 RegisterProcess `fd{az, rack, host}`.
+    i64 serverBuild = 0;           ///< 05 §1.4 `server_build` (0 = unknown; left out on the wire).
 };
+
+/// Checks the fields the orchestrator would refuse with invalid_argument (fd bounds, NUL bytes,
+/// a negative serverBuild), so a process fails at start instead of retrying RegisterProcess
+/// forever. The other fields are the caller's own.
+Result<void> validateRegistration(const ProcessInfo& info);
 
 struct Assignment {
     u64 zoneId = 0;
@@ -82,10 +105,19 @@ struct Load {
     f64 tickP99Ms = 0.0;
 };
 
+/// A region the process holds and the lease generation it holds it under (05 §1.4 Heartbeat;
+/// v0 regions are whole zones, so `region` is the zone id).
+struct HeldRegion {
+    u64 region = 0;
+    u64 leaseGen = 0;
+    friend bool operator==(const HeldRegion&, const HeldRegion&) = default;
+};
+
 struct HeartbeatRequest {
     u64 processId = 0;
     u64 epoch = 0;
     Load load;
+    std::vector<HeldRegion> held; ///< Ordered by region; left out on the wire when empty.
 };
 
 struct HeartbeatResult {

@@ -55,6 +55,8 @@ struct StaticZone {
 struct CellServerConfig {
     std::string name = "cell-1";
     std::string version;
+    orch::FailureDomain failureDomain; ///< RegisterProcess `fd` (from the placer; 05 §1.4.3).
+    i64 serverBuild = 0;               ///< RegisterProcess `serverBuild` (0 = unknown).
 
     // --- trunk server (gateways connect here) ------------------------------------------------
     net::Address trunkBind = net::Address::ipv4(127, 0, 0, 1, 7810);

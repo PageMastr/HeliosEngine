@@ -55,4 +55,12 @@ func main() {
 	b := ud.Marshal()
 	fmt.Printf("UserDataV1\t%s\n", hex.EncodeToString(b[:]))
 	dump("ControlEpoch", session.ControlMessage{SessionID: 42, Epoch: 5, Reason: "reconnect"})
+	// WP-0.14: the registration's failure domain and server build, and the held regions in
+	// heartbeats (05 §1.4), which WP-0.15r added to the Go types as optional wire fields.
+	dump("ProcessInfoCellFd", orchestrator.ProcessInfo{Name: "cell-a", Kind: "cell", Address: "127.0.0.1:7810", Version: "0.1.0", Zones: []string{"tallis"},
+		FD: orchestrator.FailureDomain{AZ: "az-1", Rack: "r12", Host: "srv-07"}, ServerBuild: 9007199254740993})
+	dump("ProcessInfoGatewayFdHost", orchestrator.ProcessInfo{Name: "gw-1", Kind: "gateway", Address: "127.0.0.1:7777", KeyID: 3, Capacity: 256,
+		FD: orchestrator.FailureDomain{Host: "edge-2"}})
+	dump("HeartbeatRequestHeld", orchestrator.HeartbeatRequest{ProcessID: 9007199254740993, Epoch: 2, Load: orchestrator.Load{Players: 3, FreeSlots: 0, TickP99Ms: 0.25},
+		Held: []orchestrator.HeldRegion{{Region: 1002, LeaseGen: 7}, {Region: 1003, LeaseGen: 9007199254740993}}})
 }

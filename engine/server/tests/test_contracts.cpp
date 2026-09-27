@@ -157,6 +157,59 @@ TEST_CASE("server.contracts: decoders are lenient about numbers and strict about
     CHECK(orch::gatewayControlSubject("dev", "session_epoch") == "ctl.dev.gateway.all.session_epoch");
 }
 
+TEST_CASE("server.contracts: fd, serverBuild and held regions match Go (05 §1.4, WP-0.15r fields)") {
+    const auto go = loadGoVectors();
+    orch::ProcessInfo cell;
+    cell.name = "cell-a";
+    cell.kind = "cell";
+    cell.address = "127.0.0.1:7810";
+    cell.version = "0.1.0";
+    cell.zones = {"tallis"};
+    cell.fd = orch::FailureDomain{"az-1", "r12", "srv-07"};
+    cell.serverBuild = 9007199254740993; // above 2^53: travels as a string
+    CHECK(text(orch::encode(cell)) == go.at("ProcessInfoCellFd"));
+    orch::ProcessInfo gw;
+    gw.name = "gw-1";
+    gw.kind = "gateway";
+    gw.address = "127.0.0.1:7777";
+    gw.keyId = 3;
+    gw.capacity = 256;
+    gw.fd.host = "edge-2"; // empty fields are left out one by one
+    CHECK(text(orch::encode(gw)) == go.at("ProcessInfoGatewayFdHost"));
+    orch::HeartbeatRequest hb{9007199254740993ull, 2, orch::Load{3, 0, 0.25}, {{1002, 7}, {1003, 9007199254740993ull}}};
+    CHECK(text(orch::encode(hb)) == go.at("HeartbeatRequestHeld"));
+
+    auto c = orch::decodeProcessInfo(bytes(go.at("ProcessInfoCellFd")));
+    REQUIRE(c);
+    CHECK(c->fd == cell.fd);
+    CHECK(c->serverBuild == cell.serverBuild);
+    CHECK(orch::decodeProcessInfo(bytes(go.at("ProcessInfoGatewayFdHost")))->fd == orch::FailureDomain{{}, {}, "edge-2"});
+    CHECK(orch::decodeProcessInfo(bytes(go.at("ProcessInfoCell")))->fd.empty());
+    auto h = orch::decodeHeartbeatRequest(bytes(go.at("HeartbeatRequestHeld")));
+    REQUIRE(h);
+    CHECK(h->held == hb.held);
+    CHECK(orch::decodeHeartbeatRequest(bytes(go.at("HeartbeatRequest")))->held.empty());
+    CHECK_FALSE(orch::decodeProcessInfo(orch::bytesOf(R"({"name":"c","kind":"cell","fd":"az-1"})")));
+    CHECK_FALSE(orch::decodeHeartbeatRequest(orch::bytesOf(R"({"processId":"1","held":[7]})")));
+
+    // What Go's validate() refuses with invalid_argument is refused before RegisterProcess.
+    CHECK(orch::validateRegistration(cell));
+    orch::ProcessInfo bad = cell;
+    bad.fd.az = std::string(orch::kMaxFdLabel + 1, 'a');
+    CHECK_FALSE(orch::validateRegistration(bad));
+    bad = cell;
+    bad.fd.host = std::string(orch::kMaxFdHost, 'h');
+    CHECK(orch::validateRegistration(bad));
+    bad.fd.host.push_back('h');
+    CHECK_FALSE(orch::validateRegistration(bad));
+    bad = cell;
+    bad.fd.rack = std::string("r\0x", 3);
+    CHECK_FALSE(orch::validateRegistration(bad));
+    bad = cell;
+    bad.serverBuild = -1;
+    CHECK_FALSE(orch::validateRegistration(bad));
+}
+
 TEST_CASE("server.contracts: connect-token user data matches Go's layout v1") {
     const auto go = loadGoVectors();
     const std::vector<u8> raw = fromHex(go.at("UserDataV1"));

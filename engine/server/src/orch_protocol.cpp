@@ -263,6 +263,13 @@ std::vector<u8> encode(const ProcessInfo& m) {
     }
     w.numOmit(r, "keyId", m.keyId);
     w.numOmit(r, "capacity", m.capacity);
+    if (!m.fd.empty()) { // Go `omitzero` on the struct, `omitempty` on each field
+        auto* fd = w.obj(r, "fd");
+        w.strOmit(fd, "az", m.fd.az);
+        w.strOmit(fd, "rack", m.fd.rack);
+        w.strOmit(fd, "host", m.fd.host);
+    }
+    if (m.serverBuild != 0) w.str(r, "serverBuild", std::to_string(m.serverBuild)); // `,string,omitempty`
     return w.bytes();
 }
 
@@ -289,6 +296,14 @@ std::vector<u8> encode(const HeartbeatRequest& m) {
     w.num(load, "players", m.load.players);
     w.num(load, "freeSlots", m.load.freeSlots);
     w.real(load, "tickP99Ms", m.load.tickP99Ms);
+    if (!m.held.empty()) {
+        auto* held = w.arr(r, "held");
+        for (const HeldRegion& h : m.held) {
+            auto* o = w.arrObj(held);
+            w.u64s(o, "region", h.region);
+            w.u64s(o, "leaseGen", h.leaseGen);
+        }
+    }
     return w.bytes();
 }
 
@@ -399,7 +414,27 @@ Result<ProcessInfo> decodeProcessInfo(std::span<const u8> json) {
         });
         m.keyId = static_cast<u32>(getI64(r, "keyId", b));
         m.capacity = getI64(r, "capacity", b);
+        if (yyjson_val* fd = yyjson_obj_get(r, "fd"); fd && !yyjson_is_null(fd)) {
+            if (!yyjson_is_obj(fd)) b = true;
+            m.fd.az = getStr(fd, "az", b);
+            m.fd.rack = getStr(fd, "rack", b);
+            m.fd.host = getStr(fd, "host", b);
+        }
+        m.serverBuild = getI64(r, "serverBuild", b);
     });
+}
+
+Result<void> validateRegistration(const ProcessInfo& info) {
+    // The same checks as Go's validate() in services/internal/orchestrator/registry.go.
+    auto hasNul = [](std::string_view s) { return s.find('\0') != std::string_view::npos; };
+    if (info.fd.az.size() > kMaxFdLabel || info.fd.rack.size() > kMaxFdLabel || info.fd.host.size() > kMaxFdHost ||
+        info.host.size() > kMaxFdHost)
+        return makeError(ErrorCode::InvalidArgument, "fd: az and rack are at most {} bytes, host at most {}", kMaxFdLabel,
+                         kMaxFdHost);
+    if (hasNul(info.fd.az) || hasNul(info.fd.rack) || hasNul(info.fd.host) || hasNul(info.host))
+        return Error{ErrorCode::InvalidArgument, "fd: text fields must not contain NUL"};
+    if (info.serverBuild < 0) return Error{ErrorCode::InvalidArgument, "serverBuild must not be negative"};
+    return {};
 }
 
 Result<RegisterResult> decodeRegisterResult(std::span<const u8> json) {
@@ -424,6 +459,13 @@ Result<HeartbeatRequest> decodeHeartbeatRequest(std::span<const u8> json) {
             m.load.freeSlots = getI64(load, "freeSlots", b);
             m.load.tickP99Ms = getF64(load, "tickP99Ms", b);
         }
+        forEach(r, "held", b, [&](yyjson_val* item) {
+            if (!yyjson_is_obj(item)) {
+                b = true;
+                return;
+            }
+            m.held.push_back(HeldRegion{getU64(item, "region", b), getU64(item, "leaseGen", b)});
+        });
     });
 }
 

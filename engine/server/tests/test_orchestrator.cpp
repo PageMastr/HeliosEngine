@@ -3,6 +3,9 @@
 #include <doctest/doctest.h>
 
 #include "fake_services.h"
+#include "helios/server/app_env.h"
+#include "helios/server/cell_server.h"
+#include "helios/server/gateway_server.h"
 #include "helios/server/orchestrator_client.h"
 
 using namespace helios;
@@ -255,4 +258,86 @@ TEST_CASE("server.orch: ResolveZone and graceful deregistration") {
     rig.bus.pump(rig.now / kMs + 1);
     CHECK(rig.orch.processes().empty()); // deregistered: the zones are free again
     CHECK(rig.orch.zone(1002).owner == 0);
+}
+
+TEST_CASE("server.orch: registration carries fd and serverBuild; heartbeats report held regions (05 §1.4)") {
+    Rig rig;
+    OrchestratorClientConfig cfg = cellConfig();
+    cfg.info.fd = orch::FailureDomain{"az-1", "r12", "srv-07"};
+    cfg.info.serverBuild = 42;
+    OrchestratorClient client(rig.bus, cfg);
+    rig.run(client, 5);
+    REQUIRE(client.isRegistered());
+    const u64 pid = client.processId();
+    CHECK(rig.orch.processes().at(pid).info.fd == cfg.info.fd);
+    CHECK(rig.orch.processes().at(pid).info.serverBuild == 42);
+
+    // Every heartbeat lists the regions held, by region, with the generations held.
+    auto heldNow = [&] {
+        std::vector<orch::HeldRegion> out;
+        for (u64 z : {1002ull, 1003ull}) out.push_back({z, rig.orch.zone(z).leaseGen});
+        return out;
+    };
+    rig.run(client, 1100);
+    REQUIRE(rig.orch.lastHeld.contains(pid));
+    CHECK(rig.orch.lastHeld.at(pid) == heldNow());
+    // A new generation for one region is reported from the heartbeat after the one that saw it.
+    rig.orch.bumpGeneration(1003);
+    rig.run(client, 2100);
+    CHECK(client.leases().generation(authority::RegionId{1003}) == rig.orch.zone(1003).leaseGen);
+    CHECK(rig.orch.lastHeld.at(pid) == heldNow());
+
+    // Unreachable: the list sent keeps the generations held (nothing was given up), which is
+    // what the leader reconciles against region_lease when the control plane recovers (§1.4.4).
+    const auto before = heldNow();
+    rig.orch.unavailable = true;
+    rig.run(client, 3000);
+    rig.orch.unavailable = false;
+    CHECK(rig.orch.lastHeld.at(pid) == before);
+
+    // After lease_lost the new registration reports only what it was assigned again.
+    rig.orch.expire(pid);
+    rig.run(client, 2200);
+    REQUIRE(client.isRegistered());
+    CHECK(client.processId() != pid);
+    CHECK(rig.orch.lastHeld.at(client.processId()) == heldNow());
+    // A gateway holds no regions: `held` is left out of its heartbeats.
+    OrchestratorClientConfig g;
+    g.info.name = "gw-1";
+    g.info.kind = "gateway";
+    g.info.address = "127.0.0.1:7777";
+    g.info.keyId = 1;
+    OrchestratorClient gw(rig.bus, g);
+    rig.run(gw, 1100);
+    REQUIRE(gw.isRegistered());
+    REQUIRE(rig.orch.lastHeld.contains(gw.processId()));
+    CHECK(rig.orch.lastHeld.at(gw.processId()).empty());
+}
+
+TEST_CASE("server.app: placement options fill fd and serverBuild; malformed values fail at start") {
+    auto parse = [](std::vector<std::string> argv) {
+        argv.insert(argv.begin(), "helios-cell");
+        return placementFromArgs(ProcessArgs(CommandLine::parse(argv)));
+    };
+    auto p = parse({"--fd-az=az-1", "--fd-rack", "r12", "--fd-host=srv-07", "--server-build", "9007199254740993"});
+    REQUIRE(p);
+    CHECK(p->fd == orch::FailureDomain{"az-1", "r12", "srv-07"});
+    CHECK(p->serverBuild == 9007199254740993);
+    CHECK_FALSE(parse({"--fd-az=az-1", "--server-build=12x"}));
+    CHECK_FALSE(parse({"--fd-az=az-1", "--server-build=-3"}));
+    CHECK_FALSE(parse({"--fd-az=az-1", "--server-build=99999999999999999999"}));
+    CHECK_FALSE(parse({"--fd-rack=" + std::string(orch::kMaxFdLabel + 1, 'r')}));
+
+    // A cell or gateway with a registration the orchestrator would refuse does not start.
+    FakeBus bus;
+    CellServerConfig cc;
+    cc.bus = &bus;
+    cc.trunkBind = net::Address::ipv4(127, 0, 0, 1, 0);
+    cc.failureDomain.host = std::string(orch::kMaxFdHost + 1, 'h');
+    CHECK(CellServer::create(std::move(cc), 0).errorCode() == ErrorCode::InvalidArgument);
+    GatewayConfig gc;
+    gc.bus = &bus;
+    gc.listen = net::Address::ipv4(127, 0, 0, 1, 0);
+    gc.serverBuild = -1;
+    CHECK(GatewayServer::create(std::move(gc), 0).errorCode() == ErrorCode::InvalidArgument);
 }

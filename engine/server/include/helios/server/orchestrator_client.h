@@ -6,6 +6,10 @@
 //        ^                                     |
 //        +----- failed_precondition (lease_lost): fence every region, register again (new epoch)
 //
+// * RegisterProcess sends the process's failure domain `fd{az, rack, host}` and `serverBuild`
+//   (config().info; 05 §1.4), and every heartbeat reports the regions held with their lease
+//   generations (`held`, by region), as Go's Agent does. Callers check the registration with
+//   orch::validateRegistration() first: the orchestrator refuses a bad one on every retry.
 // * Register failures back off exponentially (100 ms .. 5 s) and retry forever.
 // * **Holder rule** (05 §1.4.2): a heartbeat that times out, finds no responders or hits a
 //   leadership change is only counted; the process keeps its regions and keeps heartbeating. It

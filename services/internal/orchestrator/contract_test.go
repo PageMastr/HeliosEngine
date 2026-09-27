@@ -20,7 +20,8 @@ var cppVectors = filepath.Join("..", "..", "..", "engine", "server", "tests", "d
 // TestEncodingMatchesTheCppContractVectors keeps the fields WP-0.15r added (fd, serverBuild,
 // held) optional on the wire: each orchestrator vector decodes into today's Go type and encodes
 // back byte for byte, so messages that do not set the new fields are exactly what the C++ cell
-// and gateway are tested against, and the C++ side keeps working until it sends them.
+// and gateway are tested against. The *Fd and *Held vectors are the messages the C++ side sends
+// with them set (WP-0.14).
 func TestEncodingMatchesTheCppContractVectors(t *testing.T) {
 	f, err := os.Open(cppVectors)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -54,6 +55,9 @@ func TestEncodingMatchesTheCppContractVectors(t *testing.T) {
 		"ResolveZoneRequestId":     &orchestrator.ResolveZoneRequest{},
 		"ResolveZoneRequestName":   &orchestrator.ResolveZoneRequest{},
 		"Route":                    &orchestrator.Route{},
+		"ProcessInfoCellFd":        &orchestrator.ProcessInfo{},
+		"ProcessInfoGatewayFdHost": &orchestrator.ProcessInfo{},
+		"HeartbeatRequestHeld":     &orchestrator.HeartbeatRequest{},
 	} {
 		want, ok := vectors[name]
 		if !ok {

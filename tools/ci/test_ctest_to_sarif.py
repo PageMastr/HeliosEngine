@@ -16,6 +16,7 @@ class SarifConversionTests(unittest.TestCase):
         for relative in (
             "tools/lint/ip_names.cmake",
             "tools/lint/lint_tests.cmake",
+            "tools/lint/test_namespaces.cmake",
             "src/ship.cpp",
             "src/other.cpp",
         ):
@@ -65,6 +66,17 @@ class SarifConversionTests(unittest.TestCase):
             "tools/lint/ip_names.cmake",
         )
         self.assertIn("wrong diagnostic", result["message"]["text"])
+
+    def test_test_namespaces_findings_and_fallback(self) -> None:
+        output = "src/ship.cpp:4: TEST_CASE outside an unnamed namespace\n"
+        report = convert(self.junit([("lint_test_namespaces", output),
+                                     ("lint_test_namespaces_fixture_ok", "CMake Error: segfault")]), self.root)
+        located, unlocated = report["runs"][0]["results"]
+        self.assertEqual(located["locations"][0]["physicalLocation"]["region"]["startLine"], 4)
+        self.assertEqual(
+            unlocated["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+            "tools/lint/test_namespaces.cmake",
+        )
 
     def test_path_outside_checkout_is_not_annotated(self) -> None:
         output = "../outside.cpp:2: bad name\n"

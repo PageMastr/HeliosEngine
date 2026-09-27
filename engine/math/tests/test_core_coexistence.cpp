@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <type_traits>
 
+// helios-lint: outside-anon-namespace begin (re-declares helios/core names, as the test needs)
 namespace helios {
 // Same aliases as helios/core/types.h (redeclaring an alias to the same type is legal).
 using u32 = std::uint32_t;
@@ -17,6 +18,7 @@ constexpr u64 hashCombine(u64 seed, u64 value) noexcept {
     return seed ^ (value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2));
 }
 }  // namespace helios
+// helios-lint: outside-anon-namespace end
 
 #include "helios/math/all.h"
 

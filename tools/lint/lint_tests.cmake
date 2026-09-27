@@ -209,14 +209,19 @@ helios_lint_test(lint_ip_names_fixture_clean COMMAND ${CMAKE_COMMAND} -DSOURCE_D
   -DLINT_POLICY=${LINT}/ip_names_policy.cmake -P ${LINT}/ip_names.cmake)
 
 # ---------------------------------------------------------------------------------------------
-# Test namespaces (AAA-PLT-1): every doctest test macro in a tests/ source sits in an unnamed
-# namespace, so MSVC cannot merge one test file's lambdas with another's (#15). The ok fixture hides
-# braces, test macros and `namespace {` in comments and literals; literal_brace is the reverse trap.
+# Test namespaces (AAA-PLT-1): in a tests/ source with a doctest test macro, every declaration sits in
+# an unnamed namespace (or a waiver region), and test macros do so in every tests/ file, so MSVC
+# cannot merge one test file's lambdas or helpers with another's (#15). The ok fixture hides braces,
+# test macros and `namespace {` in comments, literals and #if 0; literal_brace and raw_comment_hides
+# are the reverse traps. long_tokens (128 KB comments, literals, raw string and directive) is written
+# here rather than committed, and also runs under a 1 MB stack where `ulimit` exists.
 # ---------------------------------------------------------------------------------------------
-helios_lint_test(lint_test_namespaces COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
-  -DREQUIRE_TESTS=ON -P ${LINT}/test_namespaces.cmake)
-helios_lint_test(lint_test_namespaces_fixture_ok COMMAND ${CMAKE_COMMAND}
-  -DSOURCE_DIR=${LINT_TESTS}/test_namespaces/ok -DREQUIRE_TESTS=ON -P ${LINT}/test_namespaces.cmake)
+set(tnLint ${CMAKE_COMMAND} -DREQUIRE_TESTS=ON -P ${LINT}/test_namespaces.cmake)
+helios_lint_test(lint_test_namespaces COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR} ${tnLint})
+foreach(fixture ok raw_comment_mention)
+  helios_lint_test(lint_test_namespaces_fixture_${fixture} COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_DIR=${LINT_TESTS}/test_namespaces/${fixture} ${tnLint})
+endforeach()
 foreach(case
     "outside|test_outside.cpp:4: TEST_CASE outside an unnamed namespace"
     "closed_early|test_closed_early.cpp:11: TEST_CASE outside an unnamed namespace"
@@ -226,15 +231,65 @@ foreach(case
     "doctest_prefix|test_doctest_prefix.cpp:10: DOCTEST_TEST_CASE_FIXTURE outside an unnamed namespace"
     "subcase_helper|test_subcase_helper.cpp:6: SUBCASE outside an unnamed namespace"
     "unbalanced|test_unbalanced.cpp:4: unbalanced braces"
+    "stray_close|test_stray_close.cpp:9: unbalanced braces: '}' closes nothing"
     "crlf|test_crlf.cpp:6: TEST_CASE outside an unnamed namespace"
-    "empty|no doctest test macro under")
+    "empty|no doctest test macro under"
+    "helper_outside|test_helper_outside.cpp:5: declaration outside .* .starts with 'static'."
+    "header_macro|tests/cases.h:5: TEST_CASE outside an unnamed namespace"
+    "if0_opener|test_if0_opener.cpp:8: TEST_CASE outside an unnamed namespace"
+    "macro_generated|test_macro_generated.cpp:6: declaration outside .* .starts with 'MAKE_TEST'."
+    "bdd_helper|test_bdd_helper.cpp:5: GIVEN outside an unnamed namespace"
+    "test_dir|engine/demo/test/test_singular.cpp:4: TEST_CASE outside an unnamed namespace"
+    "raw_unterminated|test_raw_unterminated.cpp:5: unterminated raw string literal"
+    "raw_comment_hides|test_raw_comment_hides.cpp:7: TEST_CASE outside an unnamed namespace"
+    "waiver_test_macro|test_waiver_test_macro.cpp:5: TEST_CASE outside an unnamed namespace"
+    "waiver_no_reason|test_waiver_no_reason.cpp:4: malformed helios-lint comment"
+    "waiver_unclosed|test_waiver_unclosed.cpp:10: waiver region not closed"
+    "after_waiver|test_after_waiver.cpp:9: declaration outside an unnamed namespace"
+    "unterminated_literal|test_unterminated_literal.cpp:5: unterminated literal"
+    "waiver_nested|test_waiver_nested.cpp:11: waiver regions do not nest"
+    "waiver_scope|test_waiver_scope.cpp:9: this '}' closes the scope of the waiver opened on line 8"
+    "waiver_end_depth|test_waiver_end_depth.cpp:7: waiver end at another brace depth than its begin"
+    "macro_at_end|test_macro_at_end.cpp:12: declaration outside .* .starts with 'MAKE_TEST'."
+    "split_macro|test_split_macro.cpp:5: declaration outside an unnamed namespace")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)
   list(GET parts 1 expect)
   helios_lint_test(lint_test_namespaces_fixture_${fixture} EXPECT_FAIL "${expect}"
-    COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_TESTS}/test_namespaces/${fixture} -DREQUIRE_TESTS=ON
-            -P ${LINT}/test_namespaces.cmake)
+    COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_TESTS}/test_namespaces/${fixture} ${tnLint})
 endforeach()
+# Generated fixtures: each construct 128 KB long (a single-class repeat in the regex engine, however
+# long), and a line with more escapes than the lexer's recursion bound.
+string(REPEAT "x" 131072 tnBig)
+string(REPEAT "x123456789 123456789 123456789 123456789 123456789 123456789 123456789 123456789\n"
+       1638 tnBigLines)
+string(REPLACE "\\n" "\n" tnBigLines "${tnBigLines}")
+string(REPEAT "\\x41" 400 tnEscapes)
+file(WRITE ${LINT_WORK}/test_namespaces/long_tokens/engine/demo/tests/test_long_tokens.cpp
+  "// Generated by tools/lint/lint_tests.cmake: 128 KB tokens must lex without deep recursion.\n"
+  "#include <doctest/doctest.h>\n#define HELIOS_DEMO_LONG \"${tnBig}\"\n"
+  "namespace {\n// ${tnBig}\n/* ${tnBig} */\n/*\n${tnBigLines}*/\n"
+  "const char* const kLong = \"${tnBig}\";\nconst char* const kEscapes = \"${tnEscapes}\";\n"
+  "const char* const kRaw = R\"(${tnBig}\n${tnBigLines})\";\n"
+  "TEST_CASE(\"demo: long tokens\") { CHECK(kLong != nullptr); }\n} // namespace\n")
+string(REPEAT "\\x41" 600 tnEscapes)
+file(WRITE ${LINT_WORK}/test_namespaces/too_many_escapes/engine/demo/tests/test_too_many_escapes.cpp
+  "#include <doctest/doctest.h>\nnamespace {\nconst char* const kEscapes = \"${tnEscapes}\";\n"
+  "TEST_CASE(\"demo: escapes\") { CHECK(kEscapes != nullptr); }\n} // namespace\n")
+unset(tnBig)
+unset(tnBigLines)
+unset(tnEscapes)
+helios_lint_test(lint_test_namespaces_fixture_long_tokens COMMAND ${CMAKE_COMMAND}
+  -DSOURCE_DIR=${LINT_WORK}/test_namespaces/long_tokens ${tnLint})
+helios_lint_test(lint_test_namespaces_fixture_too_many_escapes
+  EXPECT_FAIL "test_too_many_escapes.cpp:3: more than 500 escapes"
+  COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_WORK}/test_namespaces/too_many_escapes ${tnLint})
+find_program(HELIOS_LINT_SH sh)
+if(HELIOS_LINT_SH AND NOT WIN32)
+  helios_lint_test(lint_test_namespaces_fixture_long_tokens_1mb_stack COMMAND ${HELIOS_LINT_SH} -c
+    "ulimit -s 1024 && exec \"$0\" -DSOURCE_DIR=\"$1\" -DREQUIRE_TESTS=ON -P \"$2\""
+    ${CMAKE_COMMAND} ${LINT_WORK}/test_namespaces/long_tokens ${LINT}/test_namespaces.cmake)
+endif()
 
 # ---------------------------------------------------------------------------------------------
 # Windows manifest (ADR-011): the source manifest's settings, and on Windows builds that a built

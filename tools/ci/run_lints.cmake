@@ -1,6 +1,6 @@
 # Runs the repository lints that need no build (licences, vendored patches, IP names, Windows
-# manifest, test namespaces), and the ISA audit when a build directory is given. One entry point for CI jobs and
-# pre-commit hooks:
+# manifest, test namespaces), and the ISA audit when a build directory is given. One entry point for
+# CI jobs and pre-commit hooks:
 #
 #   cmake -P tools/ci/run_lints.cmake                         # from the repository root
 #   cmake -DBUILD_DIR=build/linux-gcc -P tools/ci/run_lints.cmake

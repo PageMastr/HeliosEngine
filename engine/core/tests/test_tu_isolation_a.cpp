@@ -17,6 +17,8 @@ TEST_CASE("tu isolation: file A's probe runs file A's lambdas") {
 
 } // namespace
 
+// helios-lint: outside-anon-namespace begin (tu_isolation.h's siteA(), called from file B)
 helios::tu_isolation::Site helios::tu_isolation::siteA() {
     return {kProbeCounter, kProbeLine};
 }
+// helios-lint: outside-anon-namespace end

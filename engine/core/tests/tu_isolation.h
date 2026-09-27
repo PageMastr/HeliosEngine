@@ -16,6 +16,8 @@
 // lambda through a real Job, and checks that its own lambdas ran; without the unnamed namespaces,
 // MSVC 14.44 fails file B's checks with file A's 'A'. siteA() and siteB() let a third test check that
 // the numbers still match, so an edit to one file cannot silently turn the probe into a test of nothing.
+// Both probe tests must also hold the same lambdas in the same order: cl numbers a function's lambdas
+// <lambda_1>, <lambda_2>, ..., so a lambda added to one of them renames the rest and they stop colliding.
 
 #include <utility>
 

@@ -11,6 +11,7 @@
 
 #include "helios/reflect/reflect.h"
 
+// helios-lint: outside-anon-namespace begin (reflected htest types and their TypeOf<> specializations)
 namespace htest {
 using namespace helios;
 using namespace helios::refl;
@@ -65,6 +66,7 @@ const TypeInfo& helios::refl::TypeOf<Holder>::get() noexcept {
                                       .build();
     return *info;
 }
+// helios-lint: outside-anon-namespace end
 
 namespace {
 

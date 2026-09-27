@@ -26,6 +26,8 @@ TEST_CASE("tu isolation: both probe tests have the same doctest number") {
 
 } // namespace
 
+// helios-lint: outside-anon-namespace begin (tu_isolation.h's siteB(), called above)
 helios::tu_isolation::Site helios::tu_isolation::siteB() {
     return {kProbeCounter, kProbeLine};
 }
+// helios-lint: outside-anon-namespace end

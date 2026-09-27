@@ -242,11 +242,13 @@ TEST_CASE("ecs components: content-placed NetHandle slots") {
 
 } // namespace
 
+// helios-lint: outside-anon-namespace begin (a test checks the qualified name ecs_test_names.Thruster)
 namespace ecs_test_names {
 struct Thruster {
     float force = 0;
 };
 } // namespace ecs_test_names
+// helios-lint: outside-anon-namespace end
 
 namespace {
 

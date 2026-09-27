@@ -20,6 +20,7 @@ struct Motion {
 } // namespace
 
 // Hand-written copy of what the generator emits.
+// helios-lint: outside-anon-namespace begin (an explicit specialization of helios::refl::Mut)
 template <>
 class helios::refl::Mut<Motion> : public helios::refl::detail::MutBase<Motion> {
 public:
@@ -43,6 +44,7 @@ public:
         return *m_c;
     }
 };
+// helios-lint: outside-anon-namespace end
 
 namespace {
 

@@ -54,6 +54,10 @@ Control plane
   --shard <name>            NATS subject scope (env HELIOS_SHARD, default dev)
   --name <name>             process name (default gw-1)
   --ticket-interval <s>     SealReconnectTickets period (default 60)
+  --fd-az, --fd-rack, --fd-host <label>
+                            failure domain sent with RegisterProcess (env HELIOS_FD_AZ,
+                            HELIOS_FD_RACK, HELIOS_FD_HOST; set by the placer, default empty)
+  --server-build <n>        server build sent with RegisterProcess (env HELIOS_SERVER_BUILD)
 
 Other
   --dev-insecure-keys       fixed public keys for loopback-only development without the backend
@@ -185,6 +189,10 @@ int run(const ProcessArgs& args) {
     config.name = args.get("name", "HELIOS_GATEWAY_NAME", "gw-1");
     config.version = version::kString;
     config.shard = args.get("shard", "HELIOS_SHARD", "dev");
+    auto placement = placementFromArgs(args);
+    if (!placement) return fail(2, placement.error().message);
+    config.failureDomain = placement->fd;
+    config.serverBuild = placement->serverBuild;
     auto listen = parseAddress(args.get("listen", "", "127.0.0.1:7777"), "--listen");
     if (!listen) return fail(2, listen.error().message);
     config.listen = *listen;

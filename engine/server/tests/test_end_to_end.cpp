@@ -5,7 +5,9 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <functional>
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "fake_services.h"
@@ -749,39 +751,92 @@ TEST_CASE("server.cell: invalid zone settings fail at start, not when a zone is 
 }
 
 TEST_CASE("conformance/holder_rule: a cell keeps its zones through a 60 s control-plane outage (CONF-03)") {
-    // 09 §5.10 CONF-03 / 05 §1.4.2: with the control plane unreachable for 60 s the C++ cell host
-    // keeps simulating its regions, and drops one only after seeing a higher lease_gen.
+    // 09 §5.10.3 CONF-03 / 05 §1.4.2: with the control plane unreachable for 60 s the C++ cell host
+    // keeps simulating its regions, and drops one only after seeing a higher lease_gen. The C++
+    // mirror of Go's TestConformance/holder_rule: 15 s each of no responders, timeouts,
+    // `unavailable` and a dead bus, back to back, with one region re-placed at a higher generation
+    // half-way through. Everything runs on the Cluster's simulated clock (1 ms steps, the bus
+    // pumped at that time), so the 60 s take well under a second of real time.
     Cluster::Options o;
     o.bus = true;
     Cluster c(std::move(o));
     REQUIRE(c.stepUntil([&] { return c.cell->host().zoneCount() == 2; }, 2000));
     ProbeClient& p = c.probe(501, 1, 1002);
     REQUIRE(c.stepUntil([&] { return p.isWelcomed(); }, 3000));
-    const u64 gen1002 = zoneOf(c, 1002)->leaseGen();
-    const u64 gen1003 = zoneOf(c, 1003)->leaseGen();
-    const u64 ticksBefore = zoneOf(c, 1002)->clock().tick();
+    OrchestratorClient& client = *c.cell->orchestrator();
+    const u64 pid = client.processId();
+    ZoneInstance* const tallis = zoneOf(c, 1002);
+    ZoneInstance* const harrow = zoneOf(c, 1003);
+    const u64 gen1002 = tallis->leaseGen();
+    const u64 gen1003 = harrow->leaseGen();
+    const std::vector<orch::HeldRegion> held{{1002, gen1002}, {1003, gen1003}};
+    REQUIRE(c.stepUntil([&] { return c.orch->lastHeld[pid] == held; }, 1500)); // heartbeats report both
+    const u64 ticksBefore = tallis->clock().tick();
 
-    c.orch->silent = true; // partitioned: every heartbeat times out
-    c.step(60'000);
-    CHECK(c.cell->orchestrator()->stats().heartbeatFailures >= 50);
-    CHECK(c.cell->orchestrator()->stats().leaseLost == 0);
-    REQUIRE(zoneOf(c, 1002) != nullptr);
-    REQUIRE(zoneOf(c, 1003) != nullptr);
-    CHECK(zoneOf(c, 1002)->leaseGen() == gen1002);
-    CHECK(zoneOf(c, 1002)->clock().tick() - ticksBefore >= 20 * 60 - 5); // kept ticking at 20 Hz
-    CHECK(c.cell->stats().zonesFenced == 0);
-    CHECK(p.isConnected());
+    auto check = [&](const char* stage) {
+        INFO(stage);
+        CHECK(zoneOf(c, 1002) == tallis); // the same instances: never destroyed and re-created
+        CHECK(zoneOf(c, 1003) == harrow);
+        CHECK(tallis->leaseGen() == gen1002);
+        CHECK(harrow->leaseGen() == gen1003);
+        CHECK(client.isRegistered());
+        CHECK(client.processId() == pid);
+        CHECK(client.leases().held().size() == 2);
+        CHECK(client.stats().leaseLost == 0);
+        CHECK(c.cell->stats().zonesFenced == 0);
+        CHECK(p.isConnected());
+    };
+    struct Mode {
+        const char* name;
+        std::function<void(bool)> set;
+    };
+    const Mode modes[] = {
+        {"no responders", [&](bool on) { c.orch->setServing(!on); }},
+        {"timeouts", [&](bool on) { c.orch->silent = on; }},
+        {"unavailable", [&](bool on) { c.orch->unavailable = on; }},
+        {"bus down", [&](bool on) { c.bus->setConnected(!on); }},
+    };
+    const i64 outageStart = c.now;
+    const Mode* previous = nullptr;
+    for (const Mode& m : modes) {
+        m.set(true); // the next failure mode starts before the previous one ends: no gap
+        if (previous) previous->set(false);
+        previous = &m;
+        // Half-way, the orchestrator re-places 1002 (a PG-allocated higher generation) that the
+        // cell cannot learn about yet: it must keep 1002 at its old generation until it sees it.
+        if (std::string_view(m.name) == "unavailable") c.orch->bumpGeneration(1002);
+        const u64 failures = client.stats().heartbeatFailures;
+        for (int s = 0; s < 15; ++s) {
+            c.step(1000);
+            check(m.name);
+        }
+        CHECK(client.stats().heartbeatFailures - failures >= 10); // it kept heartbeating
+    }
+    CHECK(c.now - outageStart >= 60'000 * kMs);
+    CHECK(tallis->clock().tick() - ticksBefore >= 20 * 60 - 5); // kept ticking at 20 Hz
+    CHECK(c.orch->lastHeld[pid] == held); // what it reported while unreachable: what it held
     p.sendEcho(std::vector<u8>{9}, c.now);
     REQUIRE(c.stepUntil([&] { return p.stats().echoesReceived == 1; }, 500)); // still served
+    check("end of outage");
 
-    // The control plane is back and has moved 1002 to a new generation: only 1002 is dropped
-    // (and hosted again under the new generation); 1003 is untouched.
-    c.orch->silent = false;
-    c.orch->bumpGeneration(1002);
-    REQUIRE(c.stepUntil([&] { return zoneOf(c, 1002) && zoneOf(c, 1002)->leaseGen() > gen1002; }, 3000));
+    // The control plane answers again: exactly 1002, whose generation rose, is dropped and hosted
+    // again under the new generation; 1003 and the registration are untouched.
+    previous->set(false);
+    const u64 gen1002b = c.orch->zone(1002).leaseGen;
+    REQUIRE(gen1002b > gen1002);
+    REQUIRE(c.stepUntil([&] { return zoneOf(c, 1002) && zoneOf(c, 1002)->leaseGen() == gen1002b; }, 3000));
     CHECK(c.cell->stats().zonesFenced == 1);
-    CHECK(zoneOf(c, 1003)->leaseGen() == gen1003);
-    CHECK(c.cell->orchestrator()->stats().leaseLost == 0);
+    CHECK(zoneOf(c, 1003) == harrow);
+    CHECK(harrow->leaseGen() == gen1003);
+    CHECK(client.stats().leaseLost == 0);
+    CHECK(client.processId() == pid);
+    const std::vector<orch::HeldRegion> after{{1002, gen1002b}, {1003, gen1003}};
+    REQUIRE(c.stepUntil([&] { return c.orch->lastHeld[pid] == after; }, 1500));
+    // The session follows the zone to its new instance without a disconnect.
+    REQUIRE(c.stepUntil([&] { return p.stats().welcomes == 2; }, 3000));
+    CHECK(p.isConnected());
+    p.sendEcho(std::vector<u8>{10}, c.now);
+    REQUIRE(c.stepUntil([&] { return p.stats().echoesReceived == 2; }, 500));
 }
 
 TEST_CASE("server.cell: the heartbeat's tickP99Ms is a percentile of recent ticks, not the last one") {

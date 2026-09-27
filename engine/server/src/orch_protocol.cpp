@@ -5,8 +5,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <optional>
+#include <utility>
 
 #include <yyjson.h>
+
+#include "helios/core/utf.h"
+#include "helios/net/address.h"
+#include "server_log.h"
 
 namespace helios::server::orch {
 
@@ -68,13 +74,18 @@ public:
     yyjson_mut_val* arrObj(yyjson_mut_val* array) { return yyjson_mut_arr_add_obj(m_doc, array); }
     void arrStr(yyjson_mut_val* array, std::string_view v) { yyjson_mut_arr_add_strncpy(m_doc, array, v.data(), v.size()); }
 
+    /// The document's JSON, or empty when yyjson refuses it (invalid UTF-8 in a string), which is
+    /// logged: validateRegistration() keeps that from happening to a registration.
     std::vector<u8> bytes() const {
         usize len = 0;
-        char* text = yyjson_mut_write(m_doc, 0, &len);
+        yyjson_write_err err{};
+        char* text = yyjson_mut_write_opts(m_doc, 0, nullptr, &len, &err);
         std::vector<u8> out;
         if (text) {
             out.assign(reinterpret_cast<const u8*>(text), reinterpret_cast<const u8*>(text) + len);
             std::free(text);
+        } else {
+            HELIOS_LOG_ERROR(LogOrch, "control-plane JSON not written: {}", err.msg ? err.msg : "unknown error");
         }
         return out;
     }
@@ -263,6 +274,13 @@ std::vector<u8> encode(const ProcessInfo& m) {
     }
     w.numOmit(r, "keyId", m.keyId);
     w.numOmit(r, "capacity", m.capacity);
+    if (!m.fd.empty()) { // Go `omitzero` on the struct, `omitempty` on each field
+        auto* fd = w.obj(r, "fd");
+        w.strOmit(fd, "az", m.fd.az);
+        w.strOmit(fd, "rack", m.fd.rack);
+        w.strOmit(fd, "host", m.fd.host);
+    }
+    if (m.serverBuild != 0) w.str(r, "serverBuild", std::to_string(m.serverBuild)); // `,string,omitempty`
     return w.bytes();
 }
 
@@ -289,6 +307,14 @@ std::vector<u8> encode(const HeartbeatRequest& m) {
     w.num(load, "players", m.load.players);
     w.num(load, "freeSlots", m.load.freeSlots);
     w.real(load, "tickP99Ms", m.load.tickP99Ms);
+    if (!m.held.empty()) {
+        auto* held = w.arr(r, "held");
+        for (const HeldRegion& h : m.held) {
+            auto* o = w.arrObj(held);
+            w.u64s(o, "region", h.region);
+            w.u64s(o, "leaseGen", h.leaseGen);
+        }
+    }
     return w.bytes();
 }
 
@@ -399,7 +425,74 @@ Result<ProcessInfo> decodeProcessInfo(std::span<const u8> json) {
         });
         m.keyId = static_cast<u32>(getI64(r, "keyId", b));
         m.capacity = getI64(r, "capacity", b);
+        if (yyjson_val* fd = yyjson_obj_get(r, "fd"); fd && !yyjson_is_null(fd)) {
+            if (!yyjson_is_obj(fd)) b = true;
+            m.fd.az = getStr(fd, "az", b);
+            m.fd.rack = getStr(fd, "rack", b);
+            m.fd.host = getStr(fd, "host", b);
+        }
+        m.serverBuild = getI64(r, "serverBuild", b);
     });
+}
+
+namespace {
+bool hasNul(std::string_view s) noexcept { return s.find('\0') != std::string_view::npos; }
+Error invalid(std::string message) { return Error{ErrorCode::InvalidArgument, std::move(message)}; }
+} // namespace
+
+Result<void> validatePlacement(const FailureDomain& fd, i64 serverBuild) {
+    if (fd.az.size() > kMaxFdLabel || fd.rack.size() > kMaxFdLabel || fd.host.size() > kMaxFdHost)
+        return makeError(ErrorCode::InvalidArgument, "fd: az and rack are at most {} bytes, host at most {}", kMaxFdLabel,
+                         kMaxFdHost);
+    if (hasNul(fd.az) || hasNul(fd.rack) || hasNul(fd.host)) return invalid("fd: text fields must not contain NUL");
+    if (!isValidUtf8(fd.az) || !isValidUtf8(fd.rack) || !isValidUtf8(fd.host))
+        return invalid("fd: az, rack and host must be valid UTF-8 (a value read in another code page?)");
+    if (serverBuild < 0) return invalid("serverBuild must not be negative");
+    return {};
+}
+
+Result<void> validateRegistration(const ProcessInfo& info) {
+    // Go's validate() (services/internal/orchestrator/registry.go), rule for rule, plus valid UTF-8
+    // in every string: yyjson writes nothing for invalid UTF-8, so such a registration would go
+    // out as an empty body and be refused (malformed JSON) on every retry.
+    if (info.name.empty() || info.name.size() > kMaxProcessName)
+        return makeError(ErrorCode::InvalidArgument, "name must be 1-{} bytes", kMaxProcessName);
+    FailureDomain fd = info.fd;
+    if (fd.host.empty()) fd.host = info.host; // Go fills fd.host from host
+    if (info.host.size() > kMaxFdHost)
+        return makeError(ErrorCode::InvalidArgument, "host is at most {} bytes", kMaxFdHost);
+    HELIOS_TRY(validatePlacement(fd, info.serverBuild));
+    if (info.address.size() > kMaxProcessField || info.version.size() > kMaxProcessField ||
+        info.zones.size() > kMaxZones)
+        return makeError(ErrorCode::InvalidArgument, "address and version are at most {} bytes, zones at most {}",
+                         kMaxProcessField, kMaxZones);
+    if (hasNul(info.name) || hasNul(info.address) || hasNul(info.host) || hasNul(info.version))
+        return invalid("text fields must not contain NUL");
+    const std::pair<const char*, const std::string*> text[] = {
+        {"name", &info.name}, {"kind", &info.kind},       {"address", &info.address},
+        {"host", &info.host}, {"version", &info.version},
+    };
+    for (const auto& [field, value] : text)
+        if (!isValidUtf8(*value)) return makeError(ErrorCode::InvalidArgument, "{} is not valid UTF-8", field);
+    for (const std::string& z : info.zones)
+        if (z.empty() || z.size() > kMaxZoneName || hasNul(z) || !isValidUtf8(z))
+            return makeError(ErrorCode::InvalidArgument, "zone names are 1-{} bytes of UTF-8 without NUL",
+                             kMaxZoneName);
+    if (info.kind == kKindGateway) {
+        // Go's netip.ParseAddrPort wants the port spelled out: "a.b.c.d:port" or "[v6]:port"
+        // (net::Address::parse would take a bare address as port 0).
+        const std::string_view a = info.address;
+        const usize colon = a.rfind(':');
+        const bool spelled = colon != std::string_view::npos && colon + 1 < a.size() &&
+                             (a.starts_with('[') ? colon > 0 && a[colon - 1] == ']' : a.find(':') == colon);
+        const auto addr = spelled ? net::Address::parse(a) : std::nullopt;
+        if (!addr || !addr->isValid())
+            return makeError(ErrorCode::InvalidArgument, "gateway address must be ip:port, got '{}'", info.address);
+        if (info.keyId == 0) return invalid("gateway must report its shard key id");
+    } else if (info.kind != kKindCell) {
+        return invalid("kind must be cell or gateway");
+    }
+    return {};
 }
 
 Result<RegisterResult> decodeRegisterResult(std::span<const u8> json) {
@@ -424,6 +517,13 @@ Result<HeartbeatRequest> decodeHeartbeatRequest(std::span<const u8> json) {
             m.load.freeSlots = getI64(load, "freeSlots", b);
             m.load.tickP99Ms = getF64(load, "tickP99Ms", b);
         }
+        forEach(r, "held", b, [&](yyjson_val* item) {
+            if (!yyjson_is_obj(item)) {
+                b = true;
+                return;
+            }
+            m.held.push_back(HeldRegion{getU64(item, "region", b), getU64(item, "leaseGen", b)});
+        });
     });
 }
 

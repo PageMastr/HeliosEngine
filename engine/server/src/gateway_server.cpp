@@ -148,6 +148,9 @@ Result<void> GatewayServer::init(i64 nowNs) {
         oc.info.version = m_config.version;
         oc.info.keyId = m_config.keyId;
         oc.info.capacity = m_config.maxClients;
+        oc.info.fd = m_config.failureDomain;
+        oc.info.serverBuild = m_config.serverBuild;
+        HELIOS_TRY(orch::validateRegistration(oc.info));
         m_orch = std::make_unique<OrchestratorClient>(*bus, std::move(oc));
         m_orch->setLoadProvider([this] {
             orch::Load load;

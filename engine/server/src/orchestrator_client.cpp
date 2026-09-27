@@ -105,6 +105,9 @@ void OrchestratorClient::sendHeartbeat(i64 nowNs) {
     req.processId = m_processId;
     req.epoch = m_epoch;
     if (m_load) req.load = m_load();
+    // 05 §1.4: the regions held with their generations, which the leader records and, on the
+    // degraded-mode exit (§1.4.4 step 1), reconciles against region_lease. held() is by region.
+    for (const authority::RegionAssignment& a : m_leases.held()) req.held.push_back(orch::HeldRegion{a.region.value, a.leaseGen});
     const u64 seq = m_seq;
     std::weak_ptr<Shared> shared = m_shared;
     // Like the Go agent, a heartbeat may take at most one interval.

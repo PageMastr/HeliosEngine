@@ -203,6 +203,10 @@ interpreter-versus-native run over the script corpus.
 computed by WP-3.1, from the patch list in `third_party/MANIFEST.md`. 0003 compiles to nothing outside
 AddressSanitizer builds, so it is not an input. All three are rebased on every Luau bump (K10).
 
+Debug sanitizer builds also compile Luau's interpreter loop (`VM/src/lvmexecute.cpp`) at `-O1`
+(`third_party/CMakeLists.txt`). At `-O0` ASan made its frame 128 KiB, so the `LUAI_MAXCCALLS` nested C
+calls of binding↔Luau recursion overflowed an 8 MiB stack instead of raising Luau's C-stack error.
+
 ## Threading rules
 
 * A `ScriptVm` is **owned by one job at a time**. It is not thread-safe: all members, bindings and

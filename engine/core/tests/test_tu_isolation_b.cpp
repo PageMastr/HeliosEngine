@@ -4,8 +4,6 @@
 
 #include "tu_isolation.h"
 
-namespace {
-
 constexpr int kProbeCounter = __COUNTER__;
 constexpr int kProbeLine = __LINE__ + 1;
 TEST_CASE("tu isolation: file B's probe runs file B's lambdas") {
@@ -23,8 +21,6 @@ TEST_CASE("tu isolation: both probe tests have the same doctest number") {
     CHECK(a.counter == b.counter);
     CHECK(a.line == b.line);
 }
-
-} // namespace
 
 // helios-lint: outside-anon-namespace begin (tu_isolation.h's siteB(), called above)
 helios::tu_isolation::Site helios::tu_isolation::siteB() {

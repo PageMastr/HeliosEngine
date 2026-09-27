@@ -111,7 +111,9 @@ bool remoteConfigured() { return envVar("HELIOS_NS03_GATEWAY").has_value() && en
 
 /// True when this host can bind `a`, which means it is one of this host's own addresses (a bind to
 /// an address of another machine fails with EADDRNOTAVAIL / WSAEADDRNOTAVAIL). Portable through
-/// net::UdpSocket, and covers every interface: LAN, link-local, VPN, container bridges.
+/// net::UdpSocket, and covers LAN, IPv4 link-local, VPN and container-bridge addresses. An IPv6
+/// link-local target needs a scope id, which net::Address does not carry, so it is neither bound
+/// here nor reachable, and the probe fails to connect instead.
 bool boundOnThisHost(const net::Address& a) {
     net::UdpSocketConfig c;
     c.bindAddress = a.withPort(0);

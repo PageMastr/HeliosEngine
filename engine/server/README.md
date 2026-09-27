@@ -266,7 +266,7 @@ lifetimes) runs against a real `helios-backend` when `HELIOS_NATS_URL` (and `HEL
     |---|---|
     | none configured | Skipped |
     | another machine, served | **Passed**, the only evidence result |
-    | loopback (127/8, `::1`), unspecified (`0.0.0.0`, `::`), or any address this host holds (found by binding it, so LAN, link-local, VPN and bridge addresses too) | Failed: `NS-0.3 remote: refused: …` |
+    | loopback (127/8, `::1`), unspecified (`0.0.0.0`, `::`), or any address this host holds (found by binding it, so LAN, IPv4 link-local, VPN and bridge addresses too) | Failed: `NS-0.3 remote: refused: …` |
     | the same, with `HELIOS_NS03_ALLOW_LOOPBACK=1` | Skipped when the smoke run passes, Failed when it does not |
     | a filter that matches no case (a renamed case) | Failed |
 

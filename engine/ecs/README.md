@@ -230,16 +230,19 @@ SPIKES.md §3 (Phase 0) and §5 (WP-1.1a).
 
 ## Known limitations
 
-* ADR-004a's indicator M1 (World burst / raw-flecs burst, ≤ 1.6×) is not demonstrated per run. After
-  WP-1.1a's third round the median over runs on the dev VM is about 1.4× with GCC and with Clang; a
-  quiet-VM series of that code had 1 of 24 runs above 1.6× (a quiet series of the second round's code
-  had 4 of 12 per compiler). The per-configuration medians are 1.23–1.35×, and the instruction ratio is
-  1.22–1.26×. A fourth round found nothing within option A's limits that moves the ratio by more than a
-  few percent: without the World's required bookkeeping the per-configuration ratio would be 1.04–1.10×.
-  With per-command creates instead of `spawnN`, M1 is 2.2–2.7×. The 9k-op burst takes 1.15–1.21 ms per
-  configuration there (0.90–0.91 ms with Clang), against the 1.5 ms of RT-01's structural clause, whose
-  formal run is on SERVER (ADR-004a M2). SPIKES.md §5 (§5.10–5.11 for the third and fourth rounds) has
-  the numbers and where the rest goes.
+* ADR-004a's indicator M1 (World burst / raw-flecs burst, ≤ 1.6× per run) is met by the owner's
+  decision of 2026-09-27, with little margin per run. On the shared dev VM a run skewed by a VM stall is
+  discarded (and still reported). A quiet-VM series of WP-1.1a's third-round code had 23 of 24 runs
+  ≤ 1.6×, with medians of 1.40× (GCC) and 1.415× (Clang); the one run above, at 1.82×, is the discarded
+  one. A quiet series of the second round's code had 4 of 12 runs per compiler above 1.6×. The
+  per-configuration medians are 1.23–1.35×, and the instruction ratio is 1.22–1.26×. A fourth round found
+  nothing within option A's limits that moves the ratio by more than a few percent: without the World's
+  required bookkeeping the per-configuration ratio would be 1.04–1.10×. M1 is met with `spawnN` creates
+  only: with per-command creates it is 2.2–2.7×, and which form the Phase 1 midpoint check and M2 use is
+  open (ADR-004a §7). The 9k-op burst takes 1.15–1.21 ms per configuration there (0.90–0.91 ms with
+  Clang), against the 1.5 ms of RT-01's structural clause, whose formal run is on SERVER (ADR-004a M2).
+  SPIKES.md §5 (§5.10–5.12 for the third and fourth rounds and the decision) has the numbers and where
+  the rest goes.
 * Sparse and DontFragment ownership checks call `flecs_component_sparse_has`, a flecs 4.1.6 internal
   declared in `src/flecs_internal.h`. A `static_assert` on the flecs version makes a flecs update
   re-check it.
@@ -269,8 +272,11 @@ SPIKES.md §3 (Phase 0) and §5 (WP-1.1a).
 
 ## Plan conformance
 
-Plan-Rev: 6
+Plan-Rev: 10
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
 `docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.
-WP-1.1a (ADR-004a option A, 2026-09-26) keeps that state: it changes no plan requirement.
+Revisions 7–9 change no anchor that maps to this module. Revision 10 is WP-1.1a's own change to
+ADR-004a (§6 M1 and M5, §7: its results, the `InFrame` choice and the owner's decision on the M1
+statistic). It records measurements of this module's code and bench, and adds no requirement that the
+code does not meet.

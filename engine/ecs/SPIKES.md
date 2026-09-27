@@ -397,7 +397,9 @@ more bench asymmetries (§5.3) and cut the per-command overhead further, bringin
 (GCC) and 1.57–1.60× (Clang) as medians over runs: marginal, and not demonstrated per run (§5.8). The
 owner then had a series run on a quiet VM, where a third of the runs still failed, and asked for more
 optimization. The third round (§5.10) brought M1 to about 1.4× with both compilers in the same kind of
-series. The numbers in §5.4 are the second round's.
+series. A second quiet series of that code had 1 of 24 runs above 1.6×. A fourth round (§5.11) measured
+what is left and changed no code. On 2026-09-27 the owner ruled that on the shared dev VM a run skewed by
+a VM stall is discarded, so M1 is met (§5.12, ADR-004a §7). The numbers in §5.4 are the second round's.
 
 ### 5.1 What changed
 
@@ -646,8 +648,8 @@ against 1,250. Revisit it if flecs makes non-fragmenting pair changes cheaper or
 
 ### 5.8 Verdict
 
-The second round's verdict; the third round's numbers are in §5.10, and M1 stays "not demonstrated per
-run" until the owner's quiet series shows otherwise.
+The second round's verdict, as it was written; the third round's numbers are in §5.10, and the owner's
+decision on M1 is in §5.12.
 
 * **M1 is marginal and not demonstrated per run on the shared VM.** The ADR defines M1 per run: the
   worst of 0/1/2/4 workers and both toggle storages, in the same run, in a release build. It defines
@@ -660,7 +662,7 @@ run" until the owner's quiet series shows otherwise.
     toggles. In instructions the World burst is 1.24–1.30× the raw-flecs burst.
   * The per-run value is the worst of eight noisy ratios, which is why it sits above both.
   * How to judge M1 (per run, a median over N runs, or per run on an idle runner) is for the owner to
-    rule on.
+    rule on. (Ruled on 2026-09-27: §5.12.)
 * DontFragment storage decides it, through the creates and destroys. Raw flecs does those in about
   0.27 ms (GCC) or 0.18 ms (Clang), the World in 0.45 ms or 0.33 ms. That weighs more against the cheap
   raw DontFragment toggles than against the tag toggles.
@@ -797,9 +799,10 @@ per DontFragment toggle and 14 ns per create.
 **The second quiet series.** The coordinator paused every other job again and ran 12 alternating runs
 per compiler of 510c5d2 (fresh Release builds, `--m1-gate`; load 0.1–2.3, from the bench's own
 workers). GCC: 1.40× [1.31–1.46], none above 1.6×. Clang: 1.415× [1.36–1.82], one above: run 4, at
-1.82× with DontFragment toggles and 1.22× with tag toggles. So M1 stays "not demonstrated per run"
-(1 of 24). The failing run was a stretch of about 1.3× over the typical worst configuration, not a
-whole-window slowdown of 1.66× like the ones in the loaded series.
+1.82× with DontFragment toggles and 1.22× with tag toggles. So M1 was not demonstrated per run (1 of
+24) until the owner's decision (§5.12), which discards that run. The failing run was a stretch of about
+1.3× over the typical worst configuration, not a whole-window slowdown of 1.66× like the ones in the
+loaded series.
 
 ### 5.11 Fourth round: what is left within option A
 
@@ -861,7 +864,43 @@ of this round's own check, whose DontFragment ratios (1.63–1.82×) sat beside 
 
 **Verdict.** Within option A's limits nothing measured moves the typical worst-configuration ratio by
 more than a few percent. The bookkeeping that separates the World from the floor is required by the
-structural contract, and its remaining pieces are 5–20 µs each. More margin needs one of the options in
-ADR-004a §7 ("Open for the owner"): a statistic over runs, a changed measurement, a flecs patch that
-puts the identity in the record flecs already touches, or option B.
+structural contract, and its remaining pieces are 5–20 µs each. More margin would need a changed
+measurement, a flecs patch that puts the identity in the record flecs already touches, or option B. The
+owner ruled on the statistic instead (§5.12).
 
+### 5.12 The owner's decision on M1 (2026-09-27)
+
+The owner ruled on ADR-004a §7's open item "the statistic" (the decision is quoted there): on the shared
+dev VM, M1 is judged per run, and a run skewed by a VM stall is discarded as an outlier. A discarded run
+is still reported. The threshold (1.6×) and the measurement (burst order, 7 bursts per side, their
+median, the worst of 4 configurations × 2 toggle storages) are unchanged, and so is M2.
+
+**The deciding series** is the second quiet series (§5.10; 510c5d2, every other job paused). 23 of its
+24 runs are ≤ 1.6×: GCC 1.31–1.46×, Clang 1.36–1.47× without the discarded run. The medians over all 12
+runs are 1.40× (GCC) and 1.415× (Clang), and 1.41× over Clang's 11 kept runs. The discarded run is Clang
+run 4: 1.82× with DontFragment toggles and 1.22× with tag toggles.
+
+**The evidence that it was a disturbance and not the code:**
+
+* It ran the same binary as the other 23 runs.
+* Its tag ratio was normal (the other Clang runs: 1.24–1.38×), so only its DontFragment measurements were
+  slow, about 1.3× above the typical worst configuration.
+* In series recorded burst by burst (§5.10), configurations above 1.6× had slow World bursts while the
+  raw bursts of the same configuration were not slow, and single slow bursts are about as frequent on
+  either side. Neither ASLR nor the placement of one World's memory explains the spread.
+* A configuration's median of 4 revert and 3 apply bursts is the slowest revert or the fastest apply, so
+  one slow burst moves it (§5.11).
+* The instruction ratio (callgrind, 1.22–1.26×) does not vary between runs.
+
+The run printed no per-burst times (`--m1-gate` without `--rounds`), so the stall is inferred from this
+signature, not observed.
+
+**Supporting data** (not the deciding series): the fourth round's check (§5.11) ran 12 alternating runs
+per compiler of bit-identical binaries (head 4442f19; load 0.1–2.4, not quiet). GCC: 1.42× [1.37–1.63];
+Clang: 1.41× [1.29–1.75]; 1 of 12 runs above 1.6× each. Both have the same signature: GCC run 7 at
+1.63× with DontFragment toggles and 1.33× with tag toggles, Clang run 8 at 1.75× and 1.28×.
+
+**What stays open.** The decision covers M1 as `ecs_bench` measures it, with `spawnN` creates. With
+per-command creates M1 is 2.24× (GCC) and 2.68× (Clang, §5.10), which is not met; which create form the
+Phase 1 midpoint check and M2 use is still open (ADR-004a §7). M2 on SERVER stays the formal RT-01
+decision at the Phase 1 gate, and K2 stays fired until it passes.

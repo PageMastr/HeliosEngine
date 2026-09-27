@@ -1,6 +1,8 @@
 # A required Khronos validation layer that does not load fails helios-rendertest, and
 # HELIOS_SKIP_GPU_TESTS=1 never turns that into a skip (RC-1's goldens must not pass unvalidated):
-#   1. the loader hides the layer (VK_LOADER_LAYERS_DISABLE);
+#   1. the loader hides the layer (VK_LOADER_LAYERS_DISABLE), also where no adapter matches
+#      (HELIOS_RHI_ADAPTER), so a probe without validation would find no device either: a layer error
+#      is never read as "no Vulkan device";
 #   2. the layer is listed but its library is missing (a broken manifest on VK_LAYER_PATH), with
 #      HELIOS_RHI_VALIDATION=1 as well, which once made the no-validation probe load it too;
 #   3. with the real layer present (LAYER set), HELIOS_RHI_VALIDATION=1 enables it on an ordinary
@@ -36,8 +38,11 @@ function(expect_layer_failure what)
   endforeach()
 endfunction()
 
-# 1. Hidden layer.
+# 1. Hidden layer, with and without a usable adapter.
 expect_layer_failure("the layer hidden by the loader")
+set(ENV{HELIOS_RHI_ADAPTER} "no-such-adapter-for-rendertest-validation-checks")
+expect_layer_failure("the layer hidden and no matching adapter")
+unset(ENV{HELIOS_RHI_ADAPTER})
 unset(ENV{VK_LOADER_LAYERS_DISABLE})
 
 # 2. A listed layer whose library does not exist; VK_LAYER_PATH replaces the search path, so the real

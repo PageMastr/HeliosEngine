@@ -26,6 +26,7 @@ _run_lint(licenses -DLINT_POLICY=${lint}/license_policy.cmake -DTHIRD_PARTY_DIR=
 _run_lint(vendor-patches -DTHIRD_PARTY_DIR=${root}/third_party -DMANIFEST=${root}/third_party/MANIFEST.md
           -P ${lint}/vendor_patches.cmake)
 _run_lint(ip-names -DLINT_POLICY=${lint}/ip_names_policy.cmake -DSOURCE_DIR=${root} -P ${lint}/ip_names.cmake)
+_run_lint(shipped-pipelines -DSOURCE_DIR=${root} -P ${root}/tools/rendertest/tests/shipped_pipelines_lint.cmake)
 _run_lint(windows-manifest -DMANIFEST=${root}/engine/platform/win/helios.manifest -P ${lint}/windows_manifest.cmake)
 if(BUILD_DIR)
   get_filename_component(buildDir "${BUILD_DIR}" ABSOLUTE BASE_DIR "${root}")

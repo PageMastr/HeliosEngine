@@ -1,14 +1,18 @@
 # RC-1 coverage lint (03 §9.3; engine/render/include/helios/render/shader_library.h). rendertest.coverage
 # sees a pipeline only when it was created through a record: createShippedPipeline() for engine/render's
 # features, createLocalPipeline() for helios-rendertest's own test shaders. A pipeline created directly
-# on the device, for example a state variant of already-covered shaders, would ship without a golden and
-# pass unnoticed. So under engine/, apps/samples/ and tools/rendertest/, every direct
-# `.createGraphicsPipeline(` / `.createComputePipeline(` call (also through `->`) fails, except in
-# engine/render/src/shader_library.cpp, which implements the record.
-#
-# A call that must stay direct carries a waiver on its own line or the line above:
+# on the device, for example a state variant of already-covered shaders under a new name, would ship
+# without a golden and pass unnoticed. So in engine/, apps/ and tools/, every identifier of the form
+# create<X>Pipeline other than those two fails: called with `.` or `->`, split across lines, or named
+# in a member-function pointer or std::invoke. Not scanned, each for a reason:
+#   engine/rhi/                           implements and tests the Device API itself
+#   tools/prebuilt/                       downloaded third-party SDKs (gitignored)
+#   tools/rendertest/tests/               this lint's fixtures
+#   engine/render/src/shader_library.cpp  implements the record
+# A use that must stay carries a waiver on its own line, or alone on the line above:
 #   // shipped-pipelines-lint: allow <reason, at least 12 characters>
-# Waived calls are listed in the output. tools/rendertest/tests/ (these fixtures) is not scanned.
+# Waived uses are listed in the output. The check is textual: an identifier built by token pasting,
+# or a member pointer obtained outside the scanned files, is not seen.
 #
 #   cmake -DSOURCE_DIR=<repository root> -P shipped_pipelines_lint.cmake
 
@@ -19,7 +23,7 @@ endif()
 get_filename_component(SOURCE_DIR "${SOURCE_DIR}" ABSOLUTE)
 
 set(files "")
-foreach(root engine/render apps/samples tools/rendertest)
+foreach(root engine apps tools)
   if(IS_DIRECTORY "${SOURCE_DIR}/${root}")
     file(GLOB_RECURSE found LIST_DIRECTORIES FALSE
          "${SOURCE_DIR}/${root}/*.cpp" "${SOURCE_DIR}/${root}/*.cc" "${SOURCE_DIR}/${root}/*.cxx"
@@ -29,18 +33,22 @@ foreach(root engine/render apps/samples tools/rendertest)
 endforeach()
 list(SORT files)
 
-set(call "(\\.|->)[ \t]*create(Graphics|Compute)Pipeline[ \t]*\\(")
+set(ident "[A-Za-z0-9_]*create[A-Za-z0-9_]*Pipeline[A-Za-z0-9_]*")  # whole identifiers containing it
 set(waiver "shipped-pipelines-lint:[ \t]*allow")
 set(findings "")
 set(waived "")
 set(scanned 0)
 foreach(f IN LISTS files)
   file(RELATIVE_PATH rel "${SOURCE_DIR}" "${f}")
-  if(rel MATCHES "^tools/rendertest/tests/" OR rel STREQUAL "engine/render/src/shader_library.cpp")
+  if(rel MATCHES "^(engine/rhi|tools/prebuilt|tools/rendertest/tests)/" OR
+     rel STREQUAL "engine/render/src/shader_library.cpp")
     continue()
   endif()
   math(EXPR scanned "${scanned} + 1")
   file(READ "${f}" text)
+  if(NOT text MATCHES "create[A-Za-z0-9_]+Pipeline")
+    continue()
+  endif()
   # One list element per line: characters with a meaning in CMake lists cannot split or join lines.
   string(REPLACE "\\" "/" text "${text}")
   string(REPLACE ";" "," text "${text}")
@@ -52,9 +60,21 @@ foreach(f IN LISTS files)
   set(previous "")
   foreach(line IN LISTS lines)
     math(EXPR number "${number} + 1")
-    if(line MATCHES "${call}")
+    string(REGEX MATCHALL "${ident}" names "${line}")
+    set(hit "")
+    foreach(name IN LISTS names)
+      if(name MATCHES "^create[A-Za-z0-9_]+Pipeline$" AND NOT name MATCHES "^create(Shipped|Local)Pipeline$")
+        set(hit "${name}")
+      endif()
+    endforeach()
+    if(hit)
+      # The waiver sits on this line, or alone on the previous one (a waiver after code covers its line only).
       set(reason "")
-      foreach(candidate "${line}" "${previous}")
+      set(candidates "${line}")
+      if(previous MATCHES "^[ \t]*//")
+        list(APPEND candidates "${previous}")
+      endif()
+      foreach(candidate IN LISTS candidates)
         if(reason STREQUAL "" AND candidate MATCHES "${waiver}(.*)$")
           string(STRIP "${CMAKE_MATCH_1}" reason)
           if(reason STREQUAL "")
@@ -64,7 +84,8 @@ foreach(f IN LISTS files)
       endforeach()
       string(STRIP "${line}" shown)
       if(reason STREQUAL "")
-        list(APPEND findings "${rel}:${number}: direct pipeline creation (use createShippedPipeline or createLocalPipeline): ${shown}")
+        list(APPEND findings
+             "${rel}:${number}: ${hit} outside createShippedPipeline/createLocalPipeline: ${shown}")
       else()
         string(LENGTH "${reason}" reasonLength)
         if(reason STREQUAL "<none>" OR reasonLength LESS 12)

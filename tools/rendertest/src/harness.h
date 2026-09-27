@@ -57,14 +57,17 @@ struct SceneResult {
 
 /// A device of `backend` for the tests (Vulkan prefers a software adapter so every machine compares
 /// against the same lavapipe goldens; HELIOS_RHI_ADAPTER overrides). With `requireValidation`,
-/// creation fails when the Khronos validation layer does not load.
-Result<std::unique_ptr<rhi::Device>> createTestDevice(Backend backend, bool validation, bool requireValidation = false);
+/// creation fails when the Khronos validation layer does not load. `validationFromEnvironment` false
+/// ignores HELIOS_RHI_VALIDATION (DeviceDesc::validationFromEnvironment).
+Result<std::unique_ptr<rhi::Device>> createTestDevice(Backend backend, bool validation, bool requireValidation = false,
+                                                      bool validationFromEnvironment = true);
 
 /// Seeded validation error (RC-1's goldens run under the layer): on a Vulkan device that requires
 /// the Khronos layer, records a barrier whose source state is wrong (the texture is in CopyDest, the
 /// barrier claims ShaderResource) and submits it. The Vulkan RHI does not track states, so only the
 /// layer can report it. Returns the layer's name and version and the first message it reported;
-/// fails when device creation fails or the layer reports nothing.
+/// fails when device creation fails, the layer reports nothing, or the device's
+/// validationErrorCount() (what fails a golden) did not count it.
 struct ValidationSelfTest {
     std::string layer;    ///< Caps::validationLayer.
     std::string message;  ///< First "Validation Error: [ ... ]" message, trimmed.

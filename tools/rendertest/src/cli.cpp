@@ -49,6 +49,9 @@ options:
                          backend, no GPU; --scene limits the scenes that count)
   --seed-name-collision  test hook for rendertest.cli: with --coverage, first create a rendertest
                          pipeline named like a shipped one, which the check must reject
+  --print-probe          test hook for rendertest.validation-required: print whether the Khronos layer
+                         is active on a default device (HELIOS_RHI_VALIDATION applies) and on the
+                         no-validation probe device (it must not be, whatever the environment says)
   -h, --help             this text
 
 environment: HELIOS_SKIP_GPU_TESTS=1 skips (passes) Vulkan scenes when no Vulkan device can be created;
@@ -73,13 +76,25 @@ std::vector<std::string> split(std::string_view list) {
 }
 
 /// A device for a run, or why there is none: `skip` (HELIOS_SKIP_GPU_TESTS=1 and no Vulkan device at
-/// all) or `error`. A missing validation layer is never a skip: when a required layer fails, the
-/// device is retried without validation, and if that works the layer is what failed.
+/// all) or `error`. A validation layer that fails is never a skip. A layer error (the loader's
+/// VK_ERROR_LAYER_NOT_PRESENT, the RHI's "required but not installed") always fails; for any other
+/// error with a required layer, a probe device without validation decides: if it exists, the layer
+/// is what failed.
 struct TestDevice {
     std::unique_ptr<rhi::Device> device;
     std::string skip;
     std::string error;
 };
+
+bool isLayerError(const std::string& error) {
+    return error.find("VK_ERROR_LAYER_NOT_PRESENT") != std::string::npos ||
+           error.find("VK_LAYER_KHRONOS_validation is required") != std::string::npos;
+}
+
+/// A Vulkan device without validation whatever HELIOS_RHI_VALIDATION says (the probe of openDevice).
+Result<std::unique_ptr<rhi::Device>> probeDevice() {
+    return createTestDevice(Backend::Vulkan, false, false, /*validationFromEnvironment=*/false);
+}
 
 TestDevice openDevice(Backend backend, bool validation, bool requireValidation) {
     auto device = createTestDevice(backend, validation, requireValidation);
@@ -88,7 +103,10 @@ TestDevice openDevice(Backend backend, bool validation, bool requireValidation) 
     if (backend != Backend::Vulkan || !envIs("HELIOS_SKIP_GPU_TESTS", "1")) {
         return {nullptr, {}, why + (backend == Backend::Vulkan ? " (HELIOS_SKIP_GPU_TESTS=1 skips machines without Vulkan)" : "")};
     }
-    if (requireValidation && createTestDevice(backend, false, false)) {
+    if (isLayerError(why)) {
+        return {nullptr, {}, why + " (the Khronos validation layer failed to load; HELIOS_SKIP_GPU_TESTS does not skip that)"};
+    }
+    if (requireValidation && probeDevice()) {
         return {nullptr, {}, why + " (a Vulkan device exists, so the required Khronos validation layer is what failed; "
                                    "HELIOS_SKIP_GPU_TESTS does not skip that)"};
     }
@@ -127,6 +145,7 @@ int runCli(const std::vector<std::string>& args, std::string& out, std::string& 
     bool selfTest = false;
     bool coverage = false;
     bool seedCollision = false;
+    bool printProbe = false;
     f64 budget = 600.0;
     std::optional<std::vector<std::string>> expected;
     for (usize i = 0; i < args.size(); ++i) {
@@ -186,6 +205,8 @@ int runCli(const std::vector<std::string>& args, std::string& out, std::string& 
             coverage = true;
         } else if (a == "--seed-name-collision") {
             seedCollision = true;
+        } else if (a == "--print-probe") {
+            printProbe = true;
         } else if (a == "-h" || a == "--help") {
             out += kUsage;
             return 0;
@@ -195,6 +216,19 @@ int runCli(const std::vector<std::string>& args, std::string& out, std::string& 
         }
     }
 
+    if (printProbe) {
+        for (const bool probe : {false, true}) {
+            auto device = probe ? probeDevice() : createTestDevice(Backend::Vulkan, false, false);
+            const char* which = probe ? "probe" : "default";
+            if (!device) {
+                err += std::format("helios-rendertest: {} device: {}\n", which, device.error().toString());
+                return 1;
+            }
+            out += std::format("{} device: Khronos validation {}\n", which,
+                               device.value()->caps().has(rhi::CapBit::ValidationLayer) ? "active" : "inactive");
+        }
+        return 0;
+    }
     if (selfTest) {
         if (auto device = openDevice(Backend::Vulkan, true, true); !device.device) {
             if (!device.skip.empty()) {

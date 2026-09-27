@@ -49,9 +49,13 @@ if(HELIOS_BUILD_TESTS)
   endif()
   set_tests_properties(rendertest.validation-layer PROPERTIES LABELS "gpu;rendertest" TIMEOUT 120)
   # A layer that is required but does not load fails, and HELIOS_SKIP_GPU_TESTS=1 never turns that into a skip.
+  set(layer_arg "")
+  if(HELIOS_VK_VALIDATION_LAYER)
+    set(layer_arg "-DLAYER=${HELIOS_VK_VALIDATION_LAYER}")
+  endif()
   add_test(NAME rendertest.validation-required
            COMMAND ${CMAKE_COMMAND} -DRENDERTEST=$<TARGET_FILE:helios-rendertest>
-                   -DOUT=${CMAKE_CURRENT_BINARY_DIR}/rendertest-validation-output
+                   -DOUT=${CMAKE_CURRENT_BINARY_DIR}/rendertest-validation-output ${layer_arg}
                    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/validation_checks.cmake)
   set_tests_properties(rendertest.validation-required PROPERTIES LABELS "gpu;rendertest" TIMEOUT 120
                        SKIP_REGULAR_EXPRESSION "SKIPPED: no Vulkan device")
@@ -69,8 +73,9 @@ if(HELIOS_BUILD_TESTS)
   # a scene whose lavapipe and Null goldens are committed (helios/render/shader_library.h).
   add_test(NAME rendertest.coverage COMMAND helios-rendertest --coverage)
   set_tests_properties(rendertest.coverage PROPERTIES LABELS "rendertest" TIMEOUT 120)
-  # ... which holds only if no pipeline bypasses the records: engine/render, apps/samples and
-  # tools/rendertest create pipelines only in createShippedPipeline() and createLocalPipeline().
+  # ... which holds only if no pipeline bypasses the records: engine/, apps/ and tools/ (except the
+  # RHI itself) create pipelines only in createShippedPipeline() and createLocalPipeline(). The lint
+  # needs no build; tools/ci/run_lints.cmake runs it too.
   set(pipeline_lint ${CMAKE_CURRENT_SOURCE_DIR}/tests/shipped_pipelines_lint.cmake)
   set(pipeline_fixtures ${CMAKE_CURRENT_SOURCE_DIR}/tests/shipped_pipelines)
   add_test(NAME lint_shipped_pipelines
@@ -80,7 +85,9 @@ if(HELIOS_BUILD_TESTS)
   # Seeded violations (tools/lint/expect_fail.cmake: the lint must exit non-zero AND say why).
   foreach(case "c7_state_variant|engine/render/src/forward.cpp:[0-9]+: .*createGraphicsPipeline"
                "sample_direct|apps/samples/demo/main.cpp:[0-9]+: .*createComputePipeline"
-               "waiver_without_reason|tools/rendertest/src/scenes.cpp:[0-9]+: .*waiver needs a reason")
+               "waiver_without_reason|tools/rendertest/src/scenes.cpp:[0-9]+: .*waiver needs a reason"
+               "indirect|shipped-pipelines lint: 4 finding"
+               "waiver_leak|engine/vfx/src/trails.cpp:4: createGraphicsPipeline outside")
     string(REPLACE "|" ";" parts "${case}")
     list(GET parts 0 fixture)
     list(GET parts 1 expect)
@@ -90,7 +97,8 @@ if(HELIOS_BUILD_TESTS)
                      -P ${PROJECT_SOURCE_DIR}/tools/lint/expect_fail.cmake)
   endforeach()
   foreach(t lint_shipped_pipelines lint_shipped_pipelines_fixture_clean lint_shipped_pipelines_fixture_c7_state_variant
-          lint_shipped_pipelines_fixture_sample_direct lint_shipped_pipelines_fixture_waiver_without_reason)
+          lint_shipped_pipelines_fixture_sample_direct lint_shipped_pipelines_fixture_waiver_without_reason
+          lint_shipped_pipelines_fixture_indirect lint_shipped_pipelines_fixture_waiver_leak)
     set_tests_properties(${t} PROPERTIES LABELS lint TIMEOUT 120)
   endforeach()
   # GPU-less CLI checks: skips overwrite stale results, removed scenes leave the report, --budget parsing,

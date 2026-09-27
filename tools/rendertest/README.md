@@ -29,32 +29,48 @@ point or a pipeline engine/render recorded through `createShippedPipeline()` is 
 lavapipe and Null goldens are both committed, and lists which scenes cover what. A new render feature
 therefore needs a scene and its goldens in the same commit; `--scene` limits the scenes that count.
 
-* **Complete record.** Scenes create their own pipelines through `createLocalPipeline()`
-  (`src/scenes.h`), and CTest `lint_shipped_pipelines` (`tests/shipped_pipelines_lint.cmake`, label
-  `lint`, seeded fixtures in `tests/shipped_pipelines/`) fails on any other direct `create*Pipeline`
-  call under `engine/render`, `apps/samples` and `tools/rendertest` unless it carries a reasoned
-  `// shipped-pipelines-lint: allow <reason>` waiver. So a shipped state variant created directly on the
-  device (review mutant C7) fails the lint instead of slipping past the coverage check.
-* **Names.** Coverage maps pipelines by the debug name in the Null trace. A rendertest pipeline named
-  like a shipped one fails the check (`rendertest pipeline '…' reuses the name of a shipped pipeline`),
-  and `createShippedPipeline()` rejects a shipped name reused with other shaders.
+* **No bypass.** Scenes create their own pipelines through `createLocalPipeline()` (`src/scenes.h`),
+  and CTest `lint_shipped_pipelines` (`tests/shipped_pipelines_lint.cmake`, label `lint`, seeded
+  fixtures in `tests/shipped_pipelines/`; also run by `tools/ci/run_lints.cmake`) fails on any
+  identifier `create<X>Pipeline` other than `createShippedPipeline`/`createLocalPipeline` in `engine/`,
+  `apps/` and `tools/` (not `engine/rhi/`, which implements the API, `tools/prebuilt/` or the fixtures),
+  unless a reasoned `// shipped-pipelines-lint: allow <reason>` waiver sits on its line or alone on the
+  line above. It catches `.` and `->` calls, calls split across lines, member-function pointers and
+  `std::invoke` that name the member (review mutants C7, L1, L3, L3b, L5); it is textual, so token
+  pasting and a member pointer obtained outside the scanned files are not seen.
+* **One name, one pipeline.** Coverage maps pipelines by the debug name in the Null trace, so
+  `createShippedPipeline()` rejects a recorded name reused with other shaders or other state (a
+  fingerprint of raster, depth, blend, formats, topology and samples; mutant C11), while the same desc
+  on another device is accepted. A rendertest pipeline named like a shipped one fails the check
+  (`rendertest pipeline '…' reuses the name of a shipped pipeline`; mutant C8).
 * **Known limits** (a narrowed gap in `scorecard.jsonc`): "bound" is not "visible": a pipeline bound
   only into a marked debug output counts although its output never reaches the PNG. Passes without a
   pipeline (uploads, copies, clears) and shaders that are not embedded in `helios_render` (cooked
-  SPIR-V, Phase 1) are not tracked.
+  SPIR-V, Phase 1) are not tracked, nor is a pipeline whose creation the lint cannot see.
 
 **Khronos validation (03 §1.5).** Where configure finds `VkLayer_khronos_validation.json` (the system
 layer directories, `VK_ADD_LAYER_PATH`, `VK_LAYER_PATH` or the Vulkan SDK; not when cross-compiling),
 the Vulkan scene tests pass `--require-validation`: the layer must load, or the test fails, and
-`HELIOS_SKIP_GPU_TESTS=1` only skips a machine without any Vulkan device, never a missing layer.
+`HELIOS_SKIP_GPU_TESTS=1` only skips a machine without any Vulkan device, never a layer that fails. A
+layer error (`VK_ERROR_LAYER_NOT_PRESENT`, "required but not installed") always fails; for any other
+device error, a probe device created without validation, whatever `HELIOS_RHI_VALIDATION` says
+(`DeviceDesc::validationFromEnvironment`), decides whether a Vulkan device exists.
 `rendertest.validation-layer` (`--validation-self-test`) prints the layer's name and version as the
 device reports them (`Caps::validationLayer`) and checks that the layer reports a seeded error: a
 barrier from the wrong state (`VUID-VkImageMemoryBarrier2-oldLayout-01197` on 1.3.275), which the
-Vulkan RHI itself does not track. `rendertest.validation-required` hides the layer from the loader
-(`VK_LOADER_LAYERS_DISABLE`) and checks that `--require-validation` then fails. Without the layer at
+Vulkan RHI itself does not track, and that `validationErrorCount()`, which fails a golden, counted it.
+`rendertest.validation-required` checks that `--require-validation` and the self-test fail, and are
+not skipped, when the loader hides the layer (`VK_LOADER_LAYERS_DISABLE`) and when a broken manifest
+on `VK_LAYER_PATH` lists a layer whose library is missing, with `HELIOS_SKIP_GPU_TESTS=1` and
+`HELIOS_RHI_VALIDATION=1`; where configure found the layer, it also checks through the `--print-probe`
+test hook that `HELIOS_RHI_VALIDATION=1` validates a default device but not the probe. Without the layer at
 configure time, the scenes run with `--validation` (unvalidated), `rendertest.validation-layer`
 reports Skipped, and every Vulkan result records `"validation": false`, which the report shows
-("validated" column, and a count in the summary line).
+("validated" column, and a count in the summary line). On Windows, `find_file` sees only
+`$VULKAN_SDK` (`Bin`, `share/vulkan/explicit_layer.d`), not layers the loader finds through the
+registry: on a machine without `VULKAN_SDK` the goldens then run unvalidated and
+`rendertest.validation-layer` reports Skipped, which is visible, not a silent pass. Follow-up for the
+`win-gpu` runner (WP-0.4): set `VULKAN_SDK`, or read the registry's layer list at configure time.
 
 ```
 helios-rendertest --list
@@ -74,7 +90,8 @@ validation error fails the scene), `rendertest.null.<scene>` (label `rendertest`
 `rendertest.report` (after the scene tests), `rendertest.validation-layer` and
 `rendertest.validation-required` (labels `gpu;rendertest`), `lint_shipped_pipelines` and its fixtures
 (label `lint`), and `rendertest.cli` (GPU-less CLI checks, including coverage failures for missing
-scenes, missing goldens and a name collision, the last through the `--seed-name-collision` test hook).
+scenes, missing goldens and a name collision, the last through the `--seed-name-collision` test hook;
+`--print-probe` is the other test hook).
 `HELIOS_SKIP_GPU_TESTS=1` turns a missing Vulkan device into a skip, which is recorded as a `skip`
 result (so an older passing result in the same `--out` directory cannot stand in for the run);
 the report ignores results of scenes that no longer exist. Golden updates need a justification in

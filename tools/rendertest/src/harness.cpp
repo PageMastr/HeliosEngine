@@ -146,13 +146,15 @@ std::string htmlEscape(std::string_view s) {
 
 std::string_view backendName(Backend backend) noexcept { return backend == Backend::Vulkan ? "vulkan" : "null"; }
 
-Result<std::unique_ptr<rhi::Device>> createTestDevice(Backend backend, bool validation, bool requireValidation) {
+Result<std::unique_ptr<rhi::Device>> createTestDevice(Backend backend, bool validation, bool requireValidation,
+                                                      bool validationFromEnvironment) {
     rhi::DeviceDesc desc;
     desc.appName = "helios-rendertest";
     desc.backend = backend == Backend::Vulkan ? rhi::Backend::Vulkan : rhi::Backend::Null;
     desc.enableSwapchain = false;  // offscreen only: no window system needed (CI, containers)
     desc.validation = validation || requireValidation;
     desc.requireValidation = requireValidation && backend == Backend::Vulkan;
+    desc.validationFromEnvironment = validationFromEnvironment;
     desc.adapterPreference = rhi::AdapterPreference::Software;
     return rhi::Device::create(desc);
 }
@@ -206,6 +208,10 @@ Result<ValidationSelfTest> runValidationSelfTest() {
     if (messages->layer.empty()) {
         return Error{ErrorCode::InvalidState,
                      std::format("the layer reported nothing for a barrier from the wrong state ({} RHI error(s))", result.errors)};
+    }
+    // The goldens fail through validationErrorCount(): the layer's report must reach it too.
+    if (result.errors == 0) {
+        return Error{ErrorCode::InvalidState, "the layer's error was not counted (validationErrorCount() is 0)"};
     }
     result.message = messages->layer.front().substr(0, 240);
     return result;

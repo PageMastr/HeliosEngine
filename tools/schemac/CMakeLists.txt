@@ -79,10 +79,4 @@ if(HELIOS_BUILD_TESTS)
     HELIOS_CMAKE_COMMAND="${CMAKE_COMMAND}"
     HELIOS_TEST_WORK_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_work")
   set_tests_properties(schemac_tests PROPERTIES TIMEOUT 600)
-  # TEMPORARY (reverted before merge): repeat the shared-lock test to reproduce the intermittent
-  # MSVC failure on CI (without the fix) and to verify the fix.
-  add_test(NAME schemac_lock_stress_TEMP
-    COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:schemac_tests> -DCOUNT=60 "-DFILTER=cli: parallel runs*,lock mutex:*"
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/TEMP_lock_stress.cmake)
-  set_tests_properties(schemac_lock_stress_TEMP PROPERTIES TIMEOUT 1800 RUN_SERIAL TRUE)
 endif()

@@ -71,7 +71,7 @@ TEST_CASE("shader library: the forward renderer records every pipeline with its 
     CHECK(recordedStages("Forward.Geometry") == Stages{"forward:vsMain", "forward:psMain"});
     CHECK(recordedStages("Forward.DebugNormals") == Stages{"forward:vsMain", "forward:psNormals"});
     CHECK(recordedStages("Forward.Exposure") == Stages{"exposure:csExposure"});
-    CHECK(recordedStages("Forward.Tonemap") == Stages{"tonemap:vsFullscreen", "tonemap:psTonemap"});
+    CHECK(recordedStages("Forward.Tonemap.RGBA8Unorm") == Stages{"tonemap:vsFullscreen", "tonemap:psTonemap"});
     const std::vector<ShippedPipeline> all = shippedPipelines();
     CHECK(std::is_sorted(all.begin(), all.end(),
                          [](const ShippedPipeline& a, const ShippedPipeline& b) { return a.name < b.name; }));
@@ -81,6 +81,18 @@ TEST_CASE("shader library: the forward renderer records every pipeline with its 
             CHECK(std::find(shipped.begin(), shipped.end(), e) != shipped.end());
         }
     }
+}
+
+TEST_CASE("shader library: forward renderers for two output formats coexist in one process") {
+    // Round-3 review mutant MF1: the tonemap's attachment format is pipeline state, so one name for
+    // every output format rejected the second renderer (an editor viewport next to a swapchain).
+    std::unique_ptr<rhi::Device> device = nullDevice();
+    auto unorm = ForwardRenderer::create(*device, rhi::Format::RGBA8Unorm);
+    REQUIRE(unorm.ok());
+    auto srgb = ForwardRenderer::create(*device, rhi::Format::BGRA8Srgb);
+    REQUIRE(srgb.ok());
+    CHECK(recordedStages("Forward.Tonemap.RGBA8Unorm") == Stages{"tonemap:vsFullscreen", "tonemap:psTonemap"});
+    CHECK(recordedStages("Forward.Tonemap.BGRA8Srgb") == Stages{"tonemap:vsFullscreen", "tonemap:psTonemap"});
 }
 
 TEST_CASE("shader library: unnamed, foreign, unknown-entry and conflicting pipelines are rejected") {
@@ -148,18 +160,42 @@ TEST_CASE("shader library: a state variant needs its own name; the same desc on 
     auto original = createShippedPipeline(*first, geo);
     REQUIRE(original.ok());
 
-    // Every part of the state counts, one field at a time.
-    std::vector<rhi::GraphicsPipelineDesc> variants(8, geo);
-    variants[0].raster.cullMode = rhi::CullMode::None;  // C11
-    variants[1].raster.depthBiasSlope = 1.0f;
-    variants[2].depth.writeEnable = false;
-    variants[3].blend[0] = rhi::BlendState::premultiplied();
-    variants[4].colorFormats[0] = rhi::Format::RGBA8Unorm;
-    variants[5].topology = rhi::PrimitiveTopology::LineList;
-    variants[6].sampleCount = 4;
-    variants[7].depthFormat = rhi::Format::Unknown;
-    variants[7].depth = {};
-    for (const rhi::GraphicsPipelineDesc& variant : variants) {
+    // Every part of the state counts: one row per member of the fingerprint (review mutants FK1-FK6
+    // each dropped one of them from the key).
+    using Desc = rhi::GraphicsPipelineDesc;
+    struct Variant {
+        const char* field;
+        void (*change)(Desc&);
+    };
+    const Variant variants[] = {
+        {"topology", [](Desc& d) { d.topology = rhi::PrimitiveTopology::LineList; }},
+        {"raster.cullMode", [](Desc& d) { d.raster.cullMode = rhi::CullMode::None; }},  // C11
+        {"raster.frontFace", [](Desc& d) { d.raster.frontFace = rhi::FrontFace::Clockwise; }},
+        {"raster.polygonMode", [](Desc& d) { d.raster.polygonMode = rhi::PolygonMode::Line; }},
+        {"raster.depthClamp", [](Desc& d) { d.raster.depthClamp = true; }},
+        {"raster.depthBiasConstant", [](Desc& d) { d.raster.depthBiasConstant = 1.0f; }},
+        {"raster.depthBiasSlope", [](Desc& d) { d.raster.depthBiasSlope = 1.0f; }},
+        {"raster.depthBiasClamp", [](Desc& d) { d.raster.depthBiasClamp = 1.0f; }},
+        {"depth.testEnable", [](Desc& d) { d.depth.testEnable = false; }},
+        {"depth.writeEnable", [](Desc& d) { d.depth.writeEnable = false; }},
+        {"depth.compareOp", [](Desc& d) { d.depth.compareOp = rhi::CompareOp::Always; }},
+        {"colorCount", [](Desc& d) { d.colorCount = 2; }},
+        {"colorFormats[0]", [](Desc& d) { d.colorFormats[0] = rhi::Format::RGBA8Unorm; }},
+        {"blend[0].enable", [](Desc& d) { d.blend[0].enable = true; }},
+        {"blend[0].srcColor", [](Desc& d) { d.blend[0].srcColor = rhi::BlendFactor::SrcAlpha; }},
+        {"blend[0].dstColor", [](Desc& d) { d.blend[0].dstColor = rhi::BlendFactor::One; }},
+        {"blend[0].colorOp", [](Desc& d) { d.blend[0].colorOp = rhi::BlendOp::Max; }},
+        {"blend[0].srcAlpha", [](Desc& d) { d.blend[0].srcAlpha = rhi::BlendFactor::Zero; }},
+        {"blend[0].dstAlpha", [](Desc& d) { d.blend[0].dstAlpha = rhi::BlendFactor::One; }},
+        {"blend[0].alphaOp", [](Desc& d) { d.blend[0].alphaOp = rhi::BlendOp::Min; }},
+        {"blend[0].writeMask", [](Desc& d) { d.blend[0].writeMask = rhi::ColorWrite::R; }},
+        {"depthFormat", [](Desc& d) { d.depthFormat = rhi::Format::D16Unorm; }},
+        {"sampleCount", [](Desc& d) { d.sampleCount = 4; }},
+    };
+    for (const Variant& row : variants) {
+        CAPTURE(row.field);
+        rhi::GraphicsPipelineDesc variant = geo;
+        row.change(variant);
         auto rejected = createShippedPipeline(*first, variant);
         CHECK(rejected.errorCode() == ErrorCode::InvalidArgument);
         if (!rejected) CHECK(rejected.error().message.find("other state") != std::string::npos);
@@ -180,7 +216,8 @@ TEST_CASE("shader library: a state variant needs its own name; the same desc on 
     second->destroy(onSecond.value());
 
     // A variant with its own name is its own pipeline (and needs its own golden).
-    rhi::GraphicsPipelineDesc twoSided = variants[0];
+    rhi::GraphicsPipelineDesc twoSided = geo;
+    twoSided.raster.cullMode = rhi::CullMode::None;
     twoSided.name = "Test.StateVariant.TwoSided";
     auto renamed = createShippedPipeline(*first, twoSided);
     REQUIRE(renamed.ok());

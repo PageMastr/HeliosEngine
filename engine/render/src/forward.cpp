@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <format>
+#include <string>
 
 #include "helios/math/scalar.h"
 #include "helios/render/shader_library.h"
@@ -251,7 +252,10 @@ Result<std::unique_ptr<ForwardRenderer>> ForwardRenderer::create(rhi::Device& de
     tone.fragment = {helios_render_shaders::tonemap(), "psTonemap"};
     tone.colorCount = 1;
     tone.colorFormats[0] = outputFormat;
-    tone.name = "Forward.Tonemap";
+    // The attachment format is pipeline state, so each output format is its own recorded pipeline
+    // (one name, one pipeline) and needs its own golden to count as covered.
+    const std::string toneName = std::format("Forward.Tonemap.{}", rhi::formatName(outputFormat));
+    tone.name = toneName;
     HELIOS_TRY_ASSIGN(r->m_tonemap, createShippedPipeline(device, tone));
     return r;
 }

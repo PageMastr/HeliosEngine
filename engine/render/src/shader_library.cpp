@@ -50,54 +50,62 @@ Result<std::vector<ShippedEntryPoint>> resolveStages(std::string_view pipeline,
     }
     std::vector<ShippedEntryPoint> out;
     for (const rhi::ShaderDesc* stage : stages) {
-        const std::string_view module = embeddedModule(stage->spirv);
+        // Names every member of ShaderDesc (see stateKey()): a new one fails to compile here.
+        const auto& [spirv, entryPoint] = *stage;
+        const std::string_view module = embeddedModule(spirv);
         if (module.empty()) {
             return Error{ErrorCode::InvalidArgument,
                          std::format("pipeline '{}': the SPIR-V of '{}' is not a module embedded in helios_render",
-                                     pipeline, stage->entryPoint)};
+                                     pipeline, entryPoint)};
         }
-        HELIOS_TRY_ASSIGN(ShaderReflection reflection, reflectSpirv(stage->spirv));
-        const ShaderEntryPoint* entry = reflection.findEntryPoint(stage->entryPoint);
+        HELIOS_TRY_ASSIGN(ShaderReflection reflection, reflectSpirv(spirv));
+        const ShaderEntryPoint* entry = reflection.findEntryPoint(entryPoint);
         if (!entry) {
             return Error{ErrorCode::InvalidArgument,
                          std::format("pipeline '{}': module '{}' has no entry point '{}'", pipeline, module,
-                                     stage->entryPoint)};
+                                     entryPoint)};
         }
-        out.push_back({std::string(module), std::string(stage->entryPoint), entry->stage});
+        out.push_back({std::string(module), std::string(entryPoint), entry->stage});
     }
     return out;
 }
 
-// stateKey() must see every field of the descs except the shaders and the name; these catch a new field.
-static_assert(sizeof(rhi::RasterState) == 16 && sizeof(rhi::DepthState) == 3 && sizeof(rhi::BlendState) == 8,
-              "a pipeline state struct changed: update stateKey()");
-static_assert(sizeof(rhi::GraphicsPipelineDesc) == 200 && sizeof(rhi::ComputePipelineDesc) == 48,
-              "a pipeline desc changed: update stateKey()");
-
 u32 bits(f32 value) noexcept { return std::bit_cast<u32>(value); }
+
+// stateKey() must see every member of the descs except the shaders (recorded as entry points) and the
+// name (the record's key). Its structured bindings name every non-static data member of each desc and
+// state struct, so a new member, also one that fits in padding, fails to compile until it is added
+// here and to the key.
 
 /// Fingerprint of a graphics desc without its shaders and name: topology, raster, depth, attachments
 /// (formats and blend of each used color attachment, depth format) and sample count.
 std::string stateKey(const rhi::GraphicsPipelineDesc& d) {
-    const rhi::RasterState& r = d.raster;
+    [[maybe_unused]] const auto& [vertex, fragment, topology, raster, depth, colorCount, colorFormats, blend,
+                                  depthFormat, sampleCount, name] = d;
+    const auto& [cullMode, frontFace, polygonMode, depthClamp, depthBiasConstant, depthBiasSlope,
+                 depthBiasClamp] = raster;
+    const auto& [testEnable, writeEnable, compareOp] = depth;
     std::string key = std::format("graphics topology={} cull={} front={} fill={} clamp={} bias={:08x}/{:08x}/{:08x} "
                                   "depth={}{}{} depthFormat={} samples={} colors={}",
-                                  static_cast<u32>(d.topology), static_cast<u32>(r.cullMode),
-                                  static_cast<u32>(r.frontFace), static_cast<u32>(r.polygonMode), r.depthClamp,
-                                  bits(r.depthBiasConstant), bits(r.depthBiasSlope), bits(r.depthBiasClamp),
-                                  d.depth.testEnable, d.depth.writeEnable, static_cast<u32>(d.depth.compareOp),
-                                  static_cast<u32>(d.depthFormat), d.sampleCount, d.colorCount);
-    for (u32 i = 0; i < d.colorCount && i < rhi::kMaxColorAttachments; ++i) {
-        const rhi::BlendState& b = d.blend[i];
-        key += std::format(" [{} blend={} {}/{}/{} {}/{}/{} mask={}]", static_cast<u32>(d.colorFormats[i]), b.enable,
-                           static_cast<u32>(b.srcColor), static_cast<u32>(b.dstColor), static_cast<u32>(b.colorOp),
-                           static_cast<u32>(b.srcAlpha), static_cast<u32>(b.dstAlpha), static_cast<u32>(b.alphaOp),
-                           static_cast<u32>(b.writeMask));
+                                  static_cast<u32>(topology), static_cast<u32>(cullMode),
+                                  static_cast<u32>(frontFace), static_cast<u32>(polygonMode), depthClamp,
+                                  bits(depthBiasConstant), bits(depthBiasSlope), bits(depthBiasClamp), testEnable,
+                                  writeEnable, static_cast<u32>(compareOp), static_cast<u32>(depthFormat),
+                                  sampleCount, colorCount);
+    for (u32 i = 0; i < colorCount && i < rhi::kMaxColorAttachments; ++i) {
+        const auto& [enable, srcColor, dstColor, colorOp, srcAlpha, dstAlpha, alphaOp, writeMask] = blend[i];
+        key += std::format(" [{} blend={} {}/{}/{} {}/{}/{} mask={}]", static_cast<u32>(colorFormats[i]), enable,
+                           static_cast<u32>(srcColor), static_cast<u32>(dstColor), static_cast<u32>(colorOp),
+                           static_cast<u32>(srcAlpha), static_cast<u32>(dstAlpha), static_cast<u32>(alphaOp),
+                           static_cast<u32>(writeMask));
     }
     return key;
 }
 /// A compute desc has nothing but its shader and name.
-std::string stateKey(const rhi::ComputePipelineDesc&) { return "compute"; }
+std::string stateKey(const rhi::ComputePipelineDesc& d) {
+    [[maybe_unused]] const auto& [compute, name] = d;
+    return "compute";
+}
 
 /// InvalidArgument when `name` is recorded with other entry points or other state (a variant must
 /// have its own name, so the Null trace tells it apart). Caller holds the record's mutex.

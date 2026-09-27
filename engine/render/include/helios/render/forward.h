@@ -116,7 +116,9 @@ class ForwardRenderer {
 public:
     /// Creates the pipelines from the embedded SPIR-V (forward, exposure, tonemap) for an output
     /// texture of `outputFormat` (an sRGB format gets hardware encoding, UNORM formats are encoded
-    /// in the shader). Checks the push-constant layouts against the shaders' reflection.
+    /// in the shader). Checks the push-constant layouts against the shaders' reflection. The tonemap
+    /// pipeline is named per output format ("Forward.Tonemap.RGBA8Unorm"), so renderers for several
+    /// formats can coexist in one process (see helios/render/shader_library.h).
     static Result<std::unique_ptr<ForwardRenderer>> create(rhi::Device& device, rhi::Format outputFormat);
     ~ForwardRenderer();
     ForwardRenderer(const ForwardRenderer&) = delete;

@@ -64,6 +64,8 @@ struct StaticRoute {
 struct GatewayConfig {
     std::string name = "gw-1";
     std::string version;
+    orch::FailureDomain failureDomain; ///< RegisterProcess `fd` (from the placer; 05 §1.4.3).
+    i64 serverBuild = 0;               ///< RegisterProcess `serverBuild` (0 = unknown).
 
     // --- client side (the only public game port) --------------------------------------------
     net::Address listen = net::Address::ipv4(127, 0, 0, 1, 7777);

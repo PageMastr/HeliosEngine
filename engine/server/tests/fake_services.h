@@ -43,6 +43,26 @@ public:
     FakeOrchestrator(FakeBus& bus, std::string shard, std::vector<std::pair<u64, std::string>> zones)
         : m_bus(bus), m_shard(std::move(shard)) {
         for (auto& [id, name] : zones) m_zones[id] = Zone{id, name, 0, 0};
+        setServing(true);
+    }
+    ~FakeOrchestrator() { setServing(false); }
+
+    /// Answer every request with "unavailable" (a leadership change) while set.
+    bool unavailable = false;
+    /// Drop requests silently while set (the orchestrator is partitioned away): callers time out.
+    bool silent = false;
+    i64 heartbeatIntervalMs = 1000;
+    u32 idShard = 3;
+
+    /// false unsubscribes every method, so requests fail with no responders (the orchestrator
+    /// process is gone while NATS is up); true serves again with the registry kept.
+    void setServing(bool serving) {
+        if (!serving) {
+            for (u64 s : m_subs) m_bus.unsubscribe(s);
+            m_subs.clear();
+            return;
+        }
+        if (!m_subs.empty()) return;
         auto sub = [&](const char* method, void (FakeOrchestrator::*fn)(const BusMessage&)) {
             m_subs.push_back(*m_bus.subscribe(orch::orchestratorSubject(m_shard, method),
                                               [this, fn](const BusMessage& m) { (this->*fn)(m); }));
@@ -53,16 +73,9 @@ public:
         sub("Deregister", &FakeOrchestrator::onDeregister);
         sub("ResolveZone", &FakeOrchestrator::onResolve);
     }
-    ~FakeOrchestrator() {
-        for (u64 s : m_subs) m_bus.unsubscribe(s);
-    }
-
-    /// Answer every request with "unavailable" (a leadership change) while set.
-    bool unavailable = false;
-    /// Drop requests silently while set (the orchestrator is partitioned away): callers time out.
-    bool silent = false;
-    i64 heartbeatIntervalMs = 1000;
-    u32 idShard = 3;
+    /// The `held` list of the last heartbeat each process id sent (answered or not).
+    std::map<u64, std::vector<orch::HeldRegion>> lastHeld;
+    u64 heartbeatRequests = 0; ///< Heartbeats received, answered or not.
 
     /// Forgets a process (as a lease expiry or a new leader would): its next heartbeat gets
     /// lease_lost and its zones are placed again.
@@ -170,8 +183,12 @@ private:
     }
 
     void onHeartbeat(const BusMessage& m) {
-        if (!gate(m)) return;
         auto req = orch::decodeHeartbeatRequest(m.data);
+        if (req) {
+            ++heartbeatRequests;
+            lastHeld[req->processId] = req->held;
+        }
+        if (!gate(m)) return;
         if (!req) {
             replyError(m_bus, m, orch::kCodeInvalidArgument, "malformed JSON request");
             return;

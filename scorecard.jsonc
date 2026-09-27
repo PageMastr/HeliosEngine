@@ -37,7 +37,9 @@
     "windows-go": {"os": "windows", "default": true,
                    "description": "go test ./... and -tags integration (embedded PostgreSQL)"},
     "windows-local": {"os": "windows", "default": true, "nightly": false,
-                      "description": "tools/milestone/validate.ps1 on the user's Windows machine (09 §5.9)"}
+                      "description": "tools/milestone/validate.ps1 on the user's Windows machine (09 §5.9)"},
+    "windows-lab": {"os": "windows", "default": false, "nightly": false,
+                    "description": "WP-0.4's lab pair (09 §5.6 class H): server_tests_ns03_remote from the win-gpu runner's MSVC build against helios-gateway and helios-cell on a Linux lab host. Not produced yet: nightly.yml gains the job when WP-0.4 registers the runner, and this run then drops \"nightly\": false"}
   },
 
   // Commands the nightly workflow runs outside CTest; each writes one JUnit result named after the gate.
@@ -274,12 +276,20 @@
     {
       "id": "NS-0.3", "phase": 0, "source": "04 §11.4", "owner": "WP-0.14",
       "title": "Windows client ↔ Linux gateway interop",
-      "class": "N", "platforms": ["linux", "windows"],
+      "class": "N+H", "platforms": ["linux", "windows"],
       "threshold": "Windows client ↔ Linux gateway interop",
-      "status": "unmeasured",
-      "tests": [],
+      "notes": "N+H (09 §5.6, the Director's decision on PR #16). N, nightly on Windows and Linux: every toolchain encodes and decodes the recorded client and trunk wire bytes (tests/data/wire_vectors.tsv), refuses a same-host target (server_tests_ns03_refusal seeds 127.0.0.1) and runs the real-UDP loopback path. H: server_tests_ns03_remote counts only from the windows-lab run; the case fails for a loopback, unspecified or host-held target, so a pass comes from another machine. Supporting evidence, not the verdict: on 2026-09-27 the owner ran the case by hand from a MinGW-w64-built Windows client against a Linux gateway in WSL over its virtual network, 2 of 2 passes, each with the Welcome, 10/10 echoes and 20 tick states and no mismatches (PR #16)",
+      "status": "partial",
+      "tests": [
+        {"doctest": "server_tests", "case": "server.interop: NS-0.3 wire bytes are the recorded ones on every toolchain"},
+        {"doctest": "server_tests", "case": "server.interop: NS-0.3 the recorded bytes decode to the same values"},
+        {"doctest": "server_tests", "case": "server.interop: NS-0.3 targets on this host are refused as cross-host evidence"},
+        {"ctest": "server_tests_ns03_refusal"},
+        {"doctest": "server_tests", "case": "server.e2e: real UDP loopback sockets"},
+        {"ctest": "server_tests_ns03_remote", "platforms": ["windows"], "run": "windows-lab"}
+      ],
       "gaps": [
-        {"clause": "No cross-host job pairs a Windows client with a Linux gateway (the e2e tests run both ends on one host)", "state": "unmeasured", "owner": "WP-0.14"}
+        {"clause": "H: no lab run yet, so the cross-host half is unmeasured (it counts as failing), and no MSVC-built client has run against a Linux gateway. WP-0.4 registers win-gpu and puts a Linux host on its network running `helios-cell --standalone --trunk-keys ring.json` and `helios-gateway --standalone --listen <lan-ip>:7777 --keys ring.json --trunk-keys ring.json`; nightly.yml then builds windows-msvc-release on win-gpu, runs `ctest -R server_tests_ns03_remote` with HELIOS_NS03_GATEWAY=<lan-ip>:7777 and HELIOS_NS03_KEYS=ring.json, and uploads the result set as windows-lab", "state": "unmeasured", "owner": "WP-0.4"}
       ]
     },
     {
@@ -322,9 +332,11 @@
       "title": "Empty-zone tick < 0.5 ms",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Empty-zone tick < 0.5 ms",
+      "notes": "The perf case gates the p99 of 2,000 ticks (the tick graph's time and ZoneHost::runDue's wall time) on the serial perf run and reports the max; the main-suite case checks the median and p90 of 400 ticks on every run, Windows included",
       "status": "measured",
       "tests": [
-        {"doctest": "server_tests", "case": "server.zonehost: NS-0.6 an empty zone ticks in < 0.5 ms"}
+        {"doctest": "server_tests", "case": "server.zonehost: NS-0.6 an empty zone ticks in < 0.5 ms"},
+        {"doctest": "server_tests", "case": "perf: NS-0.6 an empty zone ticks in < 0.5 ms (p99 of 2,000 ticks)", "platforms": ["linux"], "run": "linux-gcc"}
       ]
     },
     {

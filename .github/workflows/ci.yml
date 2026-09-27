@@ -30,6 +30,15 @@ jobs:
         run: cmake --build --preset windows-msvc-release
       - name: Test (no GPU on hosted runners)
         run: ctest --preset windows-msvc-release -LE "gpu|perf"
+      # NS-0.3's cross-host check with an MSVC-built client, on a machine without the toolchain
+      # (engine/server/README.md, "Acceptance"). Static CRT: the .exe needs nothing else.
+      - name: Upload the MSVC server_tests.exe for the NS-0.3 cross-host check
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-tests-msvc
+          path: build/windows-msvc-release/bin/server_tests.exe
+          retention-days: 7
+          if-no-files-found: error
 
   # Supported floor: VS 2022 17.14 / MSVC 14.44 on the pinned windows-2022 image (ADR-001).
   windows-msvc-floor:

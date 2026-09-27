@@ -48,6 +48,10 @@ Control plane
   --backend-data <dir>      helios-backend's data directory (default ./saved/backend)
   --shard <name>            NATS subject scope (env HELIOS_SHARD, default dev)
   --name <name>             process name (default cell-1)
+  --fd-az, --fd-rack, --fd-host <label>
+                            failure domain sent with RegisterProcess (env HELIOS_FD_AZ,
+                            HELIOS_FD_RACK, HELIOS_FD_HOST; set by the placer, default empty)
+  --server-build <n>        server build sent with RegisterProcess (env HELIOS_SERVER_BUILD)
 
 Other
   --workers <n>             job workers (default: cores - 2)
@@ -94,6 +98,10 @@ int run(const ProcessArgs& args) {
     config.name = args.get("name", "HELIOS_CELL_NAME", "cell-1");
     config.version = std::string(version::kString);
     config.shard = args.get("shard", "HELIOS_SHARD", "dev");
+    auto placement = placementFromArgs(args);
+    if (!placement) return fail(2, std::format("{}", placement.error().message));
+    config.failureDomain = placement->fd;
+    config.serverBuild = placement->serverBuild;
     auto bind = parseAddress(args.get("trunk", "", "127.0.0.1:7810"), "--trunk");
     if (!bind) return fail(2, std::format("{}", bind.error().message));
     config.trunkBind = *bind;

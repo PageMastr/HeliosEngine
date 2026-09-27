@@ -1,5 +1,6 @@
 #include "helios/server/app_env.h"
 
+#include <charconv>
 #include <csignal>
 #include <cstdlib>
 #include <system_error>
@@ -158,6 +159,21 @@ Result<net::Address> parseAddress(std::string_view text, std::string_view what) 
     auto a = net::Address::parse(text);
     if (!a || !a->isValid()) return makeError(ErrorCode::InvalidArgument, "{}: '{}' is not an ip:port address", what, text);
     return *a;
+}
+
+Result<Placement> placementFromArgs(const ProcessArgs& args) {
+    Placement p;
+    p.fd.az = args.get("fd-az", "HELIOS_FD_AZ");
+    p.fd.rack = args.get("fd-rack", "HELIOS_FD_RACK");
+    p.fd.host = args.get("fd-host", "HELIOS_FD_HOST");
+    const std::string build = args.get("server-build", "HELIOS_SERVER_BUILD");
+    if (!build.empty()) {
+        const auto [end, ec] = std::from_chars(build.data(), build.data() + build.size(), p.serverBuild);
+        if (ec != std::errc{} || end != build.data() + build.size() || p.serverBuild < 0)
+            return makeError(ErrorCode::InvalidArgument, "--server-build / HELIOS_SERVER_BUILD: '{}' is not a build number", build);
+    }
+    HELIOS_TRY(orch::validatePlacement(p.fd, p.serverBuild));
+    return p;
 }
 
 } // namespace helios::server

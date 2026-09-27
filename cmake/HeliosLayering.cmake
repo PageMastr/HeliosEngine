@@ -316,9 +316,12 @@ function(helios_check_module_graph)
         list(APPEND errors "helios layering: HEADLESS module '${name}' reaches a non-HEADLESS module or graphics library: ${path}")
       endif()
     endif()
-    # HELIOS_MODULE_ORDER must be a topological order of the modules it lists.
+    # HELIOS_MODULE_ORDER lists every module (02 §1.1: it "gains the new modules"), in a topological
+    # order. Without this check a module missing from it is added after all the others, unnoticed.
     list(FIND order "${name}" myIndex)
-    if(myIndex GREATER -1)
+    if(myIndex EQUAL -1)
+      list(APPEND errors "helios layering: module '${name}' is not in HELIOS_MODULE_ORDER; add it to engine/CMakeLists.txt's list after its dependencies")
+    else()
       foreach(d IN LISTS deps)
         get_target_property(dname "${d}" HELIOS_MODULE_NAME)
         list(FIND order "${dname}" depIndex)

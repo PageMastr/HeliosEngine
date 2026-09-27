@@ -382,11 +382,14 @@ foreach(case
     "genex_if|HEADLESS module 'net' reaches a non-HEADLESS module or graphics library: helios_net -> SDL3-static"
     "editor_only_client|client executable 'fx-client' links an EDITOR_ONLY module"
     "editor_only_server|cell executable 'fx-cell' links an EDITOR_ONLY module"
+    "editor_only_gateway|gateway executable 'fx-gateway' links an EDITOR_ONLY module: fx-gateway -> helios_assetpipe"
     "server_graphics|cell executable 'fx-cell' may link only HEADLESS modules"
     "runtime_to_editor|is not EDITOR_ONLY but depends on EDITOR_ONLY module 'assetpipe'"
     "cycle|dependency cycle between modules"
     "missing_layer|module 'mystery' has no layer"
     "layer_mismatch|contradicts the layering table"
+    "flag_mismatch|helios_module.net EDITOR_ONLY. contradicts the layering table .* is not EDITOR_ONLY"
+    "unordered|module 'net' is not in HELIOS_MODULE_ORDER"
     "bad_order|HELIOS_MODULE_ORDER lists 'ecs' before its dependency 'reflect'")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)

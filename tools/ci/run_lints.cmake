@@ -1,6 +1,6 @@
-# Runs the repository lints that need no build (licences, vendored patches, IP names, Windows
-# manifest, test namespaces), and the ISA audit when a build directory is given. One entry point for
-# CI jobs and pre-commit hooks:
+# Runs the repository lints that need no build (licences, vendored patches, IP names, shipped pipelines,
+# Windows manifest, test namespaces, and the D6 status check of 09 §5.10.2, which needs Python 3.10+), and
+# the ISA audit when a build directory is given. One entry point for CI jobs and pre-commit hooks:
 #
 #   cmake -P tools/ci/run_lints.cmake                         # from the repository root
 #   cmake -DBUILD_DIR=build/linux-gcc -P tools/ci/run_lints.cmake
@@ -29,6 +29,8 @@ _run_lint(ip-names -DLINT_POLICY=${lint}/ip_names_policy.cmake -DSOURCE_DIR=${ro
 _run_lint(shipped-pipelines -DSOURCE_DIR=${root} -P ${root}/tools/rendertest/tests/shipped_pipelines_lint.cmake)
 _run_lint(windows-manifest -DMANIFEST=${root}/engine/platform/win/helios.manifest -P ${lint}/windows_manifest.cmake)
 _run_lint(test-namespaces -DSOURCE_DIR=${root} -DREQUIRE_TESTS=ON -P ${lint}/test_namespaces.cmake)
+# D6 (09 §5.10.2): every module directory named in 09 §8.1, every module README with its Plan-Rev.
+_run_lint(status -P ${root}/tools/status/check_status.cmake)
 if(BUILD_DIR)
   get_filename_component(buildDir "${BUILD_DIR}" ABSOLUTE BASE_DIR "${root}")
   set(tools "")

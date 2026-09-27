@@ -14,7 +14,8 @@
 #     third-party library (rhi/render/ui/audio/app/input, SDL3, ImGui, volk, ...).
 #   * EDITOR_ONLY: never linked by the client, launcher, bot, cell, gateway or voice executables, and
 #     never a dependency of a module that is not EDITOR_ONLY itself.
-#   HEADLESS / EDITOR_ONLY flags from the call and from the table row are combined.
+#   A module with a table row takes its flags from the row; the call may repeat them but may not add
+#   one the row lacks (like a contradicting LAYER, that fails configure).
 #
 # helios_executable(<name> [ROLE <role>] [CPU_GATE|NO_CPU_GATE] SOURCES ... DEPS ...)
 #   ROLE is one of client launcher bootstrap bot cell gateway voice editor tool sample bench. When
@@ -29,9 +30,9 @@
 #   Declares a doctest executable registered with CTest.
 #
 # Configure-time checks (run once, deferred to the end of the top-level CMakeLists.txt): a module
-# depends only on lower layers or listed peers; the module graph is acyclic; HELIOS_MODULE_ORDER is a
-# topological order; the HEADLESS and EDITOR_ONLY rules above. Any violation stops configure with a
-# message that names the dependency path.
+# depends only on lower layers or listed peers; the module graph is acyclic; HELIOS_MODULE_ORDER lists
+# every module in a topological order; the HEADLESS and EDITOR_ONLY rules above. Any violation stops
+# configure with a message that names the dependency path.
 
 include_guard(GLOBAL)
 
@@ -115,6 +116,20 @@ function(helios_module name)
   if(NOT layer MATCHES "^[1-5]$")
     message(FATAL_ERROR "Module layering check failed:\n  helios layering: module '${name}': LAYER must be 1..5, "
                         "got '${layer}'\n")
+  endif()
+  # The row is the declaration: a call may leave out the row's flags but may not add one it lacks.
+  if(NOT "${declLayer}" STREQUAL "")
+    foreach(flag HEADLESS EDITOR_ONLY)
+      set(rowFlag "${declHeadless}")
+      if(flag STREQUAL "EDITOR_ONLY")
+        set(rowFlag "${declEditorOnly}")
+      endif()
+      if(M_${flag} AND NOT rowFlag)
+        message(FATAL_ERROR "Module layering check failed:\n  helios layering: helios_module(${name} ${flag}) "
+                            "contradicts the layering table (engine/CMakeLists.txt, 02 §1.1), whose row for "
+                            "'${name}' is not ${flag}\n")
+      endif()
+    endforeach()
   endif()
   set(headless OFF)
   if(M_HEADLESS OR "${declHeadless}")

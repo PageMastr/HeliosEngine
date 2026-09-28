@@ -1,6 +1,6 @@
 # tools/conformance — the plan-conformance lint (WP-0.2)
 
-Plan-Rev: 10
+Plan-Rev: 11
 
 `helios-conformance` checks that code follows the plan's normative decisions: the CONF rules of
 [09 §5.10.3](../../docs/plan/09-roadmap-and-process.md), against the anchor map of §5.10.2 D2. It is a Go

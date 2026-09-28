@@ -543,9 +543,9 @@ case.
 
 ## Plan conformance
 
-Plan-Rev: 10
+Plan-Rev: 11
 
-Written to plan revision 10 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau` so far), after being
+Written to plan revision 11 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau` so far), after being
 reconciled by hand with revision 6 on 2026-09-25 under `docs/plan/09-roadmap-and-process.md`
-§5.10.2 D7. Revisions 7–10 changed no anchor of this package. No conformance delta is open; see
+§5.10.2 D7. Revisions 7–11 changed no anchor of this package. No conformance delta is open; see
 §5.10.4 (c) there.

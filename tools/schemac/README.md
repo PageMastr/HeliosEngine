@@ -424,8 +424,8 @@ auto vm = ScriptVm::create(config, [&](Binder& b) {       // config.profile = Ho
     never called.
   - **Budget:** a call rejected by the caps fails in < 1 ms (`perf: rejecting a call over the per-call
     caps …` gates the median of 9 rejections: ≈ 0.2 ms for the reviewer's 22-table DAG, ≤ 0.05 ms for
-    65,536 references to one 16 KiB string, GCC RelWithDebInfo). A call within the caps converts at most 8,192 values; calibration
-    (WP-1.6) folds that into the fn's `cost`.
+    65,536 references to one 16 KiB string, GCC RelWithDebInfo). A call within the caps converts at
+    most 8,192 values; calibration (WP-1.6) folds that into the fn's `cost`.
 - **`schema.d.luau`** declares the scriptlib globals (each fn's doc comment, fuel charge and realms,
   `--!strict`) and the types their signatures reach:
   - `EntityId` and `<Record>Ref` as opaque `declare extern type`s;

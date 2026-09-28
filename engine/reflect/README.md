@@ -115,9 +115,9 @@ rejected, order-independent protocol hash). The generated-code side is tested by
 
 ## Plan conformance
 
-Plan-Rev: 10
+Plan-Rev: 11
 
-`repl.h` was written to plan revision 10 by WP-0.7b (`--emit repl`, 02 §3.5; 04 §4.1, §4.5); the rest
+`repl.h` was written to plan revision 11 by WP-0.7b (`--emit repl`, 02 §3.5; 04 §4.1, §4.5); the rest
 was reconciled by hand with revision 6 on 2026-09-25, under `docs/plan/09-roadmap-and-process.md`
-§5.10.2 D7, and revisions 7–10 changed none of its anchors. No conformance delta is open; see §5.10.4
+§5.10.2 D7, and revisions 7–11 changed none of its anchors. No conformance delta is open; see §5.10.4
 (c) there.

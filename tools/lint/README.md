@@ -157,6 +157,6 @@ Plan-Rev: 3
 
 `isa_audit.cmake` was written to plan revision 3, before the ADR-011 amendment (revision 4). Its open deltas
 are in 09 §5.10.4 (b), and WP-0.2r reworks them, so this README keeps revision 3 (D7). The layering, licence,
-IP-name and manifest lints have no open delta: WP-0.2 checked them against revision 10 (02 §1.1, 01 §4.1,
-§5.2) and added the `HELIOS_MODULE_ORDER` completeness and row-flag checks. `vendor_patches.cmake`
+IP-name and manifest lints have no open delta: WP-0.2 checked them against revision 11 (02 §1.1, 01 §4.1,
+§5.2; revision 11 changed 04 §3.2 and status sections only) and added the `HELIOS_MODULE_ORDER` completeness and row-flag checks. `vendor_patches.cmake`
 (WP-0.10r) was written to plan revision 6, and `test_namespaces.cmake` (WP-0.1) to revision 10.

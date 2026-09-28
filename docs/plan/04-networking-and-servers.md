@@ -391,8 +391,10 @@ checkpoints and the script rebase that cuts a replay keyframe every 30 min (§10
 
 Game step is fixed (`tick_dt = 1/tick_hz`); dilation `d ∈ [floor, 1]` (floor 0.1, R01-P0-3) stretches only wall
 time: `wall_interval = tick_dt / d`, so results are identical under TiDi. Gameplay timers are in ticks;
-wall-clock services (industry, market) are not dilated. Controller, `L = tick_cpu_ms / (1000/tick_hz)`: **fast
-attack** `L > 0.9 → d ← max(floor, d·0.85/L)`; **slow release** +0.05/s after 2 s of `L < 0.7`. `d` rides in
+wall-clock services (industry, market) are not dilated. Controller, with the load measured against the dilated
+tick interval, `L = tick_cpu_ms / (1000/(tick_hz·d))`: **fast attack** `L > 0.9 → d ← max(floor, d·0.85/L)`;
+**slow release** +0.05/s after 2 s of `L < 0.7`. Measured this way, a constant overload settles at
+`d = max(floor, 0.85/L₁)` (`L₁` is the load at `d = 1`) instead of ratcheting `d` down to the floor. `d` rides in
 snapshot headers and CONTROL; clients scale prediction, interpolation and animation and show an indicator. In
 multi-cell zones the **zone leader** sets `d = min(demands)` for every cell from a common future tick, and cells
 tick in phase with skew ≤ 1 ms p99 (§3.5).

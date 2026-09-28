@@ -5,10 +5,10 @@
   "checked": {
     "sec1.rpcs": 2,
     "sec1.client-to-server": 1,
-    "sec4.fields": 150,
+    "sec4.fields": 160,
     "ledger.types": 0,
     "keyed.lists": 3,
-    "fuel.fns": 6,
+    "fuel.fns": 9,
     "size.unbounded-checked": 1,
     "size.unreliable-rpcs": 1
   },

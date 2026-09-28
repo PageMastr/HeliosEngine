@@ -2566,6 +2566,208 @@ func (m *LedgerLine) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// A scriptlib argument: the glue gives fields a script omits their schema defaults.
+type Pack struct {
+	Slot string `json:"slot"`
+	Count uint16 `json:"count"`
+}
+
+var dfltPackCount = uint16(1)
+// NewPack returns a Pack with every field at its schema default.
+func NewPack() Pack {
+	return Pack{Slot: zero_string_21(), Count: dfltPackCount, }
+}
+
+func (m *Pack) isDefault() bool {
+	return def_string_21(m.Slot) &&
+		m.Count == dfltPackCount
+}
+
+func (m *Pack) appendFields(b []byte) []byte {
+	if !(def_string_21(m.Slot)) {
+		b = enc_string_21(b, 1, m.Slot)
+	}
+	if !(m.Count == dfltPackCount) {
+		b = enc_u16_1(b, 2, m.Count)
+	}
+	return b
+}
+
+func (m *Pack) readFields(r *wireReader) error {
+	for !r.atEnd() {
+		id, wt, err := r.tag()
+		if err != nil {
+			return err
+		}
+		switch id {
+			case 1:
+				err = dec_string_21(r, wt, &m.Slot)
+			case 2:
+				err = dec_u16_1(r, wt, &m.Count)
+			default:
+				err = r.skip(wt)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MarshalHelios encodes the tagged binary message (identical bytes to the C++ codec).
+func (m *Pack) MarshalHelios() []byte { return m.appendFields(nil) }
+
+// UnmarshalHelios decodes a tagged message; missing fields take their schema defaults.
+func (m *Pack) UnmarshalHelios(b []byte) error {
+	*m = NewPack()
+	return m.readFields(newWireReader(b))
+}
+
+// UnmarshalJSON reads JSON (e.g. canonical JSONC written by the C++ codec); missing fields keep defaults.
+func (m *Pack) UnmarshalJSON(b []byte) error {
+	type plain Pack
+	p := plain(NewPack())
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*m = Pack(p)
+	return nil
+}
+
+// @max on struct fields bounds arguments and results alike.
+type Bag struct {
+	Ids []uint32 `json:"ids,omitempty"`
+	Tag string `json:"tag"`
+}
+
+// NewBag returns a Bag with every field at its schema default.
+func NewBag() Bag {
+	return Bag{Tag: zero_string_21(), }
+}
+
+func (m *Bag) isDefault() bool {
+	return def_list_u32__66(m.Ids) &&
+		def_string_21(m.Tag)
+}
+
+func (m *Bag) appendFields(b []byte) []byte {
+	if !(def_list_u32__66(m.Ids)) {
+		b = enc_list_u32__66(b, 1, m.Ids)
+	}
+	if !(def_string_21(m.Tag)) {
+		b = enc_string_21(b, 2, m.Tag)
+	}
+	return b
+}
+
+func (m *Bag) readFields(r *wireReader) error {
+	for !r.atEnd() {
+		id, wt, err := r.tag()
+		if err != nil {
+			return err
+		}
+		switch id {
+			case 1:
+				err = dec_list_u32__66(r, wt, &m.Ids)
+			case 2:
+				err = dec_string_21(r, wt, &m.Tag)
+			default:
+				err = r.skip(wt)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MarshalHelios encodes the tagged binary message (identical bytes to the C++ codec).
+func (m *Bag) MarshalHelios() []byte { return m.appendFields(nil) }
+
+// UnmarshalHelios decodes a tagged message; missing fields take their schema defaults.
+func (m *Bag) UnmarshalHelios(b []byte) error {
+	*m = NewBag()
+	return m.readFields(newWireReader(b))
+}
+
+// UnmarshalJSON reads JSON (e.g. canonical JSONC written by the C++ codec); missing fields keep defaults.
+func (m *Bag) UnmarshalJSON(b []byte) error {
+	type plain Bag
+	p := plain(NewBag())
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*m = Bag(p)
+	return nil
+}
+
+// A result with Names: pushed as text; a set of Names in lexical order.
+type Tagged struct {
+	Label string `json:"label"`
+	Names []string `json:"names,omitempty"`
+}
+
+// NewTagged returns a Tagged with every field at its schema default.
+func NewTagged() Tagged {
+	return Tagged{Label: zero_Name_22(), }
+}
+
+func (m *Tagged) isDefault() bool {
+	return def_Name_22(m.Label) &&
+		def_set_Name__37(m.Names)
+}
+
+func (m *Tagged) appendFields(b []byte) []byte {
+	if !(def_Name_22(m.Label)) {
+		b = enc_Name_22(b, 1, m.Label)
+	}
+	if !(def_set_Name__37(m.Names)) {
+		b = enc_set_Name__37(b, 2, m.Names)
+	}
+	return b
+}
+
+func (m *Tagged) readFields(r *wireReader) error {
+	for !r.atEnd() {
+		id, wt, err := r.tag()
+		if err != nil {
+			return err
+		}
+		switch id {
+			case 1:
+				err = dec_Name_22(r, wt, &m.Label)
+			case 2:
+				err = dec_set_Name__37(r, wt, &m.Names)
+			default:
+				err = r.skip(wt)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MarshalHelios encodes the tagged binary message (identical bytes to the C++ codec).
+func (m *Tagged) MarshalHelios() []byte { return m.appendFields(nil) }
+
+// UnmarshalHelios decodes a tagged message; missing fields take their schema defaults.
+func (m *Tagged) UnmarshalHelios(b []byte) error {
+	*m = NewTagged()
+	return m.readFields(newWireReader(b))
+}
+
+// UnmarshalJSON reads JSON (e.g. canonical JSONC written by the C++ codec); missing fields keep defaults.
+func (m *Tagged) UnmarshalJSON(b []byte) error {
+	type plain Tagged
+	p := plain(NewTagged())
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*m = Tagged(p)
+	return nil
+}
+
 const Limit = uint32(16)
 
 const Pi float64 = 3.141592653589793
@@ -2583,16 +2785,16 @@ type StoreBuyRequest struct {
 
 // NewStoreBuyRequest returns a StoreBuyRequest with every field at its schema default.
 func NewStoreBuyRequest() StoreBuyRequest {
-	return StoreBuyRequest{Req: zero_golden_all_Req_66(), }
+	return StoreBuyRequest{Req: zero_golden_all_Req_67(), }
 }
 
 func (m *StoreBuyRequest) isDefault() bool {
-	return def_golden_all_Req_66(m.Req)
+	return def_golden_all_Req_67(m.Req)
 }
 
 func (m *StoreBuyRequest) appendFields(b []byte) []byte {
-	if !(def_golden_all_Req_66(m.Req)) {
-		b = enc_golden_all_Req_66(b, 1, m.Req)
+	if !(def_golden_all_Req_67(m.Req)) {
+		b = enc_golden_all_Req_67(b, 1, m.Req)
 	}
 	return b
 }
@@ -2605,7 +2807,7 @@ func (m *StoreBuyRequest) readFields(r *wireReader) error {
 		}
 		switch id {
 			case 1:
-				err = dec_golden_all_Req_66(r, wt, &m.Req)
+				err = dec_golden_all_Req_67(r, wt, &m.Req)
 			default:
 				err = r.skip(wt)
 		}

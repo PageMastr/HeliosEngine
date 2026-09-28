@@ -3,6 +3,15 @@
 {
   "format": 1,
   "types": {
+    "golden.all.Bag": {
+      "id": 3071524453,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "ids", "type": "list<u32>"},
+        {"id": 2, "name": "tag", "type": "string"}
+      ]
+    },
     "golden.all.Chat": {
       "id": 3681907271,
       "kind": "struct",
@@ -180,6 +189,15 @@
       "nextField": 1,
       "fields": []
     },
+    "golden.all.Pack": {
+      "id": 4067732932,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "slot", "type": "string"},
+        {"id": 2, "name": "count", "type": "u16", "default": "1"}
+      ]
+    },
     "golden.all.Pair": {
       "id": 4217745765,
       "kind": "struct",
@@ -208,6 +226,14 @@
         {"id": 1, "name": "value", "type": "i32"}
       ]
     },
+    "golden.all.Queries.bag": {
+      "id": 1608436731,
+      "kind": "fn"
+    },
+    "golden.all.Queries.clip": {
+      "id": 3068390829,
+      "kind": "fn"
+    },
     "golden.all.Queries.convert": {
       "id": 2480763702,
       "kind": "fn"
@@ -230,6 +256,10 @@
     },
     "golden.all.Queries.spawn": {
       "id": 3093412526,
+      "kind": "fn"
+    },
+    "golden.all.Queries.tagged": {
+      "id": 2180087691,
       "kind": "fn"
     },
     "golden.all.Req": {
@@ -316,6 +346,15 @@
       "nextField": 2,
       "fields": [
         {"id": 1, "name": "req", "type": "golden.all.Req"}
+      ]
+    },
+    "golden.all.Tagged": {
+      "id": 295119369,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "label", "type": "Name"},
+        {"id": 2, "name": "names", "type": "set<Name>"}
       ]
     },
     "golden.all.ThingDef": {

@@ -986,54 +986,89 @@ contention. Both are recorded under K3 and fixed by 02 §2.2's sharded, batched 
 
 ## 11. Building and running today (Windows and Linux)
 
-**Current state (2026-09-25, round 5).** The Director refreshes this list every round
+**Current state (2026-09-27, `main` at 5f88be7).** The Director refreshes this list every round
 ([09 §5.10.2](plan/09-roadmap-and-process.md#5102-rules-for-the-director), rule D6), and
-[09 §8.1](plan/09-roadmap-and-process.md#81-phase-0-status-repository-on-2026-09-25) has the detail. The
-facts below were verified by the lead: the GCC and Clang tests pass, the MinGW cross-builds link, and MSVC is
-built in CI. `cmake -P tools/status/check_status.cmake` checks that 09 §8.1 names every module in the tree.
+[09 §8.1](plan/09-roadmap-and-process.md#81-phase-0-status-repository-on-2026-09-27) has the detail. The
+facts below were checked against that tree: test counts are doctest cases in a linux-gcc build of 1425608,
+plus #19's 12 `schemac_tests` cases counted from source, and Go tests as `go test -list` gives them.
+CI run 36344848217 on 5f88be7 was still queued at this snapshot. The last completed run on `main`,
+36336602340 on 1425608, passed all ten jobs: the GCC, Clang and headless tests, the MinGW cross-build, MSVC at
+the primary and the floor, clang-cl, and Go.
+`cmake -P tools/status/check_status.cmake` checks that 09 §8.1 names every module in the tree.
+- **Merged through review since round 5** (14 PRs: #7–#20):
+  - WP-0.15r, the backend's conformance rework (#8), and a NATS subscription flush that ends the
+    `TestNATSRoundTrip` flake (#20);
+  - WP-0.10r, the two Luau fuel patches (#9): RT-13's fuel-identity and overhead clauses pass, and native
+    codegen stays refused on cells;
+  - WP-0.19, the gameplay kernel with HXL in C++ and Go (#12);
+  - WP-0.3, the scorecard, the nightly with its perf history and 1 h libFuzzer runs,
+    `tools/status/snapshot.py` and `tools/milestone/validate.ps1` (#10, #11, #13);
+  - WP-1.1a, ADR-004a's option A for RT-01's structural ops (#14);
+  - WP-0.14, the cell and gateway (#16), and WP-0.12, the render graph with `helios-shaderc` and
+    `helios-rendertest` (#18);
+  - WP-0.1's post-merge `merge-policy` check (#7) and doctest TU isolation (#17), WP-0.5's async-read
+    fix (#15), and WP-0.7's schemac lock under Windows races (#19).
 - **Committed and building:**
-  - the vendored third-party tree;
-  - `engine/core` (141 tests) and `engine/math` (104), complete for Phase 0 except WP-0.5's additions;
-  - `tools/schemac` with `engine/reflect` (121 tests: C++, byte-identical Go and JSON output; the other emitters
+  - the vendored third-party tree (26 dependencies, including `nats.c`);
+  - `engine/core` (187 tests) and `engine/math` (115), with WP-0.5's completion committed ahead of its review;
+  - `tools/schemac` with `engine/reflect` (133 tests: C++, byte-identical Go and JSON output; the other emitters
     are stubs);
-  - `engine/ecs` on flecs (90 tests; `ecs_bench` runs the RT-01 zone and the spikes in `engine/ecs/SPIKES.md`);
-  - `engine/script`, the Luau host (79 tests);
-  - `engine/rhi`, Vulkan and Null (51 tests, lavapipe goldens, the SDL3 swapchain, the `rhi_triangle` sample;
-    Slang v2026.18.2 is fetched with a pinned SHA-256);
-  - `engine/net`, the HTP transport (84 tests; NS-0.1, NS-0.2 and NS-0.7 pass, and NS-0.4 is owed in the
-    nightly).
-- **Backend (committed):** the `services/` Go module builds `helios-backend`, with 124 tests on Go 1.27.1
-  through `go.mod`. It runs identity, sessions with netcode connect tokens that are byte-exact with the C
-  implementation, and the orchestrator (PG leadership, ID blocks) in one process, on embedded PostgreSQL 18,
-  NATS and miniredis. Its conformance rework, WP-0.15r ([09 §5.10.4](plan/09-roadmap-and-process.md#5104-applications-on-the-repository-of-2026-09-25-wp-015r-wp-02r-and-wp-05r)), is still open.
-- **In progress** (working tree, not merged):
-  - the cell and gateway (`engine/server`, `engine/authority`, `apps/cellserver`, `apps/gateway`, with
-    `nats.c`; to try them, see "Run it locally" in `engine/server/README.md`);
-  - the gameplay kernel (`engine/gameplay`, `engine/hxl`, `services/pkg/hxl`);
-  - the render graph with `helios-shaderc` and `helios-rendertest`;
-  - WP-0.2's lints and WP-0.5's core and math completion, CPU gate included.
-- **Not yet present:** the launcher, client and editor, the patch pipeline, physics and PCG, the link-model
-  spike, the scorecard and nightly perf, and the *Cinder Reach* `content/`.
-- **Failing gates:**
-  - RT-01's structural ops: 3.4–6.7 ms for 9k ops against 1.5 ms (K2;
-    [ADR-004a](adr/ADR-004a-ecs-rt01-structural-ops.md), WP-1.1a);
-  - RT-13's fuel identity between the interpreter and native codegen, and its ≤ 10 % overhead (≈ 12–15 %
-    measured; K39, WP-0.10r). Until WP-0.10r lands, keep native codegen off on cells; `create()` warns
-    when it is on.
+  - `engine/ecs` on flecs (107 tests; `ecs_bench` runs the RT-01 zone and the spikes in `engine/ecs/SPIKES.md`);
+  - `engine/script`, the Luau host (97 tests);
+  - `engine/rhi`, Vulkan and Null (52 tests, lavapipe goldens, the SDL3 swapchain, the `rhi_triangle` sample;
+    Slang v2026.18.2 is fetched with a pinned SHA-256), and `engine/render` with `tools/shaderc` and
+    `tools/rendertest` (66 tests and 8 lavapipe golden scenes);
+  - `engine/net`, the HTP transport (84 tests; NS-0.1, NS-0.2 and NS-0.7 pass in the dev container);
+  - `engine/physics` and `engine/pcg` (40 and 42 tests; RT-03's Phase 0 golden holds, and WP-0.9c's `hnoise`
+    spike is red, F3);
+  - the cell and gateway: `engine/server`, `engine/authority`, `apps/cellserver` and `apps/gateway` (64 and 35
+    tests; to try them, see "Run it locally" in `engine/server/README.md`);
+  - the gameplay kernel: `engine/gameplay` and `engine/hxl` (44 and 27 tests), with `services/pkg/hxl`.
+- **Backend (committed):** the `services/` Go module builds `helios-backend`, with 151 tests plus 18
+  integration tests on Go 1.27.1 through `go.mod` (`pkg/hxl` adds 37). It runs identity, sessions with netcode
+  connect tokens that are byte-exact with the C implementation, and the orchestrator (PG leadership, ID blocks)
+  in one process, on embedded PostgreSQL 18, NATS and miniredis. Its conformance rework, WP-0.15r
+  ([09 §5.10.4](plan/09-roadmap-and-process.md#5104-applications-on-the-repository-of-2026-09-25-wp-015r-wp-02r-and-wp-05r)),
+  brought it to the current plan: the `svc_identity` and `svc_orch` schemas, direct PII sealed under
+  per-account keys, `region_lease` generations and CONF-03's holder rule.
+- **In progress** (open PRs at this snapshot, besides this refresh, #21): #22 and #30 (WP-0.7b: the `luau`
+  emitter, and the `sql` emitter stacked on it), #23 and #31 (WP-0.1: the nightly's Go-integration and
+  MSBuild-configure fixes), #24 (WP-0.10: the `script_tests` ASan fix), #25–#29 (WP-0.2's review of the
+  committed lints, and the conformance lint) and #32 (WP-0.3: the nightly's Windows doctest-XML step).
+  WP-0.5's core and math completion, CPU gate included, is committed and still awaits its WP review.
+- **Not yet present:** the launcher, client and editor, the patch pipeline, the link-model spike, the
+  conformance lint, and the *Cinder Reach* `content/`.
+- **Failing gates and fired risks:**
+  - RT-01's structural ops (K2; [ADR-004a](adr/ADR-004a-ecs-rt01-structural-ops.md)). WP-1.1a (#14) cut the
+    9k-op burst to 1.15–1.21 ms (GCC) and 0.90–0.91 ms (Clang) on the dev VM (2.9–3.3 ms before; the
+    pre-bench measured 3.4–6.7 ms against 1.5 ms). **M1**, the wrapper's cost of ≤ 1.6× raw flecs, **is
+    met by the owner's decision** of 2026-09-27 (23 of 24 quiet runs, with one run skewed by a VM stall
+    discarded). The formal clause is **M2** on the SERVER reference box at the Phase 1 gate, and **K2 stays
+    fired until M2 passes**. The create form is the owner's call;
+  - WP-0.9c's `hnoise` CPU clause is red (F3; K5b), so `pcg_tests_perf` fails by design;
+  - K39 (RT-13) fired on 2026-09-25, and both its mitigations have merged (#9);
+  - the first nightly on WP-0.3's workflow (2026-09-27) is red. The VS 2026 and VS 2022 MSBuild builds do not
+    configure, so the registry check reports 80 findings: the tests it cites are missing from their inventories
+    (124 CTests and 0 doctest cases each). NS-0.2's gate fails on the hosted Linux runner (88k packets per core
+    against 100k). The Debug-ASan build fails 8 of 140 CTests: `ecs_tests` (WP-1.1a's parity golden),
+    `physics_tests` (a Debug-only Jolt assert), `pcg_hnoise_bench_smoke` (a stack-use-after-scope),
+    `rhi_triangle_smoke` (SDL3 X11 leaks), `script_tests` and `script_tests_perf` (so RT-13 cannot pass there),
+    and the perf gates `net_tests_perf` and `pcg_tests_perf`. clang-cl's doctest-XML step and Linux Go's
+    integration step fail too. Each gets a bisect or a P0 fix (09 §5.8, §8.2). #31, #32, #23 and #24 are open
+    for the MSBuild configure, the Windows doctest-XML step, Go integration and `script_tests`.
 - **Known deltas from the plan** (09 §8.1, §5.10.4):
   - the vendored SDL3 is built without its renderers and Wayland (WP-0.17);
   - the in-tree ISA and CPU-gate code still uses the per-file AVX2 allowlist and the `.CRT$XIB` entry
-    (WP-0.2r, WP-0.5r);
-  - the backend's schema names, e-mail columns and `region_lease` (WP-0.15r);
-  - the script host warns instead of refusing codegen on cells (WP-0.10r).
-- **CI** (GitHub Actions) runs on every push:
+    (WP-0.2r, WP-0.5r).
+- **CI** (GitHub Actions) runs on pull requests and on pushes to `main`:
   - Windows: MSVC with VS 2026 (the primary) and with VS 2022 at MSVC 14.44 (the floor), and clang-cl;
   - Linux: GCC and Clang (GPU tests on lavapipe), headless, and the MinGW cross-build;
   - the Go backend on Windows and Linux, plus its integration suite (embedded PostgreSQL, non-root).
 
-  The nightly adds ASan and the MSBuild builds for VS 2026 and VS 2022. SARIF and the independent post-merge
-  `merge-policy` check are present. Still missing: the libFuzzer nightly, the nightly scorecard report and perf
-  (WP-0.3), the merge queue and `main` ruleset, and the modular MSVC job (after WP-0.6c).
+  The nightly (WP-0.3) runs GCC with the perf gates, Clang and ASan on Linux; the VS 2026, VS 2022 and
+  clang-cl builds on Windows; Go on both; a 1 h libFuzzer run per `engine/net` target; and the scorecard
+  report with the perf history. SARIF and the independent post-merge `merge-policy` check are present. Still
+  missing: the merge queue and `main` ruleset, and the modular MSVC job (after WP-0.6c).
 
 **Windows (primary).** Install **Visual Studio 2026** (recommended) or **Visual Studio 2022 17.14 or later**,
 with "Desktop development with C++" and "C++ CMake tools"
@@ -1059,9 +1094,10 @@ ctest --preset windows-msvc-release -LE gpu
   run `cd services` and then `go run ./cmd/helios-backend --seed dev`. Log in as `dev1#0001` with password
   `dev`; [`services/README.md`](../services/README.md) has the API and flags. To build the executable, run
   `go build -o ..\build\go\ ./cmd/...`.
-- **Later:** milestones are validated with `tools\milestone\validate.ps1 -Milestone M<n>`
-  ([09 §5.9](plan/09-roadmap-and-process.md#59-how-the-user-validates-milestones-on-windows)) once WP-0.3
-  lands. It accepts either Visual Studio version and records the compiler in its report.
+- **Milestones** are validated with `tools\milestone\validate.ps1 -Milestone M<n>`
+  ([09 §5.9](plan/09-roadmap-and-process.md#59-how-the-user-validates-milestones-on-windows); WP-0.3). It
+  accepts either Visual Studio version and records the compiler in its report. No Windows run of it is
+  recorded yet.
 
 **Linux.** You need GCC 13+ or Clang 17+, CMake ≥ 3.28 and Ninja. On Ubuntu 24.04, SDL3 also needs the X11,
 xkbcommon, D-Bus and udev development packages listed in
@@ -1075,7 +1111,7 @@ cmake --preset linux-gcc && cmake --build --preset linux-gcc && ctest --preset l
 - **Sanitizers:** `linux-debug-asan` (Clang with ASan and UBSan).
 - **Servers and tools only:** `linux-headless` (`HELIOS_BUILD_GRAPHICS=OFF`; test with
   `ctest --test-dir build/linux-headless`).
-- **GPU tests**, once rendering lands, run on software Vulkan (lavapipe) under `xvfb-run -a` and carry the
+- **GPU tests** run on software Vulkan (lavapipe) under `xvfb-run -a` and carry the
   CTest label `gpu`.
 - **Windows portability check without Windows:** `cmake --preset cross-mingw && cmake --build --preset cross-mingw`.
 - **Parallel agents** each use their own build directory (for example
@@ -1083,7 +1119,8 @@ cmake --preset linux-gcc && cmake --build --preset linux-gcc && ctest --preset l
 
 **Offline.** Every dependency is vendored as source and pinned in
 [`third_party/MANIFEST.md`](../third_party/MANIFEST.md). A build never touches the network. Slang is the one
-exception: it is a SHA-256-pinned prebuilt, fetched by a bootstrap when the shader toolchain lands.
+exception: it is a SHA-256-pinned prebuilt that configure fetches through
+`tools/prebuilt/fetch_slang.cmake` (`HELIOS_SLANG_ROOT` points an offline build at an unpacked copy).
 
 ---
 

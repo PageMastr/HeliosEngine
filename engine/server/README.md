@@ -331,7 +331,7 @@ lifetimes) runs against a real `helios-backend` when `HELIOS_NATS_URL` (and `HEL
 
 ## Plan conformance
 
-Plan-Rev: 9
+Plan-Rev: 11
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
 `docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked at revision 9 by WP-0.14's PR on
@@ -341,4 +341,13 @@ open §5.10.4 (a) row for this module, `fd`/`serverBuild` on registration and he
 heartbeats, is closed by that PR. No conformance delta is open.
 
 Revision 10 (PR #14: ADR-004a §6–7 for `engine/ecs`, plus status rows) changes no anchor that
-maps here, so `Plan-Rev` stays 9 (checked 2026-09-27 against CONSISTENCY's revision-10 rows).
+maps here (checked 2026-09-27 against CONSISTENCY's revision-10 rows).
+
+Revision 11 (PR #21, the Director's 04 §3.2 Plan-Change: the TiDi load is measured against the
+dilated tick interval) maps here through D2's fallback: 04 §3.2 has no map entry, and WP-0.14's Own
+column cites 04 §3. This module feeds the controller (`ZoneInstance` calls
+`ZoneClock::onTickMeasured`) and relays its dilation changes to sessions, but the load formula is
+`engine/authority`'s `TiDiController`, which already matched the new text. Re-checked on 2026-09-27
+with no delta. D7 keeps the earlier revision while a delta is open; none is (WP-0.14's PR closed
+this module's last one, the §5.10.4 (a) row named above), so the re-check records 11, as
+`engine/authority`'s README does.

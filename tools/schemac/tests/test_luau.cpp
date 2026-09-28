@@ -4,6 +4,8 @@
 // type-check the generated schema.d.luau with Luau.Analysis, and check the lock's binding ids and
 // the emitter's diagnostics.
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <format>
 #include <fstream>
@@ -409,6 +411,9 @@ TEST_CASE("luau: one call's conversion work is bounded by the per-call value and
 TEST_CASE("perf: rejecting a call over the per-call caps takes well under 1 ms") {
     // Budget: a call whose arguments exceed the caps fails in < 1 ms (asserted in optimized builds
     // without sanitizers); the tables are built beforehand, so only the glue's conversion is timed.
+    // The median of kRuns rejections is gated, because a single sample on a shared machine is
+    // sometimes preempted (one of 100 took 5.5 ms on the dev VM, where the median was 0.35 ms).
+    constexpr int kRuns = 9;
     Vm editor("editor");
     REQUIRE(editor.vm->loadModule("hostile", R"(
 local M = {}
@@ -422,16 +427,22 @@ return M
         INFO(call);
         int ref = LUA_NOREF;
         REQUIRE(editor.vm->callExport("hostile", make, {}, [&](lua_State* L, int base, int) { ref = lua_ref(L, base); }, 1).ok());
-        const auto t0 = std::chrono::steady_clock::now();
-        const auto rejected = editor.vm->callExport("hostile", call, [&](lua_State* L) {
-            lua_getref(L, ref);
-            return 1;
-        });
-        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-        CHECK_FALSE(rejected.ok());
-        MESSAGE(std::format("{}: rejected in {:.3f} ms", call, ms));
+        std::array<double, kRuns> ms{};
+        for (double& sample : ms) {
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto rejected = editor.vm->callExport("hostile", call, [&](lua_State* L) {
+                lua_getref(L, ref);
+                return 1;
+            });
+            sample = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            CHECK_FALSE(rejected.ok());
+        }
+        std::sort(ms.begin(), ms.end());
+        const double median = ms[kRuns / 2];
+        MESSAGE(std::format("{}: rejected in {:.3f} ms (median of {}; min {:.3f}, max {:.3f})", call, median,
+                            kRuns, ms.front(), ms.back()));
 #if defined(NDEBUG) && !defined(HELIOS_SANITIZERS_ENABLED) && !defined(__SANITIZE_ADDRESS__)
-        CHECK(ms < 1.0);
+        CHECK(median < 1.0);
 #endif
     }
     CHECK(editor.queries.calls == 0);

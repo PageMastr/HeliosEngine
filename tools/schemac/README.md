@@ -431,9 +431,9 @@ auto vm = ScriptVm::create(config, [&](Binder& b) {       // config.profile = Ho
   - Every rejection is a script error naming the fn, the argument and the cap, and the implementation is
     never called.
   - **Budget:** a call rejected by the caps fails in < 1 ms (`perf: rejecting a call over the per-call
-    caps …`: ≈ 0.25 ms for the reviewer's 22-table DAG, ≈ 0.05 ms for 65,536 references to one 16 KiB
-    string, GCC RelWithDebInfo). A call within the caps converts at most 8,192 values; calibration
-    (WP-1.6) folds that into the fn's `cost`.
+    caps …` gates the median of 9 rejections: ≈ 0.2 ms for the reviewer's 22-table DAG, ≤ 0.05 ms for
+    65,536 references to one 16 KiB string, GCC RelWithDebInfo). A call within the caps converts at
+    most 8,192 values; calibration (WP-1.6) folds that into the fn's `cost`.
 - **`schema.d.luau`** declares the scriptlib globals (each fn's doc comment, fuel charge and realms,
   `--!strict`) and the types their signatures reach:
   - `EntityId` and `<Record>Ref` as opaque `declare extern type`s;
@@ -671,9 +671,9 @@ server as `nobody` when started as root, and is not registered on Windows or whe
 
 ## Plan conformance
 
-Plan-Rev: 10
+Plan-Rev: 11
 
-Written to plan revision 10 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau`, `sql` and `repl` so far), after being
+Written to plan revision 11 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau`, `sql` and `repl` so far), after being
 reconciled by hand with revision 6 on 2026-09-25 under `docs/plan/09-roadmap-and-process.md`
-§5.10.2 D7. Revisions 7–10 changed no anchor of this package. No conformance delta is open; see
+§5.10.2 D7. Revisions 7–11 changed no anchor of this package. No conformance delta is open; see
 §5.10.4 (c) there.

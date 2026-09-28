@@ -168,7 +168,9 @@ public:
     /// Adds one body. Fails for key 0, a duplicate (layer, key), a missing shape, a full grid, a
     /// motion type the layer does not allow (Static/Terrain/Interior bodies must be static), a mesh
     /// shape (or a compound holding one) on a moving body, a zero or non-finite rotation, and
-    /// non-finite or negative mass, friction, restitution, damping or speed cap.
+    /// non-finite or negative mass, friction, restitution, damping or speed cap. The initial
+    /// velocities of dynamic and kinematic bodies are clamped to their caps (maxLinearVelocity,
+    /// Jolt's angular cap), as setVelocity() clamps them; Jolt never clamps a kinematic body later.
     Result<BodyHandle> createBody(const BodyDesc& desc);
     /// Adds a batch in (layer, key) order, whatever the order of `descs`; handles are returned in
     /// the order of `descs`. All-or-nothing: on error no body of the batch exists.

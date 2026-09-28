@@ -353,8 +353,9 @@ TEST_CASE("grid: bodies may exceed Jolt's default 500 m/s (06 NAV mode 1 km/s, B
 }
 
 TEST_CASE("grid: createBody clamps the initial velocities to the body's caps") {
-    // Jolt asserts that a new body starts within its caps (debug builds aborted here), and release
-    // builds only clamped at the first step, so bodyState() reported the uncapped speed until then.
+    // Jolt asserts that a new body starts within its caps (debug builds aborted here). Release builds
+    // clamped a dynamic body only at the first step, so bodyState() reported the uncapped speed until
+    // then, and never clamped a kinematic one: Jolt clamps only dynamic bodies while stepping.
     PhysicsRuntime runtime;
     GridDesc gd;
     gd.gravity = Vec3{};
@@ -375,6 +376,22 @@ TEST_CASE("grid: createBody clamps the initial velocities to the body's caps") {
     st = (*grid)->bodyState(h).value();
     CHECK(st.linearVelocity.z == doctest::Approx(100.0f));
     CHECK(st.angularVelocity.y == doctest::Approx(joltAngularCap));
+    // A kinematic body keeps its clamped velocity: 100 m/s for 1 s is 100 m (main: 300 m).
+    BodyDesc kin = sphereAt(12, DVec3(0.0, 1000.0, 0.0), createSphere(1.0f).value(), ObjectLayer::Kinematic);
+    kin.motion = MotionType::Kinematic;
+    kin.linearVelocity = Vec3(300.0f, 0.0f, 0.0f);
+    kin.maxLinearVelocity = 100.0f;
+    kin.angularVelocity = Vec3(0.0f, 60.0f, 0.0f);
+    const BodyHandle k = (*grid)->createBody(kin).value();
+    st = (*grid)->bodyState(k).value();
+    CHECK(st.linearVelocity.x == doctest::Approx(100.0f));
+    CHECK(st.angularVelocity.y == doctest::Approx(joltAngularCap));
+    for (int i = 0; i < 60; ++i) REQUIRE((*grid)->step().ok());
+    st = (*grid)->bodyState(k).value();
+    CHECK(st.linearVelocity.x == doctest::Approx(100.0f));
+    CHECK(st.angularVelocity.y == doctest::Approx(joltAngularCap));
+    CHECK(st.position.x == doctest::Approx(100.0).epsilon(1e-3));
+    CHECK(st.position.y == doctest::Approx(1000.0));
     // Static bodies have no velocity to clamp and still accept any finite value.
     BodyDesc ground = groundDesc();
     ground.linearVelocity = Vec3(0.0f, 0.0f, 300.0f);

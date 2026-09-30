@@ -33,14 +33,17 @@ ROOT = Path(__file__).resolve().parents[2]
 CLASSES = {"N", "H", "W", "M", "N+H"}
 PLATFORMS = {"linux", "windows", "any"}
 OSES = ("linux", "windows")
-STATUSES = {"measured", "partial", "unmeasured"}
+STATUSES = {"measured", "partial", "unmeasured", "approved"}
 GAP_STATES = {"unmeasured", "failing"}
 REF_KINDS = {"ctest": set(), "doctest": {"case"}, "go": {"test"}, "gate": set(), "ci_job": set(), "evidence": set()}
-REF_OPTIONAL = {"platforms", "run", "note", "tags"}
+REF_OPTIONAL = {"platforms", "run", "note", "tags", "advisory", "owner_approval"}
 TEST_KINDS = {"ctest", "doctest", "go", "gate"}  # references that run on a platform
 ENTRY_REQUIRED = {"id", "phase", "source", "owner", "title", "class", "platforms", "threshold", "status", "tests"}
-ENTRY_OPTIONAL = {"gaps", "notes"}
+ENTRY_OPTIONAL = {"gaps", "notes", "follow_ups"}
 GAP_KEYS = {"clause", "state", "owner", "pinned_by"}
+FOLLOW_UP_KEYS = {"clause", "owner"}
+# The repository owner's approval of a criterion is a record under this directory (09 §5.6's M records).
+APPROVAL_DIR = "docs/evidence/"
 TOP_KEYS = {"version", "plan_rev", "covers", "runs", "gates", "criteria", "exit", "perf_metrics", "perf_accept"}
 RUN_KEYS = {"os", "default", "nightly", "description"}
 GATE_KEYS = {"runs", "min_seconds", "description"}
@@ -89,6 +92,14 @@ def display(path: Path) -> str:
 def is_int(value) -> bool:
     """An integer that is not a bool (JSON true would otherwise pass as 1)."""
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def is_date(value) -> bool:
+    """A YYYY-MM-DD string naming a real calendar date."""
+    try:
+        return isinstance(value, str) and datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d") == value
+    except ValueError:
+        return False
 
 
 # ------------------------------------------------------------------------------------------------
@@ -191,6 +202,12 @@ def ref_label(ref: dict) -> str:
     kind = ref_kind(ref) or "?"
     extra = ref.get("case") or ref.get("test")
     return f"{kind} {ref.get(kind)}" + (f" / {extra}" if extra else "")
+
+
+def approval(entry: dict) -> dict | None:
+    """The entry's owner-approval reference (an `evidence` reference with `owner_approval`), if any."""
+    return next((r for r in entry.get("tests") or [] if isinstance(r, dict) and ref_kind(r) == "evidence"
+                 and "owner_approval" in r), None)
 
 
 def ref_platforms(entry: dict, ref: dict) -> list[str]:
@@ -562,6 +579,27 @@ def _check_ref(where: str, ref, entry: dict, data: dict, ctx: dict, errors: list
         errors.append(f"{where}: {label}: 'tags' (a string) applies to go references only")
     if "note" in ref and not isinstance(ref["note"], str):
         errors.append(f"{where}: {label}: 'note' must be a string")
+    # An owner approval passes a criterion whose own measurement it makes advisory, so both are held to the
+    # entry: the approval is a dated record under docs/evidence/, and nothing is advisory without one.
+    if "owner_approval" in ref:
+        date = ref["owner_approval"]
+        if kind != "evidence" or ctx.get("pin"):
+            errors.append(f"{where}: {label}: 'owner_approval' applies to an entry's evidence references only")
+        elif not is_date(date):
+            errors.append(f"{where}: {label}: 'owner_approval' must be the YYYY-MM-DD date the repository owner "
+                          f"approved the criterion")
+        elif date > ctx.get("today", date):
+            errors.append(f"{where}: {label}: 'owner_approval' is after today ({ctx['today']})")
+        if kind == "evidence" and not ref["evidence"].startswith(APPROVAL_DIR):
+            errors.append(f"{where}: {label}: an owner approval is a record under {APPROVAL_DIR}")
+    if "advisory" in ref:
+        if ref["advisory"] is not True:
+            errors.append(f"{where}: {label}: 'advisory' must be true (leave it out for a reference that counts)")
+        elif kind not in TEST_KINDS or ctx.get("pin"):
+            errors.append(f"{where}: {label}: only an entry's test references (ctest, doctest, go, gate) can be advisory")
+        elif approval(entry) is None:
+            errors.append(f"{where}: {label} is advisory, which needs the owner approval that passes the entry: "
+                          f"an evidence reference with 'owner_approval'")
     if kind == "gate":
         gate = (data.get("gates") or {}).get(ref["gate"]) if isinstance(data.get("gates"), dict) else None
         if not isinstance(gate, dict):
@@ -657,7 +695,8 @@ def validate(data: dict, text: str, path: Path, plan: Plan | None = None, ci_job
     covers = _check_top(name, data, errors)
     _check_metrics(name, data, errors)
     known, exits = (plan.criteria, plan.exits) if plan else ({}, {})
-    ctx = {"ci_jobs": ci_jobs, "repo": repo, "go_sources": go_sources}
+    ctx = {"ci_jobs": ci_jobs, "repo": repo, "go_sources": go_sources,
+           "today": datetime.now(timezone.utc).strftime("%Y-%m-%d")}
     items = entries(data)
     exit_items = [x for x in data.get("exit") or [] if isinstance(x, dict)] if isinstance(data.get("exit"), list) else []
     seen: set[tuple] = set()
@@ -713,7 +752,8 @@ def validate(data: dict, text: str, path: Path, plan: Plan | None = None, ci_job
             errors.append(f"{where}: {ident}: 'tests' and 'gaps' must be lists")
             continue
         status = entry.get("status")
-        want = "unmeasured" if not tests else "partial" if gaps else "measured"
+        # An entry that passes on an owner approval is never "measured", even where its other tests pass.
+        want = "unmeasured" if not tests else "partial" if gaps else "approved" if approval(entry) else "measured"
         if status not in STATUSES:
             errors.append(f"{where}: {ident}: 'status' must be one of {', '.join(sorted(STATUSES))}")
         elif status != want:
@@ -723,6 +763,20 @@ def validate(data: dict, text: str, path: Path, plan: Plan | None = None, ci_job
             errors.append(f"{where}: {ident}: an entry without tests must list its gaps")
         for ref in tests:
             _check_ref(where, ref, entry, data, ctx, errors)
+        if sum(1 for r in tests if isinstance(r, dict) and "owner_approval" in r) > 1:
+            errors.append(f"{where}: {ident}: one owner approval per entry (the report names one record)")
+        follow_ups = entry.get("follow_ups", [])
+        if not isinstance(follow_ups, list):
+            errors.append(f"{where}: {ident}: 'follow_ups' must be a list")
+            follow_ups = []
+        for item in follow_ups:
+            if not isinstance(item, dict) or set(item) - FOLLOW_UP_KEYS or not isinstance(item.get("clause"), str) or \
+                    not item["clause"].strip() or not isinstance(item.get("owner"), str) or not OWNER.match(item["owner"]):
+                errors.append(f"{where}: {ident}: a follow-up needs a non-empty 'clause' and an 'owner' (WPs, 'User' or "
+                              f"'Director')")
+        if follow_ups and approval(entry) is None:
+            errors.append(f"{where}: {ident}: 'follow_ups' are work an owner approval leaves open without blocking it; "
+                          f"without an approval, a missing clause is a gap")
         for gap in gaps:
             if not isinstance(gap, dict) or set(gap) - GAP_KEYS or not isinstance(gap.get("clause"), str) or \
                     not gap["clause"].strip() or gap.get("state") not in GAP_STATES or \
@@ -820,11 +874,7 @@ def _check_accepts(name: str, data: dict, metric_ids: set, errors: list[str], to
         if a.get("metric") not in metric_ids:
             errors.append(f"{where}: 'metric' must name a declared perf metric")
         night = a.get("night")
-        try:
-            ok = isinstance(night, str) and datetime.strptime(night, "%Y-%m-%d").strftime("%Y-%m-%d") == night
-        except ValueError:
-            ok = False
-        if not ok:
+        if not is_date(night):
             errors.append(f"{where}: 'night' must be the YYYY-MM-DD date (UTC) of the nightly whose value is accepted")
         elif night > today:
             errors.append(f"{where}: 'night' is after today ({today}); accept a night that has been measured")

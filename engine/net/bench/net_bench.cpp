@@ -9,6 +9,13 @@
 //                                   NS-0.7 20k pps of 1,200 B datagrams for 600 s, < 0.1 % drops,
 //                                   <= 1 core per side. Exit code 1 if any gate fails (nightly CI,
 //                                   evidence N).
+//   net_bench --gate --advisory ns02-stack
+//                                   the same gates, except that the encrypted stack's 100k per core is
+//                                   printed with an "NS-0.2 advisory:" line instead of failing. Loss, a
+//                                   stack that never ran, raw datagrams and NS-0.7 still fail. Only the
+//                                   hosted nightly passes it (the owner's approval of 2026-09-30,
+//                                   docs/evidence/ns-0.2-owner-approval-2026-09-30.md); a local or lab
+//                                   run gates everything. Exit code 2 for an unknown --advisory name.
 
 #include <string>
 #include <vector>
@@ -16,6 +23,7 @@
 #include "helios/core/log.h"
 #include "helios/core/time.h"
 #include "helios/net/net.h"
+#include "ns02_gate.h"
 #include "platform/net_os.h"
 #include "trunk_gate.h"
 
@@ -167,6 +175,17 @@ int main(int argc, char** argv) {
     };
     const bool gate = has("--gate");
     const bool all = args.empty();
+    // `--advisory ns02-stack` is the only accepted form: anything else is an error rather than a run that
+    // silently gates (or does not gate) something other than what the caller meant.
+    bool stackAdvisory = false;
+    for (usize i = 0; i < args.size(); ++i) {
+        if (args[i] != "--advisory") continue;
+        if (!gate || i + 1 >= args.size() || args[i + 1] != bench::kNs02StackAdvisoryName) {
+            HELIOS_LOG_ERROR("--advisory takes '{}' and applies to --gate only", bench::kNs02StackAdvisoryName);
+            return 2;
+        }
+        stackAdvisory = true;
+    }
     bool ok = true;
 
     if (all || gate || has("--socket")) {
@@ -184,9 +203,20 @@ int main(int argc, char** argv) {
         HELIOS_LOG_INFO("NS-0.2 HTP stack: {}/{} encrypted packets delivered, {:.0f} packets per core (send + receive, "
                         "1 thread)",
                         s.packets, s.sent, s.ppsPerCore());
-        if (gate && (s.sent == 0 || s.packets != s.sent || s.ppsPerCore() < 100'000.0)) {
+        const bench::Ns02Verdict verdict = bench::ns02StackVerdict(s.sent, s.packets, s.ppsPerCore(), stackAdvisory);
+        if (gate && verdict == bench::Ns02Verdict::Fail) {
             HELIOS_LOG_ERROR("NS-0.2 FAILED: the HTP stack needs 100k encrypted packets per core without loss");
             ok = false;
+        }
+        // Printed on every advisory run, so that a passing log still says the rate was not gated.
+        if (verdict == bench::Ns02Verdict::AdvisoryBelow) {
+            HELIOS_LOG_WARN("NS-0.2 advisory: {}. The HTP stack's {:.0f} packets per core is below 100k: reported, not "
+                            "failing (loss still fails)",
+                            bench::kNs02StackAdvisoryReason, s.ppsPerCore());
+        } else if (gate && stackAdvisory) {
+            HELIOS_LOG_INFO("NS-0.2 advisory: {}. The HTP stack's rate ({:.0f} packets per core) is not gated on this "
+                            "run",
+                            bench::kNs02StackAdvisoryReason, s.ppsPerCore());
         }
     }
     if (all || gate || has("--trunk")) {
@@ -206,6 +236,8 @@ int main(int argc, char** argv) {
             }
         }
     }
-    if (gate) HELIOS_LOG_INFO("gates {}", ok ? "PASSED" : "FAILED");
+    if (gate) {
+        HELIOS_LOG_INFO("gates {}{}", ok ? "PASSED" : "FAILED", stackAdvisory ? " (NS-0.2's HTP stack rate advisory)" : "");
+    }
     return ok ? 0 : 1;
 }

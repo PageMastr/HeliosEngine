@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import statistics
 import sys
 from datetime import datetime, timezone
@@ -52,30 +51,10 @@ BUDGET_PERCENT = {"render": 5.0, "runtime": 5.0, "backend": 10.0, "editor": 10.0
 HISTORY_LIMIT = 60
 
 
-def metric_values(metric: dict, runs: list[report.Results]) -> dict[str, float]:
-    """{run name: value} for a declared metric."""
-    pattern = re.compile(metric["pattern"])
-    found = {}
-    for r in runs:
-        if "run" in metric and r.name != metric["run"]:
-            continue
-        if "doctest" in metric:
-            texts = r.messages.get((metric["doctest"], metric["case"]), [])
-        else:
-            gate = r.gates.get(metric["gate"])
-            texts = [gate[2]] if gate else []
-        for text in texts:
-            m = pattern.search(text)
-            if m:
-                found[r.name] = float(m[1])
-                break
-    return found
-
-
 def extract(data: dict, runs: list[report.Results], sha: str, date: str) -> dict:
     metrics = {}
     for metric in data.get("perf_metrics") or []:
-        for run, value in metric_values(metric, runs).items():
+        for run, value in report.metric_values(metric, runs).items():
             metrics[f"{run}/{metric['id']}"] = {"value": value, "unit": metric["unit"], "better": metric["better"],
                                                 "category": metric["category"], "gate": True}
     for r in runs:

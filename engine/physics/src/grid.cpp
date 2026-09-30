@@ -286,8 +286,9 @@ struct PhysicsGrid::Impl {
             return makeError(ErrorCode::LimitExceeded, "grid '{}' is full ({} bodies)", desc.name, desc.maxBodies);
         }
         if (d.motion != MotionType::Static) {
-            // Jolt requires a new body's velocities to be within its caps: debug builds assert, release
-            // builds clamp at the first step. Clamp them now, as setVelocity() does through BodyInterface.
+            // Jolt requires a new body's velocities to be within its caps (debug builds assert). Release
+            // builds clamped a dynamic body only at its first step, and never a kinematic one. Clamp both
+            // now, as setVelocity() does through BodyInterface.
             body->SetLinearVelocityClamped(toJolt(d.linearVelocity));
             body->SetAngularVelocityClamped(toJolt(d.angularVelocity));
         }

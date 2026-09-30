@@ -60,8 +60,9 @@ step concurrently. `PhysicsRuntime` construction and shape creation are thread-s
   `angularVelocity` to Jolt's (0.25·π·60 rad/s) for dynamic and kinematic bodies, as `setVelocity`
   does. Jolt asserts that a new body starts within its caps. Before, release builds clamped dynamic
   bodies at the first step, before integrating, but never clamped kinematic bodies, which kept an
-  over-cap initial velocity (Jolt clamps only dynamic bodies while stepping; `moveKinematic` sets
-  velocities unclamped).
+  over-cap initial velocity. While stepping, Jolt clamps only dynamic bodies; its one other clamp,
+  on a kinematic body hit by a `LinearCast` (CCD) body, is unreachable while every Helios body uses
+  discrete motion quality. `moveKinematic` sets velocities unclamped.
 - **Catch-up bound.** `advance()` runs at most `GridDesc::maxStepsPerAdvance` (16) steps per call and
   drops the remaining whole steps with a warning, so a hitch cannot turn into a catch-up spiral (and a
   huge interval, where `accumulator -= dt` no longer changes the accumulator, cannot spin forever).

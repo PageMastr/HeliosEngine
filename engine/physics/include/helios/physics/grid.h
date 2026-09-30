@@ -170,7 +170,8 @@ public:
     /// shape (or a compound holding one) on a moving body, a zero or non-finite rotation, and
     /// non-finite or negative mass, friction, restitution, damping or speed cap. The initial
     /// velocities of dynamic and kinematic bodies are clamped to their caps (maxLinearVelocity,
-    /// Jolt's angular cap), as setVelocity() clamps them; Jolt never clamps a kinematic body later.
+    /// Jolt's angular cap), as setVelocity() clamps them; with discrete motion quality (every Helios
+    /// body), Jolt never clamps a kinematic body later.
     Result<BodyHandle> createBody(const BodyDesc& desc);
     /// Adds a batch in (layer, key) order, whatever the order of `descs`; handles are returned in
     /// the order of `descs`. All-or-nothing: on error no body of the batch exists.

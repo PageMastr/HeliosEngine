@@ -17,9 +17,9 @@ fence, region lease generations and the holder rule.
 
 ## TiDi control law
 
-Load `L` is the tick's CPU time over the wall interval it was given, `tick_cpu / (tick_dt / d)`. At
-`d = 1` that is 04 §3.2's `tick_cpu_ms / (1000 / tick_hz)`. Measuring against the *dilated*
-interval makes the attack converge on the sustainable dilation `0.85 / L₁` instead of ratcheting
+Load `L` is the tick's CPU time over the wall interval it was given, `tick_cpu / (tick_dt / d)`,
+which is 04 §3.2's `tick_cpu_ms / (1000/(tick_hz·d))` (plan revision 11). Measuring against the
+*dilated* interval makes the attack converge on the sustainable dilation `0.85 / L₁` instead of ratcheting
 down while already dilated (tested: a constant 1.5× overload settles at `d ≈ 0.56` with `L` inside
 the 0.7–0.9 hold band and stays there). Holding reports the already-scheduled target, so a pending
 attack is never undone while it waits for its anchor tick. `attackTicks` (default 1, the spec) can
@@ -57,17 +57,18 @@ ghosts, handoff and `Authority::mutate` (v1); multi-cell zone leaders sending `Z
 
 ## Plan conformance
 
-Plan-Rev: 9
+Plan-Rev: 11
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
 `docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked at revision 9 by WP-0.14's PR on
 2026-09-27: revisions 7–9 changed 06 §1.2, 02 §7.4 with 04 §10.2 and 09 §5.2a, none of which this
-module implements. One deviation is recorded (PR #16): the TiDi load `L` is the tick's CPU time
-over the *dilated* interval `tick_dt / d` (see "TiDi control law"), where 04 §3.2 writes
-`L = tick_cpu_ms / (1000/tick_hz)`. The two agree at `d = 1`; read literally, 04 §3.2's form ratchets
-`d` to the floor under constant overload. The Director makes the 04 §3.2 Plan-Change after PLAN-REV
-10, with `authority.tidi: constant overload converges on the sustainable dilation (no ratchet)` as its
-test. No other conformance delta is open; see §5.10.4 (c) there.
+module implements. Revision 10 (PR #14: ADR-004a §6–7 for `engine/ecs`, plus status rows) changes no
+anchor that maps here either.
 
-Revision 10 (PR #14: ADR-004a §6–7 for `engine/ecs`, plus status rows) changes no anchor that
-maps here, so `Plan-Rev` stays 9 (checked 2026-09-27 against CONSISTENCY's revision-10 rows).
+Revision 11 (PR #21, the Director's 04 §3.2 Plan-Change) resolves the one deviation PR #16
+recorded. 04 §3.2 wrote the TiDi load as `L = tick_cpu_ms / (1000/tick_hz)`, which does not depend on
+`d`, so read literally it ratchets `d` to the floor under constant overload. It now measures `L`
+against the dilated interval, as this module always has (see "TiDi control law"). CONSISTENCY §43
+names `authority.tidi: constant overload converges on the sustainable dilation (no ratchet)` as the
+change's conformance test (D5). The code is unchanged. No conformance delta is open; see
+§5.10.4 (c) there.

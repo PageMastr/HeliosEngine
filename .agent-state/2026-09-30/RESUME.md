@@ -196,3 +196,14 @@ All work that matters is pushed: see the branches above.
 | /home/user/wt/wp-0.2 | `agent/claude/wip/wp-0.2-25` (build: gcc) |
 | /home/user/wt/fix-nightly-{msbuild-isa,doctest-gpu,go-login-limit,asan-no-perf} | the nightly-fix PRs |
 | /home/user/wt/ns02-pass | `agent/claude/director-ns02-owner-pass` (build: gcc) |
+
+## Addendum: round-3 #36 (reported after the pause)
+- **Provisional score:** 9/10, APPROVE, with no blocking findings, on head `0dbdc33614d3251eeb7b5bf85c6d961c543f0fdf`.
+  Not yet posted.
+- **Draft:** `pr36-r3-review-draft.md` in this folder. Replace the `CI_STATE_PLACEHOLDER` line under
+  "8. CI on `0dbdc33`" with the final CI result, then post it as a COMMENT review with commit_id `0dbdc33…`.
+- **CI at 17:40 UTC:** 5 of 10 jobs green; MSVC primary, clang-cl, linux-gcc, linux-clang and headless still running.
+- **Merge precondition holds** while main is 5bc959f: the squash tree `3f39956` equals the head tree.
+- **Optional nits:**
+  - `test_grid.cpp:357-358`: add "(with discrete motion quality)";
+  - `grid.h:173-174`: prefer "while no Helios body uses LinearCast (CCD)".

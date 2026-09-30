@@ -45,11 +45,13 @@ jobs:
             run: linux-clang
             ctest_args: -LE perf
             validation_layer: vulkan-validationlayers
-          # ASan/UBSan runs every test, the timing gates included, as it did before WP-0.3. No
-          # validation layer: its leaks and instrumentation are not checked under LSan.
+          # ASan/UBSan runs every test except the timing gates (label perf): an instrumented Debug
+          # build measures the sanitizers, not the budget, so the gates run only in the GCC job's perf
+          # step, never under sanitizers (the owner's decision of 2026-09-30). No validation layer: its
+          # leaks and instrumentation are not checked under LSan.
           - preset: linux-debug-asan
             run: linux-asan
-            ctest_args: ""
+            ctest_args: -LE perf
             validation_layer: ""
     env:
       BUILD: build/${{ matrix.preset }}

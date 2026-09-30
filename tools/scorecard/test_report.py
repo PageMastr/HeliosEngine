@@ -662,15 +662,15 @@ class RunnerTests(unittest.TestCase):
                 "out = next(a for a in sys.argv if a.startswith('--out='))[6:]\n"
                 "open(out, 'w').write('<doctest><TestCase name=\"c\"><OverallResultsAsserts "
                 "test_case_success=\"true\"/></TestCase></doctest>')\n", encoding="utf-8")
-            tests = [{"name": "cpu_tests", "command": [sys.executable, str(fake), "--test-case-exclude=perf:*"],
-                      "properties": [{"name": "LABELS", "value": ["unit"]}]},
+            # helios_test() gives a main entry no LABELS at all: an unlabelled entry must still run.
+            tests = [{"name": "cpu_tests", "command": [sys.executable, str(fake), "--test-case-exclude=perf:*"]},
                      {"name": "gpu_tests",
                       "command": [sys.executable, "-c", "raise SystemExit(7)", "--test-case-exclude=perf:*"],
                       "properties": [{"name": "LABELS", "value": ["render", "gpu"]}]},
                      # ctest -LE searches each label, as re.search does: "gpu" also excludes "vulkan-gpu".
                      {"name": "vk_tests",
                       "command": [sys.executable, "-c", "raise SystemExit(8)", "--test-case-exclude=perf:*"],
-                      "properties": [{"name": "LABELS", "value": ["vulkan-gpu"]}]}]
+                      "properties": [{"name": "LABELS", "value": ["vulkan-gpu", "shaders"]}]}]
             original = sc.ctest_tests
             sc.ctest_tests = lambda *args: tests
             try:

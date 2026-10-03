@@ -281,10 +281,13 @@
       "title": "Headless ToolsFramework round-trips 10k random transactions; kill -9 loses at most one",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Headless ToolsFramework round-trips 10k random transactions (apply, undo, redo) to byte-identical JSONC on MSVC, GCC and Clang; `kill -9` mid-burst loses ≤ 1 transaction",
-      "status": "unmeasured",
-      "tests": [],
-      "gaps": [
-        {"clause": "No ToolsFramework or editor exists yet", "state": "unmeasured", "owner": "WP-0.18"}
+      "notes": "toolsfw_tests runs in every native C++ job (MSVC, clang-cl, GCC, Clang). Byte-identical: after every undo and redo of 10,000 committed random transactions the canonical JSONC hashes to the text recorded at that step, and a golden workload's final text has one pinned XXH3 hash on every compiler. kill -9: toolsfw_burst_child is killed mid-burst at three points (TerminateProcess on Windows), and the journal recovers the acknowledged prefix plus at most the one transaction in flight, byte for byte",
+      "status": "measured",
+      "tests": [
+        {"doctest": "toolsfw_tests", "case": "ED-1: 10k random transactions round-trip through undo and redo byte-identically"},
+        {"doctest": "toolsfw_tests", "case": "ED-1: interleaved undo/redo, gestures and rejected edits stay byte-exact, and the journal replays them"},
+        {"doctest": "toolsfw_tests", "case": "ED-1: the golden workload hashes identically on every compiler"},
+        {"doctest": "toolsfw_tests", "case": "ED-1: kill -9 mid-burst loses at most the transaction in flight"}
       ]
     },
     {

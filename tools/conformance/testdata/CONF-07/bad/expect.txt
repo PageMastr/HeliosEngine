@@ -5,7 +5,7 @@
 # column that only a misread of goose or PostgreSQL would drop or hide: a lower-case `-- +goose down`,
 # a $fn1$ body, an E'' escape, a multi-line string, a nested comment, a quoted identifier with a quote,
 # and a '$' inside an identifier. 00010: LIKE copies a plain email that its source then drops, a column
-# changed to INET, and a SELECT … INTO that CONF-07 cannot follow (fails closed).
+# changed to INET, and a SELECT ... INTO that CONF-07 cannot follow (fails closed).
 schemas/sample/player.hschema:6: CONF-07
 services/migrations/chat/00001_messages.sql:2: CONF-07
 services/migrations/identity/00001_profile.sql:4: CONF-07

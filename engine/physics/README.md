@@ -56,7 +56,13 @@ step concurrently. `PhysicsRuntime` construction and shape creation are thread-s
   non-finite `fixedDt` or more than 64 collision steps.
 - **Speed cap.** `BodyDesc::maxLinearVelocity` defaults to 10 km/s. Jolt's own default, 500 m/s,
   silently clamped every body below 06's NAV mode (1 km/s), RT-19's 1 km/s closing ships and
-  BENCH-2's 1.5 km/s.
+  BENCH-2's 1.5 km/s. `createBody` clamps the initial `linearVelocity` to the cap and
+  `angularVelocity` to Jolt's (0.25·π·60 rad/s) for dynamic and kinematic bodies, as `setVelocity`
+  does. Jolt asserts that a new body starts within its caps. Before, release builds clamped dynamic
+  bodies at the first step, before integrating, but never clamped kinematic bodies, which kept an
+  over-cap initial velocity. While stepping, Jolt clamps only dynamic bodies; its one other clamp,
+  on a kinematic body hit by a `LinearCast` (CCD) body, is unreachable while every Helios body uses
+  discrete motion quality. `moveKinematic` sets velocities unclamped.
 - **Catch-up bound.** `advance()` runs at most `GridDesc::maxStepsPerAdvance` (16) steps per call and
   drops the remaining whole steps with a warning, so a hitch cannot turn into a catch-up spiral (and a
   huge interval, where `accumulator -= dt` no longer changes the accumulator, cannot spin forever).

@@ -8,3 +8,7 @@ fallback_port = { env = "HELIOS_PORT" }
 
 [edge]
 gateway_port = 7006
+
+[gateway.extra]
+listen = { host = "0.0.0.0", port = 7007 }
+"public_port" = 7008

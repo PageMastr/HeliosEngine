@@ -8,17 +8,23 @@
 # ipv4 port, a connect default through constants, a listen default from a call (fails closed) and an
 # integer listen-port default through a constant. Go: a port from a constant, from a call (fails closed),
 # net.JoinHostPort and fmt.Sprintf addresses, and an fmt.Sprintf address from variables (fails closed).
+# Round 5: C++ ipv4 with an octet array, ipv6 and ipv6Bytes, and "host:" + port (one fails closed); Go
+# "host:" + port (one fails closed), fmt.Sprint, and a Port field of a gateway-named value or type; TOML
+# an inline table and a quoted key; YAML /UDP in upper case.
 deploy/compose.yml:3: CONF-08
 deploy/compose.yml:6: CONF-08
 deploy/compose.yml:7: CONF-08
 deploy/compose.yml:8: CONF-08
 deploy/compose.yml:9: CONF-08
 deploy/compose.yml:10: CONF-08
+deploy/compose.yml:11: CONF-08
 deploy/helios.toml:2: CONF-08
 deploy/helios.toml:5: CONF-08
 deploy/helios.toml:6: CONF-08
 deploy/helios.toml:7: CONF-08
 deploy/helios.toml:10: CONF-08
+deploy/helios.toml:13: CONF-08
+deploy/helios.toml:14: CONF-08
 engine/net/include/ports.h:2: CONF-08
 engine/net/include/ports.h:3: CONF-08
 engine/net/include/ports.h:4: CONF-08
@@ -31,7 +37,21 @@ engine/server/src/gateway_config.cpp:5: CONF-08
 engine/server/src/gateway_config.cpp:7: CONF-08
 engine/server/src/gateway_config.cpp:8: CONF-08
 engine/server/src/gateway_config.cpp:9: CONF-08
+engine/server/src/gateway_forms.cpp:2: CONF-08
+engine/server/src/gateway_forms.cpp:3: CONF-08
+engine/server/src/gateway_forms.cpp:4: CONF-08
+engine/server/src/gateway_forms.cpp:5: CONF-08
+engine/server/src/gateway_forms.cpp:6: CONF-08
+engine/server/src/gateway_forms.cpp:7: CONF-08
+engine/server/src/gateway_forms.cpp:8: CONF-08
+engine/server/src/gateway_forms.cpp:9: CONF-08
 services/cmd/tool/main.go:5: CONF-08
+services/internal/platform/concat.go:13: CONF-08
+services/internal/platform/concat.go:14: CONF-08
+services/internal/platform/concat.go:15: CONF-08
+services/internal/platform/concat.go:17: CONF-08
+services/internal/platform/concat.go:18: CONF-08
+services/internal/platform/concat.go:19: CONF-08
 services/internal/platform/config.go:3: CONF-08
 services/internal/platform/config.go:7: CONF-08
 services/internal/platform/config.go:9: CONF-08

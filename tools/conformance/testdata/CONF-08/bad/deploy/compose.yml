@@ -8,3 +8,4 @@ services:
       - "[::]:7001:7777/udp"
       - "7777:7000/udp"
       - "${HELIOS_GATEWAY_PORT:-7000}:7777/udp"
+      - "7000:7777/UDP"

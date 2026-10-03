@@ -3,3 +3,5 @@
 # host IP; other ports are not the gateway's (NATS, a trunk, a test's, TCP 8080); a commented-out mapping
 # and a printf whose format names the gateway are not read, nor are names that only contain "port"
 # (transport, report_interval).
+# 7777 also through ipv4 with an octet array, ipv6, "host:" + port, fmt.Sprint, Port fields, a TOML inline
+# table and quoted key, and an upper-case /UDP mapping.

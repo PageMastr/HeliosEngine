@@ -31,7 +31,9 @@ finding fails the run, 2 a usage or I/O error.
 - **`cmake -P tools/ci/run_lints.cmake`**, with the other build-independent lints.
 - **CI**: the `Conformance lint (tools/conformance)` job vets and tests the tool, runs it over the full tree
   (a superset of §5.10.3's "changed paths"; the known-failing records make that possible), and uploads the
-  SARIF as an artifact and to code scanning (category `helios-conformance`).
+  SARIF as an artifact and to code scanning (category `helios-conformance`). In the SARIF a failing finding is
+  an `error`; a suppressed or known-failing one is a `note` with its suppression, because code scanning does
+  not apply SARIF suppressions on upload and would fail a PR's check on a reviewed line the PR touches.
 
 ## Rules
 

@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -268,6 +269,56 @@ func TestRepositoryMap(t *testing.T) {
 			if !r.covers(scope, f) {
 				t.Errorf("%s does not read %s (09 §5.10.4 (c))", id, f)
 			}
+		}
+	}
+}
+
+// TestSARIF pins how findings reach code scanning: a failing finding is an error; a suppressed or
+// known-failing one is a note with its suppression (code scanning ignores SARIF suppressions, so an
+// error there would fail a PR that touches a reviewed line), and each carries its fingerprint.
+func TestSARIF(t *testing.T) {
+	type result struct {
+		RuleID       string `json:"ruleId"`
+		Level        string `json:"level"`
+		Suppressions []struct {
+			Kind string `json:"kind"`
+		} `json:"suppressions"`
+		PartialFingerprints map[string]string `json:"partialFingerprints"`
+	}
+	for _, c := range []struct{ fixture, want string }{
+		{"suppression_ok", "note:inSource note:inSource"},
+		{"known_ok", "note:external note:external"},
+		{"known_scope", "note:external error:"},
+	} {
+		res, err := Run(Options{Root: filepath.Join("..", "..", "testdata", "framework", c.fixture), Rules: []string{"CONF-10"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sb strings.Builder
+		if err := res.WriteSARIF(&sb); err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Runs []struct {
+				Results []result `json:"results"`
+			} `json:"runs"`
+		}
+		if err := json.Unmarshal([]byte(sb.String()), &doc); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, r := range doc.Runs[0].Results {
+			kind := ""
+			if len(r.Suppressions) > 0 {
+				kind = r.Suppressions[0].Kind
+			}
+			got = append(got, r.Level+":"+kind)
+			if !fingerprintRE.MatchString(r.PartialFingerprints["heliosConformance/v1"]) {
+				t.Errorf("%s: result without a fingerprint: %+v", c.fixture, r)
+			}
+		}
+		if strings.Join(got, " ") != c.want {
+			t.Errorf("%s: got %q, want %q", c.fixture, strings.Join(got, " "), c.want)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -191,6 +192,65 @@ func TestSpliceLines(t *testing.T) {
 	}
 	if got := fmt.Sprint(origin); got != "[0 3 4]" {
 		t.Errorf("origin %s", got)
+	}
+}
+
+// TestCConstStrings pins which C and C++ declarations count as string constants for CONF-01 and CONF-02:
+// a name that is not one stays unresolved, so a bucket or key passed through it fails closed.
+func TestCConstStrings(t *testing.T) {
+	src := newCSource(strings.Split(`#define kDef "def"
+namespace n { constexpr std::string_view kView{"view"}; }
+static const char kArr[] = "arr";
+const std::string kStr = "str";
+std::string const kParen("paren");
+const char* const kPtr = "ptr";
+char const* const kPtr2 = "ptr2";
+const char* const Foo::kQual = "qual";
+class C { public: static constexpr const char* kMember = "member"; };
+[[maybe_unused]] static constexpr const char* kAttr = "attr" "s";
+constexpr std::string_view kBraced = {"braced"};
+struct Desc { const char* name; };
+void init(Desc& d, Desc* p) { d.name = "Cell"; p->bucket = "B"; }
+void f(const char* const dflt = "x") { plain = "y"; HELIOS_LOG_INFO("z"); auto v = get("w"); }
+const char* mutablePtr = "m";
+static const char* kMutable = "km";
+std::string mutableStr = "s";
+const auto lookedUp = find("k");
+`, "\n"))
+	var got []string
+	for name, lits := range cConstStrings(src) {
+		got = append(got, name+"="+strings.Join(lits, "|"))
+	}
+	sort.Strings(got)
+	want := `kArr="arr" kAttr="attr" "s" kBraced="braced" kMember="member" kParen="paren" kPtr2="ptr2" ` +
+		`kPtr="ptr" kQual="qual" kStr="str" kView="view"`
+	if strings.Join(got, " ") != want {
+		t.Errorf("got  %s\nwant %s", strings.Join(got, " "), want)
+	}
+	table := map[string][]string{"bucket": {"DIRECTORY"}, "kView": {"view"}}
+	for expr, want := range map[string]string{
+		`n::kView`: "view", `::n::kView`: "view", `std::string(kView).c_str()`: "view", `"a" "b"`: "ab",
+		`o.bucket`: "unresolved", `p->bucket`: "unresolved", `bucket`: "DIRECTORY", `name`: "unresolved",
+	} {
+		vals, ok := cStrValues(expr, table)
+		if got := map[bool]string{true: strings.Join(vals, "|"), false: "unresolved"}[ok]; got != want {
+			t.Errorf("cStrValues(%s) = %s, want %s", expr, got, want)
+		}
+	}
+}
+
+// TestCEval pins CONF-04's C++ constant evaluation: every definition of a reused name counts, and only
+// parentheses that enclose the whole expression are stripped.
+func TestCEval(t *testing.T) {
+	table := map[string][]string{"kA": {"17"}, "kB": {"5"}, "kPage": {"6", "12"}, "kSum": {"(kA) + (kB)"},
+		"kNested": {"(kA + (kB)) + 0u"}}
+	for expr, want := range map[string]string{
+		`kA + kB`: "[22]", `(kA) + (kB)`: "[22]", `kSum`: "[22]", `ns::kSum`: "[22]", `kNested`: "[22]",
+		`kPage`: "[6 12]", `kPage + kB`: "[11 17]", `((kA))`: "[17]", `kA) + (kB`: "[]", `kMissing + 1`: "[]",
+	} {
+		if got := fmt.Sprint(cEval(expr, table, 0)); got != want {
+			t.Errorf("cEval(%s) = %s, want %s", expr, got, want)
+		}
 	}
 }
 

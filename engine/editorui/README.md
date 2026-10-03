@@ -98,7 +98,7 @@ a CJK fallback with localization previews (T25), and an icon font.
 
 ## Plan conformance
 
-Plan-Rev: 11
+Plan-Rev: 12
 
 Written for plan revision 6 (07 §1.3, §1.4, §4.4; 09 §2.1 WP-0.18) on 2026-09-25. Re-checked against
 plan revision 11 on 2026-10-03, when the work was ported onto it: revisions 7–11 changed 02 §7.4, 04
@@ -106,3 +106,6 @@ plan revision 11 on 2026-10-03, when the work was ported onto it: revisions 7–
 to this module; 07 and 09's WP-0.18 row are unchanged since revision 6. The Phase 0
 deviations from 07 are listed in the WP-0.18 row of 09 §8.1. Multi-viewport tear-offs, the fonts
 other than Roboto Regular, the `schemac` editor emitter and localization (T25) come later.
+
+Re-checked against plan revision 12 on 2026-10-03: it changed 09 §0, §5.6, §5.7, §5.10.4, §8.1,
+§8.2 and PLAN.md §11 (owner approvals, NS-0.2), none of which maps to this module.

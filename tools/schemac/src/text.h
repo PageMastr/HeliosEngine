@@ -44,6 +44,8 @@ std::string goQuote(std::string_view s);
 std::string pascalCase(std::string_view s);
 /// "MaxForce" -> "maxForce".
 std::string camelCase(std::string_view s);
+/// "maxForce" -> "max_force", "HangarSlot" -> "hangar_slot", "HTTPServer" -> "http_server".
+std::string snakeCase(std::string_view s);
 bool isPascalCase(std::string_view s) noexcept;
 bool isCamelCase(std::string_view s) noexcept;
 

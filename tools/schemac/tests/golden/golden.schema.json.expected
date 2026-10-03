@@ -798,6 +798,208 @@
       "attrs": []
     },
     {
+      "name": "golden.all.LedgerLine",
+      "kind": "struct",
+      "file": "golden.hschema",
+      "doc": "A PostgreSQL table (`--emit sql`, 05 §3): every column form, a composite key and a reserved word\nas a column. Since tests/golden/golden.sql-baseline.lock.jsonc it gained a rename, widenings, an\noptional, new columns and a removed field, which the migration stub golden shows.",
+      "id": 216246450,
+      "layoutHash": "f01d1769b32ecb34",
+      "fields": [
+        {
+          "name": "owner",
+          "id": 1,
+          "type": "EntityId",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "seq",
+          "id": 2,
+          "type": "u32",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "order",
+          "id": 3,
+          "type": "u8",
+          "default": 7,
+          "audience": "shared",
+          "was": ["rank"],
+          "attrs": [
+            {"name": "was", "args": [{"value": "rank", "string": true}]}
+          ]
+        },
+        {
+          "name": "amount",
+          "id": 4,
+          "type": "i64",
+          "default": -5,
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "small",
+          "id": 5,
+          "type": "u16",
+          "default": 3,
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "note",
+          "id": 6,
+          "type": "string?",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "flag",
+          "id": 8,
+          "type": "bool",
+          "default": true,
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "big",
+          "id": 9,
+          "type": "u64",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "ratio",
+          "id": 10,
+          "type": "f32",
+          "default": 0.5,
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "exact",
+          "id": 11,
+          "type": "f64",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "label",
+          "id": 12,
+          "type": "string",
+          "default": "it's",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "tag",
+          "id": 13,
+          "type": "Name",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "delay",
+          "id": 14,
+          "type": "Duration",
+          "default": "1500ms",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "at",
+          "id": 15,
+          "type": "Tick",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "thing",
+          "id": 16,
+          "type": "Ref<golden.all.ThingDef>",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "id",
+          "id": 17,
+          "type": "Guid",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "color",
+          "id": 18,
+          "type": "golden.all.Color",
+          "default": "Blue",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "perm",
+          "id": 19,
+          "type": "golden.all.Perm",
+          "default": ["Read"],
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "mesh",
+          "id": 20,
+          "type": "AssetRef<Mesh>",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "text",
+          "id": 21,
+          "type": "LocString",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "pos",
+          "id": 22,
+          "type": "WorldPos",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "items",
+          "id": 23,
+          "type": "list<golden.all.Item>",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "inner",
+          "id": 24,
+          "type": "golden.all.Item",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "bag",
+          "id": 25,
+          "type": "map<string,u8>",
+          "audience": "shared",
+          "attrs": []
+        },
+        {
+          "name": "shape",
+          "id": 26,
+          "type": "golden.all.LedgerLine.Shape",
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": [
+        {"name": "store", "args": [{"value": "character"}]},
+        {"name": "sql", "args": [{"key": "schema", "value": "svc_golden", "string": true}]},
+        {"name": "key", "args": [{"value": "owner"}, {"value": "seq"}]}
+      ]
+    },
+    {
       "name": "golden.all.Pack",
       "kind": "struct",
       "file": "golden.hschema",
@@ -1022,6 +1224,47 @@
         {"name": "idempotent", "args": []},
         {"name": "timeout", "args": [{"value": "2s"}]}
       ]
+    },
+    {
+      "name": "golden.all.LedgerLine.Shape",
+      "kind": "variant",
+      "file": "golden.hschema",
+      "outer": "golden.all.LedgerLine",
+      "id": 1852750697,
+      "layoutHash": "3c2ee540896b6f16",
+      "alternatives": [
+        {"name": "Dot", "id": 1, "type": "golden.all.LedgerLine.Shape.Dot"},
+        {"name": "Line", "id": 2, "type": "golden.all.LedgerLine.Shape.Line"}
+      ],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.LedgerLine.Shape.Dot",
+      "kind": "alternative",
+      "file": "golden.hschema",
+      "outer": "golden.all.LedgerLine.Shape",
+      "id": 3814822080,
+      "layoutHash": "1b4283030ad21340",
+      "fields": [],
+      "attrs": []
+    },
+    {
+      "name": "golden.all.LedgerLine.Shape.Line",
+      "kind": "alternative",
+      "file": "golden.hschema",
+      "outer": "golden.all.LedgerLine.Shape",
+      "id": 3054327879,
+      "layoutHash": "3db53ca166e32b2e",
+      "fields": [
+        {
+          "name": "length",
+          "id": 1,
+          "type": "f32",
+          "audience": "shared",
+          "attrs": []
+        }
+      ],
+      "attrs": []
     },
     {
       "name": "golden.all.Pair",

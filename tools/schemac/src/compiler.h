@@ -41,12 +41,15 @@ struct CompileOptions {
     bool emitGo = false;
     bool emitJson = false;
     bool emitLuau = false; ///< scriptlib glue next to the C++ output, schema.d.luau + fuel defaults in luauOut
+    bool emitSql = false;  ///< PostgreSQL DDL of @sql structs into sqlOut/<schema>/
     bool samples = false; ///< C++ sample-value header (tests / cross-language vectors)
     std::string cppOut = ".";
     std::string goOut = ".";
     std::string goPackage; ///< default: last component of the first file's package
     std::string jsonOut = "schema.json";
     std::string luauOut = ".";
+    std::string sqlOut = ".";
+    std::string sqlBaseline; ///< lock that --emit sql diffs against (default: the lock before this run)
     bool warningsAsErrors = false;
     bool namingLints = true;
     bool warnWithoutLock = true; ///< warn that ids are not stable when lockPath is empty

@@ -1,0 +1,6 @@
+// The record covers engine/x only: the same rule's finding in a new file elsewhere still fails.
+{
+  "known_failing": [
+    {"rule": "CONF-10", "owner": "WP-9.9r", "anchor": "09 §5.10.4 (z)", "reason": "fixture", "paths": ["engine/x/**"]},
+  ],
+}

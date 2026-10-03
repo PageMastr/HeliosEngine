@@ -1,0 +1,8 @@
+#! -rules CONF-09,CONF-10
+# A non-anchor key, an absolute path, an unknown rule, an entry with neither rules nor `why`, and a
+# selected rule (CONF-10) in no entry.
+tools/conformance/map.jsonc:1: conformance
+tools/conformance/map.jsonc:2: conformance
+tools/conformance/map.jsonc:3: conformance
+tools/conformance/map.jsonc:3: conformance
+tools/conformance/map.jsonc:4: conformance

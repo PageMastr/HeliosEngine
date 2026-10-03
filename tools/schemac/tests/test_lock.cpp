@@ -314,6 +314,15 @@ TEST_CASE("lock: hand edits and corruption are detected") {
         {R"({"format": 1, "types": {"a.X": {"id": -1, "kind": "struct"}}})", "error: invalid schema lock at types.a.X.id: expected an unsigned 32-bit integer"},
         {R"({"format": 1, "types": {"a.X": {"id": 1, "kind": "struct", "fields": [{"id": 1}]}}})",
          "error: invalid schema lock at types.a.X.fields[0]: missing 'name'"},
+        // Names, types and tables from the lock reach generated SQL and comments.
+        {R"({"format": 1, "types": {"a.X": {"id": 5, "kind": "struct", "nextField": 2, "fields": [{"id": 1, "name": "a; DROP TABLE t", "type": "u8"}]}}})",
+         "error: invalid schema lock at types.a.X: 'a; DROP TABLE t' is not an identifier"},
+        {R"({"format": 1, "types": {"a.X": {"id": 5, "kind": "struct", "nextField": 2, "fields": [{"id": 1, "name": "a", "type": "u8\rDROP"}]}}})",
+         "error: invalid schema lock at types.a.X: the type of 'a' contains a control character"},
+        {R"({"format": 1, "types": {"a.X": {"id": 5, "kind": "struct", "sql": "public.x"}}})",
+         "error: invalid schema lock at types.a.X.sql: 'public.x' is not a table of a service schema (svc_<service>.<table>)"},
+        {R"({"format": 1, "types": {"a.X": {"id": 5, "kind": "struct", "sql": "svc_a.x"}, "a.Y": {"id": 6, "kind": "struct", "sql": "svc_a.x"}}})",
+         "error: invalid schema lock at types.a.Y: the table svc_a.x is also recorded by 'a.X'"},
     };
     for (const Case& c : cases) {
         LockFixture fx;

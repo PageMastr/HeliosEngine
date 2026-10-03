@@ -47,6 +47,7 @@ var (
 	cIntLitRE    = regexp.MustCompile(`^(0[xX][0-9A-Fa-f']+|\d[\d']*)[uUlL]*$`)
 	cCastRE      = regexp.MustCompile(`^(?:static_cast\s*<[^<>]*>|(?:std::)?u?int(?:16|32|64)_t|u16|u32|i32|int|unsigned)\s*[({](.*)[)}]$`)
 	tomlTableRE  = regexp.MustCompile(`^\s*\[+\s*([^\]]+?)\s*\]+`)
+	optionNameRE = regexp.MustCompile(`^-{0,2}[\w.-]+$`)
 	tomlKeyRE    = regexp.MustCompile(`^\s*([A-Za-z0-9_.-]+)\s*=\s*(.*)$`)
 	tomlIntRE    = regexp.MustCompile(`^[+]?\d[\d_]*$`)
 	// A port mapping token in compose or Helm YAML that ends in /udp, and its parts: an optional host IP,
@@ -330,14 +331,19 @@ func checkGatewayPortGo(p *Pass, f string) {
 				}
 			}
 		case *ast.CallExpr: // flag.String("gateway", "127.0.0.1:7000", …) and the like
-			named := ""
+			// Any string that mentions the gateway makes the call's addresses gateway addresses; only an
+			// option name ("gateway-port", not a sentence) can say that an integer is the gateway port.
+			named, option := false, "gateway"
 			for _, a := range x.Args {
-				if s, ok := g.String(gf, a); ok && gatewayNameRE.MatchString(s) && named == "" {
-					named = s
+				if s, ok := g.String(gf, a); ok && gatewayNameRE.MatchString(s) {
+					named = true
+					if optionNameRE.MatchString(s) && option == "gateway" {
+						option = s
+					}
 				}
 			}
-			if named != "" {
-				check(calleeName(x)+"("+named+")", x)
+			if named {
+				check(calleeName(x)+"("+option+")", x)
 				return false
 			}
 		}

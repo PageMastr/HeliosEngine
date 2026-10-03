@@ -1,7 +1,9 @@
 package platform
 
 import (
+	"errors"
 	"flag"
+	"fmt"
 	"net"
 )
 
@@ -17,3 +19,10 @@ func local() Session { return Session{Gateways: []string{net.JoinHostPort("0.0.0
 var GatewayTransport = newTransport()
 
 func newTransport() string { return "udp" }
+
+// A sentence that names the gateway and a port is not an option name: its call carries no port.
+func validate(err error) error {
+	return fmt.Errorf("gateway address must be ip:port: %w", errors.Join(err, newErr()))
+}
+
+func newErr() error { return nil }

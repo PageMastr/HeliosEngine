@@ -138,9 +138,12 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test (no GPU on hosted runners)
         run: ctest --test-dir $env:BUILD -C RelWithDebInfo -LE "gpu|perf" --output-on-failure --output-junit "$env:RESULTS/ctest.xml"
+      # The entries the CTest step runs: -LE "gpu|perf" there, --label-exclude "gpu|perf" here.
       - name: Test cases (doctest XML)
         if: ${{ !cancelled() }}
-        run: python tools/scorecard/runners.py doctest --build-dir $env:BUILD --config RelWithDebInfo --out "$env:RESULTS/doctest"
+        run: >
+          python tools/scorecard/runners.py doctest --build-dir $env:BUILD --config RelWithDebInfo
+          --label-exclude "gpu|perf" --out "$env:RESULTS/doctest"
       - name: net_bench --gate (NS-0.2, NS-0.7; 10 min)
         if: ${{ !cancelled() && matrix.run == 'windows-vs2026' }}
         run: >

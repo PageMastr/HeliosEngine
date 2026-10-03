@@ -1722,7 +1722,7 @@ class GateClauseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d)
             with contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO())):
-                # Exit 0 without the trunk line (not net_bench --gate): that clause fails, and so does the step.
+                # Exit 0 without the trunk line (a run without --trunk, say): that clause fails, and so does the step.
                 head = WINDOWS_PASS[1][:WINDOWS_PASS[1].index("05:34:05.923")]
                 rc = runners.run_gate("net_bench_gate", [sys.executable, "-c", f"print({head!r})"],
                                       out, None, None, None, self.cases)

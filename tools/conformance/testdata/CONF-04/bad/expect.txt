@@ -1,10 +1,16 @@
 #! -rules CONF-04 -strict
 # The Snowflake layout with node and worker IDs (names, a tag and a TOML key), a hand-composed block ID,
-# and the retired 41/5/8/9 layout with a machine ID.
+# the retired 41/5/8/9 layout with a machine ID, and the Snowflake layout by multiplication (C++, Go).
+# A line with two distinct violations (a node-ID name and a layout, or a name and its tag) has two findings.
 engine/ecs/src/legacy_ids.cpp:4: CONF-04
 engine/ecs/src/legacy_ids.cpp:5: CONF-04
+engine/ecs/src/legacy_ids.cpp:5: CONF-04
+engine/net/src/session_ids.cpp:4: CONF-04
 services/deploy/helios.toml:2: CONF-04
 services/internal/chat/ids.go:4: CONF-04
+services/internal/chat/snow.go:4: CONF-04
+services/pkg/snowflake/snowflake.go:11: CONF-04
 services/pkg/snowflake/snowflake.go:11: CONF-04
 services/pkg/snowflake/snowflake.go:14: CONF-04
+services/pkg/snowflake/snowflake.go:15: CONF-04
 services/pkg/snowflake/snowflake.go:15: CONF-04

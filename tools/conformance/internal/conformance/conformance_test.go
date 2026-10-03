@@ -233,3 +233,29 @@ func TestYamlCode(t *testing.T) {
 		}
 	}
 }
+
+// TestRepositoryMap pins the scopes 09 §5.10.4 (c) relies on: the C++ cell host and gateway
+// (engine/server, apps/cellserver, apps/gateway; WP-0.14) are checked by CONF-01, 02 and 04 through the
+// repository's map.
+func TestRepositoryMap(t *testing.T) {
+	m, bad := loadMap(filepath.Join("..", "..", "map.jsonc"), "tools/conformance/map.jsonc", All())
+	for _, b := range bad {
+		t.Errorf("map: %s:%d: %s", b.Path, b.Line, b.Message)
+	}
+	for _, id := range []string{"CONF-01", "CONF-02", "CONF-04"} {
+		r := Lookup(id)
+		scope := append([]string(nil), r.Scope...)
+		for _, e := range m {
+			for _, rid := range e.Rules {
+				if rid == id {
+					scope = append(scope, e.Paths...)
+				}
+			}
+		}
+		for _, f := range []string{"engine/server/src/ids.cpp", "apps/cellserver/main.cpp", "apps/gateway/main.cpp"} {
+			if !r.covers(scope, f) {
+				t.Errorf("%s does not read %s (09 §5.10.4 (c))", id, f)
+			}
+		}
+	}
+}

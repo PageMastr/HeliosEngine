@@ -22,7 +22,8 @@
 # helios_executable(<name> [ROLE <role>] [CPU_GATE|NO_CPU_GATE] SOURCES ... DEPS ...)
 #   ROLE is one of client launcher bootstrap bot cell gateway voice editor tool sample bench. When
 #   omitted it is inferred from the directory (apps/client -> client, apps/cellserver -> cell,
-#   apps/tools/* -> tool, apps/samples -> sample, engine/*/bench -> bench, ...). Client and server
+#   apps/tools/* -> tool, apps/samples -> sample, engine/*/bench -> bench, ...); a directory with no
+#   known role and no ROLE is a configure error, so every executable gets a role check. Client and server
 #   roles may not link EDITOR_ONLY modules; cell/gateway/voice/bot may link only HEADLESS modules.
 #   Windows executables get the Helios manifest (helios_windows_manifest). The CPU gate (a
 #   pre-initializer that refuses CPUs without AVX2, 02 §1.1 / 08 §2.2) is linked into every AVX2
@@ -214,7 +215,13 @@ function(helios_executable name)
     _helios_infer_role(role)
   endif()
   set(knownRoles client launcher bootstrap bot cell gateway voice editor tool sample bench)
-  if(NOT role STREQUAL "" AND NOT role IN_LIST knownRoles)
+  if(role STREQUAL "")
+    # Without a role no role check (02 §1.1: EDITOR_ONLY, HEADLESS-only servers) would see it.
+    file(RELATIVE_PATH rel "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
+    message(FATAL_ERROR "helios_executable(${name}): no ROLE given and none is known for '${rel}/' "
+                        "(pass ROLE <one of: ${knownRoles}>, or add the directory to _helios_infer_role "
+                        "in cmake/HeliosModule.cmake)")
+  elseif(NOT role IN_LIST knownRoles)
     message(FATAL_ERROR "helios_executable(${name}): unknown ROLE '${role}' (one of: ${knownRoles})")
   endif()
   add_executable(${name} ${E_SOURCES})

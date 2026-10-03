@@ -28,7 +28,7 @@ helios_declare_module(core 1 HEADLESS)
 helios_declare_module(math 1 HEADLESS)
 helios_declare_module(reflect 2 HEADLESS)
 helios_declare_module(asset 2 HEADLESS PEERS reflect)
-if(CASE STREQUAL "cycle")
+if(CASE STREQUAL "cycle" OR CASE STREQUAL "bridge_cycle")
   # Declared peers of each other, so only the cycle check can catch it.
   helios_declare_module(ecs 2 HEADLESS PEERS reflect app)
   helios_declare_module(app 2 PEERS reflect ecs)
@@ -130,6 +130,23 @@ elseif(CASE STREQUAL "explicit_layer")
   helios_module(zonehost HEADLESS LAYER 4 PEERS world SOURCES ${src} DEPS helios::world)
 endif()
 
+# Module edges that only a non-module target carries (an INTERFACE or STATIC helper between two
+# modules) are module edges too.
+if(CASE STREQUAL "bridge_upward")
+  add_library(fx_bridge INTERFACE) # reflect (L2) -> fx_bridge -> world (L4); also a cycle through ecs
+  target_link_libraries(fx_bridge INTERFACE helios::world)
+  target_link_libraries(helios_reflect PRIVATE fx_bridge)
+elseif(CASE STREQUAL "bridge_same_layer")
+  add_library(fx_bridge INTERFACE) # net -> fx_bridge -> physics, both L3, not peers
+  target_link_libraries(fx_bridge INTERFACE helios::physics)
+  target_link_libraries(helios_net PRIVATE fx_bridge)
+elseif(CASE STREQUAL "bridge_cycle")
+  add_library(fx_bridge STATIC ${src}) # ecs -> fx_bridge -> app -> ecs (declared peers): a cycle
+  target_link_libraries(fx_bridge PRIVATE helios::app)
+  target_link_libraries(helios_ecs PRIVATE fx_bridge)
+  target_link_libraries(helios_app PRIVATE helios::ecs)
+endif()
+
 # Executables. CPU gate off: the fixture has no engine/core hook target.
 if(CASE STREQUAL "editor_only_client")
   helios_executable(fx-client ROLE client NO_CPU_GATE SOURCES ${src} DEPS helios::presentation helios::toolsfw)
@@ -148,6 +165,8 @@ if(CASE STREQUAL "editor_only_gateway")
 endif()
 if(CASE STREQUAL "plain_executable")
   add_subdirectory(apps/rogue) # add_executable() under apps/, outside every role check
+elseif(CASE STREQUAL "unknown_role")
+  add_subdirectory(apps/zonehost) # helios_executable() without ROLE where no role can be inferred
 endif()
 # Tools may link editor-only modules.
 helios_executable(fx-cook ROLE tool NO_CPU_GATE SOURCES ${src} DEPS helios::assetpipe)

@@ -322,3 +322,84 @@ func TestSARIF(t *testing.T) {
 		}
 	}
 }
+
+// TestSQLStatementsGooseAndLexing: the splitter skips what goose and PostgreSQL skip (goose's
+// annotation spellings, dollar tags with digits, E-string escapes, multi-line strings, nested comments,
+// quoted identifiers, '$' inside identifiers), so DDL that never runs cannot change the net schema.
+func TestSQLStatementsGooseAndLexing(t *testing.T) {
+	for _, c := range []struct {
+		src  string
+		want []string
+	}{
+		{"-- +goose Up\nCREATE TABLE a (x INT);\n-- +goose down\nDROP TABLE a;\n", []string{"CREATE TABLE a (x INT)"}},
+		{"-- +goose up\nCREATE TABLE a (x INT);\n-- +goose DOWN\nDROP TABLE a;\n", []string{"CREATE TABLE a (x INT)"}},
+		{"--+goose Up\nCREATE TABLE a (x INT);\n--+goose Down\nDROP TABLE a;\n", []string{"CREATE TABLE a (x INT)"}},
+		{"-- +goose Up\n-- +goose StatementBegin\nCREATE TABLE a (x INT);\n-- +goose StatementEnd\n",
+			[]string{"CREATE TABLE a (x INT)"}},
+		{"CREATE FUNCTION f() RETURNS void AS $fn1$ BEGIN PERFORM 1; DROP TABLE a; END $fn1$ LANGUAGE plpgsql;",
+			[]string{"CREATE FUNCTION f() RETURNS void AS $fn1$$fn1$ LANGUAGE plpgsql"}},
+		{"INSERT INTO a VALUES (E'it\\'s');\nALTER TABLE a ADD COLUMN email TEXT;",
+			[]string{"INSERT INTO a VALUES (E'')", "ALTER TABLE a ADD COLUMN email TEXT"}},
+		{"INSERT INTO a VALUES (e'\\\\');\nALTER TABLE a ADD COLUMN email TEXT;",
+			[]string{"INSERT INTO a VALUES (e'')", "ALTER TABLE a ADD COLUMN email TEXT"}},
+		// A plain string ends at a backslash-quote; only E strings take backslash escapes.
+		{"INSERT INTO a VALUES ('x\\'); ALTER TABLE a ADD COLUMN email TEXT;",
+			[]string{"INSERT INTO a VALUES ('')", "ALTER TABLE a ADD COLUMN email TEXT"}},
+		{"INSERT INTO a VALUES ('first\n'); ALTER TABLE a ADD COLUMN email TEXT;",
+			[]string{"INSERT INTO a VALUES ('')", "ALTER TABLE a ADD COLUMN email TEXT"}},
+		{"INSERT INTO a VALUES ('a;\nb;'); DROP TABLE a;", []string{"INSERT INTO a VALUES ('')", "DROP TABLE a"}},
+		{"/* outer /* inner */ it's a comment */ ALTER TABLE a ADD COLUMN email TEXT;",
+			[]string{"ALTER TABLE a ADD COLUMN email TEXT"}},
+		{"ALTER/* x */TABLE a ADD COLUMN email TEXT;", []string{"ALTER TABLE a ADD COLUMN email TEXT"}},
+		{`ALTER TABLE a ADD COLUMN "it's;" TEXT, ADD COLUMN email TEXT;`,
+			[]string{`ALTER TABLE a ADD COLUMN "it's;" TEXT, ADD COLUMN email TEXT`}},
+		{"ALTER TABLE a ADD COLUMN a$b$ TEXT; ALTER TABLE a ADD COLUMN email TEXT;",
+			[]string{"ALTER TABLE a ADD COLUMN a$b$ TEXT", "ALTER TABLE a ADD COLUMN email TEXT"}},
+	} {
+		var got []string
+		for _, st := range sqlStatements(strings.Split(c.src, "\n")) {
+			got = append(got, st.text)
+		}
+		if strings.Join(got, "|") != strings.Join(c.want, "|") {
+			t.Errorf("%q:\n got  %q\n want %q", c.src, got, c.want)
+		}
+	}
+}
+
+// TestPIIReportOrder: the PII columns of one line are reported in the same (name) order every run, so
+// the text and SARIF output is deterministic (they came out in map order).
+func TestPIIReportOrder(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "services", "migrations", "identity")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sql := "-- +goose Up\nCREATE TABLE svc_identity.p (surname TEXT, email TEXT, dob DATE, ip TEXT, birthday DATE);\n"
+	if err := os.WriteFile(filepath.Join(dir, "00001_p.sql"), []byte(sql), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var first string
+	for i := 0; i < 20; i++ {
+		res, err := Run(Options{Root: root, Rules: []string{"CONF-07"}, Strict: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sb strings.Builder
+		res.WriteText(&sb)
+		if i == 0 {
+			first = sb.String()
+			continue
+		}
+		if sb.String() != first {
+			t.Fatalf("run %d differs:\n%s\nfirst:\n%s", i, sb.String(), first)
+		}
+	}
+	last := -1
+	for _, col := range []string{"birthday", "dob", "email", "ip", "surname"} {
+		at := strings.Index(first, "svc_identity.p."+col+" ")
+		if at < 0 || at < last {
+			t.Fatalf("column %s is missing or out of name order:\n%s", col, first)
+		}
+		last = at
+	}
+}

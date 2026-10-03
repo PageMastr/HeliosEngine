@@ -29,7 +29,7 @@ var (
 	cGatewayLineRE = regexp.MustCompile(`(?i)\b(listen|connect|gateway\w*)\b`)
 	cIPv4PortRE    = regexp.MustCompile(`\b(?:ipv4|Address::ipv4)\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*(\d+)\s*\)`)
 	cV4PortRE      = regexp.MustCompile(`\b(?:loopbackV4|anyV4|loopbackV6|anyV6)\s*\(\s*(\d+)\s*\)`)
-	cPortConstRE   = regexp.MustCompile(`\b(k\w*[Gg]ateway\w*[Pp]ort|k\w*[Pp]ort\w*[Gg]ateway\w*)\s*=\s*(\d+)`)
+	cPortConstRE   = regexp.MustCompile(`\b(k\w*[Gg]ateway\w*[Pp]ort|k\w*[Pp]ort\w*[Gg]ateway\w*)\s*[=({]\s*(\d+)`)
 	tomlTableRE    = regexp.MustCompile(`^\s*\[+\s*([^\]]+?)\s*\]+`)
 	tomlKeyRE      = regexp.MustCompile(`^\s*([A-Za-z0-9_.-]+)\s*=\s*(.*)$`)
 	yamlUDPRE      = regexp.MustCompile(`(?:^|[\s"'\[,-])(?:[0-9.]+:)?(?:\d+:)?(\d+)/udp\b`)

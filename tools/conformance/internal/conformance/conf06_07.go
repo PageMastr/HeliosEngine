@@ -56,6 +56,11 @@ var (
 	setSchemaRE    = regexp.MustCompile(`(?is)^set\s+schema\s+` + identRE + `$`)
 	constraintRE   = regexp.MustCompile(`(?i)^(constraint|primary|unique|check|foreign|exclude|like)\b`)
 	versionRE      = regexp.MustCompile(`^(\d+)_`)
+	columnDefRE    = regexp.MustCompile(`^` + identRE + `\s+(.*)$`)
+	dropNotColRE   = regexp.MustCompile(`(?i)^drop\s+(constraint|default|not\s+null)`)
+	// A dollar-quote tag follows the rules of an unquoted identifier: a letter, '_' or a non-ASCII
+	// character, then those or digits (PostgreSQL, "Dollar-Quoted String Constants").
+	dollarTagRE = regexp.MustCompile(`^\$(?:[A-Za-z_\x{80}-\x{10FFFF}][A-Za-z0-9_\x{80}-\x{10FFFF}]*)?\$`)
 )
 
 type column struct {
@@ -227,7 +232,7 @@ func (ns *netSchema) apply(f string, st sqlStmt, own string, netName func(string
 			if el == "" || constraintRE.MatchString(el) {
 				continue
 			}
-			if cm := regexp.MustCompile(`^` + identRE + `\s+(.*)$`).FindStringSubmatch(el); cm != nil {
+			if cm := columnDefRE.FindStringSubmatch(el); cm != nil {
 				t.cols[unquote(cm[1])] = &column{unquote(cm[1]), cm[2], f, st.lineOf(cm[1])}
 			}
 		}
@@ -250,7 +255,7 @@ func (ns *netSchema) apply(f string, st sqlStmt, own string, netName func(string
 			case addColumnRE.MatchString(a) && !constraintRE.MatchString(strings.TrimSpace(a[3:])):
 				c := addColumnRE.FindStringSubmatch(a)
 				t.cols[unquote(c[1])] = &column{unquote(c[1]), c[2], f, st.lineOf(c[1])}
-			case dropColumnRE.MatchString(a) && !regexp.MustCompile(`(?i)^drop\s+(constraint|default|not\s+null)`).MatchString(a):
+			case dropColumnRE.MatchString(a) && !dropNotColRE.MatchString(a):
 				delete(t.cols, unquote(dropColumnRE.FindStringSubmatch(a)[1]))
 			case renameColRE.MatchString(a):
 				c := renameColRE.FindStringSubmatch(a)
@@ -308,7 +313,13 @@ func (ns *netSchema) reportPII(p *Pass) {
 	sort.Strings(keys)
 	for _, k := range keys {
 		t := ns.tables[k]
-		for _, c := range t.cols {
+		names := make([]string, 0, len(t.cols))
+		for n := range t.cols {
+			names = append(names, n)
+		}
+		sort.Strings(names) // a stable report order: several columns can be reported on one line
+		for _, n := range names {
+			c := t.cols[n]
 			pii := piiWordRE.MatchString(c.name) || piiTypesRE.MatchString(c.typ)
 			switch {
 			case pii && !piiSafeRE.MatchString(c.name):
@@ -353,28 +364,80 @@ type sqlStmt struct {
 	lines []string // the raw lines it spans, for lineOf
 }
 
-// lineOf returns the line of the statement where ident first appears as a word, or its first line.
+// lineOf returns the line of the statement where ident first appears as a word (any case, outside a
+// `--` comment), or its first line.
 func (s sqlStmt) lineOf(ident string) int {
-	re := regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(strings.Trim(ident, `"`)) + `($|[^A-Za-z0-9_])`)
+	w := strings.ToLower(strings.Trim(ident, `"`))
+	if w == "" {
+		return s.line
+	}
 	for i, l := range s.lines {
-		if re.MatchString(strings.SplitN(l, "--", 2)[0]) {
-			return s.line + i
+		code := strings.ToLower(strings.SplitN(l, "--", 2)[0])
+		for k := 0; ; {
+			at := strings.Index(code[k:], w)
+			if at < 0 {
+				break
+			}
+			at += k
+			end := at + len(w)
+			if (at == 0 || !wordByte(code[at-1])) && (end == len(code) || !wordByte(code[end])) {
+				return s.line + i
+			}
+			k = at + 1
 		}
 	}
 	return s.line
 }
 
-// sqlStatements splits the `-- +goose Up` part of a migration (all of it without goose annotations).
+func wordByte(b byte) bool {
+	return b == '_' || b >= '0' && b <= '9' || b|0x20 >= 'a' && b|0x20 <= 'z'
+}
+
+// identByte reports a byte that continues an unquoted PostgreSQL identifier (letters, digits, '_',
+// '$' and non-ASCII), so that the '$' of `a$b$` or the E of `name'…'` belongs to the identifier.
+func identByte(b byte) bool {
+	return wordByte(b) || b == '$' || b >= 0x80
+}
+
+// gooseAnnotation reads a line as goose v3 (the version services/go.mod pins) does in
+// internal/sqlparser: a line that starts with "--" and contains "+goose" is an annotation; every "--"
+// and the first "+goose" are removed and the rest is compared without case, so `-- +goose down` and
+// `--+goose Up` count. dir is "up", "down", or "" for the other annotations (StatementBegin, …),
+// which are plain comments to SQL. goose rejects an annotation with leading whitespace; here it counts.
+func gooseAnnotation(line string) (dir string, ok bool) {
+	t := strings.TrimSpace(line)
+	if !strings.HasPrefix(t, "--") || !strings.Contains(t, "+goose") {
+		return "", false
+	}
+	cmd := strings.TrimSpace(strings.Replace(strings.ReplaceAll(t, "--", ""), "+goose", "", 1))
+	switch {
+	case strings.EqualFold(cmd, "up"):
+		return "up", true
+	case strings.EqualFold(cmd, "down"):
+		return "down", true
+	}
+	return "", true
+}
+
+// sqlStatements splits the `-- +goose Up` part of a migration (all of it without goose annotations)
+// the way PostgreSQL's lexer reads it: `--` comments; nested `/* */` comments; '…' strings, where a
+// doubled quote is an escape and which may span lines, and E'…' strings, where a backslash escapes too;
+// "…" identifiers; and $tag$ … $tag$ bodies. Strings and bodies are blanked, so a ';' or a statement
+// inside one is never applied.
 func sqlStatements(lines []string) []sqlStmt {
 	annotated := false
 	for _, l := range lines {
-		if strings.HasPrefix(strings.TrimSpace(l), "-- +goose Up") {
+		if d, _ := gooseAnnotation(l); d == "up" {
 			annotated = true
 		}
 	}
 	var out []sqlStmt
 	var cur strings.Builder
-	start, up, inBlock, dollar := 0, !annotated, false, ""
+	start, up := 0, !annotated
+	depth := 0       // nesting depth of /* */ comments
+	dollar := ""     // the tag of an open dollar-quoted body
+	quote := byte(0) // ' or " while a string or a quoted identifier is open
+	esc := false     // the open string is an E'…' string
 	flush := func(end int) {
 		if t := strings.Join(strings.Fields(cur.String()), " "); t != "" && up {
 			out = append(out, sqlStmt{text: t, line: start + 1, lines: lines[start : end+1]})
@@ -382,15 +445,10 @@ func sqlStatements(lines []string) []sqlStmt {
 		cur.Reset()
 	}
 	for i, l := range lines {
-		if dollar == "" && !inBlock {
-			switch t := strings.TrimSpace(l); {
-			case strings.HasPrefix(t, "-- +goose Up"):
+		if depth == 0 && dollar == "" && quote == 0 {
+			if d, _ := gooseAnnotation(l); d != "" {
 				flush(i)
-				up = true
-				continue
-			case strings.HasPrefix(t, "-- +goose Down"):
-				flush(i)
-				up = false
+				up = d == "up"
 				continue
 			}
 		}
@@ -399,10 +457,17 @@ func sqlStatements(lines []string) []sqlStmt {
 		}
 		for j := 0; j < len(l); j++ {
 			c := l[j]
+			next := byte(0)
+			if j+1 < len(l) {
+				next = l[j+1]
+			}
 			switch {
-			case inBlock:
-				if c == '*' && j+1 < len(l) && l[j+1] == '/' {
-					inBlock = false
+			case depth > 0:
+				if c == '*' && next == '/' {
+					depth--
+					j++
+				} else if c == '/' && next == '*' {
+					depth++
 					j++
 				}
 			case dollar != "":
@@ -411,13 +476,31 @@ func sqlStatements(lines []string) []sqlStmt {
 					j += len(dollar) - 1
 					dollar = ""
 				}
-			case c == '-' && j+1 < len(l) && l[j+1] == '-':
+			case quote == '\'':
+				switch {
+				case esc && c == '\\':
+					j++
+				case c == '\'' && next == '\'':
+					j++
+				case c == '\'':
+					quote = 0
+				}
+			case quote == '"':
+				cur.WriteByte(c)
+				if c == '"' && next == '"' {
+					cur.WriteByte(next)
+					j++
+				} else if c == '"' {
+					quote = 0
+				}
+			case c == '-' && next == '-':
 				j = len(l)
-			case c == '/' && j+1 < len(l) && l[j+1] == '*':
-				inBlock = true
+			case c == '/' && next == '*':
+				depth = 1
+				cur.WriteByte(' ') // a comment separates tokens
 				j++
-			case c == '$':
-				if m := regexp.MustCompile(`^\$[A-Za-z_]*\$`).FindString(l[j:]); m != "" {
+			case c == '$' && (j == 0 || !identByte(l[j-1])):
+				if m := dollarTagRE.FindString(l[j:]); m != "" {
 					dollar = m
 					cur.WriteString(m)
 					j += len(m) - 1
@@ -425,12 +508,13 @@ func sqlStatements(lines []string) []sqlStmt {
 					cur.WriteByte(c)
 				}
 			case c == '\'':
+				// E'…' (any case) when the E does not end an identifier.
+				esc = j > 0 && l[j-1]|0x20 == 'e' && (j < 2 || !identByte(l[j-2]))
+				quote = '\''
 				cur.WriteString("''")
-				for j++; j < len(l) && !(l[j] == '\'' && (j+1 >= len(l) || l[j+1] != '\'')); j++ {
-					if l[j] == '\'' {
-						j++
-					}
-				}
+			case c == '"':
+				quote = '"'
+				cur.WriteByte(c)
 			case c == ';':
 				flush(i)
 				start = i
@@ -438,7 +522,9 @@ func sqlStatements(lines []string) []sqlStmt {
 				cur.WriteByte(c)
 			}
 		}
-		cur.WriteByte('\n')
+		if quote == 0 && dollar == "" {
+			cur.WriteByte('\n')
+		}
 	}
 	flush(len(lines) - 1)
 	return out

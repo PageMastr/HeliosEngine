@@ -1,7 +1,10 @@
 #! -rules CONF-07 -strict
 # Plain-text real name, date of birth and an INET column; a column renamed to email; a plain client_ip
 # added later; ciphertext PII outside svc_identity; an @pii field outside Identity. (legacy_mail is a
-# known miss: "mail" alone is not one of the listed words.)
+# known miss: "mail" alone is not one of the listed words.) Migrations 00003-00009 add a plain PII
+# column that only a misread of goose or PostgreSQL would drop or hide: a lower-case `-- +goose down`,
+# a $fn1$ body, an E'' escape, a multi-line string, a nested comment, a quoted identifier with a quote,
+# and a '$' inside an identifier.
 schemas/sample/player.hschema:6: CONF-07
 services/migrations/chat/00001_messages.sql:2: CONF-07
 services/migrations/identity/00001_profile.sql:4: CONF-07
@@ -9,3 +12,10 @@ services/migrations/identity/00001_profile.sql:5: CONF-07
 services/migrations/identity/00001_profile.sql:6: CONF-07
 services/migrations/identity/00002_rename.sql:2: CONF-07
 services/migrations/identity/00002_rename.sql:3: CONF-07
+services/migrations/identity/00003_goose_case.sql:2: CONF-07
+services/migrations/identity/00004_dollar_tag.sql:2: CONF-07
+services/migrations/identity/00005_escape_string.sql:3: CONF-07
+services/migrations/identity/00006_multiline_string.sql:3: CONF-07
+services/migrations/identity/00007_nested_comment.sql:2: CONF-07
+services/migrations/identity/00008_quoted_identifier.sql:2: CONF-07
+services/migrations/identity/00009_identifier_dollar.sql:2: CONF-07

@@ -5,6 +5,7 @@
 #
 #   cmake -P tools/ci/run_lints.cmake                         # from the repository root
 #   cmake -DBUILD_DIR=build/linux-gcc -P tools/ci/run_lints.cmake
+#   cmake -DHELIOS_STATUS_PYTHON=C:/Python312/python.exe -P tools/ci/run_lints.cmake   # Python not on PATH
 #
 # Exits non-zero if any lint fails; every lint's own output is shown. See tools/lint/README.md.
 
@@ -36,7 +37,12 @@ _run_lint(shipped-pipelines -DSOURCE_DIR=${root} -P ${root}/tools/rendertest/tes
 _run_lint(windows-manifest -DMANIFEST=${root}/engine/platform/win/helios.manifest -P ${lint}/windows_manifest.cmake)
 _run_lint(test-namespaces -DSOURCE_DIR=${root} -DREQUIRE_TESTS=ON -P ${lint}/test_namespaces.cmake)
 # D6 (09 §5.10.2): every module directory named in 09 §8.1, every module README with its Plan-Rev.
-_run_lint(status -P ${root}/tools/status/check_status.cmake)
+# A Python that is not on PATH (or only the Microsoft Store alias is) is passed through.
+set(statusArgs "")
+if(HELIOS_STATUS_PYTHON)
+  list(APPEND statusArgs "-DHELIOS_STATUS_PYTHON=${HELIOS_STATUS_PYTHON}")
+endif()
+_run_lint(status ${statusArgs} -P ${root}/tools/status/check_status.cmake)
 # CONF-01…12 over the working tree, with tools/conformance/known_failing.jsonc applied (09 §5.10.3).
 find_program(HELIOS_CI_go go)
 if(HELIOS_CI_go)

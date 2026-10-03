@@ -203,8 +203,8 @@ report at exit).
   and none failed. A missing result or a skip is *unmeasured*. A gate that ran shorter than its
   `min_seconds` fails, and so does a gate without one. A `gate` reference with `case` reads that clause's
   case; a gate result without it (written before the cases, or by a runner that could not read the
-  registry) reads `missing`, so the criterion is not passed and its streak restarts. The criterion passes when every reference passes on
-  every platform and it has no gap.
+  registry) reads `missing`, so the criterion is not passed and its streak restarts. The criterion passes
+  when every reference passes on every platform and it has no gap.
   A broken pin (a `pinned_by` test that now fails) is reported so that the registry is updated.
 - **Owner approvals.** An approved entry is evaluated like any other. While its record exists, a pass to
   which one of its `advisory_runs` contributed reads "passed (owner approval <date>, evidence <record>)",

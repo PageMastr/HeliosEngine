@@ -1,10 +1,10 @@
 """The nightly's fetch and perf steps (.github/workflows/nightly.yml), run under bash against a fake `gh`,
-and the scope of its one advisory gate.
+the scope of its one advisory gate, and which steps run the timing gates (CTest label perf).
 
 These steps decide whether tonight is compared with a perf history, so each way they can go wrong (an API
 error, a lost or expired artifact, a restart over a usable history) is a scenario here. POSIX only: the
-steps are bash, and the fake `gh` is a shell script. The advisory scope test reads the files and runs
-everywhere.
+steps are bash, and the fake `gh` is a shell script. The advisory and perf-label scope tests read the files
+and run everywhere.
 """
 
 import json

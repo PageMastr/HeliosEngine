@@ -173,8 +173,9 @@ host fingerprint: `{"cpu": "<model name>", "logical_cpus": n}` from /proc/cpuinf
 registry on Windows), `ctest*.xml` (`ctest --output-junit`), `doctest/<binary>[.perf].xml` with its
 `.status.json`, `go*.json` (`go test -json`) and `gates/<gate>.xml`. The runner uses the working directory,
 environment and timeout that CTest would, and `--label-exclude` skips the entries `ctest -LE` skips: the
-Windows jobs have no GPU and pass `"gpu|perf"` to both steps. A doctest binary whose XML is unreadable (a crash) fails every case it cites. So does one that exits
-non-zero although every case passed (a sanitizer report at exit).
+Windows jobs have no GPU and pass `"gpu|perf"` to both steps. A doctest binary whose XML is unreadable (a
+crash) fails every case it cites. So does one that exits non-zero although every case passed (a sanitizer
+report at exit).
 
 - **Per criterion.** On each platform, a reference passes when it has results in the runs that count for it
   and none failed. A missing result or a skip is *unmeasured*. A gate that ran shorter than its
@@ -206,7 +207,10 @@ non-zero although every case passed (a sanitizer report at exit).
     summary, and one `::error title=perf <verdict>::<metric> <value> vs anchor <a> (<drift> %)` workflow
     command per failing row, so the run page's annotations name each failing metric (GitHub shows at most
     10 error annotations per step; the table in the log has every row). The `perf-history` artifact holds
-    the night's `perf.md` next to the history.
+    the night's `perf.md` next to the history. On the first night that compares with a history written
+    before this (history `version` 1), the summary and the log also list the failing rows stored in that
+    history's entries, one line per failing night, so the nights whose failure the log did not name are
+    named once.
   - **Host classes.** Hosted runners of one image come on several kinds of machine: in its first week the
     `ubuntu-24.04` runner showed at least three performance classes (raw socket ≈ 200k, 255k and 415k pps
     per core; the PCG kernel 2.51, 1.98 and 2.99 ms), so one anchor for all of them turned a change of
@@ -214,22 +218,27 @@ non-zero although every case passed (a sanitizer report at exit).
     behind another. Whether the CPU model and count separate every such class is for the first
     fingerprinted nights to show. Every native job writes its fingerprint (`runners.py host`: CPU model
     name and logical CPU count) next to `run.json`, and the history keeps anchors, calibration, the rolling
-    baseline and applied accepts per run and class. Within a class every rule below holds unchanged. A metric's first night on
-    a class without its levels reads **`new-host-class`** (not failing, noted with the class) and is that
-    class's first calibration night; the other classes keep their levels for when the runner comes back,
-    including beyond the 60 retained entries (the history keeps every class's newest levels while the
-    metric is declared). A `perf_accept` record moves the level of the class its night ran on. Entries
-    from before fingerprints, and a result set without `host.json`, are the class `unrecorded`, so the
-    first fingerprinted night starts every metric's calibration on its class; the old levels, set on mixed
-    classes, stay with `unrecorded`.
+    baseline and applied accepts per run and class. Within a class every rule below holds unchanged. A
+    metric's first night on a class without its levels reads **`new-host-class`** (not failing, noted with
+    the class) and is that class's first calibration night; the other classes keep their levels for when
+    the runner comes back, including beyond the 60 retained entries (the history keeps every class's newest
+    levels while the metric is declared, and a calibrating class's clean values until it has 5, so a class
+    the runner lands on once a month still finishes its calibration). A `perf_accept` record moves the level
+    of the class its night ran on. Entries from before fingerprints, and a result set without `host.json`,
+    are the class `unrecorded`, so the first fingerprinted night starts every metric's calibration on its
+    class; the old levels, set on mixed classes, stay with `unrecorded`. The summary's hosts line names each
+    run's class tonight and how many classes the history holds levels for: a count that grows every night
+    means the fingerprint is not stable.
   - **Bounds.** A metric with a `bound` (a number in its unit, quoting the limit of the plan criterion it
     names) is gated against that bound on every night and class, calibration nights included, instead of
     against its anchor; its drift is reported, not gated, and no `perf_accept` can name it.
     `script.fuel_metering_overhead_pct` is RT-13's "≤ 10 % overhead" (04 §10.2, 02 §8.3, WP-0.10r): a
-    2–8 % difference of two timings, whose relative noise (CV ≈ 36 % locally; once −0.19 %) no 5 %
-    relative budget can hold, so its pattern also accepts a sign and an exponent. Its timing,
-    `script.ns_per_fuel` (the metered host's ns per fuel on the same workload, CV ≈ 1 %), carries the
-    relative 5 % runtime budget.
+    difference of two timings of a few percent, whose relative noise no 5 % relative budget can hold. In
+    12 local runs on a shared 4-vCPU VM at load ≈ 8, 11 read 0.15–5.3 % (CV ≈ 55 %) and one −38.1 %, so its
+    pattern also accepts a sign and an exponent. Its timing, `script.ns_per_fuel` (the metered host's ns
+    per fuel on the same workload: 11.3–11.8 ns, CV ≈ 1.1 % in the same 12 runs), carries the relative 5 %
+    runtime budget. A large negative overhead means the raw run was disturbed; the bound gates only the
+    high side, so such a night says nothing about the overhead (its drift column shows it).
   - The anchor does not follow: it is the median of the metric's first 5 values, or the value of the night
     a `perf_accept` record accepted. A metric's first night reads `new` and its next 4 read `calibrating`:
     they are recorded, not gated, and one outlier among them (a lucky or a bad night) does not set the
@@ -297,11 +306,13 @@ non-zero although every case passed (a sanitizer report at exit).
   σ = 2.5 % (90th percentile 36, worst 112, longest red streak 7). With the 14 gated keys of today's
   registry, σ = 2.5 % would make the perf step red on a large share of nights from noise alone. Host
   classes remove the step between CPU models, not the noise within one (two VMs of one model still share
-  their hosts with other tenants), and a class the runner rarely lands on takes weeks to calibrate and is
-  ungated until then. The gating and the thresholds stay as the plan sets them. The nightly perf history on
-  hosted runners is drift tracking, not the binding gate: the binding per-commit perf gates on fixed
-  hardware are WP-0.4's (its runner and the lab), and until they exist a red or a green here is evidence
-  to read, not a measurement on REF.
+  their hosts with other tenants). A class the runner rarely lands on is ungated until it has had 5
+  nights, however far apart they are. A real regression that lands on the same night as a move of the
+  fleet to a new CPU model is calibrated into the new class's anchor, and if the old classes never come
+  back, nothing catches it. The gating and the thresholds stay as the plan sets them. The nightly perf
+  history on hosted runners is drift tracking, not the binding gate: the binding per-commit perf gates on
+  fixed hardware are WP-0.4's (its runner and the lab), and until they exist a red or a green here is
+  evidence to read, not a measurement on REF.
 - **Expected red today.** `pcg_tests_perf` fails by design (K5b, armed by WP-0.9c's red outcome; 09 §8.1),
   so the GCC job's perf step is red every night, and `script_tests` is reported to abort under `linux-asan`
   (a mimalloc use-after-poison that predates the nightly; see #9). Both are real results, reported as such;

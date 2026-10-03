@@ -26,9 +26,10 @@ from before fingerprints read `unrecorded`): hosted runners of one image come on
 timings differ by more than the budgets, so a night is only compared with nights on its own class, and
 everything above holds within a class. A metric's first night on a class that has none of its levels
 reads `new-host-class` (not failing) and starts that class's calibration; the levels of other classes
-are kept for when the runner comes back to them. A metric with an absolute `bound` (a plan criterion such
-as RT-13's ≤ 10 % overhead) fails when it is worse than the bound, on every night and class, and its drift
-is reported, not gated.
+are kept for when the runner comes back to them, and so are a calibrating class's clean values (a class
+the runner rarely lands on calibrates over more nights than the history holds). A metric with an
+absolute `bound` (a plan criterion such as RT-13's ≤ 10 % overhead) fails when it is worse than the
+bound, on every night and class, and its drift is reported, not gated.
 Every verdict, both levels and the applied accept are stored in the history and carried forward (a
 missing metric carries them too, and the history keeps every class's newest levels), so none of them
 heals or expires as old entries leave it. Only a reviewed `perf_accept` record in scorecard.jsonc moves
@@ -39,10 +40,11 @@ one older than the whole history is reported as stale, not failed. A declared ga
 value and stops being produced is `missing` until it comes back or the registry drops the metric, its run
 or its run assignment; a declared metric that never had a value is listed, not failed.
 It prints the summary and then one `::error` workflow command per failing row (a check-run annotation
-that names the metric), exits 1 on any failing verdict, and exits 2 under --require-history when there
-is no history to compare with (so a lost artifact cannot reset every level); --note lines head the
-summary (a first night, or a restart, which the nightly allows only when no history can be fetched), and
-a new history records when and why it started, which every later summary shows.
+that names the metric); the failing nights of a history written before that (version 1) are listed
+once. It exits 1 on any failing verdict, and exits 2 under --require-history when there is no history to
+compare with (so a lost artifact cannot reset every level); --note lines head the summary (a first
+night, or a restart, which the nightly allows only when no history can be fetched), and a new history
+records when and why it started, which every later summary shows.
 Standard library only.
 """
 
@@ -50,6 +52,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import statistics
 import sys
 from datetime import datetime, timezone
@@ -180,6 +183,14 @@ def _levels(past: list[dict], key: str) -> dict | None:
     return _newest(past, key)[0]
 
 
+def _calibration(levels) -> list[float] | None:
+    """A class's stored calibration values (the clean values of its first nights, oldest first), if any."""
+    values = levels.get("calibration") if isinstance(levels, dict) else None
+    ok = isinstance(values, list) and all(isinstance(v, (int, float)) and not isinstance(v, bool) and
+                                          math.isfinite(v) for v in values)
+    return values if ok else None
+
+
 def _seed_levels(past: list[dict]) -> dict:
     """{key: {host class: levels}}, the newest of each, from the entries of a history that predates the
     per-class level store."""
@@ -195,15 +206,23 @@ def _seed_levels(past: list[dict]) -> dict:
 def _evaluate(full: list[dict], entry: dict, key: str, m: dict, window: int, cls: str = UNRECORDED,
               store: dict | None = None) -> dict:
     """One row: `key`'s value tonight against its levels on host class `cls`. `full` is the whole history,
-    `store` the newest levels of every class ({key: {class: levels}}), which outlive the entries."""
+    `store` the newest levels of every class ({key: {class: levels}}), which outlive the entries. The row's
+    `calibration` is the class's clean values before tonight, for the store (compare pops it)."""
     limit = BUDGET_PERCENT[m["category"]]
-    row = {"metric": key, "value": m["value"], "unit": m["unit"], "gate": m["gate"], "baseline": None,
-           "change": None, "anchor": None, "anchor_change": None, "limit": limit, "verdict": "new", "note": "",
-           "anchor_n": 1, "accepted": None, "host": cls, "better": m["better"],
-           "bound": m.get("bound") if m["gate"] else None}
     past = [e for e in full if _host_of(e, key) == cls]
     seen = [e for e in past if key in (e.get("metrics") or {})]
     stored = ((store or {}).get(key) or {}).get(cls)
+    regressed = [m["gate"] and e["metrics"][key].get("verdict") == "regression" for e in seen]
+    clean = [e["metrics"][key]["value"] for e, bad in zip(seen, regressed) if not bad]
+    # A class the runner rarely lands on calibrates over more than the history's entries: its first values
+    # are then only in the store, which keeps them while the class calibrates.
+    kept = _calibration(stored)
+    if kept is not None and len(kept) >= len(clean):
+        clean = list(kept)
+    row = {"metric": key, "value": m["value"], "unit": m["unit"], "gate": m["gate"], "baseline": None,
+           "change": None, "anchor": None, "anchor_change": None, "limit": limit, "verdict": "new", "note": "",
+           "anchor_n": 1, "accepted": None, "host": cls, "better": m["better"],
+           "bound": m.get("bound") if m["gate"] else None, "calibration": clean[:window]}
     levels = _levels(past, key) or (stored if _has_levels(stored) else None) or {}
     carried = {f: levels.get(f) for f in LEVELS}
     carried["anchor_n"] = carried["anchor_n"] or 0
@@ -255,17 +274,15 @@ def _evaluate(full: list[dict], entry: dict, key: str, m: dict, window: int, cls
         return row
     values = baseline_values(past, key, m["gate"], applied["night"] if applied else None, window)
     base = statistics.median(values) if values else carried["baseline"]
-    clean = [e["metrics"][key]["value"] for e in seen
-             if not (m["gate"] and e["metrics"][key].get("verdict") == "regression")][:window]
     if applied is not None:
         anchor, n = applied["value"], window
     elif carried["anchor"] is not None and carried["anchor_n"] >= window:
         anchor, n = carried["anchor"], window
     elif len(clean) >= window:
-        anchor, n = statistics.median(clean), window
-    elif len(clean) == len(seen) and carried["anchor_n"] < window:
-        # A calibration night: the anchor is the median of the metric's first --window values, so one
-        # outlier among them does not set it. Recorded, not gated.
+        anchor, n = statistics.median(clean[:window]), window
+    elif not any(regressed) and carried["anchor_n"] < window:
+        # A calibration night: the anchor is the median of the metric's first --window values on the class,
+        # so one outlier among them does not set it. Recorded, not gated.
         first = clean + [m["value"]]
         row.update(verdict="calibrating", baseline=statistics.median(first), anchor=statistics.median(first),
                    anchor_n=len(first), note="; ".join(notes + [f"calibration night {len(first)} of {window}"]))
@@ -324,10 +341,16 @@ def compare(history: dict, entry: dict, window: int, start_note: str = "") -> tu
     for key, m in sorted(entry["metrics"].items()):
         cls = run_class(entry, _split(key)[0])
         row = _apply_bound(_evaluate(past, entry, key, m, window, cls, store), m)
+        calibration = row.pop("calibration")
         levels = {f: row[f] for f in LEVELS}
         stored["metrics"][key].update(verdict=row["verdict"], host=cls, **levels)
         if _has_levels(levels):
             store.setdefault(key, {})[cls] = levels
+            if isinstance(row["anchor_n"], int) and row["anchor_n"] < window:
+                # Still calibrating: keep the class's clean values, which may leave the entries first.
+                if not (m["gate"] and row["verdict"] == "regression"):
+                    calibration = calibration + [m["value"]]
+                store[key][cls] = dict(levels, calibration=calibration[:window])
         rows.append(row)
     # A gated metric that had a value last night, or was already missing, is missing until it is produced
     # again or the registry drops the metric, its run, or (for a metric read from one run) moves it to
@@ -379,14 +402,49 @@ def _bound(r: dict) -> str:
     return _bound_text(r.get("better"), r["bound"], r["unit"])
 
 
-def markdown(rows: list[dict], entry: dict, notes: list[str] = (), started: dict | None = None) -> str:
+def unnamed_failures(history: dict) -> list[str]:
+    """One line per failing night of a history written before perf.py named failing rows in the job log
+    (version < 2), with the rows it failed on, so the first night of this version names them once."""
+    version = history.get("version")
+    if isinstance(version, int) and not isinstance(version, bool) and version >= 2:
+        return []
+    lines = []
+    for e in history.get("entries") or []:
+        if not isinstance(e, dict):
+            continue
+        failing = []
+        for key, m in sorted((e.get("metrics") or {}).items()):
+            if not isinstance(m, dict) or m.get("verdict") not in FAILING:
+                continue
+            text, value, anchor = f"`{key}` {m['verdict']}", m.get("value"), m.get("anchor")
+            if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (value, anchor)):
+                drift = _change(value, anchor, m.get("better", "lower"))[0]
+                text += f" ({_fmt(value)} {m.get('unit', '')}".rstrip() + f" vs anchor {_fmt(anchor)}, {_pct(drift)})"
+            failing.append(text)
+        failing += [f"`{k}` missing" for k in sorted(k for k in e.get("missing") or [] if isinstance(k, str))]
+        if failing:
+            lines.append(f"{_night(e)}, commit `{str(e.get('sha', ''))[:12]}`: " + "; ".join(failing))
+    return lines
+
+
+def markdown(rows: list[dict], entry: dict, notes: list[str] = (), started: dict | None = None,
+             levels: dict | None = None, earlier: list[str] = ()) -> str:
+    """The summary: notes, the table (one line per row), and `earlier` (unnamed_failures) as a list.
+    `levels` is the new history's level store; with it, the hosts line counts each run's host classes."""
     bad = [r for r in rows if r["verdict"] in FAILING]
     since = []
     if started and started.get("night") and started["night"] != _night(entry):
         since = [f"History since {started['night']}" + (f" ({started['note']})" if started.get("note") else "") +
                  ".", ""]
     runs = sorted({_split(r["metric"])[0] for r in rows if r["value"] is not None} - {None})
-    hosts = "; ".join(f"`{run}` on {run_class(entry, run)}" for run in runs)
+
+    def classes(run: str) -> str:
+        # A fingerprint that changed every night would show here as a count that grows every night.
+        n = len({c for k, per in (levels or {}).items() if _split(k)[0] == run and isinstance(per, dict)
+                 for c in per})
+        return f" ({n} host class{'' if n == 1 else 'es'} with levels)" if levels is not None else ""
+
+    hosts = "; ".join(f"`{run}` on {run_class(entry, run)}{classes(run)}" for run in runs)
     lines = ["## Perf history", ""] + [f"**{n}**" for n in notes] + ([""] if notes else []) + since + [
              f"Night {_night(entry)} (UTC, the `night` a `perf_accept` record names), commit `{entry['sha'][:12]}`: "
              f"{len(bad)} gated metric(s) failing. Budgets are 5 % (render, runtime) and 10 % (backend, editor, "
@@ -412,6 +470,10 @@ def markdown(rows: list[dict], entry: dict, notes: list[str] = (), started: dict
             verdict += f" ({' '.join(str(r['note']).split())})"
         lines.append(f"| `{r['metric']}` | {fmt(r['value'])} {r['unit']} | {fmt(r['baseline'])} | {pct(r['change'])} | "
                      f"{fmt(r['anchor'])} | {pct(r['anchor_change'])} | {limit} | {verdict} |")
+    if earlier:
+        lines += ["", "Failing rows of earlier nights, from a history written before the log named them (listed "
+                  "once, on the first night of a history that names its own):", ""]
+        lines += [f"- {' '.join(str(line).split())}" for line in earlier]
     return "\n".join(lines) + "\n"
 
 
@@ -480,7 +542,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     new, rows = compare(history, entry, args.window, args.note[0] if args.note else "")
     args.out.write_text(json.dumps(new, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    text = markdown(rows, entry, args.note, new.get("started"))
+    text = markdown(rows, entry, args.note, new.get("started"), levels=new.get("levels"),
+                    earlier=unnamed_failures(history))
     if args.markdown:
         args.markdown.write_text(text, encoding="utf-8")
     print(text)

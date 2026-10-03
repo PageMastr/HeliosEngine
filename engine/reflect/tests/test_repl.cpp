@@ -2,8 +2,10 @@
 
 #include <doctest/doctest.h>
 
+#include <cfloat>
 #include <cmath>
 
+#include "helios/core/assert.h"
 #include "helios/core/random.h"
 #include "helios/reflect/repl.h"
 
@@ -151,6 +153,114 @@ TEST_CASE("repl: readSmallest3 accepts whatever writeSmallest3 writes") {
         }
         INFO("bits=" << bits);
         CHECK(rejected == 0);
+    }
+}
+
+TEST_CASE("repl: re-encoding a decoded smallest-three rotation stays within one step") {
+    // Range, frame-cell and raw fields re-encode to identical bits (schemac's test_repl.cpp). Smallest
+    // three does not always (round-4 review: 26 of 20,000 at 10 bits): when two components are within
+    // a step, the decoded largest (sqrt(1 - sum)) can come out below a quantized one and the index
+    // flips, and above 24 bits the f32 result is coarser than a step. The rotation it decodes to
+    // stays within one step per component (or f32 precision) of the first decode.
+    auto roundTrip = [](const Quat& q, u32 bits, std::vector<u8>* bytes) {
+        BitWriter w;
+        writeSmallest3(w, q, bits);
+        if (bytes) *bytes = w.bytes();
+        BitReader r(w.bytes(), w.bitCount());
+        auto back = readSmallest3(r, bits);
+        REQUIRE(back);
+        return *back;
+    };
+    SplitMix64 rng(0x5a17);
+    for (const u32 bits : {3u, 6u, 10u, 12u, 16u, 24u, 32u}) {
+        const f64 step = 2 * 0.70710678118654752440 / static_cast<f64>((u64(1) << bits) - 1);
+        const f64 tolerance = step + 4.0 * FLT_EPSILON;
+        u32 differentBits = 0;
+        f64 worst = 0;
+        for (int i = 0; i < 5000; ++i) {
+            f64 c[4];
+            f64 n = 0;
+            for (f64& x : c) {
+                x = static_cast<f64>(rng.next() >> 11) / 9007199254740992.0 * 2 - 1;
+                n += x * x;
+            }
+            n = std::sqrt(n);
+            if (n < 1e-3) continue;
+            const Quat q(static_cast<f32>(c[0] / n), static_cast<f32>(c[1] / n), static_cast<f32>(c[2] / n), static_cast<f32>(c[3] / n));
+            std::vector<u8> first, second;
+            const Quat a = roundTrip(q, bits, &first);
+            const Quat b = roundTrip(a, bits, &second);
+            if (first != second) ++differentBits;
+            // q and -q are one rotation: align the signs before comparing components.
+            const f64 sign = f64(a.x) * b.x + f64(a.y) * b.y + f64(a.z) * b.z + f64(a.w) * b.w < 0 ? -1.0 : 1.0;
+            for (const f64 d : {a.x - sign * b.x, a.y - sign * b.y, a.z - sign * b.z, a.w - sign * b.w}) worst = std::max(worst, std::fabs(d));
+        }
+        INFO("bits=" << bits << " re-encoded to other bits: " << differentBits << " worst component change: " << worst
+                     << " step: " << step);
+        CHECK(worst <= tolerance);
+    }
+}
+
+TEST_CASE("repl: writeSmallest3 asserts its bits range") {
+#if HELIOS_ENABLE_ASSERTS
+    static u32 failures = 0;
+    failures = 0;
+    const AssertHandler previous = setAssertHandler([](const AssertInfo&) {
+        ++failures;
+        return AssertAction::Continue;
+    });
+    BitWriter w;
+    writeSmallest3(w, Quat(0, 0, 0, 1), 1);
+    writeSmallest3(w, Quat(0, 0, 0, 1), 33);
+    writeSmallest3(w, Quat(0, 0, 0, 1), 2);
+    writeSmallest3(w, Quat(0, 0, 0, 1), 32);
+    setAssertHandler(previous);
+    CHECK(failures == 2);
+#else
+    MESSAGE("asserts are compiled out in this build");
+#endif
+}
+
+TEST_CASE("repl: readFrameCell accepts whatever writeFrameCell writes, at any cell size") {
+    // The round-4 review: the writer saturates at ±4e18 steps and floors the cell index, so for a large
+    // negative position index * steps lies below -4e18 unless steps divides 4e18 (2^20 does, 2^21 does
+    // not), and the reader rejected it. The reader now bounds the position, not index * steps.
+    struct P {
+        f64 cell, res;
+        u32 bits;
+    };
+    for (const P p : {P{4096, 1.0 / 256, 20}, P{8192, 1.0 / 256, 21}, P{65536, 1.0 / 256, 24}, P{16777216, 1.0 / 256, 32},
+                      P{3, 1, 2}, P{1000, 1, 10}}) {
+        for (const f64 v : {1e300, -1e300, 1e20, -1e20, 4e18 * p.res, -4e18 * p.res, DBL_MAX, -DBL_MAX, -1.5625e16}) {
+            BitWriter w;
+            writeFrameCell(w, WorldPos{DVec3(v, -v, 0)}, p.cell, p.res, p.bits);
+            BitReader r(w.bytes(), w.bitCount());
+            INFO("cell=" << p.cell << " res=" << p.res << " v=" << v);
+            auto back = readFrameCell(r, p.cell, p.res, p.bits);
+            REQUIRE(back);
+            // Saturated at ±4e18 steps of res; within half a step otherwise.
+            const f64 expect = std::clamp(v, -4e18 * p.res, 4e18 * p.res);
+            CHECK(std::fabs(back->local.x - expect) <= p.res / 2);
+            CHECK(std::fabs(back->local.y + expect) <= p.res / 2);
+            CHECK(r.bitsLeft() == 0);
+        }
+    }
+    // One step past the writer's range either way is corrupt input, at a cell size that divides 4e18
+    // and at one that does not.
+    for (const P p : {P{4096, 1.0 / 256, 20}, P{8192, 1.0 / 256, 21}, P{3, 1, 2}}) {
+        const i64 steps = static_cast<i64>(p.cell / p.res);
+        const i64 kMax = 4'000'000'000'000'000'000;
+        for (const i64 total : {kMax, kMax + 1, -kMax, -kMax - 1}) {
+            BitWriter w;
+            for (int axis = 0; axis < 3; ++axis) {
+                const i64 index = total / steps - ((total % steps != 0 && total < 0) ? 1 : 0);
+                w.writeVarint(zigzagEncode(index));
+                w.write(static_cast<u64>(total - index * steps), p.bits);
+            }
+            BitReader r(w.bytes(), w.bitCount());
+            INFO("cell=" << p.cell << " total=" << total);
+            CHECK(readFrameCell(r, p.cell, p.res, p.bits).ok() == (total == kMax || total == -kMax));
+        }
     }
 }
 

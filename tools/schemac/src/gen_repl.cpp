@@ -11,6 +11,7 @@
 #include <cmath>
 #include <format>
 #include <initializer_list>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -199,6 +200,10 @@ private:
         std::optional<u64> bits;
         std::vector<std::string> keys;
         for (const AttrArg& arg : a->args) {
+            // A repeated argument or a second form would leave all but the last one ignored.
+            if (arg.key.empty() && !form.empty()) return fail(std::format("a second form '{}' after '{}' (give one form)", arg.value, form));
+            if (!arg.key.empty() && std::find(keys.begin(), keys.end(), arg.key) != keys.end())
+                return fail(std::format("{}= is given twice", arg.key));
             if (!arg.key.empty()) keys.push_back(arg.key);
             if (arg.key == "range" || arg.key == "cell" || arg.key == "res") {
                 // A unit other than metres would be dropped silently (cell=4km would be a 4 m cell).
@@ -601,7 +606,12 @@ private:
             }
         case TypeKind::Enum: {
             std::string valid;
-            for (const EnumVal& e : t->decl->values) valid += (valid.empty() ? "" : " && ") + std::format("v != {}ll", e.value);
+            for (const EnumVal& e : t->decl->values) {
+                // -9223372036854775808ll is unary minus on a literal too large for long long (GCC and
+                // Clang warn), so INT64_MIN is spelled as gen_cpp spells it.
+                const std::string lit = e.value == std::numeric_limits<i64>::min() ? "(-9223372036854775807ll - 1)" : std::to_string(e.value) + "ll";
+                valid += (valid.empty() ? "" : " && ") + std::format("v != {}", lit);
+            }
             w.open("{");
             w.line(std::format("auto x = r.read({});", rawBits(t)));
             w.line("if (!x) return x.error();");

@@ -579,10 +579,16 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
   velocities. The Phase 0 codec carries no strings, `Name`s, containers, structs or variants: a
   replicated field of those types is an error under `--emit repl`.
 - **Determinism.** Quantizers use f64 arithmetic with round-half-up, and frame cells use integer
-  steps, so a cell and a client produce the same bits (04 §4.5), and a decoded state re-encodes to
-  identical bits.
-- **Non-finite input** stays decodable: range maps NaN to its minimum, frame cells map a non-finite
-  axis to 0, and smallest-three normalises its input and sends a non-finite or zero quaternion as the
+  steps, so a cell and a client produce the same bits (04 §4.5). Range, frame-cell and raw fields
+  re-encode from their decoded value to identical bits. Smallest-three need not: when two components
+  are within a step, the decoded largest (√(1 − sum)) can come out below a quantized one, so its
+  index flips (26 of 20,000 random rotations at 10 bits), and above 24 bits the `f32` result is
+  coarser than a step. The rotation it decodes to stays within one step per component (or `f32`
+  precision) of the first decode. WP-1.10's "both sides quantize" extrapolation (04 §4.5) must
+  compare decoded rotations, not their bits.
+- **Non-finite and out-of-range input** stays decodable: range maps NaN to its minimum, frame cells
+  map a non-finite axis to 0 and saturate a finite one at ±4·10¹⁸ steps of `res` (the reader accepts
+  exactly that range at every cell size), and smallest-three normalises its input and sends a non-finite or zero quaternion as the
   identity (and steps a rounded-up component back toward 0 when the three would exceed unit length),
   so a reader always accepts what a writer wrote.
 - **Hostile input.** Readers are bounds-checked and never overread. They reject truncated streams,
@@ -606,7 +612,10 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
   it), and the fields, defaults, `@max`es, enum and flags underlying types and values, and
   alternatives of every struct, variant, enum and flags type the payload reaches (by name; reached
   types contribute no lock ids, so the hash does not depend on which files are compiled). So any
-  wire change changes it, and comments or declaration order do not.
+  wire change changes it, and comments or declaration order do not. `@range(min, max)` on a payload
+  field is not hashed: it is a validation bound (a `TypeInfo` attribute) that no decoder enforces, not
+  a wire change. If WP-1.10's rpc validation (SEC-1) rejects arguments outside `@range`, it hashes the
+  bound then, as `@max` is.
 
 ## CMake: `helios_schema()`
 
@@ -679,11 +688,16 @@ results, exact `T[N]`, exact integers up to 2⁵³ − 1, finite `f32`, and real
 profile. 22 mutants of the generator (the reviewer's 11 and 11 more) are each killed by a behavioural
 case. `test_repl.cpp` runs the generated replication code of the golden
 fixture and the sample schemas: descriptors against the schema and the `TypeInfo` (ids, offsets,
-change-mask indices), full-state round trips within each quantizer's precision (and re-encoding to the
-same bits), every truncated prefix and random input rejected cleanly, an undeclared enum value, the rpc
+change-mask indices), full-state round trips within each quantizer's precision (and frame-cell, range and raw
+fields re-encoding to the same bits), every truncated prefix and random input rejected cleanly, an undeclared enum value, the rpc
 and event tables, the protocol hash (stable under comments and the order of files, changed by a
 quantizer, an audience, an enum's values, an rpc argument's or event field's type, name or default,
-and a field of a struct an rpc reaches), undeclared flag bits, and 22 `@quant` / field diagnostics. `test_sql.cpp` covers the column mapping, the migration stub
+and a field of a struct an rpc reaches; since PR #33's round 2 also an enum's or flags' underlying
+type, a top-level rpc's result, a payload `@max` and an event's reliability), undeclared flag bits, an
+`INT64_MIN` enum value, and 30 `@quant` / field diagnostics (round 3: a repeated argument or a second
+form). `engine/reflect`'s `reflect_tests` cover the quantizers: every width of smallest-three accepted
+by its reader and within one step when re-encoded, and frame cells read back at every cell size, up to
+the ±4·10¹⁸-step saturation. `test_sql.cpp` covers the column mapping, the migration stub
 (renames, widenings, `T→T?`, new columns and tables, removed fields and tables as contract comments,
 Down in reverse, the empty stub, `--sql-baseline`), string defaults (one line, `E'…'`, no NUL) and
 the rules of `@sql`. The CTest `schemac_sql_postgres`
@@ -724,9 +738,9 @@ server as `nobody` when started as root, and is not registered on Windows or whe
 
 ## Plan conformance
 
-Plan-Rev: 11
+Plan-Rev: 12
 
-Written to plan revision 11 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau`, `sql` and `repl` so far), after being
+Written to plan revision 12 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau`, `sql` and `repl` so far), after being
 reconciled by hand with revision 6 on 2026-09-25 under `docs/plan/09-roadmap-and-process.md`
-§5.10.2 D7. Revisions 7–11 changed no anchor of this package. No conformance delta is open; see
+§5.10.2 D7. Revisions 7–12 changed no anchor of this package. No conformance delta is open; see
 §5.10.4 (c) there.

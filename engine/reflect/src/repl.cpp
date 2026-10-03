@@ -6,6 +6,8 @@
 #include <bit>
 #include <cmath>
 
+#include "helios/core/assert.h"
+
 namespace helios::refl::repl {
 
 namespace {
@@ -92,6 +94,9 @@ f64 dequantizeRange(u64 q, f64 min, f64 max, u32 bits) noexcept {
 }
 
 void writeSmallest3(BitWriter& w, const Quat& q, u32 bits) {
+    // At 1 bit the stepping loop below cannot bring the three under unit length, so readSmallest3
+    // would reject what this writes (round-3 review: all of 1,000). Generated code passes 3 to 32.
+    HELIOS_ASSERT(bits >= 2 && bits <= 32, "writeSmallest3 takes 2 to 32 bits, not {}", bits);
     f64 c[4] = {q.x, q.y, q.z, q.w};
     // Normalise in f64 so that what is sent is a unit quaternion; one that is not finite or has no
     // direction (NaN from a physics blow-up, all zero) is sent as the identity rather than as three
@@ -162,7 +167,12 @@ namespace {
 /// Steps of `res` in one cell (validated by helios-schemac: a whole number from 2 to 2^32).
 i64 stepsPerCell(f64 cell, f64 res) noexcept { return std::max<i64>(1, static_cast<i64>(std::floor(cell / res + 0.5))); }
 
-constexpr f64 kMaxSteps = 4.0e18; // < 2^62: index * steps + offset stays in i64
+// The writer saturates a position at ±kMaxSteps steps of `res`, and the reader accepts exactly that
+// range of index * steps + offset, so whatever one writes the other reads at every cell size. Both are
+// 4e18 exactly (2^20 * 5^18 < 2^62), so the f64 clamp and the i64 check agree.
+constexpr i64 kMaxStepsI = 4'000'000'000'000'000'000;
+constexpr f64 kMaxSteps = static_cast<f64>(kMaxStepsI);
+static_assert(static_cast<i64>(kMaxSteps) == kMaxStepsI);
 
 i64 floorDiv(i64 a, i64 b) noexcept { return a / b - ((a % b != 0) && ((a < 0) != (b < 0)) ? 1 : 0); }
 
@@ -188,9 +198,15 @@ Result<WorldPos> readFrameCell(BitReader& r, f64 cell, f64 res, u32 bits) {
         auto offset = r.read(bits);
         if (!offset) return offset.error();
         const i64 i = zigzagDecode(*index);
-        if (*offset >= static_cast<u64>(steps) || std::fabs(static_cast<f64>(i) * static_cast<f64>(steps)) > kMaxSteps)
+        // Bound the index first so that i * steps + offset cannot overflow i64, then check the total,
+        // not i * steps: the writer floors the index, so for a total near -4e18 index * steps lies up
+        // to steps - 1 below it whenever steps does not divide 4e18 (2^21 steps, for one).
+        if (*offset >= static_cast<u64>(steps) || i < -(kMaxStepsI / steps) - 1 || i > kMaxStepsI / steps)
             return Error(ErrorCode::Corrupt, "replication full state: frame cell position out of range");
-        v = static_cast<f64>(i * steps + static_cast<i64>(*offset)) * res;
+        const i64 total = i * steps + static_cast<i64>(*offset);
+        if (total < -kMaxStepsI || total > kMaxStepsI)
+            return Error(ErrorCode::Corrupt, "replication full state: frame cell position out of range");
+        v = static_cast<f64>(total) * res;
     }
     return WorldPos{DVec3(axes[0], axes[1], axes[2])};
 }

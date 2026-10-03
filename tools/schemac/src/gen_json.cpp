@@ -281,8 +281,8 @@ std::string generateSchemaJson(const Schema& schema) {
     }
     o.endArray();
 
-    // Script-callable C++ functions (02 §3.1, §7.4): signatures and fuel charges for the Luau
-    // glue generator and luau-lsp (`--emit luau` is a later work package).
+    // Script-callable C++ functions (02 §3.1, §7.4): signatures, binding ids (lock) and fuel charges,
+    // as `--emit luau` sees them.
     o.key("scriptlibs");
     o.beginArray();
     for (const Decl* d : schema.decls) {
@@ -295,6 +295,8 @@ std::string generateSchemaJson(const Schema& schema) {
             o.beginObject();
             o.key("name");
             o.str(fn->name);
+            o.key("bindingId");
+            o.unum(fn->typeId);
             if (!fn->doc.empty()) {
                 o.key("doc");
                 o.str(fn->doc);

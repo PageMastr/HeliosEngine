@@ -140,7 +140,7 @@ void computeLayoutHashes(Schema& s) {
 void assignEphemeralIds(Schema& s) {
     std::set<u32> used;
     for (Decl* d : s.decls) {
-        if (!d->isLockable()) continue;
+        if (!d->isLockable() && d->kind != DeclKind::ScriptFn) continue; // (fns: binding ids)
         u32 id = fnv1a32(d->qualifiedName);
         for (u32 salt = 1; id == 0 || used.contains(id); ++salt) id = fnv1a32(d->qualifiedName + "#" + std::to_string(salt));
         used.insert(id);
@@ -307,6 +307,9 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
         for (OutputFile& o : generateGo(S, options, diags)) result.outputs.push_back(std::move(o));
     }
     if (options.emitJson) result.outputs.push_back(OutputFile{options.jsonOut, generateSchemaJson(S)});
+    if (options.emitLuau) {
+        for (OutputFile& o : generateLuau(S, options, diags)) result.outputs.push_back(std::move(o));
+    }
     result.ok = !diags.hasErrors();
     return result;
 }

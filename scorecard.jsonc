@@ -435,10 +435,14 @@
       "status": "partial",
       "tests": [
         {"doctest": "schemac_tests", "case": "golden: generator output matches the committed expectations"},
+        {"doctest": "schemac_tests", "case": "golden: the schemas/ corpus generates the committed Luau outputs"},
         {"doctest": "schemac_tests", "case": "go interop: generated Go matches the C++ codecs byte for byte"},
+        {"doctest": "schemac_tests", "case": "luau: the generated glue converts arguments and results through a script VM"},
+        {"doctest": "schemac_tests", "case": "luau: the generated glue charges each fn's schema fuel"},
+        {"doctest": "schemac_tests", "case": "luau: the generated schema.d.luau type-checks scripts with Luau.Analysis"},
         {"doctest": "schemac_tests", "case": "lock: --check-lock fails on a stale or missing lock"}
       ],
-      "gaps": [{"clause": "The luau and sql emitters are stubs that report 'not yet implemented'", "state": "unmeasured", "owner": "WP-0.7b"}]
+      "gaps": [{"clause": "The sql emitter is a stub that reports 'not yet implemented'", "state": "unmeasured", "owner": "WP-0.7b"}]
     },
     {
       "id": "EXIT-0.goldens", "phase": 0, "source": "01 §5.4", "owner": "WP-0.12",

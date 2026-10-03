@@ -40,11 +40,13 @@ struct CompileOptions {
     bool emitCpp = false;
     bool emitGo = false;
     bool emitJson = false;
+    bool emitLuau = false; ///< scriptlib glue next to the C++ output, schema.d.luau + fuel defaults in luauOut
     bool samples = false; ///< C++ sample-value header (tests / cross-language vectors)
     std::string cppOut = ".";
     std::string goOut = ".";
     std::string goPackage; ///< default: last component of the first file's package
     std::string jsonOut = "schema.json";
+    std::string luauOut = ".";
     bool warningsAsErrors = false;
     bool namingLints = true;
     bool warnWithoutLock = true; ///< warn that ids are not stable when lockPath is empty

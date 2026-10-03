@@ -1,7 +1,8 @@
 # helios-schemac — the Helios schema compiler
 
 `helios-schemac` compiles `.hschema` files into C++ (types, reflection, codecs), Go (types and a
-byte-identical codec) and a machine-readable schema description. It implements ADR-004.
+byte-identical codec), Luau glue (scriptlib bindings, `.d.luau` declarations, fuel defaults) and a
+machine-readable schema description. It implements ADR-004.
 
 **The normative specification is [docs/plan/02-engine-runtime.md §3](../../docs/plan/02-engine-runtime.md#3-schema-and-reflection-normative)**
 (§3.1 language, §3.2 attributes, §3.3 records and the client/server split, §3.4 versioning,
@@ -23,7 +24,8 @@ APIs) and lists what is not implemented yet.
 | `cpp` | Implemented: structs/enums/variants, `TypeInfo` registration, canonical JSONC and tagged-binary codecs, equality, `Mut<C>` dirty-bit mutators, record refs, sample values (`--samples`) |
 | `go` | Implemented: structs with JSON tags, byte-identical tagged codec, generated round-trip / cross-language test |
 | `json` | Implemented: schema description (types, ids, fields, attributes, defaults, layout hashes, services, constants, aliases, formulas, scriptlibs with fuel costs) |
-| `luau`, `repl`, `sql`, `proto`, `editor`, `records`, `lint`, `docs` | Planned; `--emit <name>` fails with exit code 2 "not yet implemented" |
+| `luau` | Implemented for `scriptlib`s: the C++ call glue on engine/script's `Binder` with the fuel charges, binding ids from the lock, `schema.d.luau` and `fuel_costs.defaults.json` ([Generated Luau](#generated-luau)). Tagged-userdata glue for components and records (`@script` fields) is WP-1.6's |
+| `repl`, `sql`, `proto`, `editor`, `records`, `lint`, `docs` | Planned; `--emit <name>` fails with exit code 2 "not yet implemented" |
 
 The lints of the planned `lint` emitter (AAA-SEC-1, AAA-SEC-4, ledger/persist, keyed lists,
 naming) already run on every compilation.
@@ -61,8 +63,8 @@ helios-schemac -I schemas --lock schemas/schema.lock.jsonc --emit cpp,go,json \
 | `--lock <file>` | Schema lock (created if missing, updated in place). Without it ids are per-run (warning) |
 | `--check-lock` | Fail (exit 1) instead of updating an out-of-date lock (CI) |
 | `--allow-default-change` | Accept changed explicit defaults (they are part of the wire contract) |
-| `--emit cpp,go,json` | Generators (default `cpp`) |
-| `--cpp-out`, `--go-out`, `--go-package`, `--json-out` | Output locations |
+| `--emit cpp,go,json,luau` | Generators (default `cpp`) |
+| `--cpp-out`, `--go-out`, `--go-package`, `--json-out`, `--luau-out` | Output locations (`--luau-out`: `schema.d.luau` and `fuel_costs.defaults.json`; the Luau glue goes to `--cpp-out`) |
 | `--samples` | Also emit `<file>.samples.gen.h` (deterministic sample values shared with the Go test) |
 | `--depfile <f>`, `--depfile-target <p>` | Makefile-style dependency file (every schema, import and the lock) |
 | `--Werror`, `--no-naming-lints`, `--quiet` | Diagnostics control |
@@ -108,7 +110,7 @@ import "helios/world/frames.hschema";    // relative to this file, then to each 
 | `const` | `const MaxStack: u32 = 9999;` | `inline constexpr` (scalars, strings, `Duration`) |
 | `alias` | `alias Credits = i64;` / `alias Pair = { x: f32; y: f32 };` | `using`; an alias of an inline type *names* that type |
 | `formula` | `formula TtW(ship) = attr(ship, Thrust) / attr(ship, Mass);` | parsed and kept (body text); HXL compilation is a later work package |
-| `scriptlib` | `scriptlib Physics @realm(server, client) { fn raycast(from: WorldPos, dir: vec3f) -> RayHit? @script(cost=24) @pure; }` | signatures of hand-written C++ functions Luau may call: checked (types, fuel lints) and listed in `--emit json` (`scriptlibs`); the call glue is `--emit luau` (later work package) |
+| `scriptlib` | `scriptlib Physics @realm(server, client) { fn raycast(from: WorldPos, dir: vec3f) -> RayHit? @script(cost=24) @pure; }` | signatures of hand-written C++ functions Luau may call: checked (types, fuel lints) and listed in `--emit json` (`scriptlibs`, with binding ids); `--emit luau` generates the call glue |
 
 Header attributes may omit the `@` when they are on the declaration line (`replicate(all) lod(core)`,
 `reliable`), as in the spec's examples. A body is `{ members }`; members are fields (`name: type [=
@@ -229,6 +231,10 @@ after a rename and a deletion):
   containers use `fnv1a32` of their canonical name at runtime.
 - **Field ids** are sequential per type (`nextField`); they are the tagged field numbers. Variant
   alternatives get ids the same way; enum values keep their numbers.
+- **Binding ids**: every `scriptlib` fn has an entry of kind `"fn"` with only its id, minted like a
+  type id from `<package>.<Lib>.<fn>` (`"sample.ship.ShipQueries.hullOf": {"id": …, "kind": "fn"}`).
+  It keys the fn's calibrated fuel cost (02 §7.4). A renamed fn gets a new id; a removed fn keeps its
+  entry, so the id is never reused.
 - **Renames**: `@was("old")` on a field or type keeps the id (the lock records `was`). A `@was` can
   also claim a tombstone. The attribute can be dropped once the lock has the new name. JSON readers
   (C++ compiled, walker and Go) accept the old key; when an object has both, the current name wins
@@ -335,6 +341,111 @@ case-insensitively. All
 files of one package must be generated together; a type whose Go name collides with a runtime
 type (`Vec3`, `RGBA`, `Keyed`, …) or another type is an error.
 
+## Generated Luau
+
+`--emit luau` (02 §3.5, §7.4) writes, for each generated `<file>.hschema`, `<file>.luau.gen.h` and
+`<file>.luau.gen.cpp` next to the C++ output, and once per compilation `schema.d.luau` and
+`fuel_costs.defaults.json` into `--luau-out`. A file without scriptlibs gets an empty glue pair, so
+build systems know the outputs in advance. The glue includes `helios/script/binding.h` and the
+file's `.gen.h`, so a target that compiles it links `helios::script` (`helios_schema(LUAU_OUT …)`
+does that).
+
+```cpp
+#include "sample/ship.luau.gen.h"
+
+struct Ships final : sample::ship::ShipQueries {           // one virtual per fn, hand-written
+    std::optional<sample::ship::ShipHullRef> hullOf(lua_State* L, helios::refl::EntityId ship) override;
+    std::vector<helios::refl::EntityId> dockedShips(lua_State* L, helios::refl::EntityId station) override;
+};
+Ships ships;                                               // ships.glueLimits: per-call caps (below)
+auto vm = ScriptVm::create(config, [&](Binder& b) {       // config.profile = HostProfile::Cell
+    if (auto r = sample::ship::bindShipQueries(b, ships, "server"); !r) HELIOS_LOG_ERROR(LogScript, "{}", r.error().message);
+});
+```
+
+- **Interface.** Per scriptlib `Lib`, the abstract class `<pkg>::Lib` has:
+  - one pure virtual per fn, taking the `lua_State*` first;
+  - `static constexpr u32 k<Fn>Binding` constants (the lock ids);
+  - `GlueLimits glueLimits`, the per-call conversion caps described below.
+
+  `bindLib(binder, impl, realm)` registers the fns whose effective `@realm` includes `realm` as the
+  Luau library `Lib`, and returns `Result<u32>` with the number registered. `impl` must outlive the VM.
+  The realm must be one the glue knows and the one the VM's host profile runs: `"server"` on
+  `HostProfile::Cell`, `"client"` on `Client`, `"editor"` on `Editor`. Anything else, such as a typo or
+  a client realm on a cell, is `InvalidArgument` and registers nothing. Implementations follow
+  `binding.h`'s threading rules: owner thread, may raise Luau errors, call back into Luau only through
+  `callLuau`.
+- **Fuel** (02 §7.4).
+  - `cost` is the binding's `FuelCost::base`, charged by the host before the call.
+  - `each` with `of=<list, set, string or integer argument>` is charged by the host from that argument
+    (`FuelCost::itemsArg`), before the call.
+  - `of=<any other argument>` (a record ref such as a `PrefabRef`) adds a pure virtual
+    `<fn>ItemCount(L, arg)`. The glue charges its count before the call.
+  - `of=result` is charged right after the call, per result element.
+  - The glue uses the schema's numbers. `--calibrate-fuel` (WP-1.6) replaces them by binding id; for
+    that, WP-1.6 must thread `k<Fn>Binding` through `Binder::function`, which takes no binding id today.
+- **Values.**
+  - `bool`, and `f64`.
+  - `f32` must be finite and within float's range; NaN, ±inf and 1e39 are rejected before the cast.
+  - Integers are exact and range-checked; 64-bit ones only within ±(2⁵³ − 1).
+  - `string`, `LocString`, `TagQuery` and `HxlExpr` are strings.
+  - **`Name` is `std::string` in C++** (sets of them `std::set<std::string>`, lexical). Script input is
+    never interned into the process-wide `Name` table, which never shrinks and is shared by every VM,
+    and the order of a set does not depend on what the process interned before, which replays need
+    (04 §10.2). An implementation that needs a `Name` interns deliberately. A `Name` inside a struct
+    *argument* is therefore an error. Inside a struct *result* it is pushed as text, and a `set<Name>`
+    field is pushed in lexical order.
+  - `vec3f` is a Luau `vector`; its components follow the `f32` rule (NaN and ±inf are rejected).
+  - `WorldPos` is the host's `WorldPos` userdata (`helios::FramePos` in C++, with its frame). It is not
+    allowed inside structs, where it would lose the frame.
+  - `Duration` is seconds, and `Tick` a number.
+  - Enums are their value names.
+  - Structs are tables: fields by schema name, missing fields take their defaults, other keys are
+    ignored.
+  - `list` and `set` are arrays. `T[N]` is an array of exactly N elements. `T?` is `T` or `nil`.
+  - `EntityId` and record refs are **light userdata** with tags 1 (`EntityId`) and 2 (`RecordRef`):
+    exact 64-bit values, comparable with `==`, usable as table keys, and impossible to forge from a
+    script.
+  - Other types are errors in a signature under `--emit luau`: maps, variants, flags, keyed lists,
+    `Guid`, `AssetRef`, other math types, `TagSet` and `NetHandle`.
+- **Hostile arguments.**
+  - Every conversion reads tables raw (`lua_rawgetfield`/`lua_rawgeti`), so no metamethod or other Luau
+    code runs inside a binding.
+  - `@max` is enforced wherever sema accepts it, on the raw value before anything is converted. That
+    covers string (bytes), list and set (elements) parameters and the fields of struct parameters,
+    recursively. Results are checked the same way: the fn's `@max` and struct fields' `@max`.
+  - **Per-call budget.** One call converts at most `glueLimits.maxValues` values (8,192: every number,
+    string, table and element counts, a `nil` element of a `T?` list included, so a table referenced
+    from many places costs once per reference) and `glueLimits.maxStringBytes` string bytes
+    (256 KiB). A list longer than the values left fails before its first element. The plan gives no
+    default (02 §7.4, 04 §10.2), so these are conservative and the host may change them.
+  - A value nests at most 32 tables; a cyclic table stops there.
+  - Every rejection is a script error naming the fn, the argument and the cap, and the implementation is
+    never called.
+  - **Budget:** a call rejected by the caps fails in < 1 ms (`perf: rejecting a call over the per-call
+    caps …` gates the median of 9 rejections: ≈ 0.2 ms for the reviewer's 22-table DAG, ≤ 0.05 ms for
+    65,536 references to one 16 KiB string, GCC RelWithDebInfo). A call within the caps converts at
+    most 8,192 values, and that work is not charged beyond the fn's `cost` (up to ≈ 0.8 ms for an
+    8,190-value `echo` pushed back, measured in review). Calibration (02 §7.4) takes the p95 over
+    zone traces, not the worst case at the caps, so it cannot cover this: a deterministic charge per
+    converted value and string byte, taken in the glue before the call, is a WP-1.6 follow-up.
+- **`schema.d.luau`** declares the scriptlib globals (each fn's doc comment, fuel charge and realms,
+  `--!strict`) and the types their signatures reach:
+  - `EntityId` and `<Record>Ref` as opaque `declare extern type`s;
+  - enums as string unions;
+  - structs as table types, named like the Go types (`ShipHullDefHandling`). An argument uses
+    `<Type>Input`, whose fields are all optional because the glue defaults them; a result uses
+    `<Type>`, whose fields are all present.
+
+  Every realm's fns are declared, and in a host of another realm a fn is `nil` at runtime. Each fn's
+  doc lists its realms, since one definitions file serves luau-lsp for every host. Load it after
+  `engine/script/defs/helios.d.luau`. These are errors: names that collide with the host's
+  (`WorldPos`, `Task`, …), Luau reserved words as fn, parameter or field names, and two declarations
+  with one Luau name.
+- **`fuel_costs.defaults.json`**: `{"format": 1, "functions": {"<binding id>": {"name", "cost",
+  "each", "of"}}}`, sorted by id, the defaults `--calibrate-fuel` replaces in
+  `content/profiles/fuel_costs.jsonc` (02 §7.4).
+
 ## CMake: `helios_schema()`
 
 ```cmake
@@ -345,6 +456,8 @@ helios_schema(<target>
     [CPP_OUT <dir>]                 # default: ${CMAKE_CURRENT_BINARY_DIR}/<target>_schema
     [GO_OUT <dir> [GO_PACKAGE <n>]] # also generate Go
     [JSON_OUT <file>]               # also write the schema description
+    [LUAU_OUT <dir>]                # also generate the Luau glue (links helios::script), schema.d.luau
+                                    # and fuel_costs.defaults.json
     [SAMPLES])                      # also generate <file>.samples.gen.h
 ```
 
@@ -388,6 +501,20 @@ HELIOS_UPDATE_GOLDEN=1 build/<dir>/bin/schemac_tests -tc="golden*"
 
 and review the diff of `tests/golden/*.expected` like any code change.
 
+The golden fixture's expectations include the Luau outputs (`golden.luau.gen.*`, `schema.d.luau`,
+`fuel_costs.defaults.json`); `tests/golden/corpus/<set>/` holds the same for the committed
+`schemas/` corpus, compiled as CMake compiles it. `test_luau.cpp` runs the generated glue of the golden
+fixture and the sample schemas on a real engine/script VM (every value form, realms, the fuel charged
+per fn, hostile arguments: wrong types, out-of-range and inexact integers, oversized and cyclic tables,
+metatables that must not run), type-checks `schema.d.luau` with Luau.Analysis (a strict script passes;
+wrong argument and result types and unknown enum values fail), and covers binding ids in the lock and
+the signatures `--emit luau` rejects. PR #22's review round 1 added: the per-call value and byte caps
+(the reviewer's 10-level DAG and 65,536 references to a 16 KiB string fail fast, with a `perf:` budget),
+Names never interned and sets of names in lexical order, `@max` on string parameters, struct fields and
+results, exact `T[N]`, exact integers up to 2⁵³ − 1, finite `f32`, and realm checks against the host
+profile. 22 mutants of the generator (the reviewer's 11 and 11 more) are each killed by a behavioural
+case.
+
 ## Deviations and limitations
 
 - **Namespace `helios::refl`** instead of the spec's `helios::reflect`: `engine/math` declares a
@@ -398,9 +525,17 @@ and review the diff of `tests/golden/*.expected` like any code change.
   `ecs::NetHandle{u32}` and `ecs::Tick = u64`; `engine/ecs` should alias the `refl` vocabulary
   types (or vice versa) so generated components use one set.
 - Not generated yet (later work packages): `registerComponents(ecs::World&)` / flecs traits,
-  `ComponentRepDesc` and quantizers (`repl`), cooked layouts (`Cooked<T>`), NATS stubs, Luau
-  glue, SQL migrations, editor JSON, record cooking, HXL compilation of formulas and `@validate`,
-  `upgrade<T>` hooks for `@version`.
+  `ComponentRepDesc` and quantizers (`repl`), cooked layouts (`Cooked<T>`), NATS stubs, the Luau
+  tagged-userdata glue for components and records (`@script(read|write)` fields; WP-1.6, with the
+  host's `Entity` type), SQL migrations, editor JSON, record cooking, HXL compilation of formulas and
+  `@validate`, `upgrade<T>` hooks for `@version`.
+- **Luau, Phase 0 choices** (02 §3.5 leaves them open). The glue owns light-userdata tags 1 and 2 for
+  `EntityId` and record refs, and `EntityId` is declared in `schema.d.luau`; both belong in
+  engine/script (tags and `helios.d.luau`) once WP-1.6 defines the host's entity type. Until then
+  definitions files of separate compilations each declare `EntityId`, so load them into separate
+  luau-lsp environments, or compile the packages one realm uses together. Record refs share one tag:
+  the type checker tells `ThingRef` from `ShipHullRef`, the runtime does not. `@realm(world)`
+  (05 §1.23) is not accepted yet (no `worldscript` support).
 - Struct inheritance (`struct A : B`) is not supported (embed a field).
 - Go output is `go vet`-clean but not `gofmt`-formatted (run `gofmt` before committing Go); the
   runtime is copied into each generated package; Go's JSON output is compatible with (readable
@@ -411,7 +546,9 @@ and review the diff of `tests/golden/*.expected` like any code change.
 
 ## Plan conformance
 
-Plan-Rev: 6
+Plan-Rev: 11
 
-Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
-`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.
+Written to plan revision 11 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau` so far), after being
+reconciled by hand with revision 6 on 2026-09-25 under `docs/plan/09-roadmap-and-process.md`
+§5.10.2 D7. Revisions 7–11 changed no anchor of this package. No conformance delta is open; see
+§5.10.4 (c) there.

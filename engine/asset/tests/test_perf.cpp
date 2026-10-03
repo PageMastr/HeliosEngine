@@ -15,7 +15,20 @@
 #include "hpak_test_util.h"
 #include "helios/asset/mount_table.h"
 
-#if defined(NDEBUG) && !defined(HELIOS_SANITIZERS_ENABLED) && !defined(__SANITIZE_ADDRESS__)
+// Sanitizers can also come from raw compiler flags (the fuzz build), which HELIOS_SANITIZERS_ENABLED
+// does not see: GCC defines __SANITIZE_ADDRESS__, Clang answers __has_feature.
+#define HELIOS_ASSET_SANITIZED 0
+#if defined(HELIOS_SANITIZERS_ENABLED) || defined(__SANITIZE_ADDRESS__)
+#undef HELIOS_ASSET_SANITIZED
+#define HELIOS_ASSET_SANITIZED 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(undefined_behavior_sanitizer) || \
+    __has_feature(thread_sanitizer) || __has_feature(memory_sanitizer)
+#undef HELIOS_ASSET_SANITIZED
+#define HELIOS_ASSET_SANITIZED 1
+#endif
+#endif
+#if defined(NDEBUG) && !HELIOS_ASSET_SANITIZED
 #define HELIOS_ASSET_ASSERT_BUDGETS 1
 #else
 #define HELIOS_ASSET_ASSERT_BUDGETS 0

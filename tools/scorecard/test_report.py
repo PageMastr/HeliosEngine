@@ -1443,8 +1443,8 @@ def bench_output(socket=(1000000, 1000000, 200474), stack=(884608, 884608, 88464
                      f"docs/evidence/ns-0.2-owner-approval-2026-09-30.md. The HTP stack's {stack[2]} packets per core "
                      f"is below 100k: reported, not failing (loss still fails)  (net_bench.cpp:220)")
     lines.append("05:24:05.618 INFO  [Net] [cell] listening on 127.0.0.1:54161 (public 127.0.0.1:54161), 4 slots")
-    if not trunk_connected:
-        lines.append("05:24:15.618 ERROR [General] NS-0.7: trunk did not connect  (net_bench.cpp:235)")
+    if not trunk_connected:  # at runTrunkGate's 3 s connect deadline
+        lines.append("05:24:08.619 ERROR [General] NS-0.7: trunk did not connect  (net_bench.cpp:235)")
     elif trunk is not None:
         sent, delivered, pps, drops = trunk
         lines.append(f"05:34:05.923 INFO  [General] NS-0.7 trunk: 600 s, sent {sent}, delivered {delivered} ({pps} pps, "
@@ -1454,7 +1454,8 @@ def bench_output(socket=(1000000, 1000000, 200474), stack=(884608, 884608, 88464
             lines.append("05:34:05.923 ERROR [General] NS-0.7 FAILED: needs 20k pps, < 0.1 % drops, <= 1 core per "
                          "side  (net_bench.cpp:241)")
     if summary:
-        lines.append(f"05:34:05.923 INFO  [General] gates {'FAILED' if failed or not trunk_connected else 'PASSED'}"
+        lines.append(f"{'05:34:05.923' if trunk_connected else '05:24:08.619'} INFO  [General] gates "
+                     f"{'FAILED' if failed or not trunk_connected else 'PASSED'}"
                      f"{' (NS-0.2' + chr(39) + 's HTP stack rate advisory)' if advisory else ''}")
     return "\n".join(lines) + "\n"
 
@@ -1558,9 +1559,24 @@ class GateClauseTests(unittest.TestCase):
         self.assertEqual(self.cells(r["NS-0.7"]), ("fail", "fail", "pass"))
         self.assertEqual(self.cells(r["NS-0.2"]), ("pass", "pass", "pass"))
         self.assertTrue(r["NS-0.2"]["by_approval"])
-        r = self.night(linux=(1, bench_output(advisory=True, trunk_connected=False)))
+        # The exception (#45's round-2 review, blocking 1): a trunk that never connects ends the command at
+        # runTrunkGate's connect deadline, right after the 10 s stack run, so the run cannot reach min_seconds.
+        # NS-0.7 fails on its failure line, and NS-0.2's clauses fail on min_seconds, as the single result did.
+        bench = sc.ROOT / "engine" / "net" / "bench"
+        deadline = float(re.search(r"connectDeadline = monotonicSeconds\(\) \+ ([\d.]+);",
+                                   (bench / "trunk_gate.h").read_text(encoding="utf-8"))[1])
+        stack = float(re.search(r'runStackPps\(number\("--stack", 0, gate \? ([\d.]+) :',
+                                (bench / "net_bench.cpp").read_text(encoding="utf-8"))[1])
+        seconds = 5.0 + stack + deadline  # after the socket run's 5 s (bench_output's 4989.7 ms wall): 18 s
+        self.assertLess(seconds, self.data["gates"]["net_bench_gate"]["min_seconds"])
+        r = self.night(linux=(1, bench_output(advisory=True, trunk_connected=False), seconds))
         self.assertEqual(self.cells(r["NS-0.7"]), ("fail", "fail", "pass"))
-        self.assertEqual(self.cells(r["NS-0.2"]), ("pass", "pass", "pass"))
+        self.assertEqual(self.cells(r["NS-0.2"]), ("fail", "fail", "pass"))
+        self.assertFalse(r["NS-0.2"]["by_approval"])
+        details = {x["ref"]: x["detail"] for x in r["NS-0.2"]["platforms"]["linux"]["refs"]}
+        for case in ("NS-0.2 socket", "NS-0.2 HTP stack"):
+            self.assertIn(f"linux-gcc fail (ran {seconds:.0f} s of the required 600 s)",
+                          details[f"gate net_bench_gate / {case}"])
 
     def test_the_advisory_still_fails_loss_a_silent_stack_and_raw_datagrams(self):
         for linux in ((1, bench_output(advisory=True, stack=(884608, 884600, 88463), failed=("stack",))),  # loss

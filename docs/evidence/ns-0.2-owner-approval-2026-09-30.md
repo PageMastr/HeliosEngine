@@ -143,8 +143,10 @@ on hosted Windows: run 36344479712, 2026-09-27, delivered 11,813,909 of 11,999,9
 every Linux run. Nothing in this approval relaxes it: `--advisory ns02-stack` leaves NS-0.7's verdict as it
 was. NS-0.7 shares the `net_bench --gate` run with NS-0.2, so an NS-0.7 failure still fails that run's
 command; the nightly report reads each criterion's own clause cases of the run (`tools/scorecard/README.md`,
-gates), so it fails NS-0.7 and not NS-0.2, and the strict Windows step's stack rate fails NS-0.2 and not
-NS-0.7. It did not repeat on 2026-10-03, the first Windows nightly to run `net_bench`
+gates), so a measured NS-0.7 failure like this one fails NS-0.7 and not NS-0.2, and the strict Windows
+step's stack rate fails NS-0.2 and not NS-0.7. A trunk that never connects is the exception: it ends the run
+at its 3 s connect deadline, long before the gate's 600 s minimum, so NS-0.2's cases fail too. The
+2026-09-27 failure did not repeat on 2026-10-03, the first Windows nightly to run `net_bench`
 since: 11,999,992 of 11,999,992 delivered at 20,000 pps, 0 drops, cell thread 0.17 cores and gateway thread
 0.10. 04 §2.6's fallback is for a failure that persists after profiling.
 

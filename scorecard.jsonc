@@ -47,7 +47,8 @@
   // read from the command's output (`result`: the line that reports the measurement; `failure`: the line it
   // prints when the clause fails; a non-zero exit that no failure line explains, i.e. any code but 1 or 1 with
   // no failure line, fails every clause), and each criterion cites only its own cases, so one criterion's
-  // clause cannot fail another's (#43's review, N4).
+  // failure line cannot fail another's (#43's review, N4). Every clause case carries the command's wall time,
+  // so a run that ends before min_seconds fails every clause (a trunk that never connects ends it ~18 s in).
   "gates": {
     "net_bench_gate": {"runs": ["linux-gcc", "windows-vs2026"], "min_seconds": 600,
                        "description": "net_bench --gate: NS-0.2 raw and encrypted-stack pps per core, NS-0.7 600 s trunk run",
@@ -296,7 +297,7 @@
       "title": "Loopback 100k pps per core without loss",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Loopback 100k pps/core without loss",
-      "notes": "net_bench --gate measures raw datagrams and encrypted HTP packets through the full stack; NS-0.2 reads that run's `NS-0.2 socket` and `NS-0.2 HTP stack` cases, so the NS-0.7 trunk run of the same command gates NS-0.7 and not NS-0.2. Passed on the hosted Linux nightly on the repository owner's approval of 2026-09-30 (09 §5.6; the record quotes it): hosted Linux measured the encrypted stack at 88k to 132k packets per core with no code change, so linux-gcc runs `net_bench --gate --advisory ns02-stack`, which reports that one rate instead of failing on it. Raw datagrams (100k per core), loss at either level (none allowed) and a stack that never sent still fail their case, and NS-0.7 still gates NS-0.7. Hosted Windows is not covered: its stack measured 85,399 and 84,970 on 2026-09-27 and 125,611 on 2026-10-03 (a strict pass), the owner has not confirmed the approval for it, and windows-vs2026 gates everything, as does any run without --advisory",
+      "notes": "net_bench --gate measures raw datagrams and encrypted HTP packets through the full stack; NS-0.2 reads that run's `NS-0.2 socket` and `NS-0.2 HTP stack` cases, so the NS-0.7 trunk run of the same command gates NS-0.7 and not NS-0.2, except a trunk that never connects: that ends the run at its 3 s connect deadline, long before the gate's min_seconds, so NS-0.2's cases fail too. Passed on the hosted Linux nightly on the repository owner's approval of 2026-09-30 (09 §5.6; the record quotes it): hosted Linux measured the encrypted stack at 88k to 132k packets per core with no code change, so linux-gcc runs `net_bench --gate --advisory ns02-stack`, which reports that one rate instead of failing on it. Raw datagrams (100k per core), loss at either level (none allowed) and a stack that never sent still fail their case, and NS-0.7 still gates NS-0.7. Hosted Windows is not covered: its stack measured 85,399 and 84,970 on 2026-09-27 and 125,611 on 2026-10-03 (a strict pass), the owner has not confirmed the approval for it, and windows-vs2026 gates everything, as does any run without --advisory",
       "status": "approved",
       "tests": [
         {"gate": "net_bench_gate", "case": "NS-0.2 socket"},

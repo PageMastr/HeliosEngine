@@ -165,10 +165,12 @@ or 1 with no failure line printed (a failure line no pattern knows). A gate resu
 failed. A run without `--gate` checks no threshold but prints the same result lines, so it is caught only
 by `min_seconds`; `AdvisoryScopeTests` pins the nightly's two commands. The patterns follow `net_bench`'s
 own lines, and `GateClauseTests` checks them against `net_bench.cpp`'s format strings: every failure line is
-one case's, so a reworded or added failure line fails the PR tier. The owner approval is unchanged by this:
-the stack's rate is relaxed by `--advisory ns02-stack` on `linux-gcc` only, so loss, a stack that never
-sent and raw datagrams still fail their NS-0.2 case on every run, and NS-0.7's case gates NS-0.7 alone,
-with or without the advisory.
+one case's, so a reworded or added failure line fails the PR tier. Every clause case carries the command's
+wall time, so `min_seconds` applies to each: a trunk that never connects ends the run at its 3 s connect
+deadline, about 18 s in, so NS-0.2's cases fail with NS-0.7's (`GateClauseTests` models that run). The owner
+approval is unchanged by this: the stack's rate is relaxed by `--advisory ns02-stack` on `linux-gcc` only, so
+loss, a stack that never sent and raw datagrams still fail their NS-0.2 case on every run, and NS-0.7's case
+gates NS-0.7 alone, with or without the advisory.
 
 **Gaps** are clauses without a passing test: `state` is `unmeasured` (no test yet) or `failing` (measured
 and red), with the `owner` WP. `pinned_by` names a test that pins a known divergence (such a test
@@ -206,9 +208,9 @@ report at exit).
 - **Per criterion.** On each platform, a reference passes when it has results in the runs that count for it
   and none failed. A missing result or a skip is *unmeasured*. A gate that ran shorter than its
   `min_seconds` fails, and so does a gate without one. A `gate` reference with `case` reads that clause's
-  case; a gate result without it (written before the cases, or by a runner that could not read the
-  registry) reads `missing`, so the criterion is not passed and its streak restarts. The criterion passes
-  when every reference passes on every platform and it has no gap.
+  case; a gate result without it (written before the cases, or by a runner that could not read the registry)
+  reads `missing`, or `fail` if the command failed, so the criterion is not passed and its streak restarts.
+  The criterion passes when every reference passes on every platform and it has no gap.
   A broken pin (a `pinned_by` test that now fails) is reported so that the registry is updated.
 - **Owner approvals.** An approved entry is evaluated like any other. While its record exists, a pass to
   which one of its `advisory_runs` contributed reads "passed (owner approval <date>, evidence <record>)",

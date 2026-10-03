@@ -215,6 +215,104 @@ class ReportTests(unittest.TestCase):
                                    now=day + timedelta(days=1, hours=30))
         self.assertEqual(slow["criteria"][0]["streak"], 3)
 
+    def approved(self, platforms=("linux", "windows"), record="docs/record.md", runs=("linux-gcc",)):
+        entry = crit("NS-0.2", [{"gate": "net_bench_gate"},
+                                {"evidence": record, "owner_approval": "2026-09-30", "advisory": ["net.trunk_pps"],
+                                 "advisory_runs": list(runs)}],
+                     platforms=platforms)
+        entry["follow_ups"] = [{"clause": "re-test on fixed hardware", "owner": "WP-0.4"}]
+        return entry
+
+    def test_an_owner_approval_labels_the_pass_and_shows_the_advisory_level(self):
+        r = self.status(self.approved(platforms=("linux",)))
+        self.assertEqual(r["status"], "pass")
+        self.assertEqual(r["approval"], {"date": "2026-09-30", "evidence": "docs/record.md", "runs": ["linux-gcc"]})
+        self.assertEqual(r["platforms"]["linux"]["advisory"], ["linux-gcc net.trunk_pps 20,000 pps"])
+        self.assertEqual(r["follow_ups"], ["re-test on fixed hardware (WP-0.4)"])
+        data = dict(DATA, criteria=[self.approved(platforms=("linux",)), crit("NS-0.1", [{"ctest": "net_tests"}])],
+                    exit=[])
+        rep = report.build_report(data, self.runs, None, None, True, 0, self.root)
+        self.assertEqual((rep["summary"]["pass"], rep["summary"]["approved"]), (2, 1))
+        text = report.markdown(rep)
+        self.assertIn("2 of 2 criteria pass tonight (1 of them on an owner approval)", text)
+        self.assertIn("| NS-0.2 | passed (owner approval 2026-09-30, evidence docs/record.md) | passed (approval) | — |",
+                      text)
+        self.assertIn("advisory under the approval: linux: linux-gcc net.trunk_pps 20,000 pps; "
+                      "follow-up, not blocking: re-test on fixed hardware (WP-0.4) |", text)
+        self.assertIn("| NS-0.1 | pass | pass |", text)  # no approval, no label
+        # A phase exit is not carried by the approval alone (09 §5.6 "Phase exits").
+        self.assertIn("While its re-test is open it carries no phase exit on its own", text)
+
+    def test_an_owner_approval_changes_no_result(self):
+        # Windows' gate ran 12 s of its 600: it fails with or without the approval, which still shows what
+        # it leaves open on the runs it covers.
+        r = self.status(self.approved(runs=("linux-gcc", "windows-vs2026")))
+        self.assertEqual((r["status"], r["platforms"]["linux"]["status"], r["platforms"]["windows"]["status"]),
+                         ("fail", "pass", "fail"))
+        self.assertEqual(r["platforms"]["windows"]["advisory"], ["net.trunk_pps not measured"])
+        rep = report.build_report(dict(DATA, criteria=[self.approved(runs=("linux-gcc", "windows-vs2026"))], exit=[]),
+                                  self.runs, None, None, True, 0, self.root)
+        self.assertEqual(rep["summary"]["approved"], 0)
+        text = report.markdown(rep)
+        self.assertIn("| NS-0.2 | **FAIL** | passed (approval) | **FAIL** |", text)
+        self.assertIn("advisory under the approval: linux: linux-gcc net.trunk_pps 20,000 pps; "
+                      "windows: net.trunk_pps not measured; follow-up, not blocking", text)
+        self.assertIn("ran 12 s of the required 600 s", text)
+        self.assertNotIn("criteria pass tonight (", text)
+
+    def test_a_platform_the_approval_does_not_cover_shows_its_plain_result(self):
+        # The approval names linux-gcc only: Windows' gate is strict, its levels are not the approval's, and
+        # its pass is a plain pass.
+        junit(self.results / "b-win" / "gates" / "net_bench_gate.xml",
+              [("net_bench_gate", "pass", 611, "trunk: 600 s (19990 pps, x)")])
+        self.runs = report.load_results(self.results, MODULE)
+        r = self.status(self.approved())
+        self.assertEqual((r["status"], r["by_approval"]), ("pass", True))
+        self.assertNotIn("advisory", r["platforms"]["windows"])
+        self.assertNotIn("by_approval", r["platforms"]["windows"])
+        text = report.markdown(report.build_report(dict(DATA, criteria=[self.approved()], exit=[]), self.runs, None,
+                                                   None, True, 0, self.root))
+        self.assertIn("| NS-0.2 | passed (owner approval 2026-09-30, evidence docs/record.md) | passed (approval) | "
+                      "pass |", text)
+        self.assertIn("advisory under the approval: linux: linux-gcc net.trunk_pps 20,000 pps; follow-up", text)
+        self.assertNotIn("19,990", text)
+        # Without Windows' result set the criterion is unmeasured, approval or not.
+        self.runs = [res for res in self.runs if res.name != "windows-vs2026"]
+        self.assertEqual(self.status(self.approved())["status"], "unmeasured")
+
+    def test_a_pass_without_a_covered_run_is_a_plain_pass(self):
+        # validate.ps1's local run (09 §5.9) gates every clause, so its pass is never labelled as an approval's,
+        # even on an OS where the approval covers the hosted run.
+        local = self.root / "local" / "a-local"
+        local.mkdir(parents=True)
+        (local / "run.json").write_text(json.dumps({"run": "windows-local"}), encoding="utf-8")
+        junit(local / "gates" / "net_bench_gate.xml", [("net_bench_gate", "pass", 612, "trunk: 600 s (20000 pps, x)")])
+        data = copy.deepcopy(DATA)
+        data["runs"]["windows-local"] = {"os": "windows", "default": True, "nightly": False}
+        entry = self.approved(platforms=("windows",), runs=("windows-vs2026",))
+        runs = report.load_results(self.root / "local", MODULE)
+        r = report.evaluate(entry, data, runs, None, self.root)
+        self.assertEqual((r["status"], r["by_approval"]), ("pass", False))
+        self.assertEqual(r["platforms"]["windows"]["advisory"], ["net.trunk_pps not measured"])
+        rep = report.build_report(dict(data, criteria=[entry], exit=[]), runs, None, None, False, 0, self.root)
+        self.assertEqual(rep["summary"]["approved"], 0)
+        text = report.markdown(rep)
+        self.assertIn("| NS-0.2 | pass | — | pass |", text)
+        self.assertNotIn("passed (", text)
+
+    def test_an_approval_without_its_record_is_not_shown(self):
+        r = self.status(self.approved(platforms=("linux",), record="docs/missing.md"))
+        self.assertEqual(r["status"], "unmeasured")
+        self.assertNotIn("approval", r)
+        self.assertNotIn("advisory", r["platforms"]["linux"])
+        text = report.markdown(report.build_report(
+            dict(DATA, criteria=[self.approved(platforms=("linux",), record="docs/missing.md")], exit=[]),
+            self.runs, None, None, True, 0, self.root))
+        self.assertIn("| NS-0.2 | unmeasured |", text)
+        self.assertNotIn("owner approval", text)
+        self.assertNotIn("follow-up", text)
+        self.assertNotIn("phase exit", text)
+
 
 class PerfTests(unittest.TestCase):
     def test_extract_reads_declared_metrics_and_durations(self):
@@ -747,12 +845,12 @@ class PerfTests(unittest.TestCase):
         for printed, value in (("4.12", 4.12), ("-0.19", -0.19), ("-3", -3.0), ("1.5e-05", 1.5e-05),
                                ("-2.5e-06", -2.5e-06), ("7", 7.0)):
             run.messages[(overhead["doctest"], overhead["case"])] = [line.format(printed)]
-            self.assertEqual(perf.metric_values(overhead, [run]), {"linux-gcc": value}, printed)
+            self.assertEqual(report.metric_values(overhead, [run]), {"linux-gcc": value}, printed)
         cores = metrics["net.ns07.trunk_cell_cores"]
         run.gates["net_bench_gate"] = ("pass", 600.0, "NS-0.7 trunk: 600 s, sent 11999995, delivered 11999995 "
                                        "(20000 pps, 190.1 Mbit/s payload, 199.7 Mbit/s wire), drops 0.0000 %, "
                                        "cell thread 0.245 cores, gateway thread 0.231 cores, rcvbuf 4096 KB")
-        self.assertEqual(perf.metric_values(cores, [run]), {"linux-gcc": 0.245})
+        self.assertEqual(report.metric_values(cores, [run]), {"linux-gcc": 0.245})
 
     def test_each_failing_row_is_annotated_for_the_run_page(self):
         history, _ = self.replay([self.night(n, t=100.0, p=2.0) for n in range(1, 6)])

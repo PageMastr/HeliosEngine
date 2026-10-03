@@ -32,6 +32,13 @@ var (
 	// CMAKE_REQUIRED_FLAGS only feeds the check_* try-compile probes; no target is built with it.
 	probeFlagsRE = regexp.MustCompile(`^CMAKE_REQUIRED_FLAGS$`)
 	grantPropRE  = regexp.MustCompile(`\b(?:INTERFACE_)?(COMPILE_OPTIONS|COMPILE_FLAGS)\b`)
+	// A nested reference, ${${name}}: the variable it reads is computed, so CONF-11 cannot tell its value.
+	nestedRefRE = regexp.MustCompile(`\$\{[^{}]*\$\{[^{}]*\}[^{}]*\}`)
+	// Commands that may name a flag without passing it to a compiler: a message, a condition, a compiler
+	// probe, argument parsing and the end of a definition or loop.
+	isaInertCmds = map[string]bool{"message": true, "if": true, "elseif": true, "else": true, "endif": true,
+		"while": true, "endwhile": true, "check_c_compiler_flag": true, "check_cxx_compiler_flag": true,
+		"check_compiler_flag": true, "cmake_parse_arguments": true, "return": true}
 )
 
 // avxFlags returns the AVX-class flags literally in s (a -march above x86-64, which x86-64-v1 names
@@ -302,8 +309,32 @@ func listsCarry(fields []string, carries func(string) bool) bool {
 // target receives ISA flags. The exemption is by this exact name; WP-0.2r uses it, or renames it here.
 const levelFunction = "helios_apply_isa_level"
 
+// isaFuncs is what CONF-11 learns about the functions and macros of every scanned file (CMake functions are
+// global): the output arguments a body fills with flags, the variables it hands its caller (PARENT_SCOPE,
+// return(PROPAGATE), or any set() in a macro), and the flag variables in scope where it is called, which
+// its body reads (CMake's dynamic scope).
+type isaFuncs struct {
+	producers  map[string]map[int]bool
+	exports    map[string]map[string]bool
+	callerVars map[string]map[string]bool
+}
+
+// add records v under name in m and reports whether it is new.
+func addTo[K comparable](m map[string]map[K]bool, name string, v K) bool {
+	if m[name][v] {
+		return false
+	}
+	if m[name] == nil {
+		m[name] = map[K]bool{}
+	}
+	m[name][v] = true
+	return true
+}
+
 func checkISAGrants(p *Pass) {
 	levelVars, producers := isaLevels(p.Tree)
+	funcs := &isaFuncs{producers: producers, exports: map[string]map[string]bool{},
+		callerVars: map[string]map[string]bool{}}
 	cmds := map[string][]cmakeCmd{}
 	wrappers := map[string]bool{} // functions and macros the scanned CMake files define
 	for _, f := range p.Files {
@@ -314,6 +345,23 @@ func checkISAGrants(p *Pass) {
 			}
 		}
 	}
+	// A function body runs when it is called, so it reads every variable its file sets, also one set after
+	// the definition, and its callers' variables; and a call receives what the body hands back. Passes over
+	// every file collect these until nothing new is learnt (the sets only grow, so this ends); the last
+	// pass reports.
+	scans := map[string]*isaScan{}
+	fileVars := map[string]map[string]bool{}
+	for _, f := range p.Files {
+		scans[f] = &isaScan{p: p, f: f, cmds: cmds[f], levelVars: levelVars, funcs: funcs, wrappers: wrappers}
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, f := range p.Files {
+			vars := scans[f].run(fileVars[f], false)
+			changed = scans[f].changed || len(vars) != len(fileVars[f]) || changed
+			fileVars[f] = vars
+		}
+	}
 	for _, f := range p.Files {
 		for i, l := range p.Tree.Lines(f) {
 			code := strings.SplitN(l, "#", 2)[0]
@@ -322,10 +370,7 @@ func checkISAGrants(p *Pass) {
 					"(ADR-011 amendment, 02 §1.1)", m)
 			}
 		}
-		s := isaScan{p: p, f: f, cmds: cmds[f], levelVars: levelVars, producers: producers, wrappers: wrappers}
-		// A function body runs when it is called, so it reads every variable its file sets, also one set
-		// after the definition: a first pass collects them, the second reports.
-		s.run(s.run(nil, false), true)
+		scans[f].run(fileVars[f], true)
 	}
 }
 
@@ -335,15 +380,17 @@ type isaScan struct {
 	f         string
 	cmds      []cmakeCmd
 	levelVars map[string]bool
-	producers map[string]map[int]bool
+	funcs     *isaFuncs
 	wrappers  map[string]bool
+	changed   bool // the last run learnt something new about a function
 }
 
 // isaFrame is a scope: the file, or the body of a function or macro being read.
 type isaFrame struct {
-	vars  map[string]bool // the variables that hold AVX-class flags
-	fn    string          // the function or macro, lower case; "" at file scope
-	macro bool
+	vars   map[string]bool // the variables that hold AVX-class flags
+	fn     string          // the function or macro, lower case; "" at file scope
+	macro  bool
+	params []string // the definition's parameters
 }
 
 // run reads the file once and returns the variables its file scope ends with. fileVars (from a first
@@ -356,15 +403,33 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 		}
 	}
 	levelFile := f == isaLevelSets
+	s.changed = false
+	fs := s.funcs
 	cur := isaFrame{vars: maps.Clone(s.levelVars)}
 	var outer []isaFrame // the scopes around the definition being read, the file's first
-	// mark records that name holds the flags. A set() in a macro body writes its caller's scope, and so
-	// does PARENT_SCOPE in a function; a CACHE entry is seen by the file too.
+	// handBack records that the body being read gives its caller name: its callers then hold the flags
+	// there, and so does the scope around the definition, which stands in for them in this file.
+	handBack := func(name string) {
+		if n := len(outer); n > 0 {
+			outer[n-1].vars[name] = true
+			s.changed = addTo(fs.exports, cur.fn, name) || s.changed
+		}
+	}
+	// mark records that name holds the flags. A set() of ${param} in a body fills its caller's variable
+	// (an output argument); a set() in a macro body writes its caller's scope, and so does PARENT_SCOPE in
+	// a function; a CACHE entry is seen by the file too.
 	mark := func(name, args string) {
+		if cur.fn != "" && strings.HasPrefix(name, "${") {
+			for i, prm := range cur.params {
+				if name == "${"+prm+"}" {
+					s.changed = addTo(fs.producers, cur.fn, i) || s.changed
+				}
+			}
+		}
 		cur.vars[name] = true
 		if n := len(outer); n > 0 {
 			if cur.macro || strings.Contains(args, "PARENT_SCOPE") {
-				outer[n-1].vars[name] = true
+				handBack(name)
 			}
 			if strings.Contains(args, "CACHE") {
 				outer[0].vars[name] = true
@@ -382,9 +447,16 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 		levelSets := levelFile && cur.fn == levelFunction
 		switch c.name {
 		case "function", "macro":
-			// A body reads its caller's variables: the scope around the definition stands in for them.
+			// A body reads its caller's variables: the scope around the definition stands in for them, with
+			// the file's and those of every call to it found so far.
 			body := isaFrame{vars: maps.Clone(cur.vars), fn: strings.ToLower(first), macro: c.name == "macro"}
+			for _, prm := range fields[min(1, len(fields)):] {
+				body.params = append(body.params, strings.Trim(prm, `"`))
+			}
 			for v := range fileVars {
+				body.vars[v] = true
+			}
+			for v := range fs.callerVars[body.fn] {
 				body.vars[v] = true
 			}
 			outer, cur = append(outer, cur), body
@@ -407,7 +479,17 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 				cur.vars[first] = true
 			}
 			continue
-		case "set", "list", "string":
+		case "return": // return(PROPAGATE v…) hands v to the caller
+			propagate := false
+			for _, fl := range fields {
+				fl = strings.Trim(fl, `"`)
+				if propagate && cur.vars[fl] {
+					handBack(fl)
+				}
+				propagate = propagate || fl == "PROPAGATE"
+			}
+			continue
+		case "set", "list", "string", "separate_arguments":
 			name, read := writtenVar(c.name, cmakeArgs(c.args))
 			flags = carriedFlags(read, cur.vars)
 			if len(flags) > 0 && name != "" {
@@ -423,13 +505,24 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 			}
 			continue
 		}
-		if outs, ok := s.producers[c.name]; ok { // helios_isa_avx2_flags(out): out holds the flags
+		if s.wrappers[c.name] { // a call: the body reads this scope's flag variables and hands some back
+			for v := range cur.vars {
+				s.changed = addTo(fs.callerVars, c.name, v) || s.changed
+			}
+			for v := range fs.exports[c.name] {
+				mark(v, "")
+			}
+		}
+		if outs, ok := fs.producers[c.name]; ok { // helios_isa_avx2_flags(out): out holds the flags
 			for i := range outs {
 				if i < len(fields) {
 					mark(strings.Trim(fields[i], `"`), "")
 				}
 			}
 			continue
+		}
+		if m := nestedRefRE.FindString(c.args); m != "" && !isaInertCmds[c.name] {
+			flags = append(flags, m) // ${${n}}: a value CONF-11 cannot tell, so it fails closed
 		}
 		if len(flags) == 0 {
 			continue
@@ -461,6 +554,12 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 				reportf(c.line, "%s() is passed %s: a wrapper can grant them below the image level, and only "+
 					"%s's level sets carry ISA flags (02 §1.1)", c.name, strings.Join(opts, " "), isaLevelSets)
 			}
+		case !s.wrappers[c.name] && !perFile && !perTarget && !perDir && !isaInertCmds[c.name] && !levelSets:
+			// A command CONF-11 does not know (cmake_language(CALL …), a function defined outside the
+			// scanned files, …) fails closed when it carries flags.
+			reportf(c.line, "%s() carries %s: CONF-11 cannot tell whether it grants them below the image "+
+				"level; only %s's level sets carry ISA flags (02 §1.1)", c.name, strings.Join(flags, " "),
+				isaLevelSets)
 		}
 	}
 	if len(outer) > 0 { // a definition still open at the end of the file
@@ -504,6 +603,8 @@ func writtenVar(cmd string, args []string) (name, read string) {
 	switch cmd {
 	case "set":
 		return arg(0), all
+	case "separate_arguments": // separate_arguments(<out> <mode> "<args>")
+		return arg(0), without(0)
 	case "list":
 		switch strings.ToUpper(arg(0)) {
 		case "LENGTH", "GET", "JOIN", "SUBLIST", "FIND":
@@ -798,6 +899,9 @@ var (
 	// left as "{}" by checkGateSymbols).
 	gateAggHeadRE = regexp.MustCompile(`^(?:const\s+|volatile\s+)*(?:struct|enum|union)\b\s*(?:[A-Za-z_]\w*)?\s*(?:\{\})?`)
 	trailingRE    = regexp.MustCompile(`\([^()]*\)\s*$`)
+	// An array bound or an alignment specifier: parentheses inside them (sizeof(int), _Alignas(16)) are
+	// not a parameter list, and identifiers inside them are not the declared name.
+	declNoiseRE = regexp.MustCompile(`\[[^\[\]]*\]|\b(?:_Alignas|alignas)\s*\((?:[^()]|\([^()]*\))*\)`)
 )
 
 // gateDefinition reports the external names that a file-scope statement defines: every declarator of a
@@ -826,9 +930,14 @@ func gateDefinition(p *Pass, f string, line int, stmt string, body bool) {
 		decls = splitTop(s) // the declarators of one statement
 	}
 	for k, decl := range decls {
-		if i := strings.Index(decl, "="); i >= 0 {
+		i := strings.Index(decl, "=")
+		if i >= 0 {
 			decl = decl[:i]
-		} else if !body && strings.Contains(decl, "(") && !strings.Contains(decl, "(*") {
+		}
+		for declNoiseRE.MatchString(decl) {
+			decl = declNoiseRE.ReplaceAllString(decl, " ")
+		}
+		if i < 0 && !body && strings.Contains(decl, "(") && !strings.Contains(decl, "(*") {
 			continue // a prototype: a reference, not a definition
 		}
 		for trailingRE.MatchString(decl) {

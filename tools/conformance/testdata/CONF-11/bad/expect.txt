@@ -2,6 +2,9 @@
 # Today's lists, helios_avx2_sources() and tp_jolt's PUBLIC options (verbatim), and other per-file,
 # per-target and global AVX grants: INTERFACE_COMPILE_OPTIONS, directory properties, -arch:AVX2 and a
 # wrapper function; and in tools/lint/quoted.cmake, grants after a quoted or bracketed "(" and a \(.
+# engine/unknown fails closed: cmake_language() and a command defined outside the scanned files that
+# carry flags, separate_arguments() output, and a nested ${${n}} reference in a grant; a message and a
+# condition that name a flag pass.
 cmake/HeliosIsa.cmake:15: CONF-11
 cmake/HeliosIsa.cmake:24: CONF-11
 cmake/isa_allowlist.cmake:12: CONF-11
@@ -19,6 +22,11 @@ engine/demo/CMakeLists.txt:12: CONF-11
 engine/demo/CMakeLists.txt:13: CONF-11
 engine/demo/CMakeLists.txt:14: CONF-11
 engine/demo/CMakeLists.txt:18: CONF-11
+engine/unknown/CMakeLists.txt:1: CONF-11
+engine/unknown/CMakeLists.txt:2: CONF-11
+engine/unknown/CMakeLists.txt:4: CONF-11
+engine/unknown/CMakeLists.txt:7: CONF-11
+engine/unknown/CMakeLists.txt:8: CONF-11
 third_party/CMakeLists.txt:6: CONF-11
 third_party/CMakeLists.txt:8: CONF-11
 third_party/CMakeLists.txt:10: CONF-11

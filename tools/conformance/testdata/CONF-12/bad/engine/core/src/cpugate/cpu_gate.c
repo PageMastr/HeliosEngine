@@ -16,3 +16,6 @@ struct { int a; } hcg_anon_state;
 enum hcg_e { HCG_A, HCG_B } hcg_enum_var;
 struct hcg_state hcg_make(void) { struct hcg_state s = {0}; return s; }
 int hcg_after = 0;
+char hcg_buf[sizeof(int)];
+_Alignas(16) unsigned char hcg_aligned[64];
+int hcg_c = 3, hcg_proto(void);

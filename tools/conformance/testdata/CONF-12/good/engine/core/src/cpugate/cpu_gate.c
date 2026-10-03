@@ -18,3 +18,6 @@ static struct hcg_state hcg_saved;
 static struct { int b; } hcg_anon;
 static struct hcg_state hcg_make(void) { struct hcg_state s = {0}; return s; }
 extern struct hcg_state hcg_elsewhere;
+static char hcg_buf[sizeof(int)];
+static _Alignas(16) unsigned char hcg_aligned[64];
+extern char hcg_table[sizeof(long)];

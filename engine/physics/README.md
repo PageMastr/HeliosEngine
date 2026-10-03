@@ -70,7 +70,9 @@ step concurrently. `PhysicsRuntime` construction and shape creation are thread-s
   every step. Reverting the patch locally fails both cases from the first second; reverting any one of
   its orders alone (the sort key, the body-1 choice, the pair order or the character's contact order)
   fails at least one of them, and disabling only `NoCrossUpdateCache` fails
-  `stable-order: ShipHull and Vehicle bodies …`.
+  `stable-order: ShipHull and Vehicle bodies …`. Dropping the cache on every collision step instead of
+  only the first (`ContactAllocator::mFirstCollisionStep` forced on) fails
+  `stable-order: NoCrossUpdateCache keeps the warm start between the collision steps …` for both layers.
 
 ## Validation and limits
 
@@ -104,6 +106,15 @@ step concurrently. `PhysicsRuntime` construction and shape creation are thread-s
   history; the patch does not change that. The permuted tile scene does not diverge on it, but a
   character stepping onto two coplanar tiles at once could; WP-1.5 (the shared mover, RT-03 in full)
   should add a case and, if needed, a key tie-break like the query collectors'.
+- **`NoCrossUpdateCache` and contact callbacks.** The patch still finds a flagged pair's old manifold on
+  the first collision step of a `step()`, so `OnContactPersisted` (not `OnContactAdded`) keeps firing for
+  a resting hull or vehicle. Nothing tests that yet: this module installs no `ContactListener`. WP-1.5,
+  with 06's impact events, adds the case.
+- **Restored character contacts.** `CharacterContact::SaveState` does not save the patch's
+  `mObjectLayerB` (nor upstream's `mUserData`), so `RestoreState` leaves it `cObjectLayerInvalid`. That
+  is harmless today because the patch only sorts freshly collected contacts, but when WP-1.5 restores
+  characters for rollback, restored contacts must not be re-sorted by stable key without first
+  re-reading B's layer and key from the body.
 - **ISA allowlist.** Jolt's headers select AVX2 paths inline, so every `helios_physics` TU is compiled
   with `tp_jolt`'s AVX2 flags. Until WP-0.2r moves to whole-image ISA levels, `lint_isa_audit` reports
   them unless `helios_physics` joins `HELIOS_ISA_AVX2_TARGETS` in `cmake/isa_allowlist.cmake`.
@@ -118,7 +129,8 @@ step concurrently. `PhysicsRuntime` construction and shape creation are thread-s
 capacity, fixed stepping, the collision matrix, queries and tie-breaks, the character mover, the job
 adapter (1–3 workers, under load, inside a job, 32 workers for 3,000 steps, two grids at once), the
 determinism goldens and permuted variants, and the `stable-order` patch's `NoCrossUpdateCache` rule
-(`tests/test_stable_order.cpp`, with a control case that shows the check can fail).
+(`tests/test_stable_order.cpp`: no cache across `step()`s, with a control case that shows the check can
+fail, and a warm start between the collision steps of one `step()`).
 
 ## Plan conformance
 

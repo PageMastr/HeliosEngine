@@ -8,7 +8,8 @@
 // grid B is built fresh (nothing cached) with the same bodies, and both receive A's body state through
 // setPose()/setVelocity(), so the states are bit-identical. Every later step must then match bit for
 // bit. The control case shows the check can fail: a Dynamic-layer body warm-starts from A's cache, so
-// A and B part ways.
+// A and B part ways. A third case checks the rule's other half: the collision steps after the first in
+// one step() still warm-start, like a Dynamic-layer body's.
 #include <doctest/doctest.h>
 
 #include <cstring>
@@ -103,13 +104,63 @@ u32 firstDivergence(ObjectLayer layer, u32 collisionSteps, u32 warmup, u32 n) {
 TEST_CASE("stable-order: ShipHull and Vehicle bodies keep no contact cache across steps (NoCrossUpdateCache)") {
     PhysicsRuntime runtime;
     for (ObjectLayer layer : {ObjectLayer::ShipHull, ObjectLayer::Vehicle}) {
-        // 3 collision steps per step: the cache is dropped at the start of every step(), not only at the
-        // start of every collision step, and the substeps of one step() may still use it.
+        // 1 and 3 collision steps per step(): with either, no cache crosses a step() boundary. The 3-step
+        // run cannot show that collision steps 2 and 3 still warm-start: if they did not, A and B would
+        // start each collision step equally cold and still agree. The next case checks that half.
         for (u32 collisionSteps : {1u, 3u}) {
             CAPTURE(objectLayerName(layer));
             CAPTURE(collisionSteps);
             CHECK(firstDivergence(layer, collisionSteps, 90, 120) == 0);
         }
+    }
+}
+
+/// A fresh grid with `collisionSteps` collision steps per step() and a box resting and sliding on ONE
+/// tile: one contact constraint, so the layer's part in the contact sort key cannot reorder the solver.
+/// Returns the box's state after the first step().
+BodyState firstStepOnOneTile(ObjectLayer layer, u32 collisionSteps) {
+    GridDesc gd;
+    gd.name = "substeps";
+    gd.collisionSteps = collisionSteps;
+    auto g = PhysicsGrid::create(gd);
+    REQUIRE(g.ok());
+    std::unique_ptr<PhysicsGrid> grid = std::move(g).value();
+    BodyDesc t;
+    t.key = 0x7100'0000;
+    t.layer = ObjectLayer::Terrain;
+    t.motion = MotionType::Static;
+    t.shape = must(createBox(Vec3(4.0f, 0.5f, 4.0f)));
+    t.position = DVec3(0.0, -0.5, 0.0);
+    REQUIRE(grid->createBody(t).ok());
+    BodyDesc d;
+    d.key = 0x9000;
+    d.layer = layer;
+    d.shape = must(createBox(Vec3(1.5f, 0.4f, 0.8f)));
+    d.position = DVec3(0.3, 0.399, 0.2); // 1 mm into the tile: in contact from the first collision step
+    d.rotation = Quat::fromAxisAngle(Vec3(0.0f, 1.0f, 0.0f), 0.2f);
+    d.linearVelocity = Vec3(0.6f, -0.5f, 0.2f);
+    d.angularVelocity = Vec3(0.0f, 0.3f, 0.0f);
+    d.mass = 2000.0f;
+    d.allowSleeping = false;
+    auto h = grid->createBody(d);
+    REQUIRE(h.ok());
+    REQUIRE(grid->step().ok());
+    auto s = grid->bodyState(*h);
+    REQUIRE(s.ok());
+    return *s;
+}
+
+TEST_CASE("stable-order: NoCrossUpdateCache keeps the warm start between the collision steps of one step()") {
+    // 02 §7.1: later collision steps of the same Update (a vehicle bubble's 3 substeps) warm-start as usual.
+    // On a fresh grid nothing is cached yet, so a ShipHull or Vehicle box and a Dynamic-layer box start
+    // collision step 1 equally cold; a correct patch then warm-starts steps 2 and 3 of both from step 1's
+    // contact, and their first step() is bit-identical. A patch that dropped the cache on every collision
+    // step fails this (checked by forcing ContactAllocator::mFirstCollisionStep to true: both layers fail).
+    PhysicsRuntime runtime;
+    const BodyState dyn = firstStepOnOneTile(ObjectLayer::Dynamic, 3);
+    for (ObjectLayer layer : {ObjectLayer::ShipHull, ObjectLayer::Vehicle}) {
+        CAPTURE(objectLayerName(layer));
+        CHECK(sameBits(firstStepOnOneTile(layer, 3), dyn));
     }
 }
 

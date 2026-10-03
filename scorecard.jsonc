@@ -231,6 +231,7 @@
         {"doctest": "physics_tests", "case": "determinism: permuted BodyIDs give the identical hash, multi-contact islands included (RT-03 permuted variant)"},
         {"doctest": "physics_tests", "case": "determinism: permuted BodyIDs give the identical hash with a hull, a chassis and a character on four tiles each"},
         {"doctest": "physics_tests", "case": "stable-order: ShipHull and Vehicle bodies keep no contact cache across steps (NoCrossUpdateCache)"},
+        {"doctest": "physics_tests", "case": "stable-order: NoCrossUpdateCache keeps the warm start between the collision steps of one step()"},
         {"doctest": "physics_tests", "case": "stable-order: control: a Dynamic-layer body warm-starts from contacts cached by earlier steps"}
       ],
       "gaps": [

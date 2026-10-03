@@ -157,6 +157,11 @@ void applyTheme(const Theme& theme, f32 scale, ImGuiStyle& style) {
     style.FontSizeBase = m.fontSize;
     style.FontScaleDpi = scale;
 
+    // Every slot is set below. They start at Theme::color()'s magenta gap color, not at
+    // ImGuiStyle()'s dark defaults, so a slot that a newer Dear ImGui adds is visible and fails
+    // "theme: applyTheme takes every ImGui color slot from the theme" instead of quietly keeping a
+    // dark-theme color (1.92's InputTextCursor stayed white: no caret on the light theme's fields).
+    for (ImVec4& c : style.Colors) c = ImVec4(1, 0, 1, 1);
     const auto set = [&](ImGuiCol col, std::string_view token) {
         const Color c = theme.color(token);
         style.Colors[col] = ImVec4(c.r, c.g, c.b, c.a);
@@ -180,6 +185,7 @@ void applyTheme(const Theme& theme, f32 scale, ImGuiStyle& style) {
     set(ImGuiCol_ScrollbarGrabHovered, "sliderGrab");
     set(ImGuiCol_ScrollbarGrabActive, "sliderGrab");
     set(ImGuiCol_CheckMark, "checkMark");
+    set(ImGuiCol_CheckboxSelectedBg, "frameBg");  // a checked box differs by its check mark alone
     set(ImGuiCol_SliderGrab, "sliderGrab");
     set(ImGuiCol_SliderGrabActive, "sliderGrab");
     set(ImGuiCol_Button, "button");
@@ -194,6 +200,7 @@ void applyTheme(const Theme& theme, f32 scale, ImGuiStyle& style) {
     set(ImGuiCol_ResizeGrip, "separator");
     set(ImGuiCol_ResizeGripHovered, "navHighlight");
     set(ImGuiCol_ResizeGripActive, "navHighlight");
+    set(ImGuiCol_InputTextCursor, "text");  // so the text-on-frameBg lint pair covers the caret too
     set(ImGuiCol_Tab, "tab");
     set(ImGuiCol_TabHovered, "tabHovered");
     set(ImGuiCol_TabSelected, "tabSelected");
@@ -209,7 +216,10 @@ void applyTheme(const Theme& theme, f32 scale, ImGuiStyle& style) {
     style.Colors[ImGuiCol_TableRowBg] = ImVec4(0, 0, 0, 0);
     set(ImGuiCol_TableRowBgAlt, "tableRowBgAlt");
     set(ImGuiCol_TextSelectedBg, "textSelectedBg");
+    set(ImGuiCol_TreeLines, "border");
     set(ImGuiCol_DragDropTarget, "navHighlight");
+    style.Colors[ImGuiCol_DragDropTargetBg] = ImVec4(0, 0, 0, 0);  // the DragDropTarget outline marks it
+    set(ImGuiCol_UnsavedMarker, "dirty");
     set(ImGuiCol_NavCursor, "navHighlight");
     set(ImGuiCol_NavWindowingHighlight, "navHighlight");
     style.Colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0, 0, 0, 0.35f);
@@ -266,6 +276,9 @@ std::vector<ContrastPair> drawnContrastPairs() {
     pairs.push_back({"dirty", "statusBarBg"});
     // Selected text in a text field: InputText draws Text over TextSelectedBg over FrameBg.
     pairs.push_back({"text", "textSelectedBg", "frameBg"});
+    // The Viewport panel's note, drawn on the viewport image, which the renderer clears to
+    // viewportBg (the grid's 1-pixel lines cross it but are not its background).
+    pairs.push_back({"textDisabled", "viewportBg"});
     // Not listed: values of read-only fields, drawn disabled (ImGui's DisabledAlpha), are inactive
     // controls, which WCAG 1.4.3 exempts from the contrast minimum.
     return pairs;

@@ -127,6 +127,10 @@ TEST_CASE("theme: the contrast lint checks the pairs the shell draws") {
     Theme badge = *t;
     badge.colors["badgeServer"] = badge.colors["windowBg"];
     CHECK(has(checkContrast(badge), "badgeServer", "tableRowBgAlt"));
+    // The Viewport panel's note is drawn on the cleared viewport image.
+    Theme viewport = *t;
+    viewport.colors["viewportBg"] = viewport.colors["textDisabled"];
+    CHECK(has(checkContrast(viewport), "textDisabled", "viewportBg"));
     for (const ContrastPair& p : drawnContrastPairs()) {
         CAPTURE(p.foreground);
         CHECK(t->has(p.foreground));
@@ -229,6 +233,52 @@ TEST_CASE("theme: applyTheme scales metrics and fonts") {
     const Color text = t->color("text");
     CHECK(two.Colors[ImGuiCol_Text].x == doctest::Approx(text.r));
     ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("theme: applyTheme takes every ImGui color slot from the theme") {
+    // Dear ImGui 1.92 added InputTextCursor, CheckboxSelectedBg, TreeLines, DragDropTargetBg and
+    // UnsavedMarker; applyTheme() left them at ImGuiStyle()'s dark defaults, which match no token.
+    // Every slot must be a token color of the theme or one of the two fixed overlays (transparent,
+    // and the 35 % black dimming); an unset slot is now magenta, which matches neither.
+    const Color clear{0, 0, 0, 0};
+    const Color dim{0, 0, 0, 0.35f};
+    for (std::string_view name : builtinThemeNames()) {
+        auto t = builtinTheme(name);
+        REQUIRE(t);
+        CHECK_FALSE(std::any_of(t->colors.begin(), t->colors.end(), [](const auto& kv) { return kv.second == Color{1, 0, 1, 1}; }));
+        ImGuiStyle style;
+        applyTheme(*t, 1.0f, style);
+        CAPTURE(std::string(name));
+        for (int i = 0; i < ImGuiCol_COUNT; ++i) {
+            const ImVec4& v = style.Colors[i];
+            const Color c{v.x, v.y, v.z, v.w};
+            const bool token = std::any_of(t->colors.begin(), t->colors.end(), [&](const auto& kv) { return kv.second == c; });
+            const std::string slot = ImGui::GetStyleColorName(i);
+            CAPTURE(slot);
+            CHECK((token || c == clear || c == dim));
+        }
+    }
+}
+
+TEST_CASE("theme: the text caret and a checked box's check mark are visible in every theme") {
+    // WCAG 2.2 SC 1.4.11 (non-text contrast): at least 3:1 against the adjacent color. Before the
+    // fix the light theme's caret was ImGui's dark default, white on its white fields (1.00:1).
+    for (std::string_view name : builtinThemeNames()) {
+        auto t = builtinTheme(name);
+        REQUIRE(t);
+        ImGuiStyle style;
+        applyTheme(*t, 1.0f, style);
+        const auto color = [&](ImGuiCol col) {
+            const ImVec4& v = style.Colors[col];
+            return Color{v.x, v.y, v.z, v.w};
+        };
+        const Color window = color(ImGuiCol_WindowBg);
+        const Color field = over(color(ImGuiCol_FrameBg), window);
+        const Color checked = over(color(ImGuiCol_CheckboxSelectedBg), window);
+        CAPTURE(std::string(name));
+        CHECK(contrastRatio(over(color(ImGuiCol_InputTextCursor), field), field) >= 3.0);
+        CHECK(contrastRatio(over(color(ImGuiCol_CheckMark), checked), checked) >= 3.0);
+    }
 }
 
 TEST_CASE("localize: pseudo-localization grows text and keeps ids") {

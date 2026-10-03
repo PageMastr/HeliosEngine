@@ -95,7 +95,8 @@ struct ContrastPair {
 
 /// Every text-on-background pair the shell and the property grid draw (text, disabled text and
 /// input hints, selected text in a text field, the client/server badges, also on a hovered or
-/// pressed name cell, the dirty marker, errors).
+/// pressed name cell, the dirty marker, errors, the Viewport panel's note). The text caret is
+/// drawn in `text` (applyTheme), so the text-on-frameBg pair covers it.
 std::vector<ContrastPair> drawnContrastPairs();
 
 /// Checks every pair of drawnContrastPairs(); empty when the theme passes.

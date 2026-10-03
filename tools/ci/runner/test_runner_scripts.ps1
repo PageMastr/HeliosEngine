@@ -257,7 +257,8 @@ Assert-Equal 0 $script:jobLog.Count 'a WMI failure stops no process'
 
 # Through the hook's entry point: a refused job returns 1 after it says why, waits, then stops the worker; an
 # allowed job (with nothing to wipe) stops nothing.
-$jobRoot = Join-Path ([IO.Path]::GetTempPath()) ('helios-runner-job-' + [guid]::NewGuid().ToString('N'))
+$WorkDir = [IO.Path]::GetFullPath($WorkDir)
+$jobRoot = Join-Path $WorkDir 'job'
 $jobWorkspace = Join-Path (Join-Path $jobRoot 'HeliosEngine') 'HeliosEngine'
 New-Item -ItemType Directory -Force -Path $jobWorkspace, (Join-Path $jobRoot '_actions') | Out-Null
 Set-Parent 'Runner.Worker.exe' 'D:\helios-ci\runner\bin\Runner.Worker.exe'
@@ -290,7 +291,6 @@ Remove-Item -LiteralPath $jobRoot -Recurse -Force
 $script:processes = @{}
 
 # -- job-started.ps1: what it deletes ------------------------------------------------------------------------
-$WorkDir = [IO.Path]::GetFullPath($WorkDir)
 $root = Join-Path $WorkDir 'work'
 $workspace = Join-Path (Join-Path $root 'HeliosEngine') 'HeliosEngine'
 $outside = Join-Path $WorkDir 'outside'

@@ -521,7 +521,10 @@
       "threshold": "The conformance lint clean on the full tree with WP-0.15r, WP-0.2r, WP-0.5r and WP-0.10r merged (§5.10)",
       "status": "unmeasured",
       "tests": [],
-      "gaps": [{"clause": "tools/conformance does not exist", "state": "unmeasured", "owner": "WP-0.2"}]
+      "gaps": [
+        {"clause": "tools/conformance does not exist", "state": "unmeasured", "owner": "WP-0.2"},
+        {"clause": "WP-0.2 follow-up (Go module licence scan): the licence scanner (lint_licenses) sees third_party/ and MANIFEST.md, not the Go modules that services/go.sum pins, which 01 §5.2's 'dependencies' covers. Not blocking: a review sample of 51 of the 145 modules was all permissive", "state": "unmeasured", "owner": "WP-0.2"}
+      ]
     },
     {
       "id": "EXIT-0.adr-004a", "phase": 0, "source": "09 §2.1", "owner": "WP-1.1a",

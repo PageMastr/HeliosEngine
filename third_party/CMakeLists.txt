@@ -165,6 +165,15 @@ foreach(t Luau.Common Luau.Ast Luau.Bytecode Luau.Inliner Luau.Compiler Luau.Con
     helios_tp_quiet(${t})
   endif()
 endforeach()
+# Debug sanitizer builds (linux-debug-asan) compile the interpreter loop at -O1. At -O0 ASan gives every
+# local of luau_execute its own redzoned stack slot: a 128 KiB frame (480 bytes at -O1), so the
+# LUAI_MAXCCALLS nested C calls a script may make (binding -> Luau -> binding) needed more than an 8 MiB
+# stack and crashed instead of raising Luau's C-stack error. -O1 keeps the full instrumentation (the ASan
+# docs recommend -O1 or higher). MSVC is left alone: /O1 conflicts with Debug's /RTC1.
+if(HELIOS_SANITIZE AND NOT MSVC)
+  set_source_files_properties(${TP}/luau/VM/src/lvmexecute.cpp TARGET_DIRECTORY Luau.VM
+    PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O1>")
+endif()
 add_library(tp_luau INTERFACE)
 target_link_libraries(tp_luau INTERFACE Luau.Compiler Luau.VM Luau.CodeGen)
 add_library(helios::tp::luau ALIAS tp_luau)

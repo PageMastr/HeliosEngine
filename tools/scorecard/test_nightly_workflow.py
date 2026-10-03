@@ -259,5 +259,68 @@ class AdvisoryScopeTests(unittest.TestCase):
             self.assertTrue(line.endswith("-- net_bench --gate" + want), (name, line))
 
 
+def steps(job: str) -> list[dict]:
+    """The steps of a nightly.yml job, in order: {"name", "if", "run"} (the run block's lines, comments
+    dropped), read from the text; the workflow is plain enough that no YAML parser is needed."""
+    lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
+    start = lines.index(f"  {job}:")
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"  [\w-]+:$", lines[i])), len(lines))
+    out = []
+    for line in lines[start + 1:end]:
+        if m := re.match(r"\s+- (?:name: (.*)|uses: )", line):
+            out.append({"name": m[1] or "", "if": "", "run": []})
+        elif out and (m := re.match(r"\s+if: (.*)", line)):
+            out[-1]["if"] = m[1]
+        elif out and not line.lstrip().startswith("#"):
+            out[-1]["run"].append(line)
+    return out
+
+
+def matrix_rows(job: str) -> list[dict]:
+    """The `include:` rows of a nightly.yml job's matrix, as {key: value} strings."""
+    lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
+    start = lines.index(f"  {job}:")
+    rows = []
+    for line in lines[start + 1:]:
+        if re.match(r"  [\w-]+:$", line) or line.strip().startswith("steps:"):
+            break
+        if line.lstrip().startswith("#"):
+            continue
+        if m := re.match(r"\s+- (\w+): ?(.*)$", line):
+            rows.append({m[1]: m[2].strip()})
+        elif rows and (m := re.match(r"\s+(\w+): ?(.*)$", line)) and line.startswith(" " * 12):
+            rows[-1][m[1]] = m[2].strip()
+    return rows
+
+
+class PerfLabelScopeTests(unittest.TestCase):
+    """The owner's decision of 2026-09-30 (PR #39): the timing gates (CTest label perf) run only in the GCC
+    job's serial perf step, never in a sanitizer build, whose instrumented Debug code measures the sanitizers
+    and not the budget. This fails if the linux-asan row runs them again or another step does."""
+
+    def test_the_sanitizer_row_excludes_perf_and_only_the_gcc_step_runs_it(self):
+        rows = {r["run"]: r for r in matrix_rows("linux")}
+        self.assertEqual(sorted(rows), ["linux-asan", "linux-clang", "linux-gcc"])
+        self.assertEqual(rows["linux-asan"]["preset"], "linux-debug-asan")
+        for run, row in rows.items():
+            # Every Linux row's main CTest step excludes the label (the GCC job runs it in its own step).
+            m = re.fullmatch(r"(?:.*\s)?-LE (\S+)(?:\s.*)?", row.get("ctest_args", ""))
+            self.assertTrue(m and re.search(m[1].strip('"'), "perf"), (run, row.get("ctest_args")))
+            self.assertNotRegex(row.get("ctest_args", ""), r"(?<![\w-])-L\s")
+        test = next(s for s in steps("linux") if s["name"].startswith("Test (software Vulkan"))
+        self.assertIn("${{ matrix.ctest_args }}", "\n".join(test["run"]))
+        # `-L perf` (and the doctest runner's --perf, the same entries) only in the step gated on linux-gcc.
+        text = WORKFLOW.read_text(encoding="utf-8")
+        jobs = re.findall(r"^  ([\w-]+):$", text[text.index("\njobs:"):], re.M)
+        self.assertEqual(jobs, ["linux", "windows", "go", "fuzz", "scorecard"])
+        perf_steps = [s for job in jobs for s in steps(job)
+                      if re.search(r"(?<![\w-])-L\s+\"?perf|runners\.py doctest --perf", "\n".join(s["run"]))]
+        self.assertEqual([s["name"] for s in perf_steps], ["Perf gates (label perf, serial)"])
+        self.assertEqual(perf_steps[0]["if"], "${{ !cancelled() && matrix.run == 'linux-gcc' }}")
+        # The registry's description of the sanitizer run says the same.
+        data, _ = scorecard.load_jsonc(ROOT / "scorecard.jsonc")
+        self.assertIn("every CTest except perf", data["runs"]["linux-asan"]["description"])
+
+
 if __name__ == "__main__":
     unittest.main()

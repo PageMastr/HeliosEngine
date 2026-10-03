@@ -23,7 +23,7 @@
     "linux-clang": {"os": "linux", "default": true,
                     "description": "Linux Clang RelWithDebInfo: every CTest except perf (lavapipe under Xvfb)"},
     "linux-asan": {"os": "linux", "default": false,
-                   "description": "Linux Clang Debug with ASan and UBSan"},
+                   "description": "Linux Clang Debug with ASan and UBSan: every CTest except perf"},
     "linux-fuzz": {"os": "linux", "default": true,
                    "description": "libFuzzer (Clang, -fsanitize=fuzzer with ASan and UBSan), 1 h per engine/net target"},
     "windows-vs2026": {"os": "windows", "default": true,

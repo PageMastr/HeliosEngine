@@ -80,7 +80,8 @@ jobs:
           $tested = 0
           $list = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
           foreach ($key in Get-ChildItem -LiteralPath $list) {
-            if ($key.PSChildName -notlike 'S-1-5-21-*' -or $key.PSChildName -like "$mySid*") { continue }
+            # Exact names: a prefix match would also skip another user whose RID starts with this one's.
+            if ($key.PSChildName -notlike 'S-1-5-21-*' -or $key.PSChildName -in @($mySid, "$mySid.bak")) { continue }
             $profileDir = (Get-ItemProperty -LiteralPath $key.PSPath).ProfileImagePath
             $profileDir = [Environment]::ExpandEnvironmentVariables($profileDir)
             foreach ($sub in '', 'AppData', 'Documents', '.ssh') {
@@ -101,8 +102,9 @@ jobs:
           }
           Write-Output "Not an administrator; $tested other user profile(s) refuse a listing"
 
-      # 09 §5.4a, network: tools/ci/runner/firewall.ps1 blocks the account from the home LAN. A TCP connection to
-      # the default gateway that succeeds proves the rules are missing (a refusal or a block passes).
+      # 09 §5.4a, network: tools/ci/runner/firewall.ps1 blocks the account from the home LAN. A smoke test of the
+      # rules: a TCP connection to the default gateway that succeeds, or that the gateway refuses (its reset reached
+      # the PC), proves them missing. The block fails the connect locally (access denied); a timeout proves nothing.
       - name: LAN egress blocked (tools/ci/runner/firewall.ps1)
         run: |
           $gateways = @([Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
@@ -110,6 +112,7 @@ jobs:
             ForEach-Object { $_.GetIPProperties().GatewayAddresses } | ForEach-Object { $_.Address } |
             Where-Object { $_.AddressFamily -eq 'InterNetwork' -and $_.ToString() -ne '0.0.0.0' } |
             ForEach-Object { $_.ToString() } | Select-Object -Unique)
+          if ($gateways.Count -eq 0) { throw 'No IPv4 default gateway found, so the LAN block cannot be tested' }
           $reached = @()
           foreach ($gateway in $gateways) {
             foreach ($port in 53, 80, 443) {
@@ -119,6 +122,11 @@ jobs:
                   $reached += "${gateway}:$port"
                 }
               } catch {
+                $e = $_.Exception
+                while ($e -and -not ($e -is [Net.Sockets.SocketException])) { $e = $e.InnerException }
+                if ($e -and $e.SocketErrorCode -eq [Net.Sockets.SocketError]::ConnectionRefused) {
+                  $reached += "${gateway}:$port (refused by the gateway)"
+                }
               } finally {
                 $client.Close()
               }
@@ -128,7 +136,7 @@ jobs:
             throw ("The runner account reached the LAN ($($reached -join ', ')): run tools/ci/runner/firewall.ps1 " +
               '(docs/runbooks/win-gpu-runner.md)')
           }
-          Write-Output "No TCP connection to the default gateway(s) $($gateways -join ', ') on ports 53, 80, 443"
+          Write-Output "The default gateway(s) $($gateways -join ', ') accepted no TCP connection on ports 53, 80, 443"
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -157,6 +165,8 @@ jobs:
           Set-Content -Encoding ascii -Path "$env:RESULTS\run.json" -Value '{"run": "win-gpu"}'
           python tools/scorecard/runners.py host --out "$env:RESULTS\host.json"
 
+      # windows-vs2022 rather than ADR-0.9c §6's windows-msvc-release: the same MSVC and RelWithDebInfo flags, but
+      # MSBuild finds the toolset itself, where Ninja would need a developer shell from a third-party action.
       - name: Configure
         run: cmake --preset $env:PRESET
       - name: Build
@@ -192,6 +202,34 @@ jobs:
         run: >
           python tools/scorecard/runners.py gate --name net_bench_gate --build-dir $env:BUILD --config $env:CONFIG
           --timeout 1800 --out "$env:RESULTS\gates" -- net_bench --gate
+      # The goldens prefer a software adapter, and the bench prints "GPU: unavailable" and exits 0 without one, so a
+      # PC with a software Vulkan driver, or whose GPU the service session cannot see, would pass both without
+      # touching the GPU. Each must name a hardware adapter.
+      - name: The goldens and the bench ran on a hardware GPU
+        if: ${{ !cancelled() }}
+        run: |
+          $software = 'llvmpipe|lavapipe|swiftshader|software|basic render'
+          $adapter = '"adapter": "((?:[^"\\]|\\.)*)"'
+          $problems = @()
+          $dir = Join-Path $env:BUILD 'tools\rendertest\rendertest-output\vulkan'
+          $results = @(Get-ChildItem -LiteralPath $dir -Filter *.json -ErrorAction SilentlyContinue)
+          if ($results.Count -eq 0) { $problems += "no rendertest results in $dir" }
+          foreach ($file in $results) {
+            $m = [regex]::Match((Get-Content -LiteralPath $file.FullName -Raw), $adapter)
+            $name = if ($m.Success) { $m.Groups[1].Value } else { '' }
+            Write-Output "rendertest $($file.BaseName): $name"
+            if (-not $name -or $name -match $software) { $problems += "rendertest $($file.BaseName) ran on '$name'" }
+          }
+          $bench = "$env:RESULTS\hnoise-win-gpu.json"
+          $text = if (Test-Path -LiteralPath $bench) { Get-Content -LiteralPath $bench -Raw } else { '' }
+          $m = [regex]::Match($text, '"gpu": \{\s*' + $adapter)
+          $name = if ($m.Success) { $m.Groups[1].Value } else { '' }
+          Write-Output "pcg_hnoise_bench: $name"
+          if (-not $name -or $name -match $software) { $problems += "pcg_hnoise_bench measured no hardware GPU ('$name')" }
+          if ($problems.Count -gt 0) {
+            $problems | ForEach-Object { Write-Output "::error::$_" }
+            throw 'The GPU work did not run on a hardware GPU (set HELIOS_WIN_GPU_ADAPTER; docs/runbooks/win-gpu-runner.md)'
+          }
       - name: Test inventory and the rendertest output
         if: ${{ !cancelled() }}
         run: |

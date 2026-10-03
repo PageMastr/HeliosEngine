@@ -212,7 +212,8 @@ if (-not $onWindows) {
     $script:checks++
     $script:failures++
     $wipe = 'not run'
-    Write-Host "FAIL: the wipe test needs a -WorkDir of letters, digits, '_', '.' and '-' (the hook refuses others): $root"
+    Write-Host ("FAIL: the wipe test needs a -WorkDir of letters, digits, '_', '.' and '-' (the hook refuses " +
+        "others), for example -WorkDir C:\helios-runner-test; got: $root")
 } else {
     $wipe = 'ran'
     New-Tree

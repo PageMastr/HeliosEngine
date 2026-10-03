@@ -1,5 +1,6 @@
-# WP-0.2r's natural shape: today's flag function (verbatim) fills 02 §1.1's level set at file scope, a
-# helper caches a copy through another function defined after it, and one function applies a level.
+# WP-0.2r's natural shape: today's flag function fills 02 §1.1's level set at file scope, a helper caches
+# a copy through another function defined after it, and one function applies a level.
+# helios_isa_avx2_flags() is verbatim from cmake/HeliosIsa.cmake lines 34-43 (main 564747d).
 function(helios_isa_avx2_flags out)
   if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     set(flags /arch:AVX2 /fp:precise)

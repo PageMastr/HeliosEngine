@@ -6,12 +6,14 @@
 # resolve the parameters of config.cpp:6 and leader.cpp:11, nor may elect_opts.cpp's default argument
 # `key = "zone.1"`). In Go NATS code, CAS on a key the lint cannot resolve and a TTL on a bucket it cannot
 # resolve fail closed (kv.go:18 is both an unresolved KeyTTL key and CAS on it; elect.go, both APIs).
+# A TTL in a nats.c file that sets no Bucket fails closed (ttl_helper.cpp).
 # (CONF-01 also fires on these buckets; this fixture runs CONF-02 alone.)
 apps/cell/config.cpp:6: CONF-02
 apps/cell/leader.cpp:8: CONF-02
 apps/cell/leader.cpp:11: CONF-02
 apps/cell/lease.cpp:5: CONF-02
 apps/cell/lease.cpp:7: CONF-02
+apps/cell/ttl_helper.cpp:4: CONF-02
 services/internal/orch/elect.go:16: CONF-02
 services/internal/orch/elect.go:17: CONF-02
 services/internal/orch/elect.go:18: CONF-02

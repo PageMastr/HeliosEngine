@@ -4,9 +4,15 @@
 # A shift through a name defined twice with different values (zone_ids.cpp; aa_bits.h sorts first) and
 # through a sum of parenthesized constants (route_ids.cpp) is a block ID composed outside the minters.
 # A line with two distinct violations (a node-ID name and a layout, or a name and its tag) has two findings.
+# Shift amounts through a #define and a static const (define_ids.cpp), a parenthesized sum (paren_ids.cpp),
+# an enumerator (enum_ids.cpp) and a braced constexpr (brace_ids.cpp).
 engine/ecs/src/legacy_ids.cpp:4: CONF-04
 engine/ecs/src/legacy_ids.cpp:5: CONF-04
 engine/ecs/src/legacy_ids.cpp:5: CONF-04
+engine/net/src/brace_ids.cpp:3: CONF-04
+engine/net/src/define_ids.cpp:4: CONF-04
+engine/net/src/enum_ids.cpp:3: CONF-04
+engine/net/src/paren_ids.cpp:3: CONF-04
 engine/net/src/route_ids.cpp:5: CONF-04
 engine/net/src/session_ids.cpp:4: CONF-04
 engine/net/src/zone_ids.cpp:3: CONF-04

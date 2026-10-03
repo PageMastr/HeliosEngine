@@ -41,15 +41,12 @@ var (
 	// named for the gateway port.
 	cPortDeclRE   = regexp.MustCompile(`\b(k[A-Z_]\w*)\s*(?:=\s*([^;=,{}][^;,{}]*)|\{([^{}]*)\}|\(([^()]*)\))\s*[;,]`)
 	cDefinePortRE = regexp.MustCompile(`(?m)^[ \t]*#[ \t]*define[ \t]+(\w+)[ \t]+([^\n]*)$`)
-	// Integer constants for cPortValues: constexpr/const declarations and #defines.
-	cIntDeclRE   = regexp.MustCompile(`\b(?:constexpr|const)\b[^;{}()=]*?\b([A-Za-z_]\w*)\s*(?:=\s*([^;{}]+?)|\{([^{}]*)\})\s*;`)
-	cIntDefineRE = regexp.MustCompile(`(?m)^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]+([^\n]+)$`)
-	cIntLitRE    = regexp.MustCompile(`^(0[xX][0-9A-Fa-f']+|\d[\d']*)[uUlL]*$`)
-	cCastRE      = regexp.MustCompile(`^(?:static_cast\s*<[^<>]*>|(?:std::)?u?int(?:16|32|64)_t|u16|u32|i32|int|unsigned)\s*[({](.*)[)}]$`)
-	tomlTableRE  = regexp.MustCompile(`^\s*\[+\s*([^\]]+?)\s*\]+`)
-	optionNameRE = regexp.MustCompile(`^-{0,2}[\w.-]+$`)
-	tomlKeyRE    = regexp.MustCompile(`^\s*([A-Za-z0-9_.-]+)\s*=\s*(.*)$`)
-	tomlIntRE    = regexp.MustCompile(`^[+]?\d[\d_]*$`)
+	cIntLitRE     = regexp.MustCompile(`^(0[xX][0-9A-Fa-f']+|\d[\d']*)[uUlL]*$`)
+	cCastRE       = regexp.MustCompile(`^(?:static_cast\s*<[^<>]*>|(?:std::)?u?int(?:16|32|64)_t|u16|u32|i32|int|unsigned)\s*[({](.*)[)}]$`)
+	tomlTableRE   = regexp.MustCompile(`^\s*\[+\s*([^\]]+?)\s*\]+`)
+	optionNameRE  = regexp.MustCompile(`^-{0,2}[\w.-]+$`)
+	tomlKeyRE     = regexp.MustCompile(`^\s*([A-Za-z0-9_.-]+)\s*=\s*(.*)$`)
+	tomlIntRE     = regexp.MustCompile(`^[+]?\d[\d_]*$`)
 	// A port mapping token in compose or Helm YAML that ends in /udp, and its parts: an optional host IP,
 	// an optional published port (or range) and the container port (or range).
 	yamlUDPTokenRE = regexp.MustCompile(`[^\s"',]+/udp\b`)
@@ -91,7 +88,7 @@ func portOf(addr string) (int, bool) {
 }
 
 func checkGatewayPort(p *Pass) {
-	var ints map[string][]string // the scope's C and C++ integer constants, read once on first use
+	var ints map[string][]string // the scope's C and C++ integer constants (cConstTable), read once on first use
 	for _, f := range p.Files {
 		if testCodeRE.MatchString(f) {
 			continue // tests choose their own ports; the rule is about defaults
@@ -132,7 +129,7 @@ func checkGatewayPort(p *Pass) {
 				continue // every form below names the gateway, in the file's name or its text
 			}
 			if ints == nil {
-				ints = cIntTable(p)
+				ints = cConstTable(p)
 			}
 			checkGatewayPortC(p, f, ints)
 		}
@@ -349,36 +346,6 @@ func checkGatewayPortGo(p *Pass, f string) {
 		}
 		return true
 	})
-}
-
-// cIntTable collects the integer-valued constants of the C-family files in scope by bare name, for
-// cPortValues: constexpr and const declarations and #defines. Groups under `#if 0` are not read.
-func cIntTable(p *Pass) map[string][]string {
-	t := map[string][]string{}
-	for _, f := range p.Files {
-		if !cFamily.MatchString(f) {
-			continue
-		}
-		code := codeLines(p.Tree.Lines(f), true)
-		for i, dead := range inactiveLines(code) {
-			if dead {
-				code[i] = ""
-			}
-		}
-		text := strings.Join(code, "\n")
-		add := func(name, v string) {
-			if v = strings.TrimSpace(v); v != "" && !slices.Contains(t[name], v) {
-				t[name] = append(t[name], v)
-			}
-		}
-		for _, m := range cIntDefineRE.FindAllStringSubmatch(text, -1) {
-			add(m[1], m[2])
-		}
-		for _, m := range cIntDeclRE.FindAllStringSubmatch(text, -1) {
-			add(m[1], m[2]+m[3])
-		}
-	}
-	return t
 }
 
 // cPortValues evaluates a C or C++ port expression to every value it can take: integer literals

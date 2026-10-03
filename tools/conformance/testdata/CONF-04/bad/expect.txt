@@ -5,7 +5,10 @@
 # through a sum of parenthesized constants (route_ids.cpp) is a block ID composed outside the minters.
 # A line with two distinct violations (a node-ID name and a layout, or a name and its tag) has two findings.
 # Shift amounts through a #define and a static const (define_ids.cpp), a parenthesized sum (paren_ids.cpp),
-# an enumerator (enum_ids.cpp) and a braced constexpr (brace_ids.cpp).
+# an enumerator (enum_ids.cpp) and a braced constexpr (brace_ids.cpp). Brace-initialized operands
+# (`u64{prefix} << 22`, widen_ids.cpp; `std::uint64_t{ms} << 22` with `<< 12`, snow_brace_ids.cpp) and a
+# brace-initialized one scaling a field (`ms * (u64{1} << 22)`, scaled_ids.cpp); in Go, a converted power of two
+# scaling a field (`ms*uint64(1<<22)`, conv.go).
 engine/ecs/src/legacy_ids.cpp:4: CONF-04
 engine/ecs/src/legacy_ids.cpp:5: CONF-04
 engine/ecs/src/legacy_ids.cpp:5: CONF-04
@@ -14,9 +17,13 @@ engine/net/src/define_ids.cpp:4: CONF-04
 engine/net/src/enum_ids.cpp:3: CONF-04
 engine/net/src/paren_ids.cpp:3: CONF-04
 engine/net/src/route_ids.cpp:5: CONF-04
+engine/net/src/scaled_ids.cpp:4: CONF-04
 engine/net/src/session_ids.cpp:4: CONF-04
+engine/net/src/snow_brace_ids.cpp:4: CONF-04
+engine/net/src/widen_ids.cpp:4: CONF-04
 engine/net/src/zone_ids.cpp:3: CONF-04
 services/deploy/helios.toml:2: CONF-04
+services/internal/chat/conv.go:4: CONF-04
 services/internal/chat/ids.go:4: CONF-04
 services/internal/chat/snow.go:4: CONF-04
 services/pkg/snowflake/snowflake.go:11: CONF-04

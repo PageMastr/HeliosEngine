@@ -1,4 +1,5 @@
 #! -rules CONF-04 -strict
 # The minters compose 41/5/17 IDs; sizes, packing and task-graph NodeIds are not ID code, and a
 # constant under #if 0 is not read.
-# A converted or scaled Go literal (uint64(1) << 22, 4 * (1 << 22)) is a size.
+# A converted or scaled Go literal (uint64(1) << 22, 4 * (1 << 22)) and a brace-initialized C++ literal
+# (std::uint64_t{1} << 22) are sizes.

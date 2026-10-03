@@ -43,7 +43,7 @@ policy of step 4, so the hook would no longer start, and only an execution polic
 (the checklist checks the scope). It cannot reach your profile, administrator rights or the LAN, nor, after step 4b,
 your folders elsewhere on the drives. Like every local account, it can still read what Windows leaves open to all
 users (the machine-wide tools, which the build needs, `C:\ProgramData` and whatever step 4b's audit lists as `read`),
-create files and folders in `C:\ProgramData`, `C:\Windows\Temp` and at the root of a drive, read and change
+create files and folders in `C:\ProgramData` and `C:\Windows\Temp` and folders at the root of a drive, read and change
 `C:\Users\Public` (Windows lets interactive and service logons write there, so keep nothing in it that you would mind
 losing or that you run), and read and write a FAT32 or exFAT drive (most USB sticks) while one is plugged in. It can
 reach programs on the PC itself that listen on the network, including on `localhost` (Windows Firewall does not filter

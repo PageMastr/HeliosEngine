@@ -200,7 +200,9 @@ fields, dirty masks on whole-value writes, heap-pool ownership, dead relationshi
 children fragmentation, staggered `once`, frame/host destruction in the log, component-name
 collisions, id-0 commands). WP-1.1a's structural fast paths are pinned by `test_structural_ops.cpp`
 (a digest of a scripted workload over every structural command kind in four relation configurations,
-recorded with the World before WP-1.1a) and `test_bulk_paths.cpp` (spawnN against the same spawn +
+recorded with the World before WP-1.1a; in Debug and sanitizer builds it discounts the two
+`debug_only_*InvariantCheck` observers flecs creates per singleton component, so every build checks
+the same goldens) and `test_bulk_paths.cpp` (spawnN against the same spawn +
 set commands, `allocateN` and batched NetHandle issue against one call per id, the paged registry
 under churn and its handle releases, destroy runs against one destroy at a time, Sparse/DontFragment
 ownership, identity hints of recycled flecs indices, the flecs DontFragment-remove divergence and the

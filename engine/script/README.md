@@ -6,8 +6,9 @@ It implements the normative parts of 02 §7.4, 04 §3.1 / §10.2 and 06 §11: fu
 **no involuntary yields**, sticky kills, `task.checkpoint`, typed `StaleHandle` errors, heap caps,
 a coroutine scheduler on the dilatable zone clock, modules with hot reload, and the Phase 0
 hand-written binding layer (schema-generated `@script` bindings replace the registration code in
-WP-1.6). Depends on `helios::core`, `helios::math` and `helios::tp::luau`, including two vendored Luau
-patches that fuel metering needs (below; `third_party/MANIFEST.md`, "Patches").
+WP-1.6). Depends on `helios::core`, `helios::math` and `helios::tp::luau`, including three vendored Luau
+patches: two that fuel metering needs and one that keeps the VM ASan-clean on the Helios heap (below;
+`third_party/MANIFEST.md`, "Patches").
 
 | Header (`helios/script/…`) | Contents |
 |---|---|
@@ -196,9 +197,15 @@ interpreter-versus-native run over the script corpus.
 |---|---|---|
 | `0001-codegen-fornloop-fuel` | Native code reaches the interpreter's safepoints at the same program points, so fuel and kill positions are identical in both (RT-13) | `determinism: numeric for loops left early count the same fuel in native code` (stock 0.739: +80 fuel), `luau patches: codegen-fornloop-fuel …` (safepoint counts; a kill at every safepoint k stops both modes at one point) |
 | `0002-fuel-counter` | The inline counter above: the host runs only at decision points | `luau patches: fuel-counter …` (one decrement per safepoint in the VM, pattern matcher and native code), `fuel: the inline counter counts exactly what per-safepoint counting did`, `fuel: the host runs only at decision points`, `perf: fuel metering overhead and ns per fuel` (≤ 10 %) |
+| `0003-asan-unpoison-freed-page` | Under AddressSanitizer, pages Luau frees reach `luauAlloc` addressable, so mimalloc (whose debug fill writes freed blocks) no longer hits use-after-poison in `ScriptVm::create` | `luau patches: asan-unpoison-freed-page …` (no block comes back to `lua_Alloc` poisoned), and every case that creates a VM, in the `linux-debug-asan` build |
 
-Both are inputs of `sim_abi.script` (04 §6.7) with the planned `det-math` patch; `sim_abi` is computed by
-WP-3.1, from the patch list in `third_party/MANIFEST.md`. They are rebased on every Luau bump (K10).
+0001 and 0002 are inputs of `sim_abi.script` (04 §6.7) with the planned `det-math` patch; `sim_abi` is
+computed by WP-3.1, from the patch list in `third_party/MANIFEST.md`. 0003 compiles to nothing outside
+AddressSanitizer builds, so it is not an input. All three are rebased on every Luau bump (K10).
+
+Debug sanitizer builds also compile Luau's interpreter loop (`VM/src/lvmexecute.cpp`) at `-O1`
+(`third_party/CMakeLists.txt`). At `-O0` ASan made its frame 128 KiB, so the `LUAI_MAXCCALLS` nested C
+calls of binding↔Luau recursion overflowed an 8 MiB stack instead of raising Luau's C-stack error.
 
 ## Threading rules
 
@@ -220,7 +227,7 @@ WP-3.1, from the patch list in `third_party/MANIFEST.md`. They are rebased on ev
 
 ## Tests
 
-`script_tests` (doctest, `tests/*.cpp`, 97 cases): sandbox escapes; kills at `fuelKill` inside a
+`script_tests` (doctest, `tests/*.cpp`, 98 cases): sandbox escapes; kills at `fuelKill` inside a
 metamethod, a `table.sort` comparator and C++→Luau callbacks (RAII/lock release, VM usable
 afterwards); sticky kills through `pcall`/`xpcall`/coroutines/bindings; instrumented yields;
 `task.checkpoint`; lane bound; binding and builtin charges; wall budgets and backstop; the
@@ -229,7 +236,8 @@ three-kills rule; scheduler ordering; zone-time `wait` under dilation; async cal
 10¹³ m; heap and module caps; hot reload; stack traces; determinism (golden fuel count, fuel
 independent of GC pacing, interpreter vs native fuel, including loops left early); `.d.luau` parse + API
 coverage; the vendored Luau patches at the API level (one decrement per safepoint, host calls only at
-zero, the helpers' counter reset, kill positions interpreter vs native); the inline counter's
+zero, the helpers' counter reset, kill positions interpreter vs native, freed pages returned to
+`lua_Alloc` unpoisoned under ASan); the inline counter's
 bookkeeping (fuel identical with and without clock reads, around GC-forced reads, cheap bindings,
 charges landing exactly on a decision point, top-level runs, sticky re-raises, and saturating charges
 before and after a kill, in the safepoint and charge slow paths and the task, lane and VM totals; and

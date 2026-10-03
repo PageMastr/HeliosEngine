@@ -108,6 +108,14 @@ expect_contains("${out}" "(2 op(s))" "batch is one transaction")
 tool(0 out undo)
 expect_file_equals("${FRIGATE}" "${ORIGINAL}" "one undo reverts the batch")
 
+# A batch is one transaction group: a save of a document the batch has edited is refused, and
+# nothing is written (the save would reach the journal before the batch's transaction).
+file(WRITE "${WORK}/batch_save.jsonl"
+  "{\"command\": \"doc.setProperty\", \"args\": {\"doc\": \"hull/frigate\", \"path\": \"mass\", \"value\": 12500}}\n"
+  "{\"command\": \"doc.save\", \"args\": {\"doc\": \"hull/frigate\"}}\n")
+tool(3 out apply --file=${WORK}/batch_save.jsonl)
+expect_file_equals("${FRIGATE}" "${ORIGINAL}" "a batch cannot save a document it edited")
+
 # A journal-only edit (--no-save) is not on the CLI undo stack: undo skips it and reverts the
 # last saved edit, and every run's transaction ids are distinct (the Lamport counter continues
 # across runs).

@@ -206,6 +206,10 @@ public:
         ::CancelIoEx(m_pipe, nullptr);
     }
 
+    Result<void> shutdownWrite() override {
+        return Error{ErrorCode::Unsupported, "a named pipe has no half-close"};
+    }
+
 private:
     HANDLE m_pipe;
     HANDLE m_stop;

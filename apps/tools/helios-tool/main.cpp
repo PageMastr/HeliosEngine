@@ -86,7 +86,9 @@ fs::Path journalRootOf(const Context& c) {
     return c.journalRoot.empty() ? tf::defaultJournalRoot() : c.journalRoot;
 }
 
-Result<std::unique_ptr<tf::Framework>> openFramework(const Context& c, bool journal) {
+/// `lamportFloor`: the highest Lamport counter in the project's journals when the caller has
+/// already read them (undo/redo); otherwise openFramework reads them once more to find it.
+Result<std::unique_ptr<tf::Framework>> openFramework(const Context& c, bool journal, std::optional<u64> lamportFloor = std::nullopt) {
     tf::FrameworkConfig cfg;
     cfg.project = c.project;
     cfg.projectRoot = c.root;
@@ -96,8 +98,13 @@ Result<std::unique_ptr<tf::Framework>> openFramework(const Context& c, bool jour
     if (cfg.journal) {
         // Each helios-tool run is its own session: continue the project's Lamport counter so
         // transaction ids (and the undo/redo targets that name them) never repeat across runs.
-        for (const tf::JournalSessionInfo& s : tf::listJournalSessions(journalRootOf(c), c.project, false)) {
-            cfg.lamportFloor = std::max(cfg.lamportFloor, s.maxLamport);
+        // This holds for runs one after another; see the README for concurrent sessions.
+        if (lamportFloor) {
+            cfg.lamportFloor = *lamportFloor;
+        } else {
+            for (const tf::JournalSessionInfo& s : tf::listJournalSessions(journalRootOf(c), c.project, false)) {
+                cfg.lamportFloor = std::max(cfg.lamportFloor, s.maxLamport);
+            }
         }
     }
     HELIOS_TRY_ASSIGN(auto fw, tf::Framework::create(cfg));
@@ -219,14 +226,23 @@ struct CliEntry {
     std::map<tf::DocId, std::string> files;  ///< The session's document files.
 };
 
+struct CliStacks {
+    std::vector<CliEntry> done;
+    std::vector<CliEntry> redo;
+    u64 lamportFloor = 0;  ///< The highest Lamport counter in the project's journals.
+};
+
 /// Rebuilds helios-tool's linear undo stack from the project's journals (oldest first): Do
 /// transactions push, Undo pops onto the redo stack, Redo moves back. Only transactions that
 /// reached the files count: every document they touch must have a later "save" record in the
 /// same session. A journal-only edit (`apply --no-save`, or a run whose save failed) never changed
 /// the files, so its inverse could never apply and would block every older undo.
-Result<std::pair<std::vector<CliEntry>, std::vector<CliEntry>>> cliStacks(const Context& c) {
-    std::vector<CliEntry> done, redo;
+Result<CliStacks> cliStacks(const Context& c) {
+    CliStacks stacks;
+    std::vector<CliEntry>& done = stacks.done;
+    std::vector<CliEntry>& redo = stacks.redo;
     for (const tf::JournalSessionInfo& s : tf::listJournalSessions(journalRootOf(c), c.project, false)) {
+        stacks.lamportFloor = std::max(stacks.lamportFloor, s.maxLamport);
         HELIOS_TRY_ASSIGN(const tf::JournalScan scan, tf::readJournal(s.path));
         // saved[i]: record i is a transaction whose every document is saved later in the session.
         std::vector<bool> saved(scan.records.size(), false);
@@ -275,7 +291,7 @@ Result<std::pair<std::vector<CliEntry>, std::vector<CliEntry>>> cliStacks(const 
             }
         }
     }
-    return std::pair{std::move(done), std::move(redo)};
+    return stacks;
 }
 
 /// Applies `entry` (redo) or its inverse (undo) as one transaction and saves.
@@ -330,8 +346,9 @@ int cmdUndoRedo(const Context& c, bool undo) {
     if (steps < 1) return fail(kUsageError, "--steps must be at least 1");
     auto stacks = cliStacks(c);
     if (!stacks) return fail(kFailed, std::format("{}", stacks.error()));
-    auto& [done, redo] = *stacks;
-    auto created = openFramework(c, true);
+    std::vector<CliEntry>& done = stacks->done;
+    std::vector<CliEntry>& redo = stacks->redo;
+    auto created = openFramework(c, true, stacks->lamportFloor);
     if (!created) return fail(kFailed, std::format("{}", created.error()));
     tf::Framework& fw = **created;
     for (i64 i = 0; i < steps; ++i) {

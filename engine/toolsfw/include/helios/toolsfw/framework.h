@@ -23,10 +23,17 @@
 // see it (07 §1.2). History is global with per-document views; it survives saves and is capped at
 // `historyByteLimit` (512 MB): past the cap the oldest entries are dropped down to 7/8 of it.
 //
-// Budget: a commit, undo or redo costs O(its ops), independent of the session's length; a one-op
-// edit stays ≤ 0.1 ms (RelWithDebInfo, the dev container), so 60 Hz gestures never approach a
-// frame (`perf:` case in tests/test_history.cpp, which also checks that the cost stays flat over
-// 50,000 commits).
+// Replay bases: a save, or the "open" record a reload journals, is where crash recovery starts
+// replaying a document, so it must never be journaled while ops on that document are applied but
+// not yet journaled (an open transaction group, or a builder that has not committed). save(),
+// saveAll() and reloadFromDisk() refuse in that window, and a reload or revert refuses inside any
+// group (its own ops would join the group).
+//
+// Budget: the byte totals that cap the history and the log are running sums, so no commit walks
+// the session's log. A commit costs O(its ops + the redo stack's entries) and an undo or redo
+// O(its ops + the history entries it scans past, undone ones included); a one-op edit stays
+// ≤ 0.1 ms (RelWithDebInfo, the dev container), so 60 Hz gestures never approach a frame (`perf:`
+// case in tests/test_history.cpp, which also checks that the cost stays flat over 50,000 commits).
 //
 // Threading: a Framework is owned by one thread (the editor's main thread, the tool's thread);
 // every member must be called from it. The journal flusher and the RPC server's IO threads never
@@ -137,7 +144,7 @@ public:
 private:
     friend class Framework;
     friend struct detail::FwAccess;
-    TxBuilder(Framework& fw, Origin origin, std::string label) noexcept;
+    TxBuilder(Framework& fw, Origin origin, std::string label);
     Result<void> push(Op op);
 
     Framework* m_fw;
@@ -227,15 +234,22 @@ public:
     Result<Document*> open(const fs::Path& file, const refl::TypeInfo* type = nullptr);
     /// Opens every `*.hrec` under `<root>/records`, sorted by path. Returns the number opened.
     Result<usize> openAll();
-    /// Writes a dirty document's canonical text atomically (a destroyed one's file is removed).
+    /// Writes a dirty document's canonical text atomically (a destroyed one's file is removed) and
+    /// journals the save. Fails with InvalidState while an open transaction group or an
+    /// uncommitted TxBuilder holds edits of the document (see "Replay bases" above), and reports a
+    /// failed journal write (the file is written; recovery then needs a later save).
     Result<void> save(const DocId& doc);
+    /// Saves every dirty document. Refuses before writing anything when one of them has edits in
+    /// an open group or an uncommitted builder.
     Result<usize> saveAll();
     /// Closes a document. Refuses a dirty one unless `discard`. Its history entries are dropped.
     Result<void> close(const DocId& doc, bool discard = false);
     /// Brings a document in line with its file after an external edit (VS Code, `git pull`): an
     /// undoable transaction with origin Import. When the document has unsaved edits, the file's
     /// changes since the last load/save are merged three-way (07 §1.2); conflicting paths fail with
-    /// InvalidState and nothing changes.
+    /// InvalidState and nothing changes. Refused inside a transaction group and while an
+    /// uncommitted builder holds edits of the document. If the journal cannot record the new
+    /// replay base, the reload stands and the journal error is returned.
     Result<TxId> reloadFromDisk(const DocId& doc);
 
     // ---- transactions -------------------------------------------------------------------------
@@ -296,6 +310,9 @@ private:
     Result<void> applyOp(const Op& op);
     void rollback(std::vector<Op>& applied);
     Result<TxId> revert(Origin origin, std::optional<DocId> doc, bool redo);
+    /// True while a builder that has not committed or aborted (the open group included) holds
+    /// applied ops of `doc`: those edits are in the document but not yet in the journal.
+    bool hasUnjournaledOps(const DocId& doc) const;
     void pushLog(Transaction tx);
     void trimHistory();
     void emit(const FrameworkEvent& event);
@@ -320,6 +337,7 @@ private:
     std::vector<PreCommitHook> m_preHooks;
     std::vector<PostCommitHook> m_postHooks;
     std::vector<std::function<void(const FrameworkEvent&)>> m_listeners;
+    std::vector<const TxBuilder*> m_builders;  ///< Every live TxBuilder (hasUnjournaledOps()).
     std::unique_ptr<TxBuilder> m_group;
     std::vector<usize> m_groupMarks;  ///< Per open group level: m_group's op count at its beginGroup().
 };

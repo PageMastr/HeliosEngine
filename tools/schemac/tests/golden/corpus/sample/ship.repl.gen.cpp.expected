@@ -89,7 +89,7 @@ const ::helios::refl::repl::FileRepTables& shipReplication() noexcept {
     static const EventRep events[] = {
         {"sample.ship.ShipDestroyed", 0x49a24256u, EventAudience::Relevant},
     };
-    static const FileRepTables tables{components, rpcs, events, 0x18a0a35e45391224ull};
+    static const FileRepTables tables{components, rpcs, events, 0x064bbe42cf89093eull};
     return tables;
 }
 

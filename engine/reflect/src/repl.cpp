@@ -115,6 +115,9 @@ Result<Quat> readSmallest3(BitReader& r, u32 bits) {
         c[i] = dequantizeRange(*q, -kSmallest3Max, kSmallest3Max, bits);
         sum += c[i] * c[i];
     }
+    // An encoder sends the three smallest components of a unit quaternion, so their squares sum to at
+    // most 3/4 (plus rounding); more than 1 cannot be a unit quaternion and is corrupt input.
+    if (sum > 1.0) return Error(ErrorCode::Corrupt, "replication full state: smallest-three components exceed a unit quaternion");
     c[*largest] = std::sqrt(std::max(0.0, 1.0 - sum));
     return Quat(static_cast<f32>(c[0]), static_cast<f32>(c[1]), static_cast<f32>(c[2]), static_cast<f32>(c[3]));
 }

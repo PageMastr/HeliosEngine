@@ -75,7 +75,7 @@ const ComponentRepDesc& RepOf<::golden::all::Status>::desc() noexcept {
         {"score", 15u, static_cast<::helios::u32>(offsetof(::golden::all::Status, score)), 14, Lod::Core, false, Interp::None, Quantizer{Quant::Range, 20, -1000.0, 1000.0, 0.0, 0.0}, 20u},
     };
     HELIOS_GEN_OFFSETOF_END
-    static const ComponentRepDesc desc{"golden.all.Status", 0xdda8e05bu, Audience::All, Lod::Core, fields, 1045u, 0xbe30ccd16a3e4446ull};
+    static const ComponentRepDesc desc{"golden.all.Status", 0xdda8e05bu, Audience::All, Lod::Core, fields, 1045u, 0x1f0965d729fe2e39ull};
     return desc;
 }
 
@@ -129,6 +129,7 @@ Result<void> RepOf<::golden::all::Status>::readFullState(BitReader& r, ::golden:
     {
         auto x = r.read(8);
         if (!x) return x.error();
+        if ((*x & ~0x7ull) != 0) return ::helios::Error(::helios::ErrorCode::Corrupt, "Status.perm: undeclared Perm bits");
         c.perm = static_cast<::golden::all::Perm>(static_cast<std::underlying_type_t<::golden::all::Perm>>(*x));
     }
     {
@@ -260,7 +261,7 @@ const ::helios::refl::repl::FileRepTables& goldenReplication() noexcept {
     static const EventRep events[] = {
         {"golden.all.Exploded", 0xc8e093cau, EventAudience::Relevant},
     };
-    static const FileRepTables tables{components, rpcs, events, 0x7f2b3c657475b21full};
+    static const FileRepTables tables{components, rpcs, events, 0xadb19ddafb53138full};
     return tables;
 }
 

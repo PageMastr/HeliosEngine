@@ -29,6 +29,18 @@
 // saveAll() and reloadFromDisk() refuse in that window, and a reload or revert refuses inside any
 // group (its own ops would join the group).
 //
+// Concurrent builders: the journal orders transactions by commit, so two live builders (the open
+// group is one) must never both hold applied ops of one document. If they did, the later edit could
+// commit first with preconditions taken from the earlier, still unjournaled one, recovery would
+// stop at a conflict, and aborting the earlier one could not roll back under the later one. An op
+// on a document that another unfinished builder has edited is therefore refused (InvalidState):
+// commit or abort that builder first. The open group counts as such a builder, so inside a group a
+// builder from begin() (which folds into the group when it commits) may edit only documents the
+// group has not edited yet. The built-in commands, Luau and RPC never meet this: inside a group
+// every command writes into the group, and outside one each command commits before the next runs.
+// A command that edits through ctx.tx() and then invokes another command that edits the same
+// document does meet it (the inner command fails).
+//
 // Budget: the byte totals that cap the history and the log are running sums, so no commit walks
 // the session's log. A commit costs O(its ops + the redo stack's entries) and an undo or redo
 // O(its ops + the history entries it scans past, undone ones included); a one-op edit stays
@@ -93,7 +105,8 @@ struct FrameworkConfig {
 
 /// Collects the ops of one transaction; see the header comment. Obtained from
 /// Framework::begin() or CommandContext::tx(). Every call applies its op immediately; a failing
-/// call leaves the documents unchanged.
+/// call leaves the documents unchanged. A builder may outlive its Framework: ~Framework rolls an
+/// unfinished one back, and every later call fails with InvalidState.
 class TxBuilder {
 public:
     ~TxBuilder();
@@ -146,8 +159,12 @@ private:
     friend struct detail::FwAccess;
     TxBuilder(Framework& fw, Origin origin, std::string label);
     Result<void> push(Op op);
+    /// InvalidState once the Framework is gone.
+    Result<void> attached() const;
+    /// True while this builder is unfinished and holds applied ops of `doc`.
+    bool holdsOpsOf(const DocId& doc) const;
 
-    Framework* m_fw;
+    Framework* m_fw;  ///< Null once ~Framework has detached this builder.
     Origin m_origin;
     std::string m_label;
     std::string m_mergeKey;
@@ -253,7 +270,9 @@ public:
     Result<TxId> reloadFromDisk(const DocId& doc);
 
     // ---- transactions -------------------------------------------------------------------------
-    /// Starts a transaction for `origin`. Commit it with TxBuilder::commit().
+    /// Starts a transaction for `origin`. Commit it with TxBuilder::commit(). The builder may
+    /// outlive this Framework (see TxBuilder); see "Concurrent builders" above for which
+    /// documents it may edit while other builders are unfinished.
     std::unique_ptr<TxBuilder> begin(Origin origin, std::string label = {});
     /// Groups the transactions of every command until endGroup() into one undo step (Luau
     /// `Editor.transaction`, multi-command UI actions). Groups nest; the outermost commits, with
@@ -313,6 +332,9 @@ private:
     /// True while a builder that has not committed or aborted (the open group included) holds
     /// applied ops of `doc`: those edits are in the document but not yet in the journal.
     bool hasUnjournaledOps(const DocId& doc) const;
+    /// An unfinished builder other than `self` that holds applied ops of `doc`, or null (see
+    /// "Concurrent builders" above).
+    const TxBuilder* otherWriter(const TxBuilder& self, const DocId& doc) const;
     void pushLog(Transaction tx);
     void trimHistory();
     void emit(const FrameworkEvent& event);
@@ -337,7 +359,7 @@ private:
     std::vector<PreCommitHook> m_preHooks;
     std::vector<PostCommitHook> m_postHooks;
     std::vector<std::function<void(const FrameworkEvent&)>> m_listeners;
-    std::vector<const TxBuilder*> m_builders;  ///< Every live TxBuilder (hasUnjournaledOps()).
+    std::vector<TxBuilder*> m_builders;  ///< Every live, attached TxBuilder (hasUnjournaledOps(), ~Framework).
     std::unique_ptr<TxBuilder> m_group;
     std::vector<usize> m_groupMarks;  ///< Per open group level: m_group's op count at its beginGroup().
 };

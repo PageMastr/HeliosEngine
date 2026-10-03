@@ -66,17 +66,21 @@ a CJK fallback with localization previews (T25), and an icon font.
   commands that no menu exposes, and panels that Ctrl+Tab cannot reach. The contrast rule checks
   `drawnContrastPairs()`: every foreground token on every background the shell and grid draw it
   on. The semantic tokens (`badgeServer`, `badgeClient`, `dirty`, `error`, `statusBarBg`,
-  `accentLocal`) are drawn through `semanticColor()`.
+  `accentLocal`) are drawn through `semanticColor()`. `applyTheme` sets every Dear ImGui color
+  slot from the theme (a slot it misses would be magenta, and a test fails), so none keeps the
+  dark default: the text caret is drawn in `text` and a checked box on `frameBg`.
 
 ## Tests
 
-- **`editorui_tests`** (doctest, 48 cases plus 1 `perf:` case; no GPU or display, so it runs on
+- **`editorui_tests`** (doctest, 50 cases plus 1 `perf:` case; no GPU or display, so it runs on
   Windows CI too):
   - themes and contrast (every text pair the shell draws, including disabled text and input hints
     on selected and hovered rows and frames, the badges also on a hovered or pressed name cell,
-    selected text in a text field, and the dirty and error tokens, with the ratios also computed
-    outside the lint), theme metric ranges, the embedded themes against the token files, the
-    embedded font against `third_party/roboto`, pseudo-localization and chords;
+    selected text in a text field, the Viewport panel's note, and the dirty and error tokens, with
+    the ratios also computed outside the lint), every ImGui color slot taken from the theme, the
+    text caret and a checked box's check mark at 3:1 or more (WCAG 1.4.11) in every theme, theme
+    metric ranges, the embedded themes against the token files, the embedded font against
+    `third_party/roboto`, pseudo-localization and chords;
   - the property grid's edits run after its rows are drawn: clearing an optional and removing a
     non-last element of an expanded list, which read a cleared value and past the shortened list
     while the edits ran inside the draw;

@@ -102,12 +102,25 @@ TxBuilder::TxBuilder(Framework& fw, Origin origin, std::string label)
 }
 
 TxBuilder::~TxBuilder() {
+    if (!m_fw) return;  // ~Framework already rolled it back and detached it
     if (!m_done) abort();
     std::erase(m_fw->m_builders, this);
 }
 
+Result<void> TxBuilder::attached() const {
+    if (!m_fw) return Error{ErrorCode::InvalidState, "transaction outlived its framework"};
+    return {};
+}
+
 Result<void> TxBuilder::push(Op op) {
+    HELIOS_TRY(attached());
     if (m_done) return Error{ErrorCode::InvalidState, "transaction already committed or aborted"};
+    // One transaction at a time edits a document (see "Concurrent builders" in framework.h).
+    if (const TxBuilder* other = m_fw->otherWriter(*this, op.doc)) {
+        return Error{ErrorCode::InvalidState,
+                     std::format("document {} has uncommitted edits in another transaction ('{}'); commit or abort it first",
+                                 op.doc, other->m_label)};
+    }
     const Document* d = m_fw->m_workspace->find(op.doc);
     const bool known = std::any_of(m_baseRev.begin(), m_baseRev.end(), [&](const auto& p) { return p.first == op.doc; });
     const u64 rev = d ? d->revision() : 0;
@@ -128,6 +141,7 @@ Error noDocument(const DocId& id) {
 } // namespace
 
 Result<void> TxBuilder::set(const DocId& doc, std::string_view path, std::string_view json) {
+    HELIOS_TRY(attached());
     Document* d = liveDocument(*m_fw->m_workspace, doc);
     if (!d) return noDocument(doc);
     if (isHeaderPath(path)) {
@@ -149,6 +163,7 @@ Result<void> TxBuilder::set(const DocId& doc, std::string_view path, std::string
 }
 
 Result<void> TxBuilder::remove(const DocId& doc, std::string_view path) {
+    HELIOS_TRY(attached());
     Document* d = liveDocument(*m_fw->m_workspace, doc);
     if (!d) return noDocument(doc);
     if (isHeaderPath(path)) return Error{ErrorCode::InvalidArgument, std::format("'{}' cannot be removed", path)};
@@ -171,6 +186,7 @@ Result<void> TxBuilder::remove(const DocId& doc, std::string_view path) {
 
 Result<void> TxBuilder::insert(const DocId& doc, std::string_view listPath, u64 index, std::string_view elementJson,
                                std::optional<Guid> key) {
+    HELIOS_TRY(attached());
     Document* d = liveDocument(*m_fw->m_workspace, doc);
     if (!d) return noDocument(doc);
     HELIOS_TRY_ASSIGN(const detail::ListRef list, detail::resolveList(d->type(), DocAccess::object(*d), listPath));
@@ -202,6 +218,7 @@ Result<void> TxBuilder::insert(const DocId& doc, std::string_view listPath, u64 
 }
 
 Result<void> TxBuilder::move(const DocId& doc, std::string_view elementPath, u64 toIndex) {
+    HELIOS_TRY(attached());
     Document* d = liveDocument(*m_fw->m_workspace, doc);
     if (!d) return noDocument(doc);
     HELIOS_TRY_ASSIGN(const auto element, resolveElement(d->type(), DocAccess::object(*d), elementPath));
@@ -220,6 +237,7 @@ Result<void> TxBuilder::move(const DocId& doc, std::string_view elementPath, u64
 }
 
 Result<void> TxBuilder::edit(const DocId& doc, const std::function<void(void* object)>& mutate) {
+    HELIOS_TRY(attached());
     Document* d = liveDocument(*m_fw->m_workspace, doc);
     if (!d) return noDocument(doc);
     refl::Value target(d->type());
@@ -230,6 +248,7 @@ Result<void> TxBuilder::edit(const DocId& doc, const std::function<void(void* ob
 
 Result<DocId> TxBuilder::createRecord(const refl::TypeInfo& type, std::string_view file, const refl::RecordHeader& header,
                                       std::string_view json) {
+    HELIOS_TRY(attached());
     if (type.decl != refl::DeclKind::Record) {
         return Error{ErrorCode::InvalidArgument, std::format("{} is not a record type", type.qualifiedName)};
     }
@@ -259,6 +278,7 @@ Result<DocId> TxBuilder::createRecord(const refl::TypeInfo& type, std::string_vi
 }
 
 Result<void> TxBuilder::destroy(const DocId& doc) {
+    HELIOS_TRY(attached());
     Document* d = liveDocument(*m_fw->m_workspace, doc);
     if (!d) return noDocument(doc);
     Op op;
@@ -275,11 +295,12 @@ Result<void> TxBuilder::apply(const Op& op) {
 }
 
 Result<TxId> TxBuilder::commit() {
+    HELIOS_TRY(attached());
     return m_fw->commit(*this);
 }
 
 void TxBuilder::abort() {
-    if (m_done) return;
+    if (m_done || !m_fw) return;
     m_fw->rollback(m_ops);
     m_ops.clear();
     m_baseRev.clear();
@@ -368,6 +389,14 @@ Result<void> Framework::init() {
 
 Framework::~Framework() {
     while (inGroup()) cancelGroup();
+    // begin() hands out unique_ptrs, so a builder may outlive its Framework: roll back the
+    // unfinished ones (newest first) while their documents still exist, and detach every one so
+    // that its destructor and later calls never reach this object.
+    for (auto it = m_builders.rbegin(); it != m_builders.rend(); ++it) {
+        (*it)->abort();
+        (*it)->m_fw = nullptr;
+    }
+    m_builders.clear();
     if (m_journal) {
         if (auto r = m_journal->close(true); !r) HELIOS_LOG_ERROR(LogTools, "journal close failed: {}", r.error());
     }
@@ -465,10 +494,23 @@ Result<usize> Framework::openAll() {
     return opened;
 }
 
+bool TxBuilder::holdsOpsOf(const DocId& doc) const {
+    // An unfinished builder's m_baseRev lists exactly the documents its ops touch (push() adds a
+    // document with its first op, truncate() drops the ones no op touches any more), so this costs
+    // O(documents), not O(ops); push() asks it of every other live builder.
+    if (m_done) return false;
+    return std::any_of(m_baseRev.begin(), m_baseRev.end(), [&](const auto& p) { return p.first == doc; });
+}
+
 bool Framework::hasUnjournaledOps(const DocId& id) const {
-    return std::any_of(m_builders.begin(), m_builders.end(), [&](const TxBuilder* b) {
-        return !b->m_done && std::any_of(b->m_ops.begin(), b->m_ops.end(), [&](const Op& o) { return o.doc == id; });
-    });
+    return std::any_of(m_builders.begin(), m_builders.end(), [&](const TxBuilder* b) { return b->holdsOpsOf(id); });
+}
+
+const TxBuilder* Framework::otherWriter(const TxBuilder& self, const DocId& id) const {
+    for (const TxBuilder* b : m_builders) {
+        if (b != &self && b->holdsOpsOf(id)) return b;
+    }
+    return nullptr;
 }
 
 namespace {

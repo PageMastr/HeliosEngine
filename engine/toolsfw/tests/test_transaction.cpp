@@ -326,6 +326,60 @@ TEST_CASE("tx: a failing raw Create onto a destroyed document changes nothing") 
     CHECK(f.doc().text() == snapshot);
 }
 
+TEST_CASE("tx: a TxBuilder may outlive its Framework") {
+    Fixture f("tx_builder_outlives_framework");
+    auto committed = f.fw->begin(Origin::Ui, "edit");
+    REQUIRE(committed->set(f.frigate, "mass", "15000"));
+    REQUIRE(committed->commit());
+    auto pending = f.fw->begin(Origin::Ui, "pending");
+    REQUIRE(pending->set(f.frigate, "handling/yawRate", "12"));
+    // Before the fix, each builder's destructor erased itself from the freed Framework's builder
+    // list (ASan: heap-use-after-free in ~TxBuilder), and a later call reached the freed workspace.
+    f.fw.reset();
+    CHECK(pending->set(f.frigate, "mass", "1").errorCode() == ErrorCode::InvalidState);
+    CHECK(pending->destroy(f.frigate).errorCode() == ErrorCode::InvalidState);
+    CHECK(pending->commit().errorCode() == ErrorCode::InvalidState);
+    pending->abort();
+    CHECK(committed->commit().errorCode() == ErrorCode::InvalidState);
+    committed.reset();
+    pending.reset();
+}
+
+TEST_CASE("tx: only one unfinished builder at a time edits a document") {
+    Fixture f("tx_one_writer");
+    CommandInvoker& ui = f.fw->invoker(Origin::Ui);
+    constexpr const char* kSetMass16 = R"({"doc": "hull/frigate", "path": "mass", "value": 16000})";
+    constexpr const char* kSetYaw = R"({"doc": "hull/frigate", "path": "handling/yawRate", "value": 12})";
+    auto first = f.fw->begin(Origin::Ui, "First");
+    REQUIRE(first->set(f.frigate, "mass", "15000"));
+    // A second builder, a command (its own builder) and the open group are all refused, and
+    // nothing of theirs is applied.
+    auto second = f.fw->begin(Origin::Ui, "Second");
+    CHECK(second->set(f.frigate, "handling/yawRate", "12").errorCode() == ErrorCode::InvalidState);
+    CHECK(second->empty());
+    CHECK(ui.invoke("doc.setProperty", kSetMass16).errorCode() == ErrorCode::InvalidState);
+    f.fw->beginGroup(Origin::Ui, "Group");
+    CHECK(ui.invoke("doc.setProperty", kSetYaw).errorCode() == ErrorCode::InvalidState);
+    f.fw->cancelGroup();
+    CHECK(f.get("mass") == "15000");
+    CHECK(f.get("handling/yawRate") == "30");
+    // Committing (or aborting) the first builder frees the document.
+    REQUIRE(first->commit());
+    REQUIRE(second->set(f.frigate, "handling/yawRate", "12"));
+    // The group holds the document while it is open, so a builder cannot follow its edits either.
+    second->abort();
+    f.fw->beginGroup(Origin::Ui, "Group");
+    REQUIRE(ui.invoke("doc.setProperty", kSetYaw));
+    auto third = f.fw->begin(Origin::Ui, "Third");
+    CHECK(third->set(f.frigate, "mass", "17000").errorCode() == ErrorCode::InvalidState);
+    third.reset();
+    REQUIRE(f.fw->endGroup());
+    REQUIRE(ui.invoke("doc.setProperty", kSetMass16));
+    CHECK(f.get("mass") == "16000");
+    CHECK(f.get("handling/yawRate") == "12");
+    CHECK(f.fw->history().size() == 3);
+}
+
 TEST_CASE("tx: ops and transactions round-trip through JSON; inverses are involutions") {
     Fixture f("tx_json");
     auto b = f.fw->begin(Origin::Ui, "Several");

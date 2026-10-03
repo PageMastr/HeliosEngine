@@ -141,6 +141,48 @@ TEST_CASE("theme: the contrast lint checks the pairs the shell draws") {
     CHECK_FALSE(semanticColor("badgeServer") == semanticColor("badgeClient"));
 }
 
+TEST_CASE("theme: badges on hovered and pressed rows, and selected text, reach the contrast floor") {
+    // Computed independently of drawnContrastPairs(), so a pair dropped from the lint still fails here.
+    for (const char* name : {"dark", "light", "high-contrast"}) {
+        auto t = builtinTheme(name);
+        REQUIRE(t);
+        const f64 required = t->highContrast ? 7.0 : 4.5;
+        const Color base = t->color("windowBg");
+        const auto ratio = [&](std::string_view fg, std::string_view bg, std::string_view under) {
+            const Color b = over(t->color(bg), over(t->color(under), base));
+            return contrastRatio(over(t->color(fg), b), b);
+        };
+        CAPTURE(std::string(name));
+        for (std::string_view badge : {"badgeServer", "badgeClient"}) {
+            CAPTURE(badge);
+            CHECK(ratio(badge, "headerHovered", "windowBg") >= required);  // light before: 4.25, 4.48
+            CHECK(ratio(badge, "headerActive", "windowBg") >= required);   // light before: 4.04, 4.27
+        }
+        CHECK(ratio("text", "textSelectedBg", "frameBg") >= required);     // high contrast before: 6.78
+    }
+}
+
+TEST_CASE("theme: the contrast lint sees badges on a hovered name cell and selected text") {
+    const auto has = [](const std::vector<ContrastIssue>& issues, std::string_view fg, std::string_view bg) {
+        return std::any_of(issues.begin(), issues.end(), [&](const ContrastIssue& i) { return i.foreground == fg && i.background == bg; });
+    };
+    // Round 2's light badges and high-contrast selection fail pairs the editor draws.
+    auto light = builtinTheme("light");
+    REQUIRE(light);
+    Theme oldLight = *light;
+    oldLight.colors["badgeServer"] = *parseColor("#9C4A00");
+    oldLight.colors["badgeClient"] = *parseColor("#256B2A");
+    const auto lightIssues = checkContrast(oldLight);
+    CHECK(has(lightIssues, "badgeServer", "headerHovered"));
+    CHECK(has(lightIssues, "badgeServer", "headerActive"));
+    CHECK(has(lightIssues, "badgeClient", "headerActive"));
+    auto hc = builtinTheme("high-contrast");
+    REQUIRE(hc);
+    Theme oldHc = *hc;
+    oldHc.colors["textSelectedBg"] = *parseColor("#FFE60066");
+    CHECK(has(checkContrast(oldHc), "text", "textSelectedBg over frameBg"));
+}
+
 TEST_CASE("theme: metrics outside their ranges are rejected") {
     auto dark = builtinTheme("dark");
     REQUIRE(dark);

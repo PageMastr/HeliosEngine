@@ -85,6 +85,12 @@ fs::Path journalRootOf(const tf::Framework& fw) {
     return fw.config().journalRoot.empty() ? tf::defaultJournalRoot() : fw.config().journalRoot;
 }
 
+/// Appends the "end" record, so the session is no longer offered for recovery.
+Result<void> markSessionEnded(const fs::Path& journal) {
+    HELIOS_TRY_ASSIGN(auto writer, tf::JournalWriter::reopen(journal));
+    return writer->close(true);
+}
+
 } // namespace
 
 Result<std::string> recoverJournal(tf::Framework& framework, const fs::Path& journal) {
@@ -104,11 +110,11 @@ Result<std::string> recoverJournal(tf::Framework& framework, const fs::Path& jou
     }
     if (complete) {
         // Every document came back: mark the journal ended so it is not offered again.
-        auto writer = tf::JournalWriter::reopen(journal);
-        Result<void> marked = writer ? (*writer)->close(true) : Result<void>(writer.error());
+        const Result<void> marked = markSessionEnded(journal);
         if (!marked) note += std::format(" (could not mark {} recovered: {})", fs::pathToUtf8(journal.filename()), marked.error().message);
     } else {
-        note += ". The session stays offered under File > Recover Unsaved Session";
+        note += ". The session stays offered under File > Recover Unsaved Session until File > Discard Unsaved Session "
+                "stops offering it";
     }
     return note;
 }
@@ -120,6 +126,7 @@ Shell::Shell(tf::Framework& framework, ShellHost& host) : m_fw(framework), m_hos
                        {"doc.save", "Save", false},              {"doc.saveAll", "Save All", false},
                        {"doc.revert", "Revert", true},           {"doc.reload", "Reload From Disk", true},
                        {"app.recoverSession", "Recover Unsaved Session", false},
+                       {"app.discardSession", "Discard Unsaved Session", false},
                        {"app.quit", "Exit", false}};
     m_menus["Edit"] = {{"edit.undo", "Undo", false},         {"edit.redo", "Redo", false},
                        {"doc.rename", "Rename...", true},     {"doc.destroy", "Delete Record", true},
@@ -148,12 +155,30 @@ Shell::Shell(tf::Framework& framework, ShellHost& host) : m_fw(framework), m_hos
     });
     // 07 §1.2: after an unclean exit the editor offers the session's replay.
     refreshRecoverable();
-    if (!m_recoverable.empty()) {
-        const tf::JournalSessionInfo& s = m_recoverable.back();
-        log(std::format("An earlier session ({}, {} transaction(s)) ended without saving or crashed: File > Recover Unsaved "
-                        "Session replays it",
-                        s.header.session, s.txCount));
+    offerRecoverable();
+}
+
+void Shell::offerRecoverable() {
+    if (m_recoverable.empty()) return;
+    const tf::JournalSessionInfo& s = m_recoverable.back();
+    std::string line = std::format("An earlier session ({}, {} transaction(s)) ended without saving or crashed: File > Recover "
+                                   "Unsaved Session replays it, File > Discard Unsaved Session stops offering it",
+                                   s.header.session, s.txCount);
+    if (m_recoverable.size() > 1) {
+        line += std::format(" ({} such sessions; the newest comes first, and both commands take a session name)", m_recoverable.size());
     }
+    log(std::move(line));
+}
+
+Result<tf::JournalSessionInfo> Shell::recoverableSession(const tf::CommandContext& ctx) {
+    refreshRecoverable();
+    if (m_recoverable.empty()) return Error{ErrorCode::NotFound, "no unclean session to recover"};
+    if (!ctx.has("session")) return m_recoverable.back();
+    HELIOS_TRY_ASSIGN(const std::string name, ctx.stringArg("session"));
+    for (const tf::JournalSessionInfo& s : m_recoverable) {
+        if (s.header.session == name) return s;
+    }
+    return Error{ErrorCode::NotFound, std::format("no unclean session named '{}'", name)};
 }
 
 void Shell::refreshRecoverable() {
@@ -224,18 +249,41 @@ void Shell::registerCommands() {
         c.id = "app.recoverSession";
         c.label = "Recover Unsaved Session";
         c.category = "File";
-        c.doc = "Replays the newest earlier session of this project that crashed or quit with unsaved records (07 §1.2); "
-                "Output lists what came back.";
+        c.doc = "Replays the newest (or the named) earlier session of this project that crashed or quit with unsaved records "
+                "(07 §1.2); Output lists what came back.";
+        c.args = {tf::ArgDesc{"session", tf::ArgType::String, false, "Session name (default: the newest)"}};
         c.headless = false;
         c.canExecute = [this](const tf::CommandContext&) { return !m_recoverable.empty(); };
-        c.execute = [this](tf::CommandContext&) -> Result<void> {
-            refreshRecoverable();
-            if (m_recoverable.empty()) return Error{ErrorCode::NotFound, "no unclean session to recover"};
-            const fs::Path journal = m_recoverable.back().path;
-            auto note = recoverJournal(m_fw, journal);
+        c.execute = [this](tf::CommandContext& ctx) -> Result<void> {
+            HELIOS_TRY_ASSIGN(const tf::JournalSessionInfo session, recoverableSession(ctx));
+            auto note = recoverJournal(m_fw, session.path);
             refreshRecoverable();
             if (!note) return std::move(note).error();
             log(*note);
+            offerRecoverable();
+            return {};
+        };
+        (void)bus.add(std::move(c));
+    }
+    {
+        // A session that cannot fully replay (its file was edited and saved since: source changed)
+        // would otherwise be offered at every start and hide the older ones.
+        tf::CommandDesc c;
+        c.id = "app.discardSession";
+        c.label = "Discard Unsaved Session";
+        c.category = "File";
+        c.doc = "Stops offering the newest (or the named) earlier unclean session without replaying it. Its journal file "
+                "stays, so `helios-tool journal replay <file>` can still replay it.";
+        c.args = {tf::ArgDesc{"session", tf::ArgType::String, false, "Session name (default: the newest)"}};
+        c.headless = false;
+        c.canExecute = [this](const tf::CommandContext&) { return !m_recoverable.empty(); };
+        c.execute = [this](tf::CommandContext& ctx) -> Result<void> {
+            HELIOS_TRY_ASSIGN(const tf::JournalSessionInfo session, recoverableSession(ctx));
+            HELIOS_TRY(markSessionEnded(session.path));
+            refreshRecoverable();
+            log(std::format("Discarded session {} without replaying it; its journal stays at {}", session.header.session,
+                            fs::pathToUtf8(session.path)));
+            offerRecoverable();
             return {};
         };
         (void)bus.add(std::move(c));

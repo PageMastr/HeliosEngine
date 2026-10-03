@@ -19,9 +19,14 @@ helios-editor [--project-root=<dir>] [--project=<name>] [--user=<name>]
   journal ends clean only after a normal exit with every record saved (there is no save prompt
   yet), so a crash, a device loss or a quit with unsaved records leaves the session unclean. At the
   next start the Output panel offers it and *File > Recover Unsaved Session* replays it (07 §1.2);
-  `--recover=auto` replays it without asking. A fully recovered journal is marked ended.
+  `--recover=auto` replays it without asking. A fully recovered journal is marked ended. A session
+  that cannot fully replay (its record was edited and saved since) stays offered until *File >
+  Discard Unsaved Session* marks it ended without a replay; its journal file stays, so
+  `helios-tool journal replay <file>` can still replay it. Both commands take the newest session
+  first, or the one their `session` argument names.
 - **Display.** The UI scale comes from `--scale`, else `HELIOS_EDITOR_SCALE`, else the scale of
-  the display the window is on, following the window to other monitors. Menus: *View* switches the theme and scale; *Window* shows or hides panels.
+  the display the window is on, following the window to other monitors until the user picks a
+  scale under *View > UI Scale*. Menus: *View* switches the theme and scale; *Window* shows or hides panels.
   Ctrl+Shift+P opens the command palette.
 - **Remote control.** JSON-RPC on `\\.\pipe\helios-editor-<pid>` (Windows) or
   `$XDG_RUNTIME_DIR/helios-editor-<pid>.sock` (Linux), or on the name `--rpc` gives. It exposes the

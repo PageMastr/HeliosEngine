@@ -59,8 +59,11 @@ TEST_CASE("renderer: the shell renders through the RHI without validation errors
         rhi::CommandList* cmd = device->acquireCommandList(rhi::Queue::Graphics, "EditorUI");
         REQUIRE(cmd != nullptr);
         cmd->barrier(rhi::Barrier::textureState(*target, rhi::ResourceState::Undefined, rhi::ResourceState::RenderTarget));
-        const rhi::ColorAttachment color{.texture = *target};
-        cmd->beginRendering({.colors = {&color, 1}});
+        rhi::ColorAttachment color;
+        color.texture = *target;
+        rhi::RenderingDesc rendering;
+        rendering.colors = {&color, 1};
+        cmd->beginRendering(rendering);
         renderer.record(*cmd, dd);
         cmd->endRendering();
         REQUIRE(device->submit(rhi::Queue::Graphics, {&cmd, 1}));

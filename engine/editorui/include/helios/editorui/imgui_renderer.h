@@ -49,7 +49,7 @@ public:
     u32 liveTextures() const noexcept { return m_liveTextures; }
 
 private:
-    ImGuiRenderer(rhi::Device& device, rhi::Format format) noexcept : m_device(&device), m_format(format) {}
+    explicit ImGuiRenderer(rhi::Device& device) noexcept : m_device(&device) {}
 
     struct FrameBuffers {
         rhi::BufferH vertices;
@@ -60,7 +60,6 @@ private:
     };
 
     rhi::Device* m_device;
-    rhi::Format m_format;
     rhi::PipelineH m_pipeline;
     rhi::BindlessIndex m_sampler = rhi::kInvalidBindless;
     std::vector<FrameBuffers> m_frames;

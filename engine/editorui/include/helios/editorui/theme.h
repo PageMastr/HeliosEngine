@@ -94,7 +94,8 @@ struct ContrastPair {
 };
 
 /// Every text-on-background pair the shell and the property grid draw (text, disabled text and
-/// input hints, the client/server badges, the dirty marker, errors).
+/// input hints, selected text in a text field, the client/server badges, also on a hovered or
+/// pressed name cell, the dirty marker, errors).
 std::vector<ContrastPair> drawnContrastPairs();
 
 /// Checks every pair of drawnContrastPairs(); empty when the theme passes.

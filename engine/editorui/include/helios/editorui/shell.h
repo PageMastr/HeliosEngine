@@ -2,9 +2,10 @@
 // The editor shell (07 §1.3): main menu, dock space with the default layout, panels (Documents,
 // Inspector with the property grid, History, Output, Viewport), status bar with the context accent
 // (neutral = local session), command palette (Ctrl+Shift+P) and a generic argument form for
-// commands. At start it offers the replay of an earlier unclean session (07 §1.2: an Output line and
-// File > Recover Unsaved Session). Every action is a ToolsFramework command run through the host's UI invoker; the menus
-// register what they expose with the command bus (the "command no menu exposes" layout lint).
+// commands. At start it offers the replay of an earlier unclean session (07 §1.2: an Output line,
+// File > Recover Unsaved Session and File > Discard Unsaved Session). Every action is a
+// ToolsFramework command run through the host's UI invoker; the menus register what they expose
+// with the command bus (the "command no menu exposes" layout lint).
 //
 // Threading: UI thread, inside an ImGui frame.
 
@@ -24,6 +25,7 @@
 
 namespace helios::tf {
 class Framework;
+class CommandContext;
 class CommandInvoker;
 struct FrameworkEvent;
 } // namespace helios::tf
@@ -41,6 +43,8 @@ public:
     virtual f32 uiScale() const = 0;
     /// Applied before the next frame.
     virtual void requestTheme(std::string_view name) = 0;
+    /// The user's View > UI Scale choice, applied before the next frame. It stays when the window
+    /// moves to a display with another scale.
     virtual void requestScale(f32 scale) = 0;
     virtual void requestQuit() = 0;
     /// A texture of `width` x `height` pixels showing the viewport this frame (0 = none).
@@ -77,7 +81,8 @@ public:
     void openPalette() noexcept { m_openPalette = true; }
     void openCommandForm(std::string commandId);
     /// Earlier sessions of the project that crashed or quit with unsaved records, oldest first;
-    /// `app.recoverSession` (File > Recover Unsaved Session) replays the newest one.
+    /// `app.recoverSession` (File > Recover Unsaved Session) replays the newest one (or the one its
+    /// `session` argument names) and `app.discardSession` stops offering it without a replay.
     const std::vector<tf::JournalSessionInfo>& recoverableSessions() const noexcept { return m_recoverable; }
 
 private:
@@ -88,6 +93,8 @@ private:
     };
     void registerCommands();
     void refreshRecoverable();
+    void offerRecoverable();
+    Result<tf::JournalSessionInfo> recoverableSession(const tf::CommandContext& ctx);
     void onEvent(const tf::FrameworkEvent& e);
     void handleShortcuts();
     void drawMainMenu();

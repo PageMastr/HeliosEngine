@@ -24,4 +24,22 @@ inline std::optional<f32> scaleForDisplay(f32 current, f32 displayScale, bool fo
     return s;
 }
 
+/// Who owns the UI scale. A scale forced at start (--scale, HELIOS_EDITOR_SCALE, test mode) or
+/// chosen under View > UI Scale stays when the window moves to another display; otherwise the
+/// scale follows the window's display.
+struct ScalePolicy {
+    bool forced = false;      ///< Forced at start.
+    bool userChosen = false;  ///< The user picked a scale in this session.
+
+    /// The UI scale to switch to on a display-scale change (see scaleForDisplay).
+    std::optional<f32> onDisplayScale(f32 current, f32 displayScale) const noexcept {
+        return scaleForDisplay(current, displayScale, forced || userChosen);
+    }
+    /// The user picked `scale`: returns it clamped, and display changes no longer move it.
+    f32 choose(f32 scale) noexcept {
+        userChosen = true;
+        return std::clamp(scale, kMinUiScale, kMaxUiScale);
+    }
+};
+
 } // namespace helios::edui::detail

@@ -415,8 +415,11 @@ TEST_CASE("luau: the generated glue rejects hostile arguments without running Lu
 }
 
 TEST_CASE("luau: one call's conversion work is bounded by the per-call value and byte caps") {
+    // VMs without the 20 ms wall backstop: these cases check which cap rejects a call, and on a loaded
+    // machine a preempted run would be killed by the backstop instead (a different error). How fast a
+    // rejection is belongs to the perf: case below.
     // The reviewer's DAG: 22 Luau tables whose conversion would visit 4^10 nodes.
-    Vm editor("editor", /*wallBackstop=*/true);
+    Vm editor("editor");
     const std::string dag = editor.run(R"(
   local t = {n = 0, tree = {}}
   for i = 1, 10 do t = {n = i, tree = {t, t, t, t}} end
@@ -425,7 +428,7 @@ TEST_CASE("luau: one call's conversion work is bounded by the per-call value and
     CHECK(editor.queries.calls == 0);
     // The reviewer's 65,536 references to one 16 KiB string fail at the value cap before any element is
     // converted; 17 references fail at the byte cap (272 KiB of copies from one 16 KiB Luau string).
-    Vm v("server", /*wallBackstop=*/true);
+    Vm v("server");
     const std::string refs = v.run("local s = string.rep('x', 16384)\n" + convertWith(13, "table.create(65536, s)"));
     CHECK_MESSAGE(refs.find("more than 8192 values") != std::string::npos, refs);
     const std::string strings = v.run("local s = string.rep('x', 16384)\n" + convertWith(13, "table.create(17, s)"));
@@ -445,7 +448,7 @@ TEST_CASE("luau: nil elements of optional lists count against the per-call value
     // The round-2 attack: 3,584 references to one list<u32?> of 1,024 elements, only the last set. If
     // a nil cost nothing, each inner list would take 2 values and the call would convert 3.7 M
     // elements; every element costs a value, so it fails at the cap before the implementation runs.
-    Vm v("server", /*wallBackstop=*/true);
+    Vm v("server"); // no wall backstop, as in the case above
     const std::string attack = v.run(R"(
   local inner = table.create(1024)
   inner[1024] = 1

@@ -1,0 +1,5 @@
+{
+  "not an anchor": {"paths": ["x/**"], "rules": ["CONF-09"]},
+  "05 §9.9": {"paths": ["/abs/**"], "rules": ["CONF-99"]},
+  "ADR-099": {"paths": ["y/**"]}
+}

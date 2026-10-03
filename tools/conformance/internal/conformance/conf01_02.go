@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"bytes"
+	"fmt"
 	"go/ast"
 	"go/token"
 	"regexp"
@@ -48,6 +49,23 @@ var (
 	cStringRE = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
 )
 
+// The nats.go import paths. A file that imports one is NATS code, so a KV call in it whose bucket or key
+// the lint cannot resolve fails closed; methods are matched without types, so in other files only a
+// resolved lease or leader name is reported (session's own Store.Create is not KV compare-and-set).
+const (
+	jetstreamImport = "github.com/nats-io/nats.go/jetstream"
+	natsImport      = "github.com/nats-io/nats.go"
+)
+
+// natsAPIs reports whether gf imports jetstream (the current API) and nats.go (the legacy KV API).
+func natsAPIs(gf *goFile) (js, legacy bool) {
+	for _, imp := range gf.imps {
+		js = js || imp == jetstreamImport
+		legacy = legacy || imp == natsImport
+	}
+	return js, legacy
+}
+
 func checkKV(p *Pass, ttl bool) {
 	g := p.Tree.goIndex()
 	for _, f := range p.Files {
@@ -60,10 +78,12 @@ func checkKV(p *Pass, ttl bool) {
 			p.Report(f, 0, "cannot parse: %v", gf.Err)
 			continue
 		}
+		jsAPI, legacyAPI := natsAPIs(gf)
 		exempt := map[*ast.CallExpr]bool{}
 		if strings.HasSuffix(f, "_test.go") {
 			absenceChecks(gf.File, exempt)
 		}
+		configs := kvConfigNames(gf.File)
 		seen := map[*ast.CompositeLit]bool{}
 		ast.Inspect(gf.File, func(n ast.Node) bool {
 			switch x := n.(type) {
@@ -82,16 +102,30 @@ func checkKV(p *Pass, ttl bool) {
 								"in PostgreSQL, KV holds only read projections (05 §2.3, §1.4)", name, b)
 						}
 					}
+					// The bucket (KeyValue) or config (the others) is the last argument: jetstream's calls take a
+					// context first, the legacy API's do not.
+					if (jsAPI && len(x.Args) == 2 || legacyAPI && len(x.Args) == 1) && !exempt[x] &&
+						!kvBucketResolved(g, gf, x.Args[len(x.Args)-1], configs) {
+						p.Report(f, g.line(x.Pos()), "%s of a KV bucket the lint cannot resolve: lease and leader state "+
+							"lives in PostgreSQL (05 §2.3, §1.4); if this is a read projection, say so in a "+
+							"conformance:allow", name)
+					}
 				}
 				if ttl {
-					checkKVCallTTL(p, g, gf, x, name)
+					checkKVCallTTL(p, g, gf, x, name, jsAPI, legacyAPI)
 				}
 			case *ast.AssignStmt: // cfg.Bucket = "…" after the literal
 				for i, lhs := range x.Lhs {
 					if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Bucket" && !ttl && i < len(x.Rhs) {
-						if b, ok := g.String(gf, x.Rhs[i]); ok && leaseRE.MatchString(b) {
+						b, ok := g.String(gf, x.Rhs[i])
+						switch {
+						case ok && leaseRE.MatchString(b):
 							p.Report(f, g.line(x.Pos()), "KV bucket %q set on a config: lease and leader state lives "+
 								"in PostgreSQL, KV holds only read projections (05 §2.3, §1.4)", b)
+						case !ok && (jsAPI || legacyAPI):
+							p.Report(f, g.line(x.Pos()), "KV bucket set on a config from a value the lint cannot "+
+								"resolve: lease and leader state lives in PostgreSQL (05 §2.3, §1.4); if this is a "+
+								"read projection, say so in a conformance:allow")
 						}
 					}
 				}
@@ -107,15 +141,29 @@ func checkKV(p *Pass, ttl bool) {
 					return true
 				}
 				b, ok := bucketOf(g, gf, x)
-				if !ttl && !seen[x] && typeName(x.Type) == "KeyValueConfig" && ok && leaseRE.MatchString(b) {
-					p.Report(f, g.line(x.Pos()), "KeyValueConfig for bucket %q: lease and leader state lives in "+
-						"PostgreSQL, KV holds only read projections (05 §2.3, §1.4)", b)
+				kv := typeName(x.Type) == "KeyValueConfig"
+				if !ttl && !seen[x] && kv {
+					switch {
+					case ok && leaseRE.MatchString(b):
+						p.Report(f, g.line(x.Pos()), "KeyValueConfig for bucket %q: lease and leader state lives in "+
+							"PostgreSQL, KV holds only read projections (05 §2.3, §1.4)", b)
+					case !ok && field(x, "Bucket") != nil && (jsAPI || legacyAPI):
+						p.Report(f, g.line(x.Pos()), "KeyValueConfig for a bucket the lint cannot resolve: lease and "+
+							"leader state lives in PostgreSQL (05 §2.3, §1.4); if this is a read projection, say so in "+
+							"a conformance:allow")
+					}
 				}
-				if ttl && ok && leaseRE.MatchString(b) {
+				// A TTL on a KV bucket the lint cannot resolve fails closed too (CONF-01 reports the bucket);
+				// a stream's MaxAge is ordinary retention unless the stream is a lease bucket's KV_ stream.
+				if ttl && (ok && leaseRE.MatchString(b) || kv && !ok && (jsAPI || legacyAPI)) {
+					what := fmt.Sprintf("bucket %q", b)
+					if !ok {
+						what = "a bucket the lint cannot resolve"
+					}
 					for _, fl := range kvTTLFields {
 						if v := field(x, fl); v != nil {
-							p.Report(f, g.line(v.Pos()), "%s on bucket %q: lease expiry in NATS, where the holder "+
-								"rule keeps a region until a higher lease_gen (05 §1.4.2)", fl, b)
+							p.Report(f, g.line(v.Pos()), "%s on %s: lease expiry in NATS, where the holder "+
+								"rule keeps a region until a higher lease_gen (05 §1.4.2)", fl, what)
 						}
 					}
 				}
@@ -125,9 +173,64 @@ func checkKV(p *Pass, ttl bool) {
 	}
 }
 
+// kvConfigNames returns the names this file gives a KeyValueConfig whose bucket it sets: one initialised
+// from a KeyValueConfig literal that has a Bucket field, or one whose .Bucket it assigns. A bind call that
+// passes such a name is checked where the bucket is set; any other config variable fails closed.
+func kvConfigNames(file *ast.File) map[string]bool {
+	names := map[string]bool{}
+	note := func(lhs ast.Expr, rhs ast.Expr) {
+		if id, ok := lhs.(*ast.Ident); ok {
+			if cl := kvConfigLit(rhs); cl != nil && field(cl, "Bucket") != nil {
+				names[id.Name] = true
+			}
+		}
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			for i, lhs := range x.Lhs {
+				if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Bucket" {
+					if id, ok := sel.X.(*ast.Ident); ok {
+						names[id.Name] = true
+					}
+				} else if i < len(x.Rhs) {
+					note(lhs, x.Rhs[i])
+				}
+			}
+		case *ast.ValueSpec:
+			for i, id := range x.Names {
+				if i < len(x.Values) {
+					note(id, x.Values[i])
+				}
+			}
+		}
+		return true
+	})
+	return names
+}
+
+// kvBucketResolved reports whether the bucket argument of a KV bind call is one the lint can check: a
+// constant string, a KeyValueConfig literal with a constant Bucket, or a config variable whose bucket this
+// file sets (kvConfigNames; checked there).
+func kvBucketResolved(g *goIndex, gf *goFile, a ast.Expr, configs map[string]bool) bool {
+	if cl := kvConfigLit(a); cl != nil {
+		_, ok := bucketOf(g, gf, cl)
+		return ok
+	}
+	if _, ok := g.String(gf, a); ok {
+		return true
+	}
+	if u, ok := a.(*ast.UnaryExpr); ok && u.Op == token.AND {
+		a = u.X
+	}
+	id, ok := a.(*ast.Ident)
+	return ok && configs[id.Name]
+}
+
 // checkKVCallTTL reports per-key TTLs (jetstream.KeyTTL) on keys that are, or may be, lease state,
-// and compare-and-set (KV Create, or Update with a revision) on leader-like keys.
-func checkKVCallTTL(p *Pass, g *goIndex, gf *goFile, c *ast.CallExpr, name string) {
+// and compare-and-set (KV Create, or Update with a revision) on leader-like keys. In a file that imports
+// the API of the call's shape, a compare-and-set key the lint cannot resolve fails closed.
+func checkKVCallTTL(p *Pass, g *goIndex, gf *goFile, c *ast.CallExpr, name string, jsAPI, legacyAPI bool) {
 	key, keyOK := "", false
 	if len(c.Args) >= 2 {
 		key, keyOK = g.String(gf, c.Args[1])
@@ -148,9 +251,14 @@ func checkKVCallTTL(p *Pass, g *goIndex, gf *goFile, c *ast.CallExpr, name strin
 		}
 	}
 	cas := legacy || (name == "Update" && len(c.Args) == 4) || (name == "Create" && len(c.Args) >= 3)
-	if cas && keyOK && leaderKeyRE.MatchString(key) {
+	switch {
+	case cas && keyOK && leaderKeyRE.MatchString(key):
 		p.Report(gf.Path, g.line(c.Pos()), "KV compare-and-set (%s) on %q: leadership is a PostgreSQL row with "+
 			"term-fenced writes (05 §1.4.1)", name, key)
+	case cas && !keyOK && (legacy && legacyAPI || !legacy && jsAPI):
+		p.Report(gf.Path, g.line(c.Pos()), "KV compare-and-set (%s) on a key the lint cannot resolve: leadership is "+
+			"a PostgreSQL row with term-fenced writes (05 §1.4.1); if the key is not leader state, say so in a "+
+			"conformance:allow", name)
 	}
 }
 

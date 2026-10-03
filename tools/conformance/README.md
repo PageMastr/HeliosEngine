@@ -41,8 +41,8 @@ a `good/` tree for their exemptions; `go test` compares both exactly, and CTest 
 
 | Rule | Anchor | What fails it | Kind | On the tree |
 |---|---|---|---|---|
-| CONF-01 | 05 §2.3, §1.4 | a JetStream KV bucket named `LEASES` or matching `(?i)lease\|leader\|fence` created, bound or read: Go `CreateKeyValue`, `CreateOrUpdateKeyValue`, `UpdateKeyValue`, `KeyValue` and `KeyValueConfig{Bucket: …}` (names resolved through constants, across packages), a `cfg.Bucket = …` assignment and a raw `$KV.<bucket>.` subject; nats.c `js_KeyValue`, `js_CreateKeyValue`/`js_UpdateKeyValue` and `kvConfig.Bucket`, with calls read across lines and names resolved through the scope's C and C++ string constants (`constexpr`/`const char*`, `char[]`, `std::string(_view)`, `#define`). A nats.c bucket the lint cannot resolve fails closed: a read projection bound through a variable carries a `conformance:allow`. A test that asserts the bucket is absent (`if _, err := js.KeyValue(…); err == nil { t.Fatal… }`, or the assignment then that `if`) is exempt | Go syntax; C token scan | passes |
-| CONF-02 | 05 §1.4.1–1.4.2 | `TTL`, `LimitMarkerTTL` or `MaxAge` on a lease-named KV bucket or KV stream; a per-key TTL (`jetstream.KeyTTL`) on a lease key or on a key the lint cannot resolve; KV compare-and-set (`Create`, or `Update` with a revision, in jetstream's and nats.go's legacy API) on a key matching `lease\|leader\|fence\|elect\|term\|lock`; the nats.c forms (`cfg->TTL` on a lease bucket or one the lint cannot resolve, `kvStore_Create`/`kvStore_Update` on a leader-like key or one the lint cannot resolve) | Go syntax; C token scan | passes |
+| CONF-01 | 05 §2.3, §1.4 | a JetStream KV bucket named `LEASES` or matching `(?i)lease\|leader\|fence` created, bound or read: Go `CreateKeyValue`, `CreateOrUpdateKeyValue`, `UpdateKeyValue`, `KeyValue` and `KeyValueConfig{Bucket: …}` (names resolved through constants, across packages), a `cfg.Bucket = …` assignment and a raw `$KV.<bucket>.` subject; nats.c `js_KeyValue`, `js_CreateKeyValue`/`js_UpdateKeyValue` and `kvConfig.Bucket`, with calls read across lines and names resolved through the scope's C and C++ string constants (`constexpr`/`const char*`, `char[]`, `std::string(_view)`, `#define`). A nats.c bucket the lint cannot resolve fails closed, and so does a Go one in NATS code (a file that imports nats.go or its `jetstream` package): a read projection bound through a variable carries a `conformance:allow`. A test that asserts the bucket is absent (`if _, err := js.KeyValue(…); err == nil { t.Fatal… }`, or the assignment then that `if`) is exempt | Go syntax; C token scan | passes |
+| CONF-02 | 05 §1.4.1–1.4.2 | `TTL`, `LimitMarkerTTL` or `MaxAge` on a lease-named KV bucket or KV stream; a per-key TTL (`jetstream.KeyTTL`) on a lease key or on a key the lint cannot resolve; KV compare-and-set (`Create`, or `Update` with a revision, in jetstream's and nats.go's legacy API) on a key matching `lease\|leader\|fence\|elect\|term\|lock`, or, in NATS code, on a key the lint cannot resolve; a TTL on a KV bucket the lint cannot resolve, in NATS code; the nats.c forms (`cfg->TTL` on a lease bucket or one the lint cannot resolve, `kvStore_Create`/`kvStore_Update` on a leader-like key or one the lint cannot resolve) | Go syntax; C token scan | passes |
 | CONF-03 | 05 §1.4.2 (holder rule) | the required test `conformance/holder_rule` (and any the map's `tests` add) missing from a language of the scope: Go needs `t.Run("holder_rule", …)` inside `func TestConformance`, C++ a `TEST_CASE("conformance/holder_rule…")` outside `#if 0`. It also fails a required test that is switched off: an unconditional `t.Skip` in `TestConformance` or the required case, a `//go:build` line on the file that defines `TestConformance`, or a C++ case marked `doctest::skip`, `may_fail`, `should_fail` or `expected_failures`. CI runs the tests (Go `services` job, C++ `server_tests`) | test presence | passes |
 | CONF-04 | ADR-004, 05 §1.4.5 | in ID code (a file that names `idgen`, `AllocateIdBlocks`, a minter, `composeBlockId`, `BlockIdLayout` or Snowflake, or is named `*id*`/`*ids*`/`*minter*`), an identifier or config key for a node, worker, machine or datacenter ID (camelCase split, so `workerID` counts and a task graph's `NodeId` elsewhere does not); anywhere in scope, the Snowflake 41/10/12 layout (`<< 22` with `<< 12`), the retired 41/5/8/9 layout (`<< 22`, `<< 17`, `<< 9`), and `<< 22` (the time prefix) outside `pkg/idgen` and `engine/ecs`'s `entity_id.*`/`registry.*`. Shift amounts are evaluated through constants (Go across packages, C++ `constexpr` across the scope's headers); a literal left operand (`1 << 12`) is a size, not a field, unless it scales a field (`ms * (1 << 22)`). Node-ID keys in `services/**/*.toml` count too | Go syntax; C token scan | passes |
 | CONF-05 | 05 §1.4.5 (who mints) | an import of `…/pkg/idgen`, or a call of `AllocateIdBlocks`, outside `services/internal/{identity, character, ledger, market, industry, mail, worldstate, world, activity, lifecycle, orchestrator, backend}`, `pkg/idgen` itself, `_test.go` files and test-helper packages (`testkit`, `testdata`, `testutil`, and `<name>test` for the store, db, nats and pg helpers and the minter packages; a name that only ends in "test", such as `latest`, is not one) | Go imports and calls | passes |
@@ -89,14 +89,25 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
 - **CONF-01 and CONF-02, Go**, match the jetstream and nats.go method names (`KeyValue`, `CreateKeyValue`, `Create`,
   `Update`, `KeyTTL`, …) without type information, which over-reports a same-named method of another type. Bucket
   and key names resolve through constants across packages, never through variables (`name := "leases"`,
-  `fmt.Sprintf`): an unresolved Go bucket is not reported (a `KeyTTL` key is). Names are looked up without scopes,
-  so a parameter or local that shadows a package-level constant resolves to that constant; this matters only for
-  `KeyTTL` and compare-and-set keys, which otherwise fail closed. A `$KV.` subject is read only as one literal.
+  `fmt.Sprintf`). In NATS code (a file that imports `github.com/nats-io/nats.go` or its `jetstream` package), a
+  bucket or compare-and-set key that does not resolve fails closed, in the call shapes of the API the file
+  imports: jetstream's `KeyValue(ctx, b)`, `CreateKeyValue(ctx, cfg)`, `Create(ctx, k, v, …)` and `Update(ctx, k, v,
+  rev)`, the legacy `KeyValue(b)`, `CreateKeyValue(cfg)`, `Create(k, v)` and `Update(k, v, rev)`, a
+  `KeyValueConfig{Bucket: …}` and a `cfg.Bucket = …`. A config variable passed to a bind call is checked where this
+  file sets its bucket (a `KeyValueConfig` literal with a `Bucket`, or a `.Bucket` assignment, matched by name);
+  otherwise it fails closed. A `KeyTTL` key that does not resolve fails closed in any file. Not seen: a KV call in
+  a file that reaches nats.go only through a wrapper package of its own, with a bucket or key the lint cannot
+  resolve (a resolved lease or leader name is still reported). Names are looked up without scopes, so a parameter
+  or local that shadows a package-level constant resolves to that constant; this matters only where an unresolved
+  name would fail closed. A `$KV.` subject is read only as one literal.
 - **CONF-01 and CONF-02, C and C++**, resolve buckets and keys through the scope's string constants by bare name (a
   name with several values matches if any value does). A string constant is a `#define` or the declaration of a
-  constant initialized with literals: `constexpr`, or a `const` object (`const std::string k = …`, `static const
-  char k[] = …`, `const char* const k = …`). Anything else fails closed: a parameter, a variable (a `const char* k`
-  can be re-pointed), a member access (`o.bucket`, `p->bucket`) or a call. Remaining limit: a parameter or local
+  constant initialized with literals, at namespace or block scope or as a `static` class member: `constexpr`, or a
+  top-level `const` object (`const std::string k = …`, `static const char k[] = …`, `const char* const k = …`).
+  Anything else fails closed: a parameter and its default argument (a declarator inside parentheses), a non-static
+  data member (its initializer is a default a constructor overrides), a variable (a `const char* k` can be
+  re-pointed, and a `const` inside template arguments, as in `std::span<const char> k`, is not top-level), a member
+  access (`o.bucket`, `p->bucket`) or a call. `#if 0` groups are not read. Remaining limit: a parameter or local
   with the same bare name as a string constant declared elsewhere in scope resolves to that constant (constants
   are `kPascalCase`, so such a collision is unlikely). Not seen: a nats.c call made through a macro or a function
   pointer. A `js_CreateKeyValue` whose `kvConfig` is filled in another file is reported as unresolved.
@@ -104,9 +115,11 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   vacuously, and it leaves a conditional skip (`if testing.Short()`) to CI, which runs the Go jobs without
   `-short`.
 - **CONF-04** evaluates shift amounts through constants (Go across packages, C++ `constexpr` across the scope) and
-  `+`. A C++ name defined more than once in scope counts with each of its values. Not seen: a shift amount in a
-  local variable (`shift := 22`), `iota`, and a layout built with arithmetic other than `<<` and `* (1 << n)`. "ID
-  code" is recognised by file name and keywords; a node-ID identifier elsewhere is not read.
+  `+`. A C++ name defined more than once in scope counts with each of its values; values of 64 and up are not
+  shift amounts and are dropped, so no bound on the combinations can lose one that is. C++ `#if 0` groups are not
+  read. Not seen: a shift amount in a local variable (`shift := 22`), `iota`, and a layout built with arithmetic
+  other than `<<` and `* (1 << n)`. "ID code" is recognised by file name and keywords; a node-ID identifier
+  elsewhere is not read.
 - **CONF-05** reads direct imports and calls; a package that re-exports `idgen` under another name is not followed.
 - **CONF-09** reads YAML line by line, without a YAML parser. Not seen: a `uses:` written as a block scalar or
   pulled in through an anchor or alias (`<<: *setup`); a `GOTOOLCHAIN` set outside `.github/` (a script under

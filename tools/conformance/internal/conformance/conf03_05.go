@@ -363,12 +363,15 @@ func cConstTable(p *Pass) map[string][]string {
 	return t
 }
 
-// cEvalMax bounds the values one expression can take (each reused name multiplies them).
-const cEvalMax = 256
+// cShiftLimit bounds the values cEval keeps: a shift amount of a 64-bit field is below 64. Every value is
+// a sum of non-negative literals, so a larger one only grows and is dropped where it appears; at most 64
+// values remain, however many definitions a reused name multiplies, and none that matters is lost.
+const cShiftLimit = 64
 
-// cEval evaluates a C++ constant to every value it can take: integer literals, names from the table
-// (qualifiers dropped; a name defined more than once gives each of its values), + and parentheses —
-// enough for `kOffsetBits + kShardBits` and `(kOffsetBits) + (kShardBits)`. Nil means unresolved.
+// cEval evaluates a C++ constant to every value below cShiftLimit it can take: integer literals, names
+// from the table (qualifiers dropped; a name defined more than once gives each of its values), + and
+// parentheses — enough for `kOffsetBits + kShardBits` and `(kOffsetBits) + (kShardBits)`. Nil means
+// unresolved, or no value that could be a shift amount.
 func cEval(expr string, t map[string][]string, depth int) []int64 {
 	expr = strings.TrimSpace(expr)
 	for strings.HasPrefix(expr, "(") && matchingParen(expr) == len(expr)-1 {
@@ -387,17 +390,19 @@ func cEval(expr string, t map[string][]string, depth int) []int64 {
 			var next []int64
 			for _, s := range sums {
 				for _, v := range vs {
-					if !slices.Contains(next, s+v) && len(next) < cEvalMax {
+					if s+v < cShiftLimit && !slices.Contains(next, s+v) {
 						next = append(next, s+v)
 					}
 				}
 			}
-			sums = next
+			if sums = next; len(sums) == 0 {
+				return nil
+			}
 		}
 		return sums
 	}
 	if m := cIntTokenRE.FindStringSubmatch(expr); m != nil {
-		if v, err := strconv.ParseInt(m[1], 10, 64); err == nil {
+		if v, err := strconv.ParseInt(m[1], 10, 64); err == nil && v < cShiftLimit {
 			return []int64{v}
 		}
 		return nil
@@ -408,7 +413,7 @@ func cEval(expr string, t map[string][]string, depth int) []int64 {
 	var out []int64
 	for _, def := range t[expr] {
 		for _, v := range cEval(def, t, depth+1) {
-			if !slices.Contains(out, v) && len(out) < cEvalMax {
+			if !slices.Contains(out, v) {
 				out = append(out, v)
 			}
 		}

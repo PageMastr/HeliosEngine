@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -270,6 +272,22 @@ func TestCEval(t *testing.T) {
 		if got := fmt.Sprint(cEval(expr, table, 0)); got != want {
 			t.Errorf("cEval(%s) = %s, want %s", expr, got, want)
 		}
+	}
+	// Reused names multiply the combinations (here 21 x 14, nearly all distinct): a 22 that comes last
+	// must not be lost to a bound on how many values one expression keeps.
+	for i := 1; i <= 20; i++ {
+		table["kWide"] = append(table["kWide"], strconv.Itoa(1000*i))
+	}
+	table["kWide"] = append(table["kWide"], "0")
+	for i := 30; i <= 42; i++ {
+		table["kNarrow"] = append(table["kNarrow"], strconv.Itoa(i))
+	}
+	table["kNarrow"] = append(table["kNarrow"], "22")
+	if got := cEval("kWide + kNarrow", table, 0); !slices.Contains(got, 22) || len(got) != 14 {
+		t.Errorf("cEval(kWide + kNarrow) = %v, want the 14 values below 64, 22 among them", got)
+	}
+	if got := cEval("kWide", table, 0); fmt.Sprint(got) != "[0]" {
+		t.Errorf("cEval(kWide) = %v, want [0]: values of 64 and up are not shift amounts", got)
 	}
 }
 

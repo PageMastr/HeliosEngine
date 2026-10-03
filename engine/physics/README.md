@@ -5,7 +5,8 @@ L3, HEADLESS (02 §1.1). The physics runtime shared by the client, the cell and 
 mover and the RT-03 determinism hash (02 §7.1, §8.2). Work package WP-0.9 (09 §2.1).
 
 Jolt is vendored as `helios::tp::jolt` (`JPH_DOUBLE_PRECISION`, `JPH_CROSS_PLATFORM_DETERMINISTIC`,
-no FMA) and linked **privately**: no Jolt type appears in `include/helios/physics/`.
+no FMA, plus the Helios `stable-order` patch, `third_party/jolt/patches/0001-stable-order.patch`) and
+linked **privately**: no Jolt type appears in `include/helios/physics/`.
 
 ## API
 
@@ -31,19 +32,45 @@ step concurrently. `PhysicsRuntime` construction and shape creation are thread-s
   `advance(seconds)` accumulates real time and runs whole steps (at most `maxStepsPerAdvance`).
 - **Stable body keys.** Every body carries its key (EntityId, packed TileKey or PCG instance key) in
   Jolt's `mUserData`. Key 0 is refused and `(layer, key)` is unique per grid (checked in every build).
-- **Order by key, never by `BodyID`.** `createBodies()` adds a batch in `(layer, key)` order; `bodies()`,
-  `stateHash()` and the query tie-breaks (equal fractions order by `(layer, key, subShape)`) never look
-  at a `BodyID`. The closest-hit collectors keep the early-out one ulp above the best fraction, so a hit
-  at exactly the same fraction still arrives and is tie-broken by key instead of by traversal order.
+- **Order by key, never by `BodyID`.** A `BodyID` is a slot index that follows the grid's add and remove
+  history, so a predictor, a cell and a replay hold the same bodies under different `BodyID`s; no result
+  may depend on one. `createBodies()` adds a batch in `(layer, key)` order; `bodies()`, `stateHash()` and
+  the query tie-breaks (equal fractions order by `(layer, key, subShape)`) never look at a `BodyID`. The
+  closest-hit collectors keep the early-out one ulp above the best fraction, so a hit at exactly the
+  same fraction still arrives and is tie-broken by key instead of by traversal order.
+- **Jolt's solver order is by key too** (the vendored `stable-order` patch, listed in
+  `third_party/MANIFEST.md`). Stock Jolt 5.6 sorted contact constraints by a hash of `BodyID`s, made the
+  lower `BodyID` "body 1" of a pair (in `ProcessBodyPair` and in each contact constraint) and ordered
+  `CharacterVirtual`'s contacts by `BodyID`, so a body touching several others solved its contacts in a
+  different order on each host. The patch orders all of these by `(object layer, user data)`, i.e. by
+  `(layer, key)`; Jolt's caches stay keyed by `BodyID` (they are lookups, not orders).
+- **No contact cache across steps for hulls and vehicles.** `createBody()` sets the patch's
+  `Body::EFlags::NoCrossUpdateCache` on every ShipHull- and Vehicle-layer body: on the first collision
+  step of each `step()`, their contacts recompute the manifold and start the impulses at zero (later
+  collision steps of the same `step()` use the cache as usual). A client predicts these bodies and a
+  rollback restores bodies, never the cell's contact cache, so a predicted step must be a function of the
+  bodies' states. Resting hulls and vehicles lose only warm-start convergence (RT-03's slope-creep bound
+  is Phase 1, WP-1.5).
 - **Worker count.** Jolt's deterministic mode plus the barrier-based adapter give the same state at any
   worker count (tested at 0, 1, 2, 3, 4, 16 and 32 workers, under unrelated load, and from inside a
   job).
-- **Golden.** `physics_tests` pins the scripted scene (`tests/scene.cpp`: statics, a mesh, a box
+- **Goldens.** `physics_tests` pins the scripted scene (`tests/scene.cpp`: statics, a mesh, a box
   pyramid, spheres, capsules, convex hulls, a compound ship hull, debris, a projectile, a kinematic
-  platform and a walking, jumping `CharacterVirtual`) after 600 steps: `0xff972a409e8145e1`. GCC 13.3
-  and Clang 18 produce it bit for bit; MinGW builds the same test (not runnable in the Linux container);
-  CI's `windows-msvc`, `windows-msvc-floor` and `windows-clang-cl` jobs are the cross-compiler check for
-  MSVC and clang-cl. Never re-pin a golden to make one platform pass.
+  platform and a walking, jumping `CharacterVirtual`) after 600 steps at `0x1000fc8781dc8b58`, and the
+  tile scene (36 Terrain tiles with a ship hull, a Vehicle-layer chassis, a box stack and the character
+  each over the shared corner of four tiles) at `0x51afce82ae11d217`. The full scene was re-pinned once
+  when the `stable-order` patch landed (stock Jolt gave `0xff972a409e8145e1`): the patch changes the
+  contact sort order and the hull's warm start. GCC 13.3 and Clang 18 produce both bit for bit; MinGW
+  builds the same test (not runnable in the Linux container); CI's `windows-msvc`, `windows-msvc-floor`
+  and `windows-clang-cl` jobs are the cross-compiler check for MSVC and clang-cl. Never re-pin a golden
+  to make one platform pass.
+- **Permuted variant (RT-03).** Both scenes are rebuilt after 1,000 dummy add/remove cycles, one body at
+  a time, so that every `BodyID` differs and every pair of bodies has the opposite `BodyID` order (or a
+  shuffled one), and must give the same hashes every second and the character the same supporting tile
+  every step. Reverting the patch locally fails both cases from the first second; reverting any one of
+  its orders alone (the sort key, the body-1 choice, the pair order or the character's contact order)
+  fails at least one of them, and disabling only `NoCrossUpdateCache` fails
+  `stable-order: ShipHull and Vehicle bodies …`.
 
 ## Validation and limits
 
@@ -72,14 +99,11 @@ step concurrently. `PhysicsRuntime` construction and shape creation are thread-s
 
 ## Not done yet (Phase 0 gaps and requests)
 
-- **`third_party/jolt/patches/stable-order`** (02 §7.1) is not vendored: `third_party/` belongs to
-  another owner. Stock Jolt 5.6 still orders contact constraints by a hash of `BodyID`s
-  (`ContactConstraintManager` sort key and `SortContacts` tie-break), makes the lower `BodyID` "body 1"
-  in `PhysicsSystem::ProcessBodyPair`, and orders `CharacterVirtual` contacts by `BodyID` /
-  `CharacterID`. RT-03's permuted variant therefore passes only for islands with one contact
-  constraint; `determinism: KNOWN DIVERGENCE ...` pins the multi-contact divergence and flips to an
-  equality check once the patch lands. The patch reads `(object layer, mUserData)` in those three places
-  and adds `Body::EFlags::NoCrossUpdateCache`; the keys it needs are already set by this module.
+- **`CharacterVirtual` sweep ties.** Its stair-walk and floor-stick sweeps keep the first of several hits
+  at exactly the same fraction, in broadphase traversal order, which depends on the grid's add/remove
+  history; the patch does not change that. The permuted tile scene does not diverge on it, but a
+  character stepping onto two coplanar tiles at once could; WP-1.5 (the shared mover, RT-03 in full)
+  should add a case and, if needed, a key tie-break like the query collectors'.
 - **ISA allowlist.** Jolt's headers select AVX2 paths inline, so every `helios_physics` TU is compiled
   with `tp_jolt`'s AVX2 flags. Until WP-0.2r moves to whole-image ISA levels, `lint_isa_audit` reports
   them unless `helios_physics` joins `HELIOS_ISA_AVX2_TARGETS` in `cmake/isa_allowlist.cmake`.
@@ -92,13 +116,17 @@ step concurrently. `PhysicsRuntime` construction and shape creation are thread-s
 
 `physics_tests` (doctest): runtime and memory accounting, shapes, grid and body lifecycle, validation,
 capacity, fixed stepping, the collision matrix, queries and tie-breaks, the character mover, the job
-adapter (1–3 workers, under load, inside a job, 32 workers for 3,000 steps, two grids at once) and
-the determinism goldens.
+adapter (1–3 workers, under load, inside a job, 32 workers for 3,000 steps, two grids at once), the
+determinism goldens and permuted variants, and the `stable-order` patch's `NoCrossUpdateCache` rule
+(`tests/test_stable_order.cpp`, with a control case that shows the check can fail).
 
 ## Plan conformance
 
-Plan-Rev: 6
+Plan-Rev: 12
 
 Written to plan revision 6 (02 §5.4, §7.1; 09 §2.1 WP-0.9) on 2026-09-25,
-ahead of its round (it needs WP-0.2r), under `docs/plan/09-roadmap-and-process.md` §5.10.2 D7. The
-open deviations are listed in this README; the module still needs its row in 09 §8.1.
+ahead of its round (it needs WP-0.2r), under `docs/plan/09-roadmap-and-process.md` §5.10.2 D7. Brought to
+revision 12 on 2026-10-03 for the `stable-order` patch (02 §7.1, RT-03's permuted variant). One finding
+against 02 §7.1: stock Jolt orders by `BodyID` in a fourth place the plan does not list, the body order
+of each contact constraint (`ContactConstraintManager` stores and solves a pair lower `BodyID` first,
+whatever `ProcessBodyPair` chose); the patch covers it. The open deviations are listed in this README.

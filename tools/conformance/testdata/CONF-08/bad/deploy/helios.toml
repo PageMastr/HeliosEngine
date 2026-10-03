@@ -3,3 +3,8 @@ gateways = ["127.0.0.1:7777", "10.0.0.2:7001"]
 
 [gateway]
 port = 7002
+listen_port = 7_005#no space before the comment
+fallback_port = { env = "HELIOS_PORT" }
+
+[edge]
+gateway_port = 7006

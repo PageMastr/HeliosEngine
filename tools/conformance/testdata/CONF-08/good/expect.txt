@@ -1,1 +1,4 @@
 #! -rules CONF-08 -strict
+# 7777 everywhere, reached through constants, a flag default, net.JoinHostPort and compose mappings with a
+# host IP; other ports are not the gateway's (NATS, a trunk, a test's, TCP 8080); a commented-out mapping
+# and a printf whose format names the gateway are not read.

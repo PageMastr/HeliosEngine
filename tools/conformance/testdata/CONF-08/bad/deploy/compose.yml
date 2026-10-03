@@ -1,3 +1,10 @@
 services:
   gateway:
     ports: ["7003:7003/udp"]
+  gateway2:
+    ports:
+      - "7000:7777/udp"
+      - "127.0.0.1:7004:7777/udp"
+      - "[::]:7001:7777/udp"
+      - "7777:7000/udp"
+      - "${HELIOS_GATEWAY_PORT:-7000}:7777/udp"

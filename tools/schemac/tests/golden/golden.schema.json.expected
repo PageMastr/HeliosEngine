@@ -1266,6 +1266,22 @@
             {"name": "script", "args": [{"key": "cost", "value": "1"}]},
             {"name": "pure", "args": []}
           ]
+        },
+        {
+          "name": "opts",
+          "bindingId": 3260946985,
+          "doc": "Nil elements of optional lists count against the per-call value cap like any other value.",
+          "params": [
+            {"name": "xs", "type": "list<list<u32?>>", "attrs": []}
+          ],
+          "result": "u32",
+          "cost": {"base": 1, "each": 0, "of": ""},
+          "pure": true,
+          "realms": ["server", "client"],
+          "attrs": [
+            {"name": "script", "args": [{"key": "cost", "value": "1"}]},
+            {"name": "pure", "args": []}
+          ]
         }
       ],
       "attrs": [

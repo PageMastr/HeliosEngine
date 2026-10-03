@@ -138,6 +138,8 @@ scriptlib Queries @realm(server, client) {
   fn clip(s: string @max(4)) -> string @max(4) @script(cost=1) @pure;
   fn bag(b: Bag) -> Bag @script(cost=1) @pure;
   fn tagged(names: set<Name> @max(8), ratio: f32) -> Tagged @script(cost=1) @pure;
+  /// Nil elements of optional lists count against the per-call value cap like any other value.
+  fn opts(xs: list<list<u32?>>) -> u32 @script(cost=1) @pure;
 }
 
 const Limit: u32 = 16;

@@ -112,6 +112,15 @@ struct Nest {
     return static_cast<::helios::f32>(d);
 }
 
+/// A vector's components follow the f32 rule: finite (Luau vectors are floats already, so only NaN and inf).
+[[maybe_unused]] void checkFiniteVector(Ctx& c, const float* p) {
+    for (int i = 0; i < 3; ++i) {
+        if (std::isfinite(p[i])) continue;
+        const char* value = std::isnan(p[i]) ? "nan" : p[i] > 0 ? "inf" : "-inf"; // (a NaN's sign varies by platform)
+        fail(c.L, std::format("{}: component {} is {}, not a finite f32", c.what, "xyz"[i], value));
+    }
+}
+
 template <class T>
 T checkInteger(Ctx& c, int idx, const char* type) {
     const double d = checkNumber(c, idx);
@@ -210,6 +219,8 @@ std::vector<::helios::u32> check29(Ctx& c, int idx);
 void push30(lua_State* L, const ::golden::all::Tagged& v, int depth);
 void push31(lua_State* L, const ::helios::Name& v, int depth);
 void push32(lua_State* L, const std::set<::helios::Name>& v, int depth);
+std::vector<std::vector<std::optional<::helios::u32>>> check33(Ctx& c, int idx);
+std::vector<std::optional<::helios::u32>> check34(Ctx& c, int idx);
 
 // WorldPos
 ::helios::FramePos check0(Ctx& c, int idx) {
@@ -316,6 +327,7 @@ std::string check12(Ctx& c, int idx) {
     take(c, 1);
     const float* p = lua_tovector(c.L, idx);
     if (!p) badType(c, idx, "vector");
+    checkFiniteVector(c, p);
     return ::helios::Vec3(p[0], p[1], p[2]);
 }
 
@@ -376,7 +388,7 @@ std::vector<::golden::all::Pack> check18(Ctx& c, int idx) {
     if (lua_type(c.L, idx) != LUA_TTABLE) badType(c, idx, "{PackInput}");
     idx = lua_absindex(c.L, idx);
     const int n = lua_objlen(c.L, idx);
-    reserve(c, n); // every element takes at least one value: fail before converting any
+    reserve(c, n); // every element, nil included, takes at least one value: fail before converting any
     std::vector<::golden::all::Pack> out{};
     out.reserve(static_cast<usize>(n));
     for (int i = 1; i <= n; ++i) {
@@ -394,7 +406,7 @@ std::set<std::string> check19(Ctx& c, int idx) {
     if (lua_type(c.L, idx) != LUA_TTABLE) badType(c, idx, "{string}");
     idx = lua_absindex(c.L, idx);
     const int n = lua_objlen(c.L, idx);
-    reserve(c, n); // every element takes at least one value: fail before converting any
+    reserve(c, n); // every element, nil included, takes at least one value: fail before converting any
     std::set<std::string> out{};
     for (int i = 1; i <= n; ++i) {
         lua_rawgeti(c.L, idx, i);
@@ -412,7 +424,7 @@ std::array<::helios::f32, 3> check20(Ctx& c, int idx) {
     idx = lua_absindex(c.L, idx);
     const int n = lua_objlen(c.L, idx);
     if (n != 3) fail(c.L, std::format("{}: {} elements, exactly 3 required", c.what, n));
-    reserve(c, n); // every element takes at least one value: fail before converting any
+    reserve(c, n); // every element, nil included, takes at least one value: fail before converting any
     std::array<::helios::f32, 3> out{};
     for (int i = 1; i <= n; ++i) {
         lua_rawgeti(c.L, idx, i);
@@ -424,7 +436,10 @@ std::array<::helios::f32, 3> check20(Ctx& c, int idx) {
 
 // u32?
 std::optional<::helios::u32> check21(Ctx& c, int idx) {
-    if (lua_isnoneornil(c.L, idx)) return std::nullopt;
+    if (lua_isnoneornil(c.L, idx)) {
+        take(c, 1);
+        return std::nullopt;
+    }
     return check22(c, idx);
 }
 
@@ -502,7 +517,7 @@ std::vector<::golden::all::Late> check27(Ctx& c, int idx) {
     if (lua_type(c.L, idx) != LUA_TTABLE) badType(c, idx, "{LateInput}");
     idx = lua_absindex(c.L, idx);
     const int n = lua_objlen(c.L, idx);
-    reserve(c, n); // every element takes at least one value: fail before converting any
+    reserve(c, n); // every element, nil included, takes at least one value: fail before converting any
     std::vector<::golden::all::Late> out{};
     out.reserve(static_cast<usize>(n));
     for (int i = 1; i <= n; ++i) {
@@ -559,7 +574,7 @@ std::vector<::helios::u32> check29(Ctx& c, int idx) {
     if (lua_type(c.L, idx) != LUA_TTABLE) badType(c, idx, "{number}");
     idx = lua_absindex(c.L, idx);
     const int n = lua_objlen(c.L, idx);
-    reserve(c, n); // every element takes at least one value: fail before converting any
+    reserve(c, n); // every element, nil included, takes at least one value: fail before converting any
     std::vector<::helios::u32> out{};
     out.reserve(static_cast<usize>(n));
     for (int i = 1; i <= n; ++i) {
@@ -601,6 +616,42 @@ void push32(lua_State* L, const std::set<::helios::Name>& v, int depth) {
         lua_pushlstring(L, e.data(), e.size());
         lua_rawseti(L, -2, ++n);
     }
+}
+
+// list<list<u32?>>
+std::vector<std::vector<std::optional<::helios::u32>>> check33(Ctx& c, int idx) {
+    take(c, 1);
+    const Nest nest(c);
+    if (lua_type(c.L, idx) != LUA_TTABLE) badType(c, idx, "{{number\?}}");
+    idx = lua_absindex(c.L, idx);
+    const int n = lua_objlen(c.L, idx);
+    reserve(c, n); // every element, nil included, takes at least one value: fail before converting any
+    std::vector<std::vector<std::optional<::helios::u32>>> out{};
+    out.reserve(static_cast<usize>(n));
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(c.L, idx, i);
+        out.push_back(check34(c, -1));
+        lua_pop(c.L, 1);
+    }
+    return out;
+}
+
+// list<u32?>
+std::vector<std::optional<::helios::u32>> check34(Ctx& c, int idx) {
+    take(c, 1);
+    const Nest nest(c);
+    if (lua_type(c.L, idx) != LUA_TTABLE) badType(c, idx, "{number\?}");
+    idx = lua_absindex(c.L, idx);
+    const int n = lua_objlen(c.L, idx);
+    reserve(c, n); // every element, nil included, takes at least one value: fail before converting any
+    std::vector<std::optional<::helios::u32>> out{};
+    out.reserve(static_cast<usize>(n));
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(c.L, idx, i);
+        out.push_back(check21(c, -1));
+        lua_pop(c.L, 1);
+    }
+    return out;
 }
 
 // Queries.nearest: Fuel: 12; pure
@@ -750,6 +801,17 @@ int glue_Queries_tagged(lua_State* L) {
     return 1;
 }
 
+// Queries.opts: Fuel: 1; pure
+int glue_Queries_opts(lua_State* L) {
+    auto& impl = *static_cast<::golden::all::Queries*>(::helios::script::bindingUserdata(L));
+    Ctx c{L, "", 0, impl.glueLimits.maxValues, impl.glueLimits.maxStringBytes, impl.glueLimits.maxValues, impl.glueLimits.maxStringBytes};
+    c.what = "Queries.opts argument 'xs'";
+    const auto a0 = check33(c, 1);
+    const auto result = impl.opts(L, a0);
+    push22(L, result, 0);
+    return 1;
+}
+
 } // namespace
 
 namespace golden::all {
@@ -792,6 +854,10 @@ namespace golden::all {
     }
     if (realm == "server" || realm == "client") {
         binder.function("Queries", "tagged", &glue_Queries_tagged, ::helios::script::FuelCost{1u, 0u, 0}, &impl);
+        ++count;
+    }
+    if (realm == "server" || realm == "client") {
+        binder.function("Queries", "opts", &glue_Queries_opts, ::helios::script::FuelCost{1u, 0u, 0}, &impl);
         ++count;
     }
     return count;

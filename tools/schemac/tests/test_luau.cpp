@@ -59,6 +59,8 @@ struct FakeQueries final : golden::all::Queries {
     std::string clipResult;
     Tagged taggedResult;
     std::vector<std::string> taggedNames;
+    std::optional<Late> echoResult; ///< returned by echo instead of its argument when set
+    usize optsElements = 0, optsNils = 0;
     struct Converted {
         bool flag = false;
         i8 small = 0;
@@ -109,7 +111,7 @@ struct FakeQueries final : golden::all::Queries {
     }
     Late echo(lua_State*, const Late& tree) override {
         ++calls;
-        return tree;
+        return echoResult ? *echoResult : tree;
     }
     void log(lua_State*, const std::string& text) override {
         ++calls;
@@ -127,6 +129,15 @@ struct FakeQueries final : golden::all::Queries {
         ++calls;
         taggedNames.assign(names.begin(), names.end());
         return taggedResult;
+    }
+    u32 opts(lua_State*, const std::vector<std::vector<std::optional<u32>>>& xs) override {
+        ++calls;
+        optsElements = optsNils = 0;
+        for (const auto& x : xs) {
+            optsElements += x.size();
+            optsNils += static_cast<usize>(std::count(x.begin(), x.end(), std::nullopt));
+        }
+        return static_cast<u32>(optsElements);
     }
 };
 
@@ -208,7 +219,7 @@ std::string convertWith(int index, const std::string& value) {
 
 TEST_CASE("luau: the generated glue converts arguments and results through a script VM") {
     Vm v;
-    CHECK(v.boundQueries == 8); // echo is editor-only
+    CHECK(v.boundQueries == 9); // echo is editor-only
     CHECK(v.boundShips == 2);
     const std::string err = v.run(R"(
   local p = WorldPos.new(1.5, -2, 3, 7)
@@ -273,7 +284,7 @@ TEST_CASE("luau: the generated glue converts arguments and results through a scr
 )");
     CHECK_MESSAGE(echoed.empty(), echoed);
     Vm client("client");
-    CHECK(client.boundQueries == 7); // neither spawn (server) nor echo (editor)
+    CHECK(client.boundQueries == 8); // neither spawn (server) nor echo (editor)
 }
 
 TEST_CASE("luau: bind checks the realm against the known realms and the VM's host profile") {
@@ -335,6 +346,8 @@ TEST_CASE("luau: the generated glue rejects hostile arguments without running Lu
         {convertWith(3, "'7'"), "argument 'count': expected number, got string"},
         {convertWith(5, "{}"), "argument 'name': expected string, got table"},
         {convertWith(7, "{1, 2, 3}"), "argument 'dir': expected vector, got table"},
+        {convertWith(7, "vector.create(0/0, 0, 0)"), "argument 'dir': component x is nan, not a finite f32"},
+        {convertWith(7, "vector.create(0, -math.huge, 0)"), "argument 'dir': component y is -inf, not a finite f32"},
         {convertWith(8, "1e300"), "seconds is not a valid duration"},
         {convertWith(10, "'Purple'"), "'Purple' is not a Color (expected one of Red, Green, Blue)"},
         {convertWith(11, "5"), "argument 'item': expected PackInput, got number"},
@@ -379,6 +392,26 @@ TEST_CASE("luau: the generated glue rejects hostile arguments without running Lu
     CHECK_MESSAGE(cyclic.find("nests more than 32 tables deep") != std::string::npos, cyclic);
     const std::string after = editor.run("assert(Queries.echo({n = 4}).n == 4)");
     CHECK_MESSAGE(after.empty(), after);
+    // A result nests at most 32 tables too: 16 nested Lates (a table and its tree list each: 32 tables)
+    // pass, 17 fail; the VM stays usable.
+    auto nested = [](int levels) {
+        Late t;
+        for (int i = 0; i < levels; ++i) {
+            Late up;
+            up.n = static_cast<u8>(i + 1);
+            up.tree.push_back(std::move(t));
+            t = std::move(up);
+        }
+        return t;
+    };
+    editor.queries.echoResult = nested(15); // 15 levels above the innermost leaf
+    const std::string shallow = editor.run("assert(Queries.echo({n = 1}).n == 15)");
+    CHECK_MESSAGE(shallow.empty(), shallow);
+    editor.queries.echoResult = nested(16);
+    const std::string deep = editor.run("Queries.echo({n = 1})");
+    CHECK_MESSAGE(deep.find("result nests more than 32 tables deep") != std::string::npos, deep);
+    editor.queries.echoResult.reset();
+    CHECK(editor.run("assert(Queries.echo({n = 5}).n == 5)").empty());
 }
 
 TEST_CASE("luau: one call's conversion work is bounded by the per-call value and byte caps") {
@@ -406,6 +439,29 @@ TEST_CASE("luau: one call's conversion work is bounded by the per-call value and
     CHECK(v.run("Queries.tagged({'a', 'b', 'c'}, 0)").find("more than 4 values") != std::string::npos);
     v.queries.glueLimits = {};
     CHECK(v.run("Queries.log(string.rep('x', 262144))").empty());
+}
+
+TEST_CASE("luau: nil elements of optional lists count against the per-call value cap") {
+    // The round-2 attack: 3,584 references to one list<u32?> of 1,024 elements, only the last set. If
+    // a nil cost nothing, each inner list would take 2 values and the call would convert 3.7 M
+    // elements; every element costs a value, so it fails at the cap before the implementation runs.
+    Vm v("server", /*wallBackstop=*/true);
+    const std::string attack = v.run(R"(
+  local inner = table.create(1024)
+  inner[1024] = 1
+  Queries.opts(table.create(3584, inner)))");
+    CHECK_MESSAGE(attack.find("argument 'xs': the arguments hold more than 8192 values") != std::string::npos, attack);
+    CHECK(v.queries.calls == 0);
+    // Exact accounting: the outer list, the inner list and each of its elements (nil or not) cost one.
+    v.queries.glueLimits.maxValues = 4;
+    std::vector<double> out;
+    const std::string atCap = v.run("local t = table.create(2)\nt[2] = 7\nreturn Queries.opts({t})", &out, 1);
+    REQUIRE_MESSAGE(atCap.empty(), atCap);
+    CHECK(out == std::vector<double>{2});
+    CHECK(v.queries.optsNils == 1);
+    const std::string overCap = v.run("local t = table.create(3)\nt[3] = 7\nQueries.opts({t})");
+    CHECK_MESSAGE(overCap.find("more than 4 values") != std::string::npos, overCap);
+    CHECK(v.queries.calls == 1);
 }
 
 TEST_CASE("perf: rejecting a call over the per-call caps takes well under 1 ms") {

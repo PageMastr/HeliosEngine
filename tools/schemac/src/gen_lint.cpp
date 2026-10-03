@@ -121,15 +121,16 @@ private:
     /// Records a finding once per rule, location and subject: a struct reached from several network types,
     /// or a message reached both as a network type and as a field type, is reported once, worded for the
     /// shallowest depth it was reached at. One field may have two findings, its own bound and its elements'.
+    /// Indexed by (rule, location, subject), so a schema with n findings costs O(n log n), not O(n²).
     void add(std::string rule, SourceLoc loc, std::string message, std::string subject, u32 depth) {
-        for (Finding& f : m_findings) {
-            if (f.rule == rule && f.loc.file == loc.file && f.loc.line == loc.line && f.loc.col == loc.col && f.subject == subject) {
-                if (depth < f.depth) {
-                    f.message = std::move(message);
-                    f.depth = depth;
-                }
-                return;
+        const auto [at, inserted] = m_findingAt.try_emplace(FindingKey{rule, loc.file, loc.line, loc.col, subject}, m_findings.size());
+        if (!inserted) {
+            Finding& f = m_findings[at->second];
+            if (depth < f.depth) {
+                f.message = std::move(message);
+                f.depth = depth;
             }
+            return;
         }
         m_findings.push_back(Finding{std::move(rule), loc, std::move(message), std::move(subject), depth});
     }
@@ -298,7 +299,15 @@ private:
             const Size k = t->key ? valueSize(t->key, nullptr) : Size{u64{0}, 0};
             const u32 depth = std::max(e.depth, k.depth) + 1;
             if (!n || !e.bytes || !k.bytes) return {std::nullopt, depth};
-            return {satMul(*n, satAdd(satAdd(*e.bytes, *k.bytes), 5 + 17)), depth}; // entry tag and length, and a keyed list's key
+            if (t->kind == TypeKind::KeyedList) {
+                // An entry is the message {1: Guid key (18 B), 2: value (a 1-B tag and its bytes)} behind the
+                // field's tag (<= 5 B for a u32 id) and the entry's length varint, which takes 2 B from 128 B.
+                const u64 entry = satAdd(*e.bytes, 19);
+                return {satMul(*n, satAdd(satAdd(entry, varintMax(entry)), 5)), depth};
+            }
+            // A list or set element: its tag (<= 5 B). A map entry: its tag, its length varint (<= 10 B) and
+            // the key's and value's 1-B tags. 22 B covers both.
+            return {satMul(*n, satAdd(satAdd(*e.bytes, *k.bytes), 5 + 17)), depth};
         }
         }
     }
@@ -397,7 +406,9 @@ private:
     const Schema& S;
     const CompileOptions& O;
     DiagnosticEngine& D;
+    using FindingKey = std::tuple<std::string, u32, u32, u32, std::string>; ///< rule, file, line, col, subject
     std::vector<Finding> m_findings;
+    std::map<FindingKey, usize> m_findingAt; ///< index into m_findings
     std::map<std::string, u64> m_counts;
     std::set<const void*> m_checked;            ///< fields and rpc results size.unbounded checked (each once)
     std::map<const Decl*, Size> m_sizes;        ///< messageSize memo

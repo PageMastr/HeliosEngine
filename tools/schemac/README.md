@@ -647,9 +647,13 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
     (the 1,200 B netcode payload less reliable's 9 B header and the message's own header, 04 §2.1;
     EVENT_U allows 1,188 B), since `Connection::send` refuses a larger message
     rather than fragment it. `schemac_tests` pins the number to `wire.h`. The worst case counts tags,
-    length prefixes, 10-byte varints and `@max` bytes per string and elements per container (each
-    entry with its tag, length and a keyed list's key, 22 B), saturating rather than wrapping, and is
-    computed once per type, so shared struct graphs stay linear. 02 §3.7 sends rpcs bit-packed, which
+    length prefixes, 10-byte varints and `@max` bytes per string and elements per container, saturating
+    rather than wrapping, and is computed once per type, so shared struct graphs stay linear. A list,
+    set or map entry is counted at 22 B over its contents, which covers a list or set element's tag
+    (at most 5 B for a 32-bit field id) and a map entry's tag, length varint and two inner tags. A
+    keyed-list entry is counted as its tag (5 B), its length varint (2 B from 128 B), its `{1: Guid}`
+    key (18 B) and its value's tag (1 B): a flat 22 B under-counted it once the field id is 16 or more
+    and the entry 128 B or more (PR #35's round 3). 02 §3.7 sends rpcs bit-packed, which
     is never larger than the tagged form, so this budget is an upper bound. `@max(n)` on a `TagSet`
     bounds its encoded tags (a LEN message of `{1: tag}` entries) to n bytes, as on a string, so its
     worst case is exact. **Not covered yet (WP-1.10):** reliable gameplay rpcs and events (EVENT_R)

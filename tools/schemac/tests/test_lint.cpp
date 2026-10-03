@@ -284,6 +284,53 @@ TEST_CASE("lint: @max on a TagSet bounds its encoded tags in bytes") {
     CHECK(verdict("1184").find("unreliable rpc 'R' has a worst-case payload of 1187 B") != std::string::npos);
 }
 
+TEST_CASE("lint: a keyed list entry's tag and length are counted") {
+    // PR #35's round 3: a flat 22 B per entry under-counted a keyed list once its field id is 16 or more
+    // (2-byte tag) and an entry 128 B or more (2-byte length). Here `items` is field 16 and each entry
+    // holds a 123-byte P: 146 B on the wire, counted as 145. The generated codec encodes the maximal value
+    // in 1,191 B, and the lint passed it at 1,186 B. Counted now as 7 * (5 + 2 + 18 + 1 + 123) more.
+    auto c = compileText("package test;\nstruct P { s: string @max(120) }\n"
+                         "event E @audience(relevant) @unreliable {\n"
+                         "  a1: f32; a2: f32; a3: f32; a4: f32; a5: f32; a6: f32; a7: f32; a8: f32\n"
+                         "  a9: f32; a10: f32; a11: f32; a12: f32; a13: f32; a14: f32; a15: f32\n"
+                         "  items: list<P> @keyed @max(7)\n  pad: string @max(91)\n}\n",
+                         lintOptions());
+    REQUIRE_MESSAGE(c->ok(), c->messages);
+    CHECK_MESSAGE(c->messages.find("unreliable event 'E' has a worst-case payload of 1214 B") != std::string::npos, c->messages);
+    // A keyed list with a 1-byte tag and 1-byte entry lengths stays within its count.
+    auto small = compileText("package test;\nstruct P { s: string @max(8) }\n"
+                             "event E @audience(relevant) @unreliable { items: list<P> @keyed @max(4) }\n",
+                             lintOptions());
+    REQUIRE_MESSAGE(small->ok(), small->messages);
+    CHECK(small->messages.find("size.unreliable") == std::string::npos);
+}
+
+TEST_CASE("perf: --emit lint is O(n log n) in its findings") {
+    // PR #35's round 3: add() scanned every earlier finding, so 20,000 findings took 1.07 s (0.66 s for
+    // --emit cpp over twice as many fields). Budget: the lint pass adds at most half of the frontend's
+    // time for 20,000 findings, plus 50 ms.
+    std::string text = "package test;\nevent E @audience(relevant) {\n";
+    for (int i = 0; i < 20000; ++i) text += std::format("  s{}: string\n", i);
+    text += "}\n";
+    auto timed = [&](const CompileOptions& options) {
+        const auto start = std::chrono::steady_clock::now();
+        auto c = compileText(text, options);
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        REQUIRE_MESSAGE(c->ok(), c->messages.substr(0, 2000));
+        return std::pair(elapsed, std::move(c));
+    };
+    const auto [plain, plainResult] = timed(CompileOptions{});
+    const auto [lint, lintResult] = timed(lintOptions());
+    usize findings = 0;
+    for (usize at = lintResult->messages.find("[size.unbounded]"); at != std::string::npos; at = lintResult->messages.find("[size.unbounded]", at + 1))
+        ++findings;
+    CHECK(findings == 20000);
+    MESSAGE(std::format("20,000 findings: {:.3f} s with --emit lint, {:.3f} s without", lint, plain));
+#if defined(NDEBUG) && !defined(HELIOS_SANITIZERS_ENABLED) && !defined(__SANITIZE_ADDRESS__)
+    CHECK(lint <= 1.5 * plain + 0.05);
+#endif
+}
+
 TEST_CASE("perf: --emit lint is linear in a shared struct graph") {
     // struct S_i { a: S_{i-1}; b: S_{i-1} } doubles the paths per level: without a per-type memo the
     // worst case took 0.73 s at 24 levels and 8.5 s at 28. Budget: 30 levels in <= 0.25 s.

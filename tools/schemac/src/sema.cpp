@@ -1420,7 +1420,8 @@ private:
                 if (!parseUnsigned(a.args[0].value, n) || n == 0) {
                     D.error(a.loc, "@max needs a positive integer");
                 } else if (!sized) {
-                    D.error(a.loc, std::format("@max needs a list, set, map, string or text (LocString, TagQuery, HxlExpr) field, '{}' is '{}'",
+                    D.error(a.loc, std::format("@max needs a list, set, map, string, Name, TagSet or text (LocString, TagQuery, "
+                                               "HxlExpr) field, '{}' is '{}'",
                                                f.name, f.type->signature));
                 }
             } else if (a.name == "editor") {

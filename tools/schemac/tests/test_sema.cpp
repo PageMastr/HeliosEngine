@@ -437,7 +437,7 @@ TEST_CASE("sema: attribute validation") {
         {"struct A { x: string @range(0, 1) }", "error: @range needs a numeric field, 'x' is 'string'"},
         {"struct A { x: f32 @step(0) }", "error: @step needs a positive number"},
         {"struct A { x: list<u8> @max(0) }", "error: @max needs a positive integer"},
-        {"struct A { x: u8 @max(4) }", "error: @max needs a list, set, map, string or text (LocString, TagQuery, HxlExpr) field, 'x' is 'u8'"},
+        {"struct A { x: u8 @max(4) }", "error: @max needs a list, set, map, string, Name, TagSet or text (LocString, TagQuery, HxlExpr) field, 'x' is 'u8'"},
         {"struct A { x: u8 @editor(Thrust) }", "error: @editor takes named arguments: category=, widget=, order="},
         {"struct A { x: u8 @editor(colour=\"red\") }", "error: unknown @editor argument 'colour' (category, widget, order, customizer)"},
         {"struct A { x: u8 @editor(order=1.5) }", "error: @editor(order=) needs a 32-bit integer"},

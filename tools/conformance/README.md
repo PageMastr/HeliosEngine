@@ -54,27 +54,33 @@ a `good/` tree for their exemptions; `go test` compares both exactly, and CTest 
 
 ## The net schema (CONF-06, CONF-07)
 
-The schema rules judge what a database holds after every migration, not each file alone (09 §5.10.4 (a)).
-Service directories `services/migrations/<dir>/` are applied in `migrations.Schemas` order, as `migrations.Up`
-applies them (a directory it does not list comes after, by name), and the `-- +goose Up` sections of each one's
-files in version order: `CREATE SCHEMA`, `ALTER SCHEMA … RENAME TO`, `CREATE TABLE` (a `LIKE` element or an
-`INHERITS` clause copies the columns its source has at that point), `ALTER TABLE` (`ADD`, `DROP` and `RENAME` of
-columns, `ALTER COLUMN … TYPE`, `RENAME TO`, `SET SCHEMA`) and `DROP TABLE`. Comments, string literals, function
-bodies and `Down` sections are not statements of the net schema. A statement the evaluator cannot follow fails
-closed, under CONF-06 and CONF-07 both ("the net schema cannot be evaluated"): `CREATE TABLE … AS`, `PARTITION
-OF` or `OF type`, a materialized view, `SELECT … INTO`, a `DO` block in an `Up` section (its body runs with the
-migration and is not read), `LIKE` or `INHERITS` of a table no earlier statement creates, `ALTER TABLE` of such a
-table, `RENAME COLUMN` or `ALTER COLUMN … TYPE` of a column the table does not have, `ALTER TABLE … INHERIT`, and
-`-- +goose ENVSUB ON` with the `${…}` names it substitutes. Annotations are read as
-goose v3 reads them (`-- +goose down`, `--+goose Up`: any case and spacing), and statements are split as
-PostgreSQL lexes them: nested `/* */` comments, strings that span lines, `E'…'` backslash escapes, `"…"`
-identifiers, `$tag$` bodies whose tag has digits, and a `$` inside an identifier (`a$b$`). An annotation with
-leading whitespace, which goose rejects, still counts. A service's schema is
-the `Name` its `migrations.Schemas` entry gives (`services/migrations/migrations.go`), or `svc_<dir>`. The legacy
-rename that WP-0.15r declares there (`Legacy`, `LegacyVersion`) applies to the files up to `LegacyVersion`: their
-`identity.account` is `svc_identity.account`, since `migrations.Up` renames the schema after them, and a later
-file that still says `identity.` is misplaced. So `identity/00001`'s plain-text `email`, which `00004` drops, is
-not a finding.
+The schema rules judge what a database holds after every migration, not each file alone (09 §5.10.4 (a)). Service
+directories `services/migrations/<dir>/` are applied in `migrations.Schemas` order, as `migrations.Up` applies
+them (a directory it does not list comes after, by name), and the `-- +goose Up` sections of each one's files in
+version order: `CREATE SCHEMA` (with an optional `AUTHORIZATION`), `ALTER SCHEMA … RENAME TO`, `CREATE TABLE` (a
+`LIKE` element or an `INHERITS` clause copies the columns its source has at that point; `IF NOT EXISTS` of a table
+that exists keeps it), `ALTER TABLE` (`ADD`, `DROP` and `RENAME` of columns, `ALTER COLUMN … TYPE`, `RENAME TO`,
+`SET SCHEMA`, also after `ONLY` or the descendants marker `*`) and `DROP TABLE`. ALTER TABLE actions that change
+no column are read and pass: constraints (`ADD CONSTRAINT`/`PRIMARY`/`UNIQUE`/`CHECK`/`FOREIGN`/`EXCLUDE`, `DROP`,
+`VALIDATE`, `ALTER` and `RENAME CONSTRAINT`), `ALTER [COLUMN] c SET/DROP/RESET/ADD …`, `OWNER TO`,
+`ENABLE`/`DISABLE`, `[NO] FORCE ROW LEVEL SECURITY`, `REPLICA IDENTITY`, `CLUSTER ON`, `SET WITHOUT
+CLUSTER`/`LOGGED`/`UNLOGGED`/`ACCESS METHOD`/`TABLESPACE`, `SET (…)`, `RESET (…)` and `ATTACH`/`DETACH PARTITION`.
+Comments, string literals, function bodies and `Down` sections are not statements of the net schema. A statement
+the evaluator cannot follow fails closed, under CONF-06 and CONF-07 both ("the net schema cannot be evaluated"):
+`CREATE TABLE … AS`, `PARTITION OF` or `OF type`, `CREATE SCHEMA` with schema elements (`CREATE SCHEMA s CREATE
+TABLE t (…)`), `IMPORT FOREIGN SCHEMA`, a materialized view, `SELECT … INTO`, a `DO` block or a `CALL` in an `Up`
+section (the body runs with the migration and is not read), any other `ALTER TABLE` action (`OF type`, `NOT OF`,
+…), `LIKE` or `INHERITS` of a table no earlier statement creates, `ALTER TABLE` of such a table, `RENAME COLUMN`
+or `ALTER COLUMN … TYPE` of a column the table does not have, `ALTER TABLE … INHERIT`, and `-- +goose ENVSUB ON`
+with the `${…}` names it substitutes. Annotations are read as goose v3 reads them (`-- +goose down`, `--+goose
+Up`: any case and spacing), and statements are split as PostgreSQL lexes them: nested `/* */` comments, strings
+that span lines, `E'…'` backslash escapes, `"…"` identifiers, `$tag$` bodies whose tag has digits, and a `$`
+inside an identifier (`a$b$`). An annotation with leading whitespace, which goose rejects, still counts. A
+service's schema is the `Name` its `migrations.Schemas` entry gives (`services/migrations/migrations.go`), or
+`svc_<dir>`. The legacy rename that WP-0.15r declares there (`Legacy`, `LegacyVersion`) applies to the files up to
+`LegacyVersion`: their `identity.account` is `svc_identity.account`, since `migrations.Up` renames the schema
+after them, and a later file that still says `identity.` is misplaced. So `identity/00001`'s plain-text `email`,
+which `00004` drops, is not a finding.
 
 ## Suppressions, known-failing records and the map
 
@@ -158,8 +164,7 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
 - **CONF-05** reads direct imports and calls; a package that re-exports `idgen` under another name is not followed.
 - **CONF-06 and CONF-07** evaluate the `-- +goose Up` SQL of each service. Not seen: DDL that a Go migration step
   runs (`ExecContext` in `services/migrations/*.go`), statements built in Go strings, and DDL that a function the
-  migration calls runs (`SELECT f()`; only `DO` blocks fail closed). `ALTER TABLE` actions other than those
-  listed above are ignored. `INHERITS` copies the parent's columns once, so a column the parent drops later stays
+  migration calls runs (`SELECT f()`, or a trigger; `DO` blocks and `CALL` fail closed). `INHERITS` copies the parent's columns once, so a column the parent drops later stays
   on the child (an over-report) and one it adds later is judged on the parent only. CONF-07 matches whole words of
   a column name: a plural (`emails`, `first_names`) and a quoted identifier in another case (`"Email"`) are not
   matched.

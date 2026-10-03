@@ -40,38 +40,53 @@ var (
 	svcSchemaRE = regexp.MustCompile(`^svc_[a-z][a-z0-9_]*$`)
 	// Direct PII (05 §6.6): e-mail, date of birth, IP address, real name. Matched on the column name's
 	// words; *_ct ciphertext and *_bidx blind indexes are the allowed forms.
-	piiWordRE      = regexp.MustCompile(`(^|_)(e_?mail|email_norm|dob|date_of_birth|birth_?date|birthday|ip|ip_?addr(ess)?|ipv[46]|remote_addr|real_name|full_name|first_name|last_name|legal_name|given_name|family_name|surname)(_|$)`)
-	piiSafeRE      = regexp.MustCompile(`_(ct|bidx)$`)
-	piiTypesRE     = regexp.MustCompile(`(?i)^(inet|cidr)\b`)
-	identRE        = `("[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)`
-	createSchemaRE = regexp.MustCompile(`(?is)^create\s+schema\s+(?:if\s+not\s+exists\s+)?` + identRE)
+	piiWordRE  = regexp.MustCompile(`(^|_)(e_?mail|email_norm|dob|date_of_birth|birth_?date|birthday|ip|ip_?addr(ess)?|ipv[46]|remote_addr|real_name|full_name|first_name|last_name|legal_name|given_name|family_name|surname)(_|$)`)
+	piiSafeRE  = regexp.MustCompile(`_(ct|bidx)$`)
+	piiTypesRE = regexp.MustCompile(`(?i)^(inet|cidr)\b`)
+	identRE    = `("[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)`
+	// CREATE SCHEMA name [AUTHORIZATION role], and nothing after it: a schema with elements (`CREATE SCHEMA s
+	// CREATE TABLE t (…)`) creates tables too, so it fails closed below.
+	createSchemaRE = regexp.MustCompile(`(?is)^create\s+schema\s+(?:if\s+not\s+exists\s+)?` + identRE +
+		`(?:\s+authorization\s+` + identRE + `)?\s*$`)
 	renameSchemaRE = regexp.MustCompile(`(?is)^alter\s+schema\s+` + identRE + `\s+rename\s+to\s+` + identRE)
-	createTableRE  = regexp.MustCompile(`(?is)^create\s+(?:(?:global\s+|local\s+)?(?:temp|temporary|unlogged)\s+)?table\s+(?:if\s+not\s+exists\s+)?` + identRE + `(?:\s*\.\s*` + identRE + `)?\s*\(`)
-	alterTableRE   = regexp.MustCompile(`(?is)^alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?` + identRE + `(?:\s*\.\s*` + identRE + `)?\s+(.*)$`)
-	dropTableRE    = regexp.MustCompile(`(?is)^drop\s+table\s+(?:if\s+exists\s+)?(.*?)(?:\s+(?:cascade|restrict))?$`)
-	addColumnRE    = regexp.MustCompile(`(?is)^add\s+(?:column\s+)?(?:if\s+not\s+exists\s+)?` + identRE + `\s+(.*)$`)
-	dropColumnRE   = regexp.MustCompile(`(?is)^drop\s+(?:column\s+)?(?:if\s+exists\s+)?` + identRE + `(?:\s+(?:cascade|restrict))?$`)
-	renameColRE    = regexp.MustCompile(`(?is)^rename\s+(?:column\s+)?` + identRE + `\s+to\s+` + identRE + `$`)
-	renameTableRE  = regexp.MustCompile(`(?is)^rename\s+to\s+` + identRE + `$`)
-	setSchemaRE    = regexp.MustCompile(`(?is)^set\s+schema\s+` + identRE + `$`)
-	constraintRE   = regexp.MustCompile(`(?i)^(constraint|primary|unique|check|foreign|exclude)\b`)
-	alterTypeRE    = regexp.MustCompile(`(?is)^alter\s+(?:column\s+)?` + identRE + `\s+(?:set\s+data\s+)?type\s+(.*)$`)
-	likeRE         = regexp.MustCompile(`(?is)^like\s+` + identRE + `(?:\s*\.\s*` + identRE + `)?`)
-	inheritsRE     = regexp.MustCompile(`(?is)^\s*inherits\s*\(([^()]*)\)`)
-	inheritRE      = regexp.MustCompile(`(?is)^(?:no\s+)?inherit\s+`)
-	qualNameRE     = regexp.MustCompile(`(?is)^\s*` + identRE + `(?:\s*\.\s*` + identRE + `)?\s*$`)
+	createTableRE  = regexp.MustCompile(`(?is)^create\s+(?:(?:global\s+|local\s+)?(?:temp|temporary|unlogged)\s+)?table\s+(if\s+not\s+exists\s+)?` + identRE + `(?:\s*\.\s*` + identRE + `)?\s*\(`)
+	// ALTER TABLE [IF EXISTS] [ONLY] name [*] actions: `*` names the descendants too (the default).
+	alterTableRE  = regexp.MustCompile(`(?is)^alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?` + identRE + `(?:\s*\.\s*` + identRE + `)?(?:\s*\*)?\s+(.*)$`)
+	dropTableRE   = regexp.MustCompile(`(?is)^drop\s+table\s+(?:if\s+exists\s+)?(.*?)(?:\s+(?:cascade|restrict))?$`)
+	addColumnRE   = regexp.MustCompile(`(?is)^add\s+(?:column\s+)?(?:if\s+not\s+exists\s+)?` + identRE + `\s*(.*)$`)
+	dropColumnRE  = regexp.MustCompile(`(?is)^drop\s+(?:column\s+)?(?:if\s+exists\s+)?` + identRE + `(?:\s+(?:cascade|restrict))?$`)
+	renameColRE   = regexp.MustCompile(`(?is)^rename\s+(?:column\s+)?` + identRE + `\s+to\s+` + identRE + `$`)
+	renameTableRE = regexp.MustCompile(`(?is)^rename\s+to\s+` + identRE + `$`)
+	setSchemaRE   = regexp.MustCompile(`(?is)^set\s+schema\s+` + identRE + `$`)
+	constraintRE  = regexp.MustCompile(`(?i)^(constraint|primary|unique|check|foreign|exclude)\b`)
+	alterTypeRE   = regexp.MustCompile(`(?is)^alter\s+(?:column\s+)?` + identRE + `\s+(?:set\s+data\s+)?type\s+(.*)$`)
+	// ALTER TABLE actions that change no column: constraints, column defaults, statistics and identity,
+	// ownership, triggers and row security, replica identity, clustering, storage parameters, the table's
+	// persistence, access method and tablespace, and partitions attached or detached.
+	alterKeepRE = regexp.MustCompile(`(?is)^(?:add\s+(?:constraint|primary|unique|check|foreign|exclude)\b|` +
+		`(?:drop|validate|alter|rename)\s+constraint\b|alter\s+(?:column\s+)?` + identRE + `\s+(?:set|drop|reset|add)\b|` +
+		`owner\s+to\b|(?:enable|disable)\b|replica\s+identity\b|cluster\s+on\b|` +
+		`set\s+(?:logged|unlogged|without\s+cluster|access\s+method|tablespace)\b|(?:set|reset)\s*\(|` +
+		`(?:no\s+)?force\s+row\s+level\s+security\b|(?:attach|detach)\s+partition\b)`)
+	likeRE     = regexp.MustCompile(`(?is)^like\s+` + identRE + `(?:\s*\.\s*` + identRE + `)?`)
+	inheritsRE = regexp.MustCompile(`(?is)^\s*inherits\s*\(([^()]*)\)`)
+	inheritRE  = regexp.MustCompile(`(?is)^(?:no\s+)?inherit\s+`)
+	qualNameRE = regexp.MustCompile(`(?is)^\s*` + identRE + `(?:\s*\.\s*` + identRE + `)?\s*$`)
 	// Statements that create or change tables in a form the evaluator does not follow: CREATE TABLE … AS,
 	// PARTITION OF, OF type, or a name goose substitutes (${…}); CREATE SCHEMA with such a name; a
 	// materialized view (it stores rows); and a DO block, whose body runs with the migration.
 	createTableAnyRE  = regexp.MustCompile(`(?is)^create\s+(?:(?:global|local)\s+)?(?:(?:temp|temporary|unlogged|foreign)\s+)?table\b`)
 	createSchemaAnyRE = regexp.MustCompile(`(?is)^create\s+schema\b`)
 	createMatViewRE   = regexp.MustCompile(`(?is)^create\s+(?:or\s+replace\s+)?materialized\s+view\b`)
+	importSchemaRE    = regexp.MustCompile(`(?is)^import\s+foreign\s+schema\b`)
 	doRE              = regexp.MustCompile(`(?is)^do\b`)
+	callRE            = regexp.MustCompile(`(?is)^call\b`)
 	selectLeadRE      = regexp.MustCompile(`(?is)^(?:\(\s*)*(?:select|with)\b`)
-	intoRE            = regexp.MustCompile(`(?i)(\w*)\s+into\b`)
-	versionRE         = regexp.MustCompile(`^(\d+)_`)
-	columnDefRE       = regexp.MustCompile(`^` + identRE + `\s+(.*)$`)
-	dropNotColRE      = regexp.MustCompile(`(?i)^drop\s+(constraint|default|not\s+null)`)
+	// INTO and the word before it ("email"INTO needs no space: the quote ends the identifier).
+	intoRE       = regexp.MustCompile(`(?i)(\w*)\W*\binto\b`)
+	versionRE    = regexp.MustCompile(`^(\d+)_`)
+	columnDefRE  = regexp.MustCompile(`^` + identRE + `\s*(.*)$`) // "email"TEXT needs no space either
+	dropNotColRE = regexp.MustCompile(`(?i)^drop\s+(constraint|default|not\s+null)`)
 	// A dollar-quote tag follows the rules of an unquoted identifier: a letter, '_' or a non-ASCII
 	// character, then those or digits (PostgreSQL, "Dollar-Quoted String Constants").
 	dollarTagRE = regexp.MustCompile(`^\$(?:[A-Za-z_\x{80}-\x{10FFFF}][A-Za-z0-9_\x{80}-\x{10FFFF}]*)?\$`)
@@ -250,9 +265,10 @@ func (ns *netSchema) apply(f string, st sqlStmt, own string, netName func(string
 		}
 	case createTableRE.MatchString(s):
 		m := createTableRE.FindStringSubmatch(s)
-		schema, name := "", unquote(m[1])
-		if m[2] != "" {
-			schema, name = netName(unquote(m[1])), unquote(m[2])
+		ifNotExists, first, second := m[1] != "", m[2], m[3]
+		schema, name := "", unquote(first)
+		if second != "" {
+			schema, name = netName(unquote(first)), unquote(second)
 		}
 		if schema == "" {
 			ns.misplaced = append(ns.misplaced, placement{f, st.line, "table " + name + " is created without a schema, " +
@@ -261,6 +277,9 @@ func (ns *netSchema) apply(f string, st sqlStmt, own string, netName func(string
 		} else if schema != own {
 			ns.misplaced = append(ns.misplaced, placement{f, st.line, "table " + schema + "." + name +
 				" is created outside its service's schema " + own})
+		}
+		if ifNotExists && ns.tables[schema+"."+name] != nil {
+			return // PostgreSQL skips the statement: the table keeps the columns it has
 		}
 		t := &table{schema: schema, name: name, file: f, line: st.line, cols: map[string]*column{}}
 		body, rest := parenSplit(s[len(m[0])-1:])
@@ -310,6 +329,7 @@ func (ns *netSchema) apply(f string, st sqlStmt, own string, netName func(string
 		for _, a := range splitTop(actions) {
 			a = strings.TrimSpace(a)
 			switch {
+			case a == "":
 			case addColumnRE.MatchString(a) && !constraintRE.MatchString(strings.TrimSpace(a[3:])):
 				c := addColumnRE.FindStringSubmatch(a)
 				t.cols[unquote(c[1])] = &column{unquote(c[1]), c[2], f, st.lineOf(c[1])}
@@ -351,6 +371,9 @@ func (ns *netSchema) apply(f string, st sqlStmt, own string, netName func(string
 				delete(ns.tables, schema+"."+name)
 				t.schema = to
 				ns.tables[t.schema+"."+t.name] = t
+			case !alterKeepRE.MatchString(a):
+				ns.errors = append(ns.errors, placement{f, st.line, "ALTER TABLE " + schema + "." + name + " " +
+					firstWords(a, 3) + ": an ALTER TABLE action the lint does not read"})
 			}
 		}
 	case dropTableRE.MatchString(s):
@@ -362,15 +385,29 @@ func (ns *netSchema) apply(f string, st sqlStmt, own string, netName func(string
 			}
 			delete(ns.tables, key)
 		}
-	case createTableAnyRE.MatchString(s), createSchemaAnyRE.MatchString(s), createMatViewRE.MatchString(s):
+	case createTableAnyRE.MatchString(s), createSchemaAnyRE.MatchString(s), createMatViewRE.MatchString(s),
+		importSchemaRE.MatchString(s):
 		ns.errors = append(ns.errors, placement{f, st.line, "a table or schema created in a form the lint does not " +
-			"read (CREATE TABLE … AS, PARTITION OF or OF type, a materialized view, or a substituted name)"})
+			"read (CREATE TABLE … AS, PARTITION OF or OF type, CREATE SCHEMA with elements, IMPORT FOREIGN SCHEMA, a " +
+			"materialized view, or a substituted name)"})
 	case selectInto(s):
 		ns.errors = append(ns.errors, placement{f, st.line, "SELECT … INTO creates a table the lint does not read"})
 	case doRE.MatchString(s):
 		ns.errors = append(ns.errors, placement{f, st.line, "a DO block runs with the migration, and the lint does " +
 			"not read its body"})
+	case callRE.MatchString(s):
+		ns.errors = append(ns.errors, placement{f, st.line, "CALL runs a procedure with the migration, and the lint " +
+			"does not read its body"})
 	}
+}
+
+// firstWords is the start of an SQL fragment for a message: its first n words, whitespace collapsed.
+func firstWords(s string, n int) string {
+	w := strings.Fields(s)
+	if len(w) > n {
+		return strings.Join(w[:n], " ") + " …"
+	}
+	return strings.Join(w, " ")
 }
 
 // lookup finds the table a (possibly schema-qualified) name refers to, as of the statements applied so far.

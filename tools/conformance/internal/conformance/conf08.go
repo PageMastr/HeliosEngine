@@ -72,6 +72,7 @@ func portOf(addr string) (int, bool) {
 }
 
 func checkGatewayPort(p *Pass) {
+	var ints map[string][]string // the scope's C and C++ integer constants, read once on first use
 	for _, f := range p.Files {
 		if testCodeRE.MatchString(f) {
 			continue // tests choose their own ports; the rule is about defaults
@@ -108,7 +109,13 @@ func checkGatewayPort(p *Pass) {
 				}
 			}
 		default:
-			checkGatewayPortC(p, f)
+			if !gatewayNameRE.MatchString(f) && !gatewayNameRE.MatchString(p.Tree.Text(f)) {
+				continue // every form below names the gateway, in the file's name or its text
+			}
+			if ints == nil {
+				ints = cIntTable(p)
+			}
+			checkGatewayPortC(p, f, ints)
 		}
 	}
 }
@@ -414,9 +421,8 @@ func cPortValues(expr string, t map[string][]string, depth int) []int64 {
 // address literals, the port of Address::ipv4(…) and loopbackV4(…), and the default of a listen,
 // connect or gateway option. Names resolve through the scope's constants; what does not resolve fails
 // closed.
-func checkGatewayPortC(p *Pass, f string) {
+func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 	src := newCSource(p.Tree.Lines(f))
-	ints := cIntTable(p)
 	gatewayFile := gatewayNameRE.MatchString(f)
 	report := func(line int, port int64) {
 		if port != gatewayPort {

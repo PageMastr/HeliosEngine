@@ -93,7 +93,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" AND CMAKE_GENERATOR MATCH
   # flags audit accepts it) audited as if it were a baseline object.
   if(isaTools MATCHES "OBJDUMP")
     add_library(lint_isa_fixture_kernel OBJECT)
-    helios_avx2_sources(lint_isa_fixture_kernel ${LINT_TESTS}/isa/fixture_kernel_avx2.c)
+    helios_avx2_sources( # conformance:allow CONF-11 the audit's own disassembly fixture (09 §5.10.3)
+      lint_isa_fixture_kernel ${LINT_TESTS}/isa/fixture_kernel_avx2.c)
     set_target_properties(lint_isa_fixture_kernel PROPERTIES FOLDER tests)
     add_custom_target(lint_isa_fixture_kernel_build ALL DEPENDS lint_isa_fixture_kernel)
     helios_lint_test(lint_isa_disasm_detects_avx EXPECT_FAIL "instruction not allowed at the x86-64-v1 baseline"

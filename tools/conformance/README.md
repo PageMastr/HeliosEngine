@@ -51,8 +51,8 @@ a `good/` tree for their exemptions; `go test` compares both exactly, and CTest 
 | CONF-08 | 04 §2; reconciliation #12 | a default gateway address or port other than 7777: Go values named for the gateway (keyed fields, var and const specs, assignments, calls with a `"gateway"` argument, and `…GatewayPort` integers); TOML keys or tables named for the gateway (`gateways = […]`, `[gateway] port`); a published `…/udp` port in YAML; C++ `k…GatewayPort` constants, and in files named for the gateway the `listen`/`connect` defaults (`"host:port"`, `Address::ipv4(…, port)`). Tests and fuzzers are skipped: they choose their own ports | Go syntax; TOML, YAML and C scans | passes |
 | CONF-09 | ADR-014 | a `go.mod` `go` directive other than 1.27.x, a `toolchain` other than go1.27.x, or no `go` directive; an `actions/setup-go` step (block or flow style) without `go-version-file: services/go.mod`, or with `go-version`; a `GOTOOLCHAIN` set in workflow YAML (an `env` key, `GOTOOLCHAIN=…` in a script or `$GITHUB_ENV`) to anything but `auto`, `local`, `path` or go1.27.x | go.mod and workflow YAML lines | passes |
 | CONF-10 | 08 §1.16; reconciliation #19 | `SDL_CreateRenderer` (and SDL3's other renderer constructors: `SDL_CreateRenderer*`, `SDL_CreateWindowAndRenderer`, `SDL_CreateSoftwareRenderer`, `SDL_CreateGPURenderer`) in C-family code (C++20 module units and `.tpp` too), including by name in a string or split by a backslash-newline splice, outside `apps/launcher/**` and engine/ui's SDL_Renderer backend (`engine/ui/**` paths containing `sdl_renderer`; WP-0.17 names the real files). `#if 0` groups are not read | comment-aware token scan | passes |
-| CONF-11 | ADR-011 amendment; 02 §1.1; reconciliation #25 | in CMake code (comments stripped): `HELIOS_ISA_AVX2_TARGETS` or `HELIOS_ISA_AVX2_SOURCE_PATTERNS`, and any other `set`/`list` of an `*avx*_{targets,sources,patterns,files,kernels,allowlist}` variable; `helios_avx2_sources()`, defined or called; `set_source_files_properties` or `set_property(SOURCE …)` carrying `/arch:AVX*`, `-mavx*`, `-mbmi*`, `-mf16c`, `-mlzcnt`, `-mfma` or a `-march=` other than `x86-64`, literally or through a variable set from them or from `helios_isa_avx2_flags()` in the same function; the same flags in `target_compile_options`, `add_compile_options`, `set_target_properties`/`set_property(TARGET …)` `COMPILE_OPTIONS` or `CMAKE_<LANG>_FLAGS*` outside `cmake/HeliosIsa.cmake` (the level sets). The bad fixture is a verbatim copy of today's two lists, `helios_isa_avx2_flags()`, `helios_avx2_sources()` and `tp_jolt`'s options | CMake command scan | **known failing, owned by WP-0.2r** (12 findings in 6 files) |
-| CONF-12 | 02 §1.1 (gate placement and gate-TU rules); reconciliation #25 | in the gate objects (`engine/core/src/cpugate/**`, `engine/core/src/platform/*/cpu_gate_hook.c`): a `.CRT$X*` section other than `.CRT$XLA0`, or `#pragma init_seg`; `ExitProcess`; no `/INCLUDE:_tls_used` or `/INCLUDE:helios_cpu_gate_tls_entry` in the Windows hook, `cmake/**` or `engine/**/CMakeLists.txt`; an `#include` other than `cpu_gate.h`, `<stdint.h>`, `<intrin.h>`, `<cpuid.h>`, `<windows.h>`, `<signal.h>`, `<unistd.h>`; a file-scope definition without `static` other than `helios_cpu_gate_run`, `helios_cpu_gate_verdict` and `helios_cpu_gate_tls_entry`. Elsewhere in scope (vendored patches too): a `.CRT$XLA*` contribution, a `.preinit_array` entry, `constructor(n)`/`init_priority(n)` with n < 101, `ifunc` or `target_clones` | C token scan | **known failing, owned by WP-0.5r** (7 findings in the Windows hook) |
+| CONF-11 | ADR-011 amendment; 02 §1.1; reconciliation #25 | in CMake code (comments stripped): `HELIOS_ISA_AVX2_TARGETS` or `HELIOS_ISA_AVX2_SOURCE_PATTERNS`, and any other `set`/`list` of an `*avx*_{targets,sources,patterns,files,kernels,allowlist}` variable; `helios_avx2_sources()`, defined or called; `set_source_files_properties` or `set_property(SOURCE …)` carrying `/arch:AVX*`, `-mavx*`, `-mbmi*`, `-mf16c`, `-mlzcnt`, `-mfma` or a `-march=` other than `x86-64`, literally or through a variable: one set from them or from `helios_isa_avx2_flags()` in the same function, or, in any file, a level set that `cmake/HeliosIsa.cmake` defines (a variable it sets from them outside a function, into the parent scope or the cache, such as 02 §1.1's `HELIOS_ISA_AVX2`) and the output of a function there that returns them; the same flags in `target_compile_options`, `add_compile_options`, `add_definitions`, `set_target_properties`/`set_property(TARGET …)` `COMPILE_OPTIONS` or `CMAKE_<LANG>_FLAGS*`, anywhere but inside the function of `cmake/HeliosIsa.cmake` that applies an image's level (its name says `isa` and `level`, as `helios_apply_isa_level` does). The `levels` fixture seeds the regressions WP-0.2r's names make natural: `${HELIOS_ISA_AVX2}` on a file or a target, a function's output, and a per-target loop outside the level function. The bad fixture is a verbatim copy of today's two lists, `helios_isa_avx2_flags()`, `helios_avx2_sources()` and `tp_jolt`'s options | CMake command scan | **known failing, owned by WP-0.2r** (11 pinned findings in 5 files; the ISA audit's own disassembly fixture in `tools/lint/lint_tests.cmake` carries a `conformance:allow`, as §5.10.3 prescribes) |
+| CONF-12 | 02 §1.1 (gate placement and gate-TU rules); reconciliation #25 | in the gate objects (`engine/core/src/cpugate/**`, `engine/core/src/platform/*/cpu_gate_hook.c`): a `.CRT$X*` section other than `.CRT$XLA0`, or `#pragma init_seg`; `ExitProcess`; no `/INCLUDE:_tls_used` or `/INCLUDE:helios_cpu_gate_tls_entry` in the Windows hook, `cmake/**` or `engine/**/CMakeLists.txt`; an `#include` other than `cpu_gate.h`, `<stdint.h>`, `<intrin.h>`, `<cpuid.h>`, `<windows.h>`, `<signal.h>`, `<unistd.h>`; a file-scope definition without `static` other than `helios_cpu_gate_run`, `helios_cpu_gate_verdict` and `helios_cpu_gate_tls_entry`. Elsewhere in scope (vendored patches too): a `.CRT$XLA*` contribution, a `.preinit_array` entry, `constructor(n)`/`init_priority(n)` with n < 101, `ifunc` or `target_clones` | C token scan | **known failing, owned by WP-0.5r** (8 pinned findings in the Windows hook, the external `helios_cpu_gate_crt_entry` among them) |
 
 ## The net schema (CONF-06, CONF-07)
 
@@ -72,13 +72,19 @@ not a finding.
 - **Suppression** (§5.10.3): a `conformance:allow CONF-nn <reason>` comment on the finding's line. The reviewer
   must approve it. Every suppression is printed on each run, so the round audit lists them. One without a rule
   ID or a reason is malformed, and one on a line where its rule reports nothing is unused: both fail.
-- **Known failing** (`known_failing.jsonc`): findings of a rule under the record's paths are reported as
-  "known failing, owned by `<WP>`" and do not fail the run. Each record names its rework WP, its §5.10.4 row
-  and a reason, and the scorecard carries the same clause as a gap (`EXIT-0.conformance`). A record, or one of
-  its paths, that matches no finding fails the run, so the WP that closes a gap must remove it (and the gap).
-  `-strict` ignores the file: `go run ./cmd/helios-conformance -root ../.. -strict -rules CONF-11` is how
-  WP-0.2r shows CONF-11 clean. Today's records: CONF-11 (WP-0.2r) and CONF-12 (WP-0.5r), the open rows of
-  09 §5.10.4 (b).
+- **Known failing** (`known_failing.jsonc`): each record names its rule, its rework WP (`owner`), its §5.10.4 row
+  (`anchor`), a reason, and the findings it pins, one `{"path", "fingerprint"}` entry per finding. A fingerprint
+  hashes the rule, the file, the message and the finding's source line with its surrounding whitespace trimmed,
+  so it survives edits elsewhere in the file but not an edit of the line itself; `-fingerprints` prints them,
+  and SARIF carries them as `partialFingerprints`. Pinned findings print as "known failing, owned by `<WP>`"
+  and do not fail the run. Every other finding fails it, even of the same rule in the same file: a new grant
+  next to an old one, a third copy of a line pinned twice, or a pinned line that gains a flag. An entry that
+  matches no finding fails the run too, so the WP that closes a gap removes its entries and the record (and the
+  gap). The scorecard carries each record's clause as a gap of `EXIT-0.conformance`, and the run fails on a
+  record whose rule and owner no gap of that item names (when `scorecard.jsonc` exists, as it does in the
+  repository). `-strict` ignores the file: `go run ./cmd/helios-conformance -root ../.. -strict -rules CONF-11`
+  is how WP-0.2r shows CONF-11 clean. Today's records: CONF-11 (WP-0.2r) and CONF-12 (WP-0.5r), the open rows
+  of 09 §5.10.4 (b). Adding a record is a Director decision (D3).
 - **Map** (`map.jsonc`): anchors to paths, rules and required tests. The run fails on a key that is not an
   anchor, an unknown rule, a bad glob, an entry with neither rules nor `why` (D5), and a rule in no entry.
 
@@ -121,6 +127,15 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   than `<<` and `* (1 << n)`. "ID code" is recognised by file name and keywords; a node-ID identifier elsewhere is
   not read.
 - **CONF-05** reads direct imports and calls; a package that re-exports `idgen` under another name is not followed.
+- **CONF-06 and CONF-07** evaluate the `-- +goose Up` SQL of each service. Not seen: DDL that a Go migration step
+  runs (`ExecContext` in `services/migrations/*.go`), DDL inside a `DO $$ … $$` block, and statements built in Go
+  strings. CONF-07 matches whole words of a column name: a plural (`emails`, `first_names`) and a quoted
+  identifier in another case (`"Email"`) are not matched, and `ALTER COLUMN … TYPE INET` is not followed.
+- **CONF-08** matches the forms of a gateway default the tree uses today. Not seen: a Go composite literal of a
+  gateway-named type (`GatewayConfig{Port: 7003}`); in gateway-named C and C++ files, an integer default of a
+  `*port*` name not named `…GatewayPort`, a `listen` default held in a differently named constant, and
+  `Address::ipv4(…, kName)` through a constant; in YAML, a Helm `gateway: {port: …}` or a Kubernetes Service
+  `port` with `protocol: UDP` (only compose's `…/udp` form is read). The PR #28 review lists these as follow-ups.
 - **CONF-09** reads YAML line by line, without a YAML parser. Not seen: a `uses:` written as a block scalar or
   pulled in through an anchor or alias (`<<: *setup`); a `GOTOOLCHAIN` set outside `.github/` (a script under
   `tools/ci/` that a workflow runs) or by a variable that a step assembles. A `GOTOOLCHAIN` whose value is an
@@ -132,3 +147,13 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   (`SDL_Create##Renderer`), a renderer created from Luau or Go, and an SDL renderer reached through a symbol
   lookup whose name is computed at run time. Only `#if 0` (or `false`) groups and the branches after `#if 1`
   are known dead; every other conditional group is read as compiled, which can over-report and never hides.
+- **CONF-11** reads CMake commands with comments stripped. A variable is followed within its function, and across
+  files only for `cmake/HeliosIsa.cmake`'s level sets and flag functions: a variable set from AVX flags in one
+  file and used in another is not. A list of targets or sources is flagged by name only when the name says
+  `avx`; one with another name is caught where it grants the flags. Generator expressions are read as text, so a
+  flag inside one counts. Not in §5.10.3's scope at all: `CMakePresets.json` `cacheVariables` (a
+  `CMAKE_CXX_FLAGS` there), toolchain files outside `cmake/` and command-line `-D` options. Whether the presets
+  belong in CONF-11's scope is a question for the Director.
+- **CONF-12** recognises an external symbol in a gate TU by a file-scope definition without `static`, with
+  macros not expanded; audit check 2 (the objects' symbol lists) is the object-level backstop. A pre-gate hook
+  elsewhere is found by its section name or attribute, not by what a macro expands to.

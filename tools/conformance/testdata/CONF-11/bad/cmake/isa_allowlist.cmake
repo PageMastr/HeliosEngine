@@ -1,4 +1,4 @@
-# Verbatim from cmake/isa_allowlist.cmake at WP-0.2 (main 1425608), lines 1-14: the per-target and
+# Verbatim from cmake/isa_allowlist.cmake at WP-0.2 (main 1425608; unchanged at c2cbff5), lines 1-14: the per-target and
 # per-file AVX2 lists that CONF-11 exists to catch (09 §2 WP-0.2 acceptance).
 # ISA allowlist (02 §1.1 "ISA levels and the pre-gate audit", WP-0.2, RT-09).
 #

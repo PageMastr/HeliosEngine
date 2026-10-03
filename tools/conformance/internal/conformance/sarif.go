@@ -37,6 +37,9 @@ func (r *Result) WriteSARIF(w io.Writer) error {
 		Message      text          `json:"message"`
 		Locations    []location    `json:"locations"`
 		Suppressions []suppression `json:"suppressions,omitempty"`
+		// The finding's fingerprint (rule, file, message, trimmed source line), which known-failing
+		// records pin; code scanning uses it to track a result across line moves.
+		PartialFingerprints map[string]string `json:"partialFingerprints"`
 	}
 	rules := []rule{{ID: ToolRule, ShortDescription: text{"The lint's own configuration, suppressions and inputs"}}}
 	for _, ru := range r.Rules {
@@ -49,7 +52,8 @@ func (r *Result) WriteSARIF(w io.Writer) error {
 		if f.Line > 0 {
 			loc.Region = &region{StartLine: f.Line}
 		}
-		res := result{RuleID: f.Rule, Level: "error", Message: text{f.Message}, Locations: []location{{loc}}}
+		res := result{RuleID: f.Rule, Level: "error", Message: text{f.Message}, Locations: []location{{loc}},
+			PartialFingerprints: map[string]string{"heliosConformance/v1": f.Fingerprint}}
 		if f.Suppressed != "" {
 			res.Suppressions = []suppression{{"inSource", f.Suppressed}}
 		} else if f.Known != nil {

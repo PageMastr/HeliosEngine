@@ -1,4 +1,4 @@
-# Verbatim from cmake/HeliosIsa.cmake at WP-0.2 (main 1425608): helios_isa_avx2_flags() (lines 33-43)
+# Verbatim from cmake/HeliosIsa.cmake at WP-0.2 (main 1425608; unchanged at c2cbff5): helios_isa_avx2_flags() (lines 33-43)
 # and helios_avx2_sources() (lines 58-70).
 # Flags for the `avx2` level. No FMA anywhere (determinism, 02 §7.1) and no FP contraction.
 function(helios_isa_avx2_flags out)

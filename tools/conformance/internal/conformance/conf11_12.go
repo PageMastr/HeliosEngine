@@ -106,9 +106,67 @@ func cmakeCommands(lines []string) []cmakeCmd {
 	return out
 }
 
+// isaLevels reads cmake/HeliosIsa.cmake for the names that carry AVX-class flags everywhere: the
+// variables it sets from them outside a function, or into the parent scope or the cache (02 §1.1's
+// HELIOS_ISA_AVX2), and the functions that return them through an output argument (helios_isa_avx2_flags),
+// with that argument's position. A variable that references them, or that such a call fills, holds the
+// flags themselves, in any file.
+func isaLevels(t *Tree) (vars map[string]bool, producers map[string]int) {
+	vars, producers = map[string]bool{}, map[string]int{"helios_isa_avx2_flags": 0}
+	local := map[string]bool{}
+	fn, params := "", []string(nil)
+	for _, c := range cmakeCommands(t.Lines(isaLevelSets)) {
+		fields := strings.Fields(c.args)
+		first := ""
+		if len(fields) > 0 {
+			first = strings.Trim(fields[0], `"`)
+		}
+		switch c.name {
+		case "function", "macro":
+			fn, local, params = first, map[string]bool{}, fields[min(1, len(fields)):]
+			continue
+		case "endfunction", "endmacro":
+			fn, params = "", nil
+			continue
+		case "set", "list", "string":
+		default:
+			continue
+		}
+		name := first
+		if c.name != "set" && len(fields) > 1 {
+			name = strings.Trim(fields[1], `"`)
+		}
+		carries := len(avxFlags(c.args)) > 0
+		for _, v := range varRefRE.FindAllStringSubmatch(c.args, -1) {
+			carries = carries || local[v[1]] || vars[v[1]]
+		}
+		if !carries {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(name, "${") && fn != "": // set(${out} … PARENT_SCOPE): the caller's out
+			for i, prm := range params {
+				if name == "${"+prm+"}" {
+					producers[fn] = i
+				}
+			}
+		case fn == "" || strings.Contains(c.args, "PARENT_SCOPE") || strings.Contains(c.args, "CACHE"):
+			vars[name] = true
+		default:
+			local[name] = true
+		}
+	}
+	return vars, producers
+}
+
+// levelFunction reports the function in cmake/HeliosIsa.cmake that applies an image's level (its name
+// says isa and level, as helios_apply_isa_level does): the one place a target receives ISA flags.
+var levelFunctionRE = regexp.MustCompile(`(?i)^helios_\w*(isa\w*level|level\w*isa)\w*$`)
+
 func checkISAGrants(p *Pass) {
+	levelVars, producers := isaLevels(p.Tree)
 	for _, f := range p.Files {
-		levelSets := f == isaLevelSets
+		levelFile := f == isaLevelSets
 		for i, l := range p.Tree.Lines(f) {
 			code := strings.SplitN(l, "#", 2)[0]
 			if m := avxListRE.FindString(code); m != "" {
@@ -116,7 +174,15 @@ func checkISAGrants(p *Pass) {
 					"(ADR-011 amendment, 02 §1.1)", m)
 			}
 		}
-		avxVars := map[string]bool{} // variables holding AVX-class flags, per function
+		// Variables holding AVX-class flags: the level sets everywhere, plus each function's own.
+		fresh := func() map[string]bool {
+			m := map[string]bool{}
+			for v := range levelVars {
+				m[v] = true
+			}
+			return m
+		}
+		avxVars, fn := fresh(), ""
 		for _, c := range cmakeCommands(p.Tree.Lines(f)) {
 			fields := strings.Fields(c.args)
 			first := ""
@@ -131,7 +197,10 @@ func checkISAGrants(p *Pass) {
 			}
 			switch c.name {
 			case "function", "macro", "endfunction", "endmacro":
-				avxVars = map[string]bool{}
+				avxVars, fn = fresh(), ""
+				if c.name == "function" || c.name == "macro" {
+					fn = first
+				}
 				if first == "helios_avx2_sources" {
 					p.Report(f, c.line, "helios_avx2_sources() grants AVX2 to single files: images are built at one "+
 						"level (ADR-011 amendment, 02 §1.1)")
@@ -141,10 +210,9 @@ func checkISAGrants(p *Pass) {
 				p.Report(f, c.line, "helios_avx2_sources() grants AVX2 to single files: images are built at one level "+
 					"(ADR-011 amendment, 02 §1.1)")
 				continue
-			case "helios_isa_avx2_flags":
-				avxVars[first] = true
-				continue
 			case "set", "list", "string":
+				// in HeliosIsa.cmake, only the image-level function applies a level
+				levelSets := levelFile && levelFunctionRE.MatchString(fn)
 				name := first
 				if c.name != "set" && len(fields) > 1 {
 					name = strings.Trim(fields[1], `"`)
@@ -162,12 +230,18 @@ func checkISAGrants(p *Pass) {
 				}
 				continue
 			}
+			if i, ok := producers[c.name]; ok && i < len(fields) { // helios_isa_avx2_flags(out): out holds the flags
+				avxVars[strings.Trim(fields[i], `"`)] = true
+				continue
+			}
 			if len(flags) == 0 {
 				continue
 			}
+			levelSets := levelFile && levelFunctionRE.MatchString(fn)
 			perFile := c.name == "set_source_files_properties" ||
 				c.name == "set_property" && strings.EqualFold(first, "SOURCE")
 			perTarget := c.name == "target_compile_options" || c.name == "add_compile_options" ||
+				c.name == "add_definitions" || // a directory-wide grant; CMake passes non -D flags through
 				c.name == "set_target_properties" || c.name == "set_property" && strings.EqualFold(first, "TARGET")
 			switch {
 			case perFile && (grantPropRE.MatchString(c.args) || c.name == "set_source_files_properties"):

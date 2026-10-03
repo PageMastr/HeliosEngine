@@ -1,4 +1,4 @@
 #! -rules CONF-10
-# The first record's second path and the whole second record match nothing: a closed gap leaves the list.
-tools/conformance/known_failing.jsonc:3: conformance
-tools/conformance/known_failing.jsonc:4: conformance
+# The first record's second entry and the whole second record match nothing: a closed gap leaves the list.
+tools/conformance/known_failing.jsonc:5: conformance
+tools/conformance/known_failing.jsonc:7: conformance

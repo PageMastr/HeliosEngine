@@ -1,10 +1,10 @@
-// A known-failing record covers the findings it pins: they are reported, owned, and do not fail the run.
-// Two identical findings need two entries.
+// The record pins two of a.cpp's three identical findings and c.cpp's line as it was before an edit.
 {
   "known_failing": [
     {"rule": "CONF-10", "owner": "WP-9.9r", "anchor": "09 §5.10.4 (z)", "reason": "fixture", "findings": [
       {"path": "engine/x/a.cpp", "fingerprint": "3e07f400cceffc24"},
       {"path": "engine/x/a.cpp", "fingerprint": "3e07f400cceffc24"},
+      {"path": "engine/x/c.cpp", "fingerprint": "ae99c47b8d20f694"},
     ]},
   ],
 }

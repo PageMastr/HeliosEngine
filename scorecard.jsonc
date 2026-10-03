@@ -501,12 +501,12 @@
       "title": "The conformance lint is clean on the full tree with the rework WPs merged",
       "class": "N", "platforms": ["any"],
       "threshold": "The conformance lint clean on the full tree with WP-0.15r, WP-0.2r, WP-0.5r and WP-0.10r merged (§5.10)",
-      "notes": "The CI job runs CONF-01…12 over the full tree with tools/conformance/known_failing.jsonc applied, and each rule's seeded fixtures; a record or path that no longer matches fails it, so each gap below closes with its record. WP-0.15r and WP-0.10r are merged and CONF-01…10 pass",
+      "notes": "The CI job runs CONF-01…12 over the full tree with tools/conformance/known_failing.jsonc applied, and each rule's seeded fixtures; records pin each finding by fingerprint, so a new finding fails the run, and an entry that no longer matches fails it too, so each gap below closes with its record. WP-0.15r and WP-0.10r are merged and CONF-01…10 pass",
       "status": "partial",
       "tests": [{"ci_job": "Conformance lint (tools/conformance)"}, {"evidence": "tools/conformance/known_failing.jsonc"}],
       "gaps": [
         {"clause": "CONF-11 fails on the tree (known_failing.jsonc: the per-file AVX2 lists, helios_avx2_sources() and tp_jolt's PUBLIC ISA options; 09 §5.10.4 (b))", "state": "failing", "owner": "WP-0.2r"},
-        {"clause": "CONF-12 fails on the tree (known_failing.jsonc: the Windows gate in .CRT$XIB with ExitProcess and no /INCLUDE:; 09 §5.10.4 (b))", "state": "failing", "owner": "WP-0.5r"},
+        {"clause": "CONF-12 fails on the tree (known_failing.jsonc: the Windows gate in .CRT$XIB with ExitProcess, the external helios_cpu_gate_crt_entry and no /INCLUDE:; 09 §5.10.4 (b))", "state": "failing", "owner": "WP-0.5r"},
         {"clause": "WP-0.2 follow-up (Go module licence scan): the licence scanner (lint_licenses) sees third_party/ and MANIFEST.md, not the Go modules that services/go.sum pins, which 01 §5.2's 'dependencies' covers. Not blocking: a review sample of 51 of the 145 modules was all permissive", "state": "unmeasured", "owner": "WP-0.2"}
       ]
     },

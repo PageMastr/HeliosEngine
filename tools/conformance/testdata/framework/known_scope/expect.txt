@@ -1,3 +1,3 @@
 #! -rules CONF-10
-# A record covers its own paths, never its rule tree-wide.
+# A record covers the findings it pins, never its rule tree-wide.
 engine/y/new.cpp:1: CONF-10

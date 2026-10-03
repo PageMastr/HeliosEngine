@@ -594,11 +594,24 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
     reachable from rpc arguments (top-level and service rpcs), events, messages, or the replicated
     fields of components, through struct and variant fields. Otherwise one peer could make the
     receiver allocate at will. A struct reached from several network types is reported once.
-    `T[N]` is bounded by its type. `@max` bounds a field's own length or count; the language cannot
-    yet bound the elements of a `list<string>`.
+    `@max` bounds a field's own length or count only, so an element that would need a bound but
+    cannot carry one is a finding too: a string, `Name`, text builtin, `TagSet` or container inside a
+    `list`, `set`, `map` (keys included) or `T[N]`, such as `string[4]`, `list<string>`,
+    `map<string, u8>` or `list<list<i16>>`. Hold such elements in a struct with a bounded field.
+    `T[N]` needs no `@max` (its count is fixed); its elements are checked like any container's. Service
+    rpcs (backend calls, 05) and NATS `message`s count as network input too, which is conservative.
   - `size.unreliable`: an unreliable rpc's worst-case tagged payload fits one netcode payload,
     1,200 B (04 §1), since an unreliable message is never fragmented. The worst case counts tags,
-    length prefixes, 10-byte varints and `@max` bytes per string and elements per container.
+    length prefixes, 10-byte varints and `@max` bytes per string and elements per container (each
+    entry with its tag, length and a keyed list's key, 22 B). 02 §3.7 sends rpcs bit-packed, which is
+    never larger than the tagged form, so this budget is an upper bound; `@max` on a `TagSet` is
+    counted as bytes, which is approximate.
+- **Gate.** The CTest `lint_schemac_size_gameplay` (label `lint`, so every CI test job runs it) runs
+  `--emit lint --Werror --check-lock` over `schemas/gameplay`, the schemas compiled into the engine:
+  a size finding there fails CI. `schemas/sample` keeps known findings, pinned by the corpus golden
+  `tests/golden/corpus/sample/schema.lint.json.expected`, and `lint_schemac_size_fixture_sample` runs
+  the same command over it and must fail with a `[size.unbounded]` error, so a gate that stops
+  reporting fails as well. A new production schema directory adds its own gate.
 - **Report** (`--lint-out`, canonical JSON):
   - `checked`: counts per rule (rpcs, client→server rpcs, fields under the SEC-4 check, ledger
     types, keyed lists, scriptlib fns with charges, fields under `size.unbounded`, unreliable rpcs);
@@ -606,7 +619,8 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
     This is AAA-SEC-1's "every client→server message is classified", and a compilation fails before
     the report if one is missing;
   - `findings`: every finding with rule id, include-relative file, line, column and message, sorted.
-    Other compiler warnings, such as naming, appear under rule `schemac`.
+    Other compiler warnings, such as naming, appear under rule `schemac`. `files` is sorted too, so
+    the report does not depend on the command line's order.
 
 ## CMake: `helios_schema()`
 

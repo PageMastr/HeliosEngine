@@ -176,7 +176,7 @@ Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const Rec
             if (s.baseRecord != ~usize{0} && i < s.baseRecord) continue;  // already on disk
             Op local = op;
             local.doc = s.localId;
-            if (std::find(touched.begin(), touched.end(), op.doc) == touched.end()) touched.push_back(op.doc);
+            if (!containsDoc(touched, op.doc)) touched.push_back(op.doc);
             if (auto res = b->apply(local); !res) {
                 failed = true;
                 for (const DocId& d : touched) {

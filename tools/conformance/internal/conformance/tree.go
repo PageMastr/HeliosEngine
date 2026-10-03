@@ -84,7 +84,10 @@ func walkFiles(root string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() && p != root && (d.Name() == ".git" || d.Name() == "build" || d.Name() == "node_modules") {
+		// Only the top-level build/ is build output (CLAUDE.md's build/<task> directories); a source
+		// directory named build deeper down, such as tools/build/, is code.
+		if d.IsDir() && p != root && (d.Name() == ".git" || d.Name() == "node_modules" ||
+			(d.Name() == "build" && filepath.Dir(p) == root)) {
 			return filepath.SkipDir
 		}
 		if d.Type().IsRegular() {

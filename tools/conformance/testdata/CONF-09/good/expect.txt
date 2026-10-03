@@ -1,2 +1,3 @@
 #! -rules CONF-09 -strict
-# go 1.27 with a comment, toolchain go1.27.1; setup-go reading services/go.mod, as the first key and later.
+# go 1.27 with a comment, toolchain go1.27.1; setup-go reading services/go.mod, as the first key, later
+# and in flow style; GOTOOLCHAIN set to local, auto or go1.27.x.

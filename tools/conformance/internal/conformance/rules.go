@@ -116,4 +116,103 @@ func isHexDigitSep(src []byte, i int) bool {
 	return src[j] >= '0' && src[j] <= '9'
 }
 
-var cFamily = regexp.MustCompile(`\.(c|cc|cpp|cxx|h|hh|hpp|hxx|inl|ipp|m|mm)$`)
+// cFamily matches C, C++ and Objective-C sources and headers, C++20 module units (.cppm, .ccm, .cxxm,
+// .ixx) and template-body includes (.tpp).
+var cFamily = regexp.MustCompile(`\.(c|cc|cpp|cxx|h|hh|hpp|hxx|inl|ipp|tpp|m|mm|cppm|ccm|cxxm|ixx)$`)
+
+// spliceLines joins each line that ends in a backslash with the next one, as translation phase 2
+// does, so a name split across lines (`SDL_Create\` + `Renderer`) reads whole. origin[i] is the
+// 0-based physical line where logical line i starts. Whitespace after the backslash is tolerated,
+// as GCC and Clang do.
+func spliceLines(lines []string) (logical []string, origin []int) {
+	for i := 0; i < len(lines); i++ {
+		start, cur := i, lines[i]
+		for {
+			t := strings.TrimRight(cur, " \t")
+			if !strings.HasSuffix(t, "\\") || i+1 >= len(lines) {
+				break
+			}
+			i++
+			cur = t[:len(t)-1] + lines[i]
+		}
+		logical = append(logical, cur)
+		origin = append(origin, start)
+	}
+	return logical, origin
+}
+
+var (
+	ppCondRE  = regexp.MustCompile(`^\s*#\s*(if|ifdef|ifndef|elif|elifdef|elifndef|else|endif)\b(.*)$`)
+	ppParenRE = regexp.MustCompile(`[\s()]`)
+)
+
+// ppValue evaluates a conditional's expression when it is a literal: -1 for 0 or false, 1 for 1 or
+// true, 0 for anything else (unknown, so the group counts as compiled).
+func ppValue(expr string) int {
+	switch ppParenRE.ReplaceAllString(expr, "") {
+	case "0", "false":
+		return -1
+	case "1", "true":
+		return 1
+	}
+	return 0
+}
+
+// inactiveLines marks the lines of preprocessor groups that are never compiled: `#if 0` (or false)
+// groups, and the `#elif`/`#else` groups after an `#if 1`. Every other condition is unknown, so its
+// groups count as compiled. code must have comments blanked (codeLines), so `#if 0 // off` reads as
+// `#if 0`.
+func inactiveLines(code []string) []bool {
+	type frame struct {
+		parent bool // the enclosing group is compiled
+		taken  int  // the best branch so far: -1 none, 0 maybe, 1 certainly
+		active bool
+	}
+	var stack []frame
+	active := true
+	out := make([]bool, len(code))
+	for i, l := range code {
+		m := ppCondRE.FindStringSubmatch(l)
+		if m == nil {
+			out[i] = !active
+			continue
+		}
+		switch m[1] {
+		case "if", "ifdef", "ifndef":
+			v := 0
+			if m[1] == "if" {
+				v = ppValue(m[2])
+			}
+			stack = append(stack, frame{parent: active, taken: v, active: active && v >= 0})
+		case "elif", "elifdef", "elifndef":
+			if len(stack) == 0 {
+				break
+			}
+			f := &stack[len(stack)-1]
+			v := 0
+			if m[1] == "elif" {
+				v = ppValue(m[2])
+			}
+			f.active = f.parent && f.taken < 1 && v >= 0
+			f.taken = max(f.taken, v)
+		case "else":
+			if len(stack) == 0 {
+				break
+			}
+			f := &stack[len(stack)-1]
+			f.active = f.parent && f.taken < 1
+			f.taken = 1
+		case "endif":
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+		if len(stack) > 0 {
+			active = stack[len(stack)-1].active
+		} else {
+			active = true
+		}
+		out[i] = false // a directive line itself is read
+	}
+	return out
+}

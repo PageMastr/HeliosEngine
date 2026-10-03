@@ -1,5 +1,6 @@
 #include "compiler.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <functional>
@@ -66,6 +67,18 @@ std::string logicalPathFor(const std::string& path, const std::vector<std::strin
         if (!r.empty() && r != "." && !r.starts_with("..")) return r;
     }
     return std::filesystem::path(path).filename().generic_string();
+}
+
+bool isControl(char c) {
+    const auto u = static_cast<unsigned char>(c);
+    return u < 0x20 || u == 0x7f;
+}
+
+/// `s` with control characters as \xNN, for a diagnostic.
+std::string printable(std::string_view s) {
+    std::string out;
+    for (const char c : s) out += isControl(c) ? std::format("\\x{:02X}", static_cast<unsigned>(static_cast<unsigned char>(c))) : std::string(1, c);
+    return out;
 }
 
 std::string stemOf(const std::string& logical) {
@@ -184,6 +197,14 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
             }
             return it->second;
         }
+        // Every emitter prints the logical path into a generated comment (C++ //, Go //, Luau and SQL --),
+        // and a lone CR ends such a comment in GCC, Clang and PostgreSQL: a file name must not carry code.
+        if (const auto bad = std::find_if(logical.begin(), logical.end(), [](char c) { return isControl(c); }); bad != logical.end()) {
+            diags.error(from, std::format("the schema path '{}' has the control character U+{:04X}; generated code prints the path in "
+                                          "comments, so rename the file",
+                                          printable(logical), static_cast<unsigned>(static_cast<unsigned char>(*bad))));
+            return nullptr;
+        }
         if (stack.size() >= kMaxImportDepth) {
             diags.error(from, std::format("imports nest more than {} files deep (at '{}')", kMaxImportDepth, path));
             return nullptr;
@@ -264,7 +285,8 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
 
     if (!analyze(S, diags, SemaOptions{options.namingLints})) return result;
 
-    // Stable ids from the lock.
+    // Stable ids from the lock. `baseline` keeps the lock as it was, for --emit sql's migration stub.
+    Lock baseline;
     if (!options.lockPath.empty()) {
         Lock lock;
         std::string oldText;
@@ -280,6 +302,7 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
                                         options.lockPath));
             return result;
         }
+        baseline = lock;
         LockOptions lo;
         lo.allowDefaultChange = options.allowDefaultChange;
         if (!applyLock(S, lock, diags, lo, result.lockChanges)) return result;
@@ -299,6 +322,21 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
         assignEphemeralIds(S);
     }
     computeLayoutHashes(S);
+    if (options.emitSql && !options.sqlBaseline.empty()) {
+        if (options.lockPath.empty()) {
+            diags.error({}, "--sql-baseline needs --lock: the stub compares the baseline's field ids with the lock's");
+            return result;
+        }
+        baseline = Lock{};
+        auto text = fsys.read(options.sqlBaseline);
+        if (!text) {
+            diags.error({}, std::format("cannot read the SQL baseline lock '{}'", options.sqlBaseline));
+            return result;
+        }
+        const u32 file = diags.addFile(options.sqlBaseline, *text);
+        result.inputs.push_back(normalizePath(options.sqlBaseline));
+        if (!loadLock(diags.fileText(file), file, baseline, diags)) return result;
+    }
 
     if (options.emitCpp) {
         for (OutputFile& o : generateCpp(S, options)) result.outputs.push_back(std::move(o));
@@ -309,6 +347,9 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
     if (options.emitJson) result.outputs.push_back(OutputFile{options.jsonOut, generateSchemaJson(S)});
     if (options.emitLuau) {
         for (OutputFile& o : generateLuau(S, options, diags)) result.outputs.push_back(std::move(o));
+    }
+    if (options.emitSql) {
+        for (OutputFile& o : generateSql(S, baseline, options, diags)) result.outputs.push_back(std::move(o));
     }
     result.ok = !diags.hasErrors();
     return result;

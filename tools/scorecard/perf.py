@@ -28,11 +28,13 @@ everything above holds within a class. A metric's first night on a class that ha
 reads `new-host-class` (not failing) and starts that class's calibration; the levels of other classes
 are kept for when the runner comes back to them, and so are a calibrating class's clean values (a class
 the runner rarely lands on calibrates over more nights than the history holds). Host classes that keep
-changing would leave every night ungated, so once more than --window of a run's classes have had their
-first night within the history and no night since, the run's rows that no level gated tonight (`new`,
-`new-host-class`, `calibrating`, without a bound) fail as `host-churn`. A metric with an absolute `bound`
-(a plan criterion such as RT-13's ≤ 10 % overhead) fails when it is worse than the bound, on every night
-and class, and its drift is reported, not gated.
+changing would leave every night ungated, so the run's rows that no level gated tonight (`new`,
+`new-host-class`, `calibrating`, without a bound) fail as `host-churn` once more than --window of its
+classes have had their first night within the history and no night since, and also once none of its last
+HISTORY_LIMIT nights, tonight's included, had a row that a level gated (classes that each come back a few
+times and are then replaced; each entry stores the count as `ungated_nights`). A metric with an absolute
+`bound` (a plan criterion such as RT-13's ≤ 10 % overhead) fails when it is worse than the bound, on every
+night and class, and its drift is reported, not gated.
 Every verdict, both levels and the applied accept are stored in the history and carried forward (a
 missing metric carries them too, and the history keeps every class's newest levels), so none of them
 heals or expires as old entries leave it. Only a reviewed `perf_accept` record in scorecard.jsonc moves
@@ -133,6 +135,16 @@ def _host_of(e: dict, key: str) -> str | None:
 
 FAILING = ("regression", "missing", "accept-unmatched", "no-baseline", "host-churn")
 UNGATED = ("new", "new-host-class", "calibrating")  # the verdicts of a night that no level gated
+LEVEL_GATED = ("ok", "regression", "accepted")  # the verdicts of a row that a level gated
+
+
+def _gateable(m) -> bool:
+    """A row (or stored metric) that a level can gate: a gated metric without a bound."""
+    return isinstance(m, dict) and bool(m.get("gate")) and m.get("bound") is None
+
+
+def _level_gated(m) -> bool:
+    return _gateable(m) and m.get("verdict") in LEVEL_GATED
 
 
 def _accept_for(entry: dict, key: str, applies=lambda night: True) -> dict | None:
@@ -213,6 +225,24 @@ def _unreturned(entries: list[dict], run: str | None) -> list[str]:
         if run in (e.get("new_class_runs") or []):
             pending[cls] = None
     return list(pending)
+
+
+def _ungated_nights(past: list[dict], run: str | None) -> int:
+    """How many of `run`'s nights in a row before tonight measured a metric that a level can gate and had no
+    row that a level gated (nights without such a metric neither count nor reset): the count its newest
+    night stored (`ungated_nights`), or, in a history written before that was stored, counted back from the
+    stored verdicts to the last night that a level gated."""
+    n = 0
+    for e in reversed(past):
+        mine = [m for k, m in (e.get("metrics") or {}).items() if _split(k)[0] == run]
+        counts = e.get("ungated_nights")
+        count = counts.get(run) if isinstance(counts, dict) else None
+        if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+            return n + count
+        if any(_level_gated(m) for m in mine):
+            return n
+        n += any(_gateable(m) for m in mine)
+    return n
 
 
 def _seed_levels(past: list[dict]) -> dict:
@@ -366,9 +396,8 @@ def compare(history: dict, entry: dict, window: int, start_note: str = "") -> tu
     # its levels is recorded (and warned about); once more than `window` of the classes it had a first night
     # on within the history have had no night since, its ungated rows fail. A stable pool of up to `window`
     # models never gets there, and a class the runner comes back to stops counting.
-    measured = {_split(k)[0] for k in entry["metrics"]}
-    stored["new_class_runs"] = sorted((r for r in measured if run_class(entry, r) not in _run_classes(store, r)),
-                                      key=lambda r: r or "")
+    measured = sorted({_split(k)[0] for k in entry["metrics"]}, key=lambda r: r or "")
+    stored["new_class_runs"] = [r for r in measured if run_class(entry, r) not in _run_classes(store, r)]
     recent = (past + [stored])[-HISTORY_LIMIT:]
     churn = {}
     for run in measured:
@@ -377,12 +406,27 @@ def compare(history: dict, entry: dict, window: int, start_note: str = "") -> tu
             churn[run] = (f"host churn: {len(unreturned)} host classes of {run} had their first night in the "
                           f"last {len(recent)} nights and none has had another, more than --window {window}, so "
                           f"its levels cannot calibrate (is its host fingerprint stable?)")
-    rows = []
-    for key, m in sorted(entry["metrics"].items()):
-        run = _split(key)[0]
-        cls = run_class(entry, run)
-        row = _apply_bound(_evaluate(past, entry, key, m, window, cls, store), m)
-        if run in churn and m["gate"] and row["bound"] is None and row["verdict"] in UNGATED:
+    rows = [_apply_bound(_evaluate(past, entry, key, m, window, run_class(entry, _split(key)[0]), store), m)
+            for key, m in sorted(entry["metrics"].items())]
+    # The backstop: classes that each come back a few times before the next replaces them never stay
+    # unreturned, yet none calibrates. So a run's nights in a row without a row that a level gated are
+    # counted (and stored, so that the count outlives the entries); once they make a full history, tonight's
+    # included, its ungated rows fail. A stable pool gates a night long before that.
+    stored["ungated_nights"] = {}
+    for run in measured:
+        mine = [r for r in rows if _split(r["metric"])[0] == run]
+        gated, gateable = any(map(_level_gated, mine)), any(map(_gateable, mine))
+        n = 0 if gated else _ungated_nights(past, run) + gateable
+        if isinstance(run, str):
+            stored["ungated_nights"][run] = n
+        if n >= HISTORY_LIMIT and run not in churn:
+            churn[run] = (f"host churn: none of the last {n} nights of {run} had a metric that a level "
+                          f"gated, a full history ({HISTORY_LIMIT}) or more, so its host classes do not stay "
+                          f"long enough to calibrate (is its host fingerprint stable?)")
+    for row in rows:
+        key, m = row["metric"], entry["metrics"][row["metric"]]
+        run, cls = _split(key)[0], row["host"]
+        if run in churn and _gateable(row) and row["verdict"] in UNGATED:
             # Not gated tonight, and with this churn it never will be: fail it rather than stay green.
             note = f"host churn on {run}; tonight {row['verdict']}" + (f" ({row['note']})" if row["note"] else "")
             row.update(verdict="host-churn", note=note, churn=churn[run])
@@ -396,7 +440,6 @@ def compare(history: dict, entry: dict, window: int, start_note: str = "") -> tu
                 if not (m["gate"] and row["verdict"] == "regression"):
                     calibration = calibration + [m["value"]]
                 store[key][cls] = dict(levels, calibration=calibration[:window])
-        rows.append(row)
     # A gated metric that had a value last night, or was already missing, is missing until it is produced
     # again or the registry drops the metric, its run, or (for a metric read from one run) moves it to
     # another run; the entry records what was declared tonight.

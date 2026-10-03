@@ -233,17 +233,33 @@ report at exit).
     (its first night ever included) prints `::warning title=perf new-host-class::<run> on <class> (<n> host
     classes with levels)`, so the run page shows it although the night does not fail. If classes keep
     changing (a CPU model string that is not stable, or a pool that keeps bringing CPU models the history
-    has not seen), no class reaches its 5 calibration nights and nothing is gated, so the step would stay
-    green. Therefore, when more than `--window` (5) of the classes a run had its first night on within the
-    history (60 entries) have had no night since, its rows that no level gated tonight (`new`,
-    `new-host-class` and `calibrating`, except metrics with a bound, which are gated on every class) fail
-    as **`host-churn`**, with one `::error` per run. A night that a class's levels did gate keeps its
-    verdict. A class stops counting once the runner comes back to it, so a stable pool of up to 5 CPU
-    models never gets there, and a fingerprint that never repeats fails from its 6th night. In a
-    simulation (200 series of 150 nights per pool size, each model drawn with a random weight from 1 to
-    30), pools of 3 and 5 models never failed; 6 models failed in 3 series, on 1 night each; 8 in 15
-    series, on at most 5 nights; 13 in 128 series, on a median of 2 nights (worst 18). Fix the
-    fingerprint, or look at what the pool runs on; the churning nights still calibrate their classes.
+    has not seen), they may never reach their 5 calibration nights, so nothing would be gated and the step
+    would stay green. Two rules prevent that. Under either, the run's rows that no level gated tonight
+    (`new`, `new-host-class` and `calibrating`; not metrics with a bound, which are gated on every class,
+    nor metrics that are not gated) fail as **`host-churn`**, with one `::error` per run, and a row that a
+    class's levels did gate keeps its verdict.
+    1. *Classes that do not come back:* more than `--window` (5) of the classes the run had its first night
+       on within the history (60 entries, tonight's included) have had no night since. A class stops
+       counting once the runner comes back to it, so a stable pool of up to 5 CPU models never gets there,
+       and a fingerprint that never repeats fails from its 6th night.
+    2. *A full history without a gated night:* none of the run's last 60 nights, tonight's included, had a
+       row that a level gated (`ok`, `regression` or `accepted` of a gated metric without a bound). This
+       catches classes that each come back a few times before the next one replaces them, which rule 1
+       misses: with the class changing every 2nd, 3rd or 4th night, every night from the 60th fails. Only
+       nights on which the run measured a gated metric without a bound count, and a night that a level
+       gated starts the count again. Each entry stores the count (`ungated_nights`), so it outlives the
+       entries, and a night on which the run measured nothing does not reset it.
+
+    So within every 60 of its nights a run has a night that a level gated, or it fails. In a simulation
+    (200 series of 150 nights per pool size, each model drawn with a random weight from 1 to 30), pools of
+    3 and 5 models never failed; 6 models failed in 3 series, on 1 night each; 8 in 15 series, on at most
+    5 nights; 13 in 128 series, on a median of 4 nights among those (worst 18). Rule 2 added no red night
+    to any of these series. Fix the fingerprint, or look at what the pool runs on; the churning nights
+    still calibrate their classes. The level store has no cap on classes per key, because a class the
+    runner rarely lands on must keep its levels: churn adds up to one class per key and night (about 150
+    bytes each) until the step goes red. Once the fingerprint is fixed, the old classes stay in the store,
+    unused, while their metrics are declared. They do not age out, and a restart (which would drop them)
+    is honoured only when no history can be fetched, so leave them: they cost only artifact size.
   - **Bounds.** A metric with a `bound` (a number in its unit, quoting the limit of the plan criterion it
     names) is gated against that bound on every night and class, calibration nights included, instead of
     against its anchor; its drift is reported, not gated, and no `perf_accept` can name it.
@@ -324,7 +340,10 @@ report at exit).
   registry, σ = 2.5 % would make the perf step red on a large share of nights from noise alone. Host
   classes remove the step between CPU models, not the noise within one (two VMs of one model still share
   their hosts with other tenants). A class the runner rarely lands on is ungated until it has had 5
-  nights, however far apart they are. A real regression that lands on the same night as a move of the
+  nights, however far apart they are. Host churn (above) fails only when it leaves a run without a gated
+  night: under classes that each recur a few times, the first red is the run's 60th night without one
+  (`host-churn`, not `regression`), and a run that has a gated night at least once in 60 is gated on
+  those nights only. A real regression that lands on the same night as a move of the
   fleet to a new CPU model is calibrated into the new class's anchor, and if the old classes never come
   back, nothing catches it. The gating and the thresholds stay as the plan sets them. The nightly perf
   history on hosted runners is drift tracking, not the binding gate: the binding per-commit perf gates on

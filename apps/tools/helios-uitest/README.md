@@ -20,8 +20,10 @@ The built-in suite is the **ED-15 harness self-test** for the shell and the prop
 2. **Goldens.** The shell (the whole window) and the property grid (the Inspector) at 100 %
    (1920 × 1080) and 200 % (3840 × 2160), in the dark and high-contrast themes. They are compared
    with `engine/editorui/tests/golden` by ꟻLIP: mean ≤ 0.01 and ≤ 0.1 % of pixels above 0.1
-   (07 §4.4). The viewport is masked. A failing comparison writes `<name>.flip.png` next to the
-   capture. A repeated capture must be pixel-identical (determinism).
+   (07 §4.4). A capture identical to its golden passes without computing ꟻLIP, whose error is then
+   0 everywhere (it costs about a minute per 1080p image in Debug sanitizer builds). The viewport
+   is masked. A failing comparison writes `<name>.flip.png` next to the capture. A repeated capture
+   must be pixel-identical (determinism).
 3. **Layout lints** with no issues: at every golden configuration, at 75, 100, 150, 200 and 250 %,
    and with pseudo-localized labels.
 4. **Dual path.** A typed UI edit (origin `ui-scripted`) and the same edit through `cmd.invoke`

@@ -1,13 +1,15 @@
-# NS-0.2: passed on the repository owner's approval (2026-09-30)
+# NS-0.2: passed on hosted Linux on the repository owner's approval (2026-09-30)
 
 | | |
 |---|---|
 | Criterion | **NS-0.2** (04 §11.4): "Loopback 100k pps/core without loss". Class N (09 §5.6), Phase 0, owner WP-0.13 |
 | Approved by | The repository owner (the user), on 2026-09-30 |
 | Recorded by | The Director (Claude Code agent), on 2026-10-03, under 09 §5.6 "Owner approval" (plan revision 12) |
-| Clause covered | The encrypted HTP stack's 100k packets per core, on the hosted nightly runners only |
+| Clause covered | The encrypted HTP stack's 100k packets per core, on the hosted Linux nightly run (`linux-gcc` on `ubuntu-24.04`) only |
+| Not covered | Hosted Windows (`windows-vs2026`): both of its runs measured the stack below 100k, no Windows machine has measured 100k, and the owner has not confirmed the approval for it (below). That run stays strict, so NS-0.2 fails there |
 | Re-test owed | `net_bench --gate`, without `--advisory`, on fixed hardware: WP-0.4's `win-gpu` runner and a Linux lab host (owners WP-0.4 and WP-0.13) |
-| Registry | `scorecard.jsonc`, entry NS-0.2: status `approved`, `owner_approval` 2026-09-30, `advisory` `net.ns02.stack_packets_per_core`, one follow-up |
+| Phase exits | While the re-test is open, this approval carries no phase exit on its own: the exit needs the re-test passed or the owner's re-confirmation at that exit (09 §5.6, §5.7) |
+| Registry | `scorecard.jsonc`, entry NS-0.2: status `approved`, `owner_approval` 2026-09-30, `advisory_runs` `linux-gcc`, `advisory` `net.ns02.stack_packets_per_core`, two follow-ups (the re-test, and hosted Windows) |
 
 ## The owner's decision, verbatim
 
@@ -18,10 +20,9 @@ The quotation keeps the owner's spelling.
 ## What the approval covers, and what it does not
 
 It covers one clause: the rate of encrypted HTP packets through the full stack (`net_bench`'s "NS-0.2 HTP
-stack" line, perf metric `net.ns02.stack_packets_per_core`), as measured by the hosted nightly runners
-(`linux-gcc` on `ubuntu-24.04`, `windows-vs2026` on `windows-latest`). On those runs the nightly passes
-`net_bench --gate --advisory ns02-stack`, which prints that rate with an `NS-0.2 advisory:` line instead of
-failing on it. The threshold stays 100k.
+stack" line, perf metric `net.ns02.stack_packets_per_core`), as measured by the hosted Linux nightly run
+(`linux-gcc` on `ubuntu-24.04`). On that run the nightly passes `net_bench --gate --advisory ns02-stack`, which
+prints that rate with an `NS-0.2 advisory:` line instead of failing on it. The threshold stays 100k.
 
 It does not cover, and the gate still fails on:
 - raw loopback datagrams below 100k per core (`net_bench`'s "NS-0.2 socket" line, and `net_tests`'
@@ -29,8 +30,10 @@ It does not cover, and the gate still fails on:
 - **any loss**, of raw datagrams or of encrypted packets: "without loss" is not approved;
 - an encrypted stack that does not connect or sends nothing;
 - **NS-0.7**, which the same `net_bench --gate` run measures (see below);
-- any run other than the hosted nightly: `net_bench --gate` on a developer machine, the lab or `win-gpu`
-  gates every clause, the stack's rate included.
+- **hosted Windows** (`windows-vs2026` on `windows-latest`), whose nightly step runs `net_bench --gate`
+  without `--advisory` (see "Hosted Windows is not covered");
+- any other run: `net_bench --gate` on a developer machine, the lab or `win-gpu` gates every clause, the
+  stack's rate included.
 
 ## The measurements behind it
 
@@ -69,7 +72,8 @@ What the table shows:
 
 ### The development container ("passes everywhere else")
 
-The shared 4-vCPU dev VM, GCC 13 RelWithDebInfo:
+The shared 4-vCPU dev VM, GCC 13 RelWithDebInfo. Every measurement here is on Linux; no Windows machine has
+measured the stack anywhere but the two hosted runs above.
 - 2026-09-25 (`engine/net/README.md`): raw 478,863 datagrams per core; encrypted stack 1,162,752 of
   1,162,752 delivered, 117,236 packets per core; NS-0.7 600 s at 20,000 pps with 0 drops. Gate passed.
 - 2026-09-30: one 10 s stack run **lost 64 packets** (reported in the Director's paused-state notes; the
@@ -99,6 +103,28 @@ Both runs passed every clause, the strict one included, and neither lost a packe
 hosted shortfall: this VM's raw rate (about 515k per core) is that of the hosted runs that passed, not of the
 about-200k hosts that measured 88k encrypted.
 
+## Hosted Windows is not covered
+
+**No Windows machine has yet measured the encrypted stack at 100k packets per core or more.** The only
+Windows measurements are the two hosted runs above, 85,399 and 84,970 (both below), on two different raw
+rates (249,027 and 223,776 datagrams per core). The owner's stated reasons, "occasional skewed results" and
+"it passes everywhere else", come from Linux: there the level follows the host, and the dev VM passes. On
+Windows the shortfall was not occasional (2 of 2 runs), and no Windows run passed. Nothing on record shows
+that the owner saw the Windows rate when deciding: the Director's paused-state notes of 2026-09-30 listed
+NS-0.7's Windows failure, not NS-0.2's Windows rate. 09 §5.6 names such a run only once the owner has
+confirmed it with its measurements in view, so this record covers hosted Linux only:
+- the nightly's `windows-vs2026` step runs `net_bench --gate` without `--advisory`, and the registry's
+  `advisory_runs` is `["linux-gcc"]`;
+- NS-0.2 therefore fails on the hosted Windows nightly each night the stack measures below 100k there, and
+  it cannot turn green (class N needs Windows and Linux) until that changes;
+- it changes when a Windows run measures 100k or more without loss, or when the owner confirms the approval
+  for hosted Windows with these numbers in view. That confirmation is then quoted here, dated and verbatim;
+  `windows-vs2026` joins `advisory_runs`, its step passes `--advisory ns02-stack`, and
+  `tools/scorecard/test_nightly_workflow.py`'s `AdvisoryScopeTests` follows. A strict `net_bench --gate` on
+  the owner's Windows PC would be useful evidence either way.
+
+The registry lists this as a follow-up owned by the User.
+
 ## NS-0.7 is not covered
 
 NS-0.7 (one trunk connection, 20k pps of 1,200 B for 10 min, < 0.1 % drops, ≤ 1 core per side) failed once
@@ -116,16 +142,35 @@ the nightly gains a `net_bench --gate` step there **without** `--advisory`. If t
 below 100k per core on that fixed hardware, the approval lapses: NS-0.2 is failing again and the stack gets a
 second pass (WP-0.13). The follow-up is listed in `scorecard.jsonc` and in 09 §8.1 until it is done.
 
+Until it is done, the approval carries no phase exit on its own (09 §5.6 "Phase exits"): at the Phase 0 exit
+audit NS-0.2 counts as green only if this re-test has passed or the owner re-confirms the approval there, and
+that choice is the owner's, recorded here when it is made.
+
+## The perf history
+
+`tools/scorecard/perf.py` tracks `net.ns02.stack_packets_per_core` and `net.ns02.socket_pps_per_core` from the
+same run against a fixed anchor with the runtime budget of ±5 % (09 §5.8), and this approval does not change
+that. Because the hosted Linux level follows the host (about 88k encrypted and 200k raw on one host class,
+110k–132k and 255k–451k on the other), the Scorecard job's perf step can fail on the host class alone. The
+2026-10-02 nightly's perf step failed (run 36992204809); which metric failed is in that run's step summary
+and `perf-history` artifact, which the recording agent could not read. A fix, such as a per-host-class anchor
+or a wider budget category for loopback rates, belongs to WP-0.3 and is listed in 09 §8.1.
+
 ## How it is enforced
 
 - `engine/net/bench/net_bench.cpp` and `ns02_gate.h`: `--advisory` takes only `ns02-stack` and only with
-  `--gate` (exit 2 otherwise), and it relaxes only the encrypted stack's rate. `net_tests`' doctest
-  `NS-0.2 stack verdict: the rate gates by default and only the rate can be advisory` and the
-  `net_bench_advisory_*` CTests check both.
-- `.github/workflows/nightly.yml`: the two hosted `net_bench --gate` steps pass `--advisory ns02-stack`.
-- `scorecard.jsonc`: NS-0.2 cites this record. The checker (`tools/scorecard/scorecard.py`) requires a dated
-  record under `docs/evidence/`, a test that still runs and a follow-up. The nightly report reads "passed
-  (owner approval 2026-09-30, evidence docs/evidence/ns-0.2-owner-approval-2026-09-30.md)" and shows the
-  stack's level each night.
+  `--gate` (exit 2 otherwise), and it relaxes only the encrypted stack's rate; a stack that fails logs only
+  its failure, never also the advisory line. `net_tests`' doctests `NS-0.2 stack verdict: the rate gates by
+  default and only the rate can be advisory` and `NS-0.2 advisory note: a failed stack is never also
+  reported as not gated`, and the `net_bench_advisory_*` CTests, check these.
+- `.github/workflows/nightly.yml`: the `linux-gcc` step passes `--advisory ns02-stack`; the `windows-vs2026`
+  step does not.
+- `scorecard.jsonc`: NS-0.2 cites this record with `advisory_runs: ["linux-gcc"]`. The checker
+  (`tools/scorecard/scorecard.py`) requires a dated record under `docs/evidence/`, named nightly runs on the
+  entry's platforms (never a local or lab run), a test that still runs and a follow-up. When `linux-gcc`
+  counted towards a pass, the nightly report reads "passed (owner approval 2026-09-30, evidence
+  docs/evidence/ns-0.2-owner-approval-2026-09-30.md)", whether or not that night's level needed it, and it
+  shows the stack's level on `linux-gcc` each night; Windows' cell shows its plain result.
 - `tools/scorecard/test_nightly_workflow.py` pins the scope: the only advisory in the nightly is
-  `ns02-stack` on those two steps, and NS-0.2 is the only criterion with an approval.
+  `ns02-stack`, exactly on the steps of the runs in `advisory_runs` (`linux-gcc`), and NS-0.2 is the only
+  criterion with an approval.

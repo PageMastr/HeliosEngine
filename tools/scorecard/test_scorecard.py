@@ -651,7 +651,8 @@ class PerfMetricTests(Fixture):
         self.assertFinding(self.run_check(local), "run 'windows-local': 'nightly'")
 
 
-APPROVAL = {"evidence": "docs/evidence/ns02-approval.md", "owner_approval": "2026-09-30", "advisory": ["net.stack"]}
+APPROVAL = {"evidence": "docs/evidence/ns02-approval.md", "owner_approval": "2026-09-30", "advisory": ["net.stack"],
+            "advisory_runs": ["linux-gcc"]}
 FOLLOW_UPS = [{"clause": "re-test on fixed hardware", "owner": "WP-0.4, WP-0.13"}]
 STACK = {"id": "net.stack", "criterion": "NS-0.2", "gate": "net_bench_gate", "pattern": r"stack: (\d+)",
          "unit": "packets/core", "better": "higher", "category": "runtime"}
@@ -750,8 +751,42 @@ class OwnerApprovalTests(Fixture):
         del self.ns02(unapproved)["tests"][-1]["owner_approval"]
         errors = self.run_check(unapproved)
         self.assertFinding(errors, "so it goes on the approval's evidence reference")
+        self.assertFinding(errors, "'advisory_runs' names the runs an owner approval covers")
         self.assertFinding(errors, "'follow_ups' are work an owner approval leaves open")
         self.assertFinding(errors, "it is 'measured'")
+
+    def test_the_approval_names_the_nightly_runs_it_covers(self):
+        no_runs = self.approved()
+        del self.ns02(no_runs)["tests"][-1]["advisory_runs"]
+        self.assertFinding(self.run_check(no_runs), "an owner approval names the nightly runs it covers")
+        for value in ([], "linux-gcc", ["linux-gcc", "linux-gcc"], [1]):
+            self.assertFinding(self.run_check(self.approved({"advisory_runs": value})),
+                               "'advisory_runs' must be a non-empty list of distinct run names")
+        self.assertFinding(self.run_check(self.approved({"advisory_runs": ["linux-nope"]})),
+                           "advisory run 'linux-nope' is not a declared run")
+        self.assertFinding(self.run_check(self.approved({"advisory_runs": ["windows-vs2026"]}, platforms=["linux"])),
+                           "advisory run 'windows-vs2026' is not on the entry's platforms")
+        # A local or lab run gates every clause (09 §5.6), so an approval never covers one.
+        local = self.approved({"advisory_runs": ["linux-gcc", "windows-local"]})
+        local["runs"]["windows-local"] = {"os": "windows", "default": True, "nightly": False}
+        self.assertFinding(self.run_check(local), "advisory run 'windows-local' is not a nightly run")
+        self.assertEqual(self.run_check(self.approved({"advisory_runs": ["linux-gcc", "windows-vs2026"]})), [])
+        # Only the approval's own reference names runs.
+        data = self.approved()
+        self.ns02(data)["tests"][0]["advisory_runs"] = ["linux-gcc"]
+        self.assertFinding(self.run_check(data), "'advisory_runs' names the runs an owner approval covers")
+
+    def test_a_gap_pin_is_never_an_approval(self):
+        # A pin passes while its clause fails, so it can carry none of the approval's fields.
+        pin = {"evidence": "docs/evidence/ns02-approval.md", "owner_approval": "2026-09-30"}
+        gap = [{"clause": "stack rate", "state": "failing", "owner": "WP-0.13", "pinned_by": pin}]
+        self.assertFinding(self.run_check(self.approved(gaps=gap)),
+                           "'owner_approval' applies to an entry's evidence references only")
+        for key, value, fragment in (("advisory", ["net.stack"], "so it goes on the approval's evidence reference"),
+                                     ("advisory_runs", ["linux-gcc"], "'advisory_runs' names the runs an owner "
+                                                                      "approval covers")):
+            gap[0]["pinned_by"] = {**pin, key: value}
+            self.assertFinding(self.run_check(self.approved(gaps=gap)), fragment)
 
 
 class InventoryTests(Fixture):

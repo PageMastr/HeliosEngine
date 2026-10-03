@@ -182,28 +182,38 @@ class NightlyPerfStepsTests(unittest.TestCase):
 
 
 class AdvisoryScopeTests(unittest.TestCase):
-    """NS-0.2's owner approval of 2026-09-30 relaxes one clause on the hosted nightly, the encrypted stack's
-    100k packets per core, through `net_bench --gate --advisory ns02-stack` (09 §5.6). This pins that scope:
-    another advisory in the nightly or another approval in the registry fails here until this test, and its
-    review, say otherwise."""
+    """NS-0.2's owner approval of 2026-09-30 relaxes one clause, the encrypted stack's 100k packets per core, on
+    the runs the registry names (`advisory_runs`), through `net_bench --gate --advisory ns02-stack` (09 §5.6).
+    It covers hosted Linux only: hosted Windows measured about 85k on both runs and the owner has not confirmed
+    it there, so that step stays strict. This pins that scope: another advisory, another advisory run or
+    another approval fails here until this test, and its review, say otherwise."""
 
-    def test_only_ns02s_stack_rate_is_advisory(self):
-        commands = [line for line in WORKFLOW.read_text(encoding="utf-8").splitlines()
-                    if not line.lstrip().startswith("#")]
-        self.assertEqual([m for line in commands for m in re.findall(r"--advisory\b\s*(\S*)", line)],
-                         ["ns02-stack", "ns02-stack"])
-        gates = [line for line in commands if "-- net_bench --gate" in line]
-        self.assertEqual(len(gates), 2)  # linux-gcc and windows-vs2026
-        self.assertTrue(all(line.rstrip().endswith("-- net_bench --gate --advisory ns02-stack") for line in gates),
-                        gates)
+    def test_only_ns02s_stack_rate_is_advisory_and_only_on_the_named_runs(self):
         data, _ = scorecard.load_jsonc(ROOT / "scorecard.jsonc")
         approvals = {e["id"]: scorecard.approval(e) for e in data["criteria"] + data["exit"] if scorecard.approval(e)}
         self.assertEqual(list(approvals), ["NS-0.2"])
-        self.assertEqual(approvals["NS-0.2"]["advisory"], ["net.ns02.stack_packets_per_core"])
-        self.assertEqual(approvals["NS-0.2"]["evidence"], "docs/evidence/ns-0.2-owner-approval-2026-09-30.md")
+        approval = approvals["NS-0.2"]
+        self.assertEqual(approval["advisory"], ["net.ns02.stack_packets_per_core"])
+        self.assertEqual(approval["evidence"], "docs/evidence/ns-0.2-owner-approval-2026-09-30.md")
+        self.assertEqual(approval["advisory_runs"], ["linux-gcc"])
         metric = next(m for m in data["perf_metrics"] if m["id"] == "net.ns02.stack_packets_per_core")
         self.assertEqual((metric["criterion"], metric["gate"]), ("NS-0.2", "net_bench_gate"))
         self.assertIn("NS-0\\.2 HTP stack", metric["pattern"])
+
+        # Each `net_bench --gate` step, by the run its `if:` names. Comments do not count.
+        commands = [line for line in WORKFLOW.read_text(encoding="utf-8").splitlines()
+                    if not line.lstrip().startswith("#")]
+        self.assertEqual([m for line in commands for m in re.findall(r"--advisory\b\s*(\S*)", line)], ["ns02-stack"])
+        gates, run = [], None
+        for line in commands:
+            if m := re.search(r"matrix\.run == '([^']+)'", line):
+                run = m[1]
+            if "-- net_bench --gate" in line:
+                gates.append((run, line.rstrip()))
+        self.assertEqual(sorted(name for name, _ in gates), ["linux-gcc", "windows-vs2026"])
+        for name, line in gates:
+            want = " --advisory ns02-stack" if name in approval["advisory_runs"] else ""
+            self.assertTrue(line.endswith("-- net_bench --gate" + want), (name, line))
 
 
 if __name__ == "__main__":

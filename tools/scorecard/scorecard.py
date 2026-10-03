@@ -14,9 +14,10 @@ the platforms it is expected on. Findings print as `file:line: message`. `invent
 of a build (CTest names, doctest cases per binary) and of `go test -list` output as JSON.
 
 An entry may cite the repository owner's approval (09 §5.6): an `evidence` reference under docs/evidence/
-with `owner_approval` (the date) and `advisory` (the perf metrics of the one clause it passes, which the
-report shows beside the pass). The checker holds it to the plan's rule: one per criterion, a test that
-still runs, and the re-test it owes as a follow-up. The registry never relaxes a result itself.
+with `owner_approval` (the date), `advisory_runs` (the nightly runs it covers) and `advisory` (the perf
+metrics of the one clause it passes, which the report shows beside the pass). The checker holds it to the
+plan's rule: one per criterion, named runs, a test that still runs, and the re-test it owes as a follow-up.
+The registry never relaxes a result itself.
 
 Standard library only, no network. The report and perf tools import this module; nothing here is
 thread-safe or meant to be.
@@ -41,7 +42,7 @@ OSES = ("linux", "windows")
 STATUSES = {"measured", "partial", "unmeasured", "approved"}
 GAP_STATES = {"unmeasured", "failing"}
 REF_KINDS = {"ctest": set(), "doctest": {"case"}, "go": {"test"}, "gate": set(), "ci_job": set(), "evidence": set()}
-REF_OPTIONAL = {"platforms", "run", "note", "tags", "advisory", "owner_approval"}
+REF_OPTIONAL = {"platforms", "run", "note", "tags", "advisory", "advisory_runs", "owner_approval"}
 TEST_KINDS = {"ctest", "doctest", "go", "gate"}  # references that run on a platform
 ENTRY_REQUIRED = {"id", "phase", "source", "owner", "title", "class", "platforms", "threshold", "status", "tests"}
 ENTRY_OPTIONAL = {"gaps", "notes", "follow_ups"}
@@ -607,6 +608,28 @@ def _check_ref(where: str, ref, entry: dict, data: dict, ctx: dict, errors: list
             errors.append(f"{where}: {label}: 'owner_approval' is after today ({ctx['today']})")
         if kind == "evidence" and not ref["evidence"].startswith(APPROVAL_DIR):
             errors.append(f"{where}: {label}: an owner approval is a record under {APPROVAL_DIR}")
+        if kind == "evidence" and not ctx.get("pin") and "advisory_runs" not in ref:
+            errors.append(f"{where}: {label}: an owner approval names the nightly runs it covers in "
+                          f"'advisory_runs' (09 §5.6)")
+    # The runs an approval covers: hosted nightly runs only, since a local or lab run gates every clause.
+    if "advisory_runs" in ref:
+        names = ref["advisory_runs"]
+        if "owner_approval" not in ref or kind != "evidence" or ctx.get("pin"):
+            errors.append(f"{where}: {label}: 'advisory_runs' names the runs an owner approval covers, so it goes on "
+                          f"the approval's evidence reference")
+        elif not isinstance(names, list) or not names or not all(isinstance(n, str) for n in names) or \
+                len(set(names)) != len(names):
+            errors.append(f"{where}: {label}: 'advisory_runs' must be a non-empty list of distinct run names")
+        else:
+            for n in names:
+                run = runs.get(n)
+                if not isinstance(run, dict):
+                    errors.append(f"{where}: {label}: advisory run '{n}' is not a declared run")
+                elif run.get("os") not in entry_plats:
+                    errors.append(f"{where}: {label}: advisory run '{n}' is not on the entry's platforms")
+                elif run.get("nightly") is False:
+                    errors.append(f"{where}: {label}: advisory run '{n}' is not a nightly run: a local or lab run "
+                                  f"gates every clause (09 §5.6)")
     if "advisory" in ref:
         names = ref["advisory"]
         if "owner_approval" not in ref or kind != "evidence" or ctx.get("pin"):

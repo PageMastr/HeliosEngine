@@ -45,11 +45,13 @@ into annotations.
   `unmeasured` (gaps only).
 - **Owner approvals (09 §5.6).** `owner_approval` goes only on an entry's `evidence` reference under
   `docs/evidence/`, as a real `YYYY-MM-DD` date that is not in the future; one per entry, and never on an
-  exit item. The entry also needs a test reference that runs (the approved clause is still measured) and
-  at least one `follow_ups` item (the re-test the approval owes). `advisory`, on the same reference, is a
-  non-empty list of distinct perf metric ids, each declared for this criterion and read from one of its
-  test references (the same gate, or the same doctest case). `follow_ups` without an approval are
-  rejected: without one, an open clause is a gap.
+  exit item. The same reference needs `advisory_runs`, a non-empty list of distinct declared runs on the
+  entry's platforms that the approval covers, none of them `"nightly": false` (a local or lab run gates
+  every clause). The entry also needs a test reference that runs (the approved clause is still measured)
+  and at least one `follow_ups` item (the re-test the approval owes). `advisory`, on the same reference, is
+  a non-empty list of distinct perf metric ids, each declared for this criterion and read from one of its
+  test references (the same gate, or the same doctest case). None of these fields may sit on a gap's
+  `pinned_by`. `follow_ups` without an approval are rejected: without one, an open clause is a gap.
 - **References.** Entries on `any` platform cite only `evidence` and `ci_job`. A reference's `platforms`
   are a subset of its entry's; `run` names a declared run on those platforms; `tags` is for `go` only.
   `ctest` names and doctest `case`s match literally except for `*`, and a name of wildcards only is
@@ -119,16 +121,19 @@ entry cites it and owes a re-test:
 "tests": [
   {"gate": "net_bench_gate"},
   {"evidence": "docs/evidence/ns-0.2-owner-approval-2026-09-30.md", "owner_approval": "2026-09-30",
-   "advisory": ["net.ns02.stack_packets_per_core"]}
+   "advisory": ["net.ns02.stack_packets_per_core"], "advisory_runs": ["linux-gcc"]}
 ],
-"follow_ups": [{"clause": "Re-test … on fixed hardware …", "owner": "WP-0.4, WP-0.13"}]
+"follow_ups": [{"clause": "Re-test … on fixed hardware …", "owner": "WP-0.4, WP-0.13"}, …]
 ```
 
 The approval does not stop any reference from counting: what is relaxed, and where, is the gate command's
 business (NS-0.2's is `net_bench --gate --advisory ns02-stack`, which reports the encrypted stack's rate
-instead of failing on it, on the hosted nightly only). `advisory` names the perf metrics of the approved
-clause so that the report can show their level beside the pass. `follow_ups` are `{"clause", "owner"}`
-items that the approval leaves open; they do not block the pass, and the report lists them.
+instead of failing on it, on the `linux-gcc` nightly step only; the `windows-vs2026` step stays strict
+because the owner has not confirmed the approval for hosted Windows). `advisory_runs` names the runs whose
+gate step carries the relaxation, and `test_nightly_workflow.py`'s `AdvisoryScopeTests` holds `nightly.yml`
+to it. `advisory` names the perf metrics of the approved clause so that the report can show their level
+beside the pass. `follow_ups` are `{"clause", "owner"}` items that the approval leaves open; they do not
+block the pass, and the report lists them.
 
 **Runs and gates.** `runs` declares the result sets: `{"os": "linux"|"windows", "default": bool,
 "description": "…"}`. A `default` run counts for every reference of its OS without a `run`; others (ASan)
@@ -145,14 +150,14 @@ and red), with the `owner` WP. `pinned_by` names a test that pins a known diverg
 ## The nightly report
 
 `.github/workflows/nightly.yml` builds and tests on Linux (GCC, Clang, ASan/UBSan), Windows (VS 2026, VS 2022,
-clang-cl) and Go (Linux, Windows), runs `net_bench --gate --advisory ns02-stack` on GCC and VS 2026 (NS-0.2's
-owner approval; NS-0.7 and the rest of NS-0.2 still gate), and runs each engine/net fuzz target under
-libFuzzer for 1 h (NS-0.4). Each job uploads a result set; the `scorecard` job evaluates them:
+clang-cl) and Go (Linux, Windows), runs `net_bench --gate --advisory ns02-stack` on GCC (NS-0.2's owner
+approval; NS-0.7 and the rest of NS-0.2 still gate) and `net_bench --gate` on VS 2026, and runs each
+engine/net fuzz target under libFuzzer for 1 h (NS-0.4). Each job uploads a result set; the `scorecard` job evaluates them:
 
 ```
 python3 tools/scorecard/runners.py doctest --build-dir B [--config C] [--perf] --out R/doctest   # per-case XML
 python3 tools/scorecard/runners.py gate --name net_bench_gate --build-dir B --out R/gates -- net_bench --gate \
-        --advisory ns02-stack
+        [--advisory ns02-stack]     # the flag on linux-gcc only (advisory_runs)
 python3 tools/scorecard/report.py --results results --ci-jobs ci-jobs.json --previous last/scorecard-report.json \
         [--scheduled] --out scorecard-report.json --markdown scorecard.md
 python3 tools/scorecard/perf.py extract --results results --sha SHA --out perf-entry.json
@@ -170,10 +175,15 @@ although every case passed (a sanitizer report at exit).
   `min_seconds` fails, and so does a gate without one. The criterion passes when every reference passes on
   every platform and it has no gap.
   A broken pin (a `pinned_by` test that now fails) is reported so that the registry is updated.
-- **Owner approvals.** An approved entry is evaluated like any other. While its record exists, its pass
-  reads "passed (owner approval <date>, evidence <record>)" and each platform's cell "passed (approval)";
-  the row shows tonight's value of each `advisory` metric per run ("not measured" when no result set has
-  it) and lists the follow-ups, whatever the verdict. The summary counts the passes on an approval.
+- **Owner approvals.** An approved entry is evaluated like any other. While its record exists, a pass to
+  which one of its `advisory_runs` contributed reads "passed (owner approval <date>, evidence <record>)",
+  and that platform's cell "passed (approval)". The label marks the entry's pass on a run the approval
+  covers, whether or not that night's level needed it; the advisory levels beside it show whether it did.
+  A platform without a covered run, and a report without one (a local `validate.ps1` run), show the plain
+  result. The row shows tonight's value of each `advisory` metric in the covered runs ("not measured" when
+  none has it) and lists the follow-ups, whatever the verdict. The summary counts the labelled passes, and
+  a line under the table says that an approval with an open re-test carries no phase exit on its own
+  (09 §5.6, §5.7).
 - **Green (09 §5.6).** The report keeps a streak per criterion from last night's report: consecutive passing
   *scheduled* nightlies. A manual run never extends it, and a failure resets it. A scheduled report more than
   36 h after the previous scheduled one restarts every streak, because the night in between left no report
@@ -271,3 +281,7 @@ If the plan changes a threshold, the registry follows the plan, never the other 
 ## Plan conformance
 
 Plan-Rev: 12
+
+Written at plan revision 6 (WP-0.3, #10, #11, #13) and re-checked at revision 12 on 2026-10-03, when 09 §5.6's
+owner approval added `owner_approval`, `advisory_runs`, `advisory`, `follow_ups` and the `approved` status.
+Revisions 7–11 were re-checked then too: none changes a rule this directory implements (09 §5.10.4 (c)).

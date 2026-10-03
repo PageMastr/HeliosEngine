@@ -1,4 +1,4 @@
 #! -rules CONF-06 -strict
 # Legacy files keep the legacy name; bodies, strings, comments and Down sections are not the net schema;
 # services apply in Schemas order (zeta before chat), and LIKE, INHERITS, ALTER COLUMN TYPE, RENAME
-# COLUMN of known tables and columns, WITH … INSERT INTO and ENVSUB OFF are followed.
+# COLUMN of known tables and columns, WITH ... INSERT INTO and ENVSUB OFF are followed.

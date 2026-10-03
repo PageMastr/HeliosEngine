@@ -327,7 +327,7 @@ if ($audit.Count -eq 1) {
 # running the hook, and nothing ends the job. Runs step 9's block with stand-ins: $EnvLines (the lines of .env, $null
 # when it is missing), $HookAcl (the hook's ACL, $null when the hook is missing) and $AccountSid (helios-ci's SID),
 # with the console's default error preference (Continue: a cmdlet's error does not stop the block unless it says
-# so); leaves the service changes in $script:serviceLog, and an error that ended the block there too.
+# so); leaves the service changes in $script:serviceLog, and an error that ends the block propagates.
 $step9 = @($blocks | Where-Object { $_ -match '(?m)^# Step 9:' })
 Assert-Equal 1 $step9.Count 'the runbook has one step 9 block'
 $hookPath = 'D:\helios-ci\hooks\job-started.ps1'

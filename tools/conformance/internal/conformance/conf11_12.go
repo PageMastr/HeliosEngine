@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"maps"
 	"path"
 	"regexp"
 	"strconv"
@@ -178,8 +179,8 @@ func (p *Pass) cmake(f string) []cmakeCmd {
 }
 
 // isaLevels reads cmake/HeliosIsa.cmake for the names that carry AVX-class flags everywhere: the
-// variables it sets from them outside a function, or into the parent scope or the cache (02 §1.1's
-// HELIOS_ISA_AVX2), and the functions that return them through output arguments (helios_isa_avx2_flags),
+// variables it sets from them outside a function (a macro body counts as outside: it writes its caller's
+// scope), or into the parent scope or the cache (02 §1.1's HELIOS_ISA_AVX2), and the functions that return them through output arguments (helios_isa_avx2_flags),
 // with those arguments' positions. A call to such a function sets its output like set() does: at file
 // scope it defines a level set (helios_isa_avx2_flags(HELIOS_ISA_AVX2)), inside a function a local that a
 // later CACHE or PARENT_SCOPE set publishes. The file is read until nothing new is found, so a function
@@ -191,20 +192,20 @@ func isaLevels(t *Tree) (vars map[string]bool, producers map[string]map[int]bool
 	for changed := true; changed; {
 		changed = false
 		local := map[string]bool{}
-		fn, params := "", []string(nil)
+		fn, params, macro := "", []string(nil), false
 		for _, c := range cmds {
 			fields := strings.Fields(c.args)
 			first := ""
 			if len(fields) > 0 {
 				first = strings.Trim(fields[0], `"`)
 			}
-			name, carries := "", false
 			switch c.name {
 			case "function", "macro":
-				fn, local, params = first, map[string]bool{}, fields[min(1, len(fields)):]
+				fn, local, params = strings.ToLower(first), map[string]bool{}, fields[min(1, len(fields)):]
+				macro = c.name == "macro"
 				continue
 			case "endfunction", "endmacro":
-				fn, params, local = "", nil, map[string]bool{}
+				fn, params, local, macro = "", nil, map[string]bool{}, false
 				continue
 			case "foreach": // foreach(v IN LISTS <level set>): v holds the flags in the loop
 				if len(fields) > 1 && listsCarry(fields[1:], func(v string) bool { return local[v] || vars[v] }) {
@@ -212,34 +213,31 @@ func isaLevels(t *Tree) (vars map[string]bool, producers map[string]map[int]bool
 				}
 				continue
 			case "set", "list", "string":
-				name = first
-				if c.name != "set" && len(fields) > 1 {
-					name = strings.Trim(fields[1], `"`)
-				}
-				carries = len(avxFlags(c.args)) > 0
-				for _, v := range cmakeRefs(c.args) {
+				name, read := writtenVar(c.name, cmakeArgs(c.args))
+				carries := len(avxFlags(read)) > 0
+				for _, v := range cmakeRefs(read) {
 					carries = carries || local[v] || vars[v]
+				}
+				if carries && name != "" {
+					changed = setCarrier(name, c.args, fn, macro, params, local, vars, producers) || changed
 				}
 			default:
 				for i := range producers[c.name] {
 					if i < len(fields) {
 						out := strings.Trim(fields[i], `"`)
-						changed = setCarrier(out, c.args, fn, params, local, vars, producers) || changed
+						changed = setCarrier(out, c.args, fn, macro, params, local, vars, producers) || changed
 					}
 				}
-				continue
-			}
-			if carries && name != "" {
-				changed = setCarrier(name, c.args, fn, params, local, vars, producers) || changed
 			}
 		}
 	}
 	return vars, producers
 }
 
-// setCarrier records that name (set by a command with args, inside function fn or at file scope) holds
-// AVX-class flags, and reports whether that is new to vars or producers.
-func setCarrier(name, args, fn string, params []string, local, vars map[string]bool,
+// setCarrier records that name (set by a command with args, inside function or macro fn, or at file scope)
+// holds AVX-class flags, and reports whether that is new to vars or producers. A macro body writes its
+// caller's scope, which the scan takes to be the file's: a macro called at file scope defines a level set.
+func setCarrier(name, args, fn string, macro bool, params []string, local, vars map[string]bool,
 	producers map[string]map[int]bool) bool {
 	changed := false
 	switch {
@@ -252,7 +250,7 @@ func setCarrier(name, args, fn string, params []string, local, vars map[string]b
 				producers[fn][i], changed = true, true
 			}
 		}
-	case fn == "" || strings.Contains(args, "PARENT_SCOPE") || strings.Contains(args, "CACHE"):
+	case fn == "" || macro || strings.Contains(args, "PARENT_SCOPE") || strings.Contains(args, "CACHE"):
 		if !vars[name] {
 			vars[name], changed = true, true
 		}
@@ -317,7 +315,6 @@ func checkISAGrants(p *Pass) {
 		}
 	}
 	for _, f := range p.Files {
-		levelFile := f == isaLevelSets
 		for i, l := range p.Tree.Lines(f) {
 			code := strings.SplitN(l, "#", 2)[0]
 			if m := avxListRE.FindString(code); m != "" {
@@ -325,108 +322,222 @@ func checkISAGrants(p *Pass) {
 					"(ADR-011 amendment, 02 §1.1)", m)
 			}
 		}
-		// Variables holding AVX-class flags: the level sets everywhere, plus each function's own.
-		fresh := func() map[string]bool {
-			m := map[string]bool{}
-			for v := range levelVars {
-				m[v] = true
-			}
-			return m
+		s := isaScan{p: p, f: f, cmds: cmds[f], levelVars: levelVars, producers: producers, wrappers: wrappers}
+		// A function body runs when it is called, so it reads every variable its file sets, also one set
+		// after the definition: a first pass collects them, the second reports.
+		s.run(s.run(nil, false), true)
+	}
+}
+
+// isaScan reads one CMake file for CONF-11, tracking the variables that hold AVX-class flags per scope.
+type isaScan struct {
+	p         *Pass
+	f         string
+	cmds      []cmakeCmd
+	levelVars map[string]bool
+	producers map[string]map[int]bool
+	wrappers  map[string]bool
+}
+
+// isaFrame is a scope: the file, or the body of a function or macro being read.
+type isaFrame struct {
+	vars  map[string]bool // the variables that hold AVX-class flags
+	fn    string          // the function or macro, lower case; "" at file scope
+	macro bool
+}
+
+// run reads the file once and returns the variables its file scope ends with. fileVars (from a first
+// pass) are visible in every function body; with report false, nothing is reported.
+func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
+	p, f := s.p, s.f
+	reportf := func(line int, format string, args ...any) {
+		if report {
+			p.Report(f, line, format, args...)
 		}
-		avxVars, fn := fresh(), ""
-		for _, c := range cmds[f] {
-			fields := strings.Fields(c.args)
-			first := ""
-			if len(fields) > 0 {
-				first = strings.Trim(fields[0], `"`)
+	}
+	levelFile := f == isaLevelSets
+	cur := isaFrame{vars: maps.Clone(s.levelVars)}
+	var outer []isaFrame // the scopes around the definition being read, the file's first
+	// mark records that name holds the flags. A set() in a macro body writes its caller's scope, and so
+	// does PARENT_SCOPE in a function; a CACHE entry is seen by the file too.
+	mark := func(name, args string) {
+		cur.vars[name] = true
+		if n := len(outer); n > 0 {
+			if cur.macro || strings.Contains(args, "PARENT_SCOPE") {
+				outer[n-1].vars[name] = true
 			}
-			flags := avxFlags(c.args)
-			for _, v := range cmakeRefs(c.args) {
-				if avxVars[v] {
-					flags = append(flags, "${"+v+"}")
-				}
-			}
-			// in HeliosIsa.cmake, only the image-level function applies a level
-			levelSets := levelFile && fn == levelFunction
-			switch c.name {
-			case "function", "macro", "endfunction", "endmacro":
-				avxVars, fn = fresh(), ""
-				if c.name == "function" || c.name == "macro" {
-					fn = strings.ToLower(first)
-				}
-				if first == "helios_avx2_sources" {
-					p.Report(f, c.line, "helios_avx2_sources() grants AVX2 to single files: images are built at one "+
-						"level (ADR-011 amendment, 02 §1.1)")
-				}
-				continue
-			case "helios_avx2_sources":
-				p.Report(f, c.line, "helios_avx2_sources() grants AVX2 to single files: images are built at one level "+
-					"(ADR-011 amendment, 02 §1.1)")
-				continue
-			case "foreach": // foreach(v IN LISTS <flags>): v holds them in the loop
-				if len(fields) > 1 && listsCarry(fields[1:], func(v string) bool { return avxVars[v] }) {
-					avxVars[first] = true
-				}
-				continue
-			case "set", "list", "string":
-				name := first
-				if c.name != "set" && len(fields) > 1 {
-					name = strings.Trim(fields[1], `"`)
-				}
-				if len(flags) > 0 {
-					avxVars[name] = true
-				}
-				if avxListVarRE.MatchString(name) && !avxListRE.MatchString(name) {
-					p.Report(f, c.line, "%s selects targets or sources for AVX-class flags: images are built at one "+
-						"level (ADR-011 amendment, 02 §1.1)", name)
-				}
-				if langFlagsRE.MatchString(name) && !probeFlagsRE.MatchString(name) && len(flags) > 0 && !levelSets {
-					p.Report(f, c.line, "%s carries %s: ISA flags come only from the image level (02 §1.1)", name,
-						strings.Join(flags, " "))
-				}
-				continue
-			}
-			if outs, ok := producers[c.name]; ok { // helios_isa_avx2_flags(out): out holds the flags
-				for i := range outs {
-					if i < len(fields) {
-						avxVars[strings.Trim(fields[i], `"`)] = true
-					}
-				}
-				continue
-			}
-			if len(flags) == 0 {
-				continue
-			}
-			perFile := c.name == "set_source_files_properties" ||
-				c.name == "set_property" && strings.EqualFold(first, "SOURCE")
-			perTarget := c.name == "target_compile_options" || c.name == "add_compile_options" ||
-				c.name == "add_definitions" || // a directory-wide grant; CMake passes non -D flags through
-				c.name == "set_target_properties" || c.name == "set_property" && strings.EqualFold(first, "TARGET")
-			perDir := c.name == "set_directory_properties" || c.name == "set_property" && strings.EqualFold(first, "DIRECTORY")
-			switch {
-			case perFile && (grantPropRE.MatchString(c.args) || c.name == "set_source_files_properties"):
-				p.Report(f, c.line, "%s gives single files %s: images are built at one level (02 §1.1)", c.name,
-					strings.Join(flags, " "))
-			case perTarget && !levelSets && (c.name != "set_target_properties" && c.name != "set_property" ||
-				grantPropRE.MatchString(c.args)):
-				who := first
-				if c.name == "add_compile_options" || c.name == "add_definitions" {
-					who = "a directory's targets"
-				}
-				p.Report(f, c.line, "%s gives %s %s below the image level: only %s's level sets carry ISA flags "+
-					"(02 §1.1)", c.name, who, strings.Join(flags, " "), isaLevelSets)
-			case perDir && !levelSets && grantPropRE.MatchString(c.args):
-				p.Report(f, c.line, "%s gives a directory's targets %s below the image level: only %s's level sets "+
-					"carry ISA flags (02 §1.1)", c.name, strings.Join(flags, " "), isaLevelSets)
-			case wrappers[c.name] && !levelSets:
-				// Only arguments that are options: a flag named in a message is not passed on.
-				if opts := optionFlags(c.args, avxVars); len(opts) > 0 {
-					p.Report(f, c.line, "%s() is passed %s: a wrapper can grant them below the image level, and only "+
-						"%s's level sets carry ISA flags (02 §1.1)", c.name, strings.Join(opts, " "), isaLevelSets)
-				}
+			if strings.Contains(args, "CACHE") {
+				outer[0].vars[name] = true
 			}
 		}
 	}
+	for _, c := range s.cmds {
+		fields := strings.Fields(c.args)
+		first := ""
+		if len(fields) > 0 {
+			first = strings.Trim(fields[0], `"`)
+		}
+		flags := carriedFlags(c.args, cur.vars)
+		// in HeliosIsa.cmake, only the image-level function applies a level
+		levelSets := levelFile && cur.fn == levelFunction
+		switch c.name {
+		case "function", "macro":
+			// A body reads its caller's variables: the scope around the definition stands in for them.
+			body := isaFrame{vars: maps.Clone(cur.vars), fn: strings.ToLower(first), macro: c.name == "macro"}
+			for v := range fileVars {
+				body.vars[v] = true
+			}
+			outer, cur = append(outer, cur), body
+			if first == "helios_avx2_sources" {
+				reportf(c.line, "helios_avx2_sources() grants AVX2 to single files: images are built at one "+
+					"level (ADR-011 amendment, 02 §1.1)")
+			}
+			continue
+		case "endfunction", "endmacro":
+			if n := len(outer); n > 0 {
+				outer, cur = outer[:n-1], outer[n-1]
+			}
+			continue
+		case "helios_avx2_sources":
+			reportf(c.line, "helios_avx2_sources() grants AVX2 to single files: images are built at one level "+
+				"(ADR-011 amendment, 02 §1.1)")
+			continue
+		case "foreach": // foreach(v IN LISTS <flags>): v holds them in the loop
+			if len(fields) > 1 && listsCarry(fields[1:], func(v string) bool { return cur.vars[v] }) {
+				cur.vars[first] = true
+			}
+			continue
+		case "set", "list", "string":
+			name, read := writtenVar(c.name, cmakeArgs(c.args))
+			flags = carriedFlags(read, cur.vars)
+			if len(flags) > 0 && name != "" {
+				mark(name, c.args)
+			}
+			if avxListVarRE.MatchString(name) && !avxListRE.MatchString(name) {
+				reportf(c.line, "%s selects targets or sources for AVX-class flags: images are built at one "+
+					"level (ADR-011 amendment, 02 §1.1)", name)
+			}
+			if langFlagsRE.MatchString(name) && !probeFlagsRE.MatchString(name) && len(flags) > 0 && !levelSets {
+				reportf(c.line, "%s carries %s: ISA flags come only from the image level (02 §1.1)", name,
+					strings.Join(flags, " "))
+			}
+			continue
+		}
+		if outs, ok := s.producers[c.name]; ok { // helios_isa_avx2_flags(out): out holds the flags
+			for i := range outs {
+				if i < len(fields) {
+					mark(strings.Trim(fields[i], `"`), "")
+				}
+			}
+			continue
+		}
+		if len(flags) == 0 {
+			continue
+		}
+		perFile := c.name == "set_source_files_properties" ||
+			c.name == "set_property" && strings.EqualFold(first, "SOURCE")
+		perTarget := c.name == "target_compile_options" || c.name == "add_compile_options" ||
+			c.name == "add_definitions" || // a directory-wide grant; CMake passes non -D flags through
+			c.name == "set_target_properties" || c.name == "set_property" && strings.EqualFold(first, "TARGET")
+		perDir := c.name == "set_directory_properties" || c.name == "set_property" && strings.EqualFold(first, "DIRECTORY")
+		switch {
+		case perFile && (grantPropRE.MatchString(c.args) || c.name == "set_source_files_properties"):
+			reportf(c.line, "%s gives single files %s: images are built at one level (02 §1.1)", c.name,
+				strings.Join(flags, " "))
+		case perTarget && !levelSets && (c.name != "set_target_properties" && c.name != "set_property" ||
+			grantPropRE.MatchString(c.args)):
+			who := first
+			if c.name == "add_compile_options" || c.name == "add_definitions" {
+				who = "a directory's targets"
+			}
+			reportf(c.line, "%s gives %s %s below the image level: only %s's level sets carry ISA flags "+
+				"(02 §1.1)", c.name, who, strings.Join(flags, " "), isaLevelSets)
+		case perDir && !levelSets && grantPropRE.MatchString(c.args):
+			reportf(c.line, "%s gives a directory's targets %s below the image level: only %s's level sets "+
+				"carry ISA flags (02 §1.1)", c.name, strings.Join(flags, " "), isaLevelSets)
+		case s.wrappers[c.name] && !levelSets:
+			// Only arguments that are options: a flag named in a message is not passed on.
+			if opts := optionFlags(c.args, cur.vars); len(opts) > 0 {
+				reportf(c.line, "%s() is passed %s: a wrapper can grant them below the image level, and only "+
+					"%s's level sets carry ISA flags (02 §1.1)", c.name, strings.Join(opts, " "), isaLevelSets)
+			}
+		}
+	}
+	if len(outer) > 0 { // a definition still open at the end of the file
+		return outer[0].vars
+	}
+	return cur.vars
+}
+
+// carriedFlags returns the AVX-class flags in args: literal, or through a variable in vars.
+func carriedFlags(args string, vars map[string]bool) []string {
+	flags := avxFlags(args)
+	for _, v := range cmakeRefs(args) {
+		if vars[v] {
+			flags = append(flags, "${"+v+"}")
+		}
+	}
+	return flags
+}
+
+// writtenVar returns the variable that a set(), list() or string() writes, and the text of the arguments
+// its value comes from: for string(REPLACE), string(REGEX …) the match pattern is left out (a pattern
+// that names a flag removes it), and the output is the argument CMake writes (string(REPLACE <match>
+// <replace> <out> <input>) writes its 4th, string(JOIN <glue> <out> …) its 3rd).
+func writtenVar(cmd string, args []string) (name, read string) {
+	arg := func(i int) string {
+		if i >= 0 && i < len(args) {
+			return strings.Trim(args[i], `"`)
+		}
+		return ""
+	}
+	without := func(skip int) string {
+		var keep []string
+		for i, a := range args {
+			if i != skip {
+				keep = append(keep, a)
+			}
+		}
+		return strings.Join(keep, " ")
+	}
+	all := strings.Join(args, " ")
+	switch cmd {
+	case "set":
+		return arg(0), all
+	case "list":
+		switch strings.ToUpper(arg(0)) {
+		case "LENGTH", "GET", "JOIN", "SUBLIST", "FIND":
+			return arg(len(args) - 1), all
+		case "TRANSFORM":
+			for i := range args {
+				if strings.EqualFold(arg(i), "OUTPUT_VARIABLE") {
+					return arg(i + 1), all
+				}
+			}
+		}
+		return arg(1), all
+	case "string":
+		switch strings.ToUpper(arg(0)) {
+		case "REPLACE":
+			return arg(3), without(1)
+		case "REGEX":
+			switch strings.ToUpper(arg(1)) {
+			case "REPLACE":
+				return arg(4), without(2)
+			case "MATCH", "MATCHALL":
+				return arg(3), without(2)
+			}
+			return "", all
+		case "JOIN", "TOLOWER", "TOUPPER", "STRIP", "GENEX_STRIP", "CONFIGURE", "MAKE_C_IDENTIFIER", "LENGTH", "HEX":
+			return arg(2), all
+		case "SUBSTRING":
+			return arg(4), all
+		case "REPEAT", "FIND":
+			return arg(3), all
+		}
+		return arg(1), all
+	}
+	return "", all
 }
 
 // optionFlags returns the AVX-class flags, literal or through a variable in avxVars, among a command's
@@ -509,7 +620,7 @@ var (
 	dispatchRE    = regexp.MustCompile(`\b(ifunc|target_clones)\s*\(`)
 	attrGroupRE   = regexp.MustCompile(`__(?:declspec|attribute__)\s*\(`)
 	externCRE     = regexp.MustCompile(`^extern\s*"C"$`)
-	aggregateRE   = regexp.MustCompile(`^(typedef\b|(struct|enum|union)\b)`)
+	aggregateRE   = regexp.MustCompile(`^(?:(?:static|extern|const|volatile)\s+)*(typedef\b|(struct|enum|union)\b)`)
 	cKeywords     = map[string]bool{"static": true, "const": true, "volatile": true, "extern": true, "inline": true,
 		"int": true, "void": true, "char": true, "unsigned": true, "signed": true, "long": true, "short": true,
 		"__cdecl": true, "__stdcall": true, "WINAPI": true, "NTAPI": true, "PIMAGE_TLS_CALLBACK": true, "struct": true,
@@ -614,8 +725,8 @@ func checkGateLine(p *Pass, f string, line int, l string) {
 
 // checkGateSymbols reports file-scope definitions without `static` other than the three gate exports.
 // The scan is textual: statements at file scope (inside an `extern "C" {` block too), with preprocessor
-// lines skipped; an aggregate's `typedef struct {…} Name;` and function bodies are not definitions of
-// their own.
+// lines skipped. An aggregate's body, a `typedef struct {…} Name;` and function bodies are not definitions
+// of their own; a variable declared after an aggregate's body (`struct {…} s;`) is.
 func checkGateSymbols(p *Pass, f string, lines []string) {
 	depth, base, stmt, start, kind := 0, 0, "", 0, ""
 	cont := false
@@ -648,8 +759,9 @@ func checkGateSymbols(p *Pass, f string, lines []string) {
 					depth++
 					continue
 				case kind != "":
-				case aggregateRE.MatchString(head):
+				case aggregateRE.MatchString(head) && !strings.Contains(head, "("): // not `struct s f(void) {`
 					kind = "agg"
+					stmt += "{}" // the body is skipped; what follows it may declare variables
 				case strings.Contains(head, "="):
 					kind = "init"
 				default:
@@ -664,7 +776,7 @@ func checkGateSymbols(p *Pass, f string, lines []string) {
 				}
 				stmt, kind = "", ""
 			case ';':
-				if kind == "" || kind == "init" {
+				if kind == "" || kind == "init" || kind == "agg" {
 					gateDefinition(p, f, start, stmt, false)
 				}
 				stmt, kind = "", ""
@@ -680,14 +792,19 @@ func checkGateSymbols(p *Pass, f string, lines []string) {
 }
 
 var (
-	gateSkipRE   = regexp.MustCompile(`^(static|typedef|struct|enum|union)\b`)
+	gateSkipRE   = regexp.MustCompile(`^(static|typedef)\b`)
 	gateExternRE = regexp.MustCompile(`^extern\s*(?:"C(?:\+\+)?"\s*)?`)
-	trailingRE   = regexp.MustCompile(`\([^()]*\)\s*$`)
+	// An elaborated type that starts a statement: `struct tag`, `enum tag {…}`, `union {…}` (the body is
+	// left as "{}" by checkGateSymbols).
+	gateAggHeadRE = regexp.MustCompile(`^(?:const\s+|volatile\s+)*(?:struct|enum|union)\b\s*(?:[A-Za-z_]\w*)?\s*(?:\{\})?`)
+	trailingRE    = regexp.MustCompile(`\([^()]*\)\s*$`)
 )
 
 // gateDefinition reports the external names that a file-scope statement defines: every declarator of a
-// variable definition (`int a = 1, b = 2;`), or a function with its body. `extern` makes a statement a
-// mere declaration only without a body or an initializer (`extern int x = 5;` defines x).
+// variable definition (`int a = 1, b = 2;`, `struct state s;`, `enum e {A} v;`), or a function with its
+// body. `extern` makes a statement a mere declaration only without a body or an initializer (`extern int
+// x = 5;` defines x). A struct, enum or union statement that declares no variable (`struct state;`,
+// `struct state {…};`) defines nothing external.
 func gateDefinition(p *Pass, f string, line int, stmt string, body bool) {
 	s := strings.TrimSpace(stripAttrGroups(stmt))
 	if s == "" || gateSkipRE.MatchString(s) {
@@ -698,6 +815,11 @@ func gateDefinition(p *Pass, f string, line int, stmt string, body bool) {
 			return // a declaration of something defined elsewhere
 		}
 		s = s[len(m):]
+	}
+	if m := gateAggHeadRE.FindString(s); m != "" {
+		if s = strings.TrimSpace(s[len(m):]); s == "" {
+			return // a type, no variable
+		}
 	}
 	decls := []string{s}
 	if !body {

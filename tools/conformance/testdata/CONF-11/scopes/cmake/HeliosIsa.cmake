@@ -1,0 +1,17 @@
+# Level sets defined through a function whose name is written in mixed case, a macro called at file
+# scope (a macro writes its caller's scope), and a file-scope loop over the level set.
+set(HELIOS_ISA_AVX2 -mavx2 -mbmi -mbmi2)
+function(Helios_Isa_Level_Flags out)
+  set(${out} ${HELIOS_ISA_AVX2} PARENT_SCOPE)
+endfunction()
+helios_isa_level_flags(HELIOS_ISA_MIXED)
+macro(_helios_isa_define_levels)
+  set(HELIOS_ISA_MACRO -mavx2 -mfma)
+endmacro()
+_helios_isa_define_levels()
+foreach(f IN LISTS HELIOS_ISA_AVX2)
+  list(APPEND HELIOS_ISA_COPY ${f})
+endforeach()
+function(helios_apply_isa_level target level)
+  target_compile_options(${target} PRIVATE ${HELIOS_ISA_AVX2})
+endfunction()

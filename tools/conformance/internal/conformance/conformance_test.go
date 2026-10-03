@@ -479,6 +479,7 @@ func TestCMakeCommands(t *testing.T) {
 		{"set(a \"multi\nline ( \\\" string\")\nx()", []string{"set@1", "x@3"}, 0},
 		{"set(a [=[ ( ]] ]=])\nx()", []string{"set@1", "x@2"}, 0},
 		{"#[[ (\n]] x()\ny()", []string{"x@2", "y@3"}, 0},
+		{"#[[\nx(\n]]\ny()", []string{"y@4"}, 0},
 		{"set(a \\()\nx() # comment (\ny( # (\n)", []string{"set@1", "x@2", "y@3"}, 0},
 		{"if(a) x() endif()", []string{"if@1", "x@1", "endif@1"}, 0},
 		{"set(a \"#\" b) # c(\nx()", []string{"set@1", "x@2"}, 0},

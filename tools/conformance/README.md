@@ -159,17 +159,25 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   lookup whose name is computed at run time. Only `#if 0` (or `false`) groups and the branches after `#if 1`
   are known dead; every other conditional group is read as compiled, which can over-report and never hides.
 - **CONF-11** reads CMake commands as CMake's lexer does: `#` and `#[[…]]` comments are dropped, and a quoted
-  argument, a bracket argument or an escaped `\(` does not close or open a command; a command still open at the
-  end of a file fails the run as a `conformance` finding. A variable is followed within its function, and across
-  files only for `cmake/HeliosIsa.cmake`'s level sets and flag functions: a variable set from AVX flags in one
-  file and used in another is not. A wrapper is recognised only when the scanned CMake files define it, and only
-  its option arguments count (an unquoted argument, or a quoted one made of options and variables), so a message
-  that names a flag is not a grant. A list of targets or sources is flagged by name only when the name says
+  argument, a bracket argument or an escaped `\(` does not close or open a command; a command still open at the end
+  of a file fails the run as a `conformance` finding. A variable is followed through its file by scope: one set at
+  file scope stays tracked across function and macro definitions, a function or macro body sees every variable its
+  file sets (also one set after the definition, since a body runs when it is called), and a body's own `set()`
+  reaches the file only with `PARENT_SCOPE` or `CACHE`, or from a macro (a macro writes its caller's scope; one
+  never called still counts). `string()` and `list()` write the argument CMake writes (`string(REPLACE <match>
+  <replace> <out> …)`, `string(REGEX REPLACE …)`, `string(JOIN <glue> <out> …)`, …), and a `REPLACE` or `REGEX`
+  pattern does not carry a flag into the output. Across files a variable is followed only for
+  `cmake/HeliosIsa.cmake`'s level sets and flag functions (names matched in any letter case; a macro called at file
+  scope and a file-scope `foreach` over a level set define level sets too): any other variable set from AVX flags
+  in one file and used in another is not. A wrapper is recognised only when the scanned CMake files define it, and
+  only its option arguments count (an unquoted argument, or a quoted one made of options and variables), so a
+  message that names a flag is not a grant. A list of targets or sources is flagged by name only when the name says
   `avx`; one with another name is caught where it grants the flags. Generator expressions are read as text, so a
-  flag inside one counts. Not in §5.10.3's scope at all: `CMakePresets.json` `cacheVariables` (a
-  `CMAKE_CXX_FLAGS` there), toolchain files outside `cmake/` and command-line `-D` options. Whether the presets
-  belong in CONF-11's scope is a question for the Director.
+  flag inside one counts. Not in §5.10.3's scope at all: `CMakePresets.json` `cacheVariables` (a `CMAKE_CXX_FLAGS`
+  there), toolchain files outside `cmake/` and command-line `-D` options. Whether the presets belong in CONF-11's
+  scope is a question for the Director.
 - **CONF-12** recognises an external symbol in a gate TU by a file-scope definition without `static` (an `extern`
-  one with a body or an initializer too, and every declarator of a statement), with macros not expanded; audit
-  check 2 (the objects' symbol lists) is the object-level backstop. A pre-gate hook elsewhere is found by its
-  section name or attribute, not by what a macro expands to.
+  one with a body or an initializer too, every declarator of a statement, and a variable of `struct`, `enum` or
+  `union` type, named or anonymous), with macros not expanded; audit check 2 (the objects' symbol lists) is the
+  object-level backstop. A pre-gate hook elsewhere is found by its section name or attribute, not by what a macro
+  expands to.

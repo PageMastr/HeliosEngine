@@ -194,7 +194,7 @@ and argument count; unknown attributes are warnings with a "did you mean" hint. 
 | `@sql(schema="svc_<service>"[, table=])`, `@key` | structs only; a PostgreSQL table for `--emit sql` ([Generated SQL](#generated-sql)); `@store(checkpoint)` is never a table; ledger data only in `svc_ledger` and only ledger data there |
 | `@server_only`, `server {}`, `@opaque` | **AAA-SEC-4**: a shared field may not reference a server-only type unless `@opaque` |
 | `@table`, `@exclusive`/`@acyclic`/`@target`, `@client`/`@server` | only on records, relations, viewmodels respectively |
-| `@range(min, max)`, `@step`, `@unit`, `@max(n)`, `@normalized`, `@asset` | numeric/vector/container/AssetRef field checks (`@max`: elements of a container, bytes of a string, `Name` or text builtin); typed payloads in TypeInfo (`attrs::Range`, …) |
+| `@range(min, max)`, `@step`, `@unit`, `@max(n)`, `@normalized`, `@asset` | numeric/vector/container/AssetRef field checks (`@max`: elements of a container, bytes of a string, `Name` or text builtin, and bytes of a `TagSet`'s encoded tags); typed payloads in TypeInfo (`attrs::Range`, …) |
 | `@editor(category=, widget=, order=)` | named arguments only |
 | `@keyed` / `@keyed(field)` | list of structs; the key field must be a valid key type |
 | `@was("old", …)` | field or type rename (see the lock); readers accept the old JSON key |
@@ -622,26 +622,30 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
     results (top-level and service rpcs: the result of a server→client rpc is the client's reply),
     events, messages, or the replicated fields of components, through struct and variant fields.
     Otherwise one peer could make the receiver allocate at will. A struct reached from several network
-    types is reported once. `@max` bounds a field's own length or count only, so an element that would
-    need a bound but cannot carry one is a finding too: a string, `Name`, text builtin, `TagSet` or
+    types, or a `message` that is both network input and another one's field type, is reported once
+    (worded for the shallowest depth). Service rpc arguments are named after the rpc
+    (`Bank.Balance.currency`). `@max` bounds a field's own length or count only, so an element that
+    would need a bound but cannot carry one is a finding too: a string, `Name`, text builtin, `TagSet` or
     container inside a `list`, `set`, `map` (keys included) or `T[N]`, such as `string[4]`,
     `list<string>`, `map<string, u8>` or `list<list<i16>>`. Hold such elements in a struct with a
     bounded field. An rpc result that is itself a string or container cannot carry `@max` either:
     return a struct with a bounded field. `T[N]` needs no `@max` (its count is fixed); its elements are
     checked like any container's. Service rpcs (backend calls, 05) and NATS `message`s count as network
     input too, which is conservative.
-  - `size.unreliable`: an unreliable rpc's worst-case tagged payload, and its result's, fits one
-    message on an unreliable channel: 1,186 B, engine/net's `wire::maxPayloadFor(Channel::Latest,
-    wire::kMaxPacketPayload)` (the 1,200 B netcode payload less reliable's 9 B header and the message's
-    own header, 04 §2.1; EVENT_U allows 1,188 B), since `Connection::send` refuses a larger message
+  - `size.unreliable`: the worst-case tagged payload of an unreliable rpc, of its result and of an
+    `@unreliable` event (EVENT_U: fire-and-forget FX, 04 §4.6) fits one message on an unreliable
+    channel: 1,186 B, engine/net's `wire::maxPayloadFor(Channel::Latest, wire::kMaxPacketPayload)`
+    (the 1,200 B netcode payload less reliable's 9 B header and the message's own header, 04 §2.1;
+    EVENT_U allows 1,188 B), since `Connection::send` refuses a larger message
     rather than fragment it. `schemac_tests` pins the number to `wire.h`. The worst case counts tags,
     length prefixes, 10-byte varints and `@max` bytes per string and elements per container (each
     entry with its tag, length and a keyed list's key, 22 B), saturating rather than wrapping, and is
     computed once per type, so shared struct graphs stay linear. 02 §3.7 sends rpcs bit-packed, which
-    is never larger than the tagged form, so this budget is an upper bound; `@max` on a `TagSet` is
-    counted as bytes, which is approximate. **Not covered yet (WP-1.10):** reliable gameplay rpcs and
-    events have the same one-message limit (04 §2.2: reliable fragmentation serves only CONTROL, and
-    `channel.h` does not mark EVENT_R jumbo), and WP-1.10's rpc header will come out of the budget;
+    is never larger than the tagged form, so this budget is an upper bound. `@max(n)` on a `TagSet`
+    bounds its encoded tags (a LEN message of `{1: tag}` entries) to n bytes, as on a string, so its
+    worst case is exact. **Not covered yet (WP-1.10):** reliable gameplay rpcs and events (EVENT_R)
+    have the same one-message limit (04 §2.2: reliable fragmentation serves only CONTROL, and
+    `channel.h` does not mark EVENT_R jumbo), and WP-1.10's rpc and event headers will come out of the budget;
     WP-1.10, which defines both, owns extending the check to them.
 - **Gate.** The CTest `lint_schemac_size_gameplay` (label `lint`, so every CI test job runs it) runs
   `--emit lint --Werror --check-lock` over `schemas/gameplay`, the schemas compiled into the engine:
@@ -652,16 +656,20 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
 - **Report** (`--lint-out`, canonical JSON):
   - `checked`: counts per rule (rpcs, client→server rpcs, fields under the SEC-4 check, ledger
     types, keyed lists, scriptlib fns with charges, fields and rpc results under `size.unbounded`, each
-    once however many network types reach it, unreliable rpcs);
+    once however many network types reach it, unreliable rpcs, `@unreliable` events);
   - `clientToServer`: every client→server rpc with its `@ratelimit`, `@intent` and reliability.
     This is AAA-SEC-1's "every client→server message is classified", and a compilation fails before
     the report if one is missing;
   - `findings`: every finding with rule id, include-relative file, line, column and message, sorted
     by the printed file, line and column (as `clientToServer` is by the printed rpc name). Other
-    compiler warnings, such as naming, appear under rule `schemac`. `files` is sorted too, so the
-    report does not depend on the command line's order or the checkout's location.
+    compiler warnings, such as a missing `--lock`, appear under rule `schemac`, also when `--Werror`
+    made them errors. `files` is sorted too, so the report does not depend on the command line's
+    order or the checkout's location.
   - A run that fails, for example on a size finding under `--Werror`, still writes the report (the
-    other outputs are not written), so CI keeps the report of a failing gate.
+    other outputs are not written), so CI keeps the report of a failing gate. A run that fails before
+    the lint pass (a schema error, or under `--Werror` a sema warning such as naming) has no report
+    and removes an older one, so CI never keeps a stale report as this run's; its diagnostics are on
+    stderr.
 
 ## CMake: `helios_schema()`
 
@@ -732,9 +740,11 @@ the signatures `--emit luau` rejects. PR #22's review round 1 added: the per-cal
 Names never interned and sets of names in lexical order, `@max` on string parameters, struct fields and
 results, exact `T[N]`, exact integers up to 2⁵³ − 1, finite `f32`, and realm checks against the host
 profile. 22 mutants of the generator (the reviewer's 11 and 11 more) are each killed by a behavioural
-case. `test_lint.cpp` covers both size budgets (what counts as network
-input, `server {}` fields, `T[N]`, one report per struct, the exact worst case against 1,200 B), the
-report's positions and SEC-1 table, and `--Werror`. `test_repl.cpp` runs the generated replication code of the golden
+case. `test_lint.cpp` covers both size budgets (what counts as network input, `server {}` fields,
+`T[N]`, one report per struct or message, service rpc argument names, `@unreliable` events, `TagSet`
+bytes, the exact worst case against 1,186 B), the report's positions and SEC-1 table, and `--Werror`
+(the warnings it promotes stay in the report; `test_cli.cpp` checks that a run failing before the lint
+pass removes an older report). `test_repl.cpp` runs the generated replication code of the golden
 fixture and the sample schemas: descriptors against the schema and the `TypeInfo` (ids, offsets,
 change-mask indices), full-state round trips within each quantizer's precision (and re-encoding to the
 same bits), every truncated prefix and random input rejected cleanly, an undeclared enum value, the rpc

@@ -236,10 +236,19 @@ int runCli(std::span<const std::string> args, std::string& out, std::string& err
     err += diags.formatAll();
     if (!result.ok) {
         // The lint report is what CI keeps of a failing gate (--emit lint --Werror), so it is written
-        // whenever the lint pass ran; the other outputs of a failed run are not.
+        // whenever the lint pass ran; the other outputs of a failed run are not. A run that failed
+        // before the lint pass removes an older report, which CI would otherwise keep as this run's.
+        bool reported = false;
         for (const OutputFile& o : result.outputs) {
             bool w = false;
-            if (options.emitLint && o.path == options.lintOut) writeIfChanged(o.path, o.content, err, w);
+            if (options.emitLint && o.path == options.lintOut) reported = writeIfChanged(o.path, o.content, err, w);
+        }
+        if (options.emitLint && !reported) {
+            const fs::Path report = fs::pathFromUtf8(options.lintOut);
+            if (fs::exists(report)) {
+                if (auto r = fs::remove(report); !r)
+                    err += std::format("helios-schemac: error: cannot remove the stale lint report '{}': {}\n", options.lintOut, r.error().message);
+            }
         }
         lockMutex.release(err);
         return 1;

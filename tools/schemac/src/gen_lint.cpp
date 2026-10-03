@@ -6,16 +6,17 @@
 // Size budgets (warnings; --Werror makes them errors):
 //   * size.unbounded: a string, text builtin (LocString, TagQuery, HxlExpr), list, set, map or TagSet
 //     reachable from a network-facing type (rpc arguments and `-> T` results, events, messages,
-//     replicated fields of components) needs @max(n); such data is hostile input, and an unbounded
-//     container lets one peer make the receiver allocate at will. Elements that would need a bound
-//     but cannot carry one (a string or container inside a list, set, map or T[N], map keys
-//     included), and an rpc result that is itself a string or container (a result has no @max), are
-//     findings too;
-//   * size.unreliable: an unreliable rpc's worst-case tagged payload, and its result's, fits one
-//     message on an unreliable channel: kLintUnreliableBudget, engine/net's smallest single-message
-//     payload (wire::maxPayloadFor(LATEST, kMaxPacketPayload) = 1,186 B; 04 §2.1). Gameplay messages
-//     are never fragmented (04 §2.2: reliable fragmentation serves only CONTROL), so the same limit
-//     holds for reliable rpcs and events on EVENT_R; checking those, and taking WP-1.10's rpc header
+//     replicated fields of components) needs @max(n) (for a TagSet, n bytes of encoded tags, as for
+//     a string); such data is hostile input, and an unbounded container lets one peer make the
+//     receiver allocate at will. Elements that would need a bound but cannot carry one (a string or
+//     container inside a list, set, map or T[N], map keys included), and an rpc result that is itself
+//     a string or container (a result has no @max), are findings too;
+//   * size.unreliable: the worst-case tagged payload of an unreliable rpc, and of its result, and of an
+//     @unreliable event (EVENT_U, 04 §4.6) fits one message on an unreliable channel:
+//     kLintUnreliableBudget, engine/net's smallest single-message payload (wire::maxPayloadFor(LATEST,
+//     kMaxPacketPayload) = 1,186 B; EVENT_U allows 1,188 B; 04 §2.1). Gameplay messages are never
+//     fragmented (04 §2.2: reliable fragmentation serves only CONTROL), so the same limit holds for
+//     reliable rpcs and events on EVENT_R; checking those, and taking WP-1.10's rpc and event headers
 //     out of the budget, is WP-1.10's.
 
 #include <algorithm>
@@ -46,6 +47,8 @@ struct Finding {
     std::string rule;
     SourceLoc loc;
     std::string message;
+    std::string subject; ///< what the finding is about (dedup key with rule and loc)
+    u32 depth = 0;       ///< nesting below the network type it was reached from (the shallowest is kept)
 };
 
 u64 varintMax(u64 v) {
@@ -87,17 +90,26 @@ public:
         }
         for (const Decl* d : network) {
             std::set<const Decl*> seen;
+            // A service rpc's arguments are the fields of its synthesized request struct; name them
+            // after the rpc, as its result and the SEC-1 table do.
+            const std::string owner = d->kind == DeclKind::Rpc ? rpcName(d) : d->name;
             for (const Field& f : d->fields) {
                 if (d->isReplicatedComponent() && !f.replicated) continue;
-                unbounded(std::format("'{}.{}'", d->name, f.name), f.type, &f, f.loc, &f, seen, 0);
+                unbounded(std::format("'{}.{}'", owner, f.name), f.type, &f, f.loc, &f, seen, 0);
             }
             // An rpc's result is a message too: of a server->client rpc, the client's reply, which the
             // server decodes as hostile input.
             if (d->kind == DeclKind::Rpc && d->result) unbounded(std::format("'{}' result", rpcName(d)), d->result, nullptr, d->loc, d, seen, 0);
             if (d->kind == DeclKind::Rpc && d->attr("unreliable")) {
                 ++m_counts["size.unreliable-rpcs"];
-                budget(d, "", messageSize(d));
-                if (d->result) budget(d, " result", resultSize(d->result));
+                budget(d, "rpc", "", messageSize(d));
+                if (d->result) budget(d, "rpc", " result", resultSize(d->result));
+            }
+            // An @unreliable event goes on EVENT_U (fire-and-forget FX, 04 §4.6), which engine/net never
+            // fragments either: Connection::send refuses it above wire::maxPayloadFor(EventUnreliable).
+            if (d->kind == DeclKind::Event && d->attr("unreliable")) {
+                ++m_counts["size.unreliable-events"];
+                budget(d, "event", "", messageSize(d));
             }
         }
         m_counts["size.unbounded-checked"] = m_checked.size();
@@ -106,24 +118,33 @@ public:
     }
 
 private:
-    /// Records a finding once (a struct reached from several network types is reported once; one field
-    /// may have two findings, its own bound and its elements').
-    void add(std::string rule, SourceLoc loc, std::string message) {
-        for (const Finding& f : m_findings) {
-            if (f.rule == rule && f.loc.file == loc.file && f.loc.line == loc.line && f.loc.col == loc.col && f.message == message) return;
+    /// Records a finding once per rule, location and subject: a struct reached from several network types,
+    /// or a message reached both as a network type and as a field type, is reported once, worded for the
+    /// shallowest depth it was reached at. One field may have two findings, its own bound and its elements'.
+    void add(std::string rule, SourceLoc loc, std::string message, std::string subject, u32 depth) {
+        for (Finding& f : m_findings) {
+            if (f.rule == rule && f.loc.file == loc.file && f.loc.line == loc.line && f.loc.col == loc.col && f.subject == subject) {
+                if (depth < f.depth) {
+                    f.message = std::move(message);
+                    f.depth = depth;
+                }
+                return;
+            }
         }
-        m_findings.push_back(Finding{std::move(rule), loc, std::move(message)});
+        m_findings.push_back(Finding{std::move(rule), loc, std::move(message), std::move(subject), depth});
     }
 
     /// The rpc's name as the report prints it: `Service.Method` for a service rpc.
     static std::string rpcName(const Decl* d) { return d->service ? d->service->name + "." + d->rpcName : d->name; }
 
-    void budget(const Decl* d, std::string_view part, const Size& size) {
+    /// size.unreliable for the rpc or event `d` (`kind`), or its result (`part`).
+    void budget(const Decl* d, std::string_view kind, std::string_view part, const Size& size) {
         if (size.bytes && *size.bytes <= kLintUnreliableBudget) return;
         add("size.unreliable", d->loc,
-            std::format("unreliable rpc '{}'{} has a worst-case payload of {} (budget {} B, the largest unreliable message engine/net "
+            std::format("unreliable {} '{}'{} has a worst-case payload of {} (budget {} B, the largest unreliable message engine/net "
                         "sends unfragmented, 04 §2.1): bound its fields with @max or make it reliable",
-                        rpcName(d), part, size.bytes ? std::to_string(*size.bytes) + " B" : std::string("unbounded"), kLintUnreliableBudget));
+                        kind, rpcName(d), part, size.bytes ? std::to_string(*size.bytes) + " B" : std::string("unbounded"), kLintUnreliableBudget),
+            std::string(part), 0);
     }
 
     /// Strings, text-like builtins and containers other than T[N] need @max on network input.
@@ -161,17 +182,20 @@ private:
         if (needsMax(type) || base->isContainer()) m_checked.insert(key);
         if (needsMax(type) && !f) {
             add("size.unbounded", loc,
-                std::format("{} ({}) is {} and cannot carry @max: return a struct with a bounded field instead", what, type->signature, where));
+                std::format("{} ({}) is {} and cannot carry @max: return a struct with a bounded field instead", what, type->signature, where),
+                what, depth);
         } else if (needsMax(type) && !f->attr("max")) {
             add("size.unbounded", loc,
                 std::format("{} ({}) is {} without @max: bound it so a peer cannot make the receiver allocate at will", what, type->signature,
-                            where));
+                            where),
+                what, depth);
         }
         if (const Type* e = unboundableElement(type)) {
             add("size.unbounded", loc,
                 std::format("{} ({}) is {} with elements of type {}, which cannot carry @max: hold them in a struct with a bounded "
                             "field instead",
-                            what, type->signature, where, e->signature));
+                            what, type->signature, where, e->signature),
+                what + " elements", depth);
         }
         for (const Type* t = type; t; t = t->element) {
             if ((t->kind != TypeKind::Struct && t->kind != TypeKind::Variant) || !seen.insert(t->decl).second) continue;
@@ -239,7 +263,7 @@ private:
             case Builtin::Duration: return {10};
             default: {
                 const u32 n = tupleSize(t->builtin);
-                if (n == 0) return {withLength(maxOf(f))}; // text-like
+                if (n == 0) return {withLength(maxOf(f))}; // text-like, and TagSet: @max counts its encoded bytes
                 return {withLength(static_cast<u64>(n) * (tupleIsF64(t->builtin) ? 8 : 4))};
             }
             }
@@ -298,7 +322,7 @@ private:
         o.key("checked");
         o.beginObject();
         for (const char* k : {"sec1.rpcs", "sec1.client-to-server", "sec4.fields", "ledger.types", "keyed.lists", "fuel.fns",
-                              "size.unbounded-checked", "size.unreliable-rpcs"}) {
+                              "size.unbounded-checked", "size.unreliable-rpcs", "size.unreliable-events"}) {
             o.key(k);
             o.unum(m_counts[k]);
         }
@@ -330,11 +354,14 @@ private:
         o.key("findings");
         o.beginArray();
         std::vector<Finding> all = m_findings;
+        // The compiler's other warnings, including those --Werror made errors (the gate's own run).
         for (const Diagnostic& d : D.diagnostics()) {
-            if (d.severity == Severity::Warning && !d.message.starts_with("[size.")) all.push_back(Finding{"schemac", d.loc, d.message});
+            if ((d.severity == Severity::Warning || d.promoted) && !d.message.starts_with("[size."))
+                all.push_back(Finding{"schemac", d.loc, d.message, {}, 0});
         }
         // Sorted by what is printed (the include-relative path), so the order does not depend on where
-        // the checkout is.
+        // the checkout is. Ties keep the walk's order, which add() makes one finding per subject: a
+        // field's own bound before its elements'.
         std::stable_sort(all.begin(), all.end(), [&](const Finding& a, const Finding& b) {
             const std::string pa = a.loc.file ? logical(D.filePath(a.loc.file)) : std::string();
             const std::string pb = b.loc.file ? logical(D.filePath(b.loc.file)) : std::string();

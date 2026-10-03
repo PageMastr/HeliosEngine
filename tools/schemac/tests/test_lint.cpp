@@ -209,6 +209,81 @@ TEST_CASE("lint: findings and the SEC-1 table sort by what they print") {
     CHECK(both->find(R"("file": "a.hschema")") < both->find(R"("file": "b.hschema")"));
 }
 
+TEST_CASE("lint: an @unreliable event (EVENT_U) must fit one netcode payload") {
+    // The round-2 probe: an @unreliable event goes on EVENT_U (fire-and-forget FX), which engine/net
+    // never fragments (wire::maxPayloadFor(EventUnreliable) = 1,188 B), and it was never checked.
+    auto c = compileText("package test;\nevent Impact @audience(relevant) @unreliable { fx: string @max(4000) }\n", lintOptions());
+    REQUIRE_MESSAGE(c->ok(), c->messages);
+    CHECK(c->messages.find("size.unreliable") != std::string::npos);
+    CHECK_MESSAGE(c->messages.find("[size.unreliable] unreliable event 'Impact' has a worst-case payload of 4003 B (budget 1186 B") !=
+                      std::string::npos,
+                  c->messages);
+    CHECK(c->output("lint.json")->find(R"("size.unreliable-events": 1)") != std::string::npos);
+    // The same edge as an rpc's: a lone string's tag (1 B) and length (2 B) plus @max bytes.
+    auto edge = [](u32 max) {
+        return compileText(std::format("package test;\nevent Impact @audience(relevant) @unreliable {{ fx: string @max({}) }}\n", max),
+                           lintOptions())
+            ->messages;
+    };
+    CHECK(edge(1183).find("size.unreliable") == std::string::npos);
+    CHECK(edge(1184).find("unreliable event 'Impact' has a worst-case payload of 1187 B") != std::string::npos);
+    // --Werror makes it an error, like an rpc's.
+    CompileOptions strict = lintOptions();
+    strict.warningsAsErrors = true;
+    CHECK_FALSE(compileText("package test;\nevent Impact @audience(relevant) @unreliable { fx: string @max(4000) }\n", strict)->ok());
+    // A reliable event (EVENT_R) is WP-1.10's to check, with reliable rpcs.
+    auto reliable = compileText("package test;\nevent Big @audience(relevant) { fx: string @max(4000) }\n", lintOptions());
+    REQUIRE_MESSAGE(reliable->ok(), reliable->messages);
+    CHECK(reliable->messages.find("size.unreliable") == std::string::npos);
+    CHECK(reliable->output("lint.json")->find(R"("size.unreliable-events": 0)") != std::string::npos);
+}
+
+TEST_CASE("lint: a type reached as a network type and as a field type is reported once") {
+    // The round-2 probe: a message used as an event's field type was walked twice, at depth 0 and 1, and
+    // 'Note.body' was reported as network input and again as reachable from it. Either declaration
+    // order reports it once, worded for the shallower depth.
+    for (const char* text : {"package test;\nmessage Note { body: string }\nevent E @audience(owner) { n: Note }\n",
+                             "package test;\nevent E @audience(owner) { n: Note }\nmessage Note { body: string }\n"}) {
+        auto c = compileText(text, lintOptions());
+        REQUIRE_MESSAGE(c->ok(), c->messages);
+        const std::string& m = c->messages;
+        INFO(m);
+        usize count = 0;
+        for (usize at = m.find("'Note.body'"); at != std::string::npos; at = m.find("'Note.body'", at + 1)) ++count;
+        CHECK(count == 1);
+        CHECK(m.find("'Note.body' (string) is network input without @max") != std::string::npos);
+        const std::string* report = c->output("lint.json");
+        REQUIRE(report);
+        usize inReport = 0;
+        for (usize at = report->find("'Note.body'"); at != std::string::npos; at = report->find("'Note.body'", at + 1)) ++inReport;
+        CHECK(inReport == 1);
+    }
+    // A field with its own finding and its elements' keeps both.
+    auto two = compileText("package test;\nmessage M { xs: list<string> }\nevent E @audience(owner) { m: M }\n", lintOptions());
+    REQUIRE_MESSAGE(two->ok(), two->messages);
+    CHECK(two->messages.find("'M.xs' (list<string>) is network input without @max") != std::string::npos);
+    CHECK(two->messages.find("'M.xs' (list<string>) is network input with elements of type string") != std::string::npos);
+}
+
+TEST_CASE("lint: service rpc arguments are named after the rpc") {
+    // The round-2 probe: arguments were named after the synthesized request struct (BankBalanceRequest).
+    auto c = compileText("package test;\nservice Bank { rpc Balance(currency: string); }\n", lintOptions());
+    REQUIRE_MESSAGE(c->ok(), c->messages);
+    CHECK_MESSAGE(c->messages.find("'Bank.Balance.currency' (string) is network input without @max") != std::string::npos, c->messages);
+    CHECK(c->messages.find("BalanceRequest") == std::string::npos);
+}
+
+TEST_CASE("lint: @max on a TagSet bounds its encoded tags in bytes") {
+    // A TagSet is a LEN message of tags on the wire; @max(n) bounds those n bytes (each tag's field tag,
+    // length and text), as it bounds a string's, so the worst case is exact: 1 B tag and 2 B length.
+    auto verdict = [](const std::string& max) {
+        return compileText("package test;\nrpc R(t: TagSet @max(" + max + ")) server->client unreliable;\n", lintOptions())->messages;
+    };
+    CHECK(verdict("4").find("size.") == std::string::npos);
+    CHECK(verdict("1183").find("size.unreliable") == std::string::npos);
+    CHECK(verdict("1184").find("unreliable rpc 'R' has a worst-case payload of 1187 B") != std::string::npos);
+}
+
 TEST_CASE("perf: --emit lint is linear in a shared struct graph") {
     // struct S_i { a: S_{i-1}; b: S_{i-1} } doubles the paths per level: without a per-type memo the
     // worst case took 0.73 s at 24 levels and 8.5 s at 28. Budget: 30 levels in <= 0.25 s.

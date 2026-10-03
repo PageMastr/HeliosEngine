@@ -10,7 +10,8 @@
     "keyed.lists": 3,
     "fuel.fns": 10,
     "size.unbounded-checked": 19,
-    "size.unreliable-rpcs": 1
+    "size.unreliable-rpcs": 1,
+    "size.unreliable-events": 0
   },
   "clientToServer": [
     {"rpc": "golden.all.Fire", "ratelimit": "20/s", "intent": "combat", "reliable": false}

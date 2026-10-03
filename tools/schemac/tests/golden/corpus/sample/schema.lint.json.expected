@@ -9,7 +9,7 @@
     "ledger.types": 1,
     "keyed.lists": 4,
     "fuel.fns": 2,
-    "size.unbounded-checked": 9,
+    "size.unbounded-checked": 10,
     "size.unreliable-rpcs": 0
   },
   "clientToServer": [
@@ -27,6 +27,7 @@
     {"rule": "size.unbounded", "file": "sample/items.hschema", "line": 40, "col": 3, "message": "'ItemStack.byRarity' (map<sample.items.Rarity,list<u64>>) is reachable from network input with elements of type list<u64>, which cannot carry @max: hold them in a struct with a bounded field instead"},
     {"rule": "size.unbounded", "file": "sample/items.hschema", "line": 49, "col": 3, "message": "'LedgerOp.currency' (Name) is reachable from network input without @max: bound it so a peer cannot make the receiver allocate at will"},
     {"rule": "size.unbounded", "file": "sample/items.hschema", "line": 55, "col": 3, "message": "'LedgerTx.ops' (keyed<sample.items.LedgerOp>) is reachable from network input without @max: bound it so a peer cannot make the receiver allocate at will"},
+    {"rule": "size.unbounded", "file": "sample/items.hschema", "line": 61, "col": 3, "message": "'LedgerResult.error' (string) is reachable from network input without @max: bound it so a peer cannot make the receiver allocate at will"},
     {"rule": "size.unbounded", "file": "sample/items.hschema", "line": 66, "col": 32, "message": "'LedgerBalanceRequest.currency' (Name) is network input without @max: bound it so a peer cannot make the receiver allocate at will"},
     {"rule": "size.unbounded", "file": "sample/items.hschema", "line": 71, "col": 52, "message": "'TradeOffer.items' (list<sample.items.ItemStack>) is network input without @max: bound it so a peer cannot make the receiver allocate at will"}
   ]

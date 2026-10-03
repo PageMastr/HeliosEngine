@@ -194,7 +194,7 @@ and argument count; unknown attributes are warnings with a "did you mean" hint. 
 | `@sql(schema="svc_<service>"[, table=])`, `@key` | structs only; a PostgreSQL table for `--emit sql` ([Generated SQL](#generated-sql)); `@store(checkpoint)` is never a table; ledger data only in `svc_ledger` and only ledger data there |
 | `@server_only`, `server {}`, `@opaque` | **AAA-SEC-4**: a shared field may not reference a server-only type unless `@opaque` |
 | `@table`, `@exclusive`/`@acyclic`/`@target`, `@client`/`@server` | only on records, relations, viewmodels respectively |
-| `@range(min, max)`, `@step`, `@unit`, `@max(n)`, `@normalized`, `@asset` | numeric/vector/container/AssetRef field checks; typed payloads in TypeInfo (`attrs::Range`, …) |
+| `@range(min, max)`, `@step`, `@unit`, `@max(n)`, `@normalized`, `@asset` | numeric/vector/container/AssetRef field checks (`@max`: elements of a container, bytes of a string, `Name` or text builtin); typed payloads in TypeInfo (`attrs::Range`, …) |
 | `@editor(category=, widget=, order=)` | named arguments only |
 | `@keyed` / `@keyed(field)` | list of structs; the key field must be a valid key type |
 | `@was("old", …)` | field or type rename (see the lock); readers accept the old JSON key |
@@ -429,8 +429,8 @@ auto vm = ScriptVm::create(config, [&](Binder& b) {       // config.profile = Ho
   - Every conversion reads tables raw (`lua_rawgetfield`/`lua_rawgeti`), so no metamethod or other Luau
     code runs inside a binding.
   - `@max` is enforced wherever sema accepts it, on the raw value before anything is converted. That
-    covers string (bytes), list and set (elements) parameters and the fields of struct parameters,
-    recursively. Results are checked the same way: the fn's `@max` and struct fields' `@max`.
+    covers string and text builtin (bytes), list and set (elements) parameters and the fields of struct
+    parameters, recursively. Results are checked the same way: the fn's `@max` and struct fields' `@max`.
   - **Per-call budget.** One call converts at most `glueLimits.maxValues` values (8,192: every number,
     string, table and element counts, a `nil` element of a `T?` list included, so a table referenced
     from many places costs once per reference) and `glueLimits.maxStringBytes` string bytes
@@ -607,23 +607,33 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
 
 - **Size budgets** are warnings, printed like any diagnostic with the rule id in brackets. `--Werror`
   makes them errors.
-  - `size.unbounded`: a `string`, `Name`, text builtin (`LocString`, `TagQuery`, `HxlExpr`), `TagSet`,
-    `list`, `set`, keyed list or `map` needs `@max(n)` when it is network input. That means it is
-    reachable from rpc arguments (top-level and service rpcs), events, messages, or the replicated
-    fields of components, through struct and variant fields. Otherwise one peer could make the
-    receiver allocate at will. A struct reached from several network types is reported once.
-    `@max` bounds a field's own length or count only, so an element that would need a bound but
-    cannot carry one is a finding too: a string, `Name`, text builtin, `TagSet` or container inside a
-    `list`, `set`, `map` (keys included) or `T[N]`, such as `string[4]`, `list<string>`,
-    `map<string, u8>` or `list<list<i16>>`. Hold such elements in a struct with a bounded field.
-    `T[N]` needs no `@max` (its count is fixed); its elements are checked like any container's. Service
-    rpcs (backend calls, 05) and NATS `message`s count as network input too, which is conservative.
-  - `size.unreliable`: an unreliable rpc's worst-case tagged payload fits one netcode payload,
-    1,200 B (04 §1), since an unreliable message is never fragmented. The worst case counts tags,
+  - `size.unbounded`: a `string`, `Name`, text builtin (`LocString`, `TagQuery`, `HxlExpr`: strings on
+    the wire, which take `@max(n)` bytes like `string`), `TagSet`, `list`, `set`, keyed list or `map`
+    needs `@max(n)` when it is network input. That means it is reachable from rpc arguments or `-> T`
+    results (top-level and service rpcs: the result of a server→client rpc is the client's reply),
+    events, messages, or the replicated fields of components, through struct and variant fields.
+    Otherwise one peer could make the receiver allocate at will. A struct reached from several network
+    types is reported once. `@max` bounds a field's own length or count only, so an element that would
+    need a bound but cannot carry one is a finding too: a string, `Name`, text builtin, `TagSet` or
+    container inside a `list`, `set`, `map` (keys included) or `T[N]`, such as `string[4]`,
+    `list<string>`, `map<string, u8>` or `list<list<i16>>`. Hold such elements in a struct with a
+    bounded field. An rpc result that is itself a string or container cannot carry `@max` either:
+    return a struct with a bounded field. `T[N]` needs no `@max` (its count is fixed); its elements are
+    checked like any container's. Service rpcs (backend calls, 05) and NATS `message`s count as network
+    input too, which is conservative.
+  - `size.unreliable`: an unreliable rpc's worst-case tagged payload, and its result's, fits one
+    message on an unreliable channel: 1,186 B, engine/net's `wire::maxPayloadFor(Channel::Latest,
+    wire::kMaxPacketPayload)` (the 1,200 B netcode payload less reliable's 9 B header and the message's
+    own header, 04 §2.1; EVENT_U allows 1,188 B), since `Connection::send` refuses a larger message
+    rather than fragment it. `schemac_tests` pins the number to `wire.h`. The worst case counts tags,
     length prefixes, 10-byte varints and `@max` bytes per string and elements per container (each
-    entry with its tag, length and a keyed list's key, 22 B). 02 §3.7 sends rpcs bit-packed, which is
-    never larger than the tagged form, so this budget is an upper bound; `@max` on a `TagSet` is
-    counted as bytes, which is approximate.
+    entry with its tag, length and a keyed list's key, 22 B), saturating rather than wrapping, and is
+    computed once per type, so shared struct graphs stay linear. 02 §3.7 sends rpcs bit-packed, which
+    is never larger than the tagged form, so this budget is an upper bound; `@max` on a `TagSet` is
+    counted as bytes, which is approximate. **Not covered yet (WP-1.10):** reliable gameplay rpcs and
+    events have the same one-message limit (04 §2.2: reliable fragmentation serves only CONTROL, and
+    `channel.h` does not mark EVENT_R jumbo), and WP-1.10's rpc header will come out of the budget;
+    WP-1.10, which defines both, owns extending the check to them.
 - **Gate.** The CTest `lint_schemac_size_gameplay` (label `lint`, so every CI test job runs it) runs
   `--emit lint --Werror --check-lock` over `schemas/gameplay`, the schemas compiled into the engine:
   a size finding there fails CI. `schemas/sample` keeps known findings, pinned by the corpus golden
@@ -632,13 +642,17 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
   reporting fails as well. A new production schema directory adds its own gate.
 - **Report** (`--lint-out`, canonical JSON):
   - `checked`: counts per rule (rpcs, client→server rpcs, fields under the SEC-4 check, ledger
-    types, keyed lists, scriptlib fns with charges, fields under `size.unbounded`, unreliable rpcs);
+    types, keyed lists, scriptlib fns with charges, fields and rpc results under `size.unbounded`, each
+    once however many network types reach it, unreliable rpcs);
   - `clientToServer`: every client→server rpc with its `@ratelimit`, `@intent` and reliability.
     This is AAA-SEC-1's "every client→server message is classified", and a compilation fails before
     the report if one is missing;
-  - `findings`: every finding with rule id, include-relative file, line, column and message, sorted.
-    Other compiler warnings, such as naming, appear under rule `schemac`. `files` is sorted too, so
-    the report does not depend on the command line's order.
+  - `findings`: every finding with rule id, include-relative file, line, column and message, sorted
+    by the printed file, line and column (as `clientToServer` is by the printed rpc name). Other
+    compiler warnings, such as naming, appear under rule `schemac`. `files` is sorted too, so the
+    report does not depend on the command line's order or the checkout's location.
+  - A run that fails, for example on a size finding under `--Werror`, still writes the report (the
+    other outputs are not written), so CI keeps the report of a failing gate.
 
 ## CMake: `helios_schema()`
 

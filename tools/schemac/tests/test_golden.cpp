@@ -8,6 +8,7 @@
 
 #include <cstdlib>
 #include <fstream>
+#include <regex>
 #include <sstream>
 
 #include "golden.gen.h"
@@ -110,7 +111,11 @@ TEST_CASE("golden: generator output matches the committed expectations") {
     options.sqlBaseline = "golden/golden.sql-baseline.lock.jsonc";
     auto c = compileFiles({{"golden/golden.hschema", *source}}, options, &fs);
     REQUIRE_MESSAGE(c->ok(), c->messages);
-    CHECK_MESSAGE(c->diags.diagnostics().empty(), c->messages);
+    // The only diagnostics are the size budgets' warnings, which golden.lint.json pins: the service rpc
+    // Store.Buy returns Containers, whose containers are unbounded on purpose.
+    for (const Diagnostic& d : c->diags.diagnostics()) {
+        CHECK_MESSAGE((d.severity == Severity::Warning && d.message.starts_with("[size.")), c->messages);
+    }
     CHECK_MESSAGE(!c->result.lockChanged, "the golden lock is stale; rebuild schemac_tests (which updates it) and commit it");
 
     for (const GoldenOutput& g : kOutputs) {
@@ -222,9 +227,17 @@ TEST_CASE("golden: generation is deterministic and independent of declaration-ir
     REQUIRE_MESSAGE(a->ok(), a->messages);
     REQUIRE_MESSAGE(b->ok(), b->messages);
     REQUIRE(a->result.outputs.size() == b->result.outputs.size());
+    // (The lint report's findings carry source lines and columns, which the noise moves: compare them
+    // without the positions.)
+    auto withoutPositions = [](const std::string& text) {
+        static const std::regex position(R"("line": \d+, "col": \d+)");
+        return std::regex_replace(text, position, "");
+    };
     for (usize i = 0; i < a->result.outputs.size(); ++i) {
         CHECK(a->result.outputs[i].path == b->result.outputs[i].path);
-        const bool same = a->result.outputs[i].content == b->result.outputs[i].content;
+        const bool lint = a->result.outputs[i].path == options.lintOut;
+        const bool same = lint ? withoutPositions(a->result.outputs[i].content) == withoutPositions(b->result.outputs[i].content)
+                               : a->result.outputs[i].content == b->result.outputs[i].content;
         CHECK_MESSAGE(same, a->result.outputs[i].path);
     }
 }

@@ -222,8 +222,15 @@ TEST_CASE("cli: --emit lint writes the report and prints the budget warnings") {
     REQUIRE_MESSAGE(r.status == 0, r.err);
     CHECK(r.err.find("warning: [size.unbounded] 'Say.text'") != std::string::npos);
     CHECK(readFile(report).find(R"({"rpc": "cli.say.Say", "ratelimit": "1/s", "intent": "chat", "reliable": true})") != std::string::npos);
-    Run strict = cli({"--emit", "lint", "--lint-out", report.string(), "--Werror", schema.string()});
+    // A failing gate still writes its report (CI keeps it); the other outputs of a failed run are not written.
+    fs::remove(report);
+    const fs::path cpp = dir / "cpp";
+    Run strict = cli({"--emit", "lint,cpp", "--cpp-out", cpp.string(), "--lint-out", report.string(), "--Werror", schema.string()});
     CHECK(strict.status == 1);
+    CHECK(strict.err.find("error: [size.unbounded] 'Say.text'") != std::string::npos);
+    REQUIRE(fs::exists(report));
+    CHECK(readFile(report).find(R"("rule": "size.unbounded")") != std::string::npos);
+    CHECK_FALSE(fs::exists(cpp));
 }
 
 TEST_CASE("cli: schema errors exit 1 with file:line:col and a source excerpt") {

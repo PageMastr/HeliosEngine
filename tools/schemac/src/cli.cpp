@@ -235,6 +235,12 @@ int runCli(std::span<const std::string> args, std::string& out, std::string& err
     CompileResult result = compile(options, fsys, diags);
     err += diags.formatAll();
     if (!result.ok) {
+        // The lint report is what CI keeps of a failing gate (--emit lint --Werror), so it is written
+        // whenever the lint pass ran; the other outputs of a failed run are not.
+        for (const OutputFile& o : result.outputs) {
+            bool w = false;
+            if (options.emitLint && o.path == options.lintOut) writeIfChanged(o.path, o.content, err, w);
+        }
         lockMutex.release(err);
         return 1;
     }

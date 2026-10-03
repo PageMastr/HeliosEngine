@@ -4,19 +4,27 @@
 // client→server message, and every finding, each with a rule id and a location.
 //
 // Size budgets (warnings; --Werror makes them errors):
-//   * size.unbounded: a string, list, set, map or TagSet reachable from a network-facing type (rpc
-//     arguments, events, messages, replicated fields of components) needs @max(n); such data is
-//     hostile input, and an unbounded container lets one peer make the receiver allocate at will.
-//     Elements that would need a bound but cannot carry one (a string or container inside a list,
-//     set, map or T[N], map keys included) are findings too;
-//   * size.unreliable: an unreliable rpc's worst-case tagged payload fits one netcode payload,
-//     1,200 B (04 §1), since an unreliable message is never fragmented.
+//   * size.unbounded: a string, text builtin (LocString, TagQuery, HxlExpr), list, set, map or TagSet
+//     reachable from a network-facing type (rpc arguments and `-> T` results, events, messages,
+//     replicated fields of components) needs @max(n); such data is hostile input, and an unbounded
+//     container lets one peer make the receiver allocate at will. Elements that would need a bound
+//     but cannot carry one (a string or container inside a list, set, map or T[N], map keys
+//     included), and an rpc result that is itself a string or container (a result has no @max), are
+//     findings too;
+//   * size.unreliable: an unreliable rpc's worst-case tagged payload, and its result's, fits one
+//     message on an unreliable channel: kLintUnreliableBudget, engine/net's smallest single-message
+//     payload (wire::maxPayloadFor(LATEST, kMaxPacketPayload) = 1,186 B; 04 §2.1). Gameplay messages
+//     are never fragmented (04 §2.2: reliable fragmentation serves only CONTROL), so the same limit
+//     holds for reliable rpcs and events on EVENT_R; checking those, and taking WP-1.10's rpc header
+//     out of the budget, is WP-1.10's.
 
 #include <algorithm>
 #include <format>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
+#include <string_view>
 #include <tuple>
 
 #include "generators.h"
@@ -27,8 +35,12 @@ namespace helios::schemac {
 
 namespace {
 
-constexpr u64 kUnreliablePayload = 1200; ///< netcode payload bytes (04 §1)
-constexpr u32 kMaxDepth = 64;             ///< the tagged reader's nesting limit (worst cases past it are unbounded)
+constexpr u32 kMaxDepth = 64; ///< the tagged reader's nesting limit (worst cases past it are unbounded)
+constexpr u64 kU64Max = std::numeric_limits<u64>::max();
+
+/// Saturating arithmetic: a worst case at or past 2^64 B is over every budget, never a small wrap.
+u64 satAdd(u64 a, u64 b) { return a > kU64Max - b ? kU64Max : a + b; }
+u64 satMul(u64 a, u64 b) { return b != 0 && a > kU64Max / b ? kU64Max : a * b; }
 
 struct Finding {
     std::string rule;
@@ -44,6 +56,15 @@ u64 varintMax(u64 v) {
     }
     return n;
 }
+
+/// A worst case: tagged bytes (nullopt: unbounded) and the nesting levels below (structs and containers).
+struct Size {
+    std::optional<u64> bytes;
+    u32 depth = 0;
+};
+
+/// `n` bytes of a length-prefixed value (its length varint and the bytes).
+std::optional<u64> withLength(std::optional<u64> n) { return n ? std::optional<u64>(satAdd(varintMax(*n), *n)) : std::nullopt; }
 
 class LintGenerator {
 public:
@@ -68,19 +89,18 @@ public:
             std::set<const Decl*> seen;
             for (const Field& f : d->fields) {
                 if (d->isReplicatedComponent() && !f.replicated) continue;
-                unbounded(d, f, seen, 0);
+                unbounded(std::format("'{}.{}'", d->name, f.name), f.type, &f, f.loc, &f, seen, 0);
             }
+            // An rpc's result is a message too: of a server->client rpc, the client's reply, which the
+            // server decodes as hostile input.
+            if (d->kind == DeclKind::Rpc && d->result) unbounded(std::format("'{}' result", rpcName(d)), d->result, nullptr, d->loc, d, seen, 0);
             if (d->kind == DeclKind::Rpc && d->attr("unreliable")) {
-                const std::optional<u64> size = messageSize(d, 0);
                 ++m_counts["size.unreliable-rpcs"];
-                if (!size || *size > kUnreliablePayload) {
-                    add("size.unreliable", d->loc,
-                        std::format("unreliable rpc '{}' has a worst-case payload of {} (budget {} B, one netcode payload, 04 §1): bound its "
-                                    "fields with @max or make it reliable",
-                                    d->name, size ? std::to_string(*size) + " B" : std::string("unbounded"), kUnreliablePayload));
-                }
+                budget(d, "", messageSize(d));
+                if (d->result) budget(d, " result", resultSize(d->result));
             }
         }
+        m_counts["size.unbounded-checked"] = m_checked.size();
         for (const Finding& f : m_findings) D.warning(f.loc, std::format("[{}] {}", f.rule, f.message));
         return {OutputFile{O.lintOut, report()}};
     }
@@ -93,6 +113,17 @@ private:
             if (f.rule == rule && f.loc.file == loc.file && f.loc.line == loc.line && f.loc.col == loc.col && f.message == message) return;
         }
         m_findings.push_back(Finding{std::move(rule), loc, std::move(message)});
+    }
+
+    /// The rpc's name as the report prints it: `Service.Method` for a service rpc.
+    static std::string rpcName(const Decl* d) { return d->service ? d->service->name + "." + d->rpcName : d->name; }
+
+    void budget(const Decl* d, std::string_view part, const Size& size) {
+        if (size.bytes && *size.bytes <= kLintUnreliableBudget) return;
+        add("size.unreliable", d->loc,
+            std::format("unreliable rpc '{}'{} has a worst-case payload of {} (budget {} B, the largest unreliable message engine/net "
+                        "sends unfragmented, 04 §2.1): bound its fields with @max or make it reliable",
+                        rpcName(d), part, size.bytes ? std::to_string(*size.bytes) + " B" : std::string("unbounded"), kLintUnreliableBudget));
     }
 
     /// Strings, text-like builtins and containers other than T[N] need @max on network input.
@@ -118,30 +149,37 @@ private:
         return nullptr;
     }
 
-    /// size.unbounded for field `f` of `owner`: its own bound, the elements inside it that cannot be
+    /// size.unbounded for one value: field `f` (which may carry @max) or an rpc result (`f` null; a result
+    /// cannot carry @max), named `what`. Checks its own bound, the elements inside it that cannot be
     /// bounded, then the fields of every struct or variant it reaches (through containers and
-    /// optionals), once each.
-    void unbounded(const Decl* owner, const Field& f, std::set<const Decl*>& seen, u32 depth) {
-        if (depth > kMaxDepth || !f.type) return;
-        const Type* base = f.type->kind == TypeKind::Optional ? f.type->element : f.type;
+    /// optionals), once each per network type. `key` identifies the value for the checked count.
+    void unbounded(const std::string& what, const Type* type, const Field* f, SourceLoc loc, const void* key, std::set<const Decl*>& seen,
+                   u32 depth) {
+        if (depth > kMaxDepth || !type) return;
+        const Type* base = type->kind == TypeKind::Optional ? type->element : type;
         const char* where = depth == 0 ? "network input" : "reachable from network input";
-        if (needsMax(f.type) || base->isContainer()) ++m_counts["size.unbounded-checked"];
-        if (needsMax(f.type) && !f.attr("max")) {
-            add("size.unbounded", f.loc,
-                std::format("'{}.{}' ({}) is {} without @max: bound it so a peer cannot make the receiver allocate at will", owner->name, f.name,
-                            f.type->signature, where));
+        if (needsMax(type) || base->isContainer()) m_checked.insert(key);
+        if (needsMax(type) && !f) {
+            add("size.unbounded", loc,
+                std::format("{} ({}) is {} and cannot carry @max: return a struct with a bounded field instead", what, type->signature, where));
+        } else if (needsMax(type) && !f->attr("max")) {
+            add("size.unbounded", loc,
+                std::format("{} ({}) is {} without @max: bound it so a peer cannot make the receiver allocate at will", what, type->signature,
+                            where));
         }
-        if (const Type* e = unboundableElement(f.type)) {
-            add("size.unbounded", f.loc,
-                std::format("'{}.{}' ({}) is {} with elements of type {}, which cannot carry @max: hold them in a struct with a bounded "
+        if (const Type* e = unboundableElement(type)) {
+            add("size.unbounded", loc,
+                std::format("{} ({}) is {} with elements of type {}, which cannot carry @max: hold them in a struct with a bounded "
                             "field instead",
-                            owner->name, f.name, f.type->signature, where, e->signature));
+                            what, type->signature, where, e->signature));
         }
-        for (const Type* t = f.type; t; t = t->element) {
+        for (const Type* t = type; t; t = t->element) {
             if ((t->kind != TypeKind::Struct && t->kind != TypeKind::Variant) || !seen.insert(t->decl).second) continue;
-            for (const Field& inner : t->decl->fields) unbounded(t->decl, inner, seen, depth + 1);
+            for (const Field& inner : t->decl->fields)
+                unbounded(std::format("'{}.{}'", t->decl->name, inner.name), inner.type, &inner, inner.loc, &inner, seen, depth + 1);
             for (const Alternative& a : t->decl->alternatives) {
-                for (const Field& inner : a.type->fields) unbounded(a.type, inner, seen, depth + 1);
+                for (const Field& inner : a.type->fields)
+                    unbounded(std::format("'{}.{}'", a.type->name, inner.name), inner.type, &inner, inner.loc, &inner, seen, depth + 1);
             }
         }
     }
@@ -154,84 +192,89 @@ private:
         return n;
     }
 
-    static std::optional<u64> add(std::optional<u64> a, std::optional<u64> b) {
-        if (!a || !b) return std::nullopt;
-        return *a + *b;
-    }
-
-    /// Worst-case tagged bytes of a struct's fields (each with its tag), or nullopt if unbounded.
-    std::optional<u64> messageSize(const Decl* d, u32 depth) {
-        if (depth > kMaxDepth) return std::nullopt;
-        u64 total = 0;
+    /// Worst-case tagged bytes of a struct's fields (each with its tag), memoized per declaration so a
+    /// shared struct DAG costs one walk per type. A recursive type has no finite worst case, nor has a
+    /// struct nested past the tagged reader's depth limit.
+    Size messageSize(const Decl* d) {
+        if (const auto it = m_sizes.find(d); it != m_sizes.end()) return it->second;
+        if (!m_inProgress.insert(d).second) return Size{std::nullopt, 0}; // recursive
+        Size total{u64{0}, 0};
         for (const Field& f : d->fields) {
-            const std::optional<u64> v = valueSize(f.type, &f, depth);
-            if (!v) return std::nullopt;
-            total += varintMax(static_cast<u64>(f.id) << 3) + *v;
+            const Size v = valueSize(f.type, &f);
+            total.depth = std::max(total.depth, v.depth);
+            total.bytes = total.bytes && v.bytes ? std::optional<u64>(satAdd(*total.bytes, satAdd(varintMax(static_cast<u64>(f.id) << 3), *v.bytes)))
+                                                 : std::nullopt;
         }
+        if (total.depth > kMaxDepth) total.bytes.reset();
+        m_inProgress.erase(d);
+        m_sizes.emplace(d, total);
         return total;
     }
 
+    /// An rpc result as a message: a struct is its fields; any other value travels as one tagged field.
+    Size resultSize(const Type* t) {
+        if (t->kind == TypeKind::Struct) return messageSize(t->decl);
+        const Size v = valueSize(t, nullptr);
+        return Size{v.bytes ? std::optional<u64>(satAdd(1, *v.bytes)) : std::nullopt, v.depth};
+    }
+
     /// Worst-case bytes of one value after its tag (LEN values include their length prefix).
-    std::optional<u64> valueSize(const Type* t, const Field* f, u32 depth) {
-        if (!t) return std::nullopt;
+    Size valueSize(const Type* t, const Field* f) {
+        if (!t) return {};
         switch (t->kind) {
         case TypeKind::Prim:
             switch (t->prim) {
-            case Prim::F32: return 4;
-            case Prim::F64: return 8;
+            case Prim::F32: return {4};
+            case Prim::F64: return {8};
             case Prim::String:
-            case Prim::Name: {
-                const std::optional<u64> n = maxOf(f);
-                if (!n) return std::nullopt;
-                return varintMax(*n) + *n; // @max counts bytes on the wire
-            }
-            default: return 10;
+            case Prim::Name: return {withLength(maxOf(f))}; // @max counts bytes on the wire
+            default: return {10};
             }
         case TypeKind::Builtin:
             switch (t->builtin) {
-            case Builtin::Guid: return 17;
-            case Builtin::EntityId: return 8;
+            case Builtin::Guid: return {17};
+            case Builtin::EntityId: return {8};
             case Builtin::NetHandle:
             case Builtin::Tick:
-            case Builtin::Duration: return 10;
+            case Builtin::Duration: return {10};
             default: {
                 const u32 n = tupleSize(t->builtin);
-                if (n == 0) return maxOf(f) ? std::optional<u64>(varintMax(*maxOf(f)) + *maxOf(f)) : std::nullopt; // text-like
-                const u64 bytes = static_cast<u64>(n) * (tupleIsF64(t->builtin) ? 8 : 4);
-                return varintMax(bytes) + bytes;
+                if (n == 0) return {withLength(maxOf(f))}; // text-like
+                return {withLength(static_cast<u64>(n) * (tupleIsF64(t->builtin) ? 8 : 4))};
             }
             }
         case TypeKind::Enum:
-        case TypeKind::Flags: return 10;
-        case TypeKind::RecordRef: return 8;
-        case TypeKind::AssetRef: return 17;
-        case TypeKind::Optional: return valueSize(t->element, f, depth);
+        case TypeKind::Flags: return {10};
+        case TypeKind::RecordRef: return {8};
+        case TypeKind::AssetRef: return {17};
+        case TypeKind::Optional: return valueSize(t->element, f);
         case TypeKind::Struct: {
-            const std::optional<u64> body = messageSize(t->decl, depth + 1);
-            if (!body) return std::nullopt;
-            return varintMax(*body) + *body;
+            const Size body = messageSize(t->decl);
+            return {withLength(body.bytes), body.depth + 1};
         }
         case TypeKind::Variant: {
             u64 best = 0;
+            u32 depth = 0;
+            bool bounded = true;
             for (const Alternative& a : t->decl->alternatives) {
-                const std::optional<u64> body = messageSize(a.type, depth + 1);
-                if (!body) return std::nullopt;
-                best = std::max(best, varintMax(static_cast<u64>(a.id) << 3) + varintMax(*body) + *body);
+                const Size body = messageSize(a.type);
+                depth = std::max(depth, body.depth + 1);
+                bounded = bounded && body.bytes.has_value();
+                if (body.bytes) best = std::max(best, satAdd(varintMax(static_cast<u64>(a.id) << 3), satAdd(varintMax(*body.bytes), *body.bytes)));
             }
-            return varintMax(best) + best;
+            return {bounded ? withLength(best) : std::nullopt, depth};
         }
         case TypeKind::Array: {
-            const std::optional<u64> e = valueSize(t->element, nullptr, depth + 1);
-            if (!e) return std::nullopt;
-            return varintMax(t->arraySize * (*e + 5)) + t->arraySize * (*e + 5);
+            const Size e = valueSize(t->element, nullptr);
+            return {e.bytes ? withLength(satMul(t->arraySize, satAdd(*e.bytes, 5))) : std::nullopt, e.depth + 1};
         }
         default: { // list, set, keyed list, map: one entry (with its tag) per element
             const std::optional<u64> n = maxOf(f);
-            if (!n) return std::nullopt;
-            std::optional<u64> e = valueSize(t->element, nullptr, depth + 1);
-            if (t->key) e = add(e, valueSize(t->key, nullptr, depth + 1));
-            if (!e) return std::nullopt;
-            return *n * (*e + 5 + 17); // entry tag and length, and a keyed list's key
+            const Size e = valueSize(t->element, nullptr);
+            const Size k = t->key ? valueSize(t->key, nullptr) : Size{u64{0}, 0};
+            const u32 depth = std::max(e.depth, k.depth) + 1;
+            if (!n || !e.bytes || !k.bytes) return {std::nullopt, depth};
+            return {satMul(*n, satAdd(satAdd(*e.bytes, *k.bytes), 5 + 17)), depth}; // entry tag and length, and a keyed list's key
         }
         }
     }
@@ -267,11 +310,12 @@ private:
         for (const Decl* d : S.decls) {
             if (d->emitted && d->kind == DeclKind::Rpc && d->direction == "client->server") rpcs.push_back(d);
         }
-        std::sort(rpcs.begin(), rpcs.end(), [](const Decl* a, const Decl* b) { return a->qualifiedName < b->qualifiedName; });
+        auto printed = [](const Decl* d) { return d->service ? d->service->qualifiedName + "." + d->rpcName : d->qualifiedName; };
+        std::sort(rpcs.begin(), rpcs.end(), [&](const Decl* a, const Decl* b) { return printed(a) < printed(b); });
         for (const Decl* d : rpcs) {
             o.beginObject(true);
             o.key("rpc");
-            o.str(d->service ? d->service->qualifiedName + "." + d->rpcName : d->qualifiedName);
+            o.str(printed(d));
             const Attr* rate = d->attr("ratelimit") ? d->attr("ratelimit") : d->attr("rate");
             o.key("ratelimit");
             o.str(rate && !rate->args.empty() ? rate->args[0].value : "");
@@ -289,9 +333,11 @@ private:
         for (const Diagnostic& d : D.diagnostics()) {
             if (d.severity == Severity::Warning && !d.message.starts_with("[size.")) all.push_back(Finding{"schemac", d.loc, d.message});
         }
+        // Sorted by what is printed (the include-relative path), so the order does not depend on where
+        // the checkout is.
         std::stable_sort(all.begin(), all.end(), [&](const Finding& a, const Finding& b) {
-            const std::string pa = a.loc.file ? D.filePath(a.loc.file) : std::string();
-            const std::string pb = b.loc.file ? D.filePath(b.loc.file) : std::string();
+            const std::string pa = a.loc.file ? logical(D.filePath(a.loc.file)) : std::string();
+            const std::string pb = b.loc.file ? logical(D.filePath(b.loc.file)) : std::string();
             return std::tie(pa, a.loc.line, a.loc.col, a.rule) < std::tie(pb, b.loc.line, b.loc.col, b.rule);
         });
         for (const Finding& f : all) {
@@ -326,6 +372,9 @@ private:
     DiagnosticEngine& D;
     std::vector<Finding> m_findings;
     std::map<std::string, u64> m_counts;
+    std::set<const void*> m_checked;            ///< fields and rpc results size.unbounded checked (each once)
+    std::map<const Decl*, Size> m_sizes;        ///< messageSize memo
+    std::set<const Decl*> m_inProgress;         ///< messageSize's current path (a repeat is recursion)
 };
 
 } // namespace

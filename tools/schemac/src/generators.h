@@ -32,6 +32,10 @@ std::vector<OutputFile> generateRepl(const Schema& schema, const CompileOptions&
 /// Runs the size-budget lints (warnings) and returns the lint report (options.lintOut): rule counts,
 /// the SEC-1 classification of client->server rpcs and every finding. Call after the other generators.
 std::vector<OutputFile> generateLint(const Schema& schema, const CompileOptions& options, DiagnosticEngine& diags);
+/// size.unreliable's budget in bytes: the largest message engine/net sends unfragmented on every
+/// unreliable channel, wire::maxPayloadFor(Channel::Latest, wire::kMaxPacketPayload) (04 §2.1: the
+/// 1,200 B netcode payload less reliable's and the message's headers). schemac_tests pins it to wire.h.
+inline constexpr u64 kLintUnreliableBudget = 1186;
 
 /// C++ identifier for a schema field name (keywords get a trailing '_').
 std::string cppFieldName(const std::string& name);

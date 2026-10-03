@@ -48,8 +48,9 @@ helios_apply_warnings(helios-schemac)
 if(HELIOS_BUILD_TESTS)
   file(GLOB HELIOS_SCHEMAC_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp)
   # The generated Luau glue runs on the real script host, and Luau.Analysis type-checks schema.d.luau.
+  # helios::net: test_lint.cpp pins the size.unreliable budget to engine/net's wire limits.
   helios_test(schemac_tests SOURCES ${HELIOS_SCHEMAC_TEST_SOURCES}
-    DEPS helios_schemac_lib helios::reflect helios::script helios::tp::luau_analysis)
+    DEPS helios_schemac_lib helios::reflect helios::script helios::tp::luau_analysis helios::net)
   set(HELIOS_SAMPLE_SCHEMAS
     ${PROJECT_SOURCE_DIR}/schemas/sample/common.hschema
     ${PROJECT_SOURCE_DIR}/schemas/sample/ship.hschema

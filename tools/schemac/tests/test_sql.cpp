@@ -178,6 +178,8 @@ TEST_CASE("sql: @sql misuse and unstorable fields are errors") {
         {"struct S @sql(schema=\"svc_test\") @key(y) { x: u8 }", "@key names 'y', which is not a field of 'S'"},
         {"struct S @sql(schema=\"svc_test\") { x: u8? @key }", "key field 'x' of 'S' must be a non-optional scalar"},
         {"struct S @sql(schema=\"svc_test\") { x: u8 @key; h: NetHandle }", "a NetHandle is scoped to one zone instance"},
+        {"struct H { h: list<NetHandle?> }\nstruct S @sql(schema=\"svc_test\") { x: u8 @key; inner: map<u8, H> }",
+         "field 'inner' of 'S' cannot be a column of svc_test.s: it holds a NetHandle"},
         {"struct S @sql(schema=\"svc_test\") { x: u8 @key; aB: u8; a_b: u8 }", "fields 'aB' and 'a_b' both become the column a_b"},
         {"struct S @sql(schema=\"svc_test\") { x: u8 @key }\nstruct T @sql(schema=\"svc_test\", table=\"s\") { x: u8 @key }",
          "both map to the table svc_test.s"},
@@ -204,6 +206,76 @@ TEST_CASE("sql: @sql misuse and unstorable fields are errors") {
     missing.sqlBaseline = "schemas/none.jsonc";
     CHECK(compileSql("struct S @sql(schema=\"svc_test\") { x: u8 @key }", fs, missing)->messages.find("cannot read the SQL baseline lock") !=
           std::string::npos);
+}
+
+TEST_CASE("sql: a new type cannot take over another type's table") {
+    // The round-1 reproducer: A is removed and B (a rename without @was) claims A's table. Field ids
+    // are per type, so a stub diffed by table name would "rename" A's columns into B's.
+    MemoryFileSystem fs;
+    REQUIRE(compileSql("struct A @store(character) @sql(schema=\"svc_test\") { id: u32 @key; x: i32 }", fs)->ok());
+    const std::string v1Lock = fs.files["schemas/lock.jsonc"];
+    const std::string takeover = "struct B @store(character) @sql(schema=\"svc_test\", table=\"a\") { k: u32 @key; y: string }";
+    auto taken = compileSql(takeover, fs);
+    CHECK_FALSE(taken->ok());
+    CHECK_MESSAGE(taken->messages.find("the table svc_test.a belongs to 'test.A' (lock id") != std::string::npos, taken->messages);
+    CHECK(fs.files["schemas/lock.jsonc"] == v1Lock); // nothing recorded
+    // A @was rename keeps the lock entry, so it keeps the table and its columns.
+    auto renamed = compileSql("struct B @store(character) @sql(schema=\"svc_test\", table=\"a\") @was(\"A\") { id: u32 @key; x: i64 }", fs);
+    REQUIRE_MESSAGE(renamed->ok(), renamed->messages);
+    CHECK(contains(renamed->output("sql/svc_test/migration.sql"), "ALTER TABLE svc_test.a ALTER COLUMN x TYPE BIGINT;"));
+    // A hand-edited lock cannot record one table twice, and the stub takes its baseline by lock id:
+    // with A's table removed from the current lock by hand, B's table is new to the stub even though
+    // the --sql-baseline lock had A in it.
+    MemoryFileSystem edited;
+    REQUIRE(compileSql("struct A @store(character) @sql(schema=\"svc_test\") { id: u32 @key; x: i32 }", edited)->ok());
+    std::string lock = edited.files["schemas/lock.jsonc"];
+    edited.files["schemas/v1.lock.jsonc"] = lock;
+    const usize at = lock.find("\"sql\": \"svc_test.a\"");
+    REQUIRE(at != std::string::npos);
+    edited.files["schemas/lock.jsonc"] = lock.erase(at, lock.find('\n', at) - at + 1);
+    REQUIRE(edited.files["schemas/lock.jsonc"].find("svc_test.a") == std::string::npos);
+    CompileOptions fromV1 = sqlOptions();
+    fromV1.sqlBaseline = "schemas/v1.lock.jsonc";
+    auto fresh = compileSql(takeover, edited, fromV1);
+    REQUIRE_MESSAGE(fresh->ok(), fresh->messages);
+    const std::string* m = fresh->output("sql/svc_test/migration.sql");
+    INFO((m ? *m : std::string()));
+    CHECK(contains(m, "CREATE TABLE svc_test.a ("));
+    CHECK_FALSE(contains(m, "RENAME COLUMN"));
+}
+
+TEST_CASE("sql: migration notes for revived retyped fields and ledger partitions") {
+    MemoryFileSystem fs;
+    REQUIRE(compileSql("struct R @store(character) @sql(schema=\"svc_test\") { id: u32 @key; hp: i32 }", fs)->ok());
+    REQUIRE(compileSql("struct R @store(character) @sql(schema=\"svc_test\") { id: u32 @key }", fs)->ok());
+    auto revived = compileSql("struct R @store(character) @sql(schema=\"svc_test\") { id: u32 @key; hp: i64 }", fs);
+    REQUIRE_MESSAGE(revived->ok(), revived->messages);
+    const std::string* m = revived->output("sql/svc_test/migration.sql");
+    INFO((m ? *m : std::string()));
+    CHECK(contains(m, "ALTER TABLE svc_test.r ADD COLUMN IF NOT EXISTS hp BIGINT"));
+    CHECK(contains(m, "-- TODO: svc_test.r.hp was i32 when it was removed and is now i64; if the old column still exists"));
+    auto ledger = compileSql("struct Entry @store(ledger) @sql(schema=\"svc_ledger\") { id: u64 @key; amount: i64 }", fs);
+    REQUIRE_MESSAGE(ledger->ok(), ledger->messages);
+    const std::string* l = ledger->output("sql/svc_ledger/migration.sql");
+    CHECK(contains(l, "-- TODO: 05 §3.3 keeps ledger tables in monthly range partitions"));
+    CHECK_FALSE(contains(ledger->output("sql/svc_ledger/schema.sql"), "TODO"));
+}
+
+TEST_CASE("sql: a carriage return in a doc comment cannot reach the generated SQL") {
+    // The round-1 reproducer: PostgreSQL ends a -- comment at a lone CR, so the rest of the doc line
+    // would run as SQL from the snapshot and the stub. The lexer rejects it (and every control
+    // character but tab) for every emitter.
+    const std::string body = "/// harmless doc\rDROP SCHEMA svc_test CASCADE; CREATE TABLE public.pwned (x int);\n"
+                             "struct V @store(character) @sql(schema=\"svc_test\") { id: u32 @key }";
+    MemoryFileSystem fs;
+    auto c = compileSql(body, fs);
+    CHECK_FALSE(c->ok());
+    CHECK_MESSAGE(c->messages.find("control character U+000D in a doc comment") != std::string::npos, c->messages);
+    CHECK(c->output("sql/svc_test/schema.sql") == nullptr);
+    // CRLF line endings are fine: the CR before the newline is not part of the doc text.
+    auto crlf = compileSql("/// a doc line\r\nstruct V @store(character) @sql(schema=\"svc_test\") { id: u32 @key }", fs);
+    REQUIRE_MESSAGE(crlf->ok(), crlf->messages);
+    CHECK(contains(crlf->output("sql/svc_test/schema.sql"), "-- test.V (lock id"));
 }
 
 } // namespace

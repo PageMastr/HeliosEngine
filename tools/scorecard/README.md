@@ -157,14 +157,18 @@ the strict Windows step's stack rate fail NS-0.7 there too (#43's review, N4). E
 `{"criterion": "<its entry>", "result": "<regex>", "failure": "<regex>"}`. `runners.py gate` reads them from
 the registry by the gate's name and writes one more JUnit case per clause beside the command's own (which
 keeps the output for the perf metrics). A clause passes when the output has a `result` line and no
-`failure` line; a clause whose result line is missing (the command crashed or was killed before it, or was
-not `--gate`) fails; and a non-zero exit that no clause's failure line explains (a crash after the last
-clause, or a failure line no pattern knows) fails every clause, since nothing says which one passed. The
-patterns follow `net_bench`'s own lines, and `GateClauseTests` checks them against `net_bench.cpp`'s format
-strings: every failure line is one case's, so a reworded or added failure line fails the PR tier. The owner
-approval is unchanged by this: the stack's rate is relaxed by `--advisory ns02-stack` on `linux-gcc` only,
-so loss, a stack that never sent and raw datagrams still fail their NS-0.2 case on every run, and NS-0.7's
-case gates NS-0.7 alone, with or without the advisory.
+`failure` line, and a clause whose result line is missing (the command crashed or was killed before it)
+fails. A non-zero exit that no clause's failure line explains fails every clause, since nothing says which
+one passed: any code other than `net_bench`'s failure code 1 (a crash, a kill, the runner's timeout 124),
+or 1 with no failure line printed (a failure line no pattern knows). A gate result without its clause cases
+(a runner that could not read the registry) reads `missing` for each clause, or `fail` if the command
+failed. A run without `--gate` checks no threshold but prints the same result lines, so it is caught only
+by `min_seconds`; `AdvisoryScopeTests` pins the nightly's two commands. The patterns follow `net_bench`'s
+own lines, and `GateClauseTests` checks them against `net_bench.cpp`'s format strings: every failure line is
+one case's, so a reworded or added failure line fails the PR tier. The owner approval is unchanged by this:
+the stack's rate is relaxed by `--advisory ns02-stack` on `linux-gcc` only, so loss, a stack that never
+sent and raw datagrams still fail their NS-0.2 case on every run, and NS-0.7's case gates NS-0.7 alone,
+with or without the advisory.
 
 **Gaps** are clauses without a passing test: `state` is `unmeasured` (no test yet) or `failing` (measured
 and red), with the `owner` WP. `pinned_by` names a test that pins a known divergence (such a test

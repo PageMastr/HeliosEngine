@@ -1521,6 +1521,12 @@ class GateClauseTests(unittest.TestCase):
     def refs(result, os_name):
         return {r["ref"]: r["status"] for r in result["platforms"][os_name]["refs"]}
 
+    def windows_messages(self):
+        """'<case>: <failure message>' per failed clause case of the Windows gate result, one per line."""
+        root = ET.parse(self.results / "windows-vs2026" / "gates" / "net_bench_gate.xml").getroot()
+        return "\n".join(f"{c.get('name')}: {c.find('failure').get('message')}" for c in root.iter("testcase")
+                         if c.get("classname") == "net_bench_gate" and c.find("failure") is not None)
+
     def test_linux_on_the_advisory_and_ns07_pass(self):
         r = self.night()
         self.assertEqual(self.cells(r["NS-0.2"]), ("pass", "pass", "pass"))
@@ -1568,7 +1574,8 @@ class GateClauseTests(unittest.TestCase):
 
     def test_a_missing_clause_case_is_missing_never_green(self):
         # A gate result without the clause cases (written before them, or by a runner that could not read the
-        # registry): every clause reference reads `missing`, so neither criterion passes or keeps a streak.
+        # registry): every clause reference reads `missing` (`fail` if the command failed), so neither
+        # criterion passes or keeps a streak.
         night = self.night()
         d = self.results / "windows-vs2026" / "gates"
         runners.write_gate_junit(d / "net_bench_gate.xml", "net_bench_gate", 0, 615.3, WINDOWS_PASS[1])
@@ -1588,6 +1595,15 @@ class GateClauseTests(unittest.TestCase):
                                   now=datetime(2026, 10, 3, 3, 17, tzinfo=timezone.utc))
         self.assertEqual([(c["id"], c["status"], c["streak"], c["green"]) for c in rep["criteria"]],
                          [("NS-0.2", "unmeasured", 0, False), ("NS-0.7", "unmeasured", 0, False)])
+        # #45's review, N2: the same without the cases from a command that failed reads `fail`, not unmeasured.
+        runners.write_gate_junit(d / "net_bench_gate.xml", "net_bench_gate", 1, 615.3, WINDOWS_STACK_BELOW[1])
+        runs = report.load_results(self.results, MODULE)
+        for ident in ("NS-0.2", "NS-0.7"):
+            r = report.evaluate(self.entries[ident], self.data, runs, None, sc.ROOT)
+            self.assertEqual(self.cells(r), ("fail", "pass", "fail"), ident)
+            detail = next(x["detail"] for x in r["platforms"]["windows"]["refs"] if x["ref"].startswith("gate"))
+            self.assertIn("windows-vs2026 fail (the gate's result has no case 'NS-0.", detail)
+            self.assertIn("', and its command failed)", detail)
         # No gate result at all on Windows: missing too.
         (d / "net_bench_gate.xml").unlink()
         runs = report.load_results(self.results, MODULE)
@@ -1604,11 +1620,32 @@ class GateClauseTests(unittest.TestCase):
         r = self.night(windows=(1, WINDOWS_PASS[1].replace("gates PASSED", "NS-0.2 FAILED: something new")))
         self.assertEqual(self.cells(r["NS-0.2"]), ("fail", "pass", "fail"))
         self.assertEqual(self.cells(r["NS-0.7"]), ("fail", "pass", "fail"))
-        # Killed by the timeout during the trunk run: the trunk was not measured, and NS-0.2's clauses had passed.
+        # The same where the trunk's line would be: its clause fails as unmeasured, which explains no exit 1,
+        # so NS-0.2's clauses are not known to have passed either.
+        head = WINDOWS_PASS[1][:WINDOWS_PASS[1].index("05:34:05.923")]
+        r = self.night(windows=(1, head + "05:34:05.923 ERROR [General] NS-0.7: something new\ngates FAILED\n"))
+        self.assertEqual(self.cells(r["NS-0.2"]), ("fail", "pass", "fail"))
+        self.assertEqual(self.cells(r["NS-0.7"]), ("fail", "pass", "fail"))
+        # Killed by the timeout during the trunk run: the trunk was not measured, and an exit other than 1 is no
+        # clause's, so NS-0.2's clauses fail too although their lines were printed (as before the cases).
         killed = WINDOWS_PASS[1][:WINDOWS_PASS[1].index("05:34:05.923")] + "[gate killed after the 1800 s timeout]\n"
         r = self.night(windows=(124, killed))
         self.assertEqual(self.cells(r["NS-0.7"]), ("fail", "pass", "fail"))
-        self.assertEqual(self.cells(r["NS-0.2"]), ("pass", "pass", "pass"))
+        self.assertEqual(self.cells(r["NS-0.2"]), ("fail", "pass", "fail"))
+        self.assertIn("NS-0.2 socket: exit code 124, which no clause's failure line explains", self.windows_messages())
+        # #45's review, N1: the stack's failure line, then a crash (139) after the trunk line. The stack's line
+        # explains an exit 1, not a crash, so the trunk clause is not known to have passed: NS-0.7 fails too,
+        # while the stack keeps its own failure line as its reason.
+        r = self.night(windows=(139, WINDOWS_STACK_BELOW[1].replace("gates FAILED", "")))
+        self.assertEqual(self.cells(r["NS-0.2"]), ("fail", "pass", "fail"))
+        self.assertEqual(self.cells(r["NS-0.7"]), ("fail", "pass", "fail"))
+        messages = self.windows_messages()
+        self.assertIn("NS-0.2 HTP stack: 05:24:05.617 ERROR [General] NS-0.2 FAILED: the HTP stack", messages)
+        self.assertIn("NS-0.7 trunk: exit code 139, which no clause's failure line explains", messages)
+        # The same lines with exit 1, net_bench's own failure code: only NS-0.2 fails.
+        r = self.night(windows=(1, WINDOWS_STACK_BELOW[1].replace("gates FAILED", "")))
+        self.assertEqual(self.cells(r["NS-0.2"]), ("fail", "pass", "fail"))
+        self.assertEqual(self.cells(r["NS-0.7"]), ("pass", "pass", "pass"))
         # A run shorter than the gate's min_seconds fails every clause (net_bench without --gate, say).
         self.gate("windows-vs2026", 0, WINDOWS_PASS[1], seconds=17.0)
         runs = report.load_results(self.results, MODULE)

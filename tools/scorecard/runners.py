@@ -19,7 +19,8 @@ MESSAGE lines perf.py reads.
 a JUnit file whose case NAME has the exit code, wall time and the output's tail. A gate that scorecard.jsonc
 declares with `cases` (net_bench --gate measures NS-0.2 and NS-0.7) gets one more case per clause, read from
 the output: a clause passes when its `result` line was printed and its `failure` line was not, and a non-zero
-exit that no clause's failure line explains fails them all. So each criterion reads only its own clauses.
+exit that no clause's failure line explains (any code but 1, or 1 with no failure line) fails them all. So
+each criterion reads only its own clauses.
 Output is also streamed to the console. A bare command name is looked up in the build's bin directory. It
 exits with the command's code, or 1 if it exited 0 with a clause failed.
 
@@ -50,6 +51,10 @@ import scorecard
 TAIL_BYTES = 64 * 1024
 MAX_LINE = 64 * 1024  # a longer output line is cut before the clause patterns see it
 MAX_HITS = 8  # lines kept per clause pattern
+# The exit code with which a gate that declares `cases` says a clause failed, after printing that clause's
+# failure line (net_bench: `return ok ? 0 : 1`). Any other non-zero code (a signal, a timeout's 124, an access
+# violation) means the command did not finish normally, so a clause it reported may not have been checked yet.
+CLAUSE_FAILURE_EXIT = 1
 
 
 def find_binary(name: str, build_dir: str | None, config: str | None) -> str:
@@ -161,8 +166,9 @@ class ClauseLines:
 
 def clause_verdicts(cases: dict, hits: dict, rc: int) -> list[tuple[str, bool, str, list[str]]]:
     """(case, passed, why, its lines) per clause case, in the registry's order. A clause passes when the
-    output has its result line and no failure line. A non-zero exit with no clause failed (a crash or kill
-    after the last clause, or a failure line no clause knows) fails every clause: nothing says which passed."""
+    output has its result line and no failure line. A non-zero exit that no clause's failure line explains
+    fails every clause, since nothing says which one passed: any code other than CLAUSE_FAILURE_EXIT (a crash,
+    a kill, a timeout), or that code with no failure line printed (a failure line no clause knows)."""
     out = []
     for name, case in cases.items():
         h = hits.get(name) or {"result": [], "failure": []}
@@ -173,9 +179,11 @@ def clause_verdicts(cases: dict, hits: dict, rc: int) -> list[tuple[str, bool, s
             out.append((name, False, f"no line matching {case['result']!r}: the clause was not measured", lines))
         else:
             out.append((name, True, "", lines))
-    if rc != 0 and all(ok for _, ok, _, _ in out):
-        why = f"exit code {rc}, and no clause printed its failure line (a crash, a kill or an unknown failure)"
-        out = [(name, False, why, lines) for name, _, _, lines in out]
+    explained = rc == CLAUSE_FAILURE_EXIT and any((hits.get(name) or {}).get("failure") for name in cases)
+    if rc != 0 and not explained:
+        why = (f"exit code {rc}, which no clause's failure line explains (a crash, a kill, a timeout or an "
+               "unknown failure line), so no clause is known to have passed")
+        out = [(name, False, why if ok else own, lines) for name, ok, own, lines in out]
     return out
 
 

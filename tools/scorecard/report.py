@@ -14,7 +14,8 @@ DIR holds one directory per result set (a nightly job's artifact). Each has `run
 --ci-jobs is the GitHub API's jobs listing of the latest completed ci.yml run on main.
 
 A reference passes on an OS when it has results in the runs that count for it and none of them failed (a
-`gate` reference with `case` reads that clause's case; a gate result without it reads as missing);
+`gate` reference with `case` reads that clause's case; a gate result without it reads as missing, or as
+failed if the gate's command failed);
 a criterion passes when every reference passes on every platform and it has no gap. Anything else is
 fail (a failed reference or a failing gap) or unmeasured (no result, a skip, or an unmeasured gap).
 An entry that cites the repository owner's approval (09 §5.6; an evidence reference with `owner_approval`)
@@ -226,8 +227,12 @@ def eval_ref(ref: dict, os_name: str, entry: dict, data: dict, runs: list[Result
             need = ((data.get("gates") or {}).get(ref["gate"]) or {}).get("min_seconds")
             hits = []
             if gate is None:
-                if ran is not None:  # the gate ran, and its result has no such clause: never a pass
+                # The gate ran, and its result has no such clause: never a pass, and a fail if the command
+                # failed (it may have failed on this clause).
+                if ran is not None:
                     hits, why = ["missing"], f"the gate's result has no case '{ref['case']}'"
+                    if ran[0] == "fail":
+                        hits, why = ["fail"], why + ", and its command failed"
             elif not (scorecard.is_int(need) and need > 0):  # never a silent 0: the check rejects it too
                 hits, why = ["fail"], "the gate declares no positive min_seconds"
             else:

@@ -278,6 +278,8 @@ TEST_CASE("repl: invalid @quant and fields the full-state codec cannot carry are
         CHECK_MESSAGE(messages.find(expected) != std::string::npos, messages);
     }
     CHECK(diagnosticsOf("event E @audience(everyone) { x: u8 }\n", options).find("expected owner, relevant or party") != std::string::npos);
+    // Units apply to lengths only: bits= takes any schema integer, hex included.
+    CHECK(diagnosticsOf("component C replicate(all) { v: vec3f @quant(range=±8, bits=0xA) }\n", options).empty());
     // Without --emit repl the same schemas compile.
     CHECK(diagnosticsOf("component C replicate(all) { s: string }\n").empty());
 }

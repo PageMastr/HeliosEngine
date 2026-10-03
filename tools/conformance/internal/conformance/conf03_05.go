@@ -28,8 +28,9 @@ var holderRuleTests = []string{"conformance/holder_rule"}
 var (
 	cTestCaseRE = regexp.MustCompile(`\b(?:DOCTEST_)?TEST_CASE\s*\(\s*"conformance/([A-Za-z0-9_]+)`)
 	// A doctest decorator that turns the case off or lets it fail: CI would run nothing that can fail.
-	cTestOffRE = regexp.MustCompile(`\b(?:DOCTEST_)?TEST_CASE\s*\(\s*"conformance/([A-Za-z0-9_]+)[^"]*"\s*\*\s*` +
-		`doctest::(skip|may_fail|should_fail|expected_failures)\b`)
+	// The decorator may come anywhere in the chain (`"…" * doctest::timeout(120) * doctest::skip()`).
+	cTestOffRE = regexp.MustCompile(`\b(?:DOCTEST_)?TEST_CASE\s*\(\s*"conformance/([A-Za-z0-9_]+)[^"]*"\s*` +
+		`(?:\*\s*doctest::\w+\s*(?:\([^()]*\))?\s*)*\*\s*doctest::(skip|may_fail|should_fail|expected_failures)\b`)
 )
 
 // skipsAlways returns the position of an unconditional t.Skip, t.Skipf or t.SkipNow among a test
@@ -203,14 +204,33 @@ var (
 	idCodeRE   = regexp.MustCompile(`idgen|AllocateIdBlocks|allocateBlockPrefixes|IdMinter|composeBlockId|BlockIdLayout|(?i:snowflake)`)
 	idCodeName = regexp.MustCompile(`(?i)(^|_)(ids?|idgen|entity_?id|snowflake|minter)(_|\.)`)
 	// The minters: the only places that may compose a time-prefixed ID (05 §1.4.5 "Implementation").
-	idMinters   = []string{"services/pkg/idgen/**", "engine/ecs/**/entity_id.*", "engine/ecs/**/registry.*"}
-	cIdentRE    = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
-	cShiftRE    = regexp.MustCompile(`([A-Za-z0-9_)\]]+)\s*<<=?\s*\(?\s*((?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*|\d+)`)
-	cConstRE    = regexp.MustCompile(`\bconstexpr\s+[A-Za-z0-9_:<> ]*?\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;{}]+);`)
-	cIntTokenRE = regexp.MustCompile(`^(\d+)[uUlL]*$`)
-	cMulShiftRE = regexp.MustCompile(`\*\s*\(\s*1[uUlL]*\s*<<\s*((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*|\d+)\s*\)|` +
+	idMinters = []string{"services/pkg/idgen/**", "engine/ecs/**/entity_id.*", "engine/ecs/**/registry.*"}
+	cIdentRE  = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+	// A shift and its amount: a name, a literal, or a parenthesized expression (`<< (kOffBits + kShBits)`).
+	cShiftRE = regexp.MustCompile(`([A-Za-z0-9_)\]]+)\s*<<=?\s*(?:\(([^()]*)\)|((?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*|\d+))`)
+	// Integer constants: a constexpr or const declaration (= or {…}), a #define, and an enumerator.
+	cConstRE      = regexp.MustCompile(`\b(?:constexpr|const)\b[^;{}()=]*?\b([A-Za-z_]\w*)\s*(?:=\s*([^;{}]+?)|\{([^{}]*)\})\s*;`)
+	cDefineRE     = regexp.MustCompile(`(?m)^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]+([^\n]+)$`)
+	cEnumBodyRE   = regexp.MustCompile(`\benum\b[^{;()]*\{([^{}]*)\}`)
+	cEnumeratorRE = regexp.MustCompile(`^\s*([A-Za-z_]\w*)\s*=\s*(.+?)\s*$`)
+	cIntTokenRE   = regexp.MustCompile(`^(\d+)[uUlL]*$`)
+	cMulShiftRE   = regexp.MustCompile(`\*\s*\(\s*1[uUlL]*\s*<<\s*((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*|\d+)\s*\)|` +
 		`\(\s*1[uUlL]*\s*<<\s*((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*|\d+)\s*\)\s*\*`)
 )
+
+// goLiteral reports a literal operand, also in parentheses or converted (`uint64(1)`): a shift or scale of
+// one is a size, not a field.
+func goLiteral(e ast.Expr) bool {
+	switch x := e.(type) {
+	case *ast.BasicLit:
+		return true
+	case *ast.ParenExpr:
+		return goLiteral(x.X)
+	case *ast.CallExpr:
+		return len(x.Args) == 1 && goLiteral(x.Args[0])
+	}
+	return false
+}
 
 func isNodeID(ident string) bool {
 	return nodeIDWordRE.MatchString(strings.ToLower(camelRE.ReplaceAllString(ident, "${1}_${2}")))
@@ -255,13 +275,13 @@ func checkNodeIDs(p *Pass) {
 					}
 				case *ast.BinaryExpr:
 					if x.Op == token.SHL {
-						if _, lit := x.X.(*ast.BasicLit); !lit {
+						if !goLiteral(x.X) {
 							if v, ok := g.Int(gf, x.Y); ok {
 								shifts = append(shifts, shift{v, g.line(x.Pos())})
 							}
 						}
 					}
-					if x.Op == token.MUL { // ms * (1 << 22) is ms << 22
+					if x.Op == token.MUL && !goLiteral(x.X) && !goLiteral(x.Y) { // ms * (1 << 22) is ms << 22
 						for _, op := range []ast.Expr{x.X, x.Y} {
 							for {
 								pe, ok := op.(*ast.ParenExpr)
@@ -303,7 +323,7 @@ func checkNodeIDs(p *Pass) {
 					if cIntTokenRE.MatchString(m[1]) { // 1 << 12 is a size, not a field
 						continue
 					}
-					for _, v := range cEval(m[2], cConsts, 0) {
+					for _, v := range cEval(m[2]+m[3], cConsts, 0) {
 						shifts = append(shifts, shift{v, i + 1})
 					}
 				}
@@ -339,7 +359,8 @@ func checkLayouts(p *Pass, f string, shifts []shift) {
 	}
 }
 
-// cConstTable collects `constexpr … NAME = expr;` from the C-family files in scope, by bare name. A name
+// cConstTable collects the integer constants of the C-family files in scope, by bare name: `constexpr` and
+// `const` declarations (`= expr` or `{expr}`), `#define NAME expr` and enumerators (`NAME = expr`). A name
 // defined more than once (kPageBits is 6 in one ECS header and 12 in another) keeps every definition.
 // Groups under `#if 0` are not read.
 func cConstTable(p *Pass) map[string][]string {
@@ -354,9 +375,23 @@ func cConstTable(p *Pass) map[string][]string {
 				code[i] = ""
 			}
 		}
-		for _, m := range cConstRE.FindAllStringSubmatch(strings.Join(code, "\n"), -1) {
-			if v := strings.TrimSpace(m[2]); !slices.Contains(t[m[1]], v) {
-				t[m[1]] = append(t[m[1]], v)
+		text := strings.Join(code, "\n")
+		add := func(name, v string) {
+			if v = strings.TrimSpace(v); v != "" && !slices.Contains(t[name], v) {
+				t[name] = append(t[name], v)
+			}
+		}
+		for _, m := range cConstRE.FindAllStringSubmatch(text, -1) {
+			add(m[1], m[2]+m[3])
+		}
+		for _, m := range cDefineRE.FindAllStringSubmatch(text, -1) {
+			add(m[1], m[2])
+		}
+		for _, m := range cEnumBodyRE.FindAllStringSubmatch(text, -1) {
+			for _, e := range strings.Split(m[1], ",") {
+				if em := cEnumeratorRE.FindStringSubmatch(e); em != nil {
+					add(em[1], em[2])
+				}
 			}
 		}
 	}

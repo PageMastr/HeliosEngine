@@ -995,8 +995,9 @@ CI run 36344848217 on 5f88be7 was still queued at this snapshot. The last comple
 36336602340 on 1425608, passed all ten jobs: the GCC, Clang and headless tests, the MinGW cross-build, MSVC at
 the primary and the floor, clang-cl, and Go.
 `cmake -P tools/status/check_status.cmake` checks that 09 §8.1 names every module in the tree. On
-2026-10-03 the NS-0.2 owner-approval PR (plan revision 12) updated the `engine/net` item and NS-0.2's and
-NS-0.7's failing-gate entries below; the rest is the 2026-09-27 snapshot.
+2026-10-03 the NS-0.2 owner-approval PR (plan revision 12) updated the `engine/net` item, added the NS-0.2
+approval item below (with NS-0.7's hosted-Windows failure) and pointed the first nightly's NS-0.2 failure to
+it; the rest is the 2026-09-27 snapshot.
 - **Merged through review since round 5** (14 PRs: #7–#20):
   - WP-0.15r, the backend's conformance rework (#8), and a NATS subscription flush that ends the
     `TestNATSRoundTrip` flake (#20);
@@ -1052,24 +1053,28 @@ NS-0.7's failing-gate entries below; the rest is the 2026-09-27 snapshot.
   - K39 (RT-13) fired on 2026-09-25, and both its mitigations have merged (#9);
   - the first nightly on WP-0.3's workflow (2026-09-27) is red. The VS 2026 and VS 2022 MSBuild builds do not
     configure, so the registry check reports 80 findings: the tests it cites are missing from their inventories
-    (124 CTests and 0 doctest cases each). The Debug-ASan build fails 8 of 140 CTests: `ecs_tests` (WP-1.1a's
-    parity golden), `physics_tests` (a Debug-only Jolt assert), `pcg_hnoise_bench_smoke` (a stack-use-after-scope),
+    (124 CTests and 0 doctest cases each). NS-0.2's gate fails on the hosted Linux runner (88k packets per core
+    against 100k). The Debug-ASan build fails 8 of 140 CTests: `ecs_tests` (WP-1.1a's parity golden),
+    `physics_tests` (a Debug-only Jolt assert), `pcg_hnoise_bench_smoke` (a stack-use-after-scope),
     `rhi_triangle_smoke` (SDL3 X11 leaks), `script_tests` and `script_tests_perf` (so RT-13 cannot pass there),
     and the perf gates `net_tests_perf` and `pcg_tests_perf`. clang-cl's doctest-XML step and Linux Go's
     integration step fail too. Each gets a bisect or a P0 fix (09 §5.8, §8.2). #31, #32, #23 and #24 are open
-    for the MSBuild configure, the Windows doctest-XML step, Go integration and `script_tests`.
+    for the MSBuild configure, the Windows doctest-XML step, Go integration and `script_tests`. NS-0.2's hosted
+    Linux rate has since passed on the owner's approval (below).
 - **NS-0.2 passes on hosted Linux on the repository owner's approval of 2026-09-30**
   ([09 §5.6](plan/09-roadmap-and-process.md#56-ci-tiers-and-evidence-classes);
-  [the record](evidence/ns-0.2-owner-approval-2026-09-30.md) quotes it verbatim). On hosted runners the
-  encrypted stack measured 88k–132k packets per core on Linux (below 100k in 6 of 9 runs, with no code change
-  between passing and failing runs) and 85k on Windows (2 of 2 runs) against 100k. Raw datagrams passed on
-  every hosted run and no hosted run lost a packet; one dev-VM run lost 64 (2026-09-30), and a loss still
-  fails the gate. The hosted Linux nightly now runs `net_bench --gate --advisory ns02-stack`, which reports
-  that one rate instead of failing on it; everything else in the run still gates. **Hosted Windows is not
-  covered**: no Windows machine has measured the stack at 100k and the owner has not confirmed the approval
-  for it, so its step stays strict and NS-0.2 cannot turn green until a Windows run passes or the owner
-  confirms. A re-test on fixed hardware (WP-0.4's `win-gpu` runner) is owed, and if it fails, NS-0.2 fails
-  again and the stack gets a second pass; until it passes, the approval carries no phase exit on its own.
+  [the record](evidence/ns-0.2-owner-approval-2026-09-30.md) quotes it verbatim). From 2026-09-27 to
+  2026-10-03 the encrypted stack measured 88k–132k packets per core on hosted Linux (below 100k in 7 of 10
+  runs, with no code change between passing and failing runs) and 85k–126k on hosted Windows (below 100k in 2
+  of 3 runs) against 100k; on both, the level follows the host's raw rate. Raw datagrams passed on every
+  hosted run and no hosted run lost a packet; one dev-VM run lost 64 (2026-09-30), and a loss still fails the
+  gate. The hosted Linux nightly now runs `net_bench --gate --advisory ns02-stack`, which reports that one
+  rate instead of failing on it; everything else in the run still gates. **Hosted Windows is not covered**:
+  the owner has not confirmed the approval for it, so its step stays strict. NS-0.2 fails there each night
+  the stack measures below 100k, and its one strict pass (125,611 on 2026-10-03) is not the 3-night streak,
+  so NS-0.2 cannot turn green until Windows has one or the owner confirms. A re-test on fixed hardware
+  (WP-0.4's `win-gpu` runner) is owed, and if it fails, NS-0.2 fails again and the stack gets a second pass;
+  until it passes, the approval carries no phase exit on its own.
   **NS-0.7 is not covered**: it failed once on hosted Windows (2026-09-27: 19,690 pps, 1.55 % drops) and
   passed on every other run.
 - **Known deltas from the plan** (09 §8.1, §5.10.4):

@@ -150,7 +150,8 @@ jobs:
           python tools/scorecard/runners.py doctest --build-dir $env:BUILD --config RelWithDebInfo
           --label-exclude "gpu|perf" --out "$env:RESULTS/doctest"
       # Strict: the owner's approval of 2026-09-30 covers the hosted Linux run only. Hosted Windows measured the
-      # stack below 100k on every run, and the owner has not confirmed the approval for it (the record).
+      # stack below 100k on 2 of 3 runs (125,611 on 2026-10-03), and the owner has not confirmed the approval
+      # for it (the record).
       - name: net_bench --gate (NS-0.2, NS-0.7; 10 min)
         if: ${{ !cancelled() && matrix.run == 'windows-vs2026' }}
         run: >

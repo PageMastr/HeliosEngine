@@ -184,9 +184,10 @@ class NightlyPerfStepsTests(unittest.TestCase):
 class AdvisoryScopeTests(unittest.TestCase):
     """NS-0.2's owner approval of 2026-09-30 relaxes one clause, the encrypted stack's 100k packets per core, on
     the runs the registry names (`advisory_runs`), through `net_bench --gate --advisory ns02-stack` (09 §5.6).
-    It covers hosted Linux only: hosted Windows measured about 85k on both runs and the owner has not confirmed
-    it there, so that step stays strict. This pins that scope: another advisory, another advisory run or
-    another approval fails here until this test, and its review, say otherwise."""
+    It covers hosted Linux only: hosted Windows measured the stack below 100k on 2 of its 3 runs (125,611 on
+    2026-10-03) and the owner has not confirmed the approval there, so that step stays strict. This pins that
+    scope: another advisory, another advisory run or another approval fails here until this test, and its
+    review, say otherwise."""
 
     def test_only_ns02s_stack_rate_is_advisory_and_only_on_the_named_runs(self):
         data, _ = scorecard.load_jsonc(ROOT / "scorecard.jsonc")

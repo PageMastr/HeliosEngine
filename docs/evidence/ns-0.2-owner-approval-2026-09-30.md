@@ -6,7 +6,7 @@
 | Approved by | The repository owner (the user), on 2026-09-30 |
 | Recorded by | The Director (Claude Code agent), on 2026-10-03, under 09 §5.6 "Owner approval" (plan revision 12) |
 | Clause covered | The encrypted HTP stack's 100k packets per core, on the hosted Linux nightly run (`linux-gcc` on `ubuntu-24.04`) only |
-| Not covered | Hosted Windows (`windows-vs2026`): both of its runs measured the stack below 100k, no Windows machine has measured 100k, and the owner has not confirmed the approval for it (below). That run stays strict, so NS-0.2 fails there |
+| Not covered | Hosted Windows (`windows-vs2026`): its stack measured below 100k on 2 of its 3 runs (85,399 and 84,970) and 125,611 on the third, a strict pass, and the owner has not confirmed the approval for it (below). That run stays strict, so NS-0.2 fails there each night its stack measures below 100k |
 | Re-test owed | `net_bench --gate`, without `--advisory`, on fixed hardware: WP-0.4's `win-gpu` runner and a Linux lab host (owners WP-0.4 and WP-0.13) |
 | Phase exits | While the re-test is open, this approval carries no phase exit on its own: the exit needs the re-test passed or the owner's re-confirmation at that exit (09 §5.6, §5.7) |
 | Registry | `scorecard.jsonc`, entry NS-0.2: status `approved`, `owner_approval` 2026-09-30, `advisory_runs` `linux-gcc`, `advisory` `net.ns02.stack_packets_per_core`, two follow-ups (the re-test, and hosted Windows) |
@@ -37,7 +37,7 @@ It does not cover, and the gate still fails on:
 
 ## The measurements behind it
 
-### Hosted nightly runners, 2026-09-27 to 2026-10-02
+### Hosted nightly runners, 2026-09-27 to 2026-10-03
 
 Every `net_bench --gate` run the hosted runners completed, read from the job logs. "Stack" is encrypted
 packets delivered per core; every run delivered every packet it sent. NS-0.7 is 600 s at 20,000 pps of
@@ -55,25 +55,31 @@ packets delivered per core; every run delivered every packet it sent. NS-0.7 is 
 | 2026-09-30 17:47 | 36747179407 | dispatch, 9568bc4 | 200,785 | 88,324 | 20,000 pps, 0 drops | fail (NS-0.2) |
 | 2026-10-01 10:30 | 36847862239 | schedule, 5bc959f | 201,174 | 89,107 | 20,000 pps, 0 drops | fail (NS-0.2) |
 | 2026-10-02 10:07 | 36992204809 | schedule, 5bc959f | 414,908 | 120,732 | 20,000 pps, 0 drops | pass |
+| 2026-10-03 05:23 | 37098788944 | dispatch, 564747d | 200,474 | 88,464 | 20,000 pps, 0 drops | fail (NS-0.2) |
 | **Windows** (`windows-latest`, VS 2026) | | | | | | |
 | 2026-09-27 19:33 | 36343324805 | dispatch, 23dec29 | 249,027 | 85,399 | 20,000 pps, 0 drops | fail (NS-0.2) |
 | 2026-09-27 20:52 | 36344479712 | dispatch, 6ea95be | 223,776 | 84,970 | **19,690 pps, 1.55 % drops** | fail (NS-0.2 and NS-0.7) |
+| 2026-10-03 05:25 | 37098788944 | dispatch, 564747d | 344,086 | **125,611** | 20,000 pps, 0 drops | pass |
 
-The scheduled Windows nightlies before #31 could not configure MSBuild, so they never ran `net_bench`.
+The scheduled Windows nightlies before #31 could not configure MSBuild, so they never ran `net_bench`. Run
+37098788944 is the first nightly on `main` after #31 and the other nightly fixes merged; both its gate
+steps were strict, because this record's `--advisory` was not on `main` yet.
 
 What the table shows:
 - **The level follows the host, not the code.** The same commit measured both sides of 100k: cfd2e15 gave
   110,536 and then 88,316 and 88,405, and 5bc959f gave 89,107 and then 120,732. On Linux the runs fall into
-  two groups that the raw rate tracks too: about 200k raw with about 88k encrypted (6 runs), and 255k–451k
-  raw with 110k–132k encrypted (3 runs). This is the inconsistent resource availability the owner names.
-- **Below 100k is not rare on hosted runners.** It was 6 of 9 Linux runs and both Windows runs, not
+  two groups that the raw rate tracks too: about 200k raw with about 88k encrypted (7 runs), and 255k–451k
+  raw with 110k–132k encrypted (3 runs). Windows follows its raw rate the same way: 224k–249k raw gave about
+  85k encrypted (2 runs), and 344k raw gave 125,611 (1 run). This is the inconsistent resource availability
+  the owner names.
+- **Below 100k is not rare on hosted runners.** It was 7 of 10 Linux runs and 2 of 3 Windows runs, not
   occasional ones; the record states it as measured.
 - Raw datagrams passed on every hosted run (198,969–451,382 per core), and no hosted run lost a packet.
 
 ### The development container ("passes everywhere else")
 
-The shared 4-vCPU dev VM, GCC 13 RelWithDebInfo. Every measurement here is on Linux; no Windows machine has
-measured the stack anywhere but the two hosted runs above.
+The shared 4-vCPU dev VM, GCC 13 RelWithDebInfo. Every measurement here is on Linux; the only Windows
+measurements of the stack are the three hosted runs above.
 - 2026-09-25 (`engine/net/README.md`): raw 478,863 datagrams per core; encrypted stack 1,162,752 of
   1,162,752 delivered, 117,236 packets per core; NS-0.7 600 s at 20,000 pps with 0 drops. Gate passed.
 - 2026-09-30: one 10 s stack run **lost 64 packets** (reported in the Director's paused-state notes; the
@@ -105,21 +111,25 @@ about-200k hosts that measured 88k encrypted.
 
 ## Hosted Windows is not covered
 
-**No Windows machine has yet measured the encrypted stack at 100k packets per core or more.** The only
-Windows measurements are the two hosted runs above, 85,399 and 84,970 (both below), on two different raw
-rates (249,027 and 223,776 datagrams per core). The owner's stated reasons, "occasional skewed results" and
-"it passes everywhere else", come from Linux: there the level follows the host, and the dev VM passes. On
-Windows the shortfall was not occasional (2 of 2 runs), and no Windows run passed. Nothing on record shows
-that the owner saw the Windows rate when deciding: the Director's paused-state notes of 2026-09-30 listed
-NS-0.7's Windows failure, not NS-0.2's Windows rate. 09 §5.6 names such a run only once the owner has
-confirmed it with its measurements in view, so this record covers hosted Linux only:
+Hosted Windows has three measurements of the encrypted stack, all in the table above: 85,399 and 84,970 on
+2026-09-27 (raw 249,027 and 223,776 datagrams per core), both below 100k, and **125,611 on 2026-10-03** (raw
+344,086), which passed the strict `net_bench --gate`. So the Windows level follows the raw rate as the Linux
+level does. That supports the owner's stated reason, "inconsistent resource availablity causing occasional
+skewed results" (the owner's spelling), on Windows too, but the shortfall there was 2 of 3 runs, not
+occasional ones. Nothing on record shows that the owner saw the Windows rates when deciding: the Director's
+paused-state notes of 2026-09-30 listed NS-0.7's Windows failure, not NS-0.2's Windows rate, and the
+2026-10-03 run came after the decision. The owner's Windows question now has these three data points.
+
+09 §5.6 names such a run only once the owner has confirmed it with its measurements in view, and a strict
+Windows pass counts on its own anyway, so this record still covers hosted Linux only:
 - the nightly's `windows-vs2026` step runs `net_bench --gate` without `--advisory`, and the registry's
   `advisory_runs` is `["linux-gcc"]`;
-- NS-0.2 therefore fails on the hosted Windows nightly each night the stack measures below 100k there, and
-  it cannot turn green (class N needs Windows and Linux) until that changes;
-- it changes when a Windows run measures 100k or more without loss, or when the owner confirms the approval
-  for hosted Windows with these numbers in view. That confirmation is then quoted here, dated and verbatim;
-  `windows-vs2026` joins `advisory_runs`, its step passes `--advisory ns02-stack`, and
+- NS-0.2 therefore fails on the hosted Windows nightly each night its stack measures below 100k there, and
+  passes there only on a night the strict gate passes, as on 2026-10-03. One pass is not class N's 3
+  consecutive passing nights (§5.6), so NS-0.2 cannot turn green until Windows has such a streak or the owner
+  confirms the approval for hosted Windows with these numbers in view;
+- that confirmation, if given, is quoted here, dated and verbatim; `windows-vs2026` then joins
+  `advisory_runs`, its step passes `--advisory ns02-stack`, and
   `tools/scorecard/test_nightly_workflow.py`'s `AdvisoryScopeTests` follows. A strict `net_bench --gate` on
   the owner's Windows PC would be useful evidence either way.
 
@@ -129,11 +139,12 @@ The registry lists this as a follow-up owned by the User.
 
 NS-0.7 (one trunk connection, 20k pps of 1,200 B for 10 min, < 0.1 % drops, ≤ 1 core per side) failed once
 on hosted Windows: run 36344479712, 2026-09-27, delivered 11,813,909 of 11,999,992 datagrams (19,690 pps,
-1.5507 % drops; cell thread 0.26 cores, gateway thread 0.15). It passed on the other Windows run that day and
-on every Linux run. Nothing in this approval relaxes it: `--advisory ns02-stack` leaves NS-0.7's verdict as it
+1.5507 % drops; cell thread 0.26 cores, gateway thread 0.15). It passed on the other two Windows runs and on
+every Linux run. Nothing in this approval relaxes it: `--advisory ns02-stack` leaves NS-0.7's verdict as it
 was, and because NS-0.7 shares the `net_bench --gate` run with NS-0.2, an NS-0.7 failure still fails that
-night's run for both criteria. Whether the Windows failure repeats will show once the Windows nightly runs
-`net_bench` again; 04 §2.6's fallback is for a failure that persists after profiling.
+night's run for both criteria. It did not repeat on 2026-10-03, the first Windows nightly to run `net_bench`
+since: 11,999,992 of 11,999,992 delivered at 20,000 pps, 0 drops, cell thread 0.17 cores and gateway thread
+0.10. 04 §2.6's fallback is for a failure that persists after profiling.
 
 ## The re-test owed
 
@@ -152,9 +163,10 @@ that choice is the owner's, recorded here when it is made.
 same run against a fixed anchor with the runtime budget of ±5 % (09 §5.8), and this approval does not change
 that. Because the hosted Linux level follows the host (about 88k encrypted and 200k raw on one host class,
 110k–132k and 255k–451k on the other), the Scorecard job's perf step can fail on the host class alone. The
-2026-10-02 nightly's perf step failed (run 36992204809); which metric failed is in that run's step summary
-and `perf-history` artifact, which the recording agent could not read. A fix, such as a per-host-class anchor
-or a wider budget category for loopback rates, belongs to WP-0.3 and is listed in 09 §8.1.
+perf steps of the 2026-10-02 and 2026-10-03 nightlies failed (runs 36992204809 and 37098788944); which
+metric failed is in each run's step summary and `perf-history` artifact, which the recording agent could not
+read. A fix, such as a per-host-class anchor or a wider budget category for loopback rates, belongs to WP-0.3
+and is listed in 09 §8.1.
 
 ## How it is enforced
 

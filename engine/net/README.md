@@ -218,9 +218,9 @@ approval of 2026-09-30
 datagrams, loss at either level, a stack that never sent, and NS-0.7 still fail the run, and `--advisory`
 takes no other name and needs `--gate` (exit 2 otherwise; `bench/ns02_gate.h`, the `net.bench` doctests
 and the `net_bench_advisory_*` CTests). A stack that fails gets only its failure line, never also the
-advisory one. Hosted Windows is not covered (it measured about 85k on both runs, and the owner has not
-confirmed the approval for it), so its nightly step runs `net_bench --gate` without the flag, as do local
-runs and fixed hardware.
+advisory one. Hosted Windows is not covered (its stack measured below 100k on 2 of 3 runs and 125,611 on
+2026-10-03, and the owner has not confirmed the approval for it), so its nightly step runs `net_bench --gate`
+without the flag, as do local runs and fixed hardware.
 
 | Criterion | Measurement (this container, GCC 13 RelWithDebInfo, shared 4-core VM) |
 |---|---|

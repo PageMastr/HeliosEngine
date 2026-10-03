@@ -93,6 +93,11 @@ func TestMain(m *testing.M) {
 	// TestPerfTokenIssueAt100PerSecond issues 1,000 connect tokens for four accounts in 10 s; the
 	// per-account limit (10/min, burst 5) is exercised by the session unit tests instead.
 	cfg.Session.CreatePerAccount = platform.RateLimit{Rate: 60_000, Per: platform.Duration(time.Minute), Burst: 1_000}
+	// Every test logs in from 127.0.0.1, and TestPerfTokenIssueAt100PerSecond's four logins are the
+	// 9th to 12th. The default per-IP limit (30/min, burst 10) admits the 12th only 4 s after the
+	// first, and a fast runner gets there sooner (429s in nightly 36309067888). The identity unit
+	// tests exercise the per-IP limit (TestLoginFailuresAndRateLimits).
+	cfg.Identity.LoginPerIP = platform.RateLimit{Rate: 60_000, Per: platform.Duration(time.Minute), Burst: 1_000}
 	level := slog.LevelWarn
 	if os.Getenv("HELIOS_TEST_LOG") != "" {
 		level = slog.LevelDebug

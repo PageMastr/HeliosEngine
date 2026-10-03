@@ -58,6 +58,7 @@ TEST_CASE("fuzz: mutated schemas produce diagnostics, never crashes") {
         options.emitCpp = true;
         options.emitGo = true;
         options.emitJson = true;
+        options.emitLuau = true;
         options.samples = true;
         std::unique_ptr<Compiled> c;
         if (i % 2 == 0) {

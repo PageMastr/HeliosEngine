@@ -40,7 +40,9 @@ into annotations.
   `gates` (a typo like `platfroms` or `min_second` cannot silently drop a restriction). `version` is 1,
   `plan_rev` a positive integer no higher than `docs/plan/PLAN-REV`, `source` a plan section
   (`04 §11.4`), `owner` WPs, `User` or `Director`. A run needs `os` and a boolean `default`; a gate needs
-  declared `runs` and a positive integer `min_seconds`. `status` must agree with the entry: `measured`
+  declared `runs` and a positive integer `min_seconds`, and its optional `cases` are a non-empty object of
+  `{"criterion", "result", "failure"}` with two valid regexes, none named like the gate. `status` must agree
+  with the entry: `measured`
   (tests, no gaps), `approved` (tests, no gaps, and an owner approval), `partial` (tests and gaps) or
   `unmeasured` (gaps only).
 - **Owner approvals (09 §5.6).** `owner_approval` goes only on an entry's `evidence` reference under
@@ -61,7 +63,10 @@ into annotations.
   OS it is evaluated on; an inventory with an unknown `os` or a doctest binary that failed to list is
   a finding. `go` references are checked against the `func Test…(` declarations in `services/` on every
   run (with their `//go:build integration` constraint) and against the inventory's `go` section when it
-  has one (the nightly's). `gate` references must be declared and run on the reference's platforms.
+  has one (the nightly's). `gate` references must be declared and run on the reference's platforms. A
+  gate with `cases` is cited one clause at a time: each reference names a declared `case` whose
+  `criterion` is the citing entry, a reference to the whole command is rejected, and every case must be
+  cited by its criterion (a clause measured and never read is a finding).
   `ci_job` names must be jobs of `.github/workflows/ci.yml` (matrix names expanded); a missing ci.yml is
   a finding. Every declared run (except those marked `"nightly": false`) and gate must be produced by
   `.github/workflows/nightly.yml`.
@@ -80,7 +85,7 @@ into annotations.
   "title": "…", "class": "N", "platforms": ["linux", "windows"], "threshold": "…",
   "status": "partial",
   "tests": [
-    {"gate": "net_bench_gate"},
+    {"gate": "net_bench_gate", "case": "NS-0.7 trunk"},
     {"doctest": "net_tests", "case": "perf: NS-0.7 (short run): …", "platforms": ["linux"]}
   ],
   "gaps": [{"clause": "…", "state": "unmeasured", "owner": "WP-0.14"}]
@@ -105,7 +110,7 @@ into annotations.
 | `ctest` | name, `*` wildcards allowed (nothing else is special) | CTest JUnit (`ctest --output-junit`) |
 | `doctest` | `doctest` (the binary's CTest name), `case` | doctest XML of that binary |
 | `go` | `go` (package under `services/`), `test`, optional `tags` | `go test -json` |
-| `gate` | a name declared in `gates` | the JUnit file the nightly writes for that command |
+| `gate` | a name declared in `gates`, and `case` when the gate declares `cases` | the JUnit file the nightly writes for that command: the command's case, or the named clause's |
 | `ci_job` | a job name of ci.yml | the latest completed CI run on `main` |
 | `evidence` | a path under the repository root | the file existing, which means only "recorded": the signature and the exit window (09 §5.6) are the auditor's to confirm |
 
@@ -120,7 +125,8 @@ entry cites it and owes a re-test:
 ```jsonc
 "status": "approved",
 "tests": [
-  {"gate": "net_bench_gate"},
+  {"gate": "net_bench_gate", "case": "NS-0.2 socket"},
+  {"gate": "net_bench_gate", "case": "NS-0.2 HTP stack"},
   {"evidence": "docs/evidence/ns-0.2-owner-approval-2026-09-30.md", "owner_approval": "2026-09-30",
    "advisory": ["net.ns02.stack_packets_per_core"], "advisory_runs": ["linux-gcc"]}
 ],
@@ -141,8 +147,30 @@ block the pass, and the report lists them.
 count only where a reference names them. `gates` declares long gate commands:
 `{"runs": [run, …], "min_seconds": n, "description": "…"}`. `min_seconds` is required, a positive integer
 of seconds, and is the registry's machine-readable form of a duration clause (NS-0.4's "1 h per target"
-is 3600, NS-0.7's trunk run 600): the nightly fails a gate whose result is shorter. No other keys are
-accepted in either.
+is 3600, NS-0.7's trunk run 600): the nightly fails a gate whose result is shorter, and each of its clause
+cases with it. No other keys are accepted in either, apart from a gate's `cases`.
+
+A gate command that measures several criteria declares **`cases`**, one per clause, so that each criterion
+reads only its own: `net_bench --gate` measures NS-0.2's raw datagrams (`NS-0.2 socket`) and encrypted stack
+(`NS-0.2 HTP stack`) and NS-0.7's trunk run (`NS-0.7 trunk`) in one run, and one result for all three let
+the strict Windows step's stack rate fail NS-0.7 there too (#43's review, N4). Each case is
+`{"criterion": "<its entry>", "result": "<regex>", "failure": "<regex>"}`. `runners.py gate` reads them from
+the registry by the gate's name and writes one more JUnit case per clause beside the command's own (which
+keeps the output for the perf metrics). A clause passes when the output has a `result` line and no
+`failure` line, and a clause whose result line is missing (the command crashed or was killed before it)
+fails. A non-zero exit that no clause's failure line explains fails every clause, since nothing says which
+one passed: any code other than `net_bench`'s failure code 1 (a crash, a kill, the runner's timeout 124),
+or 1 with no failure line printed (a failure line no pattern knows). A gate result without its clause cases
+(a runner that could not read the registry) reads `missing` for each clause, or `fail` if the command
+failed. A run without `--gate` checks no threshold but prints the same result lines, so it is caught only
+by `min_seconds`; `AdvisoryScopeTests` pins the nightly's two commands. The patterns follow `net_bench`'s
+own lines, and `GateClauseTests` checks them against `net_bench.cpp`'s format strings: every failure line is
+one case's, so a reworded or added failure line fails the PR tier. Every clause case carries the command's
+wall time, so `min_seconds` applies to each: a trunk that never connects ends the run at its 3 s connect
+deadline, about 18 s in, so NS-0.2's cases fail with NS-0.7's (`GateClauseTests` models that run). The owner
+approval is unchanged by this: the stack's rate is relaxed by `--advisory ns02-stack` on `linux-gcc` only, so
+loss, a stack that never sent and raw datagrams still fail their NS-0.2 case on every run, and NS-0.7's case
+gates NS-0.7 alone, with or without the advisory.
 
 **Gaps** are clauses without a passing test: `state` is `unmeasured` (no test yet) or `failing` (measured
 and red), with the `owner` WP. `pinned_by` names a test that pins a known divergence (such a test
@@ -161,7 +189,7 @@ python3 tools/scorecard/runners.py host --out R/host.json                       
 python3 tools/scorecard/runners.py doctest --build-dir B [--config C] [--perf] [--label-exclude RE] \
         --out R/doctest                                                          # per-case XML
 python3 tools/scorecard/runners.py gate --name net_bench_gate --build-dir B --out R/gates -- net_bench --gate \
-        [--advisory ns02-stack]     # the flag on linux-gcc only (advisory_runs)
+        [--advisory ns02-stack]     # the flag on linux-gcc only (advisory_runs); one case per clause
 python3 tools/scorecard/report.py --results results --ci-jobs ci-jobs.json --previous last/scorecard-report.json \
         [--scheduled] --out scorecard-report.json --markdown scorecard.md
 python3 tools/scorecard/perf.py extract --results results --sha SHA --out perf-entry.json
@@ -179,8 +207,10 @@ report at exit).
 
 - **Per criterion.** On each platform, a reference passes when it has results in the runs that count for it
   and none failed. A missing result or a skip is *unmeasured*. A gate that ran shorter than its
-  `min_seconds` fails, and so does a gate without one. The criterion passes when every reference passes on
-  every platform and it has no gap.
+  `min_seconds` fails, and so does a gate without one. A `gate` reference with `case` reads that clause's
+  case; a gate result without it (written before the cases, or by a runner that could not read the registry)
+  reads `missing`, or `fail` if the command failed, so the criterion is not passed and its streak restarts.
+  The criterion passes when every reference passes on every platform and it has no gap.
   A broken pin (a `pinned_by` test that now fails) is reported so that the registry is updated.
 - **Owner approvals.** An approved entry is evaluated like any other. While its record exists, a pass to
   which one of its `advisory_runs` contributed reads "passed (owner approval <date>, evidence <record>)",
@@ -343,9 +373,14 @@ report at exit).
   nights, however far apart they are. Host churn (above) fails only when it leaves a run without a gated
   night: under classes that each recur a few times, the first red is the run's 60th night without one
   (`host-churn`, not `regression`), and a run that has a gated night at least once in 60 is gated on
-  those nights only. A real regression that lands on the same night as a move of the
-  fleet to a new CPU model is calibrated into the new class's anchor, and if the old classes never come
-  back, nothing catches it. The gating and the thresholds stay as the plan sets them. The nightly perf
+  those nights only. A real regression that lands within the first 3 nights of a class the runner has
+  never measured on is calibrated into that class's anchor (the median of its 5 calibration nights, so 3
+  regressed values set it), and if no earlier class comes back, nothing catches it. The same holds for a
+  pool that keeps moving to new CPU models and never returns: each class gates a night, so neither churn
+  rule fires, and a regression is red for at most a class's nights minus its 5 calibration nights before
+  the next class absorbs it (at most 1 if each class lasts 6 nights, 5 if it lasts 10). Then only the
+  `new-host-class` warnings on the run page show the moves. Both come from re-anchoring per class. The
+  gating and the thresholds stay as the plan sets them. The nightly perf
   history on hosted runners is drift tracking, not the binding gate: the binding per-commit perf gates on
   fixed hardware are WP-0.4's (its runner and the lab), and until they exist a red or a green here is
   evidence to read, not a measurement on REF.

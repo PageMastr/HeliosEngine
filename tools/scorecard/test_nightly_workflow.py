@@ -1,10 +1,10 @@
 """The nightly's fetch and perf steps (.github/workflows/nightly.yml), run under bash against a fake `gh`,
-and the scope of its one advisory gate.
+the scope of its one advisory gate, and which steps run the timing gates (CTest label perf).
 
 These steps decide whether tonight is compared with a perf history, so each way they can go wrong (an API
 error, a lost or expired artifact, a restart over a usable history) is a scenario here. POSIX only: the
-steps are bash, and the fake `gh` is a shell script. The advisory scope test reads the files and runs
-everywhere.
+steps are bash, and the fake `gh` is a shell script. The advisory and perf-label scope tests read the files
+and run everywhere.
 """
 
 import json
@@ -257,6 +257,157 @@ class AdvisoryScopeTests(unittest.TestCase):
         for name, line in gates:
             want = " --advisory ns02-stack" if name in approval["advisory_runs"] else ""
             self.assertTrue(line.endswith("-- net_bench --gate" + want), (name, line))
+
+
+def steps(job: str) -> list[dict]:
+    """The steps of a nightly.yml job, in order: {"name", "if", "run"} (the run block's lines, comments
+    dropped), read from the text; the workflow is plain enough that no YAML parser is needed."""
+    lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
+    start = lines.index(f"  {job}:")
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"  [\w-]+:$", lines[i])), len(lines))
+    out = []
+    for line in lines[start + 1:end]:
+        if m := re.match(r"\s+- (?:name: (.*)|uses: )", line):
+            out.append({"name": m[1] or "", "if": "", "run": []})
+        elif out and (m := re.match(r"\s+if: (.*)", line)):
+            out[-1]["if"] = m[1]
+        elif out and not line.lstrip().startswith("#"):
+            out[-1]["run"].append(line)
+    return out
+
+
+def commands(step: dict) -> list[str]:
+    """A step's run block as logical command lines: a folded block (`run: >`) is one line, as YAML joins it,
+    and a literal block's line ending with a bash `\\` or a pwsh backtick continues on the next."""
+    out = []
+    for k, line in enumerate(step["run"]):
+        if not (m := re.match(r"(\s+)run:\s*(.*)$", line)):
+            continue
+        body = []
+        for text in step["run"][k + 1:]:
+            if text.strip() and len(text) - len(text.lstrip()) <= len(m[1]):
+                break
+            body.append(text.strip())
+        if m[2] in (">", ">-"):
+            out.append(" ".join(b for b in body if b))
+        elif m[2] in ("|", "|-"):
+            command = ""
+            for b in body:
+                if b.endswith(("\\", "`")):
+                    command += b[:-1] + " "
+                else:
+                    out.append(command + b)
+                    command = ""
+            out += [command] if command else []
+        else:
+            out.append(m[2])
+    return out
+
+
+# CTest's label include, in either spelling, and its regex argument.
+LABEL_INCLUDE = re.compile(r"""(?<![\w-])(?:-L|--label-regex)(?:\s+|=)("[^"]*"|'[^']*'|\S+)""")
+
+
+def runs_perf(command: str) -> bool:
+    """Whether a command runs the perf entries: a CTest label include whose regex matches the label `perf`
+    (as CTest reads it, so `-L "gpu|perf"` and `-L .` count; an unreadable regex counts too), or the doctest
+    runner's --perf."""
+    for arg in LABEL_INCLUDE.findall(command):
+        try:
+            if re.search(arg.strip("\"'"), "perf"):
+                return True
+        except re.error:
+            return True
+    return bool(re.search(r"runners\.py\s+doctest\b.*(?<![\w-])--perf(?![\w-])", command))
+
+
+# A CTest invocation in a command, and CTest's label exclude with its regex argument.
+CTEST = re.compile(r"(?:^|[\s;&|(])ctest(?:\.exe)?(?=\s|$)")
+LABEL_EXCLUDE = re.compile(r"""(?<![\w-])(?:-LE|--label-exclude)\s+("[^"]*"|'[^']*'|\S+)""")
+
+
+def excludes_perf(args: str) -> bool:
+    """Whether CTest arguments exclude the label `perf`: a -LE / --label-exclude regex that matches it (an
+    unreadable regex does not count)."""
+    for arg in LABEL_EXCLUDE.findall(args):
+        try:
+            if re.search(arg.strip("\"'"), "perf"):
+                return True
+        except re.error:
+            pass
+    return False
+
+
+def matrix_rows(job: str) -> list[dict]:
+    """The `include:` rows of a nightly.yml job's matrix, as {key: value} strings."""
+    lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
+    start = lines.index(f"  {job}:")
+    rows = []
+    for line in lines[start + 1:]:
+        if re.match(r"  [\w-]+:$", line) or line.strip().startswith("steps:"):
+            break
+        if line.lstrip().startswith("#"):
+            continue
+        if m := re.match(r"\s+- (\w+): ?(.*)$", line):
+            rows.append({m[1]: m[2].strip()})
+        elif rows and (m := re.match(r"\s+(\w+): ?(.*)$", line)) and line.startswith(" " * 12):
+            rows[-1][m[1]] = m[2].strip()
+    return rows
+
+
+class PerfLabelScopeTests(unittest.TestCase):
+    """The owner's decision of 2026-09-30 (PR #39): the timing gates (CTest label perf) run only in the GCC
+    job's serial perf step, never in a sanitizer build, whose instrumented Debug code measures the sanitizers
+    and not the budget. This fails if the linux-asan row runs them again or another step does."""
+
+    def test_the_sanitizer_row_excludes_perf_and_only_the_gcc_step_runs_it(self):
+        rows = {r["run"]: r for r in matrix_rows("linux")}
+        self.assertEqual(sorted(rows), ["linux-asan", "linux-clang", "linux-gcc"])
+        self.assertEqual(rows["linux-asan"]["preset"], "linux-debug-asan")
+        for run, row in rows.items():
+            # Every Linux row's main CTest step excludes the label (the GCC job runs it in its own step).
+            m = re.fullmatch(r"(?:.*\s)?-LE (\S+)(?:\s.*)?", row.get("ctest_args", ""))
+            self.assertTrue(m and re.search(m[1].strip('"'), "perf"), (run, row.get("ctest_args")))
+            self.assertIsNone(LABEL_INCLUDE.search(row.get("ctest_args", "")), (run, row.get("ctest_args")))
+        test = next(s for s in steps("linux") if s["name"].startswith("Test (software Vulkan"))
+        self.assertIn("${{ matrix.ctest_args }}", "\n".join(test["run"]))
+        # `-L perf` (and the doctest runner's --perf, the same entries) only in the step gated on linux-gcc.
+        text = WORKFLOW.read_text(encoding="utf-8")
+        jobs = re.findall(r"^  ([\w-]+):$", text[text.index("\njobs:"):], re.M)
+        self.assertEqual(jobs, ["linux", "windows", "go", "fuzz", "scorecard"])
+        # Spelled any way CTest or the runner reads it (#45's review, N4: --label-regex, and --perf anywhere in
+        # the doctest runner's command, a folded block's later line included).
+        every = [s for job in jobs for s in steps(job)]
+        self.assertEqual([s["name"] for s in every if any(re.match(r"\s+run:", x) for x in s["run"]) and
+                          not any(c.strip() for c in commands(s))], [])  # no run block read as empty
+        perf_steps = [s for s in every if any(runs_perf(c) for c in commands(s))]
+        self.assertEqual([s["name"] for s in perf_steps], ["Perf gates (label perf, serial)"])
+        self.assertEqual(perf_steps[0]["if"], "${{ !cancelled() && matrix.run == 'linux-gcc' }}")
+        # The registry's description of the sanitizer run says the same.
+        data, _ = scorecard.load_jsonc(ROOT / "scorecard.jsonc")
+        self.assertIn("every CTest except perf", data["runs"]["linux-asan"]["description"])
+
+    def test_every_other_ctest_command_excludes_perf(self):
+        # #45's round-2 review, N2: a CTest command without a label include still runs the perf entries if it
+        # does not exclude them (`-R _perf`, a preset's filter, or `-Lperf`, which CTest 3.28 does not read as
+        # a label filter, so it runs everything). Outside the perf step, each one excludes the label itself
+        # (-LE with a regex that matches `perf`) or takes its job's matrix `ctest_args`, which every row sets
+        # to exclude it.
+        text = WORKFLOW.read_text(encoding="utf-8")
+        jobs = re.findall(r"^  ([\w-]+):$", text[text.index("\njobs:"):], re.M)
+        checked = set()
+        for job in jobs:
+            rows = matrix_rows(job)
+            rows_exclude = bool(rows) and all(excludes_perf(r.get("ctest_args", "")) for r in rows)
+            for step in steps(job):
+                if step["name"] == "Perf gates (label perf, serial)":
+                    continue
+                for command in filter(CTEST.search, commands(step)):
+                    checked.add(step["name"])
+                    self.assertTrue(excludes_perf(command) or
+                                    (rows_exclude and "${{ matrix.ctest_args }}" in command), (job, command))
+        self.assertLessEqual({"Test (software Vulkan via lavapipe)", "Test (no GPU on hosted runners)"},
+                             checked)
 
 
 if __name__ == "__main__":

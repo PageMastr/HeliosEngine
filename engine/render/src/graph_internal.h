@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <format>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -73,6 +74,12 @@ struct RgResourceDecl {
     u32 subresourceCount() const noexcept { return mipLevels() * arrayLayers(); }
 };
 
+/// What compile() keeps between compiles and across RenderGraph::reset() (graph_compile.cpp).
+struct RgCompileStorage;
+struct RgCompileStorageDeleter {
+    void operator()(RgCompileStorage* storage) const noexcept;
+};
+
 struct RenderGraph::Impl {
     std::string name;
     std::vector<RgPassDecl> passes;
@@ -85,6 +92,8 @@ struct RenderGraph::Impl {
     RgPlan plan;
     RgPlan executed;
     std::atomic<u64> contextErrors{0};
+    /// Created by the first compile(); see graph_compile.cpp.
+    std::unique_ptr<RgCompileStorage, RgCompileStorageDeleter> compileStorage;
 
     template <class... Args>
     void error(std::format_string<Args...> fmt, Args&&... args) {
@@ -133,6 +142,30 @@ struct RgSubBarrier {
     u32 layer = 0;
 };
 std::vector<RgBarrier> rgMergeBarriers(std::span<const RgSubBarrier> subs, std::span<const RgPhysicalInfo> physicals);
+
+/// Storage of rgMergeBarriers, reused between calls.
+struct RgMergeScratch {
+    struct Group {
+        u32 physical = kRgInvalid;
+        rhi::ResourceState before = rhi::ResourceState::Undefined;
+        rhi::ResourceState after = rhi::ResourceState::Undefined;
+        u32 mask = 0;  ///< Offset of its per-subresource mask in `masks`.
+    };
+    struct Run {
+        u32 layer = 0;
+        u32 count = 0;
+    };
+    std::vector<Group> groups;
+    std::vector<u8> masks;
+    std::vector<Run> runs;      ///< Layer runs of one group, mip by mip.
+    std::vector<u32> runStart;  ///< Per mip + 1: its first run.
+};
+/// The same merge, appended to `out` without allocating once `scratch` and `out` have grown.
+void rgMergeBarriers(std::span<const RgSubBarrier> subs, std::span<const RgPhysicalInfo> physicals,
+                     std::vector<RgBarrier>& out, RgMergeScratch& scratch);
+
+/// Empties graph.plan, keeping the storage of its elements for the next compile (RenderGraph::reset).
+void rgReclaimPlan(RenderGraph::Impl& graph);
 
 /// "Raster", "Compute", "AsyncCompute", "Copy".
 std::string_view rgPassKindName(PassFlags flags);

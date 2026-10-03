@@ -107,6 +107,10 @@
     {"id": "pcg.cpu_vm_avx2_ms_per_tile", "doctest": "pcg_tests",
      "case": "perf: CPU VM ms per 65x65 tile per core on the dispatched AVX2 kernel (03 §5.5a budget 0.5 ms)", "run": "linux-gcc",
      "pattern": "avx2 ([\\d.]+) ms", "unit": "ms", "better": "lower", "category": "runtime"},
+    {"id": "render.graph_compile_200_passes_ms", "doctest": "render_tests",
+     "case": "perf: render graph compile of 200 passes <= 0.3 ms (no topology cache)", "run": "linux-gcc",
+     "pattern": "graph compile: \\d+ passes in ([\\d.]+) ms \\(best of 10 batches", "unit": "ms", "better": "lower", "category": "render",
+     "note": "The best of 10 batches of 5 full compiles (no topology cache) that render_tests_perf gates at 03 §8.1.5's REF 60 fps 0.3 ms: the gate fails only above 0.3 ms, and this tracks drift below it per host class"},
     {"id": "schemac.regenerate_2000_types_s", "doctest": "schemac_tests",
      "case": "perf: 2,000 types regenerate within the 02 §3.5 budget", "run": "linux-gcc",
      "pattern": "types, \\d+ outputs \\(\\d+ KiB\\) in ([\\d.]+) s", "unit": "s", "better": "lower", "category": "iteration"}

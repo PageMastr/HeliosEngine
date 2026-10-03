@@ -1626,33 +1626,39 @@ class GateClauseTests(unittest.TestCase):
                   "for i in range(0, len(text), 37):\n"
                   "    sys.stdout.write(text[i:i + 37]); sys.stdout.flush(); time.sleep(0.001)\n"
                   "sys.exit(1)\n")
-        with tempfile.TemporaryDirectory() as d:
-            out = Path(d)
-            with contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO())) as log:
-                rc = runners.main(["gate", "--name", "net_bench_gate", "--out", str(out), "--",
-                                   sys.executable, "-c", script])
-                log.flush()
-                printed = log.buffer.getvalue().decode("utf-8")
-            cases = report.junit_cases(out / "net_bench_gate.xml")
-            root = ET.parse(out / "net_bench_gate.xml").getroot()
-        self.assertEqual(rc, 1)
-        self.assertEqual([(name, status) for name, status, _, _ in cases],
-                         [("net_bench_gate", "fail"), ("NS-0.2 socket", "pass"), ("NS-0.2 HTP stack", "fail"),
-                          ("NS-0.7 trunk", "pass")])
-        self.assertEqual((root.get("tests"), root.get("failures")), ("4", "2"))
-        self.assertEqual([c.get("classname") for c in root.iter("testcase")],
-                         ["gates", "net_bench_gate", "net_bench_gate", "net_bench_gate"])
-        stack = next(c for c in root.iter("testcase") if c.get("name") == "NS-0.2 HTP stack")
-        self.assertEqual(stack.find("failure").get("message"), "05:24:05.617 ERROR [General] NS-0.2 FAILED: the HTP "
-                         "stack needs 100k encrypted packets per core without loss  (net_bench.cpp:213)")
-        self.assertIn("853990/853990 encrypted packets delivered, 85399 packets per core", stack.findtext("system-out"))
-        self.assertIn("gate net_bench_gate: NS-0.7 trunk: pass\n", printed)
-        self.assertIn("gate net_bench_gate: NS-0.2 HTP stack: FAIL (", printed)
-        # The command's own case keeps the whole output for the perf metrics.
-        res = report.Results("windows-vs2026")
-        res.gates["net_bench_gate"] = cases[0][1:]
         metric = next(m for m in self.data["perf_metrics"] if m["id"] == "net.ns02.stack_packets_per_core")
-        self.assertEqual(report.metric_values(metric, [res]), {"windows-vs2026": 85399.0})
+        # print() writes os.linesep through a TextIOWrapper ("\r\n" on Windows): run under that translation on
+        # every OS too, and compare the printed lines with their ends normalised.
+        for newline in (None, "\r\n"):
+            with self.subTest(newline=newline):
+                with tempfile.TemporaryDirectory() as d:
+                    out = Path(d)
+                    with contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), newline=newline)) as log:
+                        rc = runners.main(["gate", "--name", "net_bench_gate", "--out", str(out), "--",
+                                           sys.executable, "-c", script])
+                        log.flush()
+                        printed = log.buffer.getvalue().decode("utf-8").replace("\r\n", "\n")
+                    cases = report.junit_cases(out / "net_bench_gate.xml")
+                    root = ET.parse(out / "net_bench_gate.xml").getroot()
+                self.assertEqual(rc, 1)
+                self.assertEqual([(name, status) for name, status, _, _ in cases],
+                                 [("net_bench_gate", "fail"), ("NS-0.2 socket", "pass"),
+                                  ("NS-0.2 HTP stack", "fail"), ("NS-0.7 trunk", "pass")])
+                self.assertEqual((root.get("tests"), root.get("failures")), ("4", "2"))
+                self.assertEqual([c.get("classname") for c in root.iter("testcase")],
+                                 ["gates", "net_bench_gate", "net_bench_gate", "net_bench_gate"])
+                stack = next(c for c in root.iter("testcase") if c.get("name") == "NS-0.2 HTP stack")
+                self.assertEqual(stack.find("failure").get("message"),
+                                 "05:24:05.617 ERROR [General] NS-0.2 FAILED: the HTP stack needs 100k encrypted "
+                                 "packets per core without loss  (net_bench.cpp:213)")
+                self.assertIn("853990/853990 encrypted packets delivered, 85399 packets per core",
+                              stack.findtext("system-out"))
+                self.assertIn("gate net_bench_gate: NS-0.7 trunk: pass\n", printed)
+                self.assertIn("gate net_bench_gate: NS-0.2 HTP stack: FAIL (", printed)
+                # The command's own case keeps the whole output for the perf metrics.
+                res = report.Results("windows-vs2026")
+                res.gates["net_bench_gate"] = cases[0][1:]
+                self.assertEqual(report.metric_values(metric, [res]), {"windows-vs2026": 85399.0})
 
     def test_the_line_reader_is_bounded(self):
         # An over-long line keeps only its first MAX_LINE bytes (the rest is dropped, not spliced onto it), and

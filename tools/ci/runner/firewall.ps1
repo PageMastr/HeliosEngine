@@ -1,24 +1,27 @@
 <#
 .SYNOPSIS
     Blocks the win-gpu runner account's outbound traffic to the home LAN (docs/plan/09-roadmap-and-process.md
-    §5.4a "Network"; WP-0.4; K33).
+    section 5.4a "Network"; WP-0.4; K33). ASCII only: Windows PowerShell 5.1 reads a file without a BOM as ANSI.
 
 .DESCRIPTION
     Adds Windows Defender Firewall outbound block rules that apply only to processes of one local account (the
     runner's, helios-ci), through New-NetFirewallRule -LocalUser with that account's SID:
-      - IPv4: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16;
-      - IPv6: fc00::/7 (unique local), fe80::/10 (link-local);
+      - IPv4: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 (link-local), 100.64.0.0/10 (carrier-grade
+        NAT, and overlay networks such as Tailscale's), 224.0.0.0/4 (multicast: mDNS, SSDP, LLMNR) and
+        255.255.255.255 (broadcast);
+      - IPv6: fc00::/7 (unique local), fe80::/10 (link-local), ff00::/8 (multicast);
       - the LocalSubnet keyword, which also covers the LAN's on-link prefixes outside those ranges, such as the
         global IPv6 addresses the ISP's prefix gives LAN devices. Only without -AllowAddress: block rules win over
         allow rules and a keyword cannot be split, so with lab addresses the on-link IPv6 prefix stays open (the
         script warns).
-    -AllowAddress lists lab machines the runner must reach (09 §4.3.1): the block ranges are split around each
+    -AllowAddress lists lab machines the runner must reach (09 section 4.3.1): the block ranges are split around each
     address, since an allow rule could not override a block rule. Internet traffic is untouched: its remote
     addresses are public, even though it is routed through the LAN's gateway. Name resolution keeps working because
     Windows' DNS Client service sends queries as NETWORK SERVICE, not as the runner account.
 
     Idempotent: every run first removes the rules it made before (its rule group), then adds the current set.
-    -Remove only removes them. Needs an elevated PowerShell (Windows PowerShell 5.1 or PowerShell 7).
+    -Remove only removes them, and works after the account is deleted (the group is named after the account, not
+    its SID). Needs an elevated PowerShell (Windows PowerShell 5.1 or PowerShell 7).
 
 .PARAMETER Account
     The runner's local account. Default: helios-ci.
@@ -46,8 +49,9 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Numerics
 
-$HeliosCiBlockedIPv4 = @('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16')
-$HeliosCiBlockedIPv6 = @('fc00::/7', 'fe80::/10')
+$HeliosCiBlockedIPv4 = @('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '100.64.0.0/10',
+    '224.0.0.0/4', '255.255.255.255/32')
+$HeliosCiBlockedIPv6 = @('fc00::/7', 'fe80::/10', 'ff00::/8')
 
 # An IP address as {Length (4 or 16 bytes); Value (an unsigned BigInteger)}.
 function ConvertTo-HeliosCiIPNumber {
@@ -143,33 +147,51 @@ function Get-HeliosCiStrayAddress {
         })
 }
 
-function Invoke-HeliosCiFirewall {
+# Whether this PowerShell runs elevated (Windows only).
+function Test-HeliosCiElevated {
     $principal = New-Object Security.Principal.WindowsPrincipal ([Security.Principal.WindowsIdentity]::GetCurrent())
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+# The SID of a local account (throws when there is no such account).
+function Get-HeliosCiAccountSid {
+    param([Parameter(Mandatory = $true)] [string]$Name)
+    return (New-Object Security.Principal.NTAccount $Name).Translate([Security.Principal.SecurityIdentifier]).Value
+}
+
+function Invoke-HeliosCiFirewall {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Account,
+        [AllowEmptyCollection()] [string[]]$AllowAddress = @(),
+        [switch]$Remove
+    )
+    if (-not (Test-HeliosCiElevated)) {
         throw 'Run this script from an elevated PowerShell (Run as administrator).'
     }
-    $sid = (New-Object Security.Principal.NTAccount $Account).Translate([Security.Principal.SecurityIdentifier]).Value
+    # Everything that can fail runs before the old rules go, so that a typo in -Account or -AllowAddress never
+    # leaves the PC without its block. -Remove needs no SID, so it works after the account is deleted.
+    $sid = $null
+    $rules = [ordered]@{}
+    if (-not $Remove) {
+        $sid = Get-HeliosCiAccountSid $Account
+        $stray = Get-HeliosCiStrayAddress -Block ($HeliosCiBlockedIPv4 + $HeliosCiBlockedIPv6) -Allow $AllowAddress
+        if ($stray.Count -gt 0) {
+            throw "Not in a blocked range, so allowing it would change nothing: $($stray -join ', ')"
+        }
+        $rules['IPv4'] = Get-HeliosCiBlockList -Block $HeliosCiBlockedIPv4 -Allow $AllowAddress
+        $rules['IPv6'] = Get-HeliosCiBlockList -Block $HeliosCiBlockedIPv6 -Allow $AllowAddress
+        if ($AllowAddress.Count -eq 0) {
+            $rules['LocalSubnet'] = @('LocalSubnet')
+        } else {
+            Write-Warning ('With -AllowAddress the LocalSubnet rule is left out (a block rule cannot be split around a ' +
+                'keyword), so LAN devices reachable through the ISP''s global IPv6 prefix are not blocked.')
+        }
+    }
     $group = "Helios CI runner: LAN block for $Account"
     $old = @(Get-NetFirewallRule -Group $group -ErrorAction SilentlyContinue)
     if ($old.Count -gt 0) {
         Write-Host "Removing $($old.Count) earlier rule(s) of '$group'"
         $old | Remove-NetFirewallRule
-    }
-    if ($Remove) { return }
-
-    $stray = Get-HeliosCiStrayAddress -Block ($HeliosCiBlockedIPv4 + $HeliosCiBlockedIPv6) -Allow $AllowAddress
-    if ($stray.Count -gt 0) {
-        throw "Not in a blocked range, so allowing it would change nothing: $($stray -join ', ')"
-    }
-    $rules = [ordered]@{
-        IPv4 = Get-HeliosCiBlockList -Block $HeliosCiBlockedIPv4 -Allow $AllowAddress
-        IPv6 = Get-HeliosCiBlockList -Block $HeliosCiBlockedIPv6 -Allow $AllowAddress
-    }
-    if ($AllowAddress.Count -eq 0) {
-        $rules['LocalSubnet'] = @('LocalSubnet')
-    } else {
-        Write-Warning ('With -AllowAddress the LocalSubnet rule is left out (a block rule cannot be split around a ' +
-            'keyword), so LAN devices reachable through the ISP''s global IPv6 prefix are not blocked.')
     }
     # D: DACL; A: allow; CC: the firewall's "match" right; the SID: the account whose processes the rule covers.
     $localUser = "D:(A;;CC;;;$sid)"
@@ -193,5 +215,5 @@ function Invoke-HeliosCiFirewall {
 }
 
 if (-not (Get-Variable -Name HeliosCiScriptTestMode -ErrorAction SilentlyContinue)) {
-    Invoke-HeliosCiFirewall
+    Invoke-HeliosCiFirewall -Account $Account -AllowAddress $AllowAddress -Remove:$Remove
 }

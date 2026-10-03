@@ -106,6 +106,15 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(0, code, out.getvalue())
         self.assertIn(".github/workflows/win-gpu.yml:gpu", out.getvalue())
 
+    def test_win_gpu_run_scripts_are_ascii(self):
+        # The runner writes each `run:` to a .ps1 file, which Windows PowerShell 5.1 may read as ANSI.
+        doc = policy.parse_yaml((WORKFLOWS / "win-gpu.yml").read_text(encoding="utf-8"))
+        runs = [step["run"] for job in doc["jobs"].values() for step in job.get("steps", []) if "run" in step]
+        self.assertGreater(len(runs), 5)
+        for run in runs:
+            with self.subTest(run=run[:60]):
+                self.assertTrue(run.isascii(), [line for line in run.split("\n") if not line.isascii()])
+
     def test_yaml_and_yml_files_are_both_workflows(self):
         with tempfile.TemporaryDirectory() as tmp:
             for name in ("a.yml", "b.yaml", "c.txt"):

@@ -81,7 +81,8 @@ jobs:
           $list = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
           foreach ($key in Get-ChildItem -LiteralPath $list) {
             # Exact names: a prefix match would also skip another user whose RID starts with this one's.
-            if ($key.PSChildName -notlike 'S-1-5-21-*' -or $key.PSChildName -in @($mySid, "$mySid.bak")) { continue }
+            # Local and domain accounts (S-1-5-21-*) and Entra ID accounts (S-1-12-1-*); not the service profiles.
+            if ($key.PSChildName -notmatch '^S-1-(5-21|12-1)-' -or $key.PSChildName -in @($mySid, "$mySid.bak")) { continue }
             $profileDir = (Get-ItemProperty -LiteralPath $key.PSPath).ProfileImagePath
             $profileDir = [Environment]::ExpandEnvironmentVariables($profileDir)
             foreach ($sub in '', 'AppData', 'Documents', '.ssh') {
@@ -98,13 +99,14 @@ jobs:
           if ($tested -eq 0) { $problems.Add('no other user profile was found to test (HKLM ProfileList)') }
           if ($problems.Count -gt 0) {
             $problems | ForEach-Object { Write-Output "::error::Runner isolation: $_" }
-            throw 'The runner account is not isolated (09 §5.4a): see docs/runbooks/win-gpu-runner.md'
+            throw 'The runner account is not isolated (09 section 5.4a): see docs/runbooks/win-gpu-runner.md'
           }
           Write-Output "Not an administrator; $tested other user profile(s) refuse a listing"
 
       # 09 §5.4a, network: tools/ci/runner/firewall.ps1 blocks the account from the home LAN. A smoke test of the
       # rules: a TCP connection to the default gateway that succeeds, or that the gateway refuses (its reset reached
-      # the PC), proves them missing. The block fails the connect locally (access denied); a timeout proves nothing.
+      # the PC), proves them missing. The block fails the connect locally with access denied (WSAEACCES), and at
+      # least one connect must, since a gateway that silently drops these ports times out with no rule at all.
       - name: LAN egress blocked (tools/ci/runner/firewall.ps1)
         run: |
           $gateways = @([Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
@@ -114,6 +116,7 @@ jobs:
             ForEach-Object { $_.ToString() } | Select-Object -Unique)
           if ($gateways.Count -eq 0) { throw 'No IPv4 default gateway found, so the LAN block cannot be tested' }
           $reached = @()
+          $denied = 0
           foreach ($gateway in $gateways) {
             foreach ($port in 53, 80, 443) {
               $client = New-Object Net.Sockets.TcpClient
@@ -126,6 +129,8 @@ jobs:
                 while ($e -and -not ($e -is [Net.Sockets.SocketException])) { $e = $e.InnerException }
                 if ($e -and $e.SocketErrorCode -eq [Net.Sockets.SocketError]::ConnectionRefused) {
                   $reached += "${gateway}:$port (refused by the gateway)"
+                } elseif ($e -and $e.SocketErrorCode -eq [Net.Sockets.SocketError]::AccessDenied) {
+                  $denied++
                 }
               } finally {
                 $client.Close()
@@ -136,7 +141,12 @@ jobs:
             throw ("The runner account reached the LAN ($($reached -join ', ')): run tools/ci/runner/firewall.ps1 " +
               '(docs/runbooks/win-gpu-runner.md)')
           }
-          Write-Output "The default gateway(s) $($gateways -join ', ') accepted no TCP connection on ports 53, 80, 443"
+          if ($denied -eq 0) {
+            throw ('No connection to the default gateway was denied locally, so the firewall block is not shown to be ' +
+              'active (only timeouts): run tools/ci/runner/firewall.ps1 (docs/runbooks/win-gpu-runner.md)')
+          }
+          Write-Output ("The default gateway(s) $($gateways -join ', ') accepted no TCP connection on ports 53, 80, 443; " +
+            "the firewall denied $denied")
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:

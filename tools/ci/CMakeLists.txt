@@ -3,8 +3,9 @@
 #                                 self-hosted win-gpu runner must keep 09 §5.4a's rules (post-merge triggers, the
 #                                 main and HELIOS_WIN_GPU guards, no secrets, contents: read, pinned actions);
 #   lint_runner_policy_unittest   its YAML parser and seeded fixtures (testdata/runner_policy/);
-#   lint_runner_scripts           runner/test_runner_scripts.ps1: the runner hook and firewall scripts parse, and
-#                                 their logic holds (the wipe itself on Windows), with PowerShell 7.
+#   lint_runner_scripts           runner/test_runner_scripts.ps1: the runner hook and firewall scripts parse, are
+#                                 ASCII, and their logic holds (the wipe itself on Windows, where the test must
+#                                 say that the wipe ran), with PowerShell 7.
 # Python 3.10+ is required in CI, as for tools/scorecard. pwsh is required on GitHub-hosted runners, which all
 # have it; elsewhere (the dev container, the owner's win-gpu PC) lint_runner_scripts is registered only if found.
 if(NOT HELIOS_BUILD_TESTS)
@@ -35,6 +36,11 @@ if(HELIOS_PWSH)
            COMMAND ${HELIOS_PWSH} -NoProfile -NonInteractive -File ${CMAKE_CURRENT_SOURCE_DIR}/runner/test_runner_scripts.ps1
                    -WorkDir ${CMAKE_CURRENT_BINARY_DIR}/runner-scripts-test)
   set_tests_properties(lint_runner_scripts PROPERTIES LABELS lint TIMEOUT 300)
+  if(CMAKE_HOST_WIN32)
+    # The wipe must have run, not been skipped. The script prints this only when every check passed (CTest ignores
+    # the exit code once PASS_REGULAR_EXPRESSION is set).
+    set_tests_properties(lint_runner_scripts PROPERTIES PASS_REGULAR_EXPRESSION "checks passed \\(wipe: ran\\)")
+  endif()
 else()
   message(STATUS "tools/ci: pwsh not found; lint_runner_scripts is not registered")
 endif()

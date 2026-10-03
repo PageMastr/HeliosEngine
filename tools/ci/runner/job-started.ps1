@@ -1,4 +1,5 @@
-# job-started.ps1 — the win-gpu runner's job-started hook (docs/plan/09-roadmap-and-process.md §5.4a; WP-0.4; K33).
+# job-started.ps1: the win-gpu runner's job-started hook (docs/plan/09-roadmap-and-process.md section 5.4a; WP-0.4;
+# K33). ASCII only: Windows PowerShell 5.1 reads a file without a BOM as ANSI.
 #
 # Installed as D:\helios-ci\hooks\job-started.ps1 and named by ACTIONS_RUNNER_HOOK_JOB_STARTED in
 # D:\helios-ci\runner\.env (docs/runbooks/win-gpu-runner.md). The runner runs it as the runner account, in a step
@@ -144,7 +145,7 @@ function Invoke-HeliosCiJobStarted {
     )
     $refused = Test-HeliosCiJobAllowed -Environment $Environment
     if ($refused) {
-        Write-Host "::error::job-started hook: refused: $refused (09 §5.4a; docs/runbooks/win-gpu-runner.md)"
+        Write-Host "::error::job-started hook: refused: $refused (09 section 5.4a; docs/runbooks/win-gpu-runner.md)"
         return 1
     }
     $workspace = [string]$Environment['GITHUB_WORKSPACE']

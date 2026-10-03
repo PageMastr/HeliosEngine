@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Result producers for the nightly scorecard report (09 §5.6; WP-0.3).
 
-  python3 tools/scorecard/runners.py doctest --build-dir DIR [--config CFG] [--perf] --out DIR
+  python3 tools/scorecard/runners.py doctest --build-dir DIR [--config CFG] [--perf] [--label-exclude REGEX]
+                                             --out DIR
   python3 tools/scorecard/runners.py gate --name NAME --out DIR [--build-dir DIR [--config CFG]]
                                           [--timeout SECONDS] -- COMMAND [ARGS...]
 
 `doctest` runs the doctest binaries that helios_test() registers, one CTest entry at a time (the main
 entry, or with --perf the `perf:` entry), with doctest's XML reporter: DIR/<binary>.xml or
 <binary>.perf.xml, plus <stem>.status.json with the exit code and wall time. It uses the working
-directory, environment and timeout CTest would. CTest's own JUnit gives per-binary results; these
-files give per-case results and the MESSAGE lines perf.py reads.
+directory, environment and timeout CTest would. --label-exclude skips the entries `ctest -LE REGEX` skips
+(any label matching), so a job runs the same binaries in both steps: the Windows jobs, which have no GPU,
+exclude `gpu`. CTest's own JUnit gives per-binary results; these files give per-case results and the
+MESSAGE lines perf.py reads.
 
 `gate` runs a command that is not a CTest (net_bench --gate, a libFuzzer run) and writes DIR/<NAME>.xml,
 a one-case JUnit file with the exit code, wall time and the output's tail. Output is also streamed to the
@@ -22,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -47,12 +51,18 @@ def find_binary(name: str, build_dir: str | None, config: str | None) -> str:
     return shutil.which(name) or name
 
 
-def run_doctest(build_dir: str, config: str | None, perf: bool, out: Path, ctest: str) -> int:
+def run_doctest(build_dir: str, config: str | None, perf: bool, out: Path, ctest: str,
+                label_exclude: str | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     kind = "perf" if perf else "main"
     worst = 0
     for test in scorecard.ctest_tests(Path(build_dir), config, ctest):
         if scorecard.is_doctest_entry(test) != kind:
+            continue
+        labels = scorecard.test_property(test, "LABELS") or []
+        if label_exclude and any(re.search(label_exclude, label) for label in labels):
+            print(f"doctest: {test['name']}: not run (label {', '.join(labels)} matches {label_exclude!r})",
+                  flush=True)
             continue
         binary = test["name"].removesuffix("_perf")
         stem = binary + (".perf" if perf else "")
@@ -134,6 +144,8 @@ def main(argv: list[str] | None = None) -> int:
     doc = sub.add_parser("doctest", help="run doctest binaries with the XML reporter")
     doc.add_argument("--build-dir", required=True)
     doc.add_argument("--perf", action="store_true", help="the perf: entries instead of the main ones")
+    doc.add_argument("--label-exclude", metavar="REGEX",
+                     help="skip entries with a CTest label matching REGEX, as ctest -LE does")
     gate = sub.add_parser("gate", help="run a command as a named gate")
     gate.add_argument("--name", required=True)
     gate.add_argument("--build-dir")
@@ -145,7 +157,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--ctest", default="ctest")
     args = parser.parse_args(argv)
     if args.command == "doctest":
-        return run_doctest(args.build_dir, args.config or None, args.perf, args.out, args.ctest)
+        return run_doctest(args.build_dir, args.config or None, args.perf, args.out, args.ctest,
+                           args.label_exclude or None)
     cmd = args.cmd[1:] if args.cmd[:1] == ["--"] else args.cmd
     if not cmd:
         parser.error("gate needs a command after --")

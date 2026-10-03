@@ -54,6 +54,19 @@ record ShipHullDef @table("hull") {
   server { lootTable: LootTableRef?; aiHints: map<Name, f32> }
 }
 
+/// A pilot's hangar slot, stored by the character service in its own PostgreSQL table (`--emit sql`,
+/// 05 §3.2 conventions: BIGINT ids, the key first, value data never here but in the ledger).
+struct HangarSlot @store(character) @sql(schema="svc_character", table="hangar_slot") @key(owner, slot) {
+  owner:    EntityId
+  slot:     u16
+  ship:     EntityId
+  hull:     ShipHullRef
+  size:     ShipSize = Medium
+  label:    string?
+  damage:   HullDamage
+  storedAt: Tick
+}
+
 /// Hull damage checkpointed with the ship (02 §3.4: `breaches` was renamed from `holes`).
 struct HullDamage @store(checkpoint) @version(2) {
   hp:       f32

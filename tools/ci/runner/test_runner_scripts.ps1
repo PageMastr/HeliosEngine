@@ -193,18 +193,33 @@ foreach ($case in @(
 
 # -- job-started.ps1: how it ends a refused job ---------------------------------------------------------------
 # A failed hook fails only its own step: the runner would still run the job's if: always() steps and actions'
-# pre: steps. So the hook stops its parent, the runner's worker. The process cmdlets are mocked (functions win over
-# cmdlets); $script:processes is the process table, and the mocks and Write-Host record into $script:jobLog.
+# pre: steps. So the hook stops its parent, the runner's worker, or (when WMI fails or the parent is something else)
+# every worker under the runner's folder, found with Get-Process. The process cmdlets are mocked (functions win over
+# cmdlets); $script:processes is the process table ('throw' makes WMI fail, 'throw-list' Get-Process), and the mocks
+# and Write-Host record into $script:jobLog.
 $script:jobLog = New-Object System.Collections.Generic.List[string]
 $script:processes = @{}
+$script:stopFails = @()
 function Get-CimInstance {
     [CmdletBinding()] param([string]$ClassName, [string]$Filter)
     if ($ClassName -cne 'Win32_Process' -or $Filter -cnotmatch '^ProcessId = (\d+)$') { throw "unexpected query: $ClassName $Filter" }
     if ($script:processes.ContainsKey('throw')) { throw 'WMI is not available' }
     return $script:processes[[int]$Matches[1]]
 }
+function Get-Process {
+    [CmdletBinding()] param([string]$Name)
+    if ($script:processes.ContainsKey('throw-list')) { throw 'the process list is not available' }
+    foreach ($key in @($script:processes.Keys | Where-Object { $_ -is [int] } | Sort-Object)) {
+        $process = $script:processes[$key]
+        $processName = [IO.Path]::GetFileNameWithoutExtension([string]$process.Name)
+        if ($processName -and $processName -ieq $Name) {
+            [pscustomobject]@{ Id = $process.ProcessId; ProcessName = $processName; Path = $process.ExecutablePath }
+        }
+    }
+}
 function Stop-Process {
     [CmdletBinding()] param([int]$Id, [switch]$Force)
+    if ($script:stopFails -contains $Id) { throw "Access is denied ($Id)" }
     $script:jobLog.Add("stop $Id force=$Force")
 }
 function Start-Sleep {
@@ -250,10 +265,44 @@ foreach ($other in @(
 Set-Parent $null $null
 $script:processes.Remove($PID)
 Assert-Equal $false (Stop-TestJob) 'nothing is stopped when the hook''s own process is not found'
+
+# The fallback: when WMI fails or does not show the worker as the parent, every Runner.Worker.exe under the runner's
+# folder is stopped (Get-Process); never the listener, and never a worker elsewhere.
+Set-Parent 'Runner.Worker.exe' 'D:\helios-ci\runner\bin\Runner.Worker.exe'
+New-Process 3000 600 'Runner.Listener.exe' 'D:\helios-ci\runner\bin\Runner.Listener.exe'
+$script:processes['throw'] = $true
+Assert-Equal $true (Stop-TestJob) 'a WMI failure falls back to Get-Process'
+Assert-Equal @('stop 4000 force=True') $script:jobLog.ToArray() 'a WMI failure stops the runner''s worker, not its listener'
+Set-Parent 'Runner.Worker.exe' 'D:\helios-ci\runner\bin\Runner.Worker.exe'
+$script:processes.Remove($PID)
+Assert-Equal $true (Stop-TestJob) 'the hook''s own process missing from WMI falls back to Get-Process'
+Assert-Equal @('stop 4000 force=True') $script:jobLog.ToArray() 'and stops the worker'
+Set-Parent 'cmd.exe' 'C:\Windows\System32\cmd.exe'
+New-Process 3000 600 'Runner.Worker.exe' 'D:\helios-ci\runner\bin.2.330.0\Runner.Worker.exe'
+New-Process 600 500 'Runner.Listener.exe' 'D:\helios-ci\runner\bin\Runner.Listener.exe'
+New-Process 700 1 'Runner.Worker.exe' 'C:\actions-runner\bin\Runner.Worker.exe'
+Assert-Equal $true (Stop-TestJob) 'a parent that is not the worker falls back to Get-Process'
+Assert-Equal @('stop 3000 force=True') $script:jobLog.ToArray() 'only the worker under the runner''s folder is stopped'
+Set-Parent 'cmd.exe' 'C:\Windows\System32\cmd.exe'
+New-Process 3000 600 'Runner.Worker.exe' 'D:\helios-ci\runner\bin\Runner.Worker.exe'
+New-Process 3100 600 'Runner.Worker.exe' 'D:\helios-ci\runner\bin\Runner.Worker.exe'
+$script:stopFails = @(3000)
+Assert-Equal $true (Stop-TestJob) 'every worker under the runner''s folder is stopped, even when one fails'
+Assert-Equal @('stop 3100 force=True') $script:jobLog.ToArray() 'the other worker is stopped'
+Set-Parent 'cmd.exe' 'C:\Windows\System32\cmd.exe'
+New-Process 3000 600 'Runner.Worker.exe' 'D:\helios-ci\runner\bin\Runner.Worker.exe'
+Assert-Equal $false (Stop-TestJob) 'a worker that cannot be stopped is reported'
+$script:stopFails = @()
 Set-Parent 'Runner.Worker.exe' 'D:\helios-ci\runner\bin\Runner.Worker.exe'
 $script:processes['throw'] = $true
-Assert-Equal $false (Stop-TestJob) 'a WMI failure stops nothing and does not throw'
-Assert-Equal 0 $script:jobLog.Count 'a WMI failure stops no process'
+$script:processes['throw-list'] = $true
+Assert-Equal $false (Stop-TestJob) 'WMI and Get-Process both failing stop nothing and do not throw'
+Assert-Equal 0 $script:jobLog.Count 'and stop no process'
+Set-Parent 'Runner.Worker.exe' 'C:\actions-runner\bin\Runner.Worker.exe'
+New-Process 600 500 'Runner.Listener.exe' 'D:\helios-ci\runner\bin\Runner.Listener.exe'
+$script:processes['throw'] = $true
+Assert-Equal $false (Stop-TestJob) 'with no worker under the runner''s folder nothing is stopped'
+Assert-Equal 0 $script:jobLog.Count 'not even the listener'
 
 # Through the hook's entry point: a refused job returns 1 after it says why, waits, then stops the worker; an
 # allowed job (with nothing to wipe) stops nothing.
@@ -283,6 +332,14 @@ $mainJob = @{
 }
 Assert-Equal 0 (Invoke-HeliosCiJobStarted -Root $jobRoot -RunnerRoot $runnerRoot -Environment $mainJob 6>$null) 'an allowed job passes'
 Assert-Equal 0 $script:jobLog.Count 'an allowed job stops nothing'
+Set-Parent 'Runner.Worker.exe' 'D:\helios-ci\runner\bin\Runner.Worker.exe'
+$script:processes['throw'] = $true
+$code = Invoke-Recorded { Invoke-HeliosCiJobStarted -Root $jobRoot -RunnerRoot $runnerRoot -Environment $pushToBranch }
+Assert-Equal 1 $code 'a refused job fails the hook when WMI fails'
+Assert-Equal @('host: ::error::job-started hook: refused', 'host: job-started hook: the parent process lookup failed',
+    'host: job-started hook: ending the job', 'sleep 2000', 'stop 4000 force=True') `
+    @($script:jobLog | ForEach-Object { if ($_ -like 'host: *') { ($_ -split ': ')[0..2] -join ': ' } else { $_ } }) `
+    'a refused job when WMI fails: the reason, the fallback, then the worker is stopped after a pause'
 Set-Parent 'pwsh.exe' 'C:\Program Files\PowerShell\7\pwsh.exe'
 Assert-Equal 1 (Invoke-HeliosCiJobStarted -Root $jobRoot -RunnerRoot $runnerRoot -Environment $pushToBranch 6>$null) `
     'a refused job fails the hook even when the job cannot be ended'
@@ -297,12 +354,12 @@ $outside = Join-Path $WorkDir 'outside'
 function New-Tree {
     if (Test-Path -LiteralPath $WorkDir) { Remove-Item -LiteralPath $WorkDir -Recurse -Force }
     foreach ($dir in '_actions\actions\checkout', '_temp\_github_workflow', '_diag', '_PipelineMapping\PageMastr',
-        '_tool\Python', 'scifi-test\scifi-test\build', 'HeliosEngine\old-sibling',
+        '_update\bin.2.330.0', '_tool\Python', 'scifi-test\scifi-test\build', 'HeliosEngine\old-sibling',
         'HeliosEngine\HeliosEngine\build\deep\a\b\c\d\e\f\g\h') {
         New-Item -ItemType Directory -Force -Path (Join-Path $root $dir.Replace('\', [IO.Path]::DirectorySeparatorChar)) | Out-Null
     }
     foreach ($file in '_actions\actions\checkout\action.yml', '_temp\_github_workflow\event.json', '_diag\Runner.log',
-        'stray.txt', 'HeliosEngine\HeliosEngine\README.md', 'HeliosEngine\HeliosEngine\build\deep\a\b\c\d\e\f\g\h\x.obj',
+        '_update\bin.2.330.0\Runner.Listener.exe', 'stray.txt', 'HeliosEngine\HeliosEngine\README.md', 'HeliosEngine\HeliosEngine\build\deep\a\b\c\d\e\f\g\h\x.obj',
         'HeliosEngine\HeliosEngine\.git-object') {
         Set-Content -LiteralPath (Join-Path $root $file.Replace('\', [IO.Path]::DirectorySeparatorChar)) -Value 'x'
     }
@@ -321,6 +378,8 @@ New-Tree
 Assert-Equal @('HeliosEngine/HeliosEngine/.git-object', 'HeliosEngine/HeliosEngine/README.md', 'HeliosEngine/HeliosEngine/build',
     'HeliosEngine/old-sibling', '_tool', 'scifi-test', 'stray.txt') `
     (Get-Relative (Get-HeliosCiWipeTargets -Root $root -Workspace $workspace)) 'wipe targets keep the runner''s directories and the workspace'
+Assert-Equal @('_PipelineMapping', '_actions', '_diag', '_temp', '_update') (Get-Sorted $HeliosCiKeep) `
+    'the kept directories, including the runner''s self-update'
 Assert-Throws { Get-HeliosCiWipeTargets -Root $root -Workspace '' } 'GITHUB_WORKSPACE is not set' 'no workspace'
 Assert-Throws { Get-HeliosCiWipeTargets -Root $root -Workspace (Join-Path $root 'HeliosEngine') } 'is not <work>' 'workspace one level up'
 Assert-Throws { Get-HeliosCiWipeTargets -Root $root -Workspace (Join-Path $outside 'a\b'.Replace('\', [IO.Path]::DirectorySeparatorChar)) } `
@@ -350,12 +409,13 @@ if (-not $onWindows) {
     (Get-Item -LiteralPath $readOnly).Attributes = 'ReadOnly'
     $environment = With @{ GITHUB_WORKSPACE = $workspace }
     Assert-Equal 0 (Invoke-HeliosCiJobStarted -Root $root -RunnerRoot $runnerRoot -Environment $environment) 'the wipe succeeds'
-    Assert-Equal @('HeliosEngine', '_PipelineMapping', '_actions', '_diag', '_temp') `
+    Assert-Equal @('HeliosEngine', '_PipelineMapping', '_actions', '_diag', '_temp', '_update') `
         (Get-Sorted @(Get-ChildItem -LiteralPath $root -Force | ForEach-Object Name)) 'the work directory after the wipe'
     Assert-Equal @('HeliosEngine') @(Get-ChildItem -LiteralPath (Join-Path $root 'HeliosEngine') -Force | ForEach-Object Name) 'the pipeline directory'
     Assert-Equal 0 @(Get-ChildItem -LiteralPath $workspace -Force).Count 'the workspace is empty'
     Assert-Equal 'keep me' (Get-Content -LiteralPath (Join-Path $outside 'precious.txt')) 'link targets survive'
     Assert-Equal $true (Test-Path -LiteralPath (Join-Path $root '_actions\actions\checkout\action.yml')) 'this job''s actions survive'
+    Assert-Equal $true (Test-Path -LiteralPath (Join-Path $root '_update\bin.2.330.0\Runner.Listener.exe')) 'the runner''s update survives'
 
     New-Tree
     $refused = With @{ GITHUB_WORKSPACE = $workspace; GITHUB_EVENT_NAME = 'pull_request' }

@@ -36,12 +36,14 @@ The layers, from the outside in:
 
 What stays possible (K33's residual risk): code that has passed review and merged runs as `helios-ci` with internet
 access. Such code could change what the account itself owns: its profile, its PowerShell profile, the runner
-installation (`D:\helios-ci\runner`, including `.env`) and the runner's credentials there; through `.env` or the
-PowerShell profile (which the runner loads before the hook) it could switch the hook off. It cannot reach your
-account, your files, administrator rights or the LAN. It can reach programs on the PC itself that listen on the
-network, including on `localhost` (Windows Firewall does not filter loopback): keep such services (databases, dev
-servers, remote-control tools) behind a password, or stop them while the runner is enabled. If you suspect misuse,
-follow "Rotate" below.
+installation (`D:\helios-ci\runner`, including `.env`) and the runner's credentials there. It could switch the hook
+off through `.env`, through the PowerShell profile (which the runner loads before the hook), or with
+`Set-ExecutionPolicy -Scope CurrentUser Restricted`: the CurrentUser scope takes precedence over the LocalMachine
+policy of step 4, so the hook would no longer start, and only an execution policy set by Group Policy prevents that
+(the checklist checks the scope). It cannot reach your account, your files, administrator rights or the LAN. It can
+reach programs on the PC itself that listen on the network, including on `localhost` (Windows Firewall does not
+filter loopback): keep such services (databases, dev servers, remote-control tools) behind a password, or stop them
+while the runner is enabled. If you suspect misuse, follow "Rotate" below.
 
 ## Names (binding)
 
@@ -230,7 +232,9 @@ Do this after the setup and after any change to the PC, the hook or the firewall
 - [ ] As `helios-ci` (`runas /user:helios-ci powershell`):
   - `Get-ChildItem C:\Users\<you>` fails with access denied;
   - `Test-NetConnection <your router's IP> -Port 80` fails, `Test-NetConnection github.com -Port 443` succeeds;
-  - `git --version; cmake --version; python --version; go version; $env:VULKAN_SDK` all answer.
+  - `git --version; cmake --version; python --version; go version; $env:VULKAN_SDK` all answer;
+  - `Get-ExecutionPolicy -Scope CurrentUser` answers `Undefined` (anything else overrides step 4's policy for
+    `helios-ci`; `Restricted` there would keep the hook from running).
 - [ ] A dispatched run on `main`: "Set up runner" prints `job-started hook: workflow_dispatch job on refs/heads/main;
       removed N entries ...`; "Runner isolation" and "LAN egress blocked" pass (the latter says how many connects the
       firewall denied); the job builds; "The goldens and the bench ran on a hardware GPU" names your GPU.
@@ -264,9 +268,11 @@ Do this after the setup and after any change to the PC, the hook or the firewall
 - **`refused:` at "Set up runner"**: the hook ended a job that is not an allowed run of `main`, for example a push
   to another branch whose workflow asks for this runner. It stops the job's worker process, so the run fails there,
   possibly with a message about the runner's worker; the runner stays online. Look at which branch or fork started it.
-- **"the parent process is not the runner's Runner.Worker.exe"** or **"could not end the job"** at "Set up runner":
-  the hook refused a job but could not end it, so that job's `if: always()` and `pre:` steps may have run. Stop the
-  service (step 5) and report it.
+- **"could not end the job"** at "Set up runner": the hook refused a job but found no worker process to stop, or
+  could not stop it, so that job's `if: always()` and `pre:` steps may have run. Stop the service (step 5) and report
+  it. A line saying that the parent process is not the runner's `Runner.Worker.exe`, or that its lookup failed,
+  followed by "ending the job: stopping every Runner.Worker.exe", means the hook found the worker by name instead;
+  the job was ended, but report it too.
 - **"entries survived the wipe"** at "Set up runner": a leftover process holds files in `D:\helios-ci\work`. Reboot
   (or end `helios-ci`'s processes); the next job wipes again.
 - **`rhi_triangle_smoke`** opens a window. A service runs without a desktop, so it may fail on this runner; that is a

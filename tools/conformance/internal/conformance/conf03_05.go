@@ -28,9 +28,11 @@ var holderRuleTests = []string{"conformance/holder_rule"}
 var (
 	cTestCaseRE = regexp.MustCompile(`\b(?:DOCTEST_)?TEST_CASE\s*\(\s*"conformance/([A-Za-z0-9_]+)`)
 	// A doctest decorator that turns the case off or lets it fail: CI would run nothing that can fail.
-	// The decorator may come anywhere in the chain (`"…" * doctest::timeout(120) * doctest::skip()`).
+	// The decorator may come anywhere in the chain (`"…" * doctest::timeout(120) * doctest::skip()`), after
+	// decorators whose string arguments hold parentheses (`doctest::description("60 s (no responders)")`).
 	cTestOffRE = regexp.MustCompile(`\b(?:DOCTEST_)?TEST_CASE\s*\(\s*"conformance/([A-Za-z0-9_]+)[^"]*"\s*` +
-		`(?:\*\s*doctest::\w+\s*(?:\([^()]*\))?\s*)*\*\s*doctest::(skip|may_fail|should_fail|expected_failures)\b`)
+		`(?:\*\s*doctest::\w+\s*(?:\((?:[^()"]|"(?:[^"\\]|\\.)*")*\))?\s*)*\*\s*` +
+		`doctest::(skip|may_fail|should_fail|expected_failures)\b`)
 )
 
 // skipsAlways returns the position of an unconditional t.Skip, t.Skipf or t.SkipNow among a test
@@ -207,15 +209,21 @@ var (
 	idMinters = []string{"services/pkg/idgen/**", "engine/ecs/**/entity_id.*", "engine/ecs/**/registry.*"}
 	cIdentRE  = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
 	// A shift and its amount: a name, a literal, or a parenthesized expression (`<< (kOffBits + kShBits)`).
-	cShiftRE = regexp.MustCompile(`([A-Za-z0-9_)\]]+)\s*<<=?\s*(?:\(([^()]*)\)|((?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*|\d+))`)
+	// The left operand may be brace-initialized, the way this codebase widens before a shift (`u64{x} << 22`).
+	cShiftRE = regexp.MustCompile(`((?:[A-Za-z_][\w:]*\s*\{[^{}]*\})|[A-Za-z0-9_)\]]+)\s*<<=?\s*` +
+		`(?:\(([^()]*)\)|((?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*|\d+))`)
 	// Integer constants: a constexpr or const declaration (= or {…}), a #define, and an enumerator.
 	cConstRE      = regexp.MustCompile(`\b(?:constexpr|const)\b[^;{}()=]*?\b([A-Za-z_]\w*)\s*(?:=\s*([^;{}]+?)|\{([^{}]*)\})\s*;`)
 	cDefineRE     = regexp.MustCompile(`(?m)^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]+([^\n]+)$`)
 	cEnumBodyRE   = regexp.MustCompile(`\benum\b[^{;()]*\{([^{}]*)\}`)
 	cEnumeratorRE = regexp.MustCompile(`^\s*([A-Za-z_]\w*)\s*=\s*(.+?)\s*$`)
 	cIntTokenRE   = regexp.MustCompile(`^(\d+)[uUlL]*$`)
-	cMulShiftRE   = regexp.MustCompile(`\*\s*\(\s*1[uUlL]*\s*<<\s*((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*|\d+)\s*\)|` +
-		`\(\s*1[uUlL]*\s*<<\s*((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*|\d+)\s*\)\s*\*`)
+	// A brace-initialized integer literal (`u64{1}`, `std::uint64_t{ 1ull }`): a size, like a bare literal.
+	cBraceLitRE = regexp.MustCompile(`^[\w:]+\s*\{\s*\d+[uUlL]*\s*\}$`)
+	// A power of two that scales a field: `* (1 << n)` or `(1 << n) *`, the one bare or brace-initialized.
+	cOne        = `(?:1[uUlL]*|[A-Za-z_][\w:]*\s*\{\s*1[uUlL]*\s*\})`
+	cMulShiftRE = regexp.MustCompile(`\*\s*\(\s*` + cOne + `\s*<<\s*((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*|\d+)\s*\)|` +
+		`\(\s*` + cOne + `\s*<<\s*((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*|\d+)\s*\)\s*\*`)
 )
 
 // goLiteral reports a literal operand, also in parentheses or converted (`uint64(1)`): a shift or scale of
@@ -283,12 +291,19 @@ func checkNodeIDs(p *Pass) {
 					}
 					if x.Op == token.MUL && !goLiteral(x.X) && !goLiteral(x.Y) { // ms * (1 << 22) is ms << 22
 						for _, op := range []ast.Expr{x.X, x.Y} {
-							for {
-								pe, ok := op.(*ast.ParenExpr)
-								if !ok {
-									break
+							for unwrapped := true; unwrapped; { // parentheses and conversions: uint64(1<<22)
+								switch e := op.(type) {
+								case *ast.ParenExpr:
+									op = e.X
+								case *ast.CallExpr:
+									if len(e.Args) != 1 {
+										unwrapped = false
+										break
+									}
+									op = e.Args[0]
+								default:
+									unwrapped = false
 								}
-								op = pe.X
 							}
 							if sh, ok := op.(*ast.BinaryExpr); ok && sh.Op == token.SHL {
 								if one, ok := g.Int(gf, sh.X); ok && one == 1 {
@@ -320,7 +335,7 @@ func checkNodeIDs(p *Pass) {
 					}
 				}
 				for _, m := range cShiftRE.FindAllStringSubmatch(l, -1) {
-					if cIntTokenRE.MatchString(m[1]) { // 1 << 12 is a size, not a field
+					if cIntTokenRE.MatchString(m[1]) || cBraceLitRE.MatchString(m[1]) { // 1 << 12 is a size, not a field
 						continue
 					}
 					for _, v := range cEval(m[2]+m[3], cConsts, 0) {

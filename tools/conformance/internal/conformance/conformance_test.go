@@ -199,8 +199,9 @@ func TestSpliceLines(t *testing.T) {
 
 // TestCConstStrings pins which C and C++ declarations count as string constants for CONF-01 and CONF-02:
 // a name that is not one stays unresolved, so a bucket or key passed through it fails closed. Parameters
-// with defaults (after a braced or lambda default, or an #if in the list), non-static data members, a
-// const inside template arguments and `#if 0` groups are not constants; a local in a lambda body is.
+// with defaults (after a braced or lambda default, or an #if in the list), non-static data members (also
+// of a class whose base clause or template parameters hold parentheses or `=`), a const inside template
+// arguments and `#if 0` groups are not constants; a local in a lambda or function body is.
 func TestCConstStrings(t *testing.T) {
 	src := newCSource(strings.Split(`#define kDef "def"
 namespace n { constexpr std::string_view kView{"view"}; }
@@ -233,6 +234,10 @@ struct alignas(8) [[nodiscard]] Holder { static constexpr const char* kHeld = "h
 std::optional<const std::string> opt = "o";
 std::span<const char> view = "v";
 std::unique_ptr<const char* const> held = "h";
+struct Wide : Base<(N > 1)> { const char* const wideInst = "wi"; };
+class Derived final : public Bar<decltype(x)>, Baz<N == 2> { const char* const derivedInst = "di"; };
+template <typename T = int> struct Tmpl { const char* const tmplInst = "ti"; static constexpr const char* kTmpl = "ts"; };
+void g(struct Desc* d) { const char* const kInFn = "fn"; }
 #if 0
 #define kDeadDef "dd"
 constexpr const char* kDead = "dead";
@@ -243,8 +248,8 @@ constexpr const char* kDead = "dead";
 		got = append(got, name+"="+strings.Join(lits, "|"))
 	}
 	sort.Strings(got)
-	want := `kArr="arr" kAttr="attr" "s" kBraced="braced" kDef="def" kHeld="held" kLocal="local" kMember="member" ` +
-		`kParen="paren" kPtr2="ptr2" kPtr="ptr" kQual="qual" kStr="str" kView="view"`
+	want := `kArr="arr" kAttr="attr" "s" kBraced="braced" kDef="def" kHeld="held" kInFn="fn" kLocal="local" ` +
+		`kMember="member" kParen="paren" kPtr2="ptr2" kPtr="ptr" kQual="qual" kStr="str" kTmpl="ts" kView="view"`
 	if strings.Join(got, " ") != want {
 		t.Errorf("got  %s\nwant %s", strings.Join(got, " "), want)
 	}

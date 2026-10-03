@@ -306,11 +306,11 @@ TEST_CASE("lint: a keyed list entry's tag and length are counted") {
 }
 
 TEST_CASE("perf: --emit lint is O(n log n) in its findings") {
-    // PR #35's round 3: add() scanned every earlier finding, so 20,000 findings took 1.07 s (0.66 s for
-    // --emit cpp over twice as many fields). Budget: the lint pass adds at most half of the frontend's
-    // time for 20,000 findings, plus 50 ms.
+    // PR #35's round 3: add() scanned every earlier finding, so the lint was quadratic in its findings
+    // (20,000 took 1.07 s, 40,000 took 4.1 s). Budget: 40,000 findings, the frontend included, in <= 1 s
+    // (about 0.2 s here; the quadratic scan took 3 s and more).
     std::string text = "package test;\nevent E @audience(relevant) {\n";
-    for (int i = 0; i < 20000; ++i) text += std::format("  s{}: string\n", i);
+    for (int i = 0; i < 40000; ++i) text += std::format("  s{}: string\n", i);
     text += "}\n";
     auto timed = [&](const CompileOptions& options) {
         const auto start = std::chrono::steady_clock::now();
@@ -324,10 +324,10 @@ TEST_CASE("perf: --emit lint is O(n log n) in its findings") {
     usize findings = 0;
     for (usize at = lintResult->messages.find("[size.unbounded]"); at != std::string::npos; at = lintResult->messages.find("[size.unbounded]", at + 1))
         ++findings;
-    CHECK(findings == 20000);
-    MESSAGE(std::format("20,000 findings: {:.3f} s with --emit lint, {:.3f} s without", lint, plain));
+    CHECK(findings == 40000);
+    MESSAGE(std::format("40,000 findings: {:.3f} s with --emit lint, {:.3f} s without", lint, plain));
 #if defined(NDEBUG) && !defined(HELIOS_SANITIZERS_ENABLED) && !defined(__SANITIZE_ADDRESS__)
-    CHECK(lint <= 1.5 * plain + 0.05);
+    CHECK(lint <= 1.0);
 #endif
 }
 

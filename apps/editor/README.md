@@ -19,7 +19,10 @@ helios-editor [--project-root=<dir>] [--project=<name>] [--user=<name>]
   journal ends clean only after a normal exit with every record saved (there is no save prompt
   yet), so a crash, a device loss or a quit with unsaved records leaves the session unclean. At the
   next start the Output panel offers it and *File > Recover Unsaved Session* replays it (07 §1.2);
-  `--recover=auto` replays it without asking. A fully recovered journal is marked ended. A session
+  `--recover=auto` replays it without asking. `--recover` replays last, once the window, device and
+  remote control are up, so a start that fails (no display, no Vulkan device) leaves the session
+  offered as it was. A fully recovered journal is marked ended once the replay is synced to this
+  session's journal; with `--no-journal` it stays offered until the records are saved. A session
   that cannot fully replay (its record was edited and saved since) stays offered until *File >
   Discard Unsaved Session* marks it ended without a replay; its journal file stays, so
   `helios-tool journal replay <file>` can still replay it. Both commands take the newest session

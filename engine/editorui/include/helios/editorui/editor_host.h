@@ -13,8 +13,10 @@
 // backend seam), no layout file, a hidden window unless `present` is set, and frames rendered only
 // when a capture asks for one. Its edits carry Origin::UiScripted.
 //
-// Crash recovery (07 §1.2): `recover` replays a journal at start; otherwise the shell offers an
-// earlier unclean session. The journal ends clean only after a normal exit with every record saved.
+// Crash recovery (07 §1.2): `recover` replays a journal as the last step of create(), so a start
+// that fails leaves that session as it was; otherwise the shell offers an earlier unclean session.
+// The journal ends clean only after a normal exit with every record saved: run() and every other
+// exit path (a failed create(), a host destroyed without run()) close it per journalEndsClean().
 //
 // Remote control: the framework's JSON-RPC methods (tf::registerFrameworkRpc) plus
 //   ui.items {filter?}, ui.click {path, button?}, ui.doubleClick {path}, ui.hover {path},

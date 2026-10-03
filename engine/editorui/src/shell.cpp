@@ -108,10 +108,16 @@ Result<std::string> recoverJournal(tf::Framework& framework, const fs::Path& jou
         note += ". Recovered undo and redo steps are ordinary history entries now, and only the recovered "
                 "documents' part of a multi-document transaction was replayed";
     }
-    if (complete) {
-        // Every document came back: mark the journal ended so it is not offered again.
-        const Result<void> marked = markSessionEnded(journal);
+    if (complete && framework.journal()) {
+        // Every document came back, and the replay is in this session's journal: mark the source
+        // ended so it is not offered again. The replayed transactions reach the disk first.
+        Result<void> marked = framework.journal()->sync();
+        if (marked) marked = markSessionEnded(journal);
         if (!marked) note += std::format(" (could not mark {} recovered: {})", fs::pathToUtf8(journal.filename()), marked.error().message);
+    } else if (complete) {
+        // --no-journal: nothing else holds the replayed edits until they are saved.
+        note += ". This session keeps no journal, so the session stays offered until File > Discard Unsaved Session "
+                "stops offering it; save the recovered records";
     } else {
         note += ". The session stays offered under File > Recover Unsaved Session until File > Discard Unsaved Session "
                 "stops offering it";

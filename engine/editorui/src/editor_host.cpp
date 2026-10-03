@@ -511,6 +511,10 @@ struct EditorHost::Impl {
             (void)device->waitIdle();
             device.reset();
         }
+        // Every exit path, not only run(): a failed start or a host destroyed without run() must
+        // not end the journal clean while a record has unsaved edits (~Framework would close it
+        // clean). A no-op once run() has closed it.
+        if (fw && fw->journal()) (void)fw->journal()->close(EditorHost::journalEndsClean(exitCode, *fw));
         fw.reset();
         if (window) SDL_DestroyWindow(window);
         window = nullptr;
@@ -583,8 +587,8 @@ void EditorHost::Impl::registerRpc() {
         [=](const tf::RpcRequest& req, const tf::RpcResponder& resp) {
             auto d = args(req, resp);
             if (!d || !requireHarness(resp)) return;
-            t->moveTo(static_cast<f32>(tf::json::getNumber(d->root(), "x").value_or(0)),
-                      static_cast<f32>(tf::json::getNumber(d->root(), "y").value_or(0)), finish(resp));
+            // UiTest bounds the numbers in f64 (any JSON number is safe).
+            t->moveTo(tf::json::getNumber(d->root(), "x").value_or(0), tf::json::getNumber(d->root(), "y").value_or(0), finish(resp));
         },
         "Moves the mouse to display pixels {x, y}");
     s.registerMethod(
@@ -592,8 +596,8 @@ void EditorHost::Impl::registerRpc() {
         [=](const tf::RpcRequest& req, const tf::RpcResponder& resp) {
             auto d = args(req, resp);
             if (!d || !requireHarness(resp)) return;
-            t->drag(str(*d, "from"), str(*d, "to"), static_cast<f32>(tf::json::getNumber(d->root(), "dx").value_or(0)),
-                    static_cast<f32>(tf::json::getNumber(d->root(), "dy").value_or(0)), finish(resp));
+            t->drag(str(*d, "from"), str(*d, "to"), tf::json::getNumber(d->root(), "dx").value_or(0),
+                    tf::json::getNumber(d->root(), "dy").value_or(0), finish(resp));
         },
         "Drags from an item to another item or by pixels {from, to? | dx, dy}");
     s.registerMethod(
@@ -618,7 +622,7 @@ void EditorHost::Impl::registerRpc() {
         [=](const tf::RpcRequest& req, const tf::RpcResponder& resp) {
             auto d = args(req, resp);
             if (!d || !requireHarness(resp)) return;
-            t->scroll(str(*d, "path"), static_cast<f32>(tf::json::getNumber(d->root(), "steps").value_or(-1)), finish(resp));
+            t->scroll(str(*d, "path"), tf::json::getNumber(d->root(), "steps").value_or(-1), finish(resp));
         },
         "Scrolls the mouse wheel over an item {path, steps}");
     s.registerMethod(
@@ -698,7 +702,9 @@ void EditorHost::Impl::registerRpc() {
                 }
                 pendingTheme = std::string(*th);
             }
-            if (auto sc = tf::json::getNumber(d->root(), "scale")) pendingScale = static_cast<f32>(*sc);
+            if (auto sc = tf::json::getNumber(d->root(), "scale")) {
+                pendingScale = std::clamp(detail::requestedUiScale(*sc), detail::kMinUiScale, detail::kMaxUiScale);
+            }
             if (auto p = tf::json::getBool(d->root(), "pseudoLoc")) setPseudoLocalization(*p);
             if (tf::json::getBool(d->root(), "resetLayout").value_or(false)) shell->resetLayout();
             // Answer once the new settings have been laid out (layout, font atlas and hover state).
@@ -753,20 +759,7 @@ Result<std::unique_ptr<EditorHost>> EditorHost::create(const EditorConfig& confi
         HELIOS_TRY_ASSIGN(const usize opened, m.fw->openAll());
         HELIOS_LOG_INFO("Opened {} record(s) under {}", opened, fs::pathToUtf8(config.projectRoot));
     }
-    std::string recoveryNote;
-    if (!config.recover.empty()) {
-        fs::Path journalFile = fs::pathFromUtf8(config.recover);
-        if (config.recover == "auto") {
-            const fs::Path root = config.journalRoot.empty() ? tf::defaultJournalRoot() : config.journalRoot;
-            const auto sessions = tf::listJournalSessions(root, config.project, true);
-            journalFile = sessions.empty() ? fs::Path() : sessions.back().path;
-        }
-        if (!journalFile.empty()) {
-            HELIOS_TRY_ASSIGN(recoveryNote, recoverJournal(*m.fw, journalFile));
-            HELIOS_LOG_INFO("{}", recoveryNote);
-        }
-    }
-    // Without --recover the shell offers any unclean session (Output line, File > Recover).
+    // --recover replays at the end, once nothing else can fail.
 
     // ---- theme -----------------------------------------------------------------------------
     HELIOS_TRY(m.loadTheme(config.themeFile.empty() ? std::string_view(config.theme) : std::string_view("file")));
@@ -777,7 +770,7 @@ Result<std::unique_ptr<EditorHost>> EditorHost::create(const EditorConfig& confi
     // --scale, then HELIOS_EDITOR_SCALE (07 §4.4: forces the scale through the same font
     // re-rasterization path as a per-monitor DPI change), then the display's content scale.
     f32 envScale = 0.0f;
-    if (const char* env = SDL_getenv("HELIOS_EDITOR_SCALE"); env && *env) envScale = static_cast<f32>(SDL_atof(env));
+    if (const char* env = SDL_getenv("HELIOS_EDITOR_SCALE"); env && *env) envScale = detail::requestedUiScale(SDL_atof(env));
     m.scalePolicy.forced = config.scale > 0 || envScale > 0 || config.testMode;
     if (config.scale > 0) {
         m.scale = config.scale;
@@ -858,15 +851,34 @@ Result<std::unique_ptr<EditorHost>> EditorHost::create(const EditorConfig& confi
     Impl& h = *host->m_impl;
     h.uiTest = std::make_unique<UiTest>(h.imgui, [&h](const UiInputEvent& e) { h.inject(e); });
     h.uiTest->setEnabled(config.testMode);
-    h.shell = std::make_unique<Shell>(*h.fw, *host);
-    if (!recoveryNote.empty()) h.shell->log(recoveryNote);
     if (config.rpcEndpoint != "-") {
         const std::string name = config.rpcEndpoint.empty() ? std::format("helios-editor-{}", tf::currentProcessId()) : config.rpcEndpoint;
         HELIOS_TRY_ASSIGN(h.rpc, tf::RpcServer::start(name));
         tf::registerFrameworkRpc(*h.rpc, *h.fw);
-        h.registerRpc();
+        h.registerRpc();  // the handlers reach the shell only once frame() pumps requests
         HELIOS_LOG_INFO("Remote control: {}", h.rpc->path());
     }
+
+    // ---- crash recovery (07 §1.2) ----------------------------------------------------------------
+    // Last: a complete replay marks the source session ended, and from then on its edits exist only
+    // as unsaved records in this session's journal. A start that failed after the replay would leave
+    // the user to find them by path, so nothing that can fail runs after it.
+    std::string recoveryNote;
+    if (!config.recover.empty()) {
+        fs::Path journalFile = fs::pathFromUtf8(config.recover);
+        if (config.recover == "auto") {
+            const fs::Path root = config.journalRoot.empty() ? tf::defaultJournalRoot() : config.journalRoot;
+            const auto sessions = tf::listJournalSessions(root, config.project, true);
+            journalFile = sessions.empty() ? fs::Path() : sessions.back().path;
+        }
+        if (!journalFile.empty()) {
+            HELIOS_TRY_ASSIGN(recoveryNote, recoverJournal(*h.fw, journalFile));
+            HELIOS_LOG_INFO("{}", recoveryNote);
+        }
+    }
+    // Without --recover the shell offers any unclean session (Output line, File > Recover).
+    h.shell = std::make_unique<Shell>(*h.fw, *host);
+    if (!recoveryNote.empty()) h.shell->log(recoveryNote);
     return host;
 }
 

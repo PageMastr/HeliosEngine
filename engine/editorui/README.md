@@ -72,7 +72,7 @@ a CJK fallback with localization previews (T25), and an icon font.
 
 ## Tests
 
-- **`editorui_tests`** (doctest, 50 cases plus 1 `perf:` case; no GPU or display, so it runs on
+- **`editorui_tests`** (doctest, 53 cases plus 1 `perf:` case; no GPU or display, so it runs on
   Windows CI too):
   - themes and contrast (every text pair the shell draws, including disabled text and input hints
     on selected and hovered rows and frames, the badges also on a hovered or pressed name cell,
@@ -87,7 +87,10 @@ a CJK fallback with localization previews (T25), and an icon font.
   - crash recovery: an earlier unclean session is offered (Output line, File > Recover Unsaved
     Session) and replays, or File > Discard Unsaved Session stops offering it (its journal stays);
     both take the newest session first or a named one; the journal ends clean only after a normal
-    exit with every record saved;
+    exit with every record saved; a start that fails after `--recover` was asked for leaves the
+    crashed session offered and its record untouched; without a journal a recovered session stays
+    offered;
+  - `ui.move`, `ui.drag` and `ui.scroll` bound their JSON numbers in f64 before the f32 conversion;
   - the per-monitor DPI policy, including a scale picked under View > UI Scale staying put;
   - the shell and grid on a headless ImGui context, driven by injected input: item paths, typed and
     dragged edits as `ui-scripted` transactions, Ctrl+Z/Ctrl+Y, check boxes, list buttons, the
@@ -98,6 +101,10 @@ a CJK fallback with localization previews (T25), and an icon font.
   - the ꟻLIP golden policy (it passes identical images and fails a one-pixel shift);
   - the sample project being canonical;
   - `perf:` the item table costs at most 0.2 ms per frame (07 §4.4; `editorui_tests_perf`).
+- **`editorui_tests_gpu`** (label `gpu`; the doctest suite `gpu`, which the other entries exclude):
+  2 cases on a real `EditorHost` in test mode, with a Vulkan device and SDL's offscreen video driver
+  (no display server): `run()` ends the journal clean only with every record saved, and a host
+  destroyed without `run()` after `--recover` keeps the replayed edit's journal unclean.
 - **ED-15 goldens** (`tests/golden`, `editorui_ed15`, label `gpu`, run by
   `apps/tools/helios-uitest`): shell and property grid at 100 % (1920 × 1080) and 200 %
   (3840 × 2160), dark and high contrast. Refresh them with `helios-uitest --update-goldens` and

@@ -54,8 +54,10 @@ public:
 /// Replays the unclean journal `journal` into `framework` (07 §1.2) and returns the Output summary:
 /// the transactions replayed, every document that did not come back and why, and the limits of a
 /// replay (recovered undo and redo steps become ordinary history entries; only the recovered
-/// documents' part of a multi-document transaction is replayed). When every document came back,
-/// the journal gets its "end" record so the session is not offered again. Owner thread.
+/// documents' part of a multi-document transaction is replayed). When every document came back and
+/// `framework` journals (the replay is then in its journal, synced first), `journal` gets its "end"
+/// record so the session is not offered again; without a journal (--no-journal) it stays unclean.
+/// Owner thread.
 Result<std::string> recoverJournal(tf::Framework& framework, const fs::Path& journal);
 
 /// Panel window names ("<title>###<id>"); the id part is the panel's stable path.

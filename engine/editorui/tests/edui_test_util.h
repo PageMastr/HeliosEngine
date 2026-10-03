@@ -161,17 +161,17 @@ struct ShellHarness {
     Theme theme;
 
     /// `prepare` runs on the project copy before the framework opens it (journals of earlier
-    /// sessions go under `<root>/journal`, the harness framework's journal root; it journals
-    /// nothing itself).
+    /// sessions go under `<root>/journal`, the harness framework's journal root). The framework
+    /// journals there only when `journal` is set, as the editor does unless --no-journal.
     explicit ShellHarness(std::string_view name, f32 width = 1920, f32 height = 1080,
-                          const std::function<void(const fs::Path& root)>& prepare = {}) {
+                          const std::function<void(const fs::Path& root)>& prepare = {}, bool journal = false) {
         REQUIRE(tf::samples::registerSampleTypes());
         root = fixtureCopy(name);
         if (prepare) prepare(root);
         tf::FrameworkConfig cfg;
         cfg.project = "edui-test";
         cfg.projectRoot = root;
-        cfg.journal = false;
+        cfg.journal = journal;
         cfg.journalRoot = root / "journal";
         auto created = tf::Framework::create(cfg);
         REQUIRE(created);

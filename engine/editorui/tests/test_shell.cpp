@@ -5,7 +5,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <format>
+#include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -327,7 +330,7 @@ std::string writeCrashedSession(const fs::Path& root, std::string_view file, std
 TEST_CASE("shell: an earlier unclean session is offered and File > Recover Unsaved Session replays it") {
     std::string expected;
     const auto crashedSession = [&](const fs::Path& root) { expected = writeCrashedSession(root, "crashed.hjl", "a", 14500); };
-    ShellHarness h("shell_recover", 1920, 1080, crashedSession);
+    ShellHarness h("shell_recover", 1920, 1080, crashedSession, true);
     REQUIRE(h.shell->recoverableSessions().size() == 1);
     const bool offered = std::any_of(h.shell->output().begin(), h.shell->output().end(),
                                      [](const std::string& l) { return l.find("File > Recover Unsaved Session") != std::string::npos; });
@@ -341,12 +344,63 @@ TEST_CASE("shell: an earlier unclean session is offered and File > Recover Unsav
     const bool recovered = std::any_of(h.shell->output().begin(), h.shell->output().end(),
                                        [](const std::string& l) { return l.starts_with("Recovered 1 transaction(s)"); });
     CHECK(recovered);
-    // Marked as ended: it is not offered again.
+    // Marked as ended: it is not offered again. The replay lives on in this session's journal.
     CHECK(h.shell->recoverableSessions().empty());
     auto scan = tf::readJournal(tf::journalDirectory(h.root / "journal", "edui-test") / "crashed.hjl");
     REQUIRE(scan);
     CHECK(scan->clean);
     CHECK_FALSE(h.fw->invoker(tf::Origin::UiScripted).canExecute("app.recoverSession"));
+    REQUIRE(h.fw->journal() != nullptr);
+    auto own = tf::readJournal(h.fw->journal()->path());
+    REQUIRE(own);
+    CHECK(std::any_of(own->records.begin(), own->records.end(), [](const tf::JournalRecord& r) { return r.kind == tf::JournalRecordKind::Tx; }));
+}
+
+TEST_CASE("shell: without a journal (--no-journal) a recovered session stays offered") {
+    const auto crashedSession = [&](const fs::Path& root) { (void)writeCrashedSession(root, "crashed.hjl", "n", 14500); };
+    ShellHarness h("shell_recover_nojournal", 1920, 1080, crashedSession, false);
+    REQUIRE(h.fw->journal() == nullptr);
+    REQUIRE(h.shell->recoverableSessions().size() == 1);
+    REQUIRE(h.fw->invoker(tf::Origin::UiScripted).invoke("app.recoverSession"));
+    CHECK(h.get("mass") == "14500");
+    // Nothing else holds the replayed edit until it is saved, so the source is not marked ended.
+    CHECK(h.shell->recoverableSessions().size() == 1);
+    auto scan = tf::readJournal(tf::journalDirectory(h.root / "journal", "edui-test") / "crashed.hjl");
+    REQUIRE(scan);
+    CHECK_FALSE(scan->clean);
+    CHECK(std::any_of(h.shell->output().begin(), h.shell->output().end(),
+                      [](const std::string& l) { return l.find("keeps no journal") != std::string::npos; }));
+}
+
+TEST_CASE("editor: a start that fails after --recover keeps the replayed edits recoverable") {
+    REQUIRE(tf::samples::registerSampleTypes());
+    const fs::Path root = fixtureCopy("editor_recover_fail");
+    (void)writeCrashedSession(root, "crashed.hjl", "f", 14500);
+    REQUIRE(tf::listJournalSessions(root / "journal", "edui-test", true).size() == 1);
+    auto frigate = fs::readTextFile(root / "records" / "hull" / "frigate.hrec");
+    REQUIRE(frigate);
+    EditorConfig c;
+    c.project = "edui-test";
+    c.projectRoot = root;
+    c.journalRoot = root / "journal";
+    c.recover = "auto";
+    c.rpcEndpoint = "-";
+    // Fails before any window, as a failed SDL_Init, window, Vulkan device, swapchain, ImGui
+    // backend or RPC endpoint would. The replay runs only after all of those.
+    c.theme = "no-such-theme";
+    auto host = EditorHost::create(c);
+    REQUIRE_FALSE(host);
+    CHECK(host.error().message.find("no-such-theme") != std::string::npos);
+    // The crashed session is still offered as it was: the edit (mass 14500) was never saved.
+    const auto unclean = tf::listJournalSessions(root / "journal", "edui-test", true);
+    REQUIRE(unclean.size() == 1);
+    CHECK(unclean[0].header.session == "f");
+    CHECK(unclean[0].txCount == 1);
+    CHECK(fs::readTextFile(root / "records" / "hull" / "frigate.hrec").valueOr("") == *frigate);
+    // (All sessions are listed here: the failed start's own session names this test's pid, which
+    // the unclean-only listing treats as running.)
+    const auto all = tf::listJournalSessions(root / "journal", "edui-test", false);
+    CHECK(std::any_of(all.begin(), all.end(), [](const tf::JournalSessionInfo& s) { return !s.clean; }));
 }
 
 TEST_CASE("shell: File > Discard Unsaved Session stops offering a session; a named session can be recovered") {
@@ -355,7 +409,7 @@ TEST_CASE("shell: File > Discard Unsaved Session stops offering a session; a nam
         older = writeCrashedSession(root, "crashed1.hjl", "c1", 14500);
         (void)writeCrashedSession(root, "crashed2.hjl", "c2", 13500);
     };
-    ShellHarness h("shell_discard", 1920, 1080, twoCrashed);
+    ShellHarness h("shell_discard", 1920, 1080, twoCrashed, true);
     REQUIRE(h.shell->recoverableSessions().size() == 2);
     const bool offered = std::any_of(h.shell->output().begin(), h.shell->output().end(), [](const std::string& l) {
         return l.find("File > Discard Unsaved Session") != std::string::npos && l.find("2 such sessions") != std::string::npos;
@@ -380,6 +434,73 @@ TEST_CASE("shell: File > Discard Unsaved Session stops offering a session; a nam
     CHECK(h.frigate().text() == older);
     CHECK(h.shell->recoverableSessions().empty());
     CHECK_FALSE(ui.canExecute("app.discardSession"));
+}
+
+/// A real EditorHost (suite "gpu": a Vulkan device, and SDL's offscreen video driver, which CTest
+/// selects) in test mode on the project under `root`, journaling under `<root>/journal`.
+EditorConfig hostConfig(const fs::Path& root) {
+    EditorConfig c;
+    c.project = "edui-test";
+    c.projectRoot = root;
+    c.journalRoot = root / "journal";
+    c.rpcEndpoint = "-";
+    c.testMode = true;
+    c.present = false;
+    return c;
+}
+
+/// Whether the session named `session` under `<root>/journal` ended clean (none: no such session).
+std::optional<bool> sessionClean(const fs::Path& root, std::string_view session) {
+    for (const tf::JournalSessionInfo& s : tf::listJournalSessions(root / "journal", "edui-test", false)) {
+        if (s.header.session == session) return s.clean;
+    }
+    return std::nullopt;
+}
+
+TEST_CASE("editor: run() ends the journal clean only with every record saved" * doctest::test_suite("gpu")) {
+    REQUIRE(tf::samples::registerSampleTypes());
+    const fs::Path root = fixtureCopy("editor_run_journal");
+    EditorConfig c = hostConfig(root);
+    c.maxFrames = 3;
+    const auto session = [&](bool save) {
+        auto host = EditorHost::create(c);
+        REQUIRE(host);
+        tf::Framework& fw = (*host)->framework();
+        REQUIRE(fw.invoker(tf::Origin::UiScripted).invoke("doc.setProperty", R"({"doc":"hull/frigate","path":"mass","value":13000})"));
+        if (save) REQUIRE(fw.saveAll());
+        REQUIRE(fw.journal() != nullptr);
+        const std::string name = fw.journal()->header().session;
+        CHECK((*host)->run() == 0);
+        return name;
+    };
+    const std::string unsaved = session(false);
+    CHECK(sessionClean(root, unsaved) == false);  // a quit with an unsaved record: offered at the next start
+    const std::string saved = session(true);
+    CHECK(sessionClean(root, saved) == true);
+}
+
+TEST_CASE("editor: a host destroyed without run() after --recover keeps the replayed edits recoverable" *
+          doctest::test_suite("gpu")) {
+    REQUIRE(tf::samples::registerSampleTypes());
+    const fs::Path root = fixtureCopy("editor_recover_norun");
+    (void)writeCrashedSession(root, "crashed.hjl", "g", 14500);
+    EditorConfig c = hostConfig(root);
+    c.recover = "auto";
+    std::string session;
+    {
+        auto host = EditorHost::create(c);
+        REQUIRE(host);
+        tf::Framework& fw = (*host)->framework();
+        CHECK(fw.documents().find(std::string_view("hull/frigate"))->dirty());
+        const auto& out = (*host)->shell().output();
+        CHECK(std::any_of(out.begin(), out.end(), [](const std::string& l) { return l.starts_with("Recovered 1 transaction(s)"); }));
+        REQUIRE(fw.journal() != nullptr);
+        session = fw.journal()->header().session;
+    }
+    // The source is marked ended: the replayed edit now lives only in this session's journal, which
+    // must stay unclean (~Framework alone would close it clean).
+    CHECK(sessionClean(root, "g") == true);
+    CHECK(sessionClean(root, session) == false);
 }
 
 TEST_CASE("editor: the journal ends clean only after a normal exit with every record saved") {
@@ -410,6 +531,56 @@ TEST_CASE("editor: the UI scale follows the window's display unless it was force
     edui::detail::ScalePolicy forced;
     forced.forced = true;
     CHECK_FALSE(forced.onDisplayScale(1.0f, 2.0f));
+    // ui.configure {scale} and HELIOS_EDITOR_SCALE: bounded in f64 before the f32 conversion.
+    using edui::detail::requestedUiScale;
+    CHECK(requestedUiScale(1.5) == 1.5f);
+    CHECK(requestedUiScale(1e300) == edui::detail::kMaxUiScale);
+    CHECK(requestedUiScale(std::numeric_limits<f64>::infinity()) == edui::detail::kMaxUiScale);
+    CHECK(requestedUiScale(1e-300) == edui::detail::kMinUiScale);
+    CHECK(requestedUiScale(0.0) == 0.0f);    // not set
+    CHECK(requestedUiScale(-1e300) == 0.0f);
+    CHECK(requestedUiScale(std::numeric_limits<f64>::quiet_NaN()) == 0.0f);
+}
+
+TEST_CASE("ui: move, drag and scroll bound their numbers before the f32 conversion") {
+    ShellHarness h("ui_bounds");
+    // Record what the harness injects (a fresh UiTest on the same context, as the harness's own).
+    std::vector<UiInputEvent> events;
+    h.ui.reset();
+    h.ui = std::make_unique<UiTest>(h.imgui->context(), [&](const UiInputEvent& e) {
+        events.push_back(e);
+        injectIntoImGui(e);
+    });
+    h.ui->setEnabled(true);
+    h.frame();
+    const auto mouse = [&](UiInputEvent::Type type) {
+        std::vector<UiInputEvent> out;
+        for (const UiInputEvent& e : events) {
+            if (e.type == type) out.push_back(e);
+        }
+        return out;
+    };
+    constexpr f32 kMax = static_cast<f32>(kMaxUiPixels);
+    // 1e300 is outside f32's range: a plain conversion would be undefined (in practice, infinite).
+    REQUIRE(h.act([&](UiTest::Completion d) { h.ui->moveTo(1e300, -1e300, std::move(d)); }));
+    REQUIRE_FALSE(mouse(UiInputEvent::Type::MouseMove).empty());
+    CHECK(mouse(UiInputEvent::Type::MouseMove).back().x == kMax);
+    CHECK(mouse(UiInputEvent::Type::MouseMove).back().y == -kMax);
+    events.clear();
+    REQUIRE(h.act([&](UiTest::Completion d) { h.ui->drag("Documents/filter", "", 1e300, std::numeric_limits<f64>::quiet_NaN(), std::move(d)); }));
+    const auto moves = mouse(UiInputEvent::Type::MouseMove);
+    REQUIRE(moves.size() > 1);
+    CHECK(std::fabs(moves.back().x - (moves.front().x + kMax)) <= 2.0f);  // f32 spacing at 1e6 is 1/16
+    CHECK(moves.back().y == std::floor(moves.front().y));                  // NaN counts as 0
+    events.clear();
+    REQUIRE(h.act([&](UiTest::Completion d) { h.ui->scroll("Documents/filter", -1e300, std::move(d)); }));
+    const auto wheel = mouse(UiInputEvent::Type::Wheel);
+    REQUIRE(wheel.size() == 1);
+    CHECK(wheel[0].y == -static_cast<f32>(kMaxUiWheelSteps));
+    for (const UiInputEvent& e : events) {
+        CHECK(std::isfinite(e.x));
+        CHECK(std::isfinite(e.y));
+    }
 }
 
 TEST_CASE("shell: the shell's framework listener does not outlive the shell") {

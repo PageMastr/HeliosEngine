@@ -93,6 +93,70 @@ inline std::string batchesText(const RgPlan& plan) {
     return out;
 }
 
+/// Every field of a plan except stats.compileMs, one line per element: two plans are identical exactly
+/// when their texts are (rgDumpPlan leaves out fields such as list names and placement offsets).
+inline std::string fullPlanText(const RgPlan& plan) {
+    auto u = [](auto e) { return static_cast<u64>(e); };
+    auto range = [](const rhi::SubresourceRange& r) {
+        return std::format("{}+{}/{}+{}", r.baseMip, r.mipCount, r.baseLayer, r.layerCount);
+    };
+    auto barriers = [&](std::span<const RgBarrier> list) {
+        std::string out;
+        for (const RgBarrier& b : list) {
+            out += std::format(" ({} {}->{} {})", b.physical, u(b.before), u(b.after), range(b.range));
+        }
+        return out;
+    };
+    auto numbers = [](const auto& list) {
+        std::string out;
+        for (const auto& v : list) out += std::format(" {}", static_cast<u64>(v));
+        return out;
+    };
+    auto desc = [&](const RgTextureDesc& d) {
+        return std::format("{} {} {}x{}x{} m{} l{} s{}", u(d.type), u(d.format), d.width, d.height, d.depth,
+                           d.mipLevels, d.arrayLayers, d.sampleCount);
+    };
+    std::string out = std::format("plan '{}'\n", plan.name);
+    for (const RgPassInfo& p : plan.passes) {
+        out += std::format("pass '{}' flags {} queue {} culled {} position {} batch {} list {} depthStore {}\n",
+                           p.name, u(p.flags), u(p.queue), p.culled, p.position, p.batch, p.list, u(p.depthStore));
+        out += "  accesses";
+        for (const RgAccess& a : p.accesses) {
+            out += std::format(" ({} r{} w{} {} {})", a.resource, a.readVersion, a.writeVersion, u(a.state),
+                               range(a.range));
+        }
+        out += "\n  pre" + barriers(p.preBarriers) + "\n  post" + barriers(p.postBarriers) + "\n  colorStore" +
+               numbers(p.colorStore) + "\n";
+    }
+    for (const RgResourceInfo& r : plan.resources) {
+        out += std::format("resource '{}' texture {} imported {} desc {} size {} usage {}/{} versions {} used {} "
+                           "first {} last {} physical {} bytes {} heap {} offset {} import {}->{} wait {}:{}\n",
+                           r.name, r.isTexture, r.imported, desc(r.texture), r.bufferSize, u(r.textureUsage),
+                           u(r.bufferUsage), r.versionCount, r.used, r.firstPosition, r.lastPosition, r.physical,
+                           r.bytes, u(r.heap), r.heapOffset, u(r.import.initialState), u(r.import.finalState),
+                           u(r.import.waitFor.queue), r.import.waitFor.value);
+    }
+    for (const RgPhysicalInfo& p : plan.physicals) {
+        out += std::format("physical texture {} imported {} desc {} size {} usage {}/{} bytes {}", p.isTexture,
+                           p.imported, desc(p.texture), p.bufferSize, u(p.textureUsage), u(p.bufferUsage), p.bytes);
+        out += " residents" + numbers(p.residents) + " final" + numbers(p.finalStates) + "\n";
+    }
+    for (const RgBatchInfo& b : plan.batches) {
+        out += std::format("batch kind {} queue {} lists {}+{} value {} passes{} waits{} barriers{}\n", u(b.kind),
+                           u(b.queue), b.firstList, b.listCount, b.queueValue, numbers(b.passes), numbers(b.waits),
+                           barriers(b.barriers));
+    }
+    for (const RgListInfo& l : plan.lists) {
+        out += std::format("list '{}' batch {} passes {}+{}\n", l.name, l.batch, l.firstPass, l.passCount);
+    }
+    const RgCompileStats& s = plan.stats;
+    out += std::format("order{}\nstats {} {} {} {} {} {} {} {} {} {} {} heaps{}\n", numbers(plan.order), s.passCount,
+                       s.culledPassCount, s.batchCount, s.commandListCount, s.barrierCount, s.crossQueueWaitCount,
+                       s.physicalTextureCount, s.physicalBufferCount, s.transientBytes, s.pooledBytes,
+                       s.placedBytes, numbers(s.heapBytes));
+    return out;
+}
+
 inline bool hasError(const RenderGraph& graph, std::string_view needle) {
     return std::any_of(graph.errors().begin(), graph.errors().end(),
                        [&](const std::string& e) { return e.find(needle) != std::string::npos; });

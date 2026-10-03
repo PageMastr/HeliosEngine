@@ -536,11 +536,19 @@ void UiTest::hover(std::string path, Completion done) {
     enqueue(std::move(a));
 }
 
-void UiTest::moveTo(f32 x, f32 y, Completion done) {
+namespace {
+/// An untrusted f64 (a JSON-RPC number) as an f32 in [-limit, limit]. The clamp is done in f64:
+/// converting a double outside f32's range is undefined behaviour ([conv.double]). NaN gives 0.
+f32 boundedF32(f64 v, f64 limit) noexcept {
+    return static_cast<f32>(std::isnan(v) ? 0.0 : std::clamp(v, -limit, limit));
+}
+} // namespace
+
+void UiTest::moveTo(f64 xIn, f64 yIn, Completion done) {
     auto a = std::make_unique<Action>();
     a->name = "ui.move";
     a->done = std::move(done);
-    a->run = [x, y](UiTest& t, Action& a) -> Step {
+    a->run = [x = boundedF32(xIn, kMaxUiPixels), y = boundedF32(yIn, kMaxUiPixels)](UiTest& t, Action& a) -> Step {
         if (a.step == 0) {
             t.m_sink(mouse(UiInputEvent::Type::MouseMove, x, y));
             a.wait = 2;
@@ -552,12 +560,12 @@ void UiTest::moveTo(f32 x, f32 y, Completion done) {
     enqueue(std::move(a));
 }
 
-void UiTest::drag(std::string from, std::string to, f32 dx, f32 dy, Completion done) {
+void UiTest::drag(std::string from, std::string to, f64 dxIn, f64 dyIn, Completion done) {
     auto a = std::make_unique<Action>();
     a->name = "ui.drag";
     a->done = std::move(done);
     constexpr int kMoves = 6;
-    a->run = [from, to, dx, dy](UiTest& t, Action& a) -> Step {
+    a->run = [from, to, dx = boundedF32(dxIn, kMaxUiPixels), dy = boundedF32(dyIn, kMaxUiPixels)](UiTest& t, Action& a) -> Step {
         if (a.step == 0) {
             if (!locate(t, a, from, a.x, a.y)) return Step::Retry;
             if (to.empty()) {
@@ -669,11 +677,11 @@ void UiTest::key(std::string chord, u32 repeat, Completion done) {
     enqueue(std::move(a));
 }
 
-void UiTest::scroll(std::string path, f32 steps, Completion done) {
+void UiTest::scroll(std::string path, f64 stepsIn, Completion done) {
     auto a = std::make_unique<Action>();
     a->name = "ui.scroll";
     a->done = std::move(done);
-    a->run = [path, steps](UiTest& t, Action& a) -> Step {
+    a->run = [path, steps = boundedF32(stepsIn, kMaxUiWheelSteps)](UiTest& t, Action& a) -> Step {
         switch (a.step) {
         case 0:
             if (!locate(t, a, path, a.x, a.y)) return Step::Retry;

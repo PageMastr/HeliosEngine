@@ -4,6 +4,17 @@ helios_executable(helios-uitest
   SOURCES main.cpp
   DEPS helios::toolsfw helios::render helios::core)
 
+# --out is deleted at start: it must be refused unless it is new, empty or an earlier run's output,
+# and when it holds --goldens or --fixture. No display needed (every case ends before the editor).
+if(HELIOS_BUILD_TESTS)
+  add_test(NAME helios_uitest_out_guard
+           COMMAND ${CMAKE_COMMAND} -DUITEST=$<TARGET_FILE:helios-uitest>
+                   -DFIXTURE=${PROJECT_SOURCE_DIR}/engine/toolsfw/samples/project
+                   -DWORK=${CMAKE_CURRENT_BINARY_DIR}/helios_uitest_out_guard_work
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/out_guard.cmake)
+  set_tests_properties(helios_uitest_out_guard PROPERTIES TIMEOUT 120)
+endif()
+
 # ED-15 harness self-test: shell + property grid goldens at 100 % / 200 %, dark and high contrast,
 # layout lints, UI-vs-RPC dual path, keyboard reachability. Needs a display and a Vulkan device:
 # Linux CI runs it under xvfb-run on lavapipe (label "gpu"); Windows jobs skip the gpu label.

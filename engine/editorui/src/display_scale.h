@@ -13,6 +13,14 @@ namespace helios::edui::detail {
 inline constexpr f32 kMinUiScale = 0.5f;
 inline constexpr f32 kMaxUiScale = 4.0f;
 
+/// A requested UI scale from an untrusted f64 (ui.configure, HELIOS_EDITOR_SCALE): 0 ("not set")
+/// unless it is positive, otherwise clamped to [kMinUiScale, kMaxUiScale]. The clamp is done in f64:
+/// converting a double outside f32's range (1e300) is undefined behaviour ([conv.double]).
+inline f32 requestedUiScale(f64 scale) noexcept {
+    if (!(scale > 0.0)) return 0.0f;
+    return static_cast<f32>(std::clamp(scale, static_cast<f64>(kMinUiScale), static_cast<f64>(kMaxUiScale)));
+}
+
 /// The UI scale to switch to when the window's display scale is `displayScale` (from
 /// SDL_GetWindowDisplayScale, at start and on SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED). None when a
 /// scale was forced (--scale, HELIOS_EDITOR_SCALE, test mode), the display reports no scale, or

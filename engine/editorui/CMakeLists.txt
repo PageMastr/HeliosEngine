@@ -79,4 +79,12 @@ if(TARGET editorui_tests)
     HELIOS_EDUI_FONT_FILE="${HELIOS_EDUI_FONT}"
     HELIOS_EDUI_TEST_WORK_DIR="${CMAKE_CURRENT_BINARY_DIR}/editorui_test_work")
   set_tests_properties(editorui_tests PROPERTIES TIMEOUT 600)
+  # Suites "gpu*" create a real EditorHost: a Vulkan device (lavapipe in CI) and SDL video on the
+  # offscreen driver, so no display server is needed. test_main.cpp keeps them out of the run above.
+  add_test(NAME editorui_tests_gpu COMMAND editorui_tests --test-suite=gpu*)
+  set_tests_properties(editorui_tests_gpu PROPERTIES LABELS gpu TIMEOUT 300 ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen")
+  if(HELIOS_SANITIZE AND NOT WIN32)
+    # LeakSanitizer: keep lavapipe loaded, as helios_editor_smoke does (apps/editor).
+    set_tests_properties(editorui_tests_gpu PROPERTIES ENVIRONMENT_MODIFICATION "VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=set:1")
+  endif()
 endif()

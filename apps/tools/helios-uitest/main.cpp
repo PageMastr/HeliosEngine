@@ -46,8 +46,63 @@ constexpr std::string_view kUsage = R"(helios-uitest - editor UI test driver (ED
   --keep-going         run every check even after a failure
   --log-level=<level>  (default warn)
 
+--out is deleted and rewritten at start. It must be new, empty, or the --out of an earlier run;
+it must not hold --goldens or --fixture.
+
 Exit code 0 when every check passes, 1 when one fails, 2 on usage or setup errors.
 )";
+
+/// The file a run leaves in --out, so that a later run knows the directory is its own to delete.
+constexpr std::string_view kOutMarker = "helios-uitest-out.txt";
+
+/// `p` absolute, with symbolic links and dot segments resolved as far as it exists, as a list of
+/// non-empty components (a trailing separator adds none).
+std::vector<fs::Path> pathComponents(const fs::Path& p) {
+    std::error_code ec;
+    fs::Path abs = std::filesystem::absolute(p, ec);
+    if (ec) abs = p;
+    fs::Path canonical = std::filesystem::weakly_canonical(abs, ec);
+    if (ec) canonical = abs.lexically_normal();
+    std::vector<fs::Path> parts;
+    for (const fs::Path& e : canonical) {
+        if (!e.empty()) parts.push_back(e);
+    }
+    return parts;
+}
+
+/// Whether `inner` is `outer` or lies inside it.
+bool isWithin(const fs::Path& inner, const fs::Path& outer) {
+    const std::vector<fs::Path> a = pathComponents(inner);
+    const std::vector<fs::Path> b = pathComponents(outer);
+    return b.size() <= a.size() && std::equal(b.begin(), b.end(), a.begin());
+}
+
+/// Empties --out for this run, refusing anything that is not an earlier run's output: --out is
+/// deleted recursively, so `--out=.` in a checkout, or --out equal to --goldens, must not get there.
+Result<void> prepareOut(const fs::Path& out, const fs::Path& goldens, const fs::Path& fixture) {
+    const std::string name = fs::pathToUtf8(out);
+    if (isWithin(goldens, out)) return Error{ErrorCode::InvalidArgument, std::format("--out={} would delete --goldens", name)};
+    if (isWithin(fixture, out)) return Error{ErrorCode::InvalidArgument, std::format("--out={} would delete --fixture", name)};
+    if (isWithin(out, fixture)) return Error{ErrorCode::InvalidArgument, std::format("--out={} lies inside --fixture, which it copies", name)};
+    std::error_code ec;
+    const std::filesystem::file_status st = std::filesystem::symlink_status(out, ec);
+    if (std::filesystem::exists(st)) {
+        if (!std::filesystem::is_directory(st)) return Error{ErrorCode::InvalidArgument, std::format("--out={} is not a directory", name)};
+        const bool empty = std::filesystem::is_empty(out, ec);
+        const bool earlierRun = std::filesystem::exists(out / kOutMarker, ec) || std::filesystem::exists(out / "report.json", ec);
+        if (!empty && !earlierRun) {
+            return Error{ErrorCode::InvalidArgument,
+                         std::format("--out={} is not empty and holds no earlier helios-uitest run ({} or report.json); it would be "
+                                     "deleted, so pass a new or empty directory",
+                                     name, kOutMarker)};
+        }
+        std::filesystem::remove_all(out, ec);
+        if (ec) return Error{ErrorCode::IoError, std::format("clearing --out={}: {}", name, ec.message())};
+    }
+    std::filesystem::create_directories(out / "project", ec);
+    if (ec) return Error{ErrorCode::IoError, std::format("creating --out={}: {}", name, ec.message())};
+    return fs::writeTextFile(out / kOutMarker, "Output of helios-uitest. The next run with this --out deletes this directory.\n");
+}
 
 struct Check {
     std::string name;
@@ -374,9 +429,11 @@ int run(const CommandLine& cl) {
     const fs::Path out = fs::pathFromUtf8(*cl.value("out"));
 
     // A private copy of the fixture: the suite edits it and the editor journals next to it.
+    if (auto r = prepareOut(out, goldens, fixture); !r) {
+        std::fprintf(stderr, "helios-uitest: %s\n", r.error().message.c_str());
+        return 2;
+    }
     std::error_code ec;
-    std::filesystem::remove_all(out, ec);
-    std::filesystem::create_directories(out / "project", ec);
     std::filesystem::copy(fixture, out / "project", std::filesystem::copy_options::recursive, ec);
     if (ec) {
         std::fprintf(stderr, "helios-uitest: copying the fixture: %s\n", ec.message().c_str());

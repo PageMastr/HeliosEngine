@@ -68,7 +68,8 @@ public:
     /// the AssetIdSet errors (nil GUID, a GUID already added, an AssetId collision; 02 §6.1),
     /// InvalidArgument for a tier above 2, LimitExceeded for an asset above 2 GiB or one that would
     /// take the pak past 2 GiB.
-    Result<asset::AssetId> add(const Guid& guid, std::span<const u8> cooked, const HpakAssetOrder& order = {});
+    Result<asset::AssetId> add(const Guid& guid, std::span<const u8> cooked,
+                               const HpakAssetOrder& order = {});
 
     usize assetCount() const noexcept { return m_assets.size(); }
     /// The size of the pak build() would produce now.
@@ -106,7 +107,7 @@ private:
     HpakWriterOptions m_options;
     asset::AssetIdSet m_ids;
     std::vector<Asset> m_assets;
-    u64 m_blobBytes = 0;  ///< Σ alignUp(stored, 4 KiB).
+    u64 m_blobBytes = 0; ///< Σ alignUp(stored, 4 KiB).
     u64 m_assetBlocks = 0;
     u64 m_size = asset::hpak::kHeaderBlockSize;
 };

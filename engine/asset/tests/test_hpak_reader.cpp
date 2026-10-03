@@ -19,10 +19,10 @@ using namespace helios::asset::test;
 std::vector<TestAsset> sampleAssets() {
     return {
         {guidOf(1), compressible(1000), {}},
-        {guidOf(2), {}, {}},                                  // empty asset
-        {guidOf(3), incompressible(5000), {}},                // stored raw
+        {guidOf(2), {}, {}},                                   // empty asset
+        {guidOf(3), incompressible(5000), {}},                 // stored raw
         {guidOf(4), compressible(3 * 256 * 1024 + 17, 3), {}}, // 4 zstd blocks
-        {guidOf(5), incompressible(300 * 1024, 11), {}},      // 2 raw blocks
+        {guidOf(5), incompressible(300 * 1024, 11), {}},       // 2 raw blocks
         {guidOf(6), {0x42}, {}},
     };
 }
@@ -174,7 +174,8 @@ TEST_CASE("hpak mounts: a later pak overlays earlier ones by AssetId") {
     const auto base = openPak(buildPak({{guidOf(1), compressible(100, 1), {}},
                                         {guidOf(2), compressible(200, 2), {}},
                                         {guidOf(3), compressible(300, 3), {}}}));
-    const auto patch = openPak(buildPak({{guidOf(2), compressible(222, 9), {}}, {guidOf(4), compressible(400, 4), {}}}));
+    const auto patch =
+        openPak(buildPak({{guidOf(2), compressible(222, 9), {}}, {guidOf(4), compressible(400, 4), {}}}));
     REQUIRE(base.ok());
     REQUIRE(patch.ok());
     PakMountTable table;

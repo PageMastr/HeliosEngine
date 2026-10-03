@@ -72,18 +72,18 @@ struct HpakEntry {
 
 namespace hpak {
 
-inline constexpr u32 kMagic = 0x4B415048u;          ///< "HPAK" as little-endian bytes.
-inline constexpr u16 kVersion = 0;                  ///< The v0 format (WP-0.8).
-inline constexpr u64 kHeaderBlockSize = 4 * kKiB;   ///< The header block; blobs start right after it.
-inline constexpr usize kHeaderBytes = 88;           ///< Encoded header fields (the rest of the block is 0).
-inline constexpr usize kHeaderHashedBytes = 80;     ///< headerHash covers [0, 80).
-inline constexpr usize kTocHashOffset = 72;         ///< Header offset of tocHash.
-inline constexpr usize kHeaderHashOffset = 80;      ///< Header offset of headerHash.
-inline constexpr u64 kBlobAlignment = 4 * kKiB;     ///< Every blob and the TOC start 4 KiB aligned.
-inline constexpr u64 kAssetBlockSize = 256 * kKiB;  ///< Raw bytes per independently coded asset block.
-inline constexpr u64 kPakBlockSize = 64 * kKiB;     ///< Bytes per checksummed pak block.
-inline constexpr u64 kMaxPakSize = 2 * kGiB;        ///< 02 §6.3: a pak is at most 2 GiB.
-inline constexpr u64 kMaxAssetSize = 2 * kGiB;      ///< Decoded size cap per asset (v0 choice).
+inline constexpr u32 kMagic = 0x4B415048u;         ///< "HPAK" as little-endian bytes.
+inline constexpr u16 kVersion = 0;                 ///< The v0 format (WP-0.8).
+inline constexpr u64 kHeaderBlockSize = 4 * kKiB;  ///< The header block; blobs start right after it.
+inline constexpr usize kHeaderBytes = 88;          ///< Encoded header fields (the rest of the block is 0).
+inline constexpr usize kHeaderHashedBytes = 80;    ///< headerHash covers [0, 80).
+inline constexpr usize kTocHashOffset = 72;        ///< Header offset of tocHash.
+inline constexpr usize kHeaderHashOffset = 80;     ///< Header offset of headerHash.
+inline constexpr u64 kBlobAlignment = 4 * kKiB;    ///< Every blob and the TOC start 4 KiB aligned.
+inline constexpr u64 kAssetBlockSize = 256 * kKiB; ///< Raw bytes per independently coded asset block.
+inline constexpr u64 kPakBlockSize = 64 * kKiB;    ///< Bytes per checksummed pak block.
+inline constexpr u64 kMaxPakSize = 2 * kGiB;       ///< 02 §6.3: a pak is at most 2 GiB.
+inline constexpr u64 kMaxAssetSize = 2 * kGiB;     ///< Decoded size cap per asset (v0 choice).
 inline constexpr usize kTocEntryBytes = 64;
 inline constexpr usize kBlockSizeBytes = 4;
 inline constexpr usize kBlockHashBytes = 8;

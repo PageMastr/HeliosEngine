@@ -78,13 +78,16 @@ TEST_CASE("hpak hostile: every corrupted header and layout field is rejected at 
         {"platform 0", [](auto& p) { storeLE<u32>(p.data() + 8, 0); }, ErrorCode::Corrupt},
         {"unknown platform", [](auto& p) { storeLE<u32>(p.data() + 8, 9); }, ErrorCode::Corrupt},
         {"tier 3", [](auto& p) { p[36] = 3; }, ErrorCode::Corrupt},
-        {"TOC offset misaligned", [](auto& p) { storeLE<u64>(p.data() + 40, tocAt(p) + 8); }, ErrorCode::Corrupt},
+        {"TOC offset misaligned", [](auto& p) { storeLE<u64>(p.data() + 40, tocAt(p) + 8); },
+         ErrorCode::Corrupt},
         {"TOC offset inside the header", [](auto& p) { storeLE<u64>(p.data() + 40, 0); }, ErrorCode::Corrupt},
         {"TOC offset past the end", [](auto& p) { storeLE<u64>(p.data() + 40, ~u64(0) & ~u64(4095)); },
          ErrorCode::Corrupt},
-        {"TOC size", [](auto& p) { storeLE<u64>(p.data() + 48, loadLE<u64>(p.data() + 48) + 8); }, ErrorCode::Corrupt},
+        {"TOC size", [](auto& p) { storeLE<u64>(p.data() + 48, loadLE<u64>(p.data() + 48) + 8); },
+         ErrorCode::Corrupt},
         {"TOC size wraps", [](auto& p) { storeLE<u64>(p.data() + 48, ~u64(0)); }, ErrorCode::Corrupt},
-        {"asset count", [](auto& p) { storeLE<u32>(p.data() + 56, assetCountOf(p) + 1); }, ErrorCode::Corrupt},
+        {"asset count", [](auto& p) { storeLE<u32>(p.data() + 56, assetCountOf(p) + 1); },
+         ErrorCode::Corrupt},
         {"asset count huge", [](auto& p) { storeLE<u32>(p.data() + 56, 0xFFFFFFFFu); }, ErrorCode::Corrupt},
         {"asset block count", [](auto& p) { storeLE<u32>(p.data() + 60, loadLE<u32>(p.data() + 60) + 2); },
          ErrorCode::Corrupt},
@@ -105,12 +108,16 @@ TEST_CASE("hpak hostile: every corrupted TOC entry field is rejected at open") {
     const auto field = [](u32 entry, usize at) {
         return [entry, at](std::vector<u8>& p) -> u8* { return p.data() + entryAt(p, entry) + at; };
     };
-    const auto zstdFirst = [&](const std::vector<u8>& p) { return loadLE<u32>(p.data() + entryAt(p, zstd) + 48); };
-    const auto rawFirst = [&](const std::vector<u8>& p) { return loadLE<u32>(p.data() + entryAt(p, raw) + 48); };
+    const auto zstdFirst = [&](const std::vector<u8>& p) {
+        return loadLE<u32>(p.data() + entryAt(p, zstd) + 48);
+    };
+    const auto rawFirst = [&](const std::vector<u8>& p) {
+        return loadLE<u32>(p.data() + entryAt(p, raw) + 48);
+    };
     const std::vector<Case> cases = {
         {"AssetId 0", [&](auto& p) { storeLE<u64>(field(0, 0)(p), 0); }, ErrorCode::Corrupt},
-        {"ids out of order",
-         [&](auto& p) { storeLE<u64>(field(1, 0)(p), loadLE<u64>(field(0, 0)(p))); }, ErrorCode::Corrupt},
+        {"ids out of order", [&](auto& p) { storeLE<u64>(field(1, 0)(p), loadLE<u64>(field(0, 0)(p))); },
+         ErrorCode::Corrupt},
         {"unknown codec", [&](auto& p) { *field(zstd, 56)(p) = 2; }, ErrorCode::Corrupt},
         {"reserved entry byte", [&](auto& p) { *field(raw, 60)(p) = 1; }, ErrorCode::Corrupt},
         {"decoded size above 2 GiB",
@@ -118,21 +125,27 @@ TEST_CASE("hpak hostile: every corrupted TOC entry field is rejected at open") {
         {"decoded size disagrees with the block count",
          [&](auto& p) { storeLE<u64>(field(zstd, 40)(p), 256 * 1024); }, ErrorCode::Corrupt},
         {"block count", [&](auto& p) { storeLE<u32>(field(zstd, 52)(p), 5); }, ErrorCode::Corrupt},
-        {"first block", [&](auto& p) { storeLE<u32>(field(zstd, 48)(p), zstdFirst(p) + 1); }, ErrorCode::Corrupt},
-        {"blob offset misaligned", [&](auto& p) { storeLE<u64>(field(raw, 24)(p), loadLE<u64>(field(raw, 24)(p)) + 1); },
+        {"first block", [&](auto& p) { storeLE<u32>(field(zstd, 48)(p), zstdFirst(p) + 1); },
          ErrorCode::Corrupt},
-        {"blob offset inside the header", [&](auto& p) { storeLE<u64>(field(raw, 24)(p), 0); }, ErrorCode::Corrupt},
-        {"blob offset past the blob region", [&](auto& p) { storeLE<u64>(field(empty, 24)(p), tocAt(p) + 4096); },
+        {"blob offset misaligned",
+         [&](auto& p) { storeLE<u64>(field(raw, 24)(p), loadLE<u64>(field(raw, 24)(p)) + 1); },
          ErrorCode::Corrupt},
-        {"blob runs past the blob region",
-         [&](auto& p) { storeLE<u64>(field(raw, 24)(p), tocAt(p) - 4096); }, ErrorCode::Corrupt},
+        {"blob offset inside the header", [&](auto& p) { storeLE<u64>(field(raw, 24)(p), 0); },
+         ErrorCode::Corrupt},
+        {"blob offset past the blob region",
+         [&](auto& p) { storeLE<u64>(field(empty, 24)(p), tocAt(p) + 4096); }, ErrorCode::Corrupt},
+        {"blob runs past the blob region", [&](auto& p) { storeLE<u64>(field(raw, 24)(p), tocAt(p) - 4096); },
+         ErrorCode::Corrupt},
         {"stored size disagrees with the block sizes",
-         [&](auto& p) { storeLE<u64>(field(zstd, 32)(p), loadLE<u64>(field(zstd, 32)(p)) + 1); }, ErrorCode::Corrupt},
-        {"empty asset with stored bytes", [&](auto& p) { storeLE<u64>(field(empty, 32)(p), 1); }, ErrorCode::Corrupt},
+         [&](auto& p) { storeLE<u64>(field(zstd, 32)(p), loadLE<u64>(field(zstd, 32)(p)) + 1); },
+         ErrorCode::Corrupt},
+        {"empty asset with stored bytes", [&](auto& p) { storeLE<u64>(field(empty, 32)(p), 1); },
+         ErrorCode::Corrupt},
         {"zstd block of 0 bytes", [&](auto& p) { storeLE<u32>(p.data() + blockSizeAt(p, zstdFirst(p)), 0); },
          ErrorCode::Corrupt},
         {"zstd block above the zstd bound",
-         [&](auto& p) { storeLE<u32>(p.data() + blockSizeAt(p, zstdFirst(p)), 0x7FFFFFFFu); }, ErrorCode::Corrupt},
+         [&](auto& p) { storeLE<u32>(p.data() + blockSizeAt(p, zstdFirst(p)), 0x7FFFFFFFu); },
+         ErrorCode::Corrupt},
         {"raw block size differs from the raw size",
          [&](auto& p) { storeLE<u32>(p.data() + blockSizeAt(p, rawFirst(p)), 4999); }, ErrorCode::Corrupt},
     };
@@ -142,7 +155,9 @@ TEST_CASE("hpak hostile: every corrupted TOC entry field is rejected at open") {
 TEST_CASE("hpak hostile: a pak above 2 GiB is refused before anything is read") {
     struct Huge final : IHpakSource {
         u64 size() const override { return hpak::kMaxPakSize + 1; }
-        Result<void> readAt(u64, std::span<u8>) const override { return Error{ErrorCode::IoError, "not read"}; }
+        Result<void> readAt(u64, std::span<u8>) const override {
+            return Error{ErrorCode::IoError, "not read"};
+        }
         std::string describe() const override { return "huge"; }
     };
     CHECK(HpakReader::open(std::make_unique<Huge>()).errorCode() == ErrorCode::LimitExceeded);
@@ -224,9 +239,12 @@ struct Damaged {
         pak = HpakReader::open(std::move(owned), options).value();
         a = pak->find(AssetId::fromGuid(guidOf(1)));
         b = pak->find(AssetId::fromGuid(guidOf(2)));
-        HELIOS_VERIFY(a->offset == hpak::kHeaderBlockSize && b->offset == hpak::kHeaderBlockSize + 136 * 1024);
+        HELIOS_VERIFY(a->offset == hpak::kHeaderBlockSize &&
+                      b->offset == hpak::kHeaderBlockSize + 136 * 1024);
     }
-    void flip(const HpakEntry* e) { source->set(e->offset + 5, static_cast<u8>(source->get(e->offset + 5) ^ 0xFF)); }
+    void flip(const HpakEntry* e) {
+        source->set(e->offset + 5, static_cast<u8>(source->get(e->offset + 5) ^ 0xFF));
+    }
 };
 
 TEST_CASE("hpak integrity: a bad block calls the hook once per block, whatever reads it") {

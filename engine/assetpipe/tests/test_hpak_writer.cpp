@@ -139,9 +139,9 @@ TEST_CASE("hpak writer: 4 KiB alignment, TOC sorted by AssetId, blocks of 256 Ki
     HpakWriter w = makeWriter();
     REQUIRE(w.add(guidOf(1), text(1, 1)).ok());
     REQUIRE(w.add(guidOf(2), text(4096, 2)).ok());
-    REQUIRE(w.add(guidOf(3), noise(4097, 3)).ok());               // raw: 2 pages
-    REQUIRE(w.add(guidOf(4), text(1024 * 1024 + 5, 4)).ok());    // zstd: 5 blocks
-    REQUIRE(w.add(guidOf(5), noise(256 * 1024 + 1, 5)).ok());     // raw: 2 blocks, 256 KiB + 1
+    REQUIRE(w.add(guidOf(3), noise(4097, 3)).ok());           // raw: 2 pages
+    REQUIRE(w.add(guidOf(4), text(1024 * 1024 + 5, 4)).ok()); // zstd: 5 blocks
+    REQUIRE(w.add(guidOf(5), noise(256 * 1024 + 1, 5)).ok()); // raw: 2 blocks, 256 KiB + 1
     REQUIRE(w.add(guidOf(6), {}).ok());
     const std::vector<u8> bytes = w.build().value();
     CHECK(bytes.size() == w.size());
@@ -197,7 +197,8 @@ TEST_CASE("hpak writer: the layout enforces the 2 GiB limit exactly, without wri
     const auto exact = planHpakLayout(std::vector<u64>{dataBytes}, assetBlocks);
     REQUIRE(exact.ok());
     CHECK(exact->fileSize == hpak::kMaxPakSize);
-    CHECK(planHpakLayout(std::vector<u64>{dataBytes}, assetBlocks + 1).errorCode() == ErrorCode::LimitExceeded);
+    CHECK(planHpakLayout(std::vector<u64>{dataBytes}, assetBlocks + 1).errorCode() ==
+          ErrorCode::LimitExceeded);
     // A single blob above 2 GiB and counts above u32 are refused without overflowing.
     CHECK(planHpakLayout(std::vector<u64>{~u64(0)}, 1).errorCode() == ErrorCode::LimitExceeded);
     CHECK(planHpakLayout(std::vector<u64>{4096, ~u64(0) - 4096}, 2).errorCode() == ErrorCode::LimitExceeded);
@@ -236,9 +237,9 @@ TEST_CASE("hpak writer: resealHpak restores the checksums of a patched pak") {
     REQUIRE(w.add(guidOf(1), noise(5000, 1)).ok());
     std::vector<u8> bytes = w.build().value();
     const u64 blob = hpak::kHeaderBlockSize;
-    bytes[blob + 3] ^= 1;                        // a data byte: its pak block checksum now fails
+    bytes[blob + 3] ^= 1; // a data byte: its pak block checksum now fails
     const u64 contentBuildAt = 16;
-    bytes[contentBuildAt] ^= 1;                  // a header field: the header checksum now fails
+    bytes[contentBuildAt] ^= 1; // a header field: the header checksum now fails
     CHECK(HpakReader::open(makeHpakMemorySource(bytes)).errorCode() == ErrorCode::Corrupt);
     resealHpak(bytes);
     const auto pak = open(bytes);

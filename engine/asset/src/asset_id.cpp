@@ -12,9 +12,7 @@ AssetId AssetId::fromGuid(const Guid& guid) noexcept {
     return AssetId{hash64(bytes.data(), bytes.size())};
 }
 
-std::string AssetId::toString() const {
-    return std::format("{:016x}", m_value);
-}
+std::string AssetId::toString() const { return std::format("{:016x}", m_value); }
 
 Result<AssetId> AssetIdSet::check(const Guid& guid) const {
     if (guid.isNil()) return Error{ErrorCode::InvalidArgument, "the nil GUID is not an asset"};
@@ -23,9 +21,10 @@ Result<AssetId> AssetIdSet::check(const Guid& guid) const {
         return makeError(ErrorCode::InvalidArgument, "asset {} folds to the reserved AssetId 0", guid);
     const auto it = m_byId.find(id.value());
     if (it == m_byId.end()) return id;
-    if (it->second == guid) return makeError(ErrorCode::AlreadyExists, "asset {} is already in the set", guid);
-    return makeError(ErrorCode::InvalidArgument, "AssetId collision: assets {} and {} both fold to {}", it->second,
-                     guid, id);
+    if (it->second == guid)
+        return makeError(ErrorCode::AlreadyExists, "asset {} is already in the set", guid);
+    return makeError(ErrorCode::InvalidArgument, "AssetId collision: assets {} and {} both fold to {}",
+                     it->second, guid, id);
 }
 
 Result<AssetId> AssetIdSet::insert(const Guid& guid) {

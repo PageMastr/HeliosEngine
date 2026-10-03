@@ -38,12 +38,14 @@ void mutate(helios::Xoshiro256& rng, std::vector<uint8_t>& d, const std::vector<
         const size_t n = d.size();
         switch (rng.nextU32() % 6) {
         case 0: // flip a bit; pak headers and TOCs are dense, so aim half the flips at the first 4 KiB
-            if (n) d[(rng.nextU32() % 2 ? rng.nextU32() % std::min<size_t>(n, 4096) : rng.nextU32() % n)] ^=
-                static_cast<uint8_t>(1u << (rng.nextU32() % 8));
+            if (n)
+                d[(rng.nextU32() % 2 ? rng.nextU32() % std::min<size_t>(n, 4096) : rng.nextU32() % n)] ^=
+                    static_cast<uint8_t>(1u << (rng.nextU32() % 8));
             break;
         case 1: // overwrite with an interesting byte
             if (n) {
-                static const uint8_t kInteresting[] = {0x00, 0x01, 0x02, 0x03, 0x0F, 0x10, 0x7F, 0x80, 0xFE, 0xFF};
+                static const uint8_t kInteresting[] = {0x00, 0x01, 0x02, 0x03, 0x0F,
+                                                       0x10, 0x7F, 0x80, 0xFE, 0xFF};
                 d[rng.nextU32() % n] = kInteresting[rng.nextU32() % sizeof(kInteresting)];
             }
             break;
@@ -58,7 +60,8 @@ void mutate(helios::Xoshiro256& rng, std::vector<uint8_t>& d, const std::vector<
             if (n) {
                 const size_t at = rng.nextU32() % n;
                 const size_t len = std::min<size_t>(n - at, 1 + rng.nextU32() % 32);
-                d.erase(d.begin() + static_cast<std::ptrdiff_t>(at), d.begin() + static_cast<std::ptrdiff_t>(at + len));
+                d.erase(d.begin() + static_cast<std::ptrdiff_t>(at),
+                        d.begin() + static_cast<std::ptrdiff_t>(at + len));
             }
             break;
         case 4: // splice with another input
@@ -68,7 +71,8 @@ void mutate(helios::Xoshiro256& rng, std::vector<uint8_t>& d, const std::vector<
                     const size_t from = rng.nextU32() % other.size();
                     const size_t len = std::min<size_t>(other.size() - from, 1 + rng.nextU32() % 64);
                     const size_t at = n ? rng.nextU32() % (n + 1) : 0;
-                    d.insert(d.begin() + static_cast<std::ptrdiff_t>(at), other.begin() + static_cast<std::ptrdiff_t>(from),
+                    d.insert(d.begin() + static_cast<std::ptrdiff_t>(at),
+                             other.begin() + static_cast<std::ptrdiff_t>(from),
                              other.begin() + static_cast<std::ptrdiff_t>(from + len));
                 }
             }
@@ -90,10 +94,14 @@ int main(int argc, char** argv) {
     std::vector<std::filesystem::path> paths;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--smoke" && i + 1 < argc) smoke = std::stoll(argv[++i]);
-        else if (a == "--seed" && i + 1 < argc) seed = std::stoull(argv[++i]);
-        else if (a == "--make-seeds" && i + 1 < argc) makeSeeds = argv[++i];
-        else paths.emplace_back(a);
+        if (a == "--smoke" && i + 1 < argc)
+            smoke = std::stoll(argv[++i]);
+        else if (a == "--seed" && i + 1 < argc)
+            seed = std::stoull(argv[++i]);
+        else if (a == "--make-seeds" && i + 1 < argc)
+            makeSeeds = argv[++i];
+        else
+            paths.emplace_back(a);
     }
     std::vector<std::vector<uint8_t>> inputs;
     if (!makeSeeds.empty()) {
@@ -103,7 +111,8 @@ int main(int argc, char** argv) {
             char name[32];
             std::snprintf(name, sizeof(name), "seed_%03zu.bin", i);
             std::ofstream out(std::filesystem::path(makeSeeds) / name, std::ios::binary);
-            out.write(reinterpret_cast<const char*>(inputs[i].data()), static_cast<std::streamsize>(inputs[i].size()));
+            out.write(reinterpret_cast<const char*>(inputs[i].data()),
+                      static_cast<std::streamsize>(inputs[i].size()));
         }
         helios::log::setLevel(helios::log::Level::Info); // the target quiets logging while it runs
         HELIOS_LOG_INFO("wrote {} seeds to {}", inputs.size(), makeSeeds);

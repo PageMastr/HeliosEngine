@@ -63,8 +63,9 @@ void exercise(const u8* data, usize size) {
     for (usize i = 0; i < entries.size(); ++i) {
         const HpakEntry& e = entries[i];
         if (i > 0 && !(entries[i - 1].id < e.id)) fail();
-        if (e.offset % hpak::kBlobAlignment != 0 || e.offset < hpak::kHeaderBlockSize || e.offset > info.dataEnd ||
-            e.compSize > info.dataEnd - e.offset || e.rawSize > hpak::kMaxAssetSize)
+        if (e.offset % hpak::kBlobAlignment != 0 || e.offset < hpak::kHeaderBlockSize ||
+            e.offset > info.dataEnd || e.compSize > info.dataEnd - e.offset ||
+            e.rawSize > hpak::kMaxAssetSize)
             fail();
         if (r.find(e.id) != &e) fail();
     }
@@ -92,7 +93,8 @@ void exercise(const u8* data, usize size) {
         const std::optional<AssetLocation> loc = table.find(entries[i].id);
         if (!loc || loc->mount != *top || loc->entry->id != entries[i].id) fail();
     }
-    if (!table.unmount(*top) || table.find(entries.empty() ? AssetId{1} : entries[0].id).has_value() == entries.empty())
+    if (!table.unmount(*top) ||
+        table.find(entries.empty() ? AssetId{1} : entries[0].id).has_value() == entries.empty())
         fail();
 }
 
@@ -108,7 +110,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 }
 
 void heliosFuzzSeeds(std::vector<std::vector<uint8_t>>& out) {
-    const auto guid = [](u64 n) { return Guid(0x4000000000004000ull | (n << 16), 0x8000000000000000ull | n); };
+    const auto guid = [](u64 n) {
+        return Guid(0x4000000000004000ull | (n << 16), 0x8000000000000000ull | n);
+    };
     const auto text = [](usize size, u32 seed) {
         std::vector<u8> v(size);
         for (usize i = 0; i < size; ++i) v[i] = static_cast<u8>("fuzz seed asset "[(i + seed) % 16]);
@@ -136,18 +140,20 @@ void heliosFuzzSeeds(std::vector<std::vector<uint8_t>>& out) {
         return w.build().value();
     };
     using P = asset::HpakPlatform;
-    out.push_back(pak({}, P::PcClient, {}));                                         // empty pak
-    out.push_back(pak({{1, text(40, 1), {}}}, P::PcClient, {}));                    // one small zstd asset
+    out.push_back(pak({}, P::PcClient, {}));                     // empty pak
+    out.push_back(pak({{1, text(40, 1), {}}}, P::PcClient, {})); // one small zstd asset
     out.push_back(pak({{1, text(900, 1), {}}, {2, {}, {}}, {3, noise(3000, 3), {}}, {4, {7}, {}}}, P::Server,
-                      {2, 0xABCDEF, 3}));                                             // mixed codecs, empty asset
-    out.push_back(pak({{5, text(300 * 1024, 5), {}}, {6, text(70, 6), {}}}, P::Editor, {1, 9, 0})); // 2 zstd blocks
-    out.push_back(pak({{7, noise(30 * 1024, 7), {0, 0, 0, 2}}, {8, noise(30 * 1024, 8), {0, 0, 0, 1}},
+                      {2, 0xABCDEF, 3})); // mixed codecs, empty asset
+    out.push_back(
+        pak({{5, text(300 * 1024, 5), {}}, {6, text(70, 6), {}}}, P::Editor, {1, 9, 0})); // 2 zstd blocks
+    out.push_back(pak({{7, noise(30 * 1024, 7), {0, 0, 0, 2}},
+                       {8, noise(30 * 1024, 8), {0, 0, 0, 1}},
                        {9, noise(30 * 1024, 9), {0, 0, 0, 0}}},
-                      P::PcClient, {}));                                              // spans two pak blocks
+                      P::PcClient, {})); // spans two pak blocks
     std::vector<u8> damaged = out.back();
-    damaged[hpak::kHeaderBlockSize + 70 * 1024] ^= 0x10;                              // second pak block fails
+    damaged[hpak::kHeaderBlockSize + 70 * 1024] ^= 0x10; // second pak block fails
     out.push_back(std::move(damaged));
     std::vector<u8> truncated = out[2];
     truncated.resize(hpak::kHeaderBlockSize);
-    out.push_back(std::move(truncated));                                              // header only
+    out.push_back(std::move(truncated)); // header only
 }

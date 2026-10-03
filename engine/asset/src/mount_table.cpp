@@ -21,7 +21,8 @@ Result<PakMountId> PakMountTable::mount(std::shared_ptr<const HpakReader> pak) {
 bool PakMountTable::unmount(PakMountId id) {
     std::shared_ptr<const HpakReader> dropped; // released after the lock
     std::unique_lock lock(m_mutex);
-    const auto it = std::find_if(m_mounts.begin(), m_mounts.end(), [id](const Mounted& m) { return m.id == id; });
+    const auto it =
+        std::find_if(m_mounts.begin(), m_mounts.end(), [id](const Mounted& m) { return m.id == id; });
     if (it == m_mounts.end()) return false;
     dropped = std::move(it->pak);
     m_mounts.erase(it);

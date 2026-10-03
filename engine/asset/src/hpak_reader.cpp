@@ -21,19 +21,23 @@ constexpr u64 kMaxStoredBlock = ZSTD_COMPRESSBOUND(kAssetBlockSize);
 
 class FileSource final : public IHpakSource {
 public:
-    FileSource(fs::File file, u64 size) : m_file(std::move(file)), m_size(size), m_name(fs::pathToGenericUtf8(m_file.path())) {}
+    FileSource(fs::File file, u64 size)
+        : m_file(std::move(file)), m_size(size), m_name(fs::pathToGenericUtf8(m_file.path())) {}
 
     u64 size() const override { return m_size; }
 
     Result<void> readAt(u64 offset, std::span<u8> out) const override {
         if (offset > m_size || out.size() > m_size - offset)
-            return makeError(ErrorCode::EndOfFile, "'{}': read of {} bytes at {} runs past the end ({} bytes)", m_name,
-                             out.size(), offset, m_size);
+            return makeError(ErrorCode::EndOfFile,
+                             "'{}': read of {} bytes at {} runs past the end ({} bytes)", m_name, out.size(),
+                             offset, m_size);
         usize done = 0;
         while (done < out.size()) {
-            HELIOS_TRY_ASSIGN(const usize got, m_file.readAt(offset + done, out.data() + done, out.size() - done));
+            HELIOS_TRY_ASSIGN(const usize got,
+                              m_file.readAt(offset + done, out.data() + done, out.size() - done));
             if (got == 0)
-                return makeError(ErrorCode::EndOfFile, "'{}': unexpected end of file at {}", m_name, offset + done);
+                return makeError(ErrorCode::EndOfFile, "'{}': unexpected end of file at {}", m_name,
+                                 offset + done);
             done += got;
         }
         return {};
@@ -49,14 +53,16 @@ private:
 
 class MemorySource final : public IHpakSource {
 public:
-    MemorySource(std::vector<u8> bytes, std::string name) : m_bytes(std::move(bytes)), m_name("memory:" + std::move(name)) {}
+    MemorySource(std::vector<u8> bytes, std::string name)
+        : m_bytes(std::move(bytes)), m_name("memory:" + std::move(name)) {}
 
     u64 size() const override { return m_bytes.size(); }
 
     Result<void> readAt(u64 offset, std::span<u8> out) const override {
         if (offset > m_bytes.size() || out.size() > m_bytes.size() - offset)
-            return makeError(ErrorCode::EndOfFile, "'{}': read of {} bytes at {} runs past the end ({} bytes)", m_name,
-                             out.size(), offset, m_bytes.size());
+            return makeError(ErrorCode::EndOfFile,
+                             "'{}': read of {} bytes at {} runs past the end ({} bytes)", m_name, out.size(),
+                             offset, m_bytes.size());
         if (!out.empty()) std::memcpy(out.data(), m_bytes.data() + offset, out.size());
         return {};
     }
@@ -110,7 +116,8 @@ Result<std::shared_ptr<HpakReader>> HpakReader::open(std::unique_ptr<IHpakSource
     return reader;
 }
 
-Result<std::shared_ptr<HpakReader>> HpakReader::openFile(const fs::Path& path, const HpakOpenOptions& options) {
+Result<std::shared_ptr<HpakReader>> HpakReader::openFile(const fs::Path& path,
+                                                         const HpakOpenOptions& options) {
     HELIOS_TRY_ASSIGN(std::unique_ptr<IHpakSource> source, openHpakFile(path));
     return open(std::move(source), options);
 }
@@ -121,10 +128,11 @@ Result<void> HpakReader::parse(const HpakOpenOptions& options) {
     };
     const u64 fileSize = m_source->size();
     if (fileSize < kHeaderBlockSize)
-        return corrupt(std::format("{} bytes is shorter than the {}-byte header block", fileSize, kHeaderBlockSize));
+        return corrupt(
+            std::format("{} bytes is shorter than the {}-byte header block", fileSize, kHeaderBlockSize));
     if (fileSize > kMaxPakSize)
-        return makeError(ErrorCode::LimitExceeded, "'{}': {} bytes is above the 2 GiB .hpak limit (02 §6.3)", m_name,
-                         fileSize);
+        return makeError(ErrorCode::LimitExceeded, "'{}': {} bytes is above the 2 GiB .hpak limit (02 §6.3)",
+                         m_name, fileSize);
 
     std::vector<u8> block(kHeaderBlockSize);
     HELIOS_TRY(m_source->readAt(0, block));
@@ -132,8 +140,8 @@ Result<void> HpakReader::parse(const HpakOpenOptions& options) {
     const Header h = decodeHeader(fields);
     if (h.magic != kMagic) return corrupt("not an .hpak file (bad magic)");
     if (h.version != kVersion)
-        return makeError(ErrorCode::VersionMismatch, "'{}': .hpak format version {}, this reader reads {}", m_name,
-                         h.version, kVersion);
+        return makeError(ErrorCode::VersionMismatch, "'{}': .hpak format version {}, this reader reads {}",
+                         m_name, h.version, kVersion);
     if (computeHeaderHash(fields) != h.headerHash) return corrupt("header checksum mismatch");
     if (h.reserved0 != 0 || h.flags != 0 || h.reserved2 != 0 || !allZero(h.reserved1, sizeof(h.reserved1)) ||
         !allZero(block.data() + kHeaderBytes, block.size() - kHeaderBytes))
@@ -142,24 +150,27 @@ Result<void> HpakReader::parse(const HpakOpenOptions& options) {
         return corrupt(std::format("unknown platform {}", h.platform));
     const auto platform = static_cast<HpakPlatform>(h.platform);
     if (options.platform && *options.platform != platform)
-        return makeError(ErrorCode::Unsupported, "'{}': cooked for {}, expected {}", m_name, hpakPlatformName(platform),
-                         hpakPlatformName(*options.platform));
-    if (h.tags.tier > kMaxTier) return corrupt(std::format("tier {} (tiers are 0..{})", h.tags.tier, kMaxTier));
+        return makeError(ErrorCode::Unsupported, "'{}': cooked for {}, expected {}", m_name,
+                         hpakPlatformName(platform), hpakPlatformName(*options.platform));
+    if (h.tags.tier > kMaxTier)
+        return corrupt(std::format("tier {} (tiers are 0..{})", h.tags.tier, kMaxTier));
 
     // Layout: [header block][blob region][TOC], the TOC 4 KiB aligned and ending the file.
     if (h.tocOffset < kHeaderBlockSize || h.tocOffset > fileSize || h.tocOffset % kBlobAlignment != 0)
         return corrupt(std::format("TOC offset {} is not a 4 KiB aligned offset in [{}, {}]", h.tocOffset,
                                    kHeaderBlockSize, fileSize));
     if (h.tocSize != fileSize - h.tocOffset)
-        return corrupt(std::format("TOC [{}, +{}) does not end the file ({} bytes)", h.tocOffset, h.tocSize, fileSize));
+        return corrupt(
+            std::format("TOC [{}, +{}) does not end the file ({} bytes)", h.tocOffset, h.tocSize, fileSize));
     const u64 dataEnd = h.tocOffset;
     if (h.pakBlockCount != hpak::pakBlockCount(dataEnd - kHeaderBlockSize))
         return corrupt(std::format("{} pak block checksums for a {}-byte blob region", h.pakBlockCount,
                                    dataEnd - kHeaderBlockSize));
     if (h.tocSize != hpak::tocSize(h.assetCount, h.assetBlockCount, h.pakBlockCount))
-        return corrupt(std::format("TOC is {} bytes, its counts ({} assets, {} asset blocks, {} pak blocks) need {}",
-                                   h.tocSize, h.assetCount, h.assetBlockCount, h.pakBlockCount,
-                                   hpak::tocSize(h.assetCount, h.assetBlockCount, h.pakBlockCount)));
+        return corrupt(
+            std::format("TOC is {} bytes, its counts ({} assets, {} asset blocks, {} pak blocks) need {}",
+                        h.tocSize, h.assetCount, h.assetBlockCount, h.pakBlockCount,
+                        hpak::tocSize(h.assetCount, h.assetBlockCount, h.pakBlockCount)));
 
     // The TOC is read and checked whole; its size is bounded by the file's.
     std::vector<u8> toc(static_cast<usize>(h.tocSize));
@@ -170,44 +181,55 @@ Result<void> HpakReader::parse(const HpakOpenOptions& options) {
     const u8* sizeBytes = entryBytes + u64(h.assetCount) * kTocEntryBytes;
     const u8* hashBytes = sizeBytes + u64(h.assetBlockCount) * kBlockSizeBytes;
     m_blockSizes.resize(h.assetBlockCount);
-    for (u32 i = 0; i < h.assetBlockCount; ++i) m_blockSizes[i] = loadLE<u32>(sizeBytes + u64(i) * kBlockSizeBytes);
+    for (u32 i = 0; i < h.assetBlockCount; ++i)
+        m_blockSizes[i] = loadLE<u32>(sizeBytes + u64(i) * kBlockSizeBytes);
     m_blockHashes.resize(h.pakBlockCount);
-    for (u32 i = 0; i < h.pakBlockCount; ++i) m_blockHashes[i] = loadLE<u64>(hashBytes + u64(i) * kBlockHashBytes);
+    for (u32 i = 0; i < h.pakBlockCount; ++i)
+        m_blockHashes[i] = loadLE<u64>(hashBytes + u64(i) * kBlockHashBytes);
 
     m_entries.resize(h.assetCount);
     u64 nextBlock = 0;
     for (u32 i = 0; i < h.assetCount; ++i) {
-        const RawEntry raw = decodeEntry(std::span<const u8, kTocEntryBytes>(entryBytes + u64(i) * kTocEntryBytes,
-                                                                             kTocEntryBytes));
+        const RawEntry raw = decodeEntry(
+            std::span<const u8, kTocEntryBytes>(entryBytes + u64(i) * kTocEntryBytes, kTocEntryBytes));
         const HpakEntry& e = raw.entry;
-        const auto bad = [&](std::string what) { return corrupt(std::format("TOC entry {} ({}): {}", i, e.id, what)); };
+        const auto bad = [&](std::string what) {
+            return corrupt(std::format("TOC entry {} ({}): {}", i, e.id, what));
+        };
         if (!e.id.isValid()) return bad("AssetId 0 is reserved");
         if (i > 0 && e.id <= m_entries[i - 1].id) return bad("ids are not strictly ascending");
         if (raw.codec > toUnderlying(HpakCodec::Zstd)) return bad(std::format("unknown codec {}", raw.codec));
         if (!allZero(raw.reserved, sizeof(raw.reserved))) return bad("reserved bytes are not zero");
-        if (e.rawSize > kMaxAssetSize) return bad(std::format("decoded size {} is above the 2 GiB asset limit", e.rawSize));
+        if (e.rawSize > kMaxAssetSize)
+            return bad(std::format("decoded size {} is above the 2 GiB asset limit", e.rawSize));
         if (e.blockCount != assetBlockCount(e.rawSize))
             return bad(std::format("{} blocks for {} bytes", e.blockCount, e.rawSize));
-        if (e.firstBlock != nextBlock) return bad(std::format("first block {}, expected {}", e.firstBlock, nextBlock));
+        if (e.firstBlock != nextBlock)
+            return bad(std::format("first block {}, expected {}", e.firstBlock, nextBlock));
         nextBlock += e.blockCount;
         if (nextBlock > h.assetBlockCount) return bad("its blocks run past the block-size table");
         if (e.offset < kHeaderBlockSize || e.offset > dataEnd || e.offset % kBlobAlignment != 0)
-            return bad(std::format("blob offset {} is not a 4 KiB aligned offset in the blob region", e.offset));
+            return bad(
+                std::format("blob offset {} is not a 4 KiB aligned offset in the blob region", e.offset));
         if (e.compSize > dataEnd - e.offset)
-            return bad(std::format("blob [{}, +{}) runs past the blob region (ends at {})", e.offset, e.compSize, dataEnd));
+            return bad(std::format("blob [{}, +{}) runs past the blob region (ends at {})", e.offset,
+                                   e.compSize, dataEnd));
         u64 stored = 0;
         for (u32 k = 0; k < e.blockCount; ++k) {
             const u32 size = m_blockSizes[e.firstBlock + k];
             const u64 rawLen = std::min(kAssetBlockSize, e.rawSize - u64(k) * kAssetBlockSize);
-            if (raw.codec == toUnderlying(HpakCodec::None) ? size != rawLen : (size == 0 || size > kMaxStoredBlock))
+            if (raw.codec == toUnderlying(HpakCodec::None) ? size != rawLen
+                                                           : (size == 0 || size > kMaxStoredBlock))
                 return bad(std::format("block {} stores {} bytes for {} raw bytes", k, size, rawLen));
             stored += size;
         }
-        if (stored != e.compSize) return bad(std::format("blocks store {} bytes, the blob is {}", stored, e.compSize));
+        if (stored != e.compSize)
+            return bad(std::format("blocks store {} bytes, the blob is {}", stored, e.compSize));
         m_entries[i] = e;
     }
     if (nextBlock != h.assetBlockCount)
-        return corrupt(std::format("the block-size table has {} entries, the assets use {}", h.assetBlockCount, nextBlock));
+        return corrupt(std::format("the block-size table has {} entries, the assets use {}",
+                                   h.assetBlockCount, nextBlock));
 
     m_blockStates = std::make_unique<std::atomic<u8>[]>(h.pakBlockCount);
     m_info.platform = platform;
@@ -239,17 +261,19 @@ bool HpakReader::owns(const HpakEntry& entry) const noexcept {
 }
 
 Result<std::vector<u8>> HpakReader::read(const HpakEntry& entry) const {
-    if (!owns(entry)) return makeError(ErrorCode::InvalidArgument, "'{}': the entry is not one of this pak's", m_name);
+    if (!owns(entry))
+        return makeError(ErrorCode::InvalidArgument, "'{}': the entry is not one of this pak's", m_name);
     std::vector<u8> out(static_cast<usize>(entry.rawSize)); // ≤ kMaxAssetSize (checked at open)
     HELIOS_TRY(readInto(entry, out));
     return out;
 }
 
 Result<void> HpakReader::readInto(const HpakEntry& entry, std::span<u8> out) const {
-    if (!owns(entry)) return makeError(ErrorCode::InvalidArgument, "'{}': the entry is not one of this pak's", m_name);
+    if (!owns(entry))
+        return makeError(ErrorCode::InvalidArgument, "'{}': the entry is not one of this pak's", m_name);
     if (out.size() != entry.rawSize)
-        return makeError(ErrorCode::InvalidArgument, "'{}': asset {} is {} bytes, the buffer {}", m_name, entry.id,
-                         entry.rawSize, out.size());
+        return makeError(ErrorCode::InvalidArgument, "'{}': asset {} is {} bytes, the buffer {}", m_name,
+                         entry.id, entry.rawSize, out.size());
     std::vector<u8> scratch;
     u64 rel = 0;
     for (u32 k = 0; k < entry.blockCount; ++k) {
@@ -268,13 +292,15 @@ Result<void> HpakReader::readInto(const HpakEntry& entry, std::span<u8> out) con
                 return makeError(ErrorCode::Corrupt, "'{}': asset {} block {}: zstd: {}", m_name, entry.id, k,
                                  ZSTD_getErrorName(n));
             if (n != rawLen)
-                return makeError(ErrorCode::Corrupt, "'{}': asset {} block {} decodes to {} bytes, expected {}", m_name,
-                                 entry.id, k, n, rawLen);
+                return makeError(ErrorCode::Corrupt,
+                                 "'{}': asset {} block {} decodes to {} bytes, expected {}", m_name, entry.id,
+                                 k, n, rawLen);
         }
         rel += stored;
     }
     if (hash128(out.data(), out.size()) != entry.cookedHash)
-        return makeError(ErrorCode::Corrupt, "'{}': asset {} does not match its cooked hash", m_name, entry.id);
+        return makeError(ErrorCode::Corrupt, "'{}': asset {} does not match its cooked hash", m_name,
+                         entry.id);
     return {};
 }
 
@@ -310,7 +336,8 @@ Result<void> HpakReader::verifyBlock(u32 index, std::span<u8> bytes) const {
     std::atomic<u8>& state = m_blockStates[index];
     const u64 offset = blockOffset(index);
     const auto pending = [&] {
-        return makeError(ErrorCode::Busy, "'{}': pak block {} (offset {}) is being re-fetched", m_name, index, offset);
+        return makeError(ErrorCode::Busy, "'{}': pak block {} (offset {}) is being re-fetched", m_name, index,
+                         offset);
     };
     const auto bad = [&](std::string_view why) {
         return makeError(ErrorCode::Corrupt, "'{}': pak block {} (offset {}) {}", m_name, index, offset, why);
@@ -338,8 +365,9 @@ Result<void> HpakReader::verifyBlock(u32 index, std::span<u8> bytes) const {
         if (hash64(bytes.data(), bytes.size()) == expected) return {};
         return bad("changed after it was verified");
     }
-    HELIOS_LOG_WARN("hpak '{}': pak block {} (offset {}, {} bytes) failed its checksum ({:016x}, expected {:016x})",
-                    m_name, index, offset, bytes.size(), actual, expected);
+    HELIOS_LOG_WARN(
+        "hpak '{}': pak block {} (offset {}, {} bytes) failed its checksum ({:016x}, expected {:016x})",
+        m_name, index, offset, bytes.size(), actual, expected);
     const HpakBadBlock info{this, index, offset, bytes.size(), expected, actual};
     const RefetchStatus status = m_refetcher ? m_refetcher->refetch(info) : RefetchStatus::Failed;
     if (status == RefetchStatus::Repaired) {
@@ -361,7 +389,8 @@ Result<void> HpakReader::verifyBlock(u32 index, std::span<u8> bytes) const {
 Result<void> HpakReader::verifyAll() const {
     std::vector<u8> scratch;
     for (u32 b = 0; b < m_info.pakBlockCount; ++b) {
-        if (m_blockStates[b].load(std::memory_order_acquire) == toUnderlying(HpakBlockState::Verified)) continue;
+        if (m_blockStates[b].load(std::memory_order_acquire) == toUnderlying(HpakBlockState::Verified))
+            continue;
         const u64 offset = blockOffset(b);
         scratch.resize(static_cast<usize>(std::min(kPakBlockSize, m_info.dataEnd - offset)));
         HELIOS_TRY(m_source->readAt(offset, scratch));

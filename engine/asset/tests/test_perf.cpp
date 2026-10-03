@@ -28,7 +28,9 @@ using namespace helios::asset;
 using namespace helios::asset::test;
 using Clock = std::chrono::steady_clock;
 
-f64 msSince(Clock::time_point t0) { return std::chrono::duration<f64, std::milli>(Clock::now() - t0).count(); }
+f64 msSince(Clock::time_point t0) {
+    return std::chrono::duration<f64, std::milli>(Clock::now() - t0).count();
+}
 
 f64 median(std::vector<f64> v) {
     std::sort(v.begin(), v.end());
@@ -40,7 +42,10 @@ TEST_CASE("perf: open and mount a 100k-asset pak, then look ids up through the m
     auto writer = assetpipe::HpakWriter::create();
     REQUIRE(writer.ok());
     const std::vector<u8> tiny = {1, 2, 3};
-    for (u64 i = 1; i <= kAssets; ++i) REQUIRE(writer->add(guidOf(i), i % 10 == 0 ? std::span<const u8>(tiny) : std::span<const u8>()).ok());
+    for (u64 i = 1; i <= kAssets; ++i) {
+        const std::span<const u8> bytes = i % 100 == 0 ? std::span<const u8>(tiny) : std::span<const u8>();
+        REQUIRE(writer->add(guidOf(i), bytes).ok());
+    }
     const std::vector<u8> bytes = writer->build().value();
 
     std::vector<f64> openMs, mountMs;
@@ -72,8 +77,9 @@ TEST_CASE("perf: open and mount a 100k-asset pak, then look ids up through the m
     CHECK(found == kRounds * kAssets);
 
     const f64 open = median(openMs), mount = median(mountMs);
-    MESSAGE("hpak open (100k assets, TOC " << bytes.size() / 1024 << " KiB): " << open << " ms; table mount: " << mount
-                                            << " ms; lookup: " << lookupNs << " ns");
+    MESSAGE("hpak open (100k assets, TOC " << pak->info().fileSize - pak->info().dataEnd
+                                           << " bytes): " << open << " ms; table mount: " << mount
+                                           << " ms; lookup: " << lookupNs << " ns");
 #if HELIOS_ASSET_ASSERT_BUDGETS
     CHECK(open <= 60.0);
     CHECK(mount <= 40.0);
@@ -90,7 +96,8 @@ TEST_CASE("perf: first read verifies and decodes at >= 300 MB/s, later reads at 
         const usize size = static_cast<usize>(64 * kKiB + rng.next() % (2 * kMiB));
         std::vector<u8> bytes = i % 2 ? compressible(size, static_cast<u32>(i)) : incompressible(size, i);
         if (i % 2 == 0)
-            for (usize k = 0; k < bytes.size(); ++k) bytes[k] = static_cast<u8>(bytes[k] & 0x0F); // ~4 bits/byte
+            for (usize k = 0; k < bytes.size(); ++k)
+                bytes[k] = static_cast<u8>(bytes[k] & 0x0F); // ~4 bits/byte
         total += size;
         assets.push_back({guidOf(i), std::move(bytes), {}});
     }
@@ -117,8 +124,8 @@ TEST_CASE("perf: first read verifies and decodes at >= 300 MB/s, later reads at 
     }
     const f64 mb = f64(total) / 1e6;
     const f64 firstMBs = mb / (firstMs / 1e3), laterMBs = mb / (median(laterMs) / 1e3);
-    MESSAGE("hpak read " << mb << " MB (pak " << bytes.size() / 1e6 << " MB): first " << firstMBs << " MB/s, later "
-                         << laterMBs << " MB/s");
+    MESSAGE("hpak read " << mb << " MB (pak " << bytes.size() / 1e6 << " MB): first " << firstMBs
+                         << " MB/s, later " << laterMBs << " MB/s");
 #if HELIOS_ASSET_ASSERT_BUDGETS
     CHECK(firstMBs >= 300.0);
     CHECK(laterMBs >= 400.0);

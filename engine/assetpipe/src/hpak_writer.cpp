@@ -74,18 +74,20 @@ u64 pakSizeFor(u64 blobBytes, u64 assets, u64 assetBlocks) noexcept {
 }
 
 Error limitError(u64 size) {
-    return makeError(ErrorCode::LimitExceeded,
-                     "the pak would be {} bytes, above the 2 GiB .hpak limit ({} bytes, 02 §6.3); split the content "
-                     "across more paks",
-                     size, kMaxPakSize);
+    return makeError(
+        ErrorCode::LimitExceeded,
+        "the pak would be {} bytes, above the 2 GiB .hpak limit ({} bytes, 02 §6.3); split the content "
+        "across more paks",
+        size, kMaxPakSize);
 }
 
 } // namespace
 
 Result<HpakLayout> planHpakLayout(std::span<const u64> blobSizes, u64 assetBlocks) {
     if (blobSizes.size() > std::numeric_limits<u32>::max() || assetBlocks > std::numeric_limits<u32>::max())
-        return makeError(ErrorCode::LimitExceeded, "{} assets and {} asset blocks do not fit a pak's u32 counts",
-                         blobSizes.size(), assetBlocks);
+        return makeError(ErrorCode::LimitExceeded,
+                         "{} assets and {} asset blocks do not fit a pak's u32 counts", blobSizes.size(),
+                         assetBlocks);
     HpakLayout layout;
     layout.blobOffsets.reserve(blobSizes.size());
     u64 pos = kHeaderBlockSize;
@@ -106,19 +108,23 @@ Result<HpakLayout> planHpakLayout(std::span<const u64> blobSizes, u64 assetBlock
 
 Result<HpakWriter> HpakWriter::create(const HpakWriterOptions& options) {
     const u32 platform = toUnderlying(options.platform);
-    if (platform < toUnderlying(asset::HpakPlatform::PcClient) || platform > toUnderlying(asset::HpakPlatform::Editor))
+    if (platform < toUnderlying(asset::HpakPlatform::PcClient) ||
+        platform > toUnderlying(asset::HpakPlatform::Editor))
         return makeError(ErrorCode::InvalidArgument, "unknown pak platform {}", platform);
     if (options.tags.tier > kMaxTier)
-        return makeError(ErrorCode::InvalidArgument, "pak tier {} (tiers are 0..{})", options.tags.tier, kMaxTier);
+        return makeError(ErrorCode::InvalidArgument, "pak tier {} (tiers are 0..{})", options.tags.tier,
+                         kMaxTier);
     if (options.zstdLevel < 1 || options.zstdLevel > 19)
         return makeError(ErrorCode::InvalidArgument, "zstd level {} (1..19)", options.zstdLevel);
     return HpakWriter(options);
 }
 
-Result<asset::AssetId> HpakWriter::add(const Guid& guid, std::span<const u8> cooked, const HpakAssetOrder& order) {
+Result<asset::AssetId> HpakWriter::add(const Guid& guid, std::span<const u8> cooked,
+                                       const HpakAssetOrder& order) {
     HELIOS_TRY_ASSIGN(const asset::AssetId id, m_ids.check(guid));
     if (order.tier > kMaxTier)
-        return makeError(ErrorCode::InvalidArgument, "asset {}: tier {} (tiers are 0..{})", guid, order.tier, kMaxTier);
+        return makeError(ErrorCode::InvalidArgument, "asset {}: tier {} (tiers are 0..{})", guid, order.tier,
+                         kMaxTier);
     if (cooked.size() > kMaxAssetSize)
         return makeError(ErrorCode::LimitExceeded, "asset {} is {} bytes, above the 2 GiB asset limit", guid,
                          cooked.size());
@@ -135,7 +141,7 @@ Result<asset::AssetId> HpakWriter::add(const Guid& guid, std::span<const u8> coo
         if (!cctx) return Error{ErrorCode::OutOfMemory, "ZSTD_createCCtx failed"};
         ZSTD_CCtx_reset(cctx, ZSTD_reset_session_and_parameters);
         ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, m_options.zstdLevel);
-        ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 0);    // the pak has its own checksums
+        ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 0); // the pak has its own checksums
         ZSTD_CCtx_setParameter(cctx, ZSTD_c_contentSizeFlag, 1);
         ZSTD_CCtx_setParameter(cctx, ZSTD_c_dictIDFlag, 0);
         a.blockSizes.reserve(static_cast<usize>(blocks));
@@ -156,17 +162,19 @@ Result<asset::AssetId> HpakWriter::add(const Guid& guid, std::span<const u8> coo
             a.codec = HpakCodec::None;
             a.stored.assign(cooked.begin(), cooked.end());
             for (u64 k = 0; k < blocks; ++k)
-                a.blockSizes[k] = static_cast<u32>(std::min(kAssetBlockSize, a.rawSize - k * kAssetBlockSize));
+                a.blockSizes[k] =
+                    static_cast<u32>(std::min(kAssetBlockSize, a.rawSize - k * kAssetBlockSize));
         }
     }
 
     const u64 blobBytes = m_blobBytes + alignUp<u64>(a.stored.size(), kBlobAlignment);
     const u64 size = pakSizeFor(blobBytes, m_assets.size() + 1, m_assetBlocks + blocks);
     if (size > kMaxPakSize)
-        return makeError(ErrorCode::LimitExceeded,
-                         "adding asset {} ({} bytes, {} stored) would make the pak {} bytes, above the 2 GiB .hpak "
-                         "limit ({} bytes, 02 §6.3); split the content across more paks",
-                         guid, a.rawSize, a.stored.size(), size, kMaxPakSize);
+        return makeError(
+            ErrorCode::LimitExceeded,
+            "adding asset {} ({} bytes, {} stored) would make the pak {} bytes, above the 2 GiB .hpak "
+            "limit ({} bytes, 02 §6.3); split the content across more paks",
+            guid, a.rawSize, a.stored.size(), size, kMaxPakSize);
     HELIOS_TRY(m_ids.insert(guid)); // cannot fail: check() passed and nothing was added since
     m_blobBytes = blobBytes;
     m_assetBlocks += blocks;
@@ -185,7 +193,8 @@ Result<HpakWriter::Plan> HpakWriter::plan() const {
         return std::tie(a->order.tier, a->order.group, a->order.language, a->order.firstUse, a->guid) <
                std::tie(b->order.tier, b->order.group, b->order.language, b->order.firstUse, b->guid);
     });
-    std::sort(p.tocOrder.begin(), p.tocOrder.end(), [](const Asset* a, const Asset* b) { return a->id < b->id; });
+    std::sort(p.tocOrder.begin(), p.tocOrder.end(),
+              [](const Asset* a, const Asset* b) { return a->id < b->id; });
 
     std::vector<u64> sizes;
     sizes.reserve(p.blobOrder.size());
@@ -298,7 +307,8 @@ void resealHpak(std::span<u8> pak) noexcept {
                              hash64(pak.data() + at, static_cast<usize>(len)));
             }
         }
-        storeLE<u64>(pak.data() + kTocHashOffset, hash64(pak.data() + h.tocOffset, static_cast<usize>(h.tocSize)));
+        storeLE<u64>(pak.data() + kTocHashOffset,
+                     hash64(pak.data() + h.tocOffset, static_cast<usize>(h.tocSize)));
     }
     storeLE<u64>(pak.data() + kHeaderHashOffset, computeHeaderHash(fields));
 }

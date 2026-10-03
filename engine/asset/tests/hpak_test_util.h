@@ -17,15 +17,14 @@
 namespace helios::asset::test {
 
 /// A GUID made from a small number (deterministic test identities).
-inline Guid guidOf(u64 n) {
-    return Guid(0x4000000000004000ull | (n << 16), 0x8000000000000000ull | n);
-}
+inline Guid guidOf(u64 n) { return Guid(0x4000000000004000ull | (n << 16), 0x8000000000000000ull | n); }
 
 /// Bytes zstd shrinks well (repeating text with a counter).
 inline std::vector<u8> compressible(usize size, u32 seed = 1) {
     std::vector<u8> out(size);
     const std::string_view text = "helios asset pipeline test payload ";
-    for (usize i = 0; i < size; ++i) out[i] = static_cast<u8>(text[(i + seed) % text.size()] + (i / 4096) % 3);
+    for (usize i = 0; i < size; ++i)
+        out[i] = static_cast<u8>(text[(i + seed) % text.size()] + (i / 4096) % 3);
     return out;
 }
 
@@ -44,10 +43,12 @@ struct TestAsset {
 };
 
 /// Builds a pak from `assets` with `options`; fails the calling test on error.
-inline std::vector<u8> buildPak(const std::vector<TestAsset>& assets, const assetpipe::HpakWriterOptions& options = {}) {
+inline std::vector<u8> buildPak(const std::vector<TestAsset>& assets,
+                                const assetpipe::HpakWriterOptions& options = {}) {
     auto writer = assetpipe::HpakWriter::create(options);
     HELIOS_VERIFY(writer.ok(), "HpakWriter::create failed");
-    for (const TestAsset& a : assets) HELIOS_VERIFY(writer->add(a.guid, a.bytes, a.order).ok(), "HpakWriter::add failed");
+    for (const TestAsset& a : assets)
+        HELIOS_VERIFY(writer->add(a.guid, a.bytes, a.order).ok(), "HpakWriter::add failed");
     auto bytes = writer->build();
     HELIOS_VERIFY(bytes.ok(), "HpakWriter::build failed");
     return std::move(bytes).value();
@@ -65,7 +66,8 @@ public:
     u64 size() const override { return m_bytes.size(); }
     Result<void> readAt(u64 offset, std::span<u8> out) const override {
         std::lock_guard lock(m_mutex);
-        if (offset > m_bytes.size() || out.size() > m_bytes.size() - offset) return Error{ErrorCode::EndOfFile};
+        if (offset > m_bytes.size() || out.size() > m_bytes.size() - offset)
+            return Error{ErrorCode::EndOfFile};
         std::copy_n(m_bytes.begin() + static_cast<std::ptrdiff_t>(offset), out.size(), out.begin());
         ++m_reads;
         return {};

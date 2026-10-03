@@ -60,11 +60,11 @@ class HpakReader;
 /// A pak block that failed its checksum.
 struct HpakBadBlock {
     const HpakReader* pak = nullptr;
-    u32 index = 0;     ///< Pak block index.
-    u64 offset = 0;    ///< File offset of the block.
-    u64 size = 0;      ///< Block size (the last block of the blob region may be short).
-    u64 expected = 0;  ///< XXH3-64 from the TOC.
-    u64 actual = 0;    ///< XXH3-64 of the bytes read.
+    u32 index = 0;    ///< Pak block index.
+    u64 offset = 0;   ///< File offset of the block.
+    u64 size = 0;     ///< Block size (the last block of the blob region may be short).
+    u64 expected = 0; ///< XXH3-64 from the TOC.
+    u64 actual = 0;   ///< XXH3-64 of the bytes read.
 };
 
 /// What a refetch hook did about a bad block.
@@ -114,7 +114,8 @@ public:
     static Result<std::shared_ptr<HpakReader>> open(std::unique_ptr<IHpakSource> source,
                                                     const HpakOpenOptions& options = {});
     /// openHpakFile() + open().
-    static Result<std::shared_ptr<HpakReader>> openFile(const fs::Path& path, const HpakOpenOptions& options = {});
+    static Result<std::shared_ptr<HpakReader>> openFile(const fs::Path& path,
+                                                        const HpakOpenOptions& options = {});
 
     HpakReader(const HpakReader&) = delete;
     HpakReader& operator=(const HpakReader&) = delete;
@@ -155,7 +156,9 @@ private:
     /// Verifies pak block `index`, whose bytes the caller just read into `bytes` (re-read in place
     /// when the hook repairs the block).
     Result<void> verifyBlock(u32 index, std::span<u8> bytes) const;
-    u64 blockOffset(u32 index) const noexcept { return hpak::kHeaderBlockSize + u64(index) * hpak::kPakBlockSize; }
+    u64 blockOffset(u32 index) const noexcept {
+        return hpak::kHeaderBlockSize + u64(index) * hpak::kPakBlockSize;
+    }
 
     std::unique_ptr<IHpakSource> m_source;
     std::string m_name;

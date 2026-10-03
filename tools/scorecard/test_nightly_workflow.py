@@ -321,6 +321,23 @@ def runs_perf(command: str) -> bool:
     return bool(re.search(r"runners\.py\s+doctest\b.*(?<![\w-])--perf(?![\w-])", command))
 
 
+# A CTest invocation in a command, and CTest's label exclude with its regex argument.
+CTEST = re.compile(r"(?:^|[\s;&|(])ctest(?:\.exe)?(?=\s|$)")
+LABEL_EXCLUDE = re.compile(r"""(?<![\w-])(?:-LE|--label-exclude)\s+("[^"]*"|'[^']*'|\S+)""")
+
+
+def excludes_perf(args: str) -> bool:
+    """Whether CTest arguments exclude the label `perf`: a -LE / --label-exclude regex that matches it (an
+    unreadable regex does not count)."""
+    for arg in LABEL_EXCLUDE.findall(args):
+        try:
+            if re.search(arg.strip("\"'"), "perf"):
+                return True
+        except re.error:
+            pass
+    return False
+
+
 def matrix_rows(job: str) -> list[dict]:
     """The `include:` rows of a nightly.yml job's matrix, as {key: value} strings."""
     lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
@@ -369,6 +386,26 @@ class PerfLabelScopeTests(unittest.TestCase):
         # The registry's description of the sanitizer run says the same.
         data, _ = scorecard.load_jsonc(ROOT / "scorecard.jsonc")
         self.assertIn("every CTest except perf", data["runs"]["linux-asan"]["description"])
+
+    def test_every_other_ctest_command_excludes_perf(self):
+        # #45's round-2 review, N2: a CTest command without a label include still runs the perf entries if it
+        # does not exclude them (`-R _perf`, a preset's filter, or `-Lperf`, which CTest 3.28 does not read as
+        # a label filter, so it runs everything). Outside the perf step, each one excludes the label itself
+        # (-LE with a regex that matches `perf`) or takes its job's matrix `ctest_args`, every row of which does.
+        text = WORKFLOW.read_text(encoding="utf-8")
+        jobs = re.findall(r"^  ([\w-]+):$", text[text.index("\njobs:"):], re.M)
+        checked = set()
+        for job in jobs:
+            rows = matrix_rows(job)
+            rows_exclude = bool(rows) and all(excludes_perf(r.get("ctest_args", "")) for r in rows)
+            for step in steps(job):
+                if step["name"] == "Perf gates (label perf, serial)":
+                    continue
+                for command in filter(CTEST.search, commands(step)):
+                    checked.add(step["name"])
+                    self.assertTrue(excludes_perf(command) or
+                                    (rows_exclude and "${{ matrix.ctest_args }}" in command), (job, command))
+        self.assertLessEqual({"Test (software Vulkan via lavapipe)", "Test (no GPU on hosted runners)"}, checked)
 
 
 if __name__ == "__main__":

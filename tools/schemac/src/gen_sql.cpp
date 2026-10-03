@@ -7,6 +7,7 @@
 // Columns follow the lock's field ids, so a table built by the migrations has the snapshot's layout.
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <format>
 #include <map>
@@ -42,10 +43,14 @@ std::string ident(const std::string& name) {
     return reserved ? "\"" + name + "\"" : name;
 }
 
+/// A string literal that reads the same whatever `standard_conforming_strings` is. With it off, a
+/// backslash in '…' escapes the next character, so a backslash before a doubled quote would end the
+/// literal early; a string with a backslash therefore becomes E'…', where `\\` always means one.
 std::string sqlString(std::string_view s) {
-    std::string out = "'";
+    const bool escaped = s.find('\\') != std::string_view::npos;
+    std::string out = escaped ? "E'" : "'";
     for (const char c : s) {
-        if (c == '\'') out += '\'';
+        if (c == '\'' || (escaped && c == '\\')) out += c;
         out += c;
     }
     return out + "'";
@@ -143,31 +148,15 @@ bool reachesNetHandle(const Type* t, std::set<const Decl*>& seen) {
     return false;
 }
 
-/// Column of a lock signature, for the prims (and their optionals) that widenings change.
-std::optional<Column> columnOfSignature(std::string_view sig, const Type* current) {
-    const bool optional = sig.ends_with('?');
-    if (optional) sig.remove_suffix(1);
-    std::optional<Column> c;
+std::optional<Prim> primNamed(std::string_view name) {
     static constexpr Prim kPrims[] = {Prim::I8, Prim::I16, Prim::I32, Prim::I64, Prim::U8, Prim::U16, Prim::U32, Prim::U64, Prim::F32, Prim::F64};
     for (const Prim p : kPrims) {
-        if (primName(p) == sig) {
-            std::string ignored;
-            Type t;
-            t.kind = TypeKind::Prim;
-            t.prim = p;
-            c = columnOf(&t, ignored);
-        }
+        if (primName(p) == name) return p;
     }
-    if (!c && current && current->kind == TypeKind::Optional && current->element->signature == sig) {
-        std::string ignored;
-        c = columnOf(current->element, ignored);
-    }
-    if (c && optional) {
-        c->notNull = false;
-        c->defaultSql.clear();
-    }
-    return c;
+    return std::nullopt;
 }
+
+bool isNameChar(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.'; }
 
 std::string defaultOf(const Field& f, const Column& c) {
     if (!c.notNull || c.json) return {};
@@ -216,7 +205,17 @@ struct Table {
 
 class SqlGenerator {
 public:
-    SqlGenerator(const Schema& s, const Lock& baseline, const CompileOptions& o, DiagnosticEngine& d) : S(s), B(baseline), O(o), D(d) {}
+    SqlGenerator(const Schema& s, const Lock& baseline, const CompileOptions& o, DiagnosticEngine& d) : S(s), B(baseline), O(o), D(d) {
+        // Types renamed with @was since the baseline: its signatures still name them by their old names.
+        for (const Decl* decl : S.decls) {
+            if (decl->typeId == 0) continue;
+            if (const LockType* lt = baselineType(decl->typeId)) {
+                for (const auto& [name, entry] : B.types) {
+                    if (&entry == lt && name != decl->qualifiedName) m_renamed.emplace(name, decl->qualifiedName);
+                }
+            }
+        }
+    }
 
     std::vector<OutputFile> run() {
         const usize errorsBefore = D.errorCount();
@@ -241,6 +240,61 @@ public:
     }
 
 private:
+    /// The baseline lock entry of the type `id` (a @was rename keeps the id), or nullptr.
+    const LockType* baselineType(u32 id) const {
+        for (const auto& [name, lt] : B.types) {
+            if (lt.id == id) return &lt;
+        }
+        return nullptr;
+    }
+
+    /// A baseline signature with the types renamed since then under their current names, so that a
+    /// field of a renamed type is not a type change.
+    std::string currentSignature(std::string_view sig) const {
+        std::string out;
+        for (usize i = 0; i < sig.size();) {
+            usize j = i;
+            while (j < sig.size() && isNameChar(sig[j])) ++j;
+            if (j == i) {
+                out += sig[i++];
+                continue;
+            }
+            const auto it = m_renamed.find(std::string(sig.substr(i, j - i)));
+            out += it == m_renamed.end() ? sig.substr(i, j - i) : std::string_view(it->second);
+            i = j;
+        }
+        return out;
+    }
+
+    /// The column a field of type `current` had in the baseline, where its signature was `sig` (in
+    /// current names): a prim or an optional of the current element type, the widenings the lock
+    /// allows. An enum or flags column follows the underlying type its baseline entry recorded, which
+    /// a widening changes without changing the signature. nullopt: not a change this stub writes.
+    std::optional<Column> baselineColumn(std::string_view sig, const Type* current) const {
+        const bool optional = sig.ends_with('?');
+        if (optional) sig.remove_suffix(1);
+        const Type* now = current->kind == TypeKind::Optional ? current->element : current;
+        std::string ignored;
+        std::optional<Column> c;
+        if (const std::optional<Prim> p = primNamed(sig)) {
+            Type t;
+            t.kind = TypeKind::Prim;
+            t.prim = *p;
+            c = columnOf(&t, ignored);
+        } else if (now->signature == sig) {
+            c = columnOf(now, ignored);
+            if ((now->kind == TypeKind::Enum || now->kind == TypeKind::Flags) && now->decl) {
+                const LockType* lt = baselineType(now->decl->typeId);
+                if (const std::optional<Prim> base = lt ? primNamed(lt->base) : std::nullopt) c = integerColumn(*base);
+            }
+        }
+        if (c && optional) {
+            c->notNull = false;
+            c->defaultSql.clear();
+        }
+        return c;
+    }
+
     std::string join(const std::string& rel) const { return O.sqlOut.empty() || O.sqlOut == "." ? rel : O.sqlOut + "/" + rel; }
 
     std::optional<Table> table(const Decl* d) {
@@ -343,6 +397,11 @@ private:
         return s;
     }
 
+    /// Whether a column's storage differs (its default is diffed separately, from the lock).
+    static bool changed(const Column& was, const Column& now) {
+        return was.type != now.type || was.check != now.check || was.notNull != now.notNull;
+    }
+
     static bool isKey(const Table& t, const TableCol& c) { return std::find(t.key.begin(), t.key.end(), c.name) != t.key.end(); }
 
     std::string header(const std::string& schema, std::string_view what) const {
@@ -407,19 +466,25 @@ private:
                     std::string def = columnDef(t, c, false);
                     if (revived) def = "IF NOT EXISTS " + def;
                     steps.push_back(std::format("ALTER TABLE {} ADD COLUMN {};{}", qt, def, revived ? " -- revived field (lock id " + std::to_string(c.field->id) + ")" : ""));
-                    if (revived && it->second->type != c.field->type->signature) {
+                    if (revived) {
                         // Until the N+2 contract drops it, the old column is still there: IF NOT EXISTS keeps its
                         // old type, and the Down would drop a column that predates this Up.
-                        steps.push_back(std::format("-- TODO: {}.{} was {} when it was removed and is now {}; if the old column still "
-                                                    "exists, change its type by hand (and keep it in the Down)",
-                                                    qt, c.name, it->second->type, c.field->type->signature));
+                        const std::string sig = currentSignature(it->second->type);
+                        const std::optional<Column> was = baselineColumn(sig, c.field->type);
+                        if (!was || changed(*was, c.col)) {
+                            steps.push_back(std::format("-- TODO: {}.{} was {} ({}) when it was removed and is now {} ({}); if the old "
+                                                        "column still exists, change its type by hand (and keep it in the Down)",
+                                                        qt, c.name, sig, was ? was->type : "?", c.field->type->signature, c.col.type));
+                        }
                     }
                     downs.push_back(std::format("ALTER TABLE {} DROP COLUMN IF EXISTS {};", qt, ident(c.name)));
                     continue;
                 }
                 const LockField& lf = *it->second;
-                const bool retyped = lf.type != c.field->type->signature;
-                const std::optional<Column> was = retyped ? columnOfSignature(lf.type, c.field->type) : std::optional<Column>(c.col);
+                const std::string oldSig = currentSignature(lf.type);
+                const bool retyped = oldSig != c.field->type->signature;
+                std::optional<Column> was = baselineColumn(oldSig, c.field->type);
+                if (!was && !retyped) was = c.col;
                 const std::string oldName = snakeCase(lf.name);
                 if (oldName != c.name) {
                     steps.push_back(std::format("ALTER TABLE {} RENAME COLUMN {} TO {};", qt, ident(oldName), ident(c.name)));
@@ -431,14 +496,12 @@ private:
                         downs.push_back(std::format("ALTER TABLE {} RENAME CONSTRAINT {} TO {};", qt, to, from));
                     }
                 }
-                if (retyped) {
-                    if (!was) {
-                        steps.push_back(std::format("-- TODO: {}.{} changed from {} to {}; write this step by hand", qt, c.name, lf.type,
-                                                    c.field->type->signature));
-                        continue;
-                    }
-                    alterColumn(steps, downs, t, c, *was);
+                if (!was) {
+                    steps.push_back(std::format("-- TODO: {}.{} changed from {} to {}; write this step by hand", qt, c.name, oldSig,
+                                                c.field->type->signature));
+                    continue;
                 }
+                if (changed(*was, c.col)) alterColumn(steps, downs, t, c, *was);
                 if (lf.defaultJson != (c.field->defaultValue ? c.field->defaultValue->json : std::string()) && !c.col.defaultSql.empty() &&
                     !isKey(t, c)) {
                     steps.push_back(std::format("ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {};", qt, ident(c.name), c.col.defaultSql));
@@ -515,6 +578,7 @@ private:
     const Lock& B;
     const CompileOptions& O;
     DiagnosticEngine& D;
+    std::map<std::string, std::string> m_renamed; ///< baseline qualified name -> current one
 };
 
 } // namespace

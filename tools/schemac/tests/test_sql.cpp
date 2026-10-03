@@ -195,6 +195,15 @@ TEST_CASE("sql: @sql misuse and unstorable fields are errors") {
     REQUIRE(compileSql("struct S @sql(schema=\"svc_test\") { x: u8 @key }", fs)->ok());
     auto moved = compileSql("struct S @sql(schema=\"svc_test\", table=\"t\") { x: u8 @key }", fs);
     CHECK(moved->messages.find("is stored in the table svc_test.s") != std::string::npos);
+    // A @was rename moves the default table name with it; the message names the attribute that keeps it.
+    {
+        MemoryFileSystem renames = fs;
+        auto renamedType = compileSql("struct S2 @was(\"S\") @sql(schema=\"svc_test\") { x: u8 @key }", renames);
+        CHECK_MESSAGE(renamedType->messages.find("a table cannot move to svc_test.s2 — keep it with @sql(schema=\"svc_test\", table=\"s\")") !=
+                          std::string::npos,
+                      renamedType->messages);
+        CHECK(compileSql("struct S2 @was(\"S\") @sql(schema=\"svc_test\", table=\"s\") { x: u8 @key }", renames)->ok());
+    }
     auto rekeyed = compileSql("struct S @sql(schema=\"svc_test\") { x: u8 @key; y: u8 @key }", fs);
     CHECK_MESSAGE(rekeyed->messages.find("new field 'y' cannot join the key of the existing table svc_test.s") != std::string::npos,
                   rekeyed->messages);
@@ -253,7 +262,7 @@ TEST_CASE("sql: migration notes for revived retyped fields and ledger partitions
     const std::string* m = revived->output("sql/svc_test/migration.sql");
     INFO((m ? *m : std::string()));
     CHECK(contains(m, "ALTER TABLE svc_test.r ADD COLUMN IF NOT EXISTS hp BIGINT"));
-    CHECK(contains(m, "-- TODO: svc_test.r.hp was i32 when it was removed and is now i64; if the old column still exists"));
+    CHECK(contains(m, "-- TODO: svc_test.r.hp was i32 (INTEGER) when it was removed and is now i64 (BIGINT); if the old column still exists"));
     auto ledger = compileSql("struct Entry @store(ledger) @sql(schema=\"svc_ledger\") { id: u64 @key; amount: i64 }", fs);
     REQUIRE_MESSAGE(ledger->ok(), ledger->messages);
     const std::string* l = ledger->output("sql/svc_ledger/migration.sql");
@@ -276,6 +285,101 @@ TEST_CASE("sql: a carriage return in a doc comment cannot reach the generated SQ
     auto crlf = compileSql("/// a doc line\r\nstruct V @store(character) @sql(schema=\"svc_test\") { id: u32 @key }", fs);
     REQUIRE_MESSAGE(crlf->ok(), crlf->messages);
     CHECK(contains(crlf->output("sql/svc_test/schema.sql"), "-- test.V (lock id"));
+}
+
+TEST_CASE("sql: a widened enum or flags underlying type widens its columns") {
+    // The round-2 reproducer: a field of enum type keeps its signature (test.K) when K widens from u8
+    // to u16, which the lock accepts, but its column (SMALLINT, CHECK 0..255) must widen with it.
+    MemoryFileSystem fs;
+    REQUIRE(compileSql("enum K : u8 { A; B }\nflags F : u8 { X; Y }\n"
+                       "struct S @store(character) @sql(schema=\"svc_test\") { id: u32 @key; k: K; f: F; o: K? }",
+                       fs)
+                ->ok());
+    const std::string v2 = "enum K : u16 { A; B; C = 300 }\nflags F : u16 { X; Y }\n"
+                           "struct S @store(character) @sql(schema=\"svc_test\") { id: u32 @key; k: K; f: F; o: K?; p: K? }";
+    auto c = compileSql(v2, fs);
+    REQUIRE_MESSAGE(c->ok(), c->messages); // the lock accepts u8 -> u16
+    CHECK(contains(c->output("sql/svc_test/schema.sql"), "    k INTEGER NOT NULL DEFAULT 0 CONSTRAINT s_k_check CHECK (k BETWEEN 0 AND 65535),"));
+    const std::string* m = c->output("sql/svc_test/migration.sql");
+    INFO((m ? *m : std::string()));
+    CHECK(contains(m, "ALTER TABLE svc_test.s DROP CONSTRAINT IF EXISTS s_k_check;\n"
+                      "ALTER TABLE svc_test.s ALTER COLUMN k TYPE INTEGER;\n"
+                      "ALTER TABLE svc_test.s ADD CONSTRAINT s_k_check CHECK (k BETWEEN 0 AND 65535);"));
+    CHECK(contains(m, "ALTER TABLE svc_test.s ALTER COLUMN f TYPE INTEGER;"));
+    CHECK(contains(m, "ALTER TABLE svc_test.s ADD CONSTRAINT s_f_check CHECK (f BETWEEN 0 AND 65535);"));
+    CHECK(contains(m, "ALTER TABLE svc_test.s ALTER COLUMN o TYPE INTEGER;"));
+    CHECK(contains(m, "ALTER TABLE svc_test.s ADD COLUMN p INTEGER CONSTRAINT s_p_check CHECK (p BETWEEN 0 AND 65535);"));
+    CHECK(contains(m, "ALTER TABLE svc_test.s ALTER COLUMN k TYPE SMALLINT;")); // the Down
+    CHECK(contains(m, "ALTER TABLE svc_test.s ADD CONSTRAINT s_k_check CHECK (k BETWEEN 0 AND 255);"));
+
+    // T -> T? of a widened enum: the old column is the baseline's SMALLINT, not the current INTEGER.
+    MemoryFileSystem opt;
+    REQUIRE(compileSql("enum K : u8 { A }\nstruct S @store(character) @sql(schema=\"svc_test\") { id: u32 @key; k: K }", opt)->ok());
+    auto toOptional = compileSql("enum K : u16 { A }\nstruct S @store(character) @sql(schema=\"svc_test\") { id: u32 @key; k: K? }", opt);
+    REQUIRE_MESSAGE(toOptional->ok(), toOptional->messages);
+    const std::string* o = toOptional->output("sql/svc_test/migration.sql");
+    INFO((o ? *o : std::string()));
+    CHECK(contains(o, "ALTER TABLE svc_test.s ALTER COLUMN k TYPE INTEGER;"));
+    CHECK(contains(o, "ALTER TABLE svc_test.s ALTER COLUMN k DROP NOT NULL;"));
+    CHECK(contains(o, "ALTER TABLE svc_test.s ALTER COLUMN k TYPE SMALLINT;"));
+    // An i8 enum widening to i16 drops its -128..127 CHECK (SMALLINT holds every i16).
+    MemoryFileSystem signedEnum;
+    REQUIRE(compileSql("enum K : i8 { A }\nstruct S @store(character) @sql(schema=\"svc_test\") { id: u32 @key; k: K }", signedEnum)->ok());
+    auto i16 = compileSql("enum K : i16 { A }\nstruct S @store(character) @sql(schema=\"svc_test\") { id: u32 @key; k: K }", signedEnum);
+    REQUIRE_MESSAGE(i16->ok(), i16->messages);
+    CHECK(contains(i16->output("sql/svc_test/migration.sql"), "ALTER TABLE svc_test.s DROP CONSTRAINT IF EXISTS s_k_check;"));
+}
+
+TEST_CASE("sql: a type renamed with @was is not a type change of the fields that use it") {
+    MemoryFileSystem fs;
+    REQUIRE(compileSql("enum K : u8 { A }\nstruct Inner { x: f32 }\n"
+                       "struct S @store(character) @sql(schema=\"svc_test\") { id: u32 @key; k: K = A; inner: Inner; l: list<K> }",
+                       fs)
+                ->ok());
+    auto c = compileSql("enum K2 : u8 @was(\"K\") { A; B }\nstruct Inner2 @was(\"Inner\") { x: f32 }\n"
+                        "struct S @store(character) @sql(schema=\"svc_test\") { id: u32 @key; k: K2 = B; inner: Inner2; l: list<K2> }",
+                        fs, [] {
+                            CompileOptions o = sqlOptions();
+                            o.allowDefaultChange = true;
+                            return o;
+                        }());
+    REQUIRE_MESSAGE(c->ok(), c->messages);
+    const std::string* m = c->output("sql/svc_test/migration.sql");
+    INFO((m ? *m : std::string()));
+    CHECK_FALSE(contains(m, "TODO"));
+    CHECK(contains(m, "ALTER TABLE svc_test.s ALTER COLUMN k SET DEFAULT 1;")); // the default is still diffed
+    CHECK_FALSE(contains(m, "ALTER COLUMN inner"));
+}
+
+TEST_CASE("sql: string defaults read the same whatever standard_conforming_strings is") {
+    // With standard_conforming_strings off, '\'' is an escaped quote: the round-2 probe's default ended
+    // the literal and ran the CREATE TABLE. A string with a backslash becomes E'...' with it doubled.
+    MemoryFileSystem fs;
+    auto c = compileSql("struct S @store(character) @sql(schema=\"svc_test\") { id: u32 @key;\n"
+                        "  a: string = \"\\\\'); CREATE TABLE public.scs_pwned (x int); --\"\n  b: string = \"it's\" }",
+                        fs);
+    REQUIRE_MESSAGE(c->ok(), c->messages);
+    const std::string* s = c->output("sql/svc_test/schema.sql");
+    INFO((s ? *s : std::string()));
+    CHECK(contains(s, "    a TEXT NOT NULL DEFAULT E'\\\\''); CREATE TABLE public.scs_pwned (x int); --',\n"));
+    CHECK(contains(s, "    b TEXT NOT NULL DEFAULT 'it''s',\n")); // no backslash: a plain literal
+}
+
+TEST_CASE("sql: a control character in a schema file name is an error") {
+    // The round-2 probe: every emitter prints the file name in a generated comment, which a lone CR ends.
+    const std::string name = "schemas/test/x\rDROP SCHEMA svc_test CASCADE; --.hschema";
+    auto c = compileFiles({{name, "package test;\nstruct V @store(character) @sql(schema=\"svc_test\") { id: u32 @key }"}}, sqlOptions());
+    CHECK_FALSE(c->ok());
+    CHECK_MESSAGE(c->messages.find("the schema path 'test/x\\x0DDROP SCHEMA svc_test CASCADE; --.hschema' has the control character U+000D") !=
+                      std::string::npos,
+                  c->messages);
+    CHECK(c->result.outputs.empty());
+    // An import is checked the same way.
+    auto imported = compileFiles({{"schemas/test/a.hschema", "package test;\nimport \"b\\tc.hschema\";\n"},
+                                  {"schemas/test/b\tc.hschema", "package test;\n"}},
+                                 sqlOptions());
+    CHECK_FALSE(imported->ok());
+    CHECK_MESSAGE(imported->messages.find("has the control character U+0009") != std::string::npos, imported->messages);
 }
 
 } // namespace

@@ -234,7 +234,9 @@ Do this after the setup and after any change to the PC, the hook or the firewall
   - `Test-NetConnection <your router's IP> -Port 80` fails, `Test-NetConnection github.com -Port 443` succeeds;
   - `git --version; cmake --version; python --version; go version; $env:VULKAN_SDK` all answer;
   - `Get-ExecutionPolicy -Scope CurrentUser` answers `Undefined` (anything else overrides step 4's policy for
-    `helios-ci`; `Restricted` there would keep the hook from running).
+    `helios-ci`; `Restricted` there would keep the hook from running), and so does
+    `pwsh -NoProfile -c Get-ExecutionPolicy -Scope CurrentUser` if PowerShell 7 is installed (it keeps its own
+    setting, and the runner starts the hook with `pwsh` when it finds it).
 - [ ] A dispatched run on `main`: "Set up runner" prints `job-started hook: workflow_dispatch job on refs/heads/main;
       removed N entries ...`; "Runner isolation" and "LAN egress blocked" pass (the latter says how many connects the
       firewall denied); the job builds; "The goldens and the bench ran on a hardware GPU" names your GPU.

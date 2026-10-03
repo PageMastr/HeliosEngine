@@ -649,6 +649,7 @@ func writtenVar(cmd string, args []string) (names []string, read string) {
 	return append(names, name), read
 }
 
+// writtenVar1 is writtenVar for the one output every sub-command has.
 func writtenVar1(cmd string, args []string) (name, read string) {
 	arg := func(i int) string {
 		if i >= 0 && i < len(args) {

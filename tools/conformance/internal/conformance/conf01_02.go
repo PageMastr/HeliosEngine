@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"bytes"
 	"go/ast"
 	"go/token"
 	"regexp"
@@ -389,18 +390,51 @@ func (s *cSource) calls(re *regexp.Regexp) []cCall {
 }
 
 var (
-	// `#define NAME "…"`, and NAME = "…", NAME{"…"} or NAME("…") (constexpr, const char*, char[],
-	// std::string, std::string_view).
+	// `#define NAME "…"`.
 	cDefineStrRE = regexp.MustCompile(`(?m)^\s*#\s*define\s+([A-Za-z_]\w*)\s+((?:"(?:[^"\\\n]|\\.)*"\s*)+)$`)
-	cDeclStrRE   = regexp.MustCompile(`\b([A-Za-z_]\w*)\s*(?:\[\s*\d*\s*\]\s*)?(?:=\s*\{?|\{|\()\s*((?:"(?:[^"\\\n]|\\.)*"\s*)+)[)}]?\s*[;,)]`)
-	cStrLitRE    = regexp.MustCompile(`"((?:[^"\\\n]|\\.)*)"`)
-	cWrapRE      = regexp.MustCompile(`^(?:std::)?(?:string|string_view)\s*[({](.*)[)}]$|^static_cast\s*<[^>]*>\s*\((.*)\)$|^\(\s*(?:const\s+)?char\s*(?:const\s*)?\*\s*\)\s*(.*)$`)
-	cQualIdentRE = regexp.MustCompile(`^(?:(?:[A-Za-z_]\w*)\s*(?:::|\.|->)\s*)*([A-Za-z_]\w*)$`)
+	// A declarator initialized with string literals: NAME = "…", NAME = {"…"}, NAME{"…"} or NAME("…"), with an
+	// optional array bound, ending the declarator. Whether it declares a constant is decided by what precedes
+	// NAME in its statement (cConstDecl).
+	cInitStrRE = regexp.MustCompile(`\b([A-Za-z_]\w*)\s*(?:\[\s*\w*\s*\]\s*)?` +
+		`(?:=\s*(` + cLits + `)|=?\s*\{\s*(` + cLits + `)\}|\(\s*(` + cLits + `)\))\s*[;,]`)
+	// What may precede a declared name in its statement: specifiers and a type (qualified, templated, with
+	// `*`, `&` and `const`). A `.`, `->`, `(`, `=` or literal there means an assignment, a call, a parameter
+	// or a member access, none of which declares a constant.
+	cDeclPrefixRE = regexp.MustCompile(`^(?:\w+|::|[<>,*&]|\s)*$`)
+	cAccessRE     = regexp.MustCompile(`^\s*(?:(?:public|private|protected)\s*:\s|\[\[[^\]]*\]\]\s*)+`)
+	cConstWordRE  = regexp.MustCompile(`\bconst\b`)
+	cConstexprRE  = regexp.MustCompile(`\bconstexpr\b`)
+	cStrLitRE     = regexp.MustCompile(`"((?:[^"\\\n]|\\.)*)"`)
+	cWrapRE       = regexp.MustCompile(`^(?:std::)?(?:string|string_view)\s*[({](.*)[)}]$|^static_cast\s*<[^>]*>\s*\((.*)\)$|^\(\s*(?:const\s+)?char\s*(?:const\s*)?\*\s*\)\s*(.*)$`)
+	// A name, optionally qualified by namespaces or classes. A member access (a.b, p->b) is not a constant.
+	cQualIdentRE = regexp.MustCompile(`^(?:::\s*)?(?:[A-Za-z_]\w*\s*::\s*)*([A-Za-z_]\w*)$`)
 	kvSubjectRE  = regexp.MustCompile(`^\$KV\.([^.\s]+)`)
 )
 
-// cStrTable collects the string constants of the C-family files in the rule's scope, by bare name. A name
-// defined with several values keeps them all, and a bucket or key matches if any value does.
+// cLits is one or more adjacent string literals.
+const cLits = `(?:"(?:[^"\\\n]|\\.)*"\s*)+`
+
+// cConstDecl reports whether prefix, the text of a statement before a declared name, makes that name a
+// constant: `constexpr`, or a `const` object (`const std::string k`, `static const char k[]`, `const char*
+// const k`). A pointer to const (`const char* k`) is not: the pointer can be re-pointed.
+func cConstDecl(prefix string) bool {
+	prefix = cAccessRE.ReplaceAllString(prefix, "")
+	if !cDeclPrefixRE.MatchString(prefix) {
+		return false
+	}
+	if cConstexprRE.MatchString(prefix) {
+		return true
+	}
+	if i := strings.LastIndex(prefix, "*"); i >= 0 {
+		prefix = prefix[i:]
+	}
+	return cConstWordRE.MatchString(prefix)
+}
+
+// cStrTable collects the string constants of the C-family files in the rule's scope, by bare name: the
+// `#define`s and the declarations of constants (cConstDecl). Assignments, members set elsewhere,
+// parameters and calls are not constants, so a bucket or key passed through one stays unresolved. A
+// name defined with several values keeps them all, and a bucket or key matches if any value does.
 func cStrTable(p *Pass) map[string][]string {
 	if p.cstr != nil {
 		return p.cstr
@@ -426,17 +460,46 @@ func cStrTable(p *Pass) map[string][]string {
 		for _, m := range cDefineStrRE.FindAllStringSubmatch(src.text, -1) {
 			add(m[1], m[2])
 		}
-		for _, m := range cDeclStrRE.FindAllStringSubmatch(src.text, -1) {
-			add(m[1], m[2])
+		for name, lits := range cConstStrings(src) {
+			for _, l := range lits {
+				add(name, l)
+			}
 		}
 	}
 	p.cstr = t
 	return t
 }
 
+// cConstStrings returns the string-literal initializers of the constants src declares, by bare name.
+func cConstStrings(src *cSource) map[string][]string {
+	// Statement boundaries: ; { } outside strings and comments, and every preprocessor line.
+	bounds := []byte(src.blank)
+	for i, l := range src.blankLines {
+		if strings.HasPrefix(strings.TrimSpace(l), "#") {
+			for k := src.starts[i]; k < src.starts[i]+len(l); k++ {
+				bounds[k] = ';'
+			}
+		}
+	}
+	out := map[string][]string{}
+	for _, m := range cInitStrRE.FindAllStringSubmatchIndex(src.text, -1) {
+		start := bytes.LastIndexAny(bounds[:m[2]], ";{}") + 1
+		if bounds[m[2]] == ';' || !cConstDecl(src.blank[start:m[2]]) {
+			continue
+		}
+		for g := 4; g <= 8; g += 2 {
+			if m[g] >= 0 {
+				out[src.text[m[2]:m[3]]] = append(out[src.text[m[2]:m[3]]], src.text[m[g]:m[g+1]])
+			}
+		}
+	}
+	return out
+}
+
 // cStrValues resolves an argument or initializer to its possible string values: literals (adjacent
-// ones concatenated), names from the table (qualifiers and object prefixes dropped), `.c_str()` and
-// `.data()`, and std::string/string_view, static_cast and C-cast wrappers. Anything else is unresolved.
+// ones concatenated), names from the table (namespace and class qualifiers dropped), `.c_str()` and
+// `.data()`, and std::string/string_view, static_cast and C-cast wrappers. Anything else, a member
+// access (`o.bucket`, `p->bucket`) among it, is unresolved.
 func cStrValues(expr string, t map[string][]string) ([]string, bool) {
 	for depth := 0; depth < 8; depth++ {
 		expr = strings.TrimSpace(expr)

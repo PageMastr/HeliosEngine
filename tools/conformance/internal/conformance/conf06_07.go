@@ -54,10 +54,24 @@ var (
 	renameColRE    = regexp.MustCompile(`(?is)^rename\s+(?:column\s+)?` + identRE + `\s+to\s+` + identRE + `$`)
 	renameTableRE  = regexp.MustCompile(`(?is)^rename\s+to\s+` + identRE + `$`)
 	setSchemaRE    = regexp.MustCompile(`(?is)^set\s+schema\s+` + identRE + `$`)
-	constraintRE   = regexp.MustCompile(`(?i)^(constraint|primary|unique|check|foreign|exclude|like)\b`)
-	versionRE      = regexp.MustCompile(`^(\d+)_`)
-	columnDefRE    = regexp.MustCompile(`^` + identRE + `\s+(.*)$`)
-	dropNotColRE   = regexp.MustCompile(`(?i)^drop\s+(constraint|default|not\s+null)`)
+	constraintRE   = regexp.MustCompile(`(?i)^(constraint|primary|unique|check|foreign|exclude)\b`)
+	alterTypeRE    = regexp.MustCompile(`(?is)^alter\s+(?:column\s+)?` + identRE + `\s+(?:set\s+data\s+)?type\s+(.*)$`)
+	likeRE         = regexp.MustCompile(`(?is)^like\s+` + identRE + `(?:\s*\.\s*` + identRE + `)?`)
+	inheritsRE     = regexp.MustCompile(`(?is)^\s*inherits\s*\(([^()]*)\)`)
+	inheritRE      = regexp.MustCompile(`(?is)^(?:no\s+)?inherit\s+`)
+	qualNameRE     = regexp.MustCompile(`(?is)^\s*` + identRE + `(?:\s*\.\s*` + identRE + `)?\s*$`)
+	// Statements that create or change tables in a form the evaluator does not follow: CREATE TABLE … AS,
+	// PARTITION OF, OF type, or a name goose substitutes (${…}); CREATE SCHEMA with such a name; a
+	// materialized view (it stores rows); and a DO block, whose body runs with the migration.
+	createTableAnyRE  = regexp.MustCompile(`(?is)^create\s+(?:(?:global|local)\s+)?(?:(?:temp|temporary|unlogged|foreign)\s+)?table\b`)
+	createSchemaAnyRE = regexp.MustCompile(`(?is)^create\s+schema\b`)
+	createMatViewRE   = regexp.MustCompile(`(?is)^create\s+(?:or\s+replace\s+)?materialized\s+view\b`)
+	doRE              = regexp.MustCompile(`(?is)^do\b`)
+	selectLeadRE      = regexp.MustCompile(`(?is)^(?:\(\s*)*(?:select|with)\b`)
+	intoRE            = regexp.MustCompile(`(?i)(\w*)\s+into\b`)
+	versionRE         = regexp.MustCompile(`^(\d+)_`)
+	columnDefRE       = regexp.MustCompile(`^` + identRE + `\s+(.*)$`)
+	dropNotColRE      = regexp.MustCompile(`(?i)^drop\s+(constraint|default|not\s+null)`)
 	// A dollar-quote tag follows the rules of an unquoted identifier: a letter, '_' or a non-ASCII
 	// character, then those or digits (PostgreSQL, "Dollar-Quoted String Constants").
 	dollarTagRE = regexp.MustCompile(`^\$(?:[A-Za-z_\x{80}-\x{10FFFF}][A-Za-z0-9_\x{80}-\x{10FFFF}]*)?\$`)
@@ -114,6 +128,7 @@ func evalSchemas(p *Pass) *netSchema {
 	ns := &netSchema{tables: map[string]*table{}}
 	p.Tree.schema = ns
 	renames := map[string]legacyRename{} // migration directory -> rename
+	order := map[string]int{}            // migration directory -> its index in Schemas (apply order)
 	g := p.Tree.goIndex()
 	if gf := g.file("services/migrations/migrations.go"); gf.File != nil && p.Tree.Lines("services/migrations/migrations.go") != nil {
 		var lits []*ast.CompositeLit // Schema{…}, and the elided elements of []Schema{{…}, …}
@@ -149,6 +164,9 @@ func evalSchemas(p *Pass) *netSchema {
 			}
 			if dir != "" {
 				renames[dir] = r
+				if _, ok := order[dir]; !ok {
+					order[dir] = len(order)
+				}
 			}
 		}
 	}
@@ -165,7 +183,19 @@ func evalSchemas(p *Pass) *netSchema {
 	for d := range byDir {
 		dirs = append(dirs, d)
 	}
-	sort.Strings(dirs)
+	// migrations.Up applies the services in Schemas order; a directory Schemas does not declare comes after
+	// them, in name order.
+	sort.Slice(dirs, func(i, j int) bool {
+		oi, iok := order[dirs[i]]
+		oj, jok := order[dirs[j]]
+		if iok != jok {
+			return iok
+		}
+		if iok {
+			return oi < oj
+		}
+		return dirs[i] < dirs[j]
+	})
 	for _, dir := range dirs {
 		files := byDir[dir]
 		sort.Slice(files, func(i, j int) bool { return fileVersion(files[i]) < fileVersion(files[j]) })
@@ -175,6 +205,12 @@ func evalSchemas(p *Pass) *netSchema {
 			own = "svc_" + dir
 		}
 		for _, f := range files {
+			for i, l := range p.Tree.Lines(f) {
+				if cmd, ok := gooseCommand(l); ok && strings.HasPrefix(cmd, "envsub") && !strings.HasSuffix(cmd, "off") {
+					ns.errors = append(ns.errors, placement{f, i + 1, "-- +goose ENVSUB ON substitutes environment " +
+						"variables into the SQL, so the statements are not what the file says"})
+				}
+			}
 			v := fileVersion(f)
 			netName := func(s string) string {
 				if r.legacy != "" && s == r.legacy && v <= r.version {
@@ -227,13 +263,35 @@ func (ns *netSchema) apply(f string, st sqlStmt, own string, netName func(string
 				" is created outside its service's schema " + own})
 		}
 		t := &table{schema: schema, name: name, file: f, line: st.line, cols: map[string]*column{}}
-		for _, el := range splitTop(parenBody(s[len(m[0])-1:])) {
-			el = strings.TrimSpace(el)
-			if el == "" || constraintRE.MatchString(el) {
-				continue
+		body, rest := parenSplit(s[len(m[0])-1:])
+		// LIKE src and INHERITS (parents) give the table the columns their sources have now.
+		copyFrom := func(src string) {
+			src = strings.TrimSpace(src)
+			from := ns.lookup(src, own, netName)
+			if from == nil {
+				ns.errors = append(ns.errors, placement{f, st.line, "table " + schema + "." + name + " copies the " +
+					"columns of " + src + ", which no earlier migration of this service creates"})
+				return
 			}
-			if cm := columnDefRE.FindStringSubmatch(el); cm != nil {
-				t.cols[unquote(cm[1])] = &column{unquote(cm[1]), cm[2], f, st.lineOf(cm[1])}
+			for _, c := range from.cols {
+				t.cols[c.name] = &column{c.name, c.typ, f, st.lineOf(src)}
+			}
+		}
+		for _, el := range splitTop(body) {
+			el = strings.TrimSpace(el)
+			switch {
+			case el == "" || constraintRE.MatchString(el):
+			case likeRE.MatchString(el):
+				copyFrom(likeRE.FindString(el)[len("like"):])
+			default:
+				if cm := columnDefRE.FindStringSubmatch(el); cm != nil {
+					t.cols[unquote(cm[1])] = &column{unquote(cm[1]), cm[2], f, st.lineOf(cm[1])}
+				}
+			}
+		}
+		if im := inheritsRE.FindStringSubmatch(rest); im != nil {
+			for _, parent := range strings.Split(im[1], ",") {
+				copyFrom(parent)
 			}
 		}
 		ns.tables[schema+"."+name] = t
@@ -259,11 +317,27 @@ func (ns *netSchema) apply(f string, st sqlStmt, own string, netName func(string
 				delete(t.cols, unquote(dropColumnRE.FindStringSubmatch(a)[1]))
 			case renameColRE.MatchString(a):
 				c := renameColRE.FindStringSubmatch(a)
-				if col := t.cols[unquote(c[1])]; col != nil {
-					delete(t.cols, col.name)
-					col.name, col.file, col.line = unquote(c[2]), f, st.lineOf(c[2])
-					t.cols[col.name] = col
+				col := t.cols[unquote(c[1])]
+				if col == nil {
+					ns.errors = append(ns.errors, placement{f, st.line, "RENAME COLUMN " + unquote(c[1]) + " of " +
+						schema + "." + name + ", which has no such column"})
+					continue
 				}
+				delete(t.cols, col.name)
+				col.name, col.file, col.line = unquote(c[2]), f, st.lineOf(c[2])
+				t.cols[col.name] = col
+			case alterTypeRE.MatchString(a):
+				c := alterTypeRE.FindStringSubmatch(a)
+				col := t.cols[unquote(c[1])]
+				if col == nil {
+					ns.errors = append(ns.errors, placement{f, st.line, "ALTER COLUMN " + unquote(c[1]) + " TYPE of " +
+						schema + "." + name + ", which has no such column"})
+					continue
+				}
+				col.typ, col.file, col.line = c[2], f, st.lineOf(c[1])
+			case inheritRE.MatchString(a):
+				ns.errors = append(ns.errors, placement{f, st.line, "ALTER TABLE " + schema + "." + name +
+					" changes its parents (INHERIT), and with them its columns"})
 			case renameTableRE.MatchString(a):
 				delete(ns.tables, schema+"."+name)
 				t.name = unquote(renameTableRE.FindStringSubmatch(a)[1])
@@ -288,7 +362,41 @@ func (ns *netSchema) apply(f string, st sqlStmt, own string, netName func(string
 			}
 			delete(ns.tables, key)
 		}
+	case createTableAnyRE.MatchString(s), createSchemaAnyRE.MatchString(s), createMatViewRE.MatchString(s):
+		ns.errors = append(ns.errors, placement{f, st.line, "a table or schema created in a form the lint does not " +
+			"read (CREATE TABLE … AS, PARTITION OF or OF type, a materialized view, or a substituted name)"})
+	case selectInto(s):
+		ns.errors = append(ns.errors, placement{f, st.line, "SELECT … INTO creates a table the lint does not read"})
+	case doRE.MatchString(s):
+		ns.errors = append(ns.errors, placement{f, st.line, "a DO block runs with the migration, and the lint does " +
+			"not read its body"})
 	}
+}
+
+// lookup finds the table a (possibly schema-qualified) name refers to, as of the statements applied so far.
+func (ns *netSchema) lookup(qname, own string, netName func(string) string) *table {
+	m := qualNameRE.FindStringSubmatch(qname)
+	if m == nil {
+		return nil
+	}
+	if m[2] == "" {
+		return ns.tables[own+"."+unquote(m[1])]
+	}
+	return ns.tables[netName(unquote(m[1]))+"."+unquote(m[2])]
+}
+
+// selectInto reports a SELECT … INTO (or WITH … SELECT … INTO) statement, which creates a table. An
+// INTO after INSERT or MERGE is not one.
+func selectInto(s string) bool {
+	if !selectLeadRE.MatchString(s) {
+		return false
+	}
+	for _, m := range intoRE.FindAllStringSubmatch(s, -1) {
+		if w := strings.ToLower(m[1]); w != "insert" && w != "merge" {
+			return true
+		}
+	}
+	return false
 }
 
 func (ns *netSchema) reportSchemas(p *Pass) {
@@ -306,6 +414,11 @@ func (ns *netSchema) reportSchemas(p *Pass) {
 }
 
 func (ns *netSchema) reportPII(p *Pass) {
+	// A statement the evaluator cannot follow may create or keep a PII column, so it fails this rule too: a
+	// CONF-06 suppression on its line does not hide it from the PII check.
+	for _, e := range ns.errors {
+		p.Report(e.file, e.line, "%s: the net schema cannot be evaluated, so its PII columns cannot be checked", e.msg)
+	}
 	keys := make([]string, 0, len(ns.tables))
 	for k := range ns.tables {
 		keys = append(keys, k)
@@ -405,18 +518,22 @@ func identByte(b byte) bool {
 // `--+goose Up` count. dir is "up", "down", or "" for the other annotations (StatementBegin, …),
 // which are plain comments to SQL. goose rejects an annotation with leading whitespace; here it counts.
 func gooseAnnotation(line string) (dir string, ok bool) {
+	cmd, ok := gooseCommand(line)
+	if cmd == "up" || cmd == "down" {
+		return cmd, true
+	}
+	return "", ok
+}
+
+// gooseCommand returns a goose annotation's command in lower case with its words single-spaced ("up",
+// "statementbegin", "envsub on"), read as gooseAnnotation reads it.
+func gooseCommand(line string) (string, bool) {
 	t := strings.TrimSpace(line)
 	if !strings.HasPrefix(t, "--") || !strings.Contains(t, "+goose") {
 		return "", false
 	}
-	cmd := strings.TrimSpace(strings.Replace(strings.ReplaceAll(t, "--", ""), "+goose", "", 1))
-	switch {
-	case strings.EqualFold(cmd, "up"):
-		return "up", true
-	case strings.EqualFold(cmd, "down"):
-		return "down", true
-	}
-	return "", true
+	cmd := strings.Replace(strings.ReplaceAll(t, "--", ""), "+goose", "", 1)
+	return strings.ToLower(strings.Join(strings.Fields(cmd), " ")), true
 }
 
 // sqlStatements splits the `-- +goose Up` part of a migration (all of it without goose annotations)
@@ -530,9 +647,9 @@ func sqlStatements(lines []string) []sqlStmt {
 	return out
 }
 
-// parenBody returns what the parenthesis that opens s encloses (the rest of s if it never closes), so a
-// table's column list stops before `PARTITION BY (…)` or `WITH (…)`.
-func parenBody(s string) string {
+// parenSplit returns what the parenthesis that opens s encloses (the rest of s if it never closes), so a
+// table's column list stops before `PARTITION BY (…)`, `INHERITS (…)` or `WITH (…)`, and what follows it.
+func parenSplit(s string) (body, rest string) {
 	depth := 0
 	for i, c := range s {
 		switch c {
@@ -540,11 +657,11 @@ func parenBody(s string) string {
 			depth++
 		case ')':
 			if depth--; depth == 0 {
-				return s[1:i]
+				return s[1:i], s[i+1:]
 			}
 		}
 	}
-	return strings.TrimPrefix(s, "(")
+	return strings.TrimPrefix(s, "("), ""
 }
 
 // splitTop splits at commas outside parentheses.

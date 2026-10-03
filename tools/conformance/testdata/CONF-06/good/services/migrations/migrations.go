@@ -7,4 +7,5 @@ type Schema struct {
 
 const chatSchema = "svc_chat"
 
-var Schemas = []Schema{{Name: chatSchema, Dir: "chat", Legacy: "chat", LegacyVersion: 1}}
+// Up applies the schemas in this order, zeta first.
+var Schemas = []Schema{{Name: "svc_zeta", Dir: "zeta"}, {Name: chatSchema, Dir: "chat", Legacy: "chat", LegacyVersion: 1}}

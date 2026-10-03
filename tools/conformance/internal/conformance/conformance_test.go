@@ -166,14 +166,14 @@ func TestSuppressionReasons(t *testing.T) {
 	}
 }
 
-func TestParenBody(t *testing.T) {
+func TestParenSplit(t *testing.T) {
 	for in, want := range map[string]string{
 		"(a INT, b NUMERIC(10, 2)) PARTITION BY RANGE (a)": "a INT, b NUMERIC(10, 2)",
 		"(a INT) WITH (fillfactor = 70)":                   "a INT",
 		"(unterminated":                                    "unterminated",
 	} {
-		if got := parenBody(in); got != want {
-			t.Errorf("parenBody(%q) = %q, want %q", in, got, want)
+		if got, _ := parenSplit(in); got != want {
+			t.Errorf("parenSplit(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -401,6 +401,9 @@ func TestSQLStatementsGooseAndLexing(t *testing.T) {
 			[]string{`ALTER TABLE a ADD COLUMN "it's;" TEXT, ADD COLUMN email TEXT`}},
 		{"ALTER TABLE a ADD COLUMN a$b$ TEXT; ALTER TABLE a ADD COLUMN email TEXT;",
 			[]string{"ALTER TABLE a ADD COLUMN a$b$ TEXT", "ALTER TABLE a ADD COLUMN email TEXT"}},
+		// The E of date'…' ends an identifier, so this is a plain string that a backslash does not escape.
+		{"SELECT date'x\\'; ALTER TABLE a ADD COLUMN email TEXT;",
+			[]string{"SELECT date''", "ALTER TABLE a ADD COLUMN email TEXT"}},
 	} {
 		var got []string
 		for _, st := range sqlStatements(strings.Split(c.src, "\n")) {

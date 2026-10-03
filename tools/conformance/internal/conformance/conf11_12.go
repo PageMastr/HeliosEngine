@@ -554,9 +554,10 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 				reportf(c.line, "%s() is passed %s: a wrapper can grant them below the image level, and only "+
 					"%s's level sets carry ISA flags (02 §1.1)", c.name, strings.Join(opts, " "), isaLevelSets)
 			}
-		case !s.wrappers[c.name] && !perFile && !perTarget && !perDir && !isaInertCmds[c.name] && !levelSets:
+		case !s.wrappers[c.name] && !isaInertCmds[c.name] && !levelSets:
 			// A command CONF-11 does not know (cmake_language(CALL …), a function defined outside the
-			// scanned files, …) fails closed when it carries flags.
+			// scanned files, a property it does not read such as LINK_OPTIONS, which LTO compiles with) fails
+			// closed when it carries flags.
 			reportf(c.line, "%s() carries %s: CONF-11 cannot tell whether it grants them below the image "+
 				"level; only %s's level sets carry ISA flags (02 §1.1)", c.name, strings.Join(flags, " "),
 				isaLevelSets)

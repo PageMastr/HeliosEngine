@@ -155,6 +155,14 @@ TEST_CASE("repl: truncated, corrupt and random full state fails without overread
     auto r = readState(bad, bits, out);
     REQUIRE_FALSE(r);
     CHECK(r.error().message.find("Status.mode: not a Color value") != std::string::npos);
+    // Undeclared flag bits are rejected the same way (Perm declares 1, 2 and 4).
+    Status flags;
+    flags.perm = static_cast<golden::all::Perm>(0x80);
+    usize flagBits = 0;
+    const std::vector<u8> flagBytes = fullState(flags, &flagBits);
+    auto f = readState(flagBytes, flagBits, out);
+    REQUIRE_FALSE(f);
+    CHECK(f.error().message.find("Status.perm: undeclared Perm bits") != std::string::npos);
     // Random input: every outcome is a clean result.
     helios::SplitMix64 rng(0xf022);
     for (int i = 0; i < 5000; ++i) {
@@ -208,6 +216,34 @@ TEST_CASE("repl: rpc and event tables and the protocol hash") {
     CHECK(hashOf(base) == hashOf("// note\n" + base));
     CHECK(hashOf(base) != hashOf("package test;\ncomponent C replicate(all) { v: vec3f @quant(range=±8, bits=11) }\n"));
     CHECK(hashOf(base) != hashOf("package test;\ncomponent C replicate(owner) { v: vec3f @quant(range=±8, bits=10) }\n"));
+    // range=x is ±x (02 §3.1 writes range=4096, 04 §4.1 range=±4096).
+    CHECK(hashOf(base) == hashOf("package test;\ncomponent C replicate(all) { v: vec3f @quant(range=8, bits=10) }\n"));
+    // A replicated enum's or flags' values are part of the contract (readers reject undeclared ones).
+    const std::string flags = "package test;\nflags F : u8 { A; B }\ncomponent C replicate(all) { f: F }\n";
+    CHECK(hashOf(flags) != hashOf("package test;\nflags F : u8 { A; B; X }\ncomponent C replicate(all) { f: F }\n"));
+
+    // Rpc arguments and event fields are payload: their types, ids, names, defaults and every type
+    // they reach change the hash; the round-1 reproducers had identical hashes.
+    const std::string rpc = "package test;\nrpc R(x: u8) client->server reliable @ratelimit(1/s) @intent(combat);\n";
+    for (const std::string& changed : {
+             std::string("package test;\nrpc R(x: u16) client->server reliable @ratelimit(1/s) @intent(combat);\n"),
+             std::string("package test;\nrpc R(x: u8, y: string) client->server reliable @ratelimit(1/s) @intent(combat);\n"),
+             std::string("package test;\nrpc R(y: u8) client->server reliable @ratelimit(1/s) @intent(combat);\n")}) {
+        INFO(changed);
+        CHECK(hashOf(rpc) != hashOf(changed));
+    }
+    CHECK(hashOf(rpc) == hashOf("// note\n" + rpc));
+    const std::string event = "package test;\nevent E @audience(relevant) { a: u8 }\n";
+    CHECK(hashOf(event) != hashOf("package test;\nevent E @audience(relevant) { a: f64; b: string }\n"));
+    CHECK(hashOf(event) != hashOf("package test;\nevent E @audience(relevant) { a: u8 = 3 }\n")); // readers fill omitted fields
+    // A struct reached from an rpc, through a container: a field change inside it changes the hash.
+    const std::string nested = "package test;\nstruct P { a: u8 }\nrpc R(ps: list<P> @max(4)) server->client reliable;\n";
+    CHECK(hashOf(nested) != hashOf("package test;\nstruct P { a: u16 }\nrpc R(ps: list<P> @max(4)) server->client reliable;\n"));
+    CHECK(hashOf(nested) != hashOf("package test;\nstruct P { a: u8 = 1 }\nrpc R(ps: list<P> @max(4)) server->client reliable;\n"));
+    const std::string withEnum = "package test;\nenum K : u8 { A }\nstruct P { a: u8; k: K? }\nrpc R(ps: list<P> @max(4)) server->client reliable;\n";
+    CHECK(hashOf(nested) != hashOf(withEnum));
+    CHECK(hashOf(withEnum) != hashOf("package test;\nenum K : u8 { A; B }\nstruct P { a: u8; k: K? }\nrpc R(ps: list<P> @max(4)) server->client reliable;\n"));
+    CHECK(hashOf(nested) == hashOf("package test;\nstruct Unused { z: u8 }\nstruct P { a: u8 }\nrpc R(ps: list<P> @max(4)) server->client reliable;\n"));
 }
 
 TEST_CASE("repl: invalid @quant and fields the full-state codec cannot carry are errors") {
@@ -215,7 +251,11 @@ TEST_CASE("repl: invalid @quant and fields the full-state codec cannot carry are
     options.emitRepl = true;
     const std::vector<std::pair<std::string, std::string>> cases = {
         {"v: vec3f @quant(range=±8)", "needs range=±x and bits=n"},
-        {"v: vec3f @quant(range=8, bits=10)", "range= needs ±<bound>"},
+        {"v: vec3f @quant(range=-8, bits=10)", "range= needs a positive bound"},
+        {"v: vec3f @quant(range=±1e39, bits=8)", "range=±1e+39 does not fit an f32 component"},
+        {"v: f64 @quant(range=±1e308, bits=8)", "the range's width is not a finite f64"},
+        {"p: WorldPos @quant(frame_cell, cell=4km, res=1m)", "cell=4km: unit 'km' is not supported"},
+        {"v: vec3f @quant(range=±8ft, bits=10)", "unit 'ft' is not supported"},
         {"v: vec3f @quant(range=±8, bits=40)", "bits= needs 1 to 32"},
         {"v: vec3f @quant(range=±8, bits=0)", "bits= needs 1 to 32"},
         {"v: vec3f @quant(smallest3, bits=10)", "smallest3 needs a quatf"},

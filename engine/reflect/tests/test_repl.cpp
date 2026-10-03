@@ -98,6 +98,21 @@ TEST_CASE("repl: smallest-three quaternions round-trip within their precision") 
     std::vector<u8> none;
     BitReader empty(none);
     CHECK_FALSE(readSmallest3(empty, 10));
+    // Hostile input: three components at +1/√2 square-sum to 3/2, which no unit quaternion sends.
+    BitWriter hostile;
+    hostile.write(3, 2); // w is the largest
+    for (int i = 0; i < 3; ++i) hostile.write((1u << 10) - 1, 10);
+    BitReader hr(hostile.bytes(), hostile.bitCount());
+    auto rejected = readSmallest3(hr, 10);
+    REQUIRE_FALSE(rejected);
+    CHECK(rejected.error().message.find("exceed a unit quaternion") != std::string::npos);
+    // The largest honest square sum, 3/4 (w = 1/2), still decodes to a unit quaternion.
+    BitWriter edge;
+    writeSmallest3(edge, Quat(0.5f, 0.5f, 0.5f, 0.5f), 10);
+    BitReader er(edge.bytes(), edge.bitCount());
+    auto unit = readSmallest3(er, 10);
+    REQUIRE(unit);
+    CHECK(std::fabs(f64(unit->x) * unit->x + f64(unit->y) * unit->y + f64(unit->z) * unit->z + f64(unit->w) * unit->w - 1.0) < 1e-3);
 }
 
 TEST_CASE("repl: frame-cell positions are exact to half the resolution, even at 1e13 m") {
@@ -130,11 +145,18 @@ TEST_CASE("repl: frame-cell positions are exact to half the resolution, even at 
     }
     BitReader okReader(bad.bytes(), bad.bitCount());
     CHECK(readFrameCell(okReader, cell, res, 20));
-    BitWriter over;
-    over.writeVarint(0);
-    over.write(3, 2); // with cell/res = 3 steps, an offset of 3 is out of range
-    BitReader overReader(over.bytes(), over.bitCount());
-    CHECK_FALSE(readFrameCell(overReader, 3.0, 1.0, 2));
+    // With cell/res = 3 steps, offsets 0..2 are fine and 3 is out of range. All three axes are
+    // written, so the read reaches the check instead of failing as truncated.
+    for (const u64 offset : {u64(2), u64(3)}) {
+        BitWriter over;
+        for (int axis = 0; axis < 3; ++axis) {
+            over.writeVarint(0);
+            over.write(offset, 2);
+        }
+        BitReader overReader(over.bytes(), over.bitCount());
+        auto read = readFrameCell(overReader, 3.0, 1.0, 2);
+        CHECK(read.ok() == (offset == 2));
+    }
     BitWriter far;
     far.writeVarint(zigzagEncode(std::numeric_limits<i64>::max()));
     far.write(0, 20);

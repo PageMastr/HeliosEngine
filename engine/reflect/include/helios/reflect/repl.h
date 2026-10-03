@@ -61,7 +61,9 @@ struct ComponentRepDesc {
     Lod lod = Lod::Core;
     std::span<const FieldRep> fields; ///< in repIndex order
     u32 maxFullStateBits = 0;
-    u64 hash = 0; ///< over everything above except `name`; enters the protocol hash
+    u64 hash = 0; ///< over the qualified name, type id, audience, LOD and every field's lock id, name, type,
+                  ///< change-mask index, LOD, prediction, interpolation and quantizer, plus the values of
+                  ///< the enums and flags the fields use; enters the protocol hash
 };
 
 enum class RpcDirection : u8 { ClientToServer, ServerToClient, ServerToServer };

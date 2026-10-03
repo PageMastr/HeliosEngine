@@ -5,10 +5,14 @@
 // them (04 §11.3's Phase 0: "descriptors, full state"; change masks and deltas are WP-1.10).
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
+#include <cfloat>
 #include <cmath>
 #include <format>
+#include <map>
 #include <optional>
+#include <set>
 
 #include "code_writer.h"
 #include "generators.h"
@@ -38,10 +42,20 @@ std::string f64Literal(f64 v) {
     return s;
 }
 
-/// "4096m" -> 4096, "1/256m" -> 0.00390625, "±8" -> 8 (the sign is the caller's business).
+/// The unit suffix of a @quant number ("4096m" -> "m", "1/256m" -> "m", "8" -> "").
+std::string quantUnit(const std::string& text) {
+    usize at = text.size();
+    while (at > 0 && std::isalpha(static_cast<unsigned char>(text[at - 1]))) --at;
+    return text.substr(at);
+}
+
+/// "4096m" -> 4096, "1/256m" -> 0.00390625, "±8" -> 8 (the sign is the caller's business). Lengths
+/// are metres: "m" or no unit; any other unit is rejected (callers check quantUnit first).
 std::optional<f64> quantNumber(std::string text) {
     if (text.starts_with("±")) text = text.substr(std::string_view("±").size());
-    while (!text.empty() && std::isalpha(static_cast<unsigned char>(text.back()))) text.pop_back();
+    const std::string unit = quantUnit(text);
+    if (!unit.empty() && unit != "m") return std::nullopt;
+    text.resize(text.size() - unit.size());
     const usize slash = text.find('/');
     f64 a = 0, b = 1;
     if (slash == std::string::npos) {
@@ -176,10 +190,16 @@ private:
         std::optional<f64> range, cell, res;
         std::optional<u64> bits;
         for (const AttrArg& arg : a->args) {
+            if (!arg.key.empty()) {
+                // A unit other than metres would be dropped silently (cell=4km would be a 4 m cell).
+                if (const std::string unit = quantUnit(arg.value); !unit.empty() && unit != "m")
+                    return fail(std::format("{}={}: unit '{}' is not supported (lengths are in m, or unitless)", arg.key, arg.value, unit));
+            }
             if (arg.key.empty()) {
                 form = arg.value;
             } else if (arg.key == "range") {
-                if (!arg.value.starts_with("±") || !(range = quantNumber(arg.value)) || *range <= 0) return fail("range= needs ±<bound>, e.g. range=±64");
+                // range=x is the symmetric range ±x, as 02 §3.1's example writes it (04 §4.1 writes ±x).
+                if (!(range = quantNumber(arg.value)) || *range <= 0) return fail("range= needs a positive bound, e.g. range=±64");
             } else if (arg.key == "bits") {
                 u64 n = 0;
                 if (!parseSchemaUnsigned(arg.value, n) || n < 1 || n > 32) return fail("bits= needs 1 to 32");
@@ -203,7 +223,8 @@ private:
             q.kind = Quant::FrameCell;
             q.cell = *cell;
             q.res = *res;
-            q.bits = static_cast<u32>(std::ceil(std::log2(std::round(steps))));
+            // ⌈log₂ steps⌉ in integers, so the wire width cannot depend on the build host's libm.
+            q.bits = static_cast<u32>(std::bit_width(static_cast<u64>(std::round(steps)) - 1));
             return q;
         }
         if (form == "smallest3") {
@@ -216,6 +237,10 @@ private:
         if (!form.empty()) return fail(std::format("unknown form '{}' (frame_cell, smallest3, or range=±x with bits=n)", form));
         if (!range || !bits) return fail("needs range=±x and bits=n");
         if (comps == 0) return fail(std::format("range quantization needs a float scalar or vector, not '{}'", f.type->signature));
+        // The decoder computes min + (max - min) * q / steps and casts it to the field's type: the
+        // bounds must fit f32 for f32 fields, and max - min must be finite.
+        if (!isF64 && *range > static_cast<f64>(FLT_MAX)) return fail(std::format("range=±{} does not fit an f32 component", formatF64(*range)));
+        if (!std::isfinite(2 * *range)) return fail(std::format("range=±{}: the range's width is not a finite f64", formatF64(*range)));
         q.kind = Quant::Range;
         q.min = -*range;
         q.max = *range;
@@ -288,10 +313,69 @@ private:
 
     static u64 descHash(const Decl* d, const std::vector<RepField>& fs) {
         std::string text = std::format("component {} {} {} {};", d->qualifiedName, d->typeId, audienceName(d), d->lod.empty() ? "core" : d->lod);
-        for (const RepField& r : fs)
+        std::map<std::string, const Decl*> reached; // enums and flags: a reader rejects undeclared values
+        for (const RepField& r : fs) {
             text += std::format("{}:{}:{}:{}:{}:{}:{}:{};", r.field->id, r.field->name, r.field->type->signature, r.field->repIndex, r.lod,
                                 r.field->predicted ? 1 : 0, r.interp, quantText(r.quant));
+            std::vector<const Decl*> types;
+            reachedBy(r.field->type, types);
+            for (const Decl* t : types) reached.emplace(t->qualifiedName, t);
+        }
+        for (const auto& [name, t] : reached) text += std::format(" {}{{{}}}", name, layoutText(t, false));
         return fnv1a64(text);
+    }
+
+    /// Struct, variant and enum declarations a type refers to (through containers and optionals). A
+    /// record ref travels as an id, so the record's own fields are not part of the payload.
+    static void reachedBy(const Type* t, std::vector<const Decl*>& out) {
+        if (!t) return;
+        reachedBy(t->element, out);
+        reachedBy(t->key, out);
+        const bool layout =
+            t->kind == TypeKind::Struct || t->kind == TypeKind::Variant || t->kind == TypeKind::Enum || t->kind == TypeKind::Flags;
+        if (layout && t->decl) out.push_back(t->decl);
+    }
+
+    /// One declaration's part of a payload: per field its name, type and explicit default (and lock
+    /// id when `withIds`), enum values, and variant alternatives. (@quant is valid only on replicated
+    /// component fields, which descHash covers, so a payload has none.)
+    static std::string layoutText(const Decl* d, bool withIds) {
+        std::string out;
+        for (const Field& f : d->fields) {
+            out += withIds ? std::format("{}:", f.id) : std::string();
+            out += std::format("{}:{}:{};", f.name, f.type ? f.type->signature : "?", f.defaultValue ? f.defaultValue->json : "");
+        }
+        for (const EnumVal& v : d->values) out += std::format("{}={};", v.name, v.value);
+        for (const Alternative& a : d->alternatives) out += withIds ? std::format("|{}:{};", a.id, a.name) : std::format("|{};", a.name);
+        return out;
+    }
+
+    /// The payload of an rpc's arguments or an event's fields, for the protocol hash: the declaration's
+    /// own fields with their lock ids, then every struct, variant, enum and flags type it reaches (each once,
+    /// sorted by name), so any change a peer's codec depends on changes the hash. Reached types
+    /// contribute no lock ids, as in the layout hash: an imported type has ids only when its own file
+    /// is compiled, and the hash must not depend on the file set.
+    static std::string payloadText(const Decl* root) {
+        std::map<std::string, const Decl*> reached;
+        std::set<const Decl*> seen{root};
+        std::vector<const Decl*> todo{root};
+        while (!todo.empty()) {
+            const Decl* d = todo.back();
+            todo.pop_back();
+            std::vector<const Decl*> next;
+            for (const Field& f : d->fields) reachedBy(f.type, next);
+            for (const Alternative& a : d->alternatives) {
+                if (a.type) next.push_back(a.type);
+            }
+            for (const Decl* x : next) {
+                if (!seen.insert(x).second) continue;
+                reached.emplace(x->qualifiedName, x);
+                todo.push_back(x);
+            }
+        }
+        std::string text = layoutText(root, true);
+        for (const auto& [name, d] : reached) text += std::format(" {}{{{}}}", name, layoutText(d, false));
+        return text;
     }
 
     // --- rpcs and events ----------------------------------------------------------------------
@@ -347,9 +431,10 @@ private:
         std::vector<u64> parts;
         for (const auto& [d, fs] : comps) parts.push_back(descHash(d, fs));
         for (const Rpc& r : rs)
-            parts.push_back(fnv1a64(std::format("rpc {} {} {} {} {} {};", r.decl->qualifiedName, r.decl->typeId, r.direction, r.reliable,
-                                                formatF64(r.rate), r.intent)));
-        for (const Event& e : es) parts.push_back(fnv1a64(std::format("event {} {} {};", e.decl->qualifiedName, e.decl->typeId, e.audience)));
+            parts.push_back(fnv1a64(std::format("rpc {} {} {} {} {} {};{}", r.decl->qualifiedName, r.decl->typeId, r.direction, r.reliable,
+                                                formatF64(r.rate), r.intent, payloadText(r.decl))));
+        for (const Event& e : es)
+            parts.push_back(fnv1a64(std::format("event {} {} {};{}", e.decl->qualifiedName, e.decl->typeId, e.audience, payloadText(e.decl))));
         return combine(parts);
     }
 
@@ -490,10 +575,18 @@ private:
             w.close();
             return;
         }
-        case TypeKind::Flags:
-            get(std::format("r.read({})", rawBits(t)),
-                std::format("{0} = static_cast<{1}>(static_cast<std::underlying_type_t<{1}>>(*x));", v, enumType(t)));
+        case TypeKind::Flags: {
+            u64 declared = 0;
+            for (const EnumVal& e : t->decl->values) declared |= static_cast<u64>(e.value);
+            w.open("{");
+            w.line(std::format("auto x = r.read({});", rawBits(t)));
+            w.line("if (!x) return x.error();");
+            w.line(std::format("if ((*x & ~{:#x}ull) != 0) return ::helios::Error(::helios::ErrorCode::Corrupt, \"{}: undeclared {} bits\");", declared,
+                               what, t->decl->name));
+            w.line(std::format("{0} = static_cast<{1}>(static_cast<std::underlying_type_t<{1}>>(*x));", v, enumType(t)));
+            w.close();
             return;
+        }
         case TypeKind::RecordRef: get("r.read(64)", v + ".id = *x;"); return;
         case TypeKind::Builtin:
             switch (t->builtin) {

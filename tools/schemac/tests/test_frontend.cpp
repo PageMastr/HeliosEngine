@@ -117,6 +117,17 @@ TEST_CASE("lexer: unterminated strings and comments are reported") {
     CHECK(d2.diagnostics()[0].message == "unterminated block comment");
 }
 
+TEST_CASE("lexer: doc comments reject control characters (a lone CR would end a generated comment)") {
+    // GCC, Clang, Luau and PostgreSQL end a line comment at a lone CR, so doc text copied into a
+    // generated comment would run as code from there on.
+    const std::string cr = parseErrors("package p;\n/// doc\rstatic_assert(false);\nstruct A {}\n");
+    CHECK_MESSAGE(cr.find("t.hschema:2:8: error: control character U+000D in a doc comment") != std::string::npos, cr);
+    CHECK(parseErrors("package p;\n/// doc\x01\nstruct A {}\n").find("control character U+0001") != std::string::npos);
+    CHECK(parseErrors("package p;\n/// doc\x7f\nstruct A {}\n").find("control character U+007F") != std::string::npos);
+    // Tabs and CRLF line endings are fine; plain comments are never copied, so they are not checked.
+    CHECK(parseErrors("package p;\n/// a\tb\r\nstruct A {}\n// c\rd\n").empty());
+}
+
 TEST_CASE("lexer: sources must be UTF-8 (comments and strings are copied into C++ and Go)") {
     CHECK(parseErrors("package p;\n/// caf\xC3\xA9\nstruct A { s: string = \"\xE2\x9C\x93\" }\n").empty());
     const std::string bad = parseErrors("package p;\nstruct A {}\n/// caf\xE9 (Latin-1)\nstruct B {}\n");

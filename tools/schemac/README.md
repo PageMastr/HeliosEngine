@@ -100,7 +100,9 @@ import "helios/world/frames.hschema";    // relative to this file, then to each 
   work), then unqualified names of imported packages. A name found in two imported packages is an
   "ambiguous" error; qualify it.
 - `///` doc comments attach to the next declaration, field or enum value and become `@doc`
-  (TypeInfo/FieldInfo `doc`, C++ and Go comments).
+  (TypeInfo/FieldInfo `doc`, C++ and Go comments). A control character other than tab in a doc
+  comment is an error: a lone carriage return ends a generated `//` or `--` comment in GCC, Clang,
+  Luau and PostgreSQL, so the rest of the line would run as code. (A CRLF line ending is fine.)
 
 ### Declarations
 
@@ -240,7 +242,10 @@ after a rename and a deletion):
 - **Field ids** are sequential per type (`nextField`); they are the tagged field numbers. Variant
   alternatives get ids the same way; enum values keep their numbers.
 - **SQL tables**: the entry of a struct marked `@sql` records its table (`"sql": "svc_x.table"`),
-  once; a table cannot move to another name or schema.
+  once; a table cannot move to another name or schema, and a table another entry recorded (a
+  removed type, or one renamed without `@was`) cannot be taken by a new type. The loader rejects a
+  table recorded twice, field names that are not identifiers and types with control characters,
+  since they reach generated SQL.
 - **Binding ids**: every `scriptlib` fn has an entry of kind `"fn"` with only its id, minted like a
   type id from `<package>.<Lib>.<fn>` (`"sample.ship.ShipQueries.hullOf": {"id": …, "kind": "fn"}`).
   It keys the fn's calibrated fuel cost (02 §7.4). A renamed fn gets a new id; a removed fn keeps its
@@ -405,7 +410,7 @@ auto vm = ScriptVm::create(config, [&](Binder& b) {       // config.profile = Ho
     (04 §10.2). An implementation that needs a `Name` interns deliberately. A `Name` inside a struct
     *argument* is therefore an error. Inside a struct *result* it is pushed as text, and a `set<Name>`
     field is pushed in lexical order.
-  - `vec3f` is a Luau `vector`.
+  - `vec3f` is a Luau `vector`; its components follow the `f32` rule (NaN and ±inf are rejected).
   - `WorldPos` is the host's `WorldPos` userdata (`helios::FramePos` in C++, with its frame). It is not
     allowed inside structs, where it would lose the frame.
   - `Duration` is seconds, and `Tick` a number.
@@ -425,17 +430,20 @@ auto vm = ScriptVm::create(config, [&](Binder& b) {       // config.profile = Ho
     covers string (bytes), list and set (elements) parameters and the fields of struct parameters,
     recursively. Results are checked the same way: the fn's `@max` and struct fields' `@max`.
   - **Per-call budget.** One call converts at most `glueLimits.maxValues` values (8,192: every number,
-    string, table and element counts, so a table referenced from many places costs once per
-    reference) and `glueLimits.maxStringBytes` string bytes (256 KiB). A list longer than the values
-    left fails before its first element. The plan gives no default (02 §7.4, 04 §10.2), so these are
-    conservative and the host may change them.
+    string, table and element counts, a `nil` element of a `T?` list included, so a table referenced
+    from many places costs once per reference) and `glueLimits.maxStringBytes` string bytes
+    (256 KiB). A list longer than the values left fails before its first element. The plan gives no
+    default (02 §7.4, 04 §10.2), so these are conservative and the host may change them.
   - A value nests at most 32 tables; a cyclic table stops there.
   - Every rejection is a script error naming the fn, the argument and the cap, and the implementation is
     never called.
   - **Budget:** a call rejected by the caps fails in < 1 ms (`perf: rejecting a call over the per-call
     caps …` gates the median of 9 rejections: ≈ 0.2 ms for the reviewer's 22-table DAG, ≤ 0.05 ms for
     65,536 references to one 16 KiB string, GCC RelWithDebInfo). A call within the caps converts at
-    most 8,192 values; calibration (WP-1.6) folds that into the fn's `cost`.
+    most 8,192 values, and that work is not charged beyond the fn's `cost` (up to ≈ 0.8 ms for an
+    8,190-value `echo` pushed back, measured in review). Calibration (02 §7.4) takes the p95 over
+    zone traces, not the worst case at the caps, so it cannot cover this: a deterministic charge per
+    converted value and string byte, taken in the glue before the call, is a WP-1.6 follow-up.
 - **`schema.d.luau`** declares the scriptlib globals (each fn's doc comment, fuel charge and realms,
   `--!strict`) and the types their signatures reach:
   - `EntityId` and `<Record>Ref` as opaque `declare extern type`s;
@@ -474,8 +482,10 @@ helios-schemac -I schemas --lock schemas/sample/schema.lock.jsonc --emit sql --s
   never a table; `@store(ledger)` data lives only in `svc_ledger`, and `svc_ledger` holds only
   ledger data (ADR-008).
 - **Identity.** The lock records the table of each `@sql` struct (`"sql": "svc_x.table"` on its
-  entry). A table cannot move (an error); columns follow field ids, so renames (`@was`) are
-  `RENAME COLUMN`, and columns appear in lock-id order in the snapshot and in the migrated table alike.
+  entry). A table cannot move, and a new type cannot take over a table another lock entry holds
+  (both errors): the stub diffs a table against its own type's baseline entry, found by lock id.
+  Columns follow field ids, so renames (`@was`) are `RENAME COLUMN`, and columns appear in lock-id
+  order in the snapshot and in the migrated table alike.
 - **Key.** Every table has a primary key: the fields marked `@key`, or `@key(a, b)` on the struct.
   Key fields are non-optional scalars. A new field cannot join the key of an existing table (a
   hand-written migration changes a primary key).
@@ -493,7 +503,7 @@ helios-schemac -I schemas --lock schemas/sample/schema.lock.jsonc --emit sql --s
   | `Duration` | `BIGINT` nanoseconds |
   | enums, flags | their underlying integer (the value numbers, not names) |
   | math tuples, `WorldPos`, `TagSet`, `list`, `set`, keyed lists, `T[N]` / structs, `map` / variants | `JSONB` holding the canonical JSONC, with `CHECK (jsonb_typeof(x) = 'array'` / `'object')` |
-  | `NetHandle` | an error: it is scoped to one zone instance (04 §4.6) |
+  | `NetHandle` | an error, also inside a `JSONB` column: it is scoped to one zone instance (04 §4.6) |
 
   Scalar columns are `NOT NULL DEFAULT <the schema default>` (explicit or implicit: 0, `FALSE`, `''`,
   the nil UUID, the first enum value), so `ADD COLUMN` needs no backfill; key columns have no
@@ -504,10 +514,14 @@ helios-schemac -I schemas --lock schemas/sample/schema.lock.jsonc --emit sql --s
   `CREATE TABLE`; a new field is an `ADD COLUMN` with its default; a renamed field is a `RENAME COLUMN`
   (and of its `CHECK`); a widening (`i32→i64`, `u8→u16`, `f32→f64`, `T→T?`) is an `ALTER COLUMN TYPE`
   with the new `CHECK`, or `DROP NOT NULL`; a changed explicit default is `SET DEFAULT`; a revived field
-  is `ADD COLUMN IF NOT EXISTS`. A removed field is only a comment listing the `DROP COLUMN` for the
-  contract release. Down reverses Up, last step first. Against an up-to-date baseline the stub is
-  empty (`SELECT 1;`). Copy a stub into `services/migrations/<service>/` and review it: indexes,
-  partitioning, grants and backfills are hand-written.
+  is `ADD COLUMN IF NOT EXISTS`, with a `-- TODO` when its type changed while it was removed (before
+  the N+2 contract the old column still exists and keeps its old type). A removed field is only a
+  comment listing the `DROP COLUMN` for the contract release. Down reverses Up, last step first.
+  Against an up-to-date baseline the stub is empty (`SELECT 1;`). Copy a stub into
+  `services/migrations/<service>/` and review it: indexes, partitioning, grants and backfills are
+  hand-written; a new `svc_ledger` table carries a `-- TODO` for 05 §3.3's range partitions, which
+  `ALTER` cannot add later. The header lists the schema files sorted, so the command line's order
+  does not change the output.
 - **Not generated** (hand-written, or later work packages): indexes, `UNIQUE` constraints,
   partitioning, sequences, grants and backfills; timestamps (the language has no timestamp type, so
   `TIMESTAMPTZ` columns such as 05's `created_at` are hand-written); byte columns (`BYTEA`, e.g. 05 §6.6's
@@ -533,21 +547,26 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
 
   | Form | Fields | Wire |
   |---|---|---|
-  | `range=±x, bits=n` | `f32`, `f64`, `vec2f`, `vec3f`, `vec4f`, `vec3d`, `color` | each component clamped to [−x, x] on 2ⁿ−1 steps |
+  | `range=±x, bits=n` (or `range=x`) | `f32`, `f64`, `vec2f`, `vec3f`, `vec4f`, `vec3d`, `color` | each component clamped to [−x, x] on 2ⁿ−1 steps |
   | `smallest3, bits=n` | `quatf` | index of the largest component (2 bits) and the other three in ±1/√2 at n bits |
   | `frame_cell, cell=<m>, res=<m>` | `WorldPos` | the position rounded to `res`, per axis a zigzag varint cell index and the offset in ⌈log₂(cell/res)⌉ bits (04 §4.5: `cell=4096m, res=1/256m` is 20 bits per axis) |
   | none | fixed-size values | raw: `bool` 1 bit, integers and enums at their width, floats as IEEE bits, ids at 64 (`NetHandle` 32) |
 
-  `bits` is 1 to 32, and `cell` must be a whole multiple of `res` (2 to 2³² steps). Units (`m`),
-  fractions (`1/256m`) and `±` are accepted. The Phase 0 codec carries no strings, `Name`s,
-  containers, structs or variants: a replicated field of those types is an error under
-  `--emit repl`.
+  `bits` is 1 to 32, and `cell` must be a whole multiple of `res` (2 to 2³² steps). Lengths are
+  metres: `m` or no unit (`cell=4km` is an error, not a 4 m cell); fractions (`1/256m`) and `±` are
+  accepted, and `range=x` is the same as `range=±x` (02 §3.1 writes `range=4096`, 04 §4.1
+  `range=±4096`). The bound must fit an `f32` component for `f32` fields, and the range's width must
+  be finite. With 2ⁿ−1 steps, 0 is not exact in a symmetric range (`range=±4096, bits=16` sends a
+  stationary velocity as +0.0625 m/s per axis); 04 §4.5's at-rest bit (WP-1.10) is meant to cover
+  velocities. The Phase 0 codec carries no strings, `Name`s, containers, structs or variants: a
+  replicated field of those types is an error under `--emit repl`.
 - **Determinism.** Quantizers use f64 arithmetic with round-half-up, and frame cells use integer
   steps, so a cell and a client produce the same bits (04 §4.5), and a decoded state re-encodes to
   identical bits.
 - **Hostile input.** Readers are bounds-checked and never overread. They reject truncated streams,
   varints longer than 10 bytes or overlong, frame-cell offsets of a whole cell or more, cell indices
-  whose position would overflow, and enum values the schema does not declare.
+  whose position would overflow, enum values and flag bits the schema does not declare, and
+  smallest-three components whose squares sum to more than 1 (no unit quaternion sends them).
 - **`<stem>Replication()`** returns the file's `FileRepTables`:
   - its replicated components;
   - its top-level rpcs, with direction, reliability, `@ratelimit` per second and `@intent` (service
@@ -555,9 +574,14 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
   - its events, with `@audience(owner|relevant|party)`, default `relevant`;
   - a **protocol hash**, which is `protocolHash()` over the descriptor, rpc and event hashes.
   `protocolHash()` over several files' hashes gives a build's hash, independent of order; it is an
-  input of 05 §1.14.1's compat fingerprint. The hash covers type and field ids, names, types, audience,
-  LOD, prediction, interpolation and every quantizer parameter, so any wire change changes it, and
-  comments or declaration order do not.
+  input of 05 §1.14.1's compat fingerprint. For components it covers type and field ids, names,
+  types, audience, LOD, prediction, interpolation, every quantizer parameter and the values of the
+  enums and flags the fields use. For rpcs and events it covers the direction, reliability, rate,
+  intent and audience, and the payload: each argument's or field's lock id, name, type and explicit
+  default, and the fields, defaults, enum values and alternatives of every struct, variant, enum and
+  flags type the payload reaches (by name; reached types contribute no lock ids, so the hash does
+  not depend on which files are compiled). So any wire change changes it, and comments or
+  declaration order do not.
 
 ## Lint report
 
@@ -660,7 +684,8 @@ fixture and the sample schemas: descriptors against the schema and the `TypeInfo
 change-mask indices), full-state round trips within each quantizer's precision (and re-encoding to the
 same bits), every truncated prefix and random input rejected cleanly, an undeclared enum value, the rpc
 and event tables, the protocol hash (stable under comments and the order of files, changed by a
-quantizer or an audience), and 18 `@quant` / field diagnostics. `test_sql.cpp` covers the column mapping, the migration stub
+quantizer, an audience, an enum's values, an rpc argument's or event field's type, name or default,
+and a field of a struct an rpc reaches), undeclared flag bits, and 22 `@quant` / field diagnostics. `test_sql.cpp` covers the column mapping, the migration stub
 (renames, widenings, `T→T?`, new columns and tables, removed fields as contract comments, Down in
 reverse, the empty stub, `--sql-baseline`) and the rules of `@sql`. The CTest `schemac_sql_postgres`
 (`tests/sql_postgres.cmake`) runs them on a real PostgreSQL: it compiles `tests/sql/v1` and `v2` as two

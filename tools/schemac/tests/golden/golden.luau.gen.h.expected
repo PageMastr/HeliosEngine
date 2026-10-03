@@ -67,6 +67,10 @@ public:
     /// Fuel: 1; pure. Realms: server, client. Binding id 0x81f17f8b.
     virtual ::golden::all::Tagged tagged(lua_State* L, const std::set<std::string>& names, ::helios::f32 ratio) = 0;
 
+    /// Nil elements of optional lists count against the per-call value cap like any other value.
+    /// Fuel: 1; pure. Realms: server, client. Binding id 0xc25e1a29.
+    virtual ::helios::u32 opts(lua_State* L, const std::vector<std::vector<std::optional<::helios::u32>>>& xs) = 0;
+
     static constexpr ::helios::u32 kNearestBinding = 0x1b0b464fu; ///< lock id of golden.all.Queries.nearest
     static constexpr ::helios::u32 kInRadiusBinding = 0x77a0446eu; ///< lock id of golden.all.Queries.inRadius
     static constexpr ::helios::u32 kSpawnBinding = 0xb861baaeu; ///< lock id of golden.all.Queries.spawn
@@ -76,6 +80,7 @@ public:
     static constexpr ::helios::u32 kClipBinding = 0xb6e3edadu; ///< lock id of golden.all.Queries.clip
     static constexpr ::helios::u32 kBagBinding = 0x5fdecbfbu; ///< lock id of golden.all.Queries.bag
     static constexpr ::helios::u32 kTaggedBinding = 0x81f17f8bu; ///< lock id of golden.all.Queries.tagged
+    static constexpr ::helios::u32 kOptsBinding = 0xc25e1a29u; ///< lock id of golden.all.Queries.opts
 };
 
 /// Registers the Queries functions whose @realm includes `realm` as the Luau library `Queries` (call inside

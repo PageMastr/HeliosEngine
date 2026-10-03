@@ -20,42 +20,6 @@ using asset::HpakEntry;
 
 constexpr std::array<u8, kBlobAlignment> kZeros{};
 
-/// XXH3-64 of each 64 KiB pak block of a byte stream fed in pieces.
-class PakBlockHasher {
-public:
-    void feed(const u8* p, u64 n) noexcept {
-        while (n > 0) {
-            const u64 take = std::min(n, kPakBlockSize - m_fill);
-            m_hasher.update(p, static_cast<usize>(take));
-            p += take;
-            n -= take;
-            m_fill += take;
-            if (m_fill == kPakBlockSize) flush();
-        }
-    }
-    void zeros(u64 n) noexcept {
-        while (n > 0) {
-            const u64 take = std::min<u64>(n, kZeros.size());
-            feed(kZeros.data(), take);
-            n -= take;
-        }
-    }
-    std::vector<u64> finish() {
-        if (m_fill > 0) flush();
-        return std::move(m_hashes);
-    }
-
-private:
-    void flush() {
-        m_hashes.push_back(m_hasher.digest());
-        m_hasher.reset();
-        m_fill = 0;
-    }
-    Hasher64 m_hasher;
-    u64 m_fill = 0;
-    std::vector<u64> m_hashes;
-};
-
 /// One compression context per thread (ZSTD_compress2 resets the session; the parameters are set on
 /// every call, so a context carries nothing from one writer to the next).
 struct CCtxHolder {
@@ -201,15 +165,38 @@ Result<HpakWriter::Plan> HpakWriter::plan() const {
     for (const Asset* a : p.blobOrder) sizes.push_back(a->stored.size());
     HELIOS_TRY_ASSIGN(p.layout, planHpakLayout(sizes, m_assetBlocks));
 
+    // XXH3-64 of each 64 KiB pak block of the blob region, fed blob by blob with its padding. (A local
+    // hasher, not a member: Hasher64 is 64-byte aligned and MSVC warns, C4324, about padded classes.)
     std::vector<u64> offsetOf(m_assets.size());
-    PakBlockHasher hasher;
+    std::vector<u64> blockHashes;
+    blockHashes.reserve(p.layout.pakBlockCount);
+    Hasher64 hasher;
+    u64 fill = 0;
+    const auto feed = [&](const u8* bytes, u64 n) {
+        while (n > 0) {
+            const u64 take = std::min(n, kPakBlockSize - fill);
+            hasher.update(bytes, static_cast<usize>(take));
+            bytes += take;
+            n -= take;
+            fill += take;
+            if (fill == kPakBlockSize) {
+                blockHashes.push_back(hasher.digest());
+                hasher.reset();
+                fill = 0;
+            }
+        }
+    };
     for (usize i = 0; i < p.blobOrder.size(); ++i) {
         const Asset* a = p.blobOrder[i];
         offsetOf[static_cast<usize>(a - m_assets.data())] = p.layout.blobOffsets[i];
-        hasher.feed(a->stored.data(), a->stored.size());
-        hasher.zeros(alignUp<u64>(a->stored.size(), kBlobAlignment) - a->stored.size());
+        feed(a->stored.data(), a->stored.size());
+        for (u64 pad = alignUp<u64>(a->stored.size(), kBlobAlignment) - a->stored.size(); pad > 0;) {
+            const u64 take = std::min<u64>(pad, kZeros.size());
+            feed(kZeros.data(), take);
+            pad -= take;
+        }
     }
-    const std::vector<u64> blockHashes = hasher.finish();
+    if (fill > 0) blockHashes.push_back(hasher.digest());
     HELIOS_ASSERT(blockHashes.size() == p.layout.pakBlockCount);
 
     p.toc.assign(static_cast<usize>(p.layout.tocSize), 0);

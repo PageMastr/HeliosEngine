@@ -3,13 +3,19 @@
 #
 # Installed as D:\helios-ci\hooks\job-started.ps1 and named by ACTIONS_RUNNER_HOOK_JOB_STARTED in
 # D:\helios-ci\runner\.env (docs/runbooks/win-gpu-runner.md). The runner runs it as the runner account, in a step
-# called "Set up runner", after "Set up job" has downloaded the job's actions and before any of the job's steps.
-# A non-zero exit fails the job.
+# called "Set up runner", after "Set up job" has downloaded the job's actions and before any of the job's steps
+# (actions' `pre:` steps included).
 #
 # 1. Refuse the job unless it is a `schedule`, `push` or `workflow_dispatch` run of refs/heads/main from a workflow
 #    file on main. A branch's own workflow file decides its own triggers and guards (a push to an unreviewed
 #    branch can request this runner before any review), so this check, which lives on the machine, is what keeps
 #    unmerged code off the PC; tools/ci/check_runner_policy.py is the PR-tier half.
+#    A refused job is ended, not just failed: a non-zero exit fails only this step, and the runner then still runs
+#    every later step whose `if:` holds after a failure (`always()`, `failure()`, `!cancelled()`) and every
+#    action's `pre:` step (`pre-if` defaults to `always()`), all in the same pass (actions/runner: JobExtension,
+#    StepsRunner). So the hook stops its parent process, the runner's Runner.Worker.exe under
+#    D:\helios-ci\runner, which runs the job's steps; the runner's listener then reports the job failed and stays
+#    online. If the parent is anything else, it stops nothing and says so.
 # 2. Empty D:\helios-ci\work so that the job starts clean. Kept, because the runner made them for this job:
 #    `_actions` (the actions "Set up job" downloaded for this job), `_temp` (RUNNER_TEMP, which the runner empties
 #    itself and which holds the event payload), `_PipelineMapping` (the runner's workspace bookkeeping), `_diag`
@@ -22,14 +28,15 @@
 # not followed). A path that is not where the runner's layout puts it, or a root, pipeline or workspace directory
 # that is itself a link, stops the hook with an error instead.
 #
-# The runner dot-sources the file (`powershell -command ". '<path>'"`), so the last block always runs. The tests
-# (test_runner_scripts.ps1) define $HeliosCiScriptTestMode before dot-sourcing to load the functions alone.
-# Windows PowerShell 5.1 and PowerShell 7 both run it.
+# The runner dot-sources the file (`powershell -command ". '<path>'"`, profiles included), so the last block always
+# runs; there is no switch to skip it. The tests (test_runner_scripts.ps1) load the functions and constants from the
+# parsed file instead. Windows PowerShell 5.1 and PowerShell 7 both run it.
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $HeliosCiWorkRoot = 'D:\helios-ci\work'
+$HeliosCiRunnerRoot = 'D:\helios-ci\runner'
 $HeliosCiKeep = @('_actions', '_temp', '_PipelineMapping', '_diag')
 
 # $null when the job may run here, else why not. $Environment: the job's GITHUB_* variables. Functions that return
@@ -138,14 +145,53 @@ function Remove-HeliosCiWipeTarget {
     $null = & "$env:SystemRoot\System32\cmd.exe" /d /c rd /s /q "\\?\$parking"
 }
 
+# Ends the job this hook runs in: stops process $ProcessId's parent when that is Runner.Worker.exe under
+# $RunnerRoot (the runner starts the hook's shell directly), and nothing otherwise. Returns whether it stopped it.
+# Waits $DelayMilliseconds first, to give the worker time to send the refusal to the job's log. Nothing else runs
+# meanwhile: the worker waits for this step, and cancelling the run does not stop a running step whose `if:` is
+# `always()` (StepsRunner re-evaluates it), which the hook's is.
+function Stop-HeliosCiJob {
+    param(
+        [Parameter(Mandatory = $true)] [string]$RunnerRoot,
+        [int]$ProcessId = $PID,
+        [int]$DelayMilliseconds = 2000
+    )
+    $prefix = $RunnerRoot.TrimEnd('\') + '\'
+    try {
+        $self = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $ProcessId"
+        $worker = $null
+        if ($self) {
+            $worker = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $($self.ParentProcessId)"
+        }
+        if (-not $worker -or $worker.Name -ine 'Runner.Worker.exe' -or -not $worker.ExecutablePath -or
+            -not ([string]$worker.ExecutablePath).StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+            $what = if ($worker) { "$($worker.Name) ($($worker.ExecutablePath))" } else { 'not found' }
+            Write-Host ("::error::job-started hook: the parent process is not the runner's Runner.Worker.exe under " +
+                "${RunnerRoot}: $what. Nothing was stopped, so this job's if: always() and pre: steps may still run.")
+            return $false
+        }
+        Write-Host "job-started hook: ending the job: stopping Runner.Worker.exe (process $($worker.ProcessId))"
+        if ($DelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $DelayMilliseconds }
+        Stop-Process -Id $worker.ProcessId -Force
+        return $true
+    } catch {
+        Write-Host ("::error::job-started hook: could not end the job ($($_.Exception.Message)), so its if: always() " +
+            'and pre: steps may still run.')
+        return $false
+    }
+}
+
 function Invoke-HeliosCiJobStarted {
     param(
         [Parameter(Mandatory = $true)] [string]$Root,
-        [Parameter(Mandatory = $true)] [System.Collections.IDictionary]$Environment
+        [Parameter(Mandatory = $true)] [string]$RunnerRoot,
+        [Parameter(Mandatory = $true)] [System.Collections.IDictionary]$Environment,
+        [int]$DelayMilliseconds = 2000
     )
     $refused = Test-HeliosCiJobAllowed -Environment $Environment
     if ($refused) {
         Write-Host "::error::job-started hook: refused: $refused (09 section 5.4a; docs/runbooks/win-gpu-runner.md)"
+        $null = Stop-HeliosCiJob -RunnerRoot $RunnerRoot -DelayMilliseconds $DelayMilliseconds
         return 1
     }
     $workspace = [string]$Environment['GITHUB_WORKSPACE']
@@ -168,10 +214,8 @@ function Invoke-HeliosCiJobStarted {
     return 0
 }
 
-if (-not (Get-Variable -Name HeliosCiScriptTestMode -ErrorAction SilentlyContinue)) {
-    $jobEnvironment = @{}
-    foreach ($name in 'GITHUB_EVENT_NAME', 'GITHUB_REF', 'GITHUB_WORKFLOW_REF', 'GITHUB_WORKSPACE') {
-        $jobEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
-    }
-    exit (Invoke-HeliosCiJobStarted -Root $HeliosCiWorkRoot -Environment $jobEnvironment)
+$jobEnvironment = @{}
+foreach ($name in 'GITHUB_EVENT_NAME', 'GITHUB_REF', 'GITHUB_WORKFLOW_REF', 'GITHUB_WORKSPACE') {
+    $jobEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
 }
+exit (Invoke-HeliosCiJobStarted -Root $HeliosCiWorkRoot -RunnerRoot $HeliosCiRunnerRoot -Environment $jobEnvironment)

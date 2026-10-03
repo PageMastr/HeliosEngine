@@ -27,7 +27,8 @@
     The runner's local account. Default: helios-ci.
 
 .PARAMETER AllowAddress
-    IPv4 or IPv6 addresses (not ranges) of lab machines inside the blocked ranges that the account may reach.
+    IPv4 or IPv6 addresses (not ranges) of lab machines inside the blocked ranges that the account may reach,
+    written in full (192.168.1.50, fd00::5; not 192.168.150 or 010.0.0.1).
 
 .PARAMETER Remove
     Remove this script's rules for the account and add none.
@@ -59,6 +60,11 @@ function ConvertTo-HeliosCiIPNumber {
     $ip = $null
     if ($Address -match '/' -or -not [System.Net.IPAddress]::TryParse($Address, [ref]$ip)) {
         throw "'$Address' is not an IPv4 or IPv6 address"
+    }
+    # TryParse also reads shorthand that names another host ('10.1' is 10.0.0.1, '192.168.150' is 192.168.0.150,
+    # '3232235876' is 192.168.1.100, a leading 0 is octal), so only the address's own text is accepted.
+    if ($ip.ToString() -ne $Address) {
+        throw "'$Address' is not written as a full address (it would mean $ip); write it as $ip if that is the host"
     }
     $bytes = $ip.GetAddressBytes()
     [Array]::Reverse($bytes)
@@ -214,6 +220,4 @@ function Invoke-HeliosCiFirewall {
     }
 }
 
-if (-not (Get-Variable -Name HeliosCiScriptTestMode -ErrorAction SilentlyContinue)) {
-    Invoke-HeliosCiFirewall -Account $Account -AllowAddress $AllowAddress -Remove:$Remove
-}
+Invoke-HeliosCiFirewall -Account $Account -AllowAddress $AllowAddress -Remove:$Remove

@@ -4,8 +4,10 @@
 #   pwsh -NoProfile -File tools/ci/runner/test_runner_scripts.ps1 [-WorkDir DIR]
 #
 # Everywhere: every .ps1 here parses and is ASCII; firewall.ps1's block lists (CIDR splitting around lab
-# addresses, IPv4 and IPv6, stray addresses) and the rules it adds and removes (the firewall cmdlets mocked);
-# job-started.ps1's refusal rules and the entries it would delete. On Windows also the wipe itself on a scratch
+# addresses, IPv4 and IPv6, stray and non-canonical addresses) and the rules it adds and removes (the firewall
+# cmdlets mocked); job-started.ps1's refusal rules, how it ends a refused job (the process cmdlets mocked) and the
+# entries it would delete. The scripts have no test switch: their functions and constants are loaded from the
+# parsed files, so their last block (the run) never runs here. On Windows also the wipe itself on a scratch
 # tree under -WorkDir: a junction to a directory outside, a directory symbolic link where creating one is allowed,
 # read-only files and a deep tree; the links go, their targets stay. The last line says whether the wipe ran, and
 # CTest requires "(wipe: ran)" on Windows (tools/ci/CMakeLists.txt).
@@ -51,10 +53,23 @@ foreach ($file in Get-ChildItem -LiteralPath $here -Filter *.ps1) {
     Assert-Equal 0 @($bytes | Where-Object { $_ -gt 127 }).Count "$($file.Name) is ASCII"
 }
 
-$HeliosCiScriptTestMode = $true
+# A script's functions and top-level assignments (its constants), from its syntax tree, as a script block to
+# dot-source; everything else at its top level (its param block, Set-StrictMode, the run itself) is left out.
+function Get-HeliosCiScriptDefinitions([string]$Path) {
+    $tokens = $null
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$errors)
+    $parts = @($ast.EndBlock.Statements | Where-Object {
+            $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -or
+            $_ -is [System.Management.Automation.Language.AssignmentStatementAst]
+        } | ForEach-Object { $_.Extent.Text })
+    return [scriptblock]::Create($parts -join [Environment]::NewLine)
+}
+Set-StrictMode -Version 2.0
+Add-Type -AssemblyName System.Numerics
 
 # -- firewall.ps1 --------------------------------------------------------------------------------------------
-. (Join-Path $here 'firewall.ps1')
+. (Get-HeliosCiScriptDefinitions (Join-Path $here 'firewall.ps1'))
 $ipv4 = @('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '100.64.0.0/10', '224.0.0.0/4',
     '255.255.255.255/32')
 Assert-Equal $ipv4 (Get-HeliosCiBlockList -Block $HeliosCiBlockedIPv4 -Allow @()) 'IPv4 without lab addresses'
@@ -79,6 +94,13 @@ Assert-Equal @('8.8.8.8', '2001:db8::1') `
     'addresses outside every blocked range are reported'
 Assert-Throws { Get-HeliosCiBlockList -Block @('10.0.0.0/8') -Allow @('10.0.0.0/24') } 'not an IPv4 or IPv6 address' 'a range is not a lab address'
 Assert-Throws { Get-HeliosCiBlockList -Block @('10.0.0.0/8') -Allow @('lab-host') } 'not an IPv4 or IPv6 address' 'a name is not a lab address'
+# IPAddress.TryParse also reads shorthand that means another address; each would open a host nobody named.
+foreach ($shorthand in '192.168.150', '10.1', '3232235876', '192.168.001.050', '0x0a.0.0.1', 'fd00:0:0:0:0:0:0:5') {
+    Assert-Throws { Get-HeliosCiBlockList -Block $HeliosCiBlockedIPv4 -Allow @($shorthand) } 'not written as a full' `
+        "a shorthand lab address ($shorthand) fails"
+}
+Assert-Equal @('fc00::-fd00::4', 'fd00::6-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'fe80::/10', 'ff00::/8') `
+    (Get-HeliosCiBlockList -Block $HeliosCiBlockedIPv6 -Allow @('FD00::5')) 'an IPv6 lab address in upper case'
 
 # Invoke-HeliosCiFirewall with the firewall cmdlets, the elevation check and the SID lookup mocked (functions win
 # over cmdlets): what it removes and adds, and that nothing is removed when the new rules cannot be made.
@@ -125,10 +147,13 @@ $script:fwLog.Clear()
 Assert-Throws { Invoke-HeliosCiFirewall -Account 'typo' 6>$null } 'No mapping' 'an unknown account fails'
 Assert-Throws { Invoke-HeliosCiFirewall -Account 'helios-ci' -AllowAddress '8.8.8.8' 6>$null } 'Not in a blocked range' `
     'a stray lab address fails'
+Assert-Throws { Invoke-HeliosCiFirewall -Account 'helios-ci' -AllowAddress '192.168.150' 6>$null } 'not written as a full' `
+    'a shorthand lab address fails before any rule changes'
 Assert-Equal 0 $script:fwLog.Count 'a failed run removes no rule'
 
 # -- job-started.ps1: which jobs run -------------------------------------------------------------------------
-. (Join-Path $here 'job-started.ps1')
+. (Get-HeliosCiScriptDefinitions (Join-Path $here 'job-started.ps1'))
+Assert-Equal @('D:\helios-ci\work', 'D:\helios-ci\runner') @($HeliosCiWorkRoot, $HeliosCiRunnerRoot) 'the hook''s directories'
 $main = @{
     GITHUB_EVENT_NAME   = 'schedule'
     GITHUB_REF          = 'refs/heads/main'
@@ -165,6 +190,104 @@ foreach ($case in @(
         Write-Host "FAIL: the hook accepts $what"
     }
 }
+
+# -- job-started.ps1: how it ends a refused job ---------------------------------------------------------------
+# A failed hook fails only its own step: the runner would still run the job's if: always() steps and actions'
+# pre: steps. So the hook stops its parent, the runner's worker. The process cmdlets are mocked (functions win over
+# cmdlets); $script:processes is the process table, and the mocks and Write-Host record into $script:jobLog.
+$script:jobLog = New-Object System.Collections.Generic.List[string]
+$script:processes = @{}
+function Get-CimInstance {
+    [CmdletBinding()] param([string]$ClassName, [string]$Filter)
+    if ($ClassName -cne 'Win32_Process' -or $Filter -cnotmatch '^ProcessId = (\d+)$') { throw "unexpected query: $ClassName $Filter" }
+    if ($script:processes.ContainsKey('throw')) { throw 'WMI is not available' }
+    return $script:processes[[int]$Matches[1]]
+}
+function Stop-Process {
+    [CmdletBinding()] param([int]$Id, [switch]$Force)
+    $script:jobLog.Add("stop $Id force=$Force")
+}
+function Start-Sleep {
+    [CmdletBinding()] param([int]$Milliseconds)
+    $script:jobLog.Add("sleep $Milliseconds")
+}
+function Invoke-Recorded([scriptblock]$Block) {
+    function Write-Host { param([Parameter(Position = 0)] [object]$Object) $script:jobLog.Add("host: $Object") }
+    return & $Block
+}
+function New-Process([int]$Id, [int]$Parent, [string]$Name, [AllowNull()] [string]$Path) {
+    $script:processes[$Id] = [pscustomobject]@{ ProcessId = $Id; ParentProcessId = $Parent; Name = $Name; ExecutablePath = $Path }
+}
+function Set-Parent([string]$Name, [AllowNull()] [string]$Path) {
+    $script:processes = @{}
+    $script:jobLog.Clear()
+    New-Process $PID 4000 'powershell.exe' 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+    if ($Name) { New-Process 4000 3000 $Name $Path }
+}
+$runnerRoot = 'D:\helios-ci\runner'
+function Stop-TestJob { return Stop-HeliosCiJob -RunnerRoot $runnerRoot -DelayMilliseconds 0 6>$null }
+
+foreach ($worker in @(
+        @('Runner.Worker.exe', 'D:\helios-ci\runner\bin\Runner.Worker.exe'),
+        @('runner.worker.EXE', 'd:\HELIOS-CI\Runner\bin.2.330.0\Runner.Worker.exe'))) {
+    Set-Parent $worker[0] $worker[1]
+    Assert-Equal $true (Stop-TestJob) "the job ends when the parent is $($worker[1])"
+    Assert-Equal @('stop 4000 force=True') $script:jobLog.ToArray() "exactly the worker is stopped ($($worker[1]))"
+}
+foreach ($other in @(
+        @('Runner.Worker.exe', 'C:\actions-runner\bin\Runner.Worker.exe'),
+        @('Runner.Worker.exe', 'D:\helios-ci\runner-old\bin\Runner.Worker.exe'),
+        @('Runner.Worker.exe', 'D:\helios-ci\work\HeliosEngine\HeliosEngine\Runner.Worker.exe'),
+        @('Runner.Worker.exe', $null),
+        @('Runner.Listener.exe', 'D:\helios-ci\runner\bin\Runner.Listener.exe'),
+        @('pwsh.exe', 'D:\helios-ci\runner\bin\pwsh.exe'),
+        @('ctest.exe', 'C:\Program Files\CMake\bin\ctest.exe'),
+        @($null, $null))) {
+    Set-Parent $other[0] $other[1]
+    Assert-Equal $false (Stop-TestJob) "nothing is stopped when the parent is $($other[0]) ($($other[1]))"
+    Assert-Equal 0 $script:jobLog.Count "no process is stopped when the parent is $($other[0]) ($($other[1]))"
+}
+Set-Parent $null $null
+$script:processes.Remove($PID)
+Assert-Equal $false (Stop-TestJob) 'nothing is stopped when the hook''s own process is not found'
+Set-Parent 'Runner.Worker.exe' 'D:\helios-ci\runner\bin\Runner.Worker.exe'
+$script:processes['throw'] = $true
+Assert-Equal $false (Stop-TestJob) 'a WMI failure stops nothing and does not throw'
+Assert-Equal 0 $script:jobLog.Count 'a WMI failure stops no process'
+
+# Through the hook's entry point: a refused job returns 1 after it says why, waits, then stops the worker; an
+# allowed job (with nothing to wipe) stops nothing.
+$jobRoot = Join-Path ([IO.Path]::GetTempPath()) ('helios-runner-job-' + [guid]::NewGuid().ToString('N'))
+$jobWorkspace = Join-Path (Join-Path $jobRoot 'HeliosEngine') 'HeliosEngine'
+New-Item -ItemType Directory -Force -Path $jobWorkspace, (Join-Path $jobRoot '_actions') | Out-Null
+Set-Parent 'Runner.Worker.exe' 'D:\helios-ci\runner\bin\Runner.Worker.exe'
+$pushToBranch = @{
+    GITHUB_EVENT_NAME   = 'push'
+    GITHUB_REF          = 'refs/heads/agent/claude/x'
+    GITHUB_WORKFLOW_REF = 'PageMastr/HeliosEngine/.github/workflows/hook-test.yml@refs/heads/agent/claude/x'
+    GITHUB_WORKSPACE    = $jobWorkspace
+}
+$code = Invoke-Recorded { Invoke-HeliosCiJobStarted -Root $jobRoot -RunnerRoot $runnerRoot -Environment $pushToBranch }
+Assert-Equal 1 $code 'a refused job fails the hook'
+Assert-Equal @('host: ::error::job-started hook: refused', 'host: job-started hook: ending the job', 'sleep 2000', 'stop 4000 force=True') `
+    @($script:jobLog | ForEach-Object { if ($_ -like 'host: *') { ($_ -split ': ')[0..2] -join ': ' } else { $_ } }) `
+    'a refused job: the reason, then the worker is stopped after a pause'
+Assert-Equal $true ($script:jobLog[0] -clike "*refused: ref 'refs/heads/agent/claude/x'*") 'the refusal names the ref'
+Set-Parent 'Runner.Worker.exe' 'D:\helios-ci\runner\bin\Runner.Worker.exe'
+$mainJob = @{
+    GITHUB_EVENT_NAME   = 'schedule'
+    GITHUB_REF          = 'refs/heads/main'
+    GITHUB_WORKFLOW_REF = 'PageMastr/HeliosEngine/.github/workflows/win-gpu.yml@refs/heads/main'
+    GITHUB_WORKSPACE    = $jobWorkspace
+}
+Assert-Equal 0 (Invoke-HeliosCiJobStarted -Root $jobRoot -RunnerRoot $runnerRoot -Environment $mainJob 6>$null) 'an allowed job passes'
+Assert-Equal 0 $script:jobLog.Count 'an allowed job stops nothing'
+Set-Parent 'pwsh.exe' 'C:\Program Files\PowerShell\7\pwsh.exe'
+Assert-Equal 1 (Invoke-HeliosCiJobStarted -Root $jobRoot -RunnerRoot $runnerRoot -Environment $pushToBranch 6>$null) `
+    'a refused job fails the hook even when the job cannot be ended'
+Assert-Equal 0 $script:jobLog.Count 'and then stops nothing'
+Remove-Item -LiteralPath $jobRoot -Recurse -Force
+$script:processes = @{}
 
 # -- job-started.ps1: what it deletes ------------------------------------------------------------------------
 $WorkDir = [IO.Path]::GetFullPath($WorkDir)
@@ -226,7 +349,7 @@ if (-not $onWindows) {
     Set-Content -LiteralPath $readOnly -Value 'x'
     (Get-Item -LiteralPath $readOnly).Attributes = 'ReadOnly'
     $environment = With @{ GITHUB_WORKSPACE = $workspace }
-    Assert-Equal 0 (Invoke-HeliosCiJobStarted -Root $root -Environment $environment) 'the wipe succeeds'
+    Assert-Equal 0 (Invoke-HeliosCiJobStarted -Root $root -RunnerRoot $runnerRoot -Environment $environment) 'the wipe succeeds'
     Assert-Equal @('HeliosEngine', '_PipelineMapping', '_actions', '_diag', '_temp') `
         (Get-Sorted @(Get-ChildItem -LiteralPath $root -Force | ForEach-Object Name)) 'the work directory after the wipe'
     Assert-Equal @('HeliosEngine') @(Get-ChildItem -LiteralPath (Join-Path $root 'HeliosEngine') -Force | ForEach-Object Name) 'the pipeline directory'
@@ -236,7 +359,8 @@ if (-not $onWindows) {
 
     New-Tree
     $refused = With @{ GITHUB_WORKSPACE = $workspace; GITHUB_EVENT_NAME = 'pull_request' }
-    Assert-Equal 1 (Invoke-HeliosCiJobStarted -Root $root -Environment $refused) 'a refused job fails'
+    Assert-Equal 1 (Invoke-HeliosCiJobStarted -Root $root -RunnerRoot $runnerRoot -Environment $refused -DelayMilliseconds 0 6>$null) `
+        'a refused job fails'
     Assert-Equal $true (Test-Path -LiteralPath (Join-Path $root 'stray.txt')) 'a refused job deletes nothing'
 
     New-Tree

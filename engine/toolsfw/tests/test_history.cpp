@@ -3,6 +3,11 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
+#include <chrono>
+#include <format>
+#include <vector>
+
 #include "helios/toolsfw/json_util.h"
 #include "helios/toolsfw/samples.h"
 #include "test_util.h"
@@ -165,6 +170,27 @@ TEST_CASE("history: groups fold commands into one undo step") {
     CHECK_FALSE(f.fw->inGroup());
 }
 
+TEST_CASE("history: cancelling a nested group rolls back only its own edits") {
+    Fixture f("hist_group_nested_cancel");
+    CommandInvoker& ui = f.fw->invoker(Origin::Ui);
+    f.fw->beginGroup(Origin::Ui, "Outer");
+    REQUIRE(ui.invoke("doc.setProperty", R"({"doc": "hull/frigate", "path": "mass", "value": 15000})"));
+    f.fw->beginGroup(Origin::Ui, "Inner");
+    REQUIRE(ui.invoke("doc.setProperty", R"({"doc": "hull/frigate", "path": "handling/rollRate", "value": 95})"));
+    CHECK(f.fw->groupDepth() == 2);
+    f.fw->cancelGroup();
+    CHECK(f.fw->groupDepth() == 1);
+    CHECK(f.get("handling/rollRate") != "95");
+    CHECK(f.get("mass") == "15000");  // the outer level's edit stays
+    REQUIRE(ui.invoke("doc.setProperty", R"({"doc": "hull/frigate", "path": "handling/yawRate", "value": 12})"));
+    CHECK(f.fw->history().empty());   // still inside the outer group
+    REQUIRE(f.fw->endGroup());
+    CHECK_FALSE(f.fw->inGroup());
+    REQUIRE(f.fw->history().size() == 1);
+    CHECK(f.fw->history()[0].tx.label == "Outer");
+    CHECK(f.fw->history()[0].tx.ops.size() == 2);
+}
+
 TEST_CASE("history: the byte cap drops the oldest entries") {
     const fs::Path root = freshDir("hist_cap");
     REQUIRE(writeProject(root));
@@ -210,6 +236,45 @@ TEST_CASE("history: edits of every origin share one history") {
     CHECK(f.get("mass") == "13000");
     REQUIRE(f.fw->undo(Origin::Cli));
     CHECK(f.get("mass") == "12000");
+}
+
+#if defined(NDEBUG) && !defined(HELIOS_SANITIZERS_ENABLED) && !defined(__SANITIZE_ADDRESS__)
+constexpr bool kAssertBudget = true;
+#else
+constexpr bool kAssertBudget = false;
+#endif
+
+TEST_CASE("perf: a one-op commit costs <= 0.1 ms, flat over a 50,000-transaction session") {
+    // framework.h's budget. The cost must not grow with the session's length: the first and the last
+    // 1,000 of 50,000 commits are timed in batches of 100, and the medians are compared.
+    Fixture f("hist_perf");
+    constexpr int kCommits = 50'000;
+    constexpr int kWindow = 1'000;
+    constexpr int kBatch = 100;
+    std::vector<f64> first;
+    std::vector<f64> last;
+    for (int i = 0; i < kCommits; i += kBatch) {
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int k = 0; k < kBatch; ++k) {
+            auto b = f.fw->begin(Origin::Ui, "Set mass");
+            REQUIRE(b->set(f.frigate, "mass", std::to_string(1000 + ((i + k) % 30000))));
+            REQUIRE(b->commit());
+        }
+        const f64 us = std::chrono::duration<f64, std::micro>(std::chrono::steady_clock::now() - t0).count() / kBatch;
+        if (i < kWindow) first.push_back(us);
+        if (i >= kCommits - kWindow) last.push_back(us);
+    }
+    const auto median = [](std::vector<f64> v) {
+        std::sort(v.begin(), v.end());
+        return v[v.size() / 2];
+    };
+    const f64 a = median(first);
+    const f64 b = median(last);
+    MESSAGE(std::format("one-op commit: {:.1f} us (first 1,000), {:.1f} us (last 1,000 of {}), log {} transactions", a, b, kCommits,
+                        f.fw->log().size()));
+    CHECK(f.fw->log().size() == static_cast<usize>(kCommits));
+    CHECK(b <= 3.0 * a);
+    if (kAssertBudget) CHECK(b <= 100.0);
 }
 
 } // namespace

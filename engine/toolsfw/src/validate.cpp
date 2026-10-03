@@ -205,6 +205,7 @@ Result<void> validateTransaction(const Framework& framework, const Transaction& 
     for (const Op& op : tx.ops) {
         const Document* d = framework.documents().find(op.doc);
         if (!d || d->destroyed()) continue;
+        const usize first = issues.size();
         switch (op.kind) {
         case OpKind::Set:
             if (!op.after) break;
@@ -229,11 +230,12 @@ Result<void> validateTransaction(const Framework& framework, const Transaction& 
             break;
         default: break;
         }
+        // Each issue names the file of the op that found it (a transaction may span documents).
+        for (usize k = first; k < issues.size(); ++k) issues[k].file = d->relativePath();
     }
     std::string message;
-    for (Issue& i : issues) {
+    for (const Issue& i : issues) {
         if (i.severity != Issue::Severity::Error) continue;
-        if (const Document* d = framework.documents().find(tx.ops.front().doc)) i.file = d->relativePath();
         if (!message.empty()) message += "; ";
         message += formatIssue(i);
     }

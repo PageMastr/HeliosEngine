@@ -181,6 +181,12 @@ Result<InvokeResult> CommandInvoker::invoke(std::string_view id, std::string_vie
     HELIOS_TRY_ASSIGN(const refl::JsonDocument doc, json::parseObject(argsJson, id));
     HELIOS_TRY(validateArgs(*desc, doc.root()));
     TxBuilder* group = detail::FwAccess::group(*m_framework);
+    if (group && group->origin() != m_origin) {
+        // The group commits with its own origin, so this input path's edits would be stamped
+        // with another path's origin (07 §1.2). The caller retries once the group has closed.
+        return Error{ErrorCode::InvalidState, std::format("{}: a {} transaction group is open; {} commands wait until it closes", id,
+                                                          originName(group->origin()), originName(m_origin))};
+    }
     std::unique_ptr<TxBuilder> local;
     TxBuilder* tx = group;
     if (!tx) {

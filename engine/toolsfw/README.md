@@ -30,38 +30,68 @@ Its dependencies are `core` and `reflect`, plus `script` privately for the Luau 
   checked on every op: a Set whose `before` no longer matches fails with `InvalidState` and changes
   nothing.
 - **History.** Continuous gestures share a merge key and coalesce into one undo step. Groups
-  (`beginGroup`/`endGroup`, and Luau's `Editor.transaction`) commit many commands as one step. A
-  new edit drops the redo entries of the documents it touches. The history is capped at 512 MB.
+  (`beginGroup`/`endGroup`, and Luau's `Editor.transaction`) commit many commands as one step.
+  Groups nest: cancelling a nested level (a failed inner `Editor.transaction` caught with `pcall`)
+  rolls back only that level's edits, and while a group is open only its own input path's invoker
+  may run commands, so the group's origin is the origin of every edit in it. A new edit drops the
+  redo entries of the documents it touches. The history is capped at 512 MB (past the cap, the
+  oldest entries go until it is at 7/8 of it).
+- **Commit budget.** A commit, undo or redo costs O(its ops), whatever the session's length: the
+  history and log byte totals are running sums. A one-op commit stays ≤ 0.1 ms in RelWithDebInfo
+  (`perf:` case in `test_history.cpp`, which also requires the last 1,000 of 50,000 commits to cost
+  at most 3× the first 1,000).
 - **Journal** (07 §1.2). Each session appends to `<journal root>/<project>/<session>.hjl`. The
   format is `"HJL1"`, then the header length and header JSON, then records of the form
   `u32 length | u32 check | JSON payload`. Record kinds are open, save, close, tx and end. A
   transaction is journaled **before** it becomes visible: if the write fails, the edit is rolled
   back. Every record is one `write()`, so a crash or `kill -9` loses at most the record in flight.
-  A flusher thread makes appends durable within 50 ms (group commit). `Framework::recover()`
-  replays an unclean session onto the files. It verifies each file against the session's last
-  open/save hash, re-opens documents created in the session from their snapshot, and keeps each
-  transaction's origin, label, merge key and Undo/Redo kind. The journal root is
+  A flusher thread makes appends durable within 50 ms (group commit); it calls `fsync` without
+  holding the writer's lock, so a commit never waits for the disk. A reload of an external edit
+  journals a new open record (the file's new hash, plus the merged text when unsaved local edits
+  survived the merge). `Framework::recover()` replays an unclean session onto the files. It
+  verifies each file against the session's last open/save/reload hash, restores a reload's merged
+  text, re-opens documents created in the session from their snapshot, and keeps each
+  transaction's origin, label, merge key and Undo/Redo kind. Two limits are reported, not hidden:
+  a recovered Undo or Redo becomes an ordinary history entry in the new session, and only the
+  recovered documents' ops of a multi-document transaction are replayed. Default session names are
+  `<yyyymmdd-hhmmss>-<pid>`, with `-2`, `-3`, ... when that journal already exists. The journal root is
   `HELIOS_JOURNAL_DIR`, else `%LOCALAPPDATA%\Helios\journal` on Windows or
   `$XDG_STATE_HOME/helios/journal` (else `~/.local/state/helios/journal`) on Linux.
 - **Cross-process undo** (`helios-tool undo`). `TxBuilder::markRevert(kind, target)` records a
   transaction as the Undo or Redo of a transaction from an earlier session. The CLI rebuilds its
-  linear undo stack from the project's journals.
+  linear undo stack from the project's journals, counting only transactions whose documents were
+  saved afterwards in the same session, and continues the project's Lamport counter
+  (`FrameworkConfig::lamportFloor`) so ids never repeat across its processes.
 - **Remote control.** `RpcServer` accepts on its own threads and queues requests. Handlers run on
   the owner thread in `pump()`, and a handler may answer frames later through its `RpcResponder`
   (the editor's `ui.*` methods do). Endpoints are `\\.\pipe\<name>` (remote clients rejected; the
   DACL admits only the creating user and LocalSystem) or `$XDG_RUNTIME_DIR/<name>.sock` (mode 0600).
   Only the user who started the process can connect, so the endpoint trusts its peer like the
-  command line; requests are still bounded (64 MiB per message, JSON nesting ≤ 128).
+  command line. A buggy or stuck peer is still contained (`RpcServerLimits`): at most 8
+  connections; per connection at most 64 requests and 64 MiB of request text queued or unanswered
+  (beyond that the server stops reading, so the client blocks in its own write), 64 MiB per message
+  and JSON nesting ≤ 128; and responses go through a per-connection queue drained by a writer
+  thread, so `pump()` never blocks on a client, and a client that leaves more than 64 MiB unread is
+  disconnected.
 
 Threading: a `Framework` and everything it owns are used from one owner thread. The journal
-flusher and the RPC reader threads never touch documents.
+flusher and the RPC reader and writer threads never touch documents.
+
+On Windows, `Workspace::findByPath` and `recordTypeForPath` compare paths without ASCII case, as
+NTFS does, so a differently cased path finds the open document.
+
+**Open (07 §1.2, recorded in 09 §8.1):** the platform file watcher (external edits arrive only
+through `doc.reload` / `reloadFromDisk`; `core`'s `FileWatcher` is not wired in yet) and the
+pre-commit reference-integrity hook (a `RecordRef` such as the Frigate's `lootTable` is not yet
+checked against the project's records).
 
 ## Tests
 
-`toolsfw_tests` (doctest, 51 cases): transactions and inverses, history and merging, commands and
-arguments, documents and 3-way reload, the journal (torn tails at every cut point, group commit,
-recovery, cross-session reverts), RPC over the real socket or pipe, and **ED-1**
-(`test_ed1.cpp`):
+`toolsfw_tests` (doctest, 64 cases, plus 1 `perf:` case in `toolsfw_tests_perf`): transactions and
+inverses, history and merging, nested groups, commands and arguments, documents and 3-way reload,
+the journal (torn tails at every cut point, group commit, recovery, recovery after a reload,
+cross-session reverts), RPC over the real socket or pipe (including a client that never reads and
+the connection, request and output bounds), and **ED-1** (`test_ed1.cpp`):
 
 - 10,000 random transactions (Set, Insert, Remove and Move over the Frigate, with rejected edits
   mixed in) are applied, then all undone, then all redone. After every undo and redo the canonical

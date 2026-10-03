@@ -1,0 +1,701 @@
+#include "helios/toolsfw/rpc.h"
+
+#include <algorithm>
+#include <chrono>
+#include <format>
+
+#include "helios/core/version.h"
+#include "helios/reflect/path.h"
+#include "helios/toolsfw/framework.h"
+#include "helios/toolsfw/json_util.h"
+
+#include "platform/tf_os.h"
+
+namespace helios::tf {
+
+namespace ipc {
+bool isValidEndpointName(std::string_view name) noexcept {
+    if (name.empty() || name.size() > 64) return false;
+    return std::all_of(name.begin(), name.end(), [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+    });
+}
+} // namespace ipc
+
+i32 rpcErrorCode(ErrorCode code) noexcept {
+    switch (code) {
+    case ErrorCode::NotFound: return rpcerr::kNotFound;
+    case ErrorCode::InvalidArgument:
+    case ErrorCode::ParseError:
+    case ErrorCode::OutOfRange: return rpcerr::kInvalidParams;
+    case ErrorCode::InvalidState:
+    case ErrorCode::AlreadyExists:
+    case ErrorCode::Busy: return rpcerr::kConflict;
+    case ErrorCode::Timeout: return rpcerr::kTimeout;
+    default: return rpcerr::kFailed;
+    }
+}
+
+namespace {
+
+ErrorCode errorCodeFromRpc(i64 code) noexcept {
+    switch (code) {
+    case rpcerr::kNotFound:
+    case rpcerr::kMethodNotFound: return ErrorCode::NotFound;
+    case rpcerr::kInvalidParams:
+    case rpcerr::kInvalidRequest: return ErrorCode::InvalidArgument;
+    case rpcerr::kParseError: return ErrorCode::ParseError;
+    case rpcerr::kConflict: return ErrorCode::InvalidState;
+    case rpcerr::kTimeout: return ErrorCode::Timeout;
+    default: return ErrorCode::Unknown;
+    }
+}
+
+std::string responseLine(std::string_view id, std::string_view resultJson) {
+    std::string s = "{\"jsonrpc\":\"2.0\",\"id\":";
+    s += id.empty() ? std::string_view("null") : id;
+    s += ",\"result\":";
+    s += resultJson.empty() ? std::string_view("null") : resultJson;
+    s += "}\n";
+    return s;
+}
+
+std::string errorLine(std::string_view id, i32 code, std::string_view message) {
+    refl::JsonWriter w(refl::JsonStyle::Compact);
+    w.beginObject();
+    w.key("jsonrpc");
+    w.string("2.0");
+    w.key("id");
+    if (id.empty()) {
+        w.null();
+    } else {
+        w.raw(id);
+    }
+    w.key("error");
+    w.beginObject();
+    w.key("code");
+    w.integer(code);
+    w.key("message");
+    w.string(message);
+    w.endObject();
+    w.endObject();
+    return w.take() + "\n";
+}
+
+} // namespace
+
+namespace detail {
+
+struct RpcConn {
+    u64 id = 0;
+    std::unique_ptr<ipc::Connection> conn;
+    std::mutex writeMutex;
+    std::thread reader;
+    std::atomic<bool> closed{false};
+
+    void send(std::string_view line) {
+        if (closed.load()) return;
+        std::lock_guard lock(writeMutex);
+        if (auto r = conn->write(line.data(), line.size()); !r) closed.store(true);
+    }
+};
+
+struct RpcServerState {
+    std::unique_ptr<ipc::Listener> listener;
+    std::thread acceptThread;
+    mutable std::mutex mutex;
+    std::map<u64, std::shared_ptr<RpcConn>> conns;
+    std::deque<RpcRequest> queue;
+    std::atomic<bool> stopping{false};
+    u64 nextConn = 1;
+
+    std::shared_ptr<RpcConn> find(u64 id) const {
+        std::lock_guard lock(mutex);
+        const auto it = conns.find(id);
+        return it == conns.end() ? nullptr : it->second;
+    }
+
+    void readerMain(const std::shared_ptr<RpcConn>& c) {
+        std::string buffer;
+        char chunk[64 * 1024];
+        while (!stopping.load()) {
+            auto got = c->conn->read(chunk, sizeof(chunk));
+            if (!got || *got == 0) break;
+            buffer.append(chunk, *got);
+            usize start = 0;
+            for (usize nl = buffer.find('\n'); nl != std::string::npos; nl = buffer.find('\n', start)) {
+                std::string_view line(buffer.data() + start, nl - start);
+                if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+                start = nl + 1;
+                if (!line.empty()) handleLine(c, line);
+            }
+            buffer.erase(0, start);
+            if (buffer.size() > kRpcMaxMessageBytes) {
+                c->send(errorLine({}, rpcerr::kInvalidRequest, "message too large"));
+                break;
+            }
+        }
+        c->closed.store(true);
+    }
+
+    void handleLine(const std::shared_ptr<RpcConn>& c, std::string_view line) {
+        auto doc = refl::JsonDocument::parse(line, "<rpc>");
+        if (!doc) {
+            c->send(errorLine({}, rpcerr::kParseError, doc.error().message));
+            return;
+        }
+        const refl::JsonValue v = doc->root();
+        const refl::JsonValue idValue = v.isObject() ? v.get("id") : refl::JsonValue();
+        const std::string id = idValue.isValid() ? json::compact(idValue) : std::string();
+        const auto method = json::getString(v, "method");
+        if (!v.isObject() || !method || (idValue.isValid() && !idValue.isString() && !idValue.isNumber() && !idValue.isNull())) {
+            c->send(errorLine(id, rpcerr::kInvalidRequest, "expected a JSON-RPC 2.0 request object"));
+            return;
+        }
+        RpcRequest req;
+        req.method = std::string(*method);
+        const refl::JsonValue params = v.get("params");
+        if (params.isValid()) {
+            if (!params.isObject()) {
+                c->send(errorLine(id, rpcerr::kInvalidParams, "params must be an object"));
+                return;
+            }
+            req.params = json::compact(params);
+        }
+        req.id = id;
+        req.connection = c->id;
+        std::lock_guard lock(mutex);
+        queue.push_back(std::move(req));
+    }
+
+    void acceptMain() {
+        while (!stopping.load()) {
+            auto conn = listener->accept();
+            if (!conn) {
+                if (conn.errorCode() == ErrorCode::Cancelled || stopping.load()) break;
+                HELIOS_LOG_WARN(LogTools, "rpc accept: {}", conn.error());
+                // A persistent failure (out of descriptors) must not spin this thread.
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                continue;
+            }
+            auto c = std::make_shared<RpcConn>();
+            c->conn = std::move(*conn);
+            // The reader starts under the lock: reap() and the destructor touch `reader` only for
+            // connections they found in `conns`, so they never see it half assigned.
+            std::lock_guard lock(mutex);
+            c->id = nextConn++;
+            conns[c->id] = c;
+            c->reader = std::thread([this, c] { readerMain(c); });
+        }
+    }
+
+    /// Joins the readers of closed connections (owner thread).
+    void reap() {
+        std::vector<std::shared_ptr<RpcConn>> dead;
+        {
+            std::lock_guard lock(mutex);
+            for (auto it = conns.begin(); it != conns.end();) {
+                if (it->second->closed.load()) {
+                    dead.push_back(it->second);
+                    it = conns.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        for (auto& c : dead) {
+            c->conn->shutdown();
+            if (c->reader.joinable()) c->reader.join();
+        }
+    }
+};
+
+struct RpcPending {
+    std::weak_ptr<RpcServerState> server;
+    u64 connection = 0;
+    std::string id;
+    std::atomic<bool> done{false};
+};
+
+} // namespace detail
+
+// ---------------------------------------------------------------------------------------------
+// RpcResponder
+// ---------------------------------------------------------------------------------------------
+void RpcResponder::result(std::string_view json) const {
+    if (!m_pending || m_pending->done.exchange(true)) return;
+    if (m_pending->id.empty()) return;  // notification
+    if (auto s = m_pending->server.lock()) {
+        if (auto c = s->find(m_pending->connection)) c->send(responseLine(m_pending->id, json));
+    }
+}
+
+void RpcResponder::error(i32 code, std::string_view message) const {
+    if (!m_pending || m_pending->done.exchange(true)) return;
+    if (m_pending->id.empty()) return;
+    if (auto s = m_pending->server.lock()) {
+        if (auto c = s->find(m_pending->connection)) c->send(errorLine(m_pending->id, code, message));
+    }
+}
+
+void RpcResponder::finish(const Result<std::string>& r) const {
+    if (r) {
+        result(*r);
+    } else {
+        error(r.error());
+    }
+}
+
+bool RpcResponder::done() const noexcept {
+    return !m_pending || m_pending->done.load();
+}
+
+// ---------------------------------------------------------------------------------------------
+// RpcServer
+// ---------------------------------------------------------------------------------------------
+Result<std::unique_ptr<RpcServer>> RpcServer::start(std::string_view endpointName) {
+    HELIOS_TRY_ASSIGN(auto listener, ipc::Listener::listen(endpointName));
+    std::unique_ptr<RpcServer> server(new RpcServer());
+    server->m_endpoint = std::string(endpointName);
+    server->m_state = std::make_shared<detail::RpcServerState>();
+    server->m_state->listener = std::move(listener);
+    detail::RpcServerState* st = server->m_state.get();
+    st->acceptThread = std::thread([st] { st->acceptMain(); });
+    server->registerMethod("rpc.methods", [s = server.get()](const RpcRequest&, const RpcResponder& r) {
+        refl::JsonWriter w(refl::JsonStyle::Compact);
+        w.beginArray();
+        for (const auto& [name, entry] : s->m_methods) {
+            w.beginObject();
+            w.key("name");
+            w.string(name);
+            w.key("doc");
+            w.string(entry.second);
+            w.endObject();
+        }
+        w.endArray();
+        r.result(w.take());
+    }, "Lists the methods of this endpoint");
+    return server;
+}
+
+RpcServer::~RpcServer() {
+    if (!m_state) return;
+    m_state->stopping.store(true);
+    m_state->listener->shutdown();
+    if (m_state->acceptThread.joinable()) m_state->acceptThread.join();
+    std::vector<std::shared_ptr<detail::RpcConn>> conns;
+    {
+        std::lock_guard lock(m_state->mutex);
+        for (auto& [id, c] : m_state->conns) conns.push_back(c);
+        m_state->conns.clear();
+    }
+    for (auto& c : conns) {
+        c->closed.store(true);
+        c->conn->shutdown();
+        if (c->reader.joinable()) c->reader.join();
+    }
+}
+
+const std::string& RpcServer::path() const noexcept {
+    return m_state->listener->path();
+}
+
+void RpcServer::registerMethod(std::string name, RpcHandler handler, std::string doc) {
+    m_methods[std::move(name)] = {std::move(handler), std::move(doc)};
+}
+
+usize RpcServer::pump() {
+    std::deque<RpcRequest> work;
+    {
+        std::lock_guard lock(m_state->mutex);
+        work.swap(m_state->queue);
+    }
+    for (const RpcRequest& req : work) {
+        RpcResponder responder;
+        responder.m_pending = std::make_shared<detail::RpcPending>();
+        responder.m_pending->server = m_state;
+        responder.m_pending->connection = req.connection;
+        responder.m_pending->id = req.id;
+        const auto it = m_methods.find(req.method);
+        if (it == m_methods.end()) {
+            responder.error(rpcerr::kMethodNotFound, std::format("unknown method '{}'", req.method));
+            continue;
+        }
+        it->second.first(req, responder);
+    }
+    m_state->reap();
+    return work.size();
+}
+
+void RpcServer::notifyAll(std::string_view method, std::string_view paramsJson) {
+    std::string line = "{\"jsonrpc\":\"2.0\",\"method\":" + json::quote(method);
+    if (!paramsJson.empty()) line += ",\"params\":" + std::string(paramsJson);
+    line += "}\n";
+    std::vector<std::shared_ptr<detail::RpcConn>> conns;
+    {
+        std::lock_guard lock(m_state->mutex);
+        for (auto& [id, c] : m_state->conns) conns.push_back(c);
+    }
+    for (auto& c : conns) c->send(line);
+}
+
+usize RpcServer::connectionCount() const {
+    std::lock_guard lock(m_state->mutex);
+    return static_cast<usize>(std::count_if(m_state->conns.begin(), m_state->conns.end(),
+                                            [](const auto& p) { return !p.second->closed.load(); }));
+}
+
+std::vector<std::string> RpcServer::methods() const {
+    std::vector<std::string> out;
+    for (const auto& [name, entry] : m_methods) out.push_back(name);
+    return out;
+}
+
+// ---------------------------------------------------------------------------------------------
+// RpcClient
+// ---------------------------------------------------------------------------------------------
+Result<std::unique_ptr<RpcClient>> RpcClient::connect(std::string_view endpointName, i32 timeoutMs) {
+    HELIOS_TRY_ASSIGN(auto conn, ipc::connect(endpointName, timeoutMs));
+    std::unique_ptr<RpcClient> c(new RpcClient());
+    c->m_conn = std::move(conn);
+    return c;
+}
+
+RpcClient::~RpcClient() {
+    if (m_conn) m_conn->shutdown();
+}
+
+Result<std::string> RpcClient::readLine(i32 timeoutMs) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs < 0 ? 0 : timeoutMs);
+    for (;;) {
+        const usize nl = m_buffer.find('\n');
+        if (nl != std::string::npos) {
+            std::string line = m_buffer.substr(0, nl);
+            m_buffer.erase(0, nl + 1);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty()) continue;
+            return line;
+        }
+        i32 wait = -1;
+        if (timeoutMs >= 0) {
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+            if (left <= 0) return Error{ErrorCode::Timeout, "rpc: timed out waiting for a response"};
+            wait = static_cast<i32>(left);
+        }
+        char chunk[64 * 1024];
+        HELIOS_TRY_ASSIGN(const usize got, m_conn->read(chunk, sizeof(chunk), wait));
+        if (got == 0) return Error{ErrorCode::IoError, "rpc: connection closed"};
+        m_buffer.append(chunk, got);
+        if (m_buffer.size() > kRpcMaxMessageBytes) return Error{ErrorCode::LimitExceeded, "rpc: response too large"};
+    }
+}
+
+Result<std::string> RpcClient::call(std::string_view method, std::string_view paramsJson, i32 timeoutMs) {
+    const u64 id = m_nextId++;
+    std::string line = std::format("{{\"jsonrpc\":\"2.0\",\"id\":{},\"method\":{}", id, json::quote(method));
+    if (!paramsJson.empty()) line += ",\"params\":" + std::string(paramsJson);
+    line += "}\n";
+    HELIOS_TRY(m_conn->write(line.data(), line.size()));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    for (;;) {
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+        HELIOS_TRY_ASSIGN(const std::string msg, readLine(timeoutMs < 0 ? -1 : static_cast<i32>(std::max<i64>(left, 1))));
+        HELIOS_TRY_ASSIGN(const refl::JsonDocument doc, refl::JsonDocument::parse(msg, "<rpc response>"));
+        const refl::JsonValue v = doc.root();
+        const refl::JsonValue rid = v.get("id");
+        u64 got = 0;
+        if (!rid.isValid() || rid.isNull()) {
+            if (v.get("method").isValid()) {
+                m_notifications.push_back(msg);
+                continue;
+            }
+            if (const refl::JsonValue err = v.get("error"); err.isObject()) {
+                return Error{errorCodeFromRpc(json::getInteger(err, "code").value_or(0)),
+                             std::format("{}: {}", json::getInteger(err, "code").value_or(0),
+                                         json::getString(err, "message").value_or(""))};
+            }
+            continue;
+        }
+        if (!rid.getU64(got) || got != id) continue;  // a late response of an abandoned call
+        if (const refl::JsonValue err = v.get("error"); err.isObject()) {
+            const i64 code = json::getInteger(err, "code").value_or(rpcerr::kFailed);
+            return Error{errorCodeFromRpc(code), std::format("{}: {}", code, json::getString(err, "message").value_or(""))};
+        }
+        const refl::JsonValue result = v.get("result");
+        return result.isValid() ? json::compact(result) : std::string("null");
+    }
+}
+
+Result<void> RpcClient::notify(std::string_view method, std::string_view paramsJson) {
+    std::string line = "{\"jsonrpc\":\"2.0\",\"method\":" + json::quote(method);
+    if (!paramsJson.empty()) line += ",\"params\":" + std::string(paramsJson);
+    line += "}\n";
+    return m_conn->write(line.data(), line.size());
+}
+
+std::vector<std::string> RpcClient::takeNotifications() {
+    return std::exchange(m_notifications, {});
+}
+
+// ---------------------------------------------------------------------------------------------
+// ToolsFramework methods
+// ---------------------------------------------------------------------------------------------
+namespace {
+
+void writeCommand(refl::JsonWriter& w, const CommandDesc& c) {
+    w.beginObject();
+    w.key("id");
+    w.string(c.id);
+    w.key("label");
+    w.string(c.label);
+    w.key("category");
+    w.string(c.category);
+    w.key("doc");
+    w.string(c.doc);
+    w.key("shortcut");
+    w.string(c.shortcut);
+    w.key("paletteOnly");
+    w.boolean(c.paletteOnly);
+    w.key("headless");
+    w.boolean(c.headless);
+    w.key("args");
+    w.beginArray();
+    for (const ArgDesc& a : c.args) {
+        w.beginObject();
+        w.key("name");
+        w.string(a.name);
+        w.key("type");
+        w.string(argTypeName(a.type));
+        w.key("required");
+        w.boolean(a.required);
+        w.key("doc");
+        w.string(a.doc);
+        w.endObject();
+    }
+    w.endArray();
+    w.endObject();
+}
+
+Result<refl::JsonDocument> params(const RpcRequest& req) {
+    return json::parseObject(req.params, req.method);
+}
+
+Result<const Document*> docParam(const Framework& fw, refl::JsonValue p) {
+    const auto key = json::getString(p, "doc");
+    if (!key) return Error{ErrorCode::InvalidArgument, "missing \"doc\""};
+    const Document* d = fw.documents().find(*key);
+    if (!d) return Error{ErrorCode::NotFound, std::format("no open document '{}'", *key)};
+    return d;
+}
+
+/// Runs a command through the Rpc invoker and answers {"tx": "...", "result": ...}.
+void invokeAndRespond(Framework& fw, std::string_view id, std::string_view args, const RpcResponder& r) {
+    auto res = fw.invoker(Origin::Rpc).invoke(id, args);
+    if (!res) {
+        r.error(res.error());
+        return;
+    }
+    refl::JsonWriter w(refl::JsonStyle::Compact);
+    w.beginObject();
+    w.key("tx");
+    w.string(res->tx.isNull() ? std::string() : res->tx.toString());
+    w.key("result");
+    if (res->result.empty()) {
+        w.null();
+    } else {
+        w.raw(res->result);
+    }
+    w.endObject();
+    r.result(w.take());
+}
+
+std::string optionalDocArgs(refl::JsonValue p) {
+    const auto doc = json::getString(p, "doc");
+    return doc ? "{\"doc\":" + json::quote(*doc) + "}" : std::string();
+}
+
+} // namespace
+
+void registerFrameworkRpc(RpcServer& server, Framework& fw) {
+    server.registerMethod("helios.ping", [&fw](const RpcRequest&, const RpcResponder& r) {
+        refl::JsonWriter w(refl::JsonStyle::Compact);
+        w.beginObject();
+        w.key("pid");
+        w.unsignedInteger(os::currentProcessId());
+        w.key("project");
+        w.string(fw.config().project);
+        w.key("session");
+        w.string(fw.config().session);
+        w.key("version");
+        w.string(std::format("{}.{}.{}", HELIOS_VERSION_MAJOR, HELIOS_VERSION_MINOR, HELIOS_VERSION_PATCH));
+        w.endObject();
+        r.result(w.take());
+    }, "Liveness check: {pid, project, session, version}");
+
+    server.registerMethod("cmd.list", [&fw](const RpcRequest&, const RpcResponder& r) {
+        refl::JsonWriter w(refl::JsonStyle::Compact);
+        w.beginArray();
+        for (const CommandDesc* c : fw.commands().commands()) writeCommand(w, *c);
+        w.endArray();
+        r.result(w.take());
+    }, "Every registered command with its arguments");
+
+    server.registerMethod("cmd.invoke", [&fw](const RpcRequest& req, const RpcResponder& r) {
+        auto p = params(req);
+        if (!p) return r.error(p.error());
+        const auto id = json::getString(p->root(), "id");
+        if (!id) return r.error(rpcerr::kInvalidParams, "missing \"id\"");
+        const refl::JsonValue args = p->root().get("args");
+        if (args.isValid() && !args.isObject()) return r.error(rpcerr::kInvalidParams, "\"args\" must be an object");
+        invokeAndRespond(fw, *id, args.isValid() ? json::compact(args) : std::string(), r);
+    }, "Runs a command {id, args?} with origin rpc: {tx, result}");
+
+    server.registerMethod("cmd.canExecute", [&fw](const RpcRequest& req, const RpcResponder& r) {
+        auto p = params(req);
+        if (!p) return r.error(p.error());
+        const auto id = json::getString(p->root(), "id");
+        if (!id) return r.error(rpcerr::kInvalidParams, "missing \"id\"");
+        const refl::JsonValue args = p->root().get("args");
+        r.result(fw.invoker(Origin::Rpc).canExecute(*id, args.isValid() ? json::compact(args) : std::string()) ? "true" : "false");
+    }, "Whether a command {id, args?} can run now");
+
+    server.registerMethod("doc.list", [&fw](const RpcRequest&, const RpcResponder& r) {
+        refl::JsonWriter w(refl::JsonStyle::Compact);
+        w.beginArray();
+        for (const Document* d : fw.documents().documents()) {
+            w.beginObject();
+            w.key("id");
+            w.string(d->id().toString());
+            w.key("name");
+            w.string(d->name());
+            w.key("file");
+            w.string(d->relativePath());
+            w.key("type");
+            w.string(d->type().qualifiedName);
+            w.key("revision");
+            w.unsignedInteger(d->revision());
+            w.key("dirty");
+            w.boolean(d->dirty());
+            w.key("destroyed");
+            w.boolean(d->destroyed());
+            w.endObject();
+        }
+        w.endArray();
+        r.result(w.take());
+    }, "Open documents: [{id, name, file, type, revision, dirty, destroyed}]");
+
+    server.registerMethod("doc.get", [&fw](const RpcRequest& req, const RpcResponder& r) {
+        auto p = params(req);
+        if (!p) return r.error(p.error());
+        auto d = docParam(fw, p->root());
+        if (!d) return r.error(d.error());
+        const std::string path(json::getString(p->root(), "path").value_or(""));
+        auto v = refl::getJson((*d)->type(), (*d)->object(), path);
+        if (!v) return r.error(v.error());
+        r.result(*v);
+    }, "Value at a property path {doc, path?} as JSON");
+
+    server.registerMethod("doc.text", [&fw](const RpcRequest& req, const RpcResponder& r) {
+        auto p = params(req);
+        if (!p) return r.error(p.error());
+        auto d = docParam(fw, p->root());
+        if (!d) return r.error(d.error());
+        r.result(json::quote((*d)->text()));
+    }, "Canonical JSONC text of a document {doc}");
+
+    server.registerMethod("doc.hash", [&fw](const RpcRequest& req, const RpcResponder& r) {
+        auto p = params(req);
+        if (!p) return r.error(p.error());
+        auto d = docParam(fw, p->root());
+        if (!d) return r.error(d.error());
+        r.result(json::quote(hashHex((*d)->contentHash())));
+    }, "XXH3-64 of a document's canonical text {doc}");
+
+    server.registerMethod("doc.open", [&fw](const RpcRequest& req, const RpcResponder& r) {
+        invokeAndRespond(fw, "doc.open", req.params, r);
+    }, "Opens a record file {file}");
+
+    server.registerMethod("doc.save", [&fw](const RpcRequest& req, const RpcResponder& r) {
+        auto p = params(req);
+        if (!p) return r.error(p.error());
+        const std::string args = optionalDocArgs(p->root());
+        invokeAndRespond(fw, args.empty() ? "doc.saveAll" : "doc.save", args, r);
+    }, "Saves one document {doc} or all dirty ones");
+
+    for (const bool redo : {false, true}) {
+        server.registerMethod(redo ? "tx.redo" : "tx.undo", [&fw, redo](const RpcRequest& req, const RpcResponder& r) {
+            auto p = params(req);
+            if (!p) return r.error(p.error());
+            invokeAndRespond(fw, redo ? "edit.redo" : "edit.undo", optionalDocArgs(p->root()), r);
+        }, redo ? "Redo {doc?}" : "Undo {doc?}");
+    }
+
+    server.registerMethod("tx.history", [&fw](const RpcRequest& req, const RpcResponder& r) {
+        auto p = params(req);
+        if (!p) return r.error(p.error());
+        std::optional<DocId> doc;
+        if (const auto key = json::getString(p->root(), "doc")) {
+            const Document* d = fw.documents().find(*key);
+            if (!d) return r.error(rpcerr::kNotFound, "no such document");
+            doc = d->id();
+        }
+        refl::JsonWriter w(refl::JsonStyle::Compact);
+        w.beginArray();
+        for (const HistoryEntry& e : fw.history()) {
+            if (doc) {
+                const auto docs = e.tx.documents();
+                if (std::find(docs.begin(), docs.end(), *doc) == docs.end()) continue;
+            }
+            w.beginObject();
+            w.key("id");
+            w.string(e.tx.id.toString());
+            w.key("label");
+            w.string(e.tx.label);
+            w.key("origin");
+            w.string(originName(e.tx.origin));
+            w.key("undone");
+            w.boolean(e.undone);
+            w.key("ops");
+            w.unsignedInteger(e.tx.ops.size());
+            w.endObject();
+        }
+        w.endArray();
+        r.result(w.take());
+    }, "Undo history [{id, label, origin, undone, ops}] {doc?}");
+
+    server.registerMethod("tx.log", [&fw](const RpcRequest& req, const RpcResponder& r) {
+        auto p = params(req);
+        if (!p) return r.error(p.error());
+        const u64 since = static_cast<u64>(std::max<i64>(json::getInteger(p->root(), "since").value_or(0), 0));
+        refl::JsonWriter w(refl::JsonStyle::Compact);
+        w.beginArray();
+        for (const Transaction& t : fw.log()) {
+            if (t.id.lamport > since) t.writeJson(w);
+        }
+        w.endArray();
+        r.result(w.take());
+    }, "Committed transactions (do/undo/redo) with lamport > since {since?}");
+
+    server.registerMethod("selection.get", [&fw](const RpcRequest&, const RpcResponder& r) {
+        refl::JsonWriter w(refl::JsonStyle::Compact);
+        w.beginArray();
+        for (const ObjRef& ref : fw.selection().items()) {
+            w.beginObject();
+            w.key("doc");
+            w.string(ref.doc.toString());
+            w.key("guid");
+            w.string(ref.guid.toString());
+            w.key("path");
+            w.string(ref.path);
+            w.endObject();
+        }
+        w.endArray();
+        r.result(w.take());
+    }, "Current selection [{doc, guid, path}]");
+
+    server.registerMethod("selection.set", [&fw](const RpcRequest& req, const RpcResponder& r) {
+        invokeAndRespond(fw, "selection.set", req.params, r);
+    }, "Selects a document {doc, path?}");
+}
+
+} // namespace helios::tf

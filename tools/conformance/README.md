@@ -156,9 +156,9 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   a column name: a plural (`emails`, `first_names`) and a quoted identifier in another case (`"Email"`) are not
   matched.
 - **CONF-08** reads the forms of a gateway default listed in its row. Constants resolve by bare name (C and C++:
-  `constexpr` and `const` declarations, `#define`s and enumerators across the scope (CONF-04's table), integer
-  literals, casts and `+`; Go:
-  package constants), and a value in those forms that does not resolve fails closed. Not seen: a Go composite
+  `constexpr` and `const` declarations, `#define`s and enumerators across the scope, as CONF-04 reads them, with
+  integer literals, casts and `+`; Go: package constants), and a value in those forms that does not resolve fails
+  closed. Not seen: a Go composite
   literal of a gateway-named type with a differently named field (`GatewayConfig{Port: 7003}`); in C and C++, a
   port in a differently named constant or variable that no `listen`/`connect`/gateway line passes on (an integer
   default of a `*port*` name that is not `…GatewayPort`); in YAML, compose's long syntax (`target:`/`published:`)

@@ -1,0 +1,13 @@
+# expect: trigger
+# A push filter that matches branches other than main.
+on:
+  push:
+    branches: [main, "release/**"]
+permissions:
+  contents: read
+jobs:
+  gpu:
+    if: github.ref == 'refs/heads/main' && vars.HELIOS_WIN_GPU == 'enabled'
+    runs-on: win-gpu
+    steps:
+      - run: echo gpu

@@ -1,0 +1,207 @@
+name: win-gpu
+
+# Post-merge GPU work on the repository owner's Windows PC, the self-hosted runner `win-gpu`
+# (docs/plan/09-roadmap-and-process.md §5.4a; WP-0.4; K33). The PC runs only merged code:
+#   - triggers: the schedule and a user's workflow_dispatch, never pull requests; the job also needs main and the
+#     repository variable HELIOS_WIN_GPU=enabled (the owner's switch: unset, the job is skipped, not queued).
+#     tools/ci/check_runner_policy.py (CTest lint_runner_policy, every PR) fails any workflow that breaks this;
+#   - no secrets, a read-only token, results as artifacts, actions pinned to commit SHAs;
+#   - the runner's job-started hook (tools/ci/runner/job-started.ps1) refuses every job that is not a schedule, push
+#     or workflow_dispatch run of refs/heads/main, then empties the work directory; firewall.ps1 blocks the runner
+#     account from the home LAN. Setup, verification and rotation: docs/runbooks/win-gpu-runner.md.
+# One job: the hook empties the work directory before every job, so separate jobs would each rebuild. It uploads
+# the `results-win-gpu` artifact in the nightly's result-set format (run.json, host.json, CTest JUnit, gate JUnit,
+# test inventory; tools/scorecard/README.md) for scorecard.jsonc's `win-gpu` run, plus ADR-0.9c's hnoise JSON and
+# the rendertest output. The nightly report does not read this artifact yet (scorecard.jsonc gaps). A queued job
+# waits up to 24 h for the runner, so a PC that is off at the scheduled time runs it when it comes back.
+
+on:
+  schedule:
+    - cron: "37 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: win-gpu
+  cancel-in-progress: false
+
+jobs:
+  gpu:
+    name: win-gpu (Vulkan goldens, GPU tests, hnoise bench)
+    if: github.ref == 'refs/heads/main' && vars.HELIOS_WIN_GPU == 'enabled'
+    runs-on: [self-hosted, win-gpu]
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    defaults:
+      run:
+        # Windows PowerShell 5.1 ships with Windows; the owner's tool list has no PowerShell 7.
+        shell: powershell
+    env:
+      PRESET: windows-vs2022
+      BUILD: build/windows-vs2022
+      CONFIG: RelWithDebInfo
+      RESULTS: ${{ github.workspace }}\results\win-gpu
+      # Optional repository variable: the discrete GPU's name when the PC has more than one adapter (ADR-0.9c §6).
+      HELIOS_RHI_ADAPTER: ${{ vars.HELIOS_WIN_GPU_ADAPTER }}
+      PYTHONNOUSERSITE: "1"
+    steps:
+      # Before any repository code runs (09 §5.4a, account isolation). Administrators shows in the token even when
+      # UAC filters it to deny-only, and the group's member list catches a membership added after the service
+      # started. Every other user profile on the PC (HKLM ProfileList) must refuse a listing.
+      - name: Runner isolation (not an administrator; other users' profiles unreadable)
+        run: |
+          $me = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $mySid = $me.User.Value
+          Write-Output "Runner account: $($me.Name) ($mySid)"
+          $problems = New-Object System.Collections.Generic.List[string]
+          $groups = & "$env:SystemRoot\System32\whoami.exe" /groups /fo csv /nh |
+            ConvertFrom-Csv -Header Name, Type, Sid, Attributes
+          if ($LASTEXITCODE -ne 0) { throw 'whoami /groups failed' }
+          if (@($groups | Where-Object { $_.Sid -eq 'S-1-5-32-544' }).Count -gt 0) {
+            $problems.Add('the token holds BUILTIN\Administrators (S-1-5-32-544)')
+          }
+          $adminsSid = New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544'
+          $adminsName = $adminsSid.Translate([Security.Principal.NTAccount]).Value.Split('\')[-1]
+          $group = [ADSI]"WinNT://$env:COMPUTERNAME/$adminsName,group"
+          foreach ($member in @($group.psbase.Invoke('Members'))) {
+            try {
+              $bytes = $member.GetType().InvokeMember('objectSid', 'GetProperty', $null, $member, $null)
+              $sid = [Security.Principal.SecurityIdentifier]::new([byte[]]$bytes, 0).Value
+            } catch {
+              # e.g. a cloud (Entra ID) role; the token check above still covers this account
+              Write-Output "Skipped an Administrators member whose SID cannot be read: $($_.Exception.Message)"
+              continue
+            }
+            if ($sid -eq $mySid) { $problems.Add("$($me.Name) is a member of the local Administrators group") }
+          }
+          $tested = 0
+          $list = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
+          foreach ($key in Get-ChildItem -LiteralPath $list) {
+            if ($key.PSChildName -notlike 'S-1-5-21-*' -or $key.PSChildName -like "$mySid*") { continue }
+            $profileDir = (Get-ItemProperty -LiteralPath $key.PSPath).ProfileImagePath
+            $profileDir = [Environment]::ExpandEnvironmentVariables($profileDir)
+            foreach ($sub in '', 'AppData', 'Documents', '.ssh') {
+              $path = if ($sub) { Join-Path $profileDir $sub } else { $profileDir }
+              try {
+                $null = [IO.Directory]::GetFileSystemEntries($path)
+                $problems.Add("can list $path")
+              } catch [UnauthorizedAccessException] {
+                if (-not $sub) { $tested++ }
+              } catch [IO.DirectoryNotFoundException] {
+              }
+            }
+          }
+          if ($tested -eq 0) { $problems.Add('no other user profile was found to test (HKLM ProfileList)') }
+          if ($problems.Count -gt 0) {
+            $problems | ForEach-Object { Write-Output "::error::Runner isolation: $_" }
+            throw 'The runner account is not isolated (09 §5.4a): see docs/runbooks/win-gpu-runner.md'
+          }
+          Write-Output "Not an administrator; $tested other user profile(s) refuse a listing"
+
+      # 09 §5.4a, network: tools/ci/runner/firewall.ps1 blocks the account from the home LAN. A TCP connection to
+      # the default gateway that succeeds proves the rules are missing (a refusal or a block passes).
+      - name: LAN egress blocked (tools/ci/runner/firewall.ps1)
+        run: |
+          $gateways = @([Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
+            Where-Object { $_.OperationalStatus -eq 'Up' } |
+            ForEach-Object { $_.GetIPProperties().GatewayAddresses } | ForEach-Object { $_.Address } |
+            Where-Object { $_.AddressFamily -eq 'InterNetwork' -and $_.ToString() -ne '0.0.0.0' } |
+            ForEach-Object { $_.ToString() } | Select-Object -Unique)
+          $reached = @()
+          foreach ($gateway in $gateways) {
+            foreach ($port in 53, 80, 443) {
+              $client = New-Object Net.Sockets.TcpClient
+              try {
+                if ($client.ConnectAsync($gateway, $port).Wait(3000) -and $client.Connected) {
+                  $reached += "${gateway}:$port"
+                }
+              } catch {
+              } finally {
+                $client.Close()
+              }
+            }
+          }
+          if ($reached.Count -gt 0) {
+            throw ("The runner account reached the LAN ($($reached -join ', ')): run tools/ci/runner/firewall.ps1 " +
+              '(docs/runbooks/win-gpu-runner.md)')
+          }
+          Write-Output "No TCP connection to the default gateway(s) $($gateways -join ', ') on ports 53, 80, 443"
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      # Go: configure registers tools/conformance's lint tests and requires Go when CI is set, as the runner sets it.
+      - name: Tools, the Vulkan SDK, and the run's result set
+        run: |
+          foreach ($tool in 'git', 'cmake', 'ctest', 'python', 'go') {
+            $found = Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $found) { throw "$tool is not on the runner account's PATH (docs/runbooks/win-gpu-runner.md, step 4)" }
+            Write-Output "${tool}: $($found.Path)"
+          }
+          & python --version
+          if ($LASTEXITCODE -ne 0) { throw 'python does not run (the Microsoft Store alias?)' }
+          # The goldens run validated only if configure finds the Khronos layer, which on Windows it looks for
+          # under VULKAN_SDK alone (tools/rendertest/README.md).
+          if (-not $env:VULKAN_SDK) { throw 'VULKAN_SDK is not set for the runner service: install the Vulkan SDK, then restart the service' }
+          $layer = Join-Path $env:VULKAN_SDK 'Bin\VkLayer_khronos_validation.json'
+          if (-not (Test-Path -LiteralPath $layer)) { throw "No Khronos validation layer at $layer" }
+          Write-Output "Vulkan SDK: $env:VULKAN_SDK"
+          # Temporary files go to the runner's per-job directory, which the runner empties, not the account profile.
+          "TEMP=$env:RUNNER_TEMP" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMP=$env:RUNNER_TEMP" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          New-Item -ItemType Directory -Force -Path $env:RESULTS | Out-Null
+          Set-Content -Encoding ascii -Path "$env:RESULTS\run.json" -Value '{"run": "win-gpu"}'
+          python tools/scorecard/runners.py host --out "$env:RESULTS\host.json"
+
+      - name: Configure
+        run: cmake --preset $env:PRESET
+      - name: Build
+        run: cmake --build --preset $env:PRESET --parallel
+
+      # Label gpu: rendertest.vulkan.* (the goldens; RC-1), rendertest.validation-*, rhi_tests_gpu, pcg_gpu_tests
+      # (the Slang twin, bit for bit; RT-04) and rhi_triangle_smoke, on the hardware adapter.
+      - name: GPU tests (label gpu, on the hardware GPU)
+        run: ctest --test-dir $env:BUILD -C $env:CONFIG -L gpu --output-on-failure --output-junit "$env:RESULTS\ctest.xml"
+      # As ci.yml's Linux jobs do: the layer must have loaded and reported itself (03 §1.5, RC-1).
+      - name: Khronos validation layer loaded
+        if: ${{ !cancelled() }}
+        run: |
+          $log = @(& ctest --test-dir $env:BUILD -C $env:CONFIG -R '^rendertest\.validation-layer$' -V)
+          $status = $LASTEXITCODE
+          $log | Write-Output
+          if ($status -ne 0) { throw 'rendertest.validation-layer failed' }
+          if (-not ($log -match '^\d+: validation layer: VK_LAYER_KHRONOS_validation \d+\.\d+')) {
+            throw 'The validation layer did not report itself, so the goldens ran unvalidated'
+          }
+
+      # ADR-0.9c §6 step 1 (WP-0.9c, K5b): tiles per 0.8 ms on this GPU and CPU ms per tile. Exit code 2 means the
+      # AVX2 kernel did not run, 3 that the GPU batch differs from the CPU; both fail the step.
+      - name: hnoise throughput on the hardware GPU (ADR-0.9c)
+        if: ${{ !cancelled() }}
+        run: >
+          python tools/scorecard/runners.py gate --name pcg_hnoise_bench_hardware_gpu --build-dir $env:BUILD
+          --config $env:CONFIG --timeout 3600 --out "$env:RESULTS\gates" --
+          pcg_hnoise_bench --hardware-gpu --tiles=64 --gpu-tiles=64 --repeats=20 "--json=$env:RESULTS\hnoise-win-gpu.json"
+      # NS-0.2's re-test on fixed hardware (the owner's approval of 2026-09-30 owes it): strict, without --advisory.
+      - name: net_bench --gate, strict (NS-0.2, NS-0.7; 10 min)
+        if: ${{ !cancelled() }}
+        run: >
+          python tools/scorecard/runners.py gate --name net_bench_gate --build-dir $env:BUILD --config $env:CONFIG
+          --timeout 1800 --out "$env:RESULTS\gates" -- net_bench --gate
+      - name: Test inventory and the rendertest output
+        if: ${{ !cancelled() }}
+        run: |
+          python tools/scorecard/scorecard.py inventory --build-dir $env:BUILD --config $env:CONFIG --out "$env:RESULTS\inventory.json"
+          if ($LASTEXITCODE -ne 0) { throw 'scorecard.py inventory failed' }
+          $output = Get-ChildItem -LiteralPath $env:BUILD -Directory -Recurse -Filter rendertest-output | Select-Object -First 1
+          if ($output) { Copy-Item -LiteralPath $output.FullName -Destination "$env:RESULTS\rendertest" -Recurse }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: results-win-gpu
+          path: results/win-gpu
+          retention-days: 30

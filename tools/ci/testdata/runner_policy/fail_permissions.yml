@@ -1,0 +1,15 @@
+# expect: permissions
+# A write scope on the runner job's token.
+on:
+  schedule:
+    - cron: "0 4 * * *"
+permissions:
+  contents: read
+jobs:
+  gpu:
+    if: github.ref == 'refs/heads/main' && vars.HELIOS_WIN_GPU == 'enabled'
+    runs-on: [self-hosted, win-gpu]
+    permissions:
+      contents: write
+    steps:
+      - run: echo gpu

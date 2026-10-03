@@ -39,7 +39,9 @@
     "windows-local": {"os": "windows", "default": true, "nightly": false,
                       "description": "tools/milestone/validate.ps1 on the user's Windows machine (09 §5.9)"},
     "windows-lab": {"os": "windows", "default": false, "nightly": false,
-                    "description": "WP-0.4's lab pair (09 §5.6 class H): server_tests_ns03_remote from the win-gpu runner's MSVC build against helios-gateway and helios-cell on a Linux lab host. Not produced yet: nightly.yml gains the job when WP-0.4 registers the runner, and this run then drops \"nightly\": false"}
+                    "description": "WP-0.4's lab pair (09 §5.6 class H): server_tests_ns03_remote from the win-gpu runner's MSVC build against helios-gateway and helios-cell on a Linux lab host. Not produced yet: it needs the Linux lab host, then a job on the win-gpu runner (.github/workflows/win-gpu.yml), which the hosted nightly does not wait for"},
+    "win-gpu": {"os": "windows", "default": false, "nightly": false,
+                "description": "WP-0.4's win-gpu runner, the owner's PC with a real GPU (09 §5.4a): .github/workflows/win-gpu.yml, daily and on dispatch, on main only, builds windows-vs2022 and runs the gpu-labelled CTests (the Vulkan goldens on the hardware adapter), ADR-0.9c's pcg_hnoise_bench --hardware-gpu and a strict net_bench --gate, and uploads this result set as the results-win-gpu artifact. Not produced yet: the owner registers the runner and sets HELIOS_WIN_GPU (docs/runbooks/win-gpu-runner.md); the nightly report does not read that artifact yet"}
   },
 
   // Commands the nightly workflow runs outside CTest; each writes one JUnit result named after the gate.
@@ -289,7 +291,7 @@
          "advisory": ["net.ns02.stack_packets_per_core"], "advisory_runs": ["linux-gcc"]}
       ],
       "follow_ups": [
-        {"clause": "Re-test the encrypted stack's 100k packets per core on fixed hardware, without --advisory: `net_bench --gate` on WP-0.4's win-gpu runner and on a Linux lab host. If it is below 100k there, NS-0.2 goes back to failing and the stack gets a second pass (owner, 2026-09-30)", "owner": "WP-0.4, WP-0.13"},
+        {"clause": "Re-test the encrypted stack's 100k packets per core on fixed hardware, without --advisory: `net_bench --gate` on WP-0.4's win-gpu runner and on a Linux lab host. If it is below 100k there, NS-0.2 goes back to failing and the stack gets a second pass (owner, 2026-09-30). The win-gpu half is a strict step of .github/workflows/win-gpu.yml (the win-gpu run), which has not run yet and which the nightly report does not read yet; the Linux lab host does not exist", "owner": "WP-0.4, WP-0.13"},
         {"clause": "Hosted Windows (windows-vs2026) is not covered. The owner's question on Windows now has three data points: its stack measured 85,399 and 84,970 per core on 2026-09-27 and 125,611 on 2026-10-03, a strict pass. The step stays strict, so NS-0.2 fails on Windows each night its stack measures below 100k, and one pass is not class N's 3-night streak: NS-0.2 cannot turn green until Windows has such a streak or the owner confirms the approval for it with these numbers in view (quoted in the record; then the run joins advisory_runs and its step passes --advisory)", "owner": "User"}
       ]
     },
@@ -309,7 +311,7 @@
         {"ctest": "server_tests_ns03_remote", "platforms": ["windows"], "run": "windows-lab"}
       ],
       "gaps": [
-        {"clause": "H: no lab run yet, so the cross-host half is unmeasured (it counts as failing), and no MSVC-built client has run against a Linux gateway. WP-0.4 registers win-gpu and puts a Linux host on its network running `helios-cell --standalone --trunk-keys ring.json` and `helios-gateway --standalone --listen <lan-ip>:7777 --keys ring.json --trunk-keys ring.json`; nightly.yml then builds windows-msvc-release on win-gpu, runs `ctest -R server_tests_ns03_remote` with HELIOS_NS03_GATEWAY=<lan-ip>:7777 and HELIOS_NS03_KEYS=ring.json, and uploads the result set as windows-lab", "state": "unmeasured", "owner": "WP-0.4"}
+        {"clause": "H: no lab run yet, so the cross-host half is unmeasured (it counts as failing), and no MSVC-built client has run against a Linux gateway. WP-0.4 registers win-gpu and puts a Linux host on its network running `helios-cell --standalone --trunk-keys ring.json` and `helios-gateway --standalone --listen <lan-ip>:7777 --keys ring.json --trunk-keys ring.json`, allowed through the runner's LAN block with `tools/ci/runner/firewall.ps1 -AllowAddress <lan-ip>`; a win-gpu.yml job then builds windows-msvc-release on win-gpu, runs `ctest -R server_tests_ns03_remote` with HELIOS_NS03_GATEWAY=<lan-ip>:7777 and HELIOS_NS03_KEYS=ring.json, and uploads the result set as windows-lab", "state": "unmeasured", "owner": "WP-0.4"}
       ]
     },
     {
@@ -464,8 +466,9 @@
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Golden images pass on the Vulkan and Null backends (demonstrated on Windows and Linux)",
       "status": "partial",
-      "tests": [{"ctest": "rendertest.vulkan.*", "platforms": ["linux"]}, {"ctest": "rendertest.null.*"}],
-      "gaps": [{"clause": "Windows Vulkan goldens: the win-gpu runner does not exist (09 §5.4)", "state": "unmeasured", "owner": "WP-0.4"}]
+      "tests": [{"ctest": "rendertest.vulkan.*", "platforms": ["linux"]}, {"ctest": "rendertest.null.*"},
+                {"ctest": "rendertest.vulkan.*", "platforms": ["windows"], "run": "win-gpu"}],
+      "gaps": [{"clause": "Windows Vulkan goldens on a real GPU: .github/workflows/win-gpu.yml runs rendertest.vulkan.* on the win-gpu runner (the win-gpu run), but no run exists yet (the owner registers the runner and sets HELIOS_WIN_GPU, docs/runbooks/win-gpu-runner.md) and the nightly report does not read its results-win-gpu artifact yet (09 §5.4)", "state": "unmeasured", "owner": "WP-0.4, User"}]
     },
     {
       "id": "EXIT-0.cell-tick", "phase": 0, "source": "01 §5.4", "owner": "WP-0.14",
@@ -510,9 +513,9 @@
       "title": "The WP-0.4 runner policy check is green",
       "class": "N", "platforms": ["any"],
       "threshold": "The WP-0.4 runner policy check green",
-      "status": "unmeasured",
-      "tests": [],
-      "gaps": [{"clause": "tools/ci/check_runner_policy does not exist", "state": "unmeasured", "owner": "WP-0.4"}]
+      "notes": "tools/ci/check_runner_policy.py runs as CTest lint_runner_policy (label lint) in every CI job that runs CTest, over every .github/workflows file: a workflow whose jobs can reach the win-gpu runner keeps 09 §5.4a's rules (post-merge triggers only, the main and HELIOS_WIN_GPU guards, no secrets, contents: read, pinned actions), and a runs-on it cannot resolve fails. The headless job is the one cited; its seeded fixtures run as lint_runner_policy_unittest",
+      "status": "measured",
+      "tests": [{"ci_job": "Linux (headless servers + tools)"}]
     },
     {
       "id": "EXIT-0.conformance", "phase": 0, "source": "09 §2.1", "owner": "WP-0.2",

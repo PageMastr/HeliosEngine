@@ -276,6 +276,51 @@ def steps(job: str) -> list[dict]:
     return out
 
 
+def commands(step: dict) -> list[str]:
+    """A step's run block as logical command lines: a folded block (`run: >`) is one line, as YAML joins it,
+    and a literal block's line ending with a bash `\\` or a pwsh backtick continues on the next."""
+    out = []
+    for k, line in enumerate(step["run"]):
+        if not (m := re.match(r"(\s+)run:\s*(.*)$", line)):
+            continue
+        body = []
+        for text in step["run"][k + 1:]:
+            if text.strip() and len(text) - len(text.lstrip()) <= len(m[1]):
+                break
+            body.append(text.strip())
+        if m[2] in (">", ">-"):
+            out.append(" ".join(b for b in body if b))
+        elif m[2] in ("|", "|-"):
+            command = ""
+            for b in body:
+                if b.endswith(("\\", "`")):
+                    command += b[:-1] + " "
+                else:
+                    out.append(command + b)
+                    command = ""
+            out += [command] if command else []
+        else:
+            out.append(m[2])
+    return out
+
+
+# CTest's label include, in either spelling, and its regex argument.
+LABEL_INCLUDE = re.compile(r"""(?<![\w-])(?:-L|--label-regex)(?:\s+|=)("[^"]*"|'[^']*'|\S+)""")
+
+
+def runs_perf(command: str) -> bool:
+    """Whether a command runs the perf entries: a CTest label include whose regex matches the label `perf`
+    (as CTest reads it, so `-L "gpu|perf"` and `-L .` count; an unreadable regex counts too), or the doctest
+    runner's --perf."""
+    for arg in LABEL_INCLUDE.findall(command):
+        try:
+            if re.search(arg.strip("\"'"), "perf"):
+                return True
+        except re.error:
+            return True
+    return bool(re.search(r"runners\.py\s+doctest\b.*(?<![\w-])--perf(?![\w-])", command))
+
+
 def matrix_rows(job: str) -> list[dict]:
     """The `include:` rows of a nightly.yml job's matrix, as {key: value} strings."""
     lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
@@ -306,15 +351,19 @@ class PerfLabelScopeTests(unittest.TestCase):
             # Every Linux row's main CTest step excludes the label (the GCC job runs it in its own step).
             m = re.fullmatch(r"(?:.*\s)?-LE (\S+)(?:\s.*)?", row.get("ctest_args", ""))
             self.assertTrue(m and re.search(m[1].strip('"'), "perf"), (run, row.get("ctest_args")))
-            self.assertNotRegex(row.get("ctest_args", ""), r"(?<![\w-])-L\s")
+            self.assertIsNone(LABEL_INCLUDE.search(row.get("ctest_args", "")), (run, row.get("ctest_args")))
         test = next(s for s in steps("linux") if s["name"].startswith("Test (software Vulkan"))
         self.assertIn("${{ matrix.ctest_args }}", "\n".join(test["run"]))
         # `-L perf` (and the doctest runner's --perf, the same entries) only in the step gated on linux-gcc.
         text = WORKFLOW.read_text(encoding="utf-8")
         jobs = re.findall(r"^  ([\w-]+):$", text[text.index("\njobs:"):], re.M)
         self.assertEqual(jobs, ["linux", "windows", "go", "fuzz", "scorecard"])
-        perf_steps = [s for job in jobs for s in steps(job)
-                      if re.search(r"(?<![\w-])-L\s+\"?perf|runners\.py doctest --perf", "\n".join(s["run"]))]
+        # Spelled any way CTest or the runner reads it (#45's review, N4: --label-regex, and --perf anywhere in
+        # the doctest runner's command, a folded block's later line included).
+        every = [s for job in jobs for s in steps(job)]
+        self.assertEqual([s["name"] for s in every if any(re.match(r"\s+run:", x) for x in s["run"]) and
+                          not any(c.strip() for c in commands(s))], [])  # no run block read as empty
+        perf_steps = [s for s in every if any(runs_perf(c) for c in commands(s))]
         self.assertEqual([s["name"] for s in perf_steps], ["Perf gates (label perf, serial)"])
         self.assertEqual(perf_steps[0]["if"], "${{ !cancelled() && matrix.run == 'linux-gcc' }}")
         # The registry's description of the sanitizer run says the same.

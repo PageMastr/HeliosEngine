@@ -71,6 +71,8 @@ constexpr GoldenOutput kOutputs[] = {
     {"cpp/golden.luau.gen.cpp", "golden.luau.gen.cpp.expected"},
     {"luau/schema.d.luau", "schema.d.luau.expected"},
     {"luau/fuel_costs.defaults.json", "fuel_costs.defaults.json.expected"},
+    {"sql/svc_golden/schema.sql", "svc_golden.schema.sql.expected"},
+    {"sql/svc_golden/migration.sql", "svc_golden.migration.sql.expected"},
 };
 
 TEST_CASE("golden: generator output matches the committed expectations") {
@@ -78,9 +80,13 @@ TEST_CASE("golden: generator output matches the committed expectations") {
     REQUIRE(source);
     const auto lock = readText(kGoldenDir + "/golden.lock.jsonc");
     REQUIRE_MESSAGE(lock, "tests/golden/golden.lock.jsonc is created by building schemac_tests; commit it");
+    // The lock of the release before LedgerLine's changes: the migration stub golden diffs against it.
+    const auto baseline = readText(kGoldenDir + "/golden.sql-baseline.lock.jsonc");
+    REQUIRE(baseline);
 
     MemoryFileSystem fs;
     fs.files["golden/golden.lock.jsonc"] = *lock;
+    fs.files["golden/golden.sql-baseline.lock.jsonc"] = *baseline;
     CompileOptions options;
     options.files = {"golden/golden.hschema"};
     options.includeDirs = {"golden"};
@@ -89,10 +95,13 @@ TEST_CASE("golden: generator output matches the committed expectations") {
     options.emitGo = true;
     options.emitJson = true;
     options.emitLuau = true;
+    options.emitSql = true;
     options.cppOut = "cpp";
     options.goOut = "go";
     options.jsonOut = "golden.schema.json";
     options.luauOut = "luau";
+    options.sqlOut = "sql";
+    options.sqlBaseline = "golden/golden.sql-baseline.lock.jsonc";
     auto c = compileFiles({{"golden/golden.hschema", *source}}, options, &fs);
     REQUIRE_MESSAGE(c->ok(), c->messages);
     CHECK_MESSAGE(c->diags.diagnostics().empty(), c->messages);
@@ -123,7 +132,7 @@ struct CorpusSet {
     std::vector<std::pair<const char*, const char*>> outputs; ///< output suffix -> expected file
 };
 
-TEST_CASE("golden: the schemas/ corpus generates the committed Luau outputs") {
+TEST_CASE("golden: the schemas/ corpus generates the committed Luau and SQL outputs") {
     const std::vector<CorpusSet> sets = {
         {"sample",
          {"schemas/sample/common.hschema", "schemas/sample/ship.hschema", "schemas/sample/items.hschema"},
@@ -131,7 +140,9 @@ TEST_CASE("golden: the schemas/ corpus generates the committed Luau outputs") {
          {{"cpp/sample/ship.luau.gen.h", "ship.luau.gen.h.expected"},
           {"cpp/sample/ship.luau.gen.cpp", "ship.luau.gen.cpp.expected"},
           {"luau/schema.d.luau", "schema.d.luau.expected"},
-          {"luau/fuel_costs.defaults.json", "fuel_costs.defaults.json.expected"}}},
+          {"luau/fuel_costs.defaults.json", "fuel_costs.defaults.json.expected"},
+          {"sql/svc_character/schema.sql", "svc_character.schema.sql.expected"},
+          {"sql/svc_character/migration.sql", "svc_character.migration.sql.expected"}}},
     };
     for (const CorpusSet& set : sets) {
         INFO(set.name);
@@ -150,8 +161,10 @@ TEST_CASE("golden: the schemas/ corpus generates the committed Luau outputs") {
         options.includeDirs = {"schemas"};
         options.lockPath = set.lock;
         options.emitLuau = true;
+        options.emitSql = true;
         options.cppOut = "cpp";
         options.luauOut = "luau";
+        options.sqlOut = "sql";
         auto c = compileFiles(files, options, &fs);
         REQUIRE_MESSAGE(c->ok(), c->messages);
         CHECK_MESSAGE(!c->result.lockChanged, set.lock << " is stale; rebuild schemac_tests (which updates it) and commit it");
@@ -183,6 +196,7 @@ TEST_CASE("golden: generation is deterministic and independent of declaration-ir
     options.emitGo = true;
     options.emitJson = true;
     options.emitLuau = true;
+    options.emitSql = true;
     auto a = compileFiles({{"golden/golden.hschema", *source}}, options);
     // Comments and whitespace do not change the output.
     std::string reformatted;

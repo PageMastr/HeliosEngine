@@ -1269,6 +1269,72 @@ class PerfTests(unittest.TestCase):
                          ["::warning title=perf new-host-class::linux-gcc on CPU 100%25%0D%0A::error::x, "
                           "4 logical CPUs (1 host class with levels)"])
 
+    # --- PR #44 review round 4 (nits 2 to 4).
+
+    def test_no_hosts_line_becomes_a_workflow_command(self):
+        tonight = self.on("CPU\n::stop-commands::x", self.night(1, t=100.0))
+        new, rows = perf.compare({}, tonight, 5)
+        text = perf.markdown(rows, new["entries"][-1], levels=new["levels"])
+        self.assertEqual([l for l in text.splitlines() if l.lstrip().startswith("::")], [])
+
+    def test_host_fingerprints_are_loaded_with_their_whitespace_collapsed(self):
+        # `runners.py host` collapses the model; a host.json written any other way is read as written, and a
+        # `::stop-commands::` line in the tee'd job log would hide every later ::error annotation.
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "a"
+            run.mkdir()
+            (run / "run.json").write_text('{"run": "linux-gcc"}', encoding="utf-8")
+            (run / "host.json").write_text(json.dumps({"cpu": " CPU\n::stop-commands::x\t\r\nrev 2 ",
+                                                       "logical_cpus": 4}), encoding="utf-8")
+            hosts = perf.load_hosts(Path(d))
+        self.assertEqual(hosts, {"linux-gcc": {"cpu": "CPU ::stop-commands::x rev 2", "logical_cpus": 4}})
+        # The class it names is the one `runners.py host` would have written for the same machine.
+        self.assertEqual(runners.host_class(hosts["linux-gcc"]), "CPU ::stop-commands::x rev 2, 4 logical CPUs")
+
+    def test_the_backstop_counts_each_run_on_its_own(self):
+        # linux-gcc's class changes every 2nd night; windows stays on one class and is gated from its 6th
+        # night. Windows' gated rows must not reset linux-gcc's count, nor the other way round.
+        history, red = {}, {"linux-gcc": [], "windows": []}
+        for n in range(1, 63):
+            e = self.on(f"CPU rev {n // 2}", self.night(n, t=100.0, runs=("linux-gcc", "windows")))
+            e["metrics"]["windows/t"] = dict(e["metrics"]["linux-gcc/t"])
+            e["hosts"]["windows"] = {"cpu": "WIN", "logical_cpus": 4, "class": "WIN, 4 logical CPUs"}
+            history, rows = perf.compare(history, e, 5)
+            for r in rows:
+                if r["verdict"] in perf.FAILING:
+                    red[r["metric"].split("/")[0]].append(n)
+        self.assertEqual(red, {"linux-gcc": [60, 61, 62], "windows": []})
+        self.assertEqual(history["entries"][-1]["ungated_nights"], {"linux-gcc": 62, "windows": 0})
+
+    def test_the_legacy_walk_counts_each_run_on_its_own(self):
+        # The same two runs, in a history written before the count was stored: the walk back over the stored
+        # verdicts must read each run's own rows, so windows' gated rows do not stop linux-gcc's count.
+        def night(n):
+            e = self.on(f"CPU rev {n // 2}", self.night(n, t=100.0, runs=("linux-gcc", "windows")))
+            e["metrics"]["windows/t"] = dict(e["metrics"]["linux-gcc/t"])
+            e["hosts"]["windows"] = {"cpu": "WIN", "logical_cpus": 4, "class": "WIN, 4 logical CPUs"}
+            return e
+
+        legacy, _ = self.replay([night(n) for n in range(1, 62)])
+        for e in legacy["entries"]:
+            del e["ungated_nights"]
+        new, rows = perf.compare(legacy, night(62), 5)
+        self.assertEqual({r["metric"]: r["verdict"] for r in rows if r["verdict"] != "never measured"},
+                         {"linux-gcc/t": "host-churn", "windows/t": "ok"})
+        # The walk sees the 60 retained entries (nights 2 to 61), so linux-gcc's count is 60 + tonight.
+        self.assertEqual(new["entries"][-1]["ungated_nights"], {"linux-gcc": 61, "windows": 0})
+
+    def test_an_accepted_row_is_a_night_that_a_level_gated(self):
+        # A perf_accept for tonight sets the level tonight is gated against, so that night resets the backstop's
+        # count like an `ok` one: 59 churning nights, an accepted night on a new class, then another new class.
+        nights = [self.on(f"CPU rev {n // 2}", self.night(n, t=100.0)) for n in range(1, 60)]
+        nights.append(self.on("CPU rev 30", self.night(60, accepted=[self.accept(60, 100.0)], t=100.0)))
+        nights.append(self.on("CPU rev 31", self.night(61, t=100.0)))
+        history, verdicts = self.replay(nights)
+        self.assertEqual([v["t"] for v in verdicts[58:]], ["calibrating", "accepted", "new-host-class"])
+        self.assertEqual([e["ungated_nights"] for e in history["entries"][-3:]],
+                         [{"linux-gcc": 59}, {"linux-gcc": 0}, {"linux-gcc": 1}])
+
 
 class RunnerTests(unittest.TestCase):
     def test_gate_writes_junit_with_exit_code_and_output(self):
@@ -1346,18 +1412,399 @@ class RunnerTests(unittest.TestCase):
                       "properties": [{"name": "LABELS", "value": ["vulkan-gpu", "shaders"]}]}]
             original = sc.ctest_tests
             sc.ctest_tests = lambda *args: tests
+            logs = {}
             try:
-                with contextlib.redirect_stdout(io.StringIO()):
-                    skipped = runners.main(["doctest", "--build-dir", "build", "--label-exclude", "gpu|perf",
-                                            "--out", str(work / "skip")])
-                    every = runners.main(["doctest", "--build-dir", "build", "--out", str(work / "all")])
+                for name, args in (("skip", ["--label-exclude", "gpu|perf"]), ("all", []),
+                                   ("anchored", ["--label-exclude", "^gpu$"])):
+                    with contextlib.redirect_stdout(io.StringIO()) as log:
+                        rc = runners.main(["doctest", "--build-dir", "build", *args, "--out", str(work / name)])
+                    logs[name] = (rc, log.getvalue())
             finally:
                 sc.ctest_tests = original
-            self.assertEqual(skipped, 0)
+            self.assertEqual(logs["skip"][0], 0)
             self.assertEqual(sorted(p.name for p in (work / "skip").iterdir()),
                              ["cpu_tests.status.json", "cpu_tests.xml"])
-            self.assertEqual(every, 1)
+            # The skip line names the label that matched, not every label of the entry.
+            self.assertIn("doctest: gpu_tests: not run (label gpu matches 'gpu|perf')\n", logs["skip"][1])
+            self.assertIn("doctest: vk_tests: not run (label vulkan-gpu matches 'gpu|perf')\n", logs["skip"][1])
+            self.assertEqual(logs["all"][0], 1)
             self.assertEqual(json.loads((work / "all" / "gpu_tests.status.json").read_text())["returncode"], 7)
+            # PR #32's review: an anchored pattern is matched against each label on its own, as ctest -LE does,
+            # so "^gpu$" skips gpu_tests (labels render, gpu) and runs vk_tests (vulkan-gpu); a search over the
+            # labels joined into one string would skip neither.
+            self.assertEqual(logs["anchored"][0], 1)  # vk_tests ran and exited 8
+            self.assertEqual(sorted(p.name for p in (work / "anchored").iterdir()),
+                             ["cpu_tests.status.json", "cpu_tests.xml", "vk_tests.status.json"])
+            self.assertEqual(json.loads((work / "anchored" / "vk_tests.status.json").read_text())["returncode"], 8)
+            self.assertIn("doctest: gpu_tests: not run (label gpu matches '^gpu$')\n", logs["anchored"][1])
+            self.assertNotIn("vk_tests: not run", logs["anchored"][1])
+
+
+# `net_bench --gate` lines as the nightly of 2026-10-03 logged them (run 37098788944: Linux job 111134044934,
+# Windows job 111134044901), with the numbers each scenario needs.
+def bench_output(socket=(1000000, 1000000, 200474), stack=(884608, 884608, 88464),
+                 trunk=(11999995, 11999995, 20000, 0.0), advisory=False, failed=(), trunk_connected=True,
+                 summary=True) -> str:
+    """The output of one `net_bench --gate [--advisory ns02-stack]` run; `failed` names the clauses whose
+    failure line it prints (socket, stack, trunk), as net_bench does after each measurement."""
+    lines = [f"05:23:55.610 INFO  [General] NS-0.2 socket: {socket[0]}/{socket[1]} datagrams, {socket[2]} pps per "
+             f"core (4988.2 ms CPU, 4989.7 ms wall)",
+             "05:23:55.612 INFO  [Net] [server] listening on 127.0.0.1:43068 (public 127.0.0.1:43068), 256 slots"]
+    if "socket" in failed:
+        lines.insert(1, "05:23:55.611 ERROR [General] NS-0.2 FAILED: needs 100k pps per core without loss  "
+                        "(net_bench.cpp:201)")
+    lines.append(f"05:24:05.617 INFO  [General] NS-0.2 HTP stack: {stack[0]}/{stack[1]} encrypted packets delivered, "
+                 f"{stack[2]} packets per core (send + receive, 1 thread)")
+    if "stack" in failed:
+        lines.append("05:24:05.617 ERROR [General] NS-0.2 FAILED: the HTP stack needs 100k encrypted packets per "
+                     "core without loss  (net_bench.cpp:213)")
+    elif advisory and stack[2] < 100000:
+        lines.append(f"05:24:05.617 WARN  [General] NS-0.2 advisory: owner approval 2026-09-30, evidence "
+                     f"docs/evidence/ns-0.2-owner-approval-2026-09-30.md. The HTP stack's {stack[2]} packets per core "
+                     f"is below 100k: reported, not failing (loss still fails)  (net_bench.cpp:220)")
+    lines.append("05:24:05.618 INFO  [Net] [cell] listening on 127.0.0.1:54161 (public 127.0.0.1:54161), 4 slots")
+    if not trunk_connected:  # at runTrunkGate's 3 s connect deadline
+        lines.append("05:24:08.619 ERROR [General] NS-0.7: trunk did not connect  (net_bench.cpp:235)")
+    elif trunk is not None:
+        sent, delivered, pps, drops = trunk
+        lines.append(f"05:34:05.923 INFO  [General] NS-0.7 trunk: 600 s, sent {sent}, delivered {delivered} ({pps} pps, "
+                     f"190.1 Mbit/s payload, 199.7 Mbit/s wire), drops {drops:.4f} %, cell thread 0.25 cores, gateway "
+                     f"thread 0.23 cores, rcvbuf 2048 KB, syscalls send 1466870 recv 7501308")
+        if "trunk" in failed:
+            lines.append("05:34:05.923 ERROR [General] NS-0.7 FAILED: needs 20k pps, < 0.1 % drops, <= 1 core per "
+                         "side  (net_bench.cpp:241)")
+    if summary:
+        lines.append(f"{'05:34:05.923' if trunk_connected else '05:24:08.619'} INFO  [General] gates "
+                     f"{'FAILED' if failed or not trunk_connected else 'PASSED'}"
+                     f"{' (NS-0.2' + chr(39) + 's HTP stack rate advisory)' if advisory else ''}")
+    return "\n".join(lines) + "\n"
+
+
+LINUX_ADVISORY = (0, bench_output(advisory=True))  # 88,464 per core: below 100k, on the approval
+WINDOWS_PASS = (0, bench_output(socket=(1000000, 1000000, 344086), stack=(1248256, 1248256, 125611),
+                                trunk=(11999992, 11999992, 20000, 0.0)))
+WINDOWS_STACK_BELOW = (1, bench_output(socket=(1000000, 1000000, 249000), stack=(853990, 853990, 85399),
+                                       failed=("stack",)))  # 2026-09-27's level, on the strict step
+WINDOWS_TRUNK_FAILS = (1, bench_output(socket=(1000000, 1000000, 344086), stack=(1248256, 1248256, 125611),
+                                       trunk=(11999992, 11813909, 19690, 1.5507), failed=("trunk",)))  # 2026-09-27
+
+
+class GateClauseTests(unittest.TestCase):
+    """#43's review, N4: NS-0.2 and NS-0.7 both read the one net_bench_gate result, so on the strict Windows step
+    a stack below 100k also failed NS-0.7. With one JUnit case per clause (runners.py gate) and each criterion
+    citing its own (the real scorecard.jsonc), each fails only on its own clauses, and the owner approval still
+    relaxes nothing but the encrypted stack's rate on linux-gcc."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.data, _ = sc.load_jsonc(sc.ROOT / "scorecard.jsonc")
+        cls.cases = cls.data["gates"]["net_bench_gate"]["cases"]
+        cls.entries = {e["id"]: e for e in cls.data["criteria"] if e["id"] in ("NS-0.2", "NS-0.7")}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.results = Path(self.tmp.name)
+
+    def gate(self, run, rc, text, seconds=615.3, cases=None):
+        """The gate result `runners.py gate` writes for `text`, in run `run`'s result set."""
+        d = self.results / run
+        (d / "gates").mkdir(parents=True, exist_ok=True)
+        (d / "run.json").write_text(json.dumps({"run": run}), encoding="utf-8")
+        scanner = runners.ClauseLines(self.cases if cases is None else cases)
+        scanner.feed(text.encode("utf-8"))
+        scanner.finish()
+        runners.write_gate_junit(d / "gates" / "net_bench_gate.xml", "net_bench_gate", rc, seconds, text,
+                                 runners.clause_verdicts(self.cases if cases is None else cases, scanner.hits, rc))
+
+    def night(self, linux=LINUX_ADVISORY, windows=WINDOWS_PASS):
+        """{criterion: report.evaluate(...)} for NS-0.2 and NS-0.7 with the registry's entries, the linux-gcc and
+        windows-vs2026 gate results given (None: no gate result), and Linux's passing net_tests perf cases."""
+        linux_dir = self.results / "linux-gcc"
+        (linux_dir / "doctest").mkdir(parents=True, exist_ok=True)
+        (linux_dir / "run.json").write_text('{"run": "linux-gcc"}', encoding="utf-8")
+        (self.results / "windows-vs2026").mkdir(exist_ok=True)
+        (self.results / "windows-vs2026" / "run.json").write_text('{"run": "windows-vs2026"}', encoding="utf-8")
+        doctest_xml(linux_dir / "doctest" / "net_tests.perf.xml",
+                    [("perf: NS-0.2: loopback 100k pps per core without loss", True, "-> 480000 pps per core"),
+                     ("perf: NS-0.7 (short run): trunk throughput over UDP loopback", True, "")])
+        for run, out in (("linux-gcc", linux), ("windows-vs2026", windows)):
+            if out is not None:
+                self.gate(run, *out)
+        runs = report.load_results(self.results, MODULE)
+        return {ident: report.evaluate(e, self.data, runs, None, sc.ROOT) for ident, e in self.entries.items()}
+
+    @staticmethod
+    def cells(result):
+        return result["status"], result["platforms"]["linux"]["status"], result["platforms"]["windows"]["status"]
+
+    @staticmethod
+    def refs(result, os_name):
+        return {r["ref"]: r["status"] for r in result["platforms"][os_name]["refs"]}
+
+    def windows_messages(self):
+        """'<case>: <failure message>' per failed clause case of the Windows gate result, one per line."""
+        root = ET.parse(self.results / "windows-vs2026" / "gates" / "net_bench_gate.xml").getroot()
+        return "\n".join(f"{c.get('name')}: {c.find('failure').get('message')}" for c in root.iter("testcase")
+                         if c.get("classname") == "net_bench_gate" and c.find("failure") is not None)
+
+    def test_linux_on_the_advisory_and_ns07_pass(self):
+        r = self.night()
+        self.assertEqual(self.cells(r["NS-0.2"]), ("pass", "pass", "pass"))
+        self.assertTrue(r["NS-0.2"]["by_approval"])  # linux-gcc's 88,464 passed on the approval
+        self.assertEqual(r["NS-0.2"]["platforms"]["linux"]["advisory"],
+                         ["linux-gcc net.ns02.stack_packets_per_core 88,464 packets/core"])
+        self.assertEqual(self.cells(r["NS-0.7"]), ("pass", "pass", "pass"))
+        self.assertEqual(self.refs(r["NS-0.7"], "windows"), {"gate net_bench_gate / NS-0.7 trunk": "pass"})
+
+    def test_a_windows_stack_below_100k_fails_ns02_and_not_ns07(self):
+        r = self.night(windows=WINDOWS_STACK_BELOW)
+        self.assertEqual(self.cells(r["NS-0.2"]), ("fail", "pass", "fail"))
+        self.assertEqual(self.refs(r["NS-0.2"], "windows"), {
+            "gate net_bench_gate / NS-0.2 socket": "pass", "gate net_bench_gate / NS-0.2 HTP stack": "fail",
+            "evidence docs/evidence/ns-0.2-owner-approval-2026-09-30.md": "pass"})
+        self.assertIn("NS-0.2 FAILED: the HTP stack", "".join(report.junit_cases(
+            self.results / "windows-vs2026" / "gates" / "net_bench_gate.xml")[2][3]))
+        # NS-0.7's own clauses passed on Windows, so its Windows cell passes although the command exited 1.
+        self.assertEqual(self.cells(r["NS-0.7"]), ("pass", "pass", "pass"))
+
+    def test_ns07_failing_fails_only_ns07(self):
+        r = self.night(windows=WINDOWS_TRUNK_FAILS)
+        self.assertEqual(self.cells(r["NS-0.7"]), ("fail", "pass", "fail"))
+        self.assertEqual(self.cells(r["NS-0.2"]), ("pass", "pass", "pass"))
+        # On linux-gcc too: the advisory relaxes NS-0.2's stack rate only, so NS-0.7 still fails there, and
+        # NS-0.2 (on the approval) does not.
+        linux = (1, bench_output(advisory=True, trunk=(11999995, 11000000, 18333, 8.3333), failed=("trunk",)))
+        r = self.night(linux=linux)
+        self.assertEqual(self.cells(r["NS-0.7"]), ("fail", "fail", "pass"))
+        self.assertEqual(self.cells(r["NS-0.2"]), ("pass", "pass", "pass"))
+        self.assertTrue(r["NS-0.2"]["by_approval"])
+        # The exception (#45's round-2 review, blocking 1): a trunk that never connects ends the command at
+        # runTrunkGate's connect deadline, right after the 10 s stack run, so the run cannot reach
+        # min_seconds. NS-0.7 fails on its failure line, and NS-0.2's clauses fail on min_seconds, as the
+        # single result did.
+        bench = sc.ROOT / "engine" / "net" / "bench"
+        deadline = float(re.search(r"connectDeadline = monotonicSeconds\(\) \+ ([\d.]+);",
+                                   (bench / "trunk_gate.h").read_text(encoding="utf-8"))[1])
+        stack = float(re.search(r'runStackPps\(number\("--stack", 0, gate \? ([\d.]+) :',
+                                (bench / "net_bench.cpp").read_text(encoding="utf-8"))[1])
+        seconds = 5.0 + stack + deadline  # after the socket run's 5 s (bench_output's 4989.7 ms wall): 18 s
+        self.assertLess(seconds, self.data["gates"]["net_bench_gate"]["min_seconds"])
+        r = self.night(linux=(1, bench_output(advisory=True, trunk_connected=False), seconds))
+        self.assertEqual(self.cells(r["NS-0.7"]), ("fail", "fail", "pass"))
+        self.assertEqual(self.cells(r["NS-0.2"]), ("fail", "fail", "pass"))
+        self.assertFalse(r["NS-0.2"]["by_approval"])
+        details = {x["ref"]: x["detail"] for x in r["NS-0.2"]["platforms"]["linux"]["refs"]}
+        for case in ("NS-0.2 socket", "NS-0.2 HTP stack"):
+            self.assertIn(f"linux-gcc fail (ran {seconds:.0f} s of the required 600 s)",
+                          details[f"gate net_bench_gate / {case}"])
+
+    def test_the_advisory_still_fails_loss_a_silent_stack_and_raw_datagrams(self):
+        for linux in ((1, bench_output(advisory=True, stack=(884608, 884600, 88463), failed=("stack",))),  # loss
+                      (1, bench_output(advisory=True, stack=(0, 0, 0), failed=("stack",))),  # never sent
+                      (1, bench_output(advisory=True, socket=(1000000, 1000000, 95000), failed=("socket",))),
+                      (1, bench_output(advisory=True, socket=(1000000, 999990, 200474), failed=("socket",)))):
+            r = self.night(linux=linux)
+            self.assertEqual(self.cells(r["NS-0.2"]), ("fail", "fail", "pass"), linux[1])
+            self.assertFalse(r["NS-0.2"]["by_approval"])
+            self.assertEqual(self.cells(r["NS-0.7"]), ("pass", "pass", "pass"))
+
+    def test_a_missing_clause_case_is_missing_never_green(self):
+        # A gate result without the clause cases (written before them, or by a runner that could not read the
+        # registry): every clause reference reads `missing` (`fail` if the command failed), so neither
+        # criterion passes or keeps a streak.
+        night = self.night()
+        d = self.results / "windows-vs2026" / "gates"
+        runners.write_gate_junit(d / "net_bench_gate.xml", "net_bench_gate", 0, 615.3, WINDOWS_PASS[1])
+        runs = report.load_results(self.results, MODULE)
+        for ident in ("NS-0.2", "NS-0.7"):
+            r = report.evaluate(self.entries[ident], self.data, runs, None, sc.ROOT)
+            self.assertEqual(self.cells(r), ("unmeasured", "pass", "unmeasured"))
+            gates = {k: v for k, v in self.refs(r, "windows").items() if k.startswith("gate")}
+            self.assertEqual(set(gates.values()), {"missing"}, gates)
+            detail = next(x["detail"] for x in r["platforms"]["windows"]["refs"] if x["ref"].startswith("gate"))
+            self.assertIn("windows-vs2026 missing (the gate's result has no case 'NS-0.", detail)
+            self.assertEqual(night[ident]["status"], "pass")  # the same night with the cases passes
+        previous = {"generated": "2026-10-02T03:17:00Z", "scheduled": True,
+                    "criteria": [{"id": i, "phase": 0, "streak": 2, "history": ["pass"] * 2} for i in self.entries]}
+        data = dict(self.data, criteria=list(self.entries.values()), exit=[])
+        rep = report.build_report(data, runs, None, previous, True, 0, sc.ROOT,
+                                  now=datetime(2026, 10, 3, 3, 17, tzinfo=timezone.utc))
+        self.assertEqual([(c["id"], c["status"], c["streak"], c["green"]) for c in rep["criteria"]],
+                         [("NS-0.2", "unmeasured", 0, False), ("NS-0.7", "unmeasured", 0, False)])
+        # #45's review, N2: the same without the cases from a command that failed reads `fail`, not unmeasured.
+        runners.write_gate_junit(d / "net_bench_gate.xml", "net_bench_gate", 1, 615.3, WINDOWS_STACK_BELOW[1])
+        runs = report.load_results(self.results, MODULE)
+        for ident in ("NS-0.2", "NS-0.7"):
+            r = report.evaluate(self.entries[ident], self.data, runs, None, sc.ROOT)
+            self.assertEqual(self.cells(r), ("fail", "pass", "fail"), ident)
+            detail = next(x["detail"] for x in r["platforms"]["windows"]["refs"] if x["ref"].startswith("gate"))
+            self.assertIn("windows-vs2026 fail (the gate's result has no case 'NS-0.", detail)
+            self.assertIn("', and its command failed)", detail)
+        # No gate result at all on Windows: missing too.
+        (d / "net_bench_gate.xml").unlink()
+        runs = report.load_results(self.results, MODULE)
+        r = report.evaluate(self.entries["NS-0.7"], self.data, runs, None, sc.ROOT)
+        self.assertEqual((self.cells(r), self.refs(r, "windows")),
+                         (("unmeasured", "pass", "unmeasured"), {"gate net_bench_gate / NS-0.7 trunk": "missing"}))
+
+    def test_an_exit_no_clause_explains_fails_every_clause(self):
+        # Every line printed, none of them a failure, and exit 139 (a crash at exit): no clause is known to pass.
+        r = self.night(windows=(-11, WINDOWS_PASS[1]))
+        self.assertEqual(self.cells(r["NS-0.2"]), ("fail", "pass", "fail"))
+        self.assertEqual(self.cells(r["NS-0.7"]), ("fail", "pass", "fail"))
+        # A failure line no clause knows: the same (the source test below keeps the patterns in step).
+        r = self.night(windows=(1, WINDOWS_PASS[1].replace("gates PASSED", "NS-0.2 FAILED: something new")))
+        self.assertEqual(self.cells(r["NS-0.2"]), ("fail", "pass", "fail"))
+        self.assertEqual(self.cells(r["NS-0.7"]), ("fail", "pass", "fail"))
+        # The same where the trunk's line would be: its clause fails as unmeasured, which explains no exit 1,
+        # so NS-0.2's clauses are not known to have passed either.
+        head = WINDOWS_PASS[1][:WINDOWS_PASS[1].index("05:34:05.923")]
+        r = self.night(windows=(1, head + "05:34:05.923 ERROR [General] NS-0.7: something new\ngates FAILED\n"))
+        self.assertEqual(self.cells(r["NS-0.2"]), ("fail", "pass", "fail"))
+        self.assertEqual(self.cells(r["NS-0.7"]), ("fail", "pass", "fail"))
+        # Killed by the timeout during the trunk run: the trunk was not measured, and an exit other than 1 is no
+        # clause's, so NS-0.2's clauses fail too although their lines were printed (as before the cases).
+        killed = WINDOWS_PASS[1][:WINDOWS_PASS[1].index("05:34:05.923")] + "[gate killed after the 1800 s timeout]\n"
+        r = self.night(windows=(124, killed))
+        self.assertEqual(self.cells(r["NS-0.7"]), ("fail", "pass", "fail"))
+        self.assertEqual(self.cells(r["NS-0.2"]), ("fail", "pass", "fail"))
+        self.assertIn("NS-0.2 socket: exit code 124, which no clause's failure line explains", self.windows_messages())
+        # #45's review, N1: the stack's failure line, then a crash (139) after the trunk line. The stack's line
+        # explains an exit 1, not a crash, so the trunk clause is not known to have passed: NS-0.7 fails too,
+        # while the stack keeps its own failure line as its reason.
+        r = self.night(windows=(139, WINDOWS_STACK_BELOW[1].replace("gates FAILED", "")))
+        self.assertEqual(self.cells(r["NS-0.2"]), ("fail", "pass", "fail"))
+        self.assertEqual(self.cells(r["NS-0.7"]), ("fail", "pass", "fail"))
+        messages = self.windows_messages()
+        self.assertIn("NS-0.2 HTP stack: 05:24:05.617 ERROR [General] NS-0.2 FAILED: the HTP stack", messages)
+        self.assertIn("NS-0.7 trunk: exit code 139, which no clause's failure line explains", messages)
+        # The same lines with exit 1, net_bench's own failure code: only NS-0.2 fails.
+        r = self.night(windows=(1, WINDOWS_STACK_BELOW[1].replace("gates FAILED", "")))
+        self.assertEqual(self.cells(r["NS-0.2"]), ("fail", "pass", "fail"))
+        self.assertEqual(self.cells(r["NS-0.7"]), ("pass", "pass", "pass"))
+        # A run shorter than the gate's min_seconds fails every clause (net_bench without --gate, say).
+        self.gate("windows-vs2026", 0, WINDOWS_PASS[1], seconds=17.0)
+        runs = report.load_results(self.results, MODULE)
+        for ident, e in self.entries.items():
+            r = report.evaluate(e, self.data, runs, None, sc.ROOT)
+            self.assertEqual(self.cells(r), ("fail", "pass", "fail"), ident)
+            self.assertIn("ran 17 s of the required 600 s", r["platforms"]["windows"]["refs"][0]["detail"])
+
+    def test_the_runner_streams_one_case_per_clause(self):
+        # run_gate on a command that prints the strict Windows night of 2026-09-27 in chunks that split lines,
+        # with Windows line ends.
+        text = WINDOWS_STACK_BELOW[1].replace("\n", "\r\n")
+        script = ("import sys, time\n"
+                  f"text = {text!r}\n"
+                  "for i in range(0, len(text), 37):\n"
+                  "    sys.stdout.write(text[i:i + 37]); sys.stdout.flush(); time.sleep(0.001)\n"
+                  "sys.exit(1)\n")
+        metric = next(m for m in self.data["perf_metrics"] if m["id"] == "net.ns02.stack_packets_per_core")
+        # print() writes os.linesep through a TextIOWrapper ("\r\n" on Windows): run under that translation on
+        # every OS too, and compare the printed lines with their ends normalised.
+        for newline in (None, "\r\n"):
+            with self.subTest(newline=newline):
+                with tempfile.TemporaryDirectory() as d:
+                    out = Path(d)
+                    with contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), newline=newline)) as log:
+                        rc = runners.main(["gate", "--name", "net_bench_gate", "--out", str(out), "--",
+                                           sys.executable, "-c", script])
+                        log.flush()
+                        printed = log.buffer.getvalue().decode("utf-8").replace("\r\n", "\n")
+                    cases = report.junit_cases(out / "net_bench_gate.xml")
+                    root = ET.parse(out / "net_bench_gate.xml").getroot()
+                self.assertEqual(rc, 1)
+                self.assertEqual([(name, status) for name, status, _, _ in cases],
+                                 [("net_bench_gate", "fail"), ("NS-0.2 socket", "pass"),
+                                  ("NS-0.2 HTP stack", "fail"), ("NS-0.7 trunk", "pass")])
+                self.assertEqual((root.get("tests"), root.get("failures")), ("4", "2"))
+                self.assertEqual([c.get("classname") for c in root.iter("testcase")],
+                                 ["gates", "net_bench_gate", "net_bench_gate", "net_bench_gate"])
+                stack = next(c for c in root.iter("testcase") if c.get("name") == "NS-0.2 HTP stack")
+                self.assertEqual(stack.find("failure").get("message"),
+                                 "05:24:05.617 ERROR [General] NS-0.2 FAILED: the HTP stack needs 100k encrypted "
+                                 "packets per core without loss  (net_bench.cpp:213)")
+                self.assertIn("853990/853990 encrypted packets delivered, 85399 packets per core",
+                              stack.findtext("system-out"))
+                self.assertIn("gate net_bench_gate: NS-0.7 trunk: pass\n", printed)
+                self.assertIn("gate net_bench_gate: NS-0.2 HTP stack: FAIL (", printed)
+                # The command's own case keeps the whole output for the perf metrics.
+                res = report.Results("windows-vs2026")
+                res.gates["net_bench_gate"] = cases[0][1:]
+                self.assertEqual(report.metric_values(metric, [res]), {"windows-vs2026": 85399.0})
+
+    def test_the_line_reader_is_bounded(self):
+        # An over-long line keeps only its first MAX_LINE bytes (the rest is dropped, not spliced onto it), and
+        # each pattern keeps its first MAX_HITS lines, whatever the command prints.
+        scanner = runners.ClauseLines(self.cases)
+        stack = WINDOWS_PASS[1].splitlines()[2].encode("utf-8")
+        for _ in range(3 * runners.MAX_LINE // 50_000 + 1):
+            scanner.feed(b"x" * 50_000)
+            self.assertLessEqual(len(scanner._partial), runners.MAX_LINE)
+        scanner.feed(stack + b"\n")  # the end of the long line: past its first MAX_LINE bytes, so not seen
+        self.assertEqual(scanner.hits["NS-0.2 HTP stack"]["result"], [])
+        for _ in range(3 * runners.MAX_HITS):
+            scanner.feed(stack[:40])
+            scanner.feed(stack[40:] + b"\n")
+        trunk = WINDOWS_PASS[1].splitlines()[4]
+        scanner.feed(trunk.encode("utf-8"))  # the output's last line, without a newline
+        self.assertEqual(scanner.hits["NS-0.7 trunk"]["result"], [])
+        scanner.finish()
+        self.assertEqual(scanner.hits["NS-0.7 trunk"]["result"], [trunk])
+        self.assertEqual(scanner.hits["NS-0.2 HTP stack"]["result"], [stack.decode()] * runners.MAX_HITS)
+        self.assertEqual(scanner.hits["NS-0.2 socket"], {"result": [], "failure": []})
+
+    def test_the_runner_fails_a_clause_the_output_does_not_show(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            with contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO())):
+                # Exit 0 without the trunk line (a run without --trunk, say): that clause fails, and so does the step.
+                head = WINDOWS_PASS[1][:WINDOWS_PASS[1].index("05:34:05.923")]
+                rc = runners.run_gate("net_bench_gate", [sys.executable, "-c", f"print({head!r})"],
+                                      out, None, None, None, self.cases)
+                self.assertEqual(rc, 1)
+                self.assertEqual([s for _, s, _, _ in report.junit_cases(out / "net_bench_gate.xml")],
+                                 ["pass", "pass", "pass", "fail"])
+                # A command that cannot start fails every clause instead of leaving them missing.
+                rc = runners.run_gate("net_bench_gate", [str(out / "no-such-binary")], out, None, None, None,
+                                      self.cases)
+                self.assertEqual(rc, 127)
+                self.assertEqual([s for _, s, _, _ in report.junit_cases(out / "net_bench_gate.xml")], ["fail"] * 4)
+                # A gate without cases writes its one case, as before; an unreadable registry writes only that.
+                rc = runners.main(["gate", "--name", "libfuzzer_packet_parser", "--out", str(out), "--",
+                                   sys.executable, "-c", "pass"])
+                self.assertEqual((rc, [n for n, *_ in report.junit_cases(out / "libfuzzer_packet_parser.xml")]),
+                                 (0, ["libfuzzer_packet_parser"]))
+                (out / "bad.jsonc").write_text("{", encoding="utf-8")
+                rc = runners.main(["gate", "--name", "net_bench_gate", "--scorecard", str(out / "bad.jsonc"),
+                                   "--out", str(out), "--", sys.executable, "-c", "pass"])
+                self.assertEqual((rc, [n for n, *_ in report.junit_cases(out / "net_bench_gate.xml")]),
+                                 (0, ["net_bench_gate"]))
+
+    def test_the_clause_patterns_match_what_net_bench_prints(self):
+        # Each case's patterns against net_bench.cpp's own format strings ({...} filled in): every result line
+        # is one case's, and every failure line one case's, so a reworded or new failure line fails here, in
+        # the PR tier, instead of passing a clause on the nightly.
+        source = (sc.ROOT / "engine" / "net" / "bench" / "net_bench.cpp").read_text(encoding="utf-8")
+        logs = {}
+        for level, literals in re.findall(r'HELIOS_LOG_(INFO|WARN|ERROR)\(\s*((?:"(?:[^"\\]|\\.)*"\s*)+)', source):
+            text = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', literals))
+            logs.setdefault(level, []).append(re.sub(r"\{[^{}]*\}", "1", text))
+        usage = "--advisory takes '1' and applies to --gate only"  # exits 2 before any clause runs
+        self.assertIn(usage, logs["ERROR"])
+        claimed = {line: [n for n, c in self.cases.items() if re.search(c["failure"], line)] for line in logs["ERROR"]}
+        self.assertEqual({line: names for line, names in claimed.items() if line != usage}, {
+            "NS-0.2 FAILED: needs 100k pps per core without loss": ["NS-0.2 socket"],
+            "NS-0.2 FAILED: the HTP stack needs 100k encrypted packets per core without loss": ["NS-0.2 HTP stack"],
+            "NS-0.7: trunk did not connect": ["NS-0.7 trunk"],
+            "NS-0.7 FAILED: needs 20k pps, < 0.1 % drops, <= 1 core per side": ["NS-0.7 trunk"]})
+        self.assertEqual(claimed[usage], [])
+        others = logs["INFO"] + logs["WARN"]
+        for name, case in self.cases.items():
+            self.assertEqual(len([line for line in others if re.search(case["result"], line)]), 1, name)
+            self.assertEqual([line for line in others if re.search(case["failure"], line)], [], name)
+        self.assertEqual({c["criterion"] for c in self.cases.values()}, {"NS-0.2", "NS-0.7"})
 
 
 if __name__ == "__main__":

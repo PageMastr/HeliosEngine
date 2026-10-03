@@ -65,6 +65,10 @@ bool Spellings::operator==(const Spellings& other) const noexcept {
     return ::helios::refl::Codec<::golden::all::Spellings>::equals(*this, other);
 }
 
+bool LedgerLine::operator==(const LedgerLine& other) const noexcept {
+    return ::helios::refl::Codec<::golden::all::LedgerLine>::equals(*this, other);
+}
+
 bool Pack::operator==(const Pack& other) const noexcept {
     return ::helios::refl::Codec<::golden::all::Pack>::equals(*this, other);
 }
@@ -101,6 +105,14 @@ bool StoreBuyRequest::operator==(const StoreBuyRequest& other) const noexcept {
     return ::helios::refl::Codec<::golden::all::StoreBuyRequest>::equals(*this, other);
 }
 
+bool LedgerLine::ShapeDot::operator==(const LedgerLine::ShapeDot& other) const noexcept {
+    return ::helios::refl::Codec<::golden::all::LedgerLine::ShapeDot>::equals(*this, other);
+}
+
+bool LedgerLine::ShapeLine::operator==(const LedgerLine::ShapeLine& other) const noexcept {
+    return ::helios::refl::Codec<::golden::all::LedgerLine::ShapeLine>::equals(*this, other);
+}
+
 bool Pair::operator==(const Pair& other) const noexcept {
     return ::helios::refl::Codec<::golden::all::Pair>::equals(*this, other);
 }
@@ -128,6 +140,7 @@ bool Motion::Server::operator==(const Motion::Server& other) const noexcept {
         &::helios::refl::typeOf<::golden::all::Fire>(),
         &::helios::refl::typeOf<::golden::all::Req>(),
         &::helios::refl::typeOf<::golden::all::Spellings>(),
+        &::helios::refl::typeOf<::golden::all::LedgerLine>(),
         &::helios::refl::typeOf<::golden::all::Pack>(),
         &::helios::refl::typeOf<::golden::all::Bag>(),
         &::helios::refl::typeOf<::golden::all::Tagged>(),
@@ -139,6 +152,9 @@ bool Motion::Server::operator==(const Motion::Server& other) const noexcept {
         &::helios::refl::typeOf<::golden::all::ThingDef::Inner>(),
         &::helios::refl::typeOf<::golden::all::ThingDef::Inner::B>(),
         &::helios::refl::typeOf<::golden::all::StoreBuyRequest>(),
+        &::helios::refl::typeOf<::golden::all::LedgerLine::Shape>(),
+        &::helios::refl::typeOf<::golden::all::LedgerLine::ShapeDot>(),
+        &::helios::refl::typeOf<::golden::all::LedgerLine::ShapeLine>(),
         &::helios::refl::typeOf<::golden::all::Pair>(),
         &::helios::refl::typeOf<::golden::all::Motion::Server>(),
     };
@@ -306,22 +322,68 @@ constexpr ::helios::refl::attrs::Step kTyped17_1{.25};
 constexpr ::helios::refl::AttrArg kArgs17_2[] = {{"category", "Edge"}, {"order", "1e1"}, };
 constexpr ::helios::refl::attrs::Editor kTyped17_2{"Edge", "", 10};
 constexpr ::helios::refl::Attr kAttrs17[] = {{"range", kArgs17_0, &kTyped17_0, ::helios::refl::attrs::Range::kKind}, {"step", kArgs17_1, &kTyped17_1, ::helios::refl::attrs::Step::kKind}, {"editor", kArgs17_2, &kTyped17_2, ::helios::refl::attrs::Editor::kKind}, };
-constexpr ::helios::refl::AttrArg kArgs18_0[] = {{"", "16"}, };
-constexpr ::helios::refl::attrs::Max kTyped18_0{16ull};
-constexpr ::helios::refl::Attr kAttrs18[] = {{"max", kArgs18_0, &kTyped18_0, ::helios::refl::attrs::Max::kKind}, };
+const ::helios::u8& dflt_LedgerLine_order() {
+    static const ::helios::u8 value = 7u;
+    return value;
+}
+constexpr ::helios::refl::AttrArg kArgs18_0[] = {{"", "rank"}, };
+constexpr ::helios::refl::Attr kAttrs18[] = {{"was", kArgs18_0, nullptr, 0}, };
+constexpr std::string_view kWas_LedgerLine_order[] = {"rank", };
+const ::helios::i64& dflt_LedgerLine_amount() {
+    static const ::helios::i64 value = -5ll;
+    return value;
+}
+const ::helios::u16& dflt_LedgerLine_small() {
+    static const ::helios::u16 value = 3u;
+    return value;
+}
+const bool& dflt_LedgerLine_flag() {
+    static const bool value = true;
+    return value;
+}
+const ::helios::f32& dflt_LedgerLine_ratio() {
+    static const ::helios::f32 value = 0.5f;
+    return value;
+}
+const std::string& dflt_LedgerLine_label() {
+    static const std::string value = std::string("it's");
+    return value;
+}
+const ::helios::refl::Duration& dflt_LedgerLine_delay() {
+    static const ::helios::refl::Duration value = ::helios::refl::Duration(1500000000ll);
+    return value;
+}
+const ::golden::all::Color& dflt_LedgerLine_color() {
+    static const ::golden::all::Color value = ::golden::all::Color::Blue;
+    return value;
+}
+const ::golden::all::Perm& dflt_LedgerLine_perm() {
+    static const ::golden::all::Perm value = static_cast<::golden::all::Perm>(1ull);
+    return value;
+}
+constexpr ::helios::refl::AttrArg kArgs19_0[] = {{"", "Mesh"}, };
+constexpr ::helios::refl::attrs::Asset kTyped19_0{"Mesh"};
+constexpr ::helios::refl::Attr kAttrs19[] = {{"asset", kArgs19_0, &kTyped19_0, ::helios::refl::attrs::Asset::kKind}, };
+constexpr ::helios::refl::AttrArg kArgs20_0[] = {{"", "character"}, };
+constexpr ::helios::refl::AttrArg kArgs20_1[] = {{"schema", "svc_golden"}, };
+constexpr ::helios::refl::AttrArg kArgs20_2[] = {{"", "owner"}, {"", "seq"}, };
+constexpr ::helios::refl::Attr kAttrs20[] = {{"store", kArgs20_0, nullptr, 0}, {"sql", kArgs20_1, nullptr, 0}, {"key", kArgs20_2, nullptr, 0}, };
+constexpr ::helios::refl::AttrArg kArgs21_0[] = {{"", "16"}, };
+constexpr ::helios::refl::attrs::Max kTyped21_0{16ull};
+constexpr ::helios::refl::Attr kAttrs21[] = {{"max", kArgs21_0, &kTyped21_0, ::helios::refl::attrs::Max::kKind}, };
 const ::helios::u16& dflt_Pack_count() {
     static const ::helios::u16 value = 1u;
     return value;
 }
-constexpr ::helios::refl::AttrArg kArgs19_0[] = {{"", "2"}, };
-constexpr ::helios::refl::attrs::Max kTyped19_0{2ull};
-constexpr ::helios::refl::Attr kAttrs19[] = {{"max", kArgs19_0, &kTyped19_0, ::helios::refl::attrs::Max::kKind}, };
-constexpr ::helios::refl::AttrArg kArgs20_0[] = {{"", "4"}, };
-constexpr ::helios::refl::attrs::Max kTyped20_0{4ull};
-constexpr ::helios::refl::Attr kAttrs20[] = {{"max", kArgs20_0, &kTyped20_0, ::helios::refl::attrs::Max::kKind}, };
-constexpr ::helios::refl::AttrArg kArgs21_0[] = {{"", "3"}, };
-constexpr ::helios::refl::attrs::Max kTyped21_0{3ull};
-constexpr ::helios::refl::Attr kAttrs21[] = {{"max", kArgs21_0, &kTyped21_0, ::helios::refl::attrs::Max::kKind}, };
+constexpr ::helios::refl::AttrArg kArgs22_0[] = {{"", "2"}, };
+constexpr ::helios::refl::attrs::Max kTyped22_0{2ull};
+constexpr ::helios::refl::Attr kAttrs22[] = {{"max", kArgs22_0, &kTyped22_0, ::helios::refl::attrs::Max::kKind}, };
+constexpr ::helios::refl::AttrArg kArgs23_0[] = {{"", "4"}, };
+constexpr ::helios::refl::attrs::Max kTyped23_0{4ull};
+constexpr ::helios::refl::Attr kAttrs23[] = {{"max", kArgs23_0, &kTyped23_0, ::helios::refl::attrs::Max::kKind}, };
+constexpr ::helios::refl::AttrArg kArgs24_0[] = {{"", "3"}, };
+constexpr ::helios::refl::attrs::Max kTyped24_0{3ull};
+constexpr ::helios::refl::Attr kAttrs24[] = {{"max", kArgs24_0, &kTyped24_0, ::helios::refl::attrs::Max::kKind}, };
 const ::helios::Vec3& dflt_ThingDef_ShapeBox_size() {
     static const ::helios::Vec3 value = ::helios::Vec3(1.0f, 1.0f, 1.0f);
     return value;
@@ -330,8 +392,8 @@ const ::helios::f32& dflt_ThingDef_ShapeSphere_radius() {
     static const ::helios::f32 value = 0.5f;
     return value;
 }
-constexpr ::helios::refl::AttrArg kArgs22_1[] = {{"", "2s"}, };
-constexpr ::helios::refl::Attr kAttrs22[] = {{"idempotent", {}, nullptr, 0}, {"timeout", kArgs22_1, nullptr, 0}, };
+constexpr ::helios::refl::AttrArg kArgs25_1[] = {{"", "2s"}, };
+constexpr ::helios::refl::Attr kAttrs25[] = {{"idempotent", {}, nullptr, 0}, {"timeout", kArgs25_1, nullptr, 0}, };
 
 } // namespace
 
@@ -2691,6 +2753,575 @@ const TypeInfo& TypeOf<::golden::all::Spellings>::get() noexcept {
     return info;
 }
 
+bool Codec<::golden::all::LedgerLine>::isDefault([[maybe_unused]] const ::golden::all::LedgerLine& v) noexcept {
+    return ::helios::refl::isDefaultValue(v.owner)
+        && ::helios::refl::isDefaultValue(v.seq)
+        && ::helios::refl::valuesEqual(v.order, dflt_LedgerLine_order())
+        && ::helios::refl::valuesEqual(v.amount, dflt_LedgerLine_amount())
+        && ::helios::refl::valuesEqual(v.small, dflt_LedgerLine_small())
+        && ::helios::refl::isDefaultValue(v.note)
+        && ::helios::refl::valuesEqual(v.flag, dflt_LedgerLine_flag())
+        && ::helios::refl::isDefaultValue(v.big)
+        && ::helios::refl::valuesEqual(v.ratio, dflt_LedgerLine_ratio())
+        && ::helios::refl::isDefaultValue(v.exact)
+        && ::helios::refl::valuesEqual(v.label, dflt_LedgerLine_label())
+        && ::helios::refl::isDefaultValue(v.tag)
+        && ::helios::refl::valuesEqual(v.delay, dflt_LedgerLine_delay())
+        && ::helios::refl::isDefaultValue(v.at)
+        && ::helios::refl::isDefaultValue(v.thing)
+        && ::helios::refl::isDefaultValue(v.id)
+        && ::helios::refl::valuesEqual(v.color, dflt_LedgerLine_color())
+        && ::helios::refl::valuesEqual(v.perm, dflt_LedgerLine_perm())
+        && ::helios::refl::isDefaultValue(v.mesh)
+        && ::helios::refl::isDefaultValue(v.text)
+        && ::helios::refl::isDefaultValue(v.pos)
+        && ::helios::refl::isDefaultValue(v.items)
+        && ::helios::refl::isDefaultValue(v.inner)
+        && ::helios::refl::isDefaultValue(v.bag)
+        && ::helios::refl::isDefaultValue(v.shape);
+}
+
+bool Codec<::golden::all::LedgerLine>::equals([[maybe_unused]] const ::golden::all::LedgerLine& a, [[maybe_unused]] const ::golden::all::LedgerLine& b) noexcept {
+    return ::helios::refl::valuesEqual(a.owner, b.owner)
+        && ::helios::refl::valuesEqual(a.seq, b.seq)
+        && ::helios::refl::valuesEqual(a.order, b.order)
+        && ::helios::refl::valuesEqual(a.amount, b.amount)
+        && ::helios::refl::valuesEqual(a.small, b.small)
+        && ::helios::refl::valuesEqual(a.note, b.note)
+        && ::helios::refl::valuesEqual(a.flag, b.flag)
+        && ::helios::refl::valuesEqual(a.big, b.big)
+        && ::helios::refl::valuesEqual(a.ratio, b.ratio)
+        && ::helios::refl::valuesEqual(a.exact, b.exact)
+        && ::helios::refl::valuesEqual(a.label, b.label)
+        && ::helios::refl::valuesEqual(a.tag, b.tag)
+        && ::helios::refl::valuesEqual(a.delay, b.delay)
+        && ::helios::refl::valuesEqual(a.at, b.at)
+        && ::helios::refl::valuesEqual(a.thing, b.thing)
+        && ::helios::refl::valuesEqual(a.id, b.id)
+        && ::helios::refl::valuesEqual(a.color, b.color)
+        && ::helios::refl::valuesEqual(a.perm, b.perm)
+        && ::helios::refl::valuesEqual(a.mesh, b.mesh)
+        && ::helios::refl::valuesEqual(a.text, b.text)
+        && ::helios::refl::valuesEqual(a.pos, b.pos)
+        && ::helios::refl::valuesEqual(a.items, b.items)
+        && ::helios::refl::valuesEqual(a.inner, b.inner)
+        && ::helios::refl::valuesEqual(a.bag, b.bag)
+        && ::helios::refl::valuesEqual(a.shape, b.shape);
+}
+
+void Codec<::golden::all::LedgerLine>::writeFields([[maybe_unused]] TaggedWriter& w, [[maybe_unused]] const ::golden::all::LedgerLine& v) {
+    if (!::helios::refl::isDefaultValue(v.owner)) ::helios::refl::writeField(w, 1u, v.owner);
+    if (!::helios::refl::isDefaultValue(v.seq)) ::helios::refl::writeField(w, 2u, v.seq);
+    if (!::helios::refl::valuesEqual(v.order, dflt_LedgerLine_order())) ::helios::refl::writeField(w, 3u, v.order);
+    if (!::helios::refl::valuesEqual(v.amount, dflt_LedgerLine_amount())) ::helios::refl::writeField(w, 4u, v.amount);
+    if (!::helios::refl::valuesEqual(v.small, dflt_LedgerLine_small())) ::helios::refl::writeField(w, 5u, v.small);
+    if (!::helios::refl::isDefaultValue(v.note)) ::helios::refl::writeField(w, 6u, v.note);
+    if (!::helios::refl::valuesEqual(v.flag, dflt_LedgerLine_flag())) ::helios::refl::writeField(w, 8u, v.flag);
+    if (!::helios::refl::isDefaultValue(v.big)) ::helios::refl::writeField(w, 9u, v.big);
+    if (!::helios::refl::valuesEqual(v.ratio, dflt_LedgerLine_ratio())) ::helios::refl::writeField(w, 10u, v.ratio);
+    if (!::helios::refl::isDefaultValue(v.exact)) ::helios::refl::writeField(w, 11u, v.exact);
+    if (!::helios::refl::valuesEqual(v.label, dflt_LedgerLine_label())) ::helios::refl::writeField(w, 12u, v.label);
+    if (!::helios::refl::isDefaultValue(v.tag)) ::helios::refl::writeField(w, 13u, v.tag);
+    if (!::helios::refl::valuesEqual(v.delay, dflt_LedgerLine_delay())) ::helios::refl::writeField(w, 14u, v.delay);
+    if (!::helios::refl::isDefaultValue(v.at)) ::helios::refl::writeField(w, 15u, v.at);
+    if (!::helios::refl::isDefaultValue(v.thing)) ::helios::refl::writeField(w, 16u, v.thing);
+    if (!::helios::refl::isDefaultValue(v.id)) ::helios::refl::writeField(w, 17u, v.id);
+    if (!::helios::refl::valuesEqual(v.color, dflt_LedgerLine_color())) ::helios::refl::writeField(w, 18u, v.color);
+    if (!::helios::refl::valuesEqual(v.perm, dflt_LedgerLine_perm())) ::helios::refl::writeField(w, 19u, v.perm);
+    if (!::helios::refl::isDefaultValue(v.mesh)) ::helios::refl::writeField(w, 20u, v.mesh);
+    if (!::helios::refl::isDefaultValue(v.text)) ::helios::refl::writeField(w, 21u, v.text);
+    if (!::helios::refl::isDefaultValue(v.pos)) ::helios::refl::writeField(w, 22u, v.pos);
+    if (!::helios::refl::isDefaultValue(v.items)) ::helios::refl::writeField(w, 23u, v.items);
+    if (!::helios::refl::isDefaultValue(v.inner)) ::helios::refl::writeField(w, 24u, v.inner);
+    if (!::helios::refl::isDefaultValue(v.bag)) ::helios::refl::writeField(w, 25u, v.bag);
+    if (!::helios::refl::isDefaultValue(v.shape)) ::helios::refl::writeField(w, 26u, v.shape);
+}
+
+Result<bool> Codec<::golden::all::LedgerLine>::readField([[maybe_unused]] TaggedReader& r, [[maybe_unused]] FieldTag tag, [[maybe_unused]] ::golden::all::LedgerLine& v) {
+    switch (tag.id) {
+        case 1u: return ::helios::refl::readKnownField(r, tag.wire, v.owner);
+        case 2u: return ::helios::refl::readKnownField(r, tag.wire, v.seq);
+        case 3u: return ::helios::refl::readKnownField(r, tag.wire, v.order);
+        case 4u: return ::helios::refl::readKnownField(r, tag.wire, v.amount);
+        case 5u: return ::helios::refl::readKnownField(r, tag.wire, v.small);
+        case 6u: return ::helios::refl::readKnownField(r, tag.wire, v.note);
+        case 8u: return ::helios::refl::readKnownField(r, tag.wire, v.flag);
+        case 9u: return ::helios::refl::readKnownField(r, tag.wire, v.big);
+        case 10u: return ::helios::refl::readKnownField(r, tag.wire, v.ratio);
+        case 11u: return ::helios::refl::readKnownField(r, tag.wire, v.exact);
+        case 12u: return ::helios::refl::readKnownField(r, tag.wire, v.label);
+        case 13u: return ::helios::refl::readKnownField(r, tag.wire, v.tag);
+        case 14u: return ::helios::refl::readKnownField(r, tag.wire, v.delay);
+        case 15u: return ::helios::refl::readKnownField(r, tag.wire, v.at);
+        case 16u: return ::helios::refl::readKnownField(r, tag.wire, v.thing);
+        case 17u: return ::helios::refl::readKnownField(r, tag.wire, v.id);
+        case 18u: return ::helios::refl::readKnownField(r, tag.wire, v.color);
+        case 19u: return ::helios::refl::readKnownField(r, tag.wire, v.perm);
+        case 20u: return ::helios::refl::readKnownField(r, tag.wire, v.mesh);
+        case 21u: return ::helios::refl::readKnownField(r, tag.wire, v.text);
+        case 22u: return ::helios::refl::readKnownField(r, tag.wire, v.pos);
+        case 23u: return ::helios::refl::readKnownField(r, tag.wire, v.items);
+        case 24u: return ::helios::refl::readKnownField(r, tag.wire, v.inner);
+        case 25u: return ::helios::refl::readKnownField(r, tag.wire, v.bag);
+        case 26u: return ::helios::refl::readKnownField(r, tag.wire, v.shape);
+        default: return false;
+    }
+}
+
+void Codec<::golden::all::LedgerLine>::writeJsonFields([[maybe_unused]] JsonWriter& w, [[maybe_unused]] const ::golden::all::LedgerLine& v) {
+    if (!::helios::refl::isDefaultValue(v.owner)) {
+        w.key("owner");
+        ::helios::refl::writeJsonValue(w, v.owner);
+    }
+    if (!::helios::refl::isDefaultValue(v.seq)) {
+        w.key("seq");
+        ::helios::refl::writeJsonValue(w, v.seq);
+    }
+    if (!::helios::refl::valuesEqual(v.order, dflt_LedgerLine_order())) {
+        w.key("order");
+        ::helios::refl::writeJsonValue(w, v.order);
+    }
+    if (!::helios::refl::valuesEqual(v.amount, dflt_LedgerLine_amount())) {
+        w.key("amount");
+        ::helios::refl::writeJsonValue(w, v.amount);
+    }
+    if (!::helios::refl::valuesEqual(v.small, dflt_LedgerLine_small())) {
+        w.key("small");
+        ::helios::refl::writeJsonValue(w, v.small);
+    }
+    if (!::helios::refl::isDefaultValue(v.note)) {
+        w.key("note");
+        ::helios::refl::writeJsonValue(w, v.note);
+    }
+    if (!::helios::refl::valuesEqual(v.flag, dflt_LedgerLine_flag())) {
+        w.key("flag");
+        ::helios::refl::writeJsonValue(w, v.flag);
+    }
+    if (!::helios::refl::isDefaultValue(v.big)) {
+        w.key("big");
+        ::helios::refl::writeJsonValue(w, v.big);
+    }
+    if (!::helios::refl::valuesEqual(v.ratio, dflt_LedgerLine_ratio())) {
+        w.key("ratio");
+        ::helios::refl::writeJsonValue(w, v.ratio);
+    }
+    if (!::helios::refl::isDefaultValue(v.exact)) {
+        w.key("exact");
+        ::helios::refl::writeJsonValue(w, v.exact);
+    }
+    if (!::helios::refl::valuesEqual(v.label, dflt_LedgerLine_label())) {
+        w.key("label");
+        ::helios::refl::writeJsonValue(w, v.label);
+    }
+    if (!::helios::refl::isDefaultValue(v.tag)) {
+        w.key("tag");
+        ::helios::refl::writeJsonValue(w, v.tag);
+    }
+    if (!::helios::refl::valuesEqual(v.delay, dflt_LedgerLine_delay())) {
+        w.key("delay");
+        ::helios::refl::writeJsonValue(w, v.delay);
+    }
+    if (!::helios::refl::isDefaultValue(v.at)) {
+        w.key("at");
+        ::helios::refl::writeJsonValue(w, v.at);
+    }
+    if (!::helios::refl::isDefaultValue(v.thing)) {
+        w.key("thing");
+        ::helios::refl::writeJsonValue(w, v.thing);
+    }
+    if (!::helios::refl::isDefaultValue(v.id)) {
+        w.key("id");
+        ::helios::refl::writeJsonValue(w, v.id);
+    }
+    if (!::helios::refl::valuesEqual(v.color, dflt_LedgerLine_color())) {
+        w.key("color");
+        ::helios::refl::writeJsonValue(w, v.color);
+    }
+    if (!::helios::refl::valuesEqual(v.perm, dflt_LedgerLine_perm())) {
+        w.key("perm");
+        ::helios::refl::writeJsonValue(w, v.perm);
+    }
+    if (!::helios::refl::isDefaultValue(v.mesh)) {
+        w.key("mesh");
+        ::helios::refl::writeJsonValue(w, v.mesh);
+    }
+    if (!::helios::refl::isDefaultValue(v.text)) {
+        w.key("text");
+        ::helios::refl::writeJsonValue(w, v.text);
+    }
+    if (!::helios::refl::isDefaultValue(v.pos)) {
+        w.key("pos");
+        ::helios::refl::writeJsonValue(w, v.pos);
+    }
+    if (!::helios::refl::isDefaultValue(v.items)) {
+        w.key("items");
+        ::helios::refl::writeJsonValue(w, v.items);
+    }
+    if (!::helios::refl::isDefaultValue(v.inner)) {
+        w.key("inner");
+        ::helios::refl::writeJsonValue(w, v.inner);
+    }
+    if (!::helios::refl::isDefaultValue(v.bag)) {
+        w.key("bag");
+        ::helios::refl::writeJsonValue(w, v.bag);
+    }
+    if (!::helios::refl::isDefaultValue(v.shape)) {
+        w.key("shape");
+        ::helios::refl::writeJsonValue(w, v.shape);
+    }
+}
+
+Result<bool> Codec<::golden::all::LedgerLine>::readJsonMember([[maybe_unused]] std::string_view key, [[maybe_unused]] JsonValue in, [[maybe_unused]] ::golden::all::LedgerLine& v, [[maybe_unused]] ReadCtx& ctx) {
+    if (key == "owner") return ::helios::refl::readKnownMember(in, v.owner, ctx);
+    if (key == "seq") return ::helios::refl::readKnownMember(in, v.seq, ctx);
+    if (key == "order" || key == "rank") return ::helios::refl::readKnownMember(in, v.order, ctx);
+    if (key == "amount") return ::helios::refl::readKnownMember(in, v.amount, ctx);
+    if (key == "small") return ::helios::refl::readKnownMember(in, v.small, ctx);
+    if (key == "note") return ::helios::refl::readKnownMember(in, v.note, ctx);
+    if (key == "flag") return ::helios::refl::readKnownMember(in, v.flag, ctx);
+    if (key == "big") return ::helios::refl::readKnownMember(in, v.big, ctx);
+    if (key == "ratio") return ::helios::refl::readKnownMember(in, v.ratio, ctx);
+    if (key == "exact") return ::helios::refl::readKnownMember(in, v.exact, ctx);
+    if (key == "label") return ::helios::refl::readKnownMember(in, v.label, ctx);
+    if (key == "tag") return ::helios::refl::readKnownMember(in, v.tag, ctx);
+    if (key == "delay") return ::helios::refl::readKnownMember(in, v.delay, ctx);
+    if (key == "at") return ::helios::refl::readKnownMember(in, v.at, ctx);
+    if (key == "thing") return ::helios::refl::readKnownMember(in, v.thing, ctx);
+    if (key == "id") return ::helios::refl::readKnownMember(in, v.id, ctx);
+    if (key == "color") return ::helios::refl::readKnownMember(in, v.color, ctx);
+    if (key == "perm") return ::helios::refl::readKnownMember(in, v.perm, ctx);
+    if (key == "mesh") return ::helios::refl::readKnownMember(in, v.mesh, ctx);
+    if (key == "text") return ::helios::refl::readKnownMember(in, v.text, ctx);
+    if (key == "pos") return ::helios::refl::readKnownMember(in, v.pos, ctx);
+    if (key == "items") return ::helios::refl::readKnownMember(in, v.items, ctx);
+    if (key == "inner") return ::helios::refl::readKnownMember(in, v.inner, ctx);
+    if (key == "bag") return ::helios::refl::readKnownMember(in, v.bag, ctx);
+    if (key == "shape") return ::helios::refl::readKnownMember(in, v.shape, ctx);
+    return false;
+}
+
+const TypeInfo& TypeOf<::golden::all::LedgerLine>::get() noexcept {
+    HELIOS_GEN_OFFSETOF_BEGIN
+    static const FieldInfo fields[] = {
+        {
+            .name = "owner",
+            .id = 1u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, owner)),
+            .typeFn = &TypeOf<::helios::refl::EntityId>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "seq",
+            .id = 2u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, seq)),
+            .typeFn = &TypeOf<::helios::u32>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "order",
+            .id = 3u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, order)),
+            .typeFn = &TypeOf<::helios::u8>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .was = kWas_LedgerLine_order,
+            .defaultValue = &dflt_LedgerLine_order(),
+            .defaultJson = "7",
+            .attrs = kAttrs18,
+            .doc = "",
+        },
+        {
+            .name = "amount",
+            .id = 4u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, amount)),
+            .typeFn = &TypeOf<::helios::i64>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .defaultValue = &dflt_LedgerLine_amount(),
+            .defaultJson = "-5",
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "small",
+            .id = 5u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, small)),
+            .typeFn = &TypeOf<::helios::u16>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .defaultValue = &dflt_LedgerLine_small(),
+            .defaultJson = "3",
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "note",
+            .id = 6u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, note)),
+            .typeFn = &TypeOf<std::optional<std::string>>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "flag",
+            .id = 8u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, flag)),
+            .typeFn = &TypeOf<bool>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .defaultValue = &dflt_LedgerLine_flag(),
+            .defaultJson = "true",
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "big",
+            .id = 9u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, big)),
+            .typeFn = &TypeOf<::helios::u64>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "ratio",
+            .id = 10u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, ratio)),
+            .typeFn = &TypeOf<::helios::f32>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .defaultValue = &dflt_LedgerLine_ratio(),
+            .defaultJson = "0.5",
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "exact",
+            .id = 11u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, exact)),
+            .typeFn = &TypeOf<::helios::f64>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "label",
+            .id = 12u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, label)),
+            .typeFn = &TypeOf<std::string>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .defaultValue = &dflt_LedgerLine_label(),
+            .defaultJson = "\"it's\"",
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "tag",
+            .id = 13u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, tag)),
+            .typeFn = &TypeOf<::helios::Name>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "delay",
+            .id = 14u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, delay)),
+            .typeFn = &TypeOf<::helios::refl::Duration>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .defaultValue = &dflt_LedgerLine_delay(),
+            .defaultJson = "\"1500ms\"",
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "at",
+            .id = 15u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, at)),
+            .typeFn = &TypeOf<::helios::refl::Tick>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "thing",
+            .id = 16u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, thing)),
+            .typeFn = &TypeOf<::helios::refl::RecordRef<::golden::all::ThingDef>>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "id",
+            .id = 17u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, id)),
+            .typeFn = &TypeOf<::helios::Guid>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "color",
+            .id = 18u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, color)),
+            .typeFn = &TypeOf<::golden::all::Color>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .defaultValue = &dflt_LedgerLine_color(),
+            .defaultJson = "\"Blue\"",
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "perm",
+            .id = 19u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, perm)),
+            .typeFn = &TypeOf<::golden::all::Perm>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .defaultValue = &dflt_LedgerLine_perm(),
+            .defaultJson = "[\"Read\"]",
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "mesh",
+            .id = 20u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, mesh)),
+            .typeFn = &TypeOf<::helios::refl::AssetRef>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = kAttrs19,
+            .doc = "",
+        },
+        {
+            .name = "text",
+            .id = 21u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, text)),
+            .typeFn = &TypeOf<::helios::refl::LocString>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "pos",
+            .id = 22u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, pos)),
+            .typeFn = &TypeOf<::helios::refl::WorldPos>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "items",
+            .id = 23u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, items)),
+            .typeFn = &TypeOf<std::vector<::golden::all::Item>>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "inner",
+            .id = 24u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, inner)),
+            .typeFn = &TypeOf<::golden::all::Item>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "bag",
+            .id = 25u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, bag)),
+            .typeFn = &TypeOf<std::map<std::string, ::helios::u8>>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+        {
+            .name = "shape",
+            .id = 26u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine, shape)),
+            .typeFn = &TypeOf<::golden::all::LedgerLine::Shape>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+    };
+    HELIOS_GEN_OFFSETOF_END
+    static const TypeInfo info{
+        .qualifiedName = "golden.all.LedgerLine",
+        .name = "LedgerLine",
+        .id = 0x0ce3a8b2u,
+        .size = static_cast<::helios::u32>(sizeof(::golden::all::LedgerLine)),
+        .align = static_cast<::helios::u32>(alignof(::golden::all::LedgerLine)),
+        .kind = Kind::Struct,
+        .wire = WireType::Len,
+        .decl = DeclKind::Struct,
+        .flags = ::helios::refl::TypeFlags::None,
+        .version = 0u,
+        .layoutHash = 0xf01d1769b32ecb34ull,
+        .fields = fields,
+        .enumValues = {},
+        .alternatives = {},
+        .elementFn = nullptr,
+        .ops = &makeOps<::golden::all::LedgerLine>(),
+        .attrs = kAttrs20,
+        .doc = "A PostgreSQL table (`--emit sql`, 05 \xc2\xa7""3): every column form, a composite key and a reserved word\nas a column. Since tests/golden/golden.sql-baseline.lock.jsonc it gained a rename, widenings, an\noptional, new columns and a removed field, which the migration stub golden shows.",
+    };
+    return info;
+}
+
 bool Codec<::golden::all::Pack>::isDefault([[maybe_unused]] const ::golden::all::Pack& v) noexcept {
     return ::helios::refl::isDefaultValue(v.slot)
         && ::helios::refl::valuesEqual(v.count, dflt_Pack_count());
@@ -2742,7 +3373,7 @@ const TypeInfo& TypeOf<::golden::all::Pack>::get() noexcept {
             .flags = ::helios::refl::FieldFlags::None,
             .audience = ::helios::refl::Audience::None,
             .repIndex = 255,
-            .attrs = kAttrs18,
+            .attrs = kAttrs21,
             .doc = "",
         },
         {
@@ -2834,7 +3465,7 @@ const TypeInfo& TypeOf<::golden::all::Bag>::get() noexcept {
             .flags = ::helios::refl::FieldFlags::None,
             .audience = ::helios::refl::Audience::None,
             .repIndex = 255,
-            .attrs = kAttrs19,
+            .attrs = kAttrs22,
             .doc = "",
         },
         {
@@ -2845,7 +3476,7 @@ const TypeInfo& TypeOf<::golden::all::Bag>::get() noexcept {
             .flags = ::helios::refl::FieldFlags::None,
             .audience = ::helios::refl::Audience::None,
             .repIndex = 255,
-            .attrs = kAttrs20,
+            .attrs = kAttrs23,
             .doc = "",
         },
     };
@@ -2935,7 +3566,7 @@ const TypeInfo& TypeOf<::golden::all::Tagged>::get() noexcept {
             .flags = ::helios::refl::FieldFlags::None,
             .audience = ::helios::refl::Audience::None,
             .repIndex = 255,
-            .attrs = kAttrs21,
+            .attrs = kAttrs24,
             .doc = "",
         },
     };
@@ -3434,7 +4065,151 @@ const TypeInfo& TypeOf<::golden::all::StoreBuyRequest>::get() noexcept {
         .alternatives = {},
         .elementFn = nullptr,
         .ops = &makeOps<::golden::all::StoreBuyRequest>(),
-        .attrs = kAttrs22,
+        .attrs = kAttrs25,
+        .doc = "",
+    };
+    return info;
+}
+
+const TypeInfo& TypeOf<::golden::all::LedgerLine::Shape>::get() noexcept {
+    static const VariantAlt alternatives[] = {
+        {"Dot", 1u, &TypeOf<::golden::all::LedgerLine::ShapeDot>::get},
+        {"Line", 2u, &TypeOf<::golden::all::LedgerLine::ShapeLine>::get},
+    };
+    static const TypeInfo info{
+        .qualifiedName = "golden.all.LedgerLine.Shape",
+        .name = "Shape",
+        .id = 0x6e6ebb69u,
+        .size = static_cast<::helios::u32>(sizeof(::golden::all::LedgerLine::Shape)),
+        .align = static_cast<::helios::u32>(alignof(::golden::all::LedgerLine::Shape)),
+        .kind = Kind::Variant,
+        .wire = WireType::Len,
+        .decl = DeclKind::None,
+        .flags = ::helios::refl::TypeFlags::None,
+        .version = 0u,
+        .layoutHash = 0x3c2ee540896b6f16ull,
+        .fields = {},
+        .enumValues = {},
+        .alternatives = alternatives,
+        .elementFn = nullptr,
+        .ops = &makeOps<::golden::all::LedgerLine::Shape>(),
+        .attrs = {},
+        .doc = "",
+    };
+    return info;
+}
+
+bool Codec<::golden::all::LedgerLine::ShapeDot>::isDefault([[maybe_unused]] const ::golden::all::LedgerLine::ShapeDot& v) noexcept {
+    return true;
+}
+
+bool Codec<::golden::all::LedgerLine::ShapeDot>::equals([[maybe_unused]] const ::golden::all::LedgerLine::ShapeDot& a, [[maybe_unused]] const ::golden::all::LedgerLine::ShapeDot& b) noexcept {
+    return true;
+}
+
+void Codec<::golden::all::LedgerLine::ShapeDot>::writeFields([[maybe_unused]] TaggedWriter& w, [[maybe_unused]] const ::golden::all::LedgerLine::ShapeDot& v) {
+}
+
+Result<bool> Codec<::golden::all::LedgerLine::ShapeDot>::readField([[maybe_unused]] TaggedReader& r, [[maybe_unused]] FieldTag tag, [[maybe_unused]] ::golden::all::LedgerLine::ShapeDot& v) {
+    return false;
+}
+
+void Codec<::golden::all::LedgerLine::ShapeDot>::writeJsonFields([[maybe_unused]] JsonWriter& w, [[maybe_unused]] const ::golden::all::LedgerLine::ShapeDot& v) {
+}
+
+Result<bool> Codec<::golden::all::LedgerLine::ShapeDot>::readJsonMember([[maybe_unused]] std::string_view key, [[maybe_unused]] JsonValue in, [[maybe_unused]] ::golden::all::LedgerLine::ShapeDot& v, [[maybe_unused]] ReadCtx& ctx) {
+    return false;
+}
+
+const TypeInfo& TypeOf<::golden::all::LedgerLine::ShapeDot>::get() noexcept {
+    static const TypeInfo info{
+        .qualifiedName = "golden.all.LedgerLine.Shape.Dot",
+        .name = "Dot",
+        .id = 0xe36190c0u,
+        .size = static_cast<::helios::u32>(sizeof(::golden::all::LedgerLine::ShapeDot)),
+        .align = static_cast<::helios::u32>(alignof(::golden::all::LedgerLine::ShapeDot)),
+        .kind = Kind::Struct,
+        .wire = WireType::Len,
+        .decl = DeclKind::Alternative,
+        .flags = ::helios::refl::TypeFlags::Unit,
+        .version = 0u,
+        .layoutHash = 0x1b4283030ad21340ull,
+        .fields = {},
+        .enumValues = {},
+        .alternatives = {},
+        .elementFn = nullptr,
+        .ops = &makeOps<::golden::all::LedgerLine::ShapeDot>(),
+        .attrs = {},
+        .doc = "",
+    };
+    return info;
+}
+
+bool Codec<::golden::all::LedgerLine::ShapeLine>::isDefault([[maybe_unused]] const ::golden::all::LedgerLine::ShapeLine& v) noexcept {
+    return ::helios::refl::isDefaultValue(v.length);
+}
+
+bool Codec<::golden::all::LedgerLine::ShapeLine>::equals([[maybe_unused]] const ::golden::all::LedgerLine::ShapeLine& a, [[maybe_unused]] const ::golden::all::LedgerLine::ShapeLine& b) noexcept {
+    return ::helios::refl::valuesEqual(a.length, b.length);
+}
+
+void Codec<::golden::all::LedgerLine::ShapeLine>::writeFields([[maybe_unused]] TaggedWriter& w, [[maybe_unused]] const ::golden::all::LedgerLine::ShapeLine& v) {
+    if (!::helios::refl::isDefaultValue(v.length)) ::helios::refl::writeField(w, 1u, v.length);
+}
+
+Result<bool> Codec<::golden::all::LedgerLine::ShapeLine>::readField([[maybe_unused]] TaggedReader& r, [[maybe_unused]] FieldTag tag, [[maybe_unused]] ::golden::all::LedgerLine::ShapeLine& v) {
+    switch (tag.id) {
+        case 1u: return ::helios::refl::readKnownField(r, tag.wire, v.length);
+        default: return false;
+    }
+}
+
+void Codec<::golden::all::LedgerLine::ShapeLine>::writeJsonFields([[maybe_unused]] JsonWriter& w, [[maybe_unused]] const ::golden::all::LedgerLine::ShapeLine& v) {
+    if (!::helios::refl::isDefaultValue(v.length)) {
+        w.key("length");
+        ::helios::refl::writeJsonValue(w, v.length);
+    }
+}
+
+Result<bool> Codec<::golden::all::LedgerLine::ShapeLine>::readJsonMember([[maybe_unused]] std::string_view key, [[maybe_unused]] JsonValue in, [[maybe_unused]] ::golden::all::LedgerLine::ShapeLine& v, [[maybe_unused]] ReadCtx& ctx) {
+    if (key == "length") return ::helios::refl::readKnownMember(in, v.length, ctx);
+    return false;
+}
+
+const TypeInfo& TypeOf<::golden::all::LedgerLine::ShapeLine>::get() noexcept {
+    HELIOS_GEN_OFFSETOF_BEGIN
+    static const FieldInfo fields[] = {
+        {
+            .name = "length",
+            .id = 1u,
+            .offset = static_cast<::helios::u32>(offsetof(::golden::all::LedgerLine::ShapeLine, length)),
+            .typeFn = &TypeOf<::helios::f32>::get,
+            .flags = ::helios::refl::FieldFlags::None,
+            .audience = ::helios::refl::Audience::None,
+            .repIndex = 255,
+            .attrs = {},
+            .doc = "",
+        },
+    };
+    HELIOS_GEN_OFFSETOF_END
+    static const TypeInfo info{
+        .qualifiedName = "golden.all.LedgerLine.Shape.Line",
+        .name = "Line",
+        .id = 0xb60d5847u,
+        .size = static_cast<::helios::u32>(sizeof(::golden::all::LedgerLine::ShapeLine)),
+        .align = static_cast<::helios::u32>(alignof(::golden::all::LedgerLine::ShapeLine)),
+        .kind = Kind::Struct,
+        .wire = WireType::Len,
+        .decl = DeclKind::Alternative,
+        .flags = ::helios::refl::TypeFlags::None,
+        .version = 0u,
+        .layoutHash = 0x3db53ca166e32b2eull,
+        .fields = fields,
+        .enumValues = {},
+        .alternatives = {},
+        .elementFn = nullptr,
+        .ops = &makeOps<::golden::all::LedgerLine::ShapeLine>(),
+        .attrs = {},
         .doc = "",
     };
     return info;

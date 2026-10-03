@@ -3,15 +3,6 @@
 {
   "format": 1,
   "types": {
-    "golden.all.Bag": {
-      "id": 3071524453,
-      "kind": "struct",
-      "nextField": 3,
-      "fields": [
-        {"id": 1, "name": "ids", "type": "list<u32>"},
-        {"id": 2, "name": "tag", "type": "string"}
-      ]
-    },
     "golden.all.Chat": {
       "id": 3681907271,
       "kind": "struct",
@@ -112,57 +103,15 @@
       "id": 216246450,
       "kind": "struct",
       "sql": "svc_golden.ledger_line",
-      "nextField": 27,
+      "nextField": 8,
       "fields": [
         {"id": 1, "name": "owner", "type": "EntityId"},
         {"id": 2, "name": "seq", "type": "u32"},
-        {"id": 3, "name": "order", "type": "u8", "default": "7", "was": ["rank"]},
-        {"id": 4, "name": "amount", "type": "i64", "default": "-5"},
-        {"id": 5, "name": "small", "type": "u16", "default": "3"},
-        {"id": 6, "name": "note", "type": "string?"},
-        {"id": 7, "name": "legacy", "type": "bool", "tombstone": true},
-        {"id": 8, "name": "flag", "type": "bool", "default": "true"},
-        {"id": 9, "name": "big", "type": "u64"},
-        {"id": 10, "name": "ratio", "type": "f32", "default": "0.5"},
-        {"id": 11, "name": "exact", "type": "f64"},
-        {"id": 12, "name": "label", "type": "string", "default": "\"it's\""},
-        {"id": 13, "name": "tag", "type": "Name"},
-        {"id": 14, "name": "delay", "type": "Duration", "default": "\"1500ms\""},
-        {"id": 15, "name": "at", "type": "Tick"},
-        {"id": 16, "name": "thing", "type": "Ref<golden.all.ThingDef>"},
-        {"id": 17, "name": "id", "type": "Guid"},
-        {"id": 18, "name": "color", "type": "golden.all.Color", "default": "\"Blue\""},
-        {"id": 19, "name": "perm", "type": "golden.all.Perm", "default": "[\"Read\"]"},
-        {"id": 20, "name": "mesh", "type": "AssetRef<Mesh>"},
-        {"id": 21, "name": "text", "type": "LocString"},
-        {"id": 22, "name": "pos", "type": "WorldPos"},
-        {"id": 23, "name": "items", "type": "list<golden.all.Item>"},
-        {"id": 24, "name": "inner", "type": "golden.all.Item"},
-        {"id": 25, "name": "bag", "type": "map<string,u8>"},
-        {"id": 26, "name": "shape", "type": "golden.all.LedgerLine.Shape"}
-      ]
-    },
-    "golden.all.LedgerLine.Shape": {
-      "id": 1852750697,
-      "kind": "variant",
-      "nextField": 3,
-      "alternatives": [
-        {"id": 1, "name": "Dot"},
-        {"id": 2, "name": "Line"}
-      ]
-    },
-    "golden.all.LedgerLine.Shape.Dot": {
-      "id": 3814822080,
-      "kind": "struct",
-      "nextField": 1,
-      "fields": []
-    },
-    "golden.all.LedgerLine.Shape.Line": {
-      "id": 3054327879,
-      "kind": "struct",
-      "nextField": 2,
-      "fields": [
-        {"id": 1, "name": "length", "type": "f32"}
+        {"id": 3, "name": "rank", "type": "u8", "default": "7"},
+        {"id": 4, "name": "amount", "type": "i32", "default": "-5"},
+        {"id": 5, "name": "small", "type": "u8", "default": "3"},
+        {"id": 6, "name": "note", "type": "string"},
+        {"id": 7, "name": "legacy", "type": "bool"}
       ]
     },
     "golden.all.Motion": {
@@ -188,15 +137,6 @@
       "kind": "struct",
       "nextField": 1,
       "fields": []
-    },
-    "golden.all.Pack": {
-      "id": 4067732932,
-      "kind": "struct",
-      "nextField": 3,
-      "fields": [
-        {"id": 1, "name": "slot", "type": "string"},
-        {"id": 2, "name": "count", "type": "u16", "default": "1"}
-      ]
     },
     "golden.all.Pair": {
       "id": 4217745765,
@@ -226,14 +166,6 @@
         {"id": 1, "name": "value", "type": "i32"}
       ]
     },
-    "golden.all.Queries.bag": {
-      "id": 1608436731,
-      "kind": "fn"
-    },
-    "golden.all.Queries.clip": {
-      "id": 3068390829,
-      "kind": "fn"
-    },
     "golden.all.Queries.convert": {
       "id": 2480763702,
       "kind": "fn"
@@ -254,16 +186,8 @@
       "id": 453723727,
       "kind": "fn"
     },
-    "golden.all.Queries.opts": {
-      "id": 3260946985,
-      "kind": "fn"
-    },
     "golden.all.Queries.spawn": {
       "id": 3093412526,
-      "kind": "fn"
-    },
-    "golden.all.Queries.tagged": {
-      "id": 2180087691,
       "kind": "fn"
     },
     "golden.all.Req": {
@@ -328,15 +252,6 @@
       "nextField": 2,
       "fields": [
         {"id": 1, "name": "req", "type": "golden.all.Req"}
-      ]
-    },
-    "golden.all.Tagged": {
-      "id": 295119369,
-      "kind": "struct",
-      "nextField": 3,
-      "fields": [
-        {"id": 1, "name": "label", "type": "Name"},
-        {"id": 2, "name": "names", "type": "set<Name>"}
       ]
     },
     "golden.all.ThingDef": {

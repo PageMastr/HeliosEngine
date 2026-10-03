@@ -44,6 +44,7 @@ struct LockType {
     u32 version = 0;
     std::string base; ///< enum/flags underlying type
     std::vector<std::string> was;
+    std::string sql; ///< the PostgreSQL table of an @sql struct ("svc_x.table"); it never changes
     std::vector<LockField> fields; ///< struct fields or variant alternatives, sorted by id
     u32 nextField = 1;
     std::vector<LockEnumValue> values;

@@ -572,7 +572,7 @@ def _check_ref(where: str, ref, entry: dict, data: dict, ctx: dict, errors: list
     allowed = {kind} | REF_KINDS[kind] | REF_KIND_OPTIONAL.get(kind, set()) | REF_OPTIONAL
     for key in sorted(set(ref) - allowed):
         errors.append(f"{where}: unknown field '{key}' in {label}")
-    for key in [kind, *sorted(REF_KINDS[kind])]:
+    for key in [kind, *sorted(REF_KINDS[kind]), *sorted(REF_KIND_OPTIONAL.get(kind, set()) & set(ref))]:
         if not isinstance(ref.get(key), str) or not ref[key].strip():
             errors.append(f"{where}: {label} needs a non-empty string '{key}'")
             return

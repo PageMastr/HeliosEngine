@@ -28,9 +28,11 @@ var (
 	avxListVarRE = regexp.MustCompile(`(?i)^\w*avx\w*_(targets|sources|source_patterns|patterns|files|kernels|allowlist)$`)
 	avxFlagRE    = regexp.MustCompile(`(?i)([/-]arch:AVX\w*|-mavx\w*|-mbmi\w*|-mf16c|-mlzcnt|-mfma\b)`)
 	marchRE      = regexp.MustCompile(`-march=([A-Za-z0-9_.-]+)`)
-	langFlagsRE  = regexp.MustCompile(`\bCMAKE_[A-Z]+_FLAGS\w*`)
-	// CMAKE_REQUIRED_FLAGS only feeds the check_* try-compile probes; no target is built with it.
-	probeFlagsRE = regexp.MustCompile(`^CMAKE_REQUIRED_FLAGS$`)
+	// Variables that reach the compiler: CMake's own (CMAKE_<LANG>_FLAGS*, CMAKE_<LANG>_COMPILE_OBJECT, …)
+	// and the environment (ENV{CXXFLAGS} seeds CMAKE_CXX_FLAGS when a language is enabled).
+	compilerVarRE = regexp.MustCompile(`^(?:CMAKE_\w+|ENV\{\w+\})$`)
+	// CMAKE_REQUIRED_* only feed the check_* try-compile probes; no target is built with them.
+	probeFlagsRE = regexp.MustCompile(`^CMAKE_REQUIRED_\w+$`)
 	grantPropRE  = regexp.MustCompile(`\b(?:INTERFACE_)?(COMPILE_OPTIONS|COMPILE_FLAGS)\b`)
 	// A nested reference, ${${name}}: the variable it reads is computed, so CONF-11 cannot tell its value.
 	nestedRefRE = regexp.MustCompile(`\$\{[^{}]*\$\{[^{}]*\}[^{}]*\}`)
@@ -214,19 +216,21 @@ func isaLevels(t *Tree) (vars map[string]bool, producers map[string]map[int]bool
 			case "endfunction", "endmacro":
 				fn, params, local, macro = "", nil, map[string]bool{}, false
 				continue
-			case "foreach": // foreach(v IN LISTS <level set>): v holds the flags in the loop
-				if len(fields) > 1 && listsCarry(fields[1:], func(v string) bool { return local[v] || vars[v] }) {
+			case "foreach": // foreach(v IN LISTS <level set>) or foreach(v -mavx2 …): v holds flags in the loop
+				if loopCarries(c.args, fields, func(v string) bool { return local[v] || vars[v] }) {
 					local[first] = true
 				}
 				continue
 			case "set", "list", "string":
-				name, read := writtenVar(c.name, cmakeArgs(c.args))
+				names, read := writtenVar(c.name, cmakeArgs(c.args))
 				carries := len(avxFlags(read)) > 0
 				for _, v := range cmakeRefs(read) {
 					carries = carries || local[v] || vars[v]
 				}
-				if carries && name != "" {
-					changed = setCarrier(name, c.args, fn, macro, params, local, vars, producers) || changed
+				for _, name := range names {
+					if carries && name != "" {
+						changed = setCarrier(name, c.args, fn, macro, params, local, vars, producers) || changed
+					}
 				}
 			default:
 				for i := range producers[c.name] {
@@ -277,6 +281,16 @@ func cmakeRefs(args string) []string {
 		out = append(out, m[1])
 	}
 	return out
+}
+
+// loopCarries reports whether a foreach's loop variable (the first of args, split into fields) takes
+// AVX-class flags: an item that is an option names one (foreach(f -mavx2 -mfma), foreach(f IN ITEMS
+// -mavx2); a quoted sentence that names a flag, such as a test's expected message, is not one), or its
+// lists or items reference a variable for which carries is true.
+func loopCarries(args string, fields []string, carries func(string) bool) bool {
+	items := cmakeArgs(args)
+	return len(fields) > 1 && len(items) > 1 &&
+		(len(optionFlags(strings.Join(items[1:], " "), nil)) > 0 || listsCarry(fields[1:], carries))
 }
 
 // listsCarry reports whether a foreach's lists (the fields after its loop variable: `IN LISTS a b`,
@@ -349,10 +363,13 @@ func checkISAGrants(p *Pass) {
 	// the definition, and its callers' variables; and a call receives what the body hands back. Passes over
 	// every file collect these until nothing new is learnt (the sets only grow, so this ends); the last
 	// pass reports.
+	// The root CMakeLists.txt and the cmake/*.cmake modules it includes run before every subdirectory, so
+	// the flag variables their file scope ends with are seen everywhere, like the level sets.
 	scans := map[string]*isaScan{}
 	fileVars := map[string]map[string]bool{}
+	globals := maps.Clone(levelVars)
 	for _, f := range p.Files {
-		scans[f] = &isaScan{p: p, f: f, cmds: cmds[f], levelVars: levelVars, funcs: funcs, wrappers: wrappers}
+		scans[f] = &isaScan{p: p, f: f, cmds: cmds[f], levelVars: globals, funcs: funcs, wrappers: wrappers}
 	}
 	for changed := true; changed; {
 		changed = false
@@ -360,6 +377,13 @@ func checkISAGrants(p *Pass) {
 			vars := scans[f].run(fileVars[f], false)
 			changed = scans[f].changed || len(vars) != len(fileVars[f]) || changed
 			fileVars[f] = vars
+			if f == "CMakeLists.txt" || path.Dir(f) == "cmake" && strings.HasSuffix(f, ".cmake") {
+				for v := range vars {
+					if !globals[v] {
+						globals[v], changed = true, true
+					}
+				}
+			}
 		}
 	}
 	for _, f := range p.Files {
@@ -407,6 +431,13 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 	fs := s.funcs
 	cur := isaFrame{vars: maps.Clone(s.levelVars)}
 	var outer []isaFrame // the scopes around the definition being read, the file's first
+	// The open foreach loops: the loop variable, and whether it held flags before the loop (CMake restores
+	// its value when the loop ends, CMP0124).
+	type loopVar struct {
+		name string
+		was  bool
+	}
+	var loops []loopVar
 	// handBack records that the body being read gives its caller name: its callers then hold the flags
 	// there, and so does the scope around the definition, which stands in for them in this file.
 	handBack := func(name string) {
@@ -415,16 +446,24 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 			s.changed = addTo(fs.exports, cur.fn, name) || s.changed
 		}
 	}
-	// mark records that name holds the flags. A set() of ${param} in a body fills its caller's variable
-	// (an output argument); a set() in a macro body writes its caller's scope, and so does PARENT_SCOPE in
-	// a function; a CACHE entry is seen by the file too.
-	mark := func(name, args string) {
-		if cur.fn != "" && strings.HasPrefix(name, "${") {
+	// mark records that c writes the flags to name. A set() of ${param} in a body fills its caller's
+	// variable (an output argument); a set() in a macro body writes its caller's scope, and so does
+	// PARENT_SCOPE in a function; a CACHE entry is seen by the file too. Any other name built at run time
+	// (${ARG_OUT}, ${prefix}_FLAGS, ${ARGV0}) is one no reference can be matched to, so it fails closed.
+	mark := func(name, args string, c cmakeCmd) {
+		if strings.Contains(name, "${") {
+			param := false
 			for i, prm := range cur.params {
-				if name == "${"+prm+"}" {
+				if cur.fn != "" && name == "${"+prm+"}" {
 					s.changed = addTo(fs.producers, cur.fn, i) || s.changed
+					param = true
 				}
 			}
+			if !param && !(levelFile && cur.fn == levelFunction) {
+				reportf(c.line, "%s() writes AVX-class flags to %s, a name CONF-11 cannot tell: only %s's "+
+					"level sets carry ISA flags (02 §1.1)", c.name, name, isaLevelSets)
+			}
+			return // the caller's variable is marked where the call names it
 		}
 		cur.vars[name] = true
 		if n := len(outer); n > 0 {
@@ -474,9 +513,18 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 			reportf(c.line, "helios_avx2_sources() grants AVX2 to single files: images are built at one level "+
 				"(ADR-011 amendment, 02 §1.1)")
 			continue
-		case "foreach": // foreach(v IN LISTS <flags>): v holds them in the loop
-			if len(fields) > 1 && listsCarry(fields[1:], func(v string) bool { return cur.vars[v] }) {
+		case "foreach": // foreach(v IN LISTS <flags>) or foreach(v -mavx2 …): v holds them in the loop
+			loops = append(loops, loopVar{first, cur.vars[first]})
+			if loopCarries(c.args, fields, func(v string) bool { return cur.vars[v] }) {
 				cur.vars[first] = true
+			}
+			continue
+		case "endforeach":
+			if n := len(loops); n > 0 {
+				if lv := loops[n-1]; !lv.was {
+					delete(cur.vars, lv.name)
+				}
+				loops = loops[:n-1]
 			}
 			continue
 		case "return": // return(PROPAGATE v…) hands v to the caller
@@ -490,18 +538,20 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 			}
 			continue
 		case "set", "list", "string", "separate_arguments":
-			name, read := writtenVar(c.name, cmakeArgs(c.args))
+			names, read := writtenVar(c.name, cmakeArgs(c.args))
 			flags = carriedFlags(read, cur.vars)
-			if len(flags) > 0 && name != "" {
-				mark(name, c.args)
-			}
-			if avxListVarRE.MatchString(name) && !avxListRE.MatchString(name) {
-				reportf(c.line, "%s selects targets or sources for AVX-class flags: images are built at one "+
-					"level (ADR-011 amendment, 02 §1.1)", name)
-			}
-			if langFlagsRE.MatchString(name) && !probeFlagsRE.MatchString(name) && len(flags) > 0 && !levelSets {
-				reportf(c.line, "%s carries %s: ISA flags come only from the image level (02 §1.1)", name,
-					strings.Join(flags, " "))
+			for _, name := range names {
+				if len(flags) > 0 && name != "" {
+					mark(name, c.args, c)
+				}
+				if avxListVarRE.MatchString(name) && !avxListRE.MatchString(name) {
+					reportf(c.line, "%s selects targets or sources for AVX-class flags: images are built at one "+
+						"level (ADR-011 amendment, 02 §1.1)", name)
+				}
+				if compilerVarRE.MatchString(name) && !probeFlagsRE.MatchString(name) && len(flags) > 0 && !levelSets {
+					reportf(c.line, "%s carries %s: ISA flags come only from the image level (02 §1.1)", name,
+						strings.Join(flags, " "))
+				}
 			}
 			continue
 		}
@@ -510,13 +560,13 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 				s.changed = addTo(fs.callerVars, c.name, v) || s.changed
 			}
 			for v := range fs.exports[c.name] {
-				mark(v, "")
+				mark(v, "", c)
 			}
 		}
 		if outs, ok := fs.producers[c.name]; ok { // helios_isa_avx2_flags(out): out holds the flags
 			for i := range outs {
 				if i < len(fields) {
-					mark(strings.Trim(fields[i], `"`), "")
+					mark(strings.Trim(fields[i], `"`), "", c)
 				}
 			}
 			continue
@@ -580,11 +630,26 @@ func carriedFlags(args string, vars map[string]bool) []string {
 	return flags
 }
 
-// writtenVar returns the variable that a set(), list() or string() writes, and the text of the arguments
-// its value comes from: for string(REPLACE), string(REGEX …) the match pattern is left out (a pattern
+// writtenVar returns the variables that a set(), list() or string() writes, and the text of the arguments
+// their value comes from: for string(REPLACE), string(REGEX …) the match pattern is left out (a pattern
 // that names a flag removes it), and the output is the argument CMake writes (string(REPLACE <match>
-// <replace> <out> <input>) writes its 4th, string(JOIN <glue> <out> …) its 3rd).
-func writtenVar(cmd string, args []string) (name, read string) {
+// <replace> <out> <input>) writes its 4th, string(JOIN <glue> <out> …) its 3rd). A list() sub-command
+// reads its list by name, so the list's value (${<list>}) is read too; list(POP_FRONT|POP_BACK <list>
+// <out>…) writes every <out>.
+func writtenVar(cmd string, args []string) (names []string, read string) {
+	name, read := writtenVar1(cmd, args)
+	if cmd == "list" && len(args) > 0 {
+		switch strings.ToUpper(strings.Trim(args[0], `"`)) {
+		case "POP_FRONT", "POP_BACK":
+			for _, a := range args[min(2, len(args)):] {
+				names = append(names, strings.Trim(a, `"`))
+			}
+		}
+	}
+	return append(names, name), read
+}
+
+func writtenVar1(cmd string, args []string) (name, read string) {
 	arg := func(i int) string {
 		if i >= 0 && i < len(args) {
 			return strings.Trim(args[i], `"`)
@@ -607,6 +672,9 @@ func writtenVar(cmd string, args []string) (name, read string) {
 	case "separate_arguments": // separate_arguments(<out> <mode> "<args>")
 		return arg(0), without(0)
 	case "list":
+		if arg(1) != "" {
+			all += " ${" + arg(1) + "}"
+		}
 		switch strings.ToUpper(arg(0)) {
 		case "LENGTH", "GET", "JOIN", "SUBLIST", "FIND":
 			return arg(len(args) - 1), all

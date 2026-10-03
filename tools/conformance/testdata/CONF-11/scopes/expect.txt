@@ -10,6 +10,12 @@
 # reads its caller's local (22), a CACHE entry set in a body (32) and an output argument forwarded to
 # another producer (37). A local the callee does not hand back stays local (43 passes). Functions are
 # global: tools/z's return(PROPAGATE) (45) and output argument (47) reach engine/z, read first.
+# A level set built by a foreach over literal flags (engine/y 28). A producer chain learnt over two passes
+# (engine/a 2: tools/b's _outer reads tools/c's _inner). The root's and cmake/*.cmake's file-scope flag
+# variables reach every directory (engine/pcg 1, 2).
+engine/a/CMakeLists.txt:2: CONF-11
+engine/pcg/CMakeLists.txt:1: CONF-11
+engine/pcg/CMakeLists.txt:2: CONF-11
 engine/y/CMakeLists.txt:3: CONF-11
 engine/y/CMakeLists.txt:5: CONF-11
 engine/y/CMakeLists.txt:6: CONF-11
@@ -21,6 +27,7 @@ engine/y/CMakeLists.txt:24: CONF-11
 engine/y/CMakeLists.txt:25: CONF-11
 engine/y/CMakeLists.txt:26: CONF-11
 engine/y/CMakeLists.txt:27: CONF-11
+engine/y/CMakeLists.txt:28: CONF-11
 engine/z/CMakeLists.txt:5: CONF-11
 engine/z/CMakeLists.txt:8: CONF-11
 engine/z/CMakeLists.txt:14: CONF-11

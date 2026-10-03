@@ -1,3 +1,4 @@
 #! -rules CONF-11 -strict
 # Level sets applied in cmake/HeliosIsa.cmake, baseline pins (x86-64-v1 too), SSE4.2, names in comments
-# and messages, and try-compile probe flags.
+# and messages, and try-compile probe flags; quoted foreach items that name a flag in a sentence, and a
+# loop variable after its loop.

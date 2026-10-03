@@ -1,0 +1,3 @@
+#! -rules CONF-09 -strict
+# A go.mod without a `go` directive: ADR-014's pin is missing, though the toolchain line is right.
+services/go.mod: CONF-09

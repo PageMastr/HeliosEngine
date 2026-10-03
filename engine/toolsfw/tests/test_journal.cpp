@@ -7,6 +7,7 @@
 #include <thread>
 
 #include "helios/core/hash.h"
+#include "helios/toolsfw/automation.h"
 #include "test_util.h"
 
 using namespace helios;
@@ -492,6 +493,173 @@ TEST_CASE("journal: the Lamport floor continues transaction ids across sessions"
     const auto sessions = listJournalSessions(root / "journal", "test-project", false);
     REQUIRE(sessions.size() == 1);
     CHECK(sessions[0].maxLamport == 42);
+}
+
+// ---- replay bases and open groups (review round 2 of #40) --------------------------------------
+// A save, or the "open" record a reload journals, is a document's replay base. A group's ops are
+// applied at once but journaled only when the outermost group ends, so a base journaled inside
+// the group would precede ops that are already in it: recovery then failed with a conflict and
+// dropped every later edit, or brought back a cancelled group's edits.
+
+constexpr const char* kSetMass = R"({"doc": "hull/frigate", "path": "mass", "value": 15000})";
+constexpr const char* kSetRoll = R"({"doc": "hull/frigate", "path": "handling/rollRate", "value": 95})";
+constexpr const char* kSetPitch = R"({"doc": "hull/frigate", "path": "handling/pitchRate", "value": 44})";
+constexpr const char* kSaveFrigate = R"({"doc": "hull/frigate"})";
+
+TEST_CASE("journal: a save inside a group that edited the document is refused, and recovery keeps the later edits") {
+    Fixture f("save_in_group", /*journal=*/true);
+    CommandInvoker& ui = f.fw->invoker(Origin::Ui);
+    const fs::Path file = f.doc().path();
+    const std::string onDisk = fs::readTextFile(file).value();
+    f.fw->beginGroup(Origin::Ui, "Outer");
+    REQUIRE(ui.invoke("doc.setProperty", kSetMass));
+    CHECK(ui.invoke("doc.save", kSaveFrigate).errorCode() == ErrorCode::InvalidState);
+    CHECK(f.fw->save(f.frigate).errorCode() == ErrorCode::InvalidState);
+    CHECK(f.fw->saveAll().errorCode() == ErrorCode::InvalidState);
+    CHECK(fs::readTextFile(file).value() == onDisk);  // nothing was written
+    REQUIRE(f.fw->endGroup());
+    REQUIRE(ui.invoke("doc.setProperty", kSetRoll));
+    const std::string expected = f.doc().text();
+    const fs::Path journal = f.fw->journal()->path();
+    f.fw.reset();
+
+    const Recovered r = recoverFixture(f, journal);
+    CHECK(r.status() == DocRecovery::Replayed);
+    CHECK(r.report.replayed == 2);
+    CHECK(r.text() == expected);  // before the fix: conflict at 'mass', rollRate 95 lost
+}
+
+TEST_CASE("journal: a save inside a group that has not edited the document stays a valid replay base") {
+    Fixture f("save_before_group_edit", /*journal=*/true);
+    CommandInvoker& ui = f.fw->invoker(Origin::Ui);
+    REQUIRE(ui.invoke("doc.setProperty", kSetMass));
+    f.fw->beginGroup(Origin::Ui, "Outer");
+    REQUIRE(ui.invoke("doc.save", kSaveFrigate));  // the group holds nothing of the frigate yet
+    REQUIRE(ui.invoke("doc.setProperty", kSetRoll));
+    REQUIRE(f.fw->endGroup());
+    const std::string expected = f.doc().text();
+    const fs::Path journal = f.fw->journal()->path();
+    f.fw.reset();
+
+    const Recovered r = recoverFixture(f, journal);
+    CHECK(r.status() == DocRecovery::Replayed);
+    CHECK(r.report.replayed == 1);  // only the group: the mass edit is in the saved file
+    CHECK(r.text() == expected);
+}
+
+TEST_CASE("journal: Editor.transaction cannot save a document it edited; recovery keeps the later edits") {
+    Fixture f("save_in_luau_tx", /*journal=*/true);
+    const fs::Path file = f.doc().path();
+    const std::string onDisk = fs::readTextFile(file).value();
+    auto a = Automation::create(*f.fw);
+    REQUIRE(a);
+    // An uncaught refusal fails the script and rolls the transaction back.
+    auto failed = (*a)->run("save", R"(
+        Editor.transaction("t", function()
+            Record.set("hull/frigate", "mass", "15000")
+            Editor.cmd("doc.save", '{"doc": "hull/frigate"}')
+        end))");
+    CHECK_FALSE(failed);
+    CHECK(f.get("mass") == "12000");
+    CHECK(fs::readTextFile(file).value() == onDisk);
+    // A caught refusal keeps the transaction, which commits as one step.
+    auto caught = (*a)->run("save_caught", R"(
+        Editor.transaction("t", function()
+            Record.set("hull/frigate", "mass", "15000")
+            assert(not pcall(Editor.cmd, "doc.save", '{"doc": "hull/frigate"}'))
+        end))");
+    REQUIRE_MESSAGE(caught, (caught ? std::string() : caught.error().toString()));
+    CHECK(fs::readTextFile(file).value() == onDisk);
+    REQUIRE(f.fw->invoker(Origin::Ui).invoke("doc.setProperty", kSetRoll));
+    const std::string expected = f.doc().text();
+    const fs::Path journal = f.fw->journal()->path();
+    a->reset();
+    f.fw.reset();
+
+    const Recovered r = recoverFixture(f, journal);
+    CHECK(r.status() == DocRecovery::Replayed);
+    CHECK(r.text() == expected);
+}
+
+TEST_CASE("journal: a reload inside a group is refused, and recovery keeps the edits in and after the group") {
+    Fixture f("reload_in_group", /*journal=*/true);
+    CommandInvoker& ui = f.fw->invoker(Origin::Ui);
+    editFile(f.doc().path(), "\"yawRate\": 30", "\"yawRate\": 31");
+    f.fw->beginGroup(Origin::Ui, "Outer");
+    REQUIRE(ui.invoke("doc.setProperty", kSetMass));
+    CHECK(f.fw->reloadFromDisk(f.frigate).errorCode() == ErrorCode::InvalidState);
+    CHECK(ui.invoke("doc.revert", kSaveFrigate).errorCode() == ErrorCode::InvalidState);
+    CHECK(f.get("handling/yawRate") == "30");
+    REQUIRE(ui.invoke("doc.setProperty", kSetPitch));
+    REQUIRE(f.fw->endGroup());
+    REQUIRE(f.fw->reloadFromDisk(f.frigate));  // after the group: merges the external yawRate
+    CHECK(f.get("handling/yawRate") == "31");
+    REQUIRE(ui.invoke("doc.setProperty", kSetRoll));
+    const std::string expected = f.doc().text();
+    const fs::Path journal = f.fw->journal()->path();
+    f.fw.reset();
+
+    const Recovered r = recoverFixture(f, journal);
+    CHECK(r.status() == DocRecovery::Replayed);
+    CHECK(r.text() == expected);  // before the fix: conflict, rollRate and pitchRate lost
+}
+
+TEST_CASE("journal: cancelling a group never leaves its edits in a replay base") {
+    Fixture f("reload_in_group_cancel", /*journal=*/true);
+    CommandInvoker& ui = f.fw->invoker(Origin::Ui);
+    const std::string original = f.doc().text();
+    editFile(f.doc().path(), "\"yawRate\": 30", "\"yawRate\": 31");
+    f.fw->beginGroup(Origin::Ui, "Outer");
+    REQUIRE(ui.invoke("doc.setProperty", kSetMass));
+    CHECK(f.fw->reloadFromDisk(f.frigate).errorCode() == ErrorCode::InvalidState);
+    f.fw->cancelGroup();
+    // The cancelled edit is gone, and the external yawRate 31 was never half-loaded into the group
+    // (before the fix the cancel silently rolled it back as well).
+    CHECK(f.doc().text() == original);
+    const fs::Path journal = f.fw->journal()->path();
+    f.fw.reset();
+
+    // Nothing in the journal holds the cancelled mass: the file changed after the session's open,
+    // so recovery reports it and replays nothing. Before the fix, the reload's snapshot brought
+    // mass 15000 back.
+    const Recovered r = recoverFixture(f, journal);
+    CHECK(r.report.replayed == 0);
+    CHECK(r.status() == DocRecovery::SourceChanged);
+    CHECK(r.text().find("\"mass\": 15000") == std::string::npos);
+}
+
+TEST_CASE("journal: an uncommitted builder's edits block saving, closing and reloading their document") {
+    Fixture f("pending_builder", /*journal=*/true);
+    auto b = f.fw->begin(Origin::Ui, "Pending");
+    REQUIRE(b->set(f.frigate, "mass", "15000"));
+    CHECK(f.fw->save(f.frigate).errorCode() == ErrorCode::InvalidState);
+    CHECK(f.fw->saveAll().errorCode() == ErrorCode::InvalidState);
+    CHECK(f.fw->close(f.frigate, /*discard=*/true).errorCode() == ErrorCode::InvalidState);
+    CHECK(f.fw->reloadFromDisk(f.frigate).errorCode() == ErrorCode::InvalidState);
+    REQUIRE(b->commit());
+    CHECK(f.fw->save(f.frigate));
+    b.reset();
+    // An aborted builder holds nothing.
+    auto c = f.fw->begin(Origin::Ui, "Aborted");
+    REQUIRE(c->set(f.frigate, "mass", "16000"));
+    c->abort();
+    CHECK(f.fw->reloadFromDisk(f.frigate));
+}
+
+TEST_CASE("journal: a save or reload whose replay base cannot be journaled reports it") {
+    Fixture f("base_not_journaled", /*journal=*/true);
+    const fs::Path file = f.doc().path();
+    REQUIRE(f.fw->invoker(Origin::Ui).invoke("doc.setProperty", kSetMass));
+    REQUIRE(f.fw->journal()->close(false));  // every later append fails
+    auto saved = f.fw->save(f.frigate);
+    REQUIRE_FALSE(saved);
+    CHECK(saved.error().message.find("was saved") != std::string::npos);
+    CHECK(fs::readTextFile(file).value() == f.doc().text());  // the file itself was written
+    // A reload with no edit to apply still needs a new base (the file's bytes changed).
+    REQUIRE(fs::writeTextFile(file, f.doc().text() + "\n"));
+    auto reloaded = f.fw->reloadFromDisk(f.frigate);
+    REQUIRE_FALSE(reloaded);
+    CHECK(reloaded.error().message.find("was reloaded") != std::string::npos);
 }
 
 } // namespace

@@ -46,4 +46,30 @@ struct Fixture {
     }
 };
 
+/// Replays `journal` into a fresh framework over the fixture's project (a restart after a crash).
+struct Recovered {
+    std::unique_ptr<Framework> fw;
+    RecoveryReport report;
+    /// The frigate after recovery ("" when it was not recovered).
+    std::string text() const {
+        const Document* d = fw->documents().find("records/hull/frigate.hrec");
+        return d ? d->text() : std::string();
+    }
+    DocRecovery status() const {
+        REQUIRE(report.documents.size() == 1);
+        return report.documents[0].status;
+    }
+};
+
+inline Recovered recoverFixture(const Fixture& f, const fs::Path& journal, u64 seed = 5) {
+    auto created = Framework::create(deterministicConfig(f.root / "project", {}, seed));
+    REQUIRE(created);
+    Recovered out;
+    out.fw = std::move(*created);
+    auto report = out.fw->recover(journal);
+    REQUIRE_MESSAGE(report, (report ? std::string() : report.error().toString()));
+    out.report = std::move(*report);
+    return out;
+}
+
 } // namespace helios::tf::test

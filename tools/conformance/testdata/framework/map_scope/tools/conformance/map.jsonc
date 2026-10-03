@@ -1,0 +1,4 @@
+// D2: an entry that names a rule widens its scope to the entry's paths.
+{
+  "ADR-014": {"paths": ["services/go.mod", "tools/**/go.mod", ".github/**"], "rules": ["CONF-09"]}
+}

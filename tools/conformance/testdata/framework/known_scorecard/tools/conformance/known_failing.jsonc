@@ -1,0 +1,7 @@
+// Two records: the first has its scorecard gap; the second does not, so the gap it hides is invisible.
+{
+  "known_failing": [
+    {"rule": "CONF-10", "owner": "WP-9.9r", "anchor": "09 §5.10.4 (z)", "reason": "fixture", "paths": ["engine/x/**"]},
+    {"rule": "CONF-10", "owner": "WP-9.8r", "anchor": "09 §5.10.4 (y)", "reason": "fixture", "paths": ["engine/y/**"]},
+  ],
+}

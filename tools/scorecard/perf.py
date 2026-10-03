@@ -27,9 +27,12 @@ timings differ by more than the budgets, so a night is only compared with nights
 everything above holds within a class. A metric's first night on a class that has none of its levels
 reads `new-host-class` (not failing) and starts that class's calibration; the levels of other classes
 are kept for when the runner comes back to them, and so are a calibrating class's clean values (a class
-the runner rarely lands on calibrates over more nights than the history holds). A metric with an
-absolute `bound` (a plan criterion such as RT-13's ≤ 10 % overhead) fails when it is worse than the
-bound, on every night and class, and its drift is reported, not gated.
+the runner rarely lands on calibrates over more nights than the history holds). Host classes that keep
+changing would leave every night ungated, so once more than --window of a run's classes have had their
+first night within the history and no night since, the run's rows that no level gated tonight (`new`,
+`new-host-class`, `calibrating`, without a bound) fail as `host-churn`. A metric with an absolute `bound`
+(a plan criterion such as RT-13's ≤ 10 % overhead) fails when it is worse than the bound, on every night
+and class, and its drift is reported, not gated.
 Every verdict, both levels and the applied accept are stored in the history and carried forward (a
 missing metric carries them too, and the history keeps every class's newest levels), so none of them
 heals or expires as old entries leave it. Only a reviewed `perf_accept` record in scorecard.jsonc moves
@@ -39,9 +42,10 @@ history but has no stored value for the metric, or measured something else, fail
 one older than the whole history is reported as stale, not failed. A declared gated metric that had a
 value and stops being produced is `missing` until it comes back or the registry drops the metric, its run
 or its run assignment; a declared metric that never had a value is listed, not failed.
-It prints the summary and then one `::error` workflow command per failing row (a check-run annotation
-that names the metric); the failing nights of a history written before that (version 1) are listed
-once. It exits 1 on any failing verdict, and exits 2 under --require-history when there is no history to
+It prints the summary, then a `::warning` workflow command (a check-run annotation) for each run on a host
+class without its levels, and one `::error` per failing row that names the metric (one per run for its
+`host-churn` rows); the failing nights of a history written before that (version 1) are listed once.
+It exits 1 on any failing verdict, and exits 2 under --require-history when there is no history to
 compare with (so a lost artifact cannot reset every level); --note lines head the summary (a first
 night, or a restart, which the nightly allows only when no history can be fetched), and a new history
 records when and why it started, which every later summary shows.
@@ -127,7 +131,8 @@ def _host_of(e: dict, key: str) -> str | None:
     return None
 
 
-FAILING = ("regression", "missing", "accept-unmatched", "no-baseline")
+FAILING = ("regression", "missing", "accept-unmatched", "no-baseline", "host-churn")
+UNGATED = ("new", "new-host-class", "calibrating")  # the verdicts of a night that no level gated
 
 
 def _accept_for(entry: dict, key: str, applies=lambda night: True) -> dict | None:
@@ -189,6 +194,25 @@ def _calibration(levels) -> list[float] | None:
     ok = isinstance(values, list) and all(isinstance(v, (int, float)) and not isinstance(v, bool) and
                                           math.isfinite(v) for v in values)
     return values if ok else None
+
+
+def _run_classes(store: dict | None, run: str | None) -> set[str]:
+    """The host classes the level store ({key: {class: levels}}) holds levels of `run`'s metrics for."""
+    return {c for k, per in (store or {}).items() if _split(k)[0] == run and isinstance(per, dict) for c in per}
+
+
+def _unreturned(entries: list[dict], run: str | None) -> list[str]:
+    """The host classes `run` had its first night on within `entries` (its `new_class_runs`) and has not
+    measured on since, oldest first: classes the runner has not come back to."""
+    pending: dict[str, None] = {}
+    for e in entries:
+        if not any(_split(k)[0] == run for k in e.get("metrics") or {}):
+            continue
+        cls = run_class(e, run)
+        pending.pop(cls, None)
+        if run in (e.get("new_class_runs") or []):
+            pending[cls] = None
+    return list(pending)
 
 
 def _seed_levels(past: list[dict]) -> dict:
@@ -337,10 +361,31 @@ def compare(history: dict, entry: dict, window: int, start_note: str = "") -> tu
     store = history.get("levels") if isinstance(history.get("levels"), dict) else _seed_levels(past)
     store = json.loads(json.dumps(store))
     stored = json.loads(json.dumps(entry))  # the entry as appended, with every verdict and level
+    # Host classes that keep changing (an unstable CPU model string, or a pool that keeps bringing new CPU
+    # models) would leave every night ungated and the step green. A run's first night on a class without
+    # its levels is recorded (and warned about); once more than `window` of the classes it had a first night
+    # on within the history have had no night since, its ungated rows fail. A stable pool of up to `window`
+    # models never gets there, and a class the runner comes back to stops counting.
+    measured = {_split(k)[0] for k in entry["metrics"]}
+    stored["new_class_runs"] = sorted((r for r in measured if run_class(entry, r) not in _run_classes(store, r)),
+                                      key=lambda r: r or "")
+    recent = (past + [stored])[-HISTORY_LIMIT:]
+    churn = {}
+    for run in measured:
+        unreturned = _unreturned(recent, run)
+        if len(unreturned) > window:
+            churn[run] = (f"host churn: {len(unreturned)} host classes of {run} had their first night in the "
+                          f"last {len(recent)} nights and none has had another, more than --window {window}, so "
+                          f"its levels cannot calibrate (is its host fingerprint stable?)")
     rows = []
     for key, m in sorted(entry["metrics"].items()):
-        cls = run_class(entry, _split(key)[0])
+        run = _split(key)[0]
+        cls = run_class(entry, run)
         row = _apply_bound(_evaluate(past, entry, key, m, window, cls, store), m)
+        if run in churn and m["gate"] and row["bound"] is None and row["verdict"] in UNGATED:
+            # Not gated tonight, and with this churn it never will be: fail it rather than stay green.
+            note = f"host churn on {run}; tonight {row['verdict']}" + (f" ({row['note']})" if row["note"] else "")
+            row.update(verdict="host-churn", note=note, churn=churn[run])
         calibration = row.pop("calibration")
         levels = {f: row[f] for f in LEVELS}
         stored["metrics"][key].update(verdict=row["verdict"], host=cls, **levels)
@@ -430,7 +475,8 @@ def unnamed_failures(history: dict) -> list[str]:
 def markdown(rows: list[dict], entry: dict, notes: list[str] = (), started: dict | None = None,
              levels: dict | None = None, earlier: list[str] = ()) -> str:
     """The summary: notes, the table (one line per row), and `earlier` (unnamed_failures) as a list.
-    `levels` is the new history's level store; with it, the hosts line counts each run's host classes."""
+    `levels` is the new history's level store; with it, the hosts line counts each run's host classes.
+    `entry` is tonight's entry as compare stored it, which marks the runs on a new host class."""
     bad = [r for r in rows if r["verdict"] in FAILING]
     since = []
     if started and started.get("night") and started["night"] != _night(entry):
@@ -440,11 +486,13 @@ def markdown(rows: list[dict], entry: dict, notes: list[str] = (), started: dict
 
     def classes(run: str) -> str:
         # A fingerprint that changed every night would show here as a count that grows every night.
-        n = len({c for k, per in (levels or {}).items() if _split(k)[0] == run and isinstance(per, dict)
-                 for c in per})
-        return f" ({n} host class{'' if n == 1 else 'es'} with levels)" if levels is not None else ""
+        new = "first night on this class; " if run in (entry.get("new_class_runs") or []) else ""
+        return f" ({new}{_count_classes(levels, run)} with levels)" if levels is not None else ""
 
     hosts = "; ".join(f"`{run}` on {run_class(entry, run)}{classes(run)}" for run in runs)
+    churn = {_split(r["metric"])[0]: r["churn"] for r in rows if r.get("churn")}  # rows are in key order
+    churn_lines = [f"**{text[0].upper()}{text[1:]}.** Its rows that no level gated tonight fail as `host-churn` "
+                   f"(tools/scorecard/README.md, host classes)." for text in churn.values()]
     lines = ["## Perf history", ""] + [f"**{n}**" for n in notes] + ([""] if notes else []) + since + [
              f"Night {_night(entry)} (UTC, the `night` a `perf_accept` record names), commit `{entry['sha'][:12]}`: "
              f"{len(bad)} gated metric(s) failing. Budgets are 5 % (render, runtime) and 10 % (backend, editor, "
@@ -455,7 +503,7 @@ def markdown(rows: list[dict], entry: dict, notes: list[str] = (), started: dict
              f"per run and host class (CPU model, logical CPUs), and a night is compared only with nights on its "
              f"own class: a class's first night reads `new-host-class` and starts its calibration. Hosted runners "
              f"are not the fixed hardware the binding per-commit gates need (WP-0.4).",
-             ""] + ([f"Hosts: {hosts}.", ""] if hosts else []) + [
+             ""] + ([f"Hosts: {hosts}.", ""] if hosts else []) + churn_lines + ([""] if churn_lines else []) + [
              "| Metric | Tonight | Baseline | Change | Anchor | Drift | Budget | Verdict |",
              "|---|---|---|---|---|---|---|---|"]
     fmt, pct = _fmt, _pct
@@ -466,8 +514,8 @@ def markdown(rows: list[dict], entry: dict, notes: list[str] = (), started: dict
         verdict = f"**{r['verdict']}**" if r["verdict"] in FAILING else r["verdict"]
         if r.get("note"):
             # One line per row: the table also goes to the job log, where a line starting with `::` would
-            # be a workflow command.
-            verdict += f" ({' '.join(str(r['note']).split())})"
+            # be a workflow command. A `|` would end the cell (some notes hold a CPU model name).
+            verdict += f" ({' '.join(str(r['note']).split())})".replace("|", "\\|")
         lines.append(f"| `{r['metric']}` | {fmt(r['value'])} {r['unit']} | {fmt(r['baseline'])} | {pct(r['change'])} | "
                      f"{fmt(r['anchor'])} | {pct(r['anchor_change'])} | {limit} | {verdict} |")
     if earlier:
@@ -485,12 +533,26 @@ def _command_property(text: str) -> str:
     return _command_data(text).replace(":", "%3A").replace(",", "%2C")
 
 
-def annotations(rows: list[dict]) -> list[str]:
-    """One GitHub `::error` workflow command per failing row, so the check run names each failing metric
-    (the summary and the artifact are not where a reader of the run page or the log looks first)."""
+def _count_classes(levels: dict | None, run: str | None) -> str:
+    n = len(_run_classes(levels, run))
+    return f"{n} host class{'' if n == 1 else 'es'}"
+
+
+def annotations(rows: list[dict], entry: dict | None = None, levels: dict | None = None) -> list[str]:
+    """GitHub workflow commands for the run page (the summary and the artifact are not where a reader of
+    the run page or the log looks first): one `::warning` per run on a host class without its levels
+    (`entry` as compare stored it, `levels` the new history's store), then one `::error` per failing row,
+    so the check run names each failing metric, except that a run's `host-churn` rows share one."""
     lines = []
+    for run in (entry or {}).get("new_class_runs") or []:
+        text = f"{run} on {run_class(entry, run)} ({_count_classes(levels, run)} with levels)"
+        lines.append(f"::warning title={_command_property('perf new-host-class')}::{_command_data(text)}")
+    churned: dict = {}
     for r in rows:
         if r["verdict"] not in FAILING:
+            continue
+        if r["verdict"] == "host-churn":
+            churned.setdefault(_split(r["metric"])[0], []).append(r)
             continue
         if r["value"] is None:
             text = f"{r['metric']}: no value tonight"
@@ -502,6 +564,9 @@ def annotations(rows: list[dict]) -> list[str]:
         if r.get("note"):
             text += f": {r['note']}"
         lines.append(f"::error title={_command_property('perf ' + r['verdict'])}::{_command_data(text)}")
+    for run, churn_rows in churned.items():
+        text = f"{run}: {len(churn_rows)} gated metric(s) not gated tonight. {churn_rows[0]['churn']}"
+        lines.append(f"::error title={_command_property('perf host-churn')}::{_command_data(text)}")
     return lines
 
 
@@ -542,12 +607,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     new, rows = compare(history, entry, args.window, args.note[0] if args.note else "")
     args.out.write_text(json.dumps(new, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    text = markdown(rows, entry, args.note, new.get("started"), levels=new.get("levels"),
+    tonight = new["entries"][-1]  # as stored, with the runs on a new host class
+    text = markdown(rows, tonight, args.note, new.get("started"), levels=new.get("levels"),
                     earlier=unnamed_failures(history))
     if args.markdown:
         args.markdown.write_text(text, encoding="utf-8")
     print(text)
-    for line in annotations(rows):
+    for line in annotations(rows, tonight, new.get("levels")):
         print(line)
     return 1 if any(r["verdict"] in FAILING for r in rows) else 0
 

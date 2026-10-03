@@ -229,6 +229,21 @@ report at exit).
     class; the old levels, set on mixed classes, stay with `unrecorded`. The summary's hosts line names each
     run's class tonight and how many classes the history holds levels for: a count that grows every night
     means the fingerprint is not stable.
+  - **New classes are warned about, and churn fails.** A run's night on a class without any of its levels
+    (its first night ever included) prints `::warning title=perf new-host-class::<run> on <class> (<n> host
+    classes with levels)`, so the run page shows it although the night does not fail. If classes keep
+    changing (a CPU model string that is not stable, or a pool that keeps bringing CPU models the history
+    has not seen), no class reaches its 5 calibration nights and nothing is gated, so the step would stay
+    green. Therefore, when more than `--window` (5) of the classes a run had its first night on within the
+    history (60 entries) have had no night since, its rows that no level gated tonight (`new`,
+    `new-host-class` and `calibrating`, except metrics with a bound, which are gated on every class) fail
+    as **`host-churn`**, with one `::error` per run. A night that a class's levels did gate keeps its
+    verdict. A class stops counting once the runner comes back to it, so a stable pool of up to 5 CPU
+    models never gets there, and a fingerprint that never repeats fails from its 6th night. In a
+    simulation (200 series of 150 nights per pool size, each model drawn with a random weight from 1 to
+    30), pools of 3 and 5 models never failed; 6 models failed in 3 series, on 1 night each; 8 in 15
+    series, on at most 5 nights; 13 in 128 series, on a median of 2 nights (worst 18). Fix the
+    fingerprint, or look at what the pool runs on; the churning nights still calibrate their classes.
   - **Bounds.** A metric with a `bound` (a number in its unit, quoting the limit of the plan criterion it
     names) is gated against that bound on every night and class, calibration nights included, instead of
     against its anchor; its drift is reported, not gated, and no `perf_accept` can name it.
@@ -269,10 +284,12 @@ report at exit).
   - When the stored value of that night (or tonight's, when `night` is tonight) is within the metric's
     budget of `value`, the record is applied: that value becomes the anchor and starts the rolling
     baseline. It stays applied whether the record is kept or removed, including after its night has left
-    the history. The latest record in force wins; a record older than the applied accept has no effect,
-    and its row says so. Accept a typical night: the anchor is that one night's value (not a median of
-    several), so a noisy night makes a noisy anchor. Anchoring an accept at the median of the accepted
-    night and the nights after it is a follow-up.
+    the history. It is applied on a night the runner is on the host class its night ran on, so that class
+    must come back while the night is in the history; otherwise the record reads stale and the class's next
+    night is compared with its old anchor (accept a newer night on that class). The latest record in force
+    wins; a record older than the applied accept has no effect, and its row says so. Accept a typical
+    night: the anchor is that one night's value (not a median of several), so a noisy night makes a noisy
+    anchor. Anchoring an accept at the median of the accepted night and the nights after it is a follow-up.
   - A record whose night is inside the history but has no stored value for the metric, or measured
     something else, fails the metric as `accept-unmatched` until it is corrected. A record older than the
     whole history (after a restart) cannot be applied and is reported as stale, not failed: remove it.

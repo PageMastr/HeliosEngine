@@ -207,6 +207,10 @@ class NightlyPerfStepsTests(unittest.TestCase):
         self.assertIn("new-host-class (first night on this host class (AMD EPYC 7763 64-Core Processor, "
                       "4 logical CPUs)", summary)
         self.assertNotIn("::error", self.perf_log)
+        # The run page says so (a new class does not fail, so without this the night would leave no annotation).
+        self.assertIn("\n::warning title=perf new-host-class::linux-gcc on AMD EPYC 7763 64-Core Processor, "
+                      "4 logical CPUs (2 host classes with levels)\n", self.perf_log)
+        self.assertNotIn("::warning", summary)  # the summary gets the markdown only
         for job in ("linux", "windows"):  # every native job records its host next to run.json
             text = WORKFLOW.read_text(encoding="utf-8")
             body = text[text.index(f"\n  {job}:"):]

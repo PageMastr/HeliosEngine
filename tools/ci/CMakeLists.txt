@@ -6,8 +6,8 @@
 #   lint_runner_scripts           runner/test_runner_scripts.ps1: the runner hook and firewall scripts parse, are
 #                                 ASCII, and their logic holds (the wipe itself on Windows, where the test must
 #                                 say that the wipe ran); the PowerShell blocks of docs/runbooks/win-gpu-runner.md
-#                                 parse, and its drive-root ACL audit (step 4b) holds against stand-ins; with
-#                                 PowerShell 7.
+#                                 parse, and its drive-root ACL audit (step 4b), the check before the service
+#                                 starts (step 9) and the rotate blocks hold against stand-ins; with PowerShell 7.
 # Python 3.10+ is required in CI, as for tools/scorecard. pwsh is required on GitHub-hosted runners, which all
 # have it; elsewhere (the dev container, the owner's win-gpu PC) lint_runner_scripts is registered only if found.
 if(NOT HELIOS_BUILD_TESTS)

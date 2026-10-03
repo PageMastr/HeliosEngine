@@ -7,7 +7,9 @@
 # addresses, IPv4 and IPv6, stray and non-canonical addresses) and the rules it adds and removes (the firewall
 # cmdlets mocked); job-started.ps1's refusal rules, how it ends a refused job (the process cmdlets mocked) and the
 # entries it would delete; every PowerShell block of docs/runbooks/win-gpu-runner.md parses, and its step 4b audit
-# (what helios-ci can open at the root of each local drive) runs against stand-ins for WMI and the ACL cmdlets. The
+# (what helios-ci can open at the root of each local drive), step 9's check before the service starts (the hook is
+# set in .env and readable by helios-ci) and the rotate blocks (what helios-ci owns; the hook's ACL for a new
+# account) run against stand-ins for WMI, the account, file, ACL and service cmdlets. The
 # scripts have no test switch: their functions and constants are loaded from the parsed files, so their last block
 # (the run) never runs here. On Windows also the wipe itself on a scratch tree under -WorkDir: a junction to a
 # directory outside, a directory symbolic link where creating one is allowed, read-only files and a deep tree; the
@@ -177,14 +179,41 @@ $audit = @($blocks | Where-Object { $_ -match '(?m)^# Step 4b audit:' })
 Assert-Equal 1 $audit.Count 'the runbook has one step 4b audit'
 
 $ciSid = 'S-1-5-21-1-2-3-1002'
-function New-AuditRule([string]$Sid, [int]$Rights, [string]$Type = 'Allow') {
+function New-AuditRule([string]$Sid, [int]$Rights, [string]$Type = 'Allow', [switch]$Inherited) {
     return [pscustomobject]@{ IdentityReference = [pscustomobject]@{ Value = $Sid }; AccessControlType = $Type
-        FileSystemRights = $Rights }
+        FileSystemRights = $Rights; IsInherited = [bool]$Inherited }
 }
+# What an IdentityReference of $Type says for $Sid: the SID itself for SecurityIdentifier, an account name otherwise
+# (as NTAccount gives), so that code which asks for names matches none of the SIDs it looks for.
+$auditNames = @{ 'S-1-1-0' = 'Everyone'; 'S-1-2-0' = 'LOCAL'; 'S-1-5-6' = 'NT AUTHORITY\SERVICE'
+    'S-1-5-11' = 'NT AUTHORITY\Authenticated Users'; 'S-1-5-15' = 'NT AUTHORITY\This Organization'
+    'S-1-5-18' = 'NT AUTHORITY\SYSTEM'; 'S-1-5-32-544' = 'BUILTIN\Administrators'; 'S-1-5-32-545' = 'BUILTIN\Users'
+    'S-1-5-113' = 'NT AUTHORITY\Local account'; $ciSid = 'PC\helios-ci' }
+function ConvertTo-AuditIdentity([string]$Sid, $Type) {
+    if ($Type -eq [System.Security.Principal.SecurityIdentifier]) { return $Sid }
+    if ($auditNames.ContainsKey($Sid)) { return $auditNames[$Sid] }
+    return 'PC\user' + $Sid.Split('-')[-1]
+}
+# An ACL as FileSystemSecurity gives it: GetAccessRules(includeExplicit, includeInherited, targetType) returns only the
+# kinds of entries asked for, and GetOwner and GetAccessRules name accounts in the targetType asked for.
 function New-AuditAcl([string]$Owner, [object[]]$Rules = @()) {
     $acl = [pscustomobject]@{ OwnerSid = $Owner; Rules = $Rules }
-    $acl | Add-Member -MemberType ScriptMethod -Name GetOwner -Value { param($Type) [pscustomobject]@{ Value = $this.OwnerSid } }
-    $acl | Add-Member -MemberType ScriptMethod -Name GetAccessRules -Value { param($Explicit, $Inherited, $Type) $this.Rules }
+    $acl | Add-Member -MemberType ScriptMethod -Name GetOwner -Value {
+        param($Type)
+        [pscustomobject]@{ Value = (ConvertTo-AuditIdentity $this.OwnerSid $Type) }
+    }
+    $acl | Add-Member -MemberType ScriptMethod -Name GetAccessRules -Value {
+        param([bool]$Explicit, [bool]$Inherited, $Type)
+        foreach ($rule in $this.Rules) {
+            if (($rule.IsInherited -and $Inherited) -or (-not $rule.IsInherited -and $Explicit)) {
+                [pscustomobject]@{
+                    IdentityReference = [pscustomobject]@{ Value = (ConvertTo-AuditIdentity $rule.IdentityReference.Value $Type) }
+                    AccessControlType = $rule.AccessControlType; FileSystemRights = $rule.FileSystemRights
+                    IsInherited = $rule.IsInherited
+                }
+            }
+        }
+    }
     return $acl
 }
 # Runs the audit on $AuditDisks (drive -> file system), $AuditItems (drive root -> names) and $AuditAcls (path -> ACL,
@@ -238,7 +267,9 @@ if ($audit.Count -eq 1) {
     $readExecute = 0x1200a9
     $full = 0x1f01ff
     $admins = New-AuditRule 'S-1-5-32-544' $full
-    $openToAll = @((New-AuditRule 'S-1-5-11' $modify), (New-AuditRule 'S-1-5-32-545' $readExecute), $admins)
+    # What a folder created at the root of a drive inherits from it.
+    $openToAll = @((New-AuditRule 'S-1-5-11' $modify -Inherited), (New-AuditRule 'S-1-5-32-545' $readExecute -Inherited),
+        (New-AuditRule 'S-1-5-32-544' $full -Inherited))
     $closed = New-AuditAcl 'S-1-5-32-544' @($admins, (New-AuditRule 'S-1-5-21-1-2-3-1001' $full))
     $disks = @{ 'C:' = 'NTFS'; 'D:' = 'NTFS'; 'E:' = 'exFAT'; 'F:' = $null; 'G:' = 'ReFS' }
     $items = @{
@@ -289,6 +320,168 @@ if ($audit.Count -eq 1) {
     Assert-Equal 0 $script:auditRows.Count 'and it has no rows'
     Assert-Throws { Invoke-HeliosCiAudit -AuditDisks @{} -AuditItems @{} -AuditAcls @{} -AuditAccount '' } 'do step 2 first' `
         'the audit without the helios-ci account'
+}
+
+# Step 9 starts the service only when the runner will run the hook: .env's last hook line names it, and helios-ci
+# (by its SID now: an account created again has a new one) can read it. Otherwise "Set up runner" fails without
+# running the hook, and nothing ends the job. Runs step 9's block with stand-ins: $EnvLines (the lines of .env, $null
+# when it is missing), $HookAcl (the hook's ACL, $null when the hook is missing) and $AccountSid (helios-ci's SID),
+# with the console's default error preference (Continue: a cmdlet's error does not stop the block unless it says
+# so); leaves the service changes in $script:serviceLog, and an error that ended the block there too.
+$step9 = @($blocks | Where-Object { $_ -match '(?m)^# Step 9:' })
+Assert-Equal 1 $step9.Count 'the runbook has one step 9 block'
+$hookPath = 'D:\helios-ci\hooks\job-started.ps1'
+function Invoke-HeliosCiStep9([object[]]$EnvLines, [object]$HookAcl, [string]$AccountSid = $ciSid) {
+    function Get-LocalUser {
+        [CmdletBinding()] param([string]$Name)
+        if ($Name -cne 'helios-ci') { throw "unexpected Get-LocalUser $Name" }
+        [pscustomobject]@{ SID = [pscustomobject]@{ Value = $AccountSid } }
+    }
+    function Test-Path {
+        [CmdletBinding()] param([string]$LiteralPath, [string]$PathType)
+        if ($LiteralPath -cne $hookPath -or $PathType -ne 'Leaf') { throw "unexpected Test-Path $LiteralPath $PathType" }
+        return $null -ne $HookAcl
+    }
+    function Get-Content {
+        [CmdletBinding()] param([string]$LiteralPath)
+        if ($LiteralPath -cne 'D:\helios-ci\runner\.env') { throw "unexpected Get-Content $LiteralPath" }
+        if ($null -eq $EnvLines) { Write-Error "Cannot find path '$LiteralPath' because it does not exist."; return }
+        $EnvLines
+    }
+    function Get-Acl {
+        [CmdletBinding()] param([string]$LiteralPath)
+        if ($LiteralPath -cne $hookPath -or $null -eq $HookAcl) { throw "unexpected Get-Acl $LiteralPath" }
+        $HookAcl
+    }
+    function Get-Service {
+        [CmdletBinding()] param([Parameter(Position = 0)] [string]$Name)
+        if ($Name -cne 'actions.runner.*') { throw "unexpected Get-Service $Name" }
+        [pscustomobject]@{ Name = 'actions.runner.PageMastr-HeliosEngine.helios-win-gpu'; Status = 'Stopped'; StartType = 'Manual' }
+    }
+    function Set-Service {
+        [CmdletBinding()] param([Parameter(ValueFromPipeline = $true)] $InputObject, [string]$StartupType)
+        process { $script:serviceLog.Add("$StartupType $($InputObject.Name)") }
+    }
+    function Start-Service {
+        [CmdletBinding()] param([Parameter(ValueFromPipeline = $true)] $InputObject)
+        process { $script:serviceLog.Add("start $($InputObject.Name)") }
+    }
+    $script:serviceLog = New-Object System.Collections.Generic.List[string]
+    $ErrorActionPreference = 'Continue'
+    & { [void](. ([scriptblock]::Create($step9[0]))) } 2>$null
+}
+if ($step9.Count -eq 1) {
+    $service = 'actions.runner.PageMastr-HeliosEngine.helios-win-gpu'
+    $hookLine = "ACTIONS_RUNNER_HOOK_JOB_STARTED=$hookPath"
+    # What step 3's icacls line gives the hook: the hooks folder's entries, inherited.
+    $hookAcl = New-AuditAcl 'S-1-5-32-544' @((New-AuditRule 'S-1-5-32-544' 0x1f01ff -Inherited),
+        (New-AuditRule 'S-1-5-18' 0x1f01ff -Inherited), (New-AuditRule $ciSid 0x1200a9 -Inherited))
+    $envLines = @('LANG=en_US.UTF-8', $hookLine)
+    try { Invoke-HeliosCiStep9 $envLines $hookAcl } catch { $script:serviceLog.Add("error: $($_.Exception.Message)") }
+    Assert-Equal @("Automatic $service", "start $service") $script:serviceLog.ToArray() 'step 9 starts the runner when the hook is in place'
+    $refused = @(
+        @{ What = 'helios-ci was created again (new SID) and the hooks ACL still names the old one'
+            Env = $envLines; Acl = $hookAcl; Sid = 'S-1-5-21-1-2-3-1003'; Error = 'run the icacls line of step 3 again' },
+        @{ What = 'helios-ci may only list the hook, not read it'; Env = $envLines; Sid = $ciSid; Error = 'cannot read'
+            Acl = New-AuditAcl 'S-1-5-32-544' @((New-AuditRule $ciSid 0x1200a0 -Inherited)) },
+        @{ What = 'only Users may read the hook'; Env = $envLines; Sid = $ciSid; Error = 'cannot read'
+            Acl = New-AuditAcl 'S-1-5-32-544' @((New-AuditRule 'S-1-5-32-545' 0x1200a9 -Inherited)) },
+        @{ What = 'a Deny entry on the hook'; Env = $envLines; Sid = $ciSid; Error = 'Deny entry'
+            Acl = New-AuditAcl 'S-1-5-32-544' @((New-AuditRule 'S-1-5-6' 0x1200a9 'Deny'), (New-AuditRule $ciSid 0x1200a9 -Inherited)) },
+        @{ What = 'the hook is missing'; Env = $envLines; Acl = $null; Sid = $ciSid; Error = 'is missing: do step 6' },
+        @{ What = '.env is missing (the block stops at the cmdlet''s error)'; Env = $null; Acl = $hookAcl; Sid = $ciSid
+            Error = 'Cannot find path' },
+        @{ What = '.env has no hook line'; Env = @('LANG=en_US.UTF-8'); Acl = $hookAcl; Sid = $ciSid; Error = 'must name' },
+        @{ What = '.env has the hook line only as a comment'; Env = @("# $hookLine"); Acl = $hookAcl; Sid = $ciSid; Error = 'must name' },
+        @{ What = '.env indents the hook line (the runner would set a variable whose name starts with a space)'
+            Env = @(" $hookLine"); Acl = $hookAcl; Sid = $ciSid; Error = 'must name' },
+        @{ What = '.env has a space after the path (the runner does not trim it)'; Env = @("$hookLine "); Acl = $hookAcl
+            Sid = $ciSid; Error = 'must name' },
+        @{ What = 'a later empty hook line in .env switches the hook off'; Env = @($hookLine, 'ACTIONS_RUNNER_HOOK_JOB_STARTED=')
+            Acl = $hookAcl; Sid = $ciSid; Error = 'must name' },
+        @{ What = 'a later hook line in .env, in lower case, names another script'
+            Env = @($hookLine, 'actions_runner_hook_job_started=C:\Users\Public\hook.ps1'); Acl = $hookAcl; Sid = $ciSid
+            Error = 'must name' }
+    )
+    foreach ($case in $refused) {
+        Assert-Throws { Invoke-HeliosCiStep9 $case.Env $case.Acl $case.Sid } $case.Error "step 9 refuses: $($case.What)"
+        Assert-Equal 0 $script:serviceLog.Count "and leaves the service alone: $($case.What)"
+    }
+}
+
+# Rotating after suspected misuse lists what helios-ci owns outside its profile before the account goes (afterwards
+# the owner is a bare SID), and gives the new account step 3's access to the hook: the hooks ACL names the old SID,
+# and config.cmd re-grants only runner and work.
+$rotateList = @($blocks | Where-Object { $_ -match '(?m)^[ \t]*# Rotate: what helios-ci owns' })
+$rotateAcl = @($blocks | Where-Object { $_ -match '(?m)^[ \t]*# Rotate: give the new helios-ci' })
+Assert-Equal '1 1' "$($rotateList.Count) $($rotateAcl.Count)" 'the runbook has the two rotate blocks'
+# Each icacls grant on D:\helios-ci\hooks, as its command elements.
+function Get-HeliosCiHooksGrant([string]$Block) {
+    $tokens = $null
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($Block, [ref]$tokens, [ref]$errors)
+    $grants = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'icacls' -and
+            $node.CommandElements.Count -gt 2 -and $node.CommandElements[1].Extent.Text -eq 'D:\helios-ci\hooks' -and
+            @($node.CommandElements | Where-Object { $_.Extent.Text -eq '/grant:r' }).Count -gt 0
+        }, $true)
+    return @($grants | ForEach-Object { @($_.CommandElements | ForEach-Object { $_.Extent.Text }) -join ' ' })
+}
+$step3Grant = @($blocks | Where-Object { $_ -notmatch '(?m)^[ \t]*# Rotate:' } | ForEach-Object { Get-HeliosCiHooksGrant $_ })
+Assert-Equal 1 $step3Grant.Count 'step 3 has one icacls grant on the hooks folder'
+if ($rotateAcl.Count -eq 1) {
+    Assert-Equal $step3Grant (Get-HeliosCiHooksGrant $rotateAcl[0]) 'rotating with a new account repeats step 3''s grant on the hooks folder'
+    Assert-Equal $true ($rotateAcl[0] -match '(?m)^\s*if \(\$old\) \{ icacls D:\\helios-ci\\hooks /remove:g "\*\$old" \}') `
+        'and removes the deleted account''s entry'
+}
+if ($rotateList.Count -eq 1) {
+    $owned = @{ 'C:\planted' = $ciSid; 'C:\dev' = 'S-1-5-21-1-2-3-1001'; 'C:\ProgramData\Vendor' = 'S-1-5-32-544'
+        'C:\ProgramData\Vendor\update.exe' = $ciSid; 'C:\Users\Public\Documents\run.ps1' = $ciSid
+        'C:\Windows\Temp\setup.log' = 'S-1-5-18'; 'D:\helios-ci' = 'S-1-5-32-544'; 'E:\notes.txt' = $ciSid }
+    $listed = @{ 'C:\' = @('C:\planted', 'C:\dev', 'C:\Unreadable'); 'D:\' = @('D:\helios-ci'); 'E:\' = @('E:\notes.txt')
+        'C:\ProgramData' = @('C:\ProgramData\Vendor', 'C:\ProgramData\Vendor\update.exe')
+        'C:\Users\Public' = @('C:\Users\Public\Documents\run.ps1'); 'C:\Windows\Temp' = @('C:\Windows\Temp\setup.log') }
+    function Invoke-HeliosCiRotateList {
+        function Get-LocalUser {
+            [CmdletBinding()] param([string]$Name)
+            if ($Name -cne 'helios-ci') { throw "unexpected Get-LocalUser $Name" }
+            [pscustomobject]@{ SID = [pscustomobject]@{ Value = $ciSid } }
+        }
+        function Get-CimInstance {
+            [CmdletBinding()] param([Parameter(Position = 0)] [string]$ClassName, [string]$Filter)
+            if ($ClassName -ne 'Win32_LogicalDisk' -or $Filter -ne 'DriveType = 2 OR DriveType = 3') { throw "unexpected Get-CimInstance $ClassName" }
+            foreach ($id in 'C:', 'D:', 'E:') { [pscustomobject]@{ DeviceID = $id } }
+        }
+        # The drive roots one level deep, the shared folders all the way down (and only with -Force, hidden items too).
+        function Get-ChildItem {
+            [CmdletBinding()] param([string[]]$LiteralPath, [switch]$Force, [switch]$Recurse)
+            foreach ($path in $LiteralPath) {
+                if (-not $Force -or ($path -like '?:\' -eq [bool]$Recurse)) { throw "unexpected Get-ChildItem $path" }
+                foreach ($full in @($listed[$path])) { [pscustomobject]@{ FullName = $full; LastWriteTime = '2026-10-03' } }
+            }
+        }
+        function Get-Acl {
+            [CmdletBinding()] param([string]$LiteralPath)
+            if (-not $owned.ContainsKey($LiteralPath)) { throw 'Attempted to perform an unauthorized operation.' }
+            New-AuditAcl $owned[$LiteralPath]
+        }
+        function Format-Table {
+            [CmdletBinding()] param([Parameter(ValueFromPipeline = $true)] $InputObject, [switch]$AutoSize, [switch]$Wrap)
+            process { $InputObject }
+        }
+        $saved = $env:ProgramData, $env:PUBLIC, $env:SystemRoot
+        $env:ProgramData, $env:PUBLIC, $env:SystemRoot = 'C:\ProgramData', 'C:\Users\Public', 'C:\Windows'
+        try {
+            & { @(. ([scriptblock]::Create($rotateList[0]))) | ForEach-Object { if ($_ -is [string]) { $_ } else { $_.FullName } } }
+        } finally {
+            $env:ProgramData, $env:PUBLIC, $env:SystemRoot = $saved
+        }
+    }
+    $rotateOutput = try { Invoke-HeliosCiRotateList } catch { "error: $($_.Exception.Message)" }
+    Assert-Equal @("helios-ci's SID: $ciSid", 'C:\planted', 'E:\notes.txt', 'C:\ProgramData\Vendor\update.exe',
+        'C:\Users\Public\Documents\run.ps1') $rotateOutput `
+        'rotating lists what helios-ci owns at the drive roots, in ProgramData, Public and Windows\Temp'
 }
 
 # -- job-started.ps1: which jobs run -------------------------------------------------------------------------

@@ -19,3 +19,6 @@ struct User @store(character) @sql(schema="svc_sqltest") @key(owner, order) {
   order: u16
   when:  Duration = 2s
 }
+
+/// Removed in v2: its table is a contract step (DROP TABLE) for release N+2.
+struct Retired @store(character) @sql(schema="svc_sqltest") { id: u32 @key }

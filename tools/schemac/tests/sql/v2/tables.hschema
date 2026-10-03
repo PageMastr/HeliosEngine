@@ -1,5 +1,5 @@
-/// Release N+1: a rename, widenings (an enum's underlying type too), an optional, new columns, a
-/// removed field and a new table.
+/// Release N+1: a rename, widenings (an enum's underlying type too), an optional, new columns (one with
+/// control characters in its default), a removed field, a removed table and a new table.
 package sqltest;
 
 enum Tier : u16 { Bronze; Silver; Gold; Platinum = 300 }
@@ -14,6 +14,7 @@ struct Account @store(character) @sql(schema="svc_sqltest") {
   added:  bool = true
   tags:   TagSet
   pos:    vec3d = [0, 1, 0]
+  banner: string = "one\n-- +goose ENVSUB ON\ttwo\u0001"
 }
 
 struct User @store(character) @sql(schema="svc_sqltest") @key(owner, order) {

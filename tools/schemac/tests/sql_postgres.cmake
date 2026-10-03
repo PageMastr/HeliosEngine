@@ -4,7 +4,9 @@
 #
 # 1. Compiles tests/sql/v1 and then v2 against one lock, as two releases would.
 # 2. Database "chain": v1's migration stub (creates the tables), then v2's stub, then v2's contract
-#    comments (release N+2). Database "snap": v2's snapshot. Their pg_dump --schema-only must match.
+#    comments (release N+2: a removed column and a removed table). Database "snap": v2's snapshot.
+#    Their pg_dump --schema-only must match, and in both a row that takes the defaults holds the
+#    control characters of a string default.
 # 3. Database "down": both stubs' Up, then v2's Down, must match v1's snapshot.
 # 4. Every snapshot in SNAPSHOTS (the committed goldens) applies to an empty database.
 # Prints "SKIPPED:" (the CTest skip pattern) when no PostgreSQL server binaries are found. As root, the
@@ -148,14 +150,17 @@ if(NOT errors)
   psql_file(chain "${WORK_DIR}/v2.up.sql" rc)
   check_ok(rc "v2 migration Up")
   # The contract release runs the commented DROPs.
-  file(STRINGS "${v2}/migration.sql" contract REGEX "^--   ALTER TABLE .* DROP COLUMN ")
+  file(STRINGS "${v2}/migration.sql" contract REGEX "^--   (ALTER TABLE .* DROP COLUMN |DROP TABLE )")
   set(contract_sql "")
   foreach(line IN LISTS contract)
     string(REGEX REPLACE "^--   ([^;]*;).*" "\\1" stmt "${line}")
     string(APPEND contract_sql "${stmt}\n")
   endforeach()
-  if(NOT contract_sql)
+  if(NOT contract_sql MATCHES "DROP COLUMN legacy;")
     list(APPEND errors "v2's stub has no contract step for the removed field")
+  endif()
+  if(NOT contract_sql MATCHES "DROP TABLE svc_sqltest\\.retired;")
+    list(APPEND errors "v2's stub has no contract step for the removed table")
   endif()
   psql_command(chain "${contract_sql}" rc)
   check_ok(rc "contract step")
@@ -166,6 +171,12 @@ if(NOT errors)
   if(NOT chain_dump STREQUAL snap_dump)
     list(APPEND errors "v1 + v2 migrations differ from the v2 snapshot (diff ${WORK_DIR}/chain.dump ${WORK_DIR}/snap.dump)")
   endif()
+  # The control characters of a string default (written as E'...' escapes, one line) store as the schema's text.
+  foreach(db chain snap)
+    psql_command(${db} "INSERT INTO svc_sqltest.account (id) VALUES (1);
+SELECT 1 / (SELECT count(*)::int FROM svc_sqltest.account WHERE id = 1 AND banner = E'one\\n-- +goose ENVSUB ON\\ttwo\\x01');" rc)
+    check_ok(rc "the default of svc_sqltest.account.banner in ${db}")
+  endforeach()
   # --- 3. Down returns to v1 (on a second chain that never ran the contract step) -----------------
   psql_command(down "CREATE SCHEMA svc_sqltest;" rc)
   psql_file(down "${WORK_DIR}/v1.up.sql" rc)

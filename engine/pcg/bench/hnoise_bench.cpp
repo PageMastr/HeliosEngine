@@ -47,8 +47,10 @@ struct Args {
 };
 
 bool parseU32(std::string_view text, u32& out) {
+    // Named, not a temporary: `end` points into this buffer and is read after strtoul returns.
+    const std::string digits(text);
     char* end = nullptr;
-    const unsigned long v = std::strtoul(std::string(text).c_str(), &end, 10);
+    const unsigned long v = std::strtoul(digits.c_str(), &end, 10);
     if (!end || *end != '\0' || v == 0 || v > 100000) return false;
     out = static_cast<u32>(v);
     return true;

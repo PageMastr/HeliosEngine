@@ -42,8 +42,10 @@ helios_declare_module(gameplay     4 HEADLESS PEERS world)
 helios_declare_module(assembly     4 HEADLESS PEERS gameplay)
 helios_declare_module(replication  4 HEADLESS PEERS world)
 helios_declare_module(authority    4 HEADLESS PEERS world)
-# engine/server (WP-0.14): the cell's ZoneHost and the gateway runtime (02 §2.4, 04 §1, §11.1). 02 §1.1's
-# table has no row for it yet; this row records the module as built so HELIOS_MODULE_ORDER is complete.
+# engine/server (WP-0.14): the cell's ZoneHost and the gateway runtime. A deviation, recorded as built:
+# neither 02 §1.1's table nor 04 §11.1's layout has this module (04 §11.1 puts ZoneHost in apps/cellserver,
+# 02 §1.1 puts ZoneInstance in world). It depends on authority (L4) and the cell and gateway link it, so it
+# is L4, HEADLESS, with that peer. The Director decides: a row in 02 §1.1, or folding it into world and the apps.
 helios_declare_module(server       4 HEADLESS PEERS authority)
 helios_declare_module(netgame      4 HEADLESS PEERS world replication authority)
 helios_declare_module(clientcore   4 HEADLESS PEERS world replication authority netgame)

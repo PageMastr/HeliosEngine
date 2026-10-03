@@ -13,9 +13,10 @@
 //                                   the same gates, except that the encrypted stack's 100k per core is
 //                                   printed with an "NS-0.2 advisory:" line instead of failing. Loss, a
 //                                   stack that never ran, raw datagrams and NS-0.7 still fail. Only the
-//                                   hosted nightly passes it (the owner's approval of 2026-09-30,
-//                                   docs/evidence/ns-0.2-owner-approval-2026-09-30.md); a local or lab
-//                                   run gates everything. Exit code 2 for an unknown --advisory name.
+//                                   hosted Linux nightly passes it (the owner's approval of 2026-09-30,
+//                                   docs/evidence/ns-0.2-owner-approval-2026-09-30.md); hosted Windows, a
+//                                   local or a lab run gates everything. Exit code 2 for an unknown
+//                                   --advisory name.
 
 #include <string>
 #include <vector>
@@ -210,14 +211,16 @@ int main(int argc, char** argv) {
             HELIOS_LOG_ERROR("NS-0.2 FAILED: the HTP stack needs 100k encrypted packets per core without loss");
             ok = false;
         }
-        // Printed on every advisory run, so that a passing log still says the rate was not gated.
-        if (verdict == bench::Ns02Verdict::AdvisoryBelow) {
+        // Printed on every advisory run whose stack did not fail, so that a passing log still says the rate
+        // was not gated; a failed stack gets only the failure line above.
+        const bench::Ns02AdvisoryNote note = bench::ns02AdvisoryNote(verdict, gate && stackAdvisory);
+        if (note == bench::Ns02AdvisoryNote::Below) {
             HELIOS_LOG_WARN("NS-0.2 advisory: {}. The HTP stack's {:.0f} packets per core is below 100k: "
                             "reported, not failing (loss still fails)",
                             bench::kNs02StackAdvisoryReason, s.ppsPerCore());
-        } else if (gate && stackAdvisory) {
-            HELIOS_LOG_INFO("NS-0.2 advisory: {}. The HTP stack's rate ({:.0f} packets per core) is not gated "
-                            "on this run",
+        } else if (note == bench::Ns02AdvisoryNote::NotGated) {
+            HELIOS_LOG_INFO("NS-0.2 advisory: {}. The HTP stack's rate ({:.0f} packets per core) is not "
+                            "gated on this run",
                             bench::kNs02StackAdvisoryReason, s.ppsPerCore());
         }
     }

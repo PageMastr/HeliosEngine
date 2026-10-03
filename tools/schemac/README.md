@@ -101,6 +101,8 @@ import "helios/world/frames.hschema";    // relative to this file, then to each 
   (TypeInfo/FieldInfo `doc`, C++ and Go comments). A control character other than tab in a doc
   comment is an error: a lone carriage return ends a generated `//` or `--` comment in GCC, Clang,
   Luau and PostgreSQL, so the rest of the line would run as code. (A CRLF line ending is fine.)
+  For the same reason a schema file path (an input or an import) with a control character is an
+  error: every emitter prints it in a header comment.
 
 ### Declarations
 
@@ -483,7 +485,11 @@ helios-schemac -I schemas --lock schemas/sample/schema.lock.jsonc --emit sql --s
   entry). A table cannot move, and a new type cannot take over a table another lock entry holds
   (both errors): the stub diffs a table against its own type's baseline entry, found by lock id.
   Columns follow field ids, so renames (`@was`) are `RENAME COLUMN`, and columns appear in lock-id
-  order in the snapshot and in the migrated table alike.
+  order in the snapshot and in the migrated table alike, with one exception: a field revived after the
+  N+2 contract dropped its column is an `ADD COLUMN`, which PostgreSQL appends at the end (SQL that
+  names its columns does not notice). A type renamed with `@was` keeps its entry, so the fields that
+  use it do not change type; a renamed `@sql` struct keeps its table with `@sql(table="<old name>")`,
+  since the default table name follows the type name.
 - **Key.** Every table has a primary key: the fields marked `@key`, or `@key(a, b)` on the struct.
   Key fields are non-optional scalars. A new field cannot join the key of an existing table (a
   hand-written migration changes a primary key).
@@ -505,15 +511,18 @@ helios-schemac -I schemas --lock schemas/sample/schema.lock.jsonc --emit sql --s
 
   Scalar columns are `NOT NULL DEFAULT <the schema default>` (explicit or implicit: 0, `FALSE`, `''`,
   the nil UUID, the first enum value), so `ADD COLUMN` needs no backfill; key columns have no
-  default. `T?` columns are nullable without a default. `JSONB` columns are nullable, and NULL means
+  default. A string default with a backslash is an `E'…'` literal (backslash and quote doubled), so it
+  reads the same whatever `standard_conforming_strings` is. `T?` columns are nullable without a default. `JSONB` columns are nullable, and NULL means
   the field's default (none for `T?`), as writers omit defaults (§3.7). `CHECK` constraints are named
   `<table>_<column>_check`.
 - **Migrations only expand** (05 §3.3: release N adds, contraction happens in N+2). A new struct is a
   `CREATE TABLE`; a new field is an `ADD COLUMN` with its default; a renamed field is a `RENAME COLUMN`
-  (and of its `CHECK`); a widening (`i32→i64`, `u8→u16`, `f32→f64`, `T→T?`) is an `ALTER COLUMN TYPE`
-  with the new `CHECK`, or `DROP NOT NULL`; a changed explicit default is `SET DEFAULT`; a revived field
-  is `ADD COLUMN IF NOT EXISTS`, with a `-- TODO` when its type changed while it was removed (before
-  the N+2 contract the old column still exists and keeps its old type). A removed field is only a
+  (and of its `CHECK`); a widening (`i32→i64`, `u8→u16`, `f32→f64`, `T→T?`, and an enum's or flags'
+  underlying type, which changes the column but not the field's signature: the stub compares it with
+  the enum's baseline entry) is an `ALTER COLUMN TYPE` with the new `CHECK`, or `DROP NOT NULL`; a
+  changed explicit default is `SET DEFAULT`; a revived field is `ADD COLUMN IF NOT EXISTS`, with a
+  `-- TODO` when its column changed while it was removed (before the N+2 contract the old column still
+  exists and keeps its old type). A removed field is only a
   comment listing the `DROP COLUMN` for the contract release. Down reverses Up, last step first.
   Against an up-to-date baseline the stub is empty (`SELECT 1;`). Copy a stub into
   `services/migrations/<service>/` and review it: indexes, partitioning, grants and backfills are

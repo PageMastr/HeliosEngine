@@ -108,6 +108,7 @@ class NightlyPerfStepsTests(unittest.TestCase):
         # The perf step runs whatever the fetch step did (`if: !cancelled()`).
         perf = subprocess.run(["bash", "-e", "-c", self.perf], cwd=work, env=base, capture_output=True, text=True,
                               timeout=120)
+        self.perf_log = perf.stdout + perf.stderr  # what the job log shows
         out = work / "out" / "perf-history.json"
         entries = len(json.loads(out.read_text(encoding="utf-8"))["entries"]) if out.is_file() else None
         summary = (work / "summary.md").read_text(encoding="utf-8") if (work / "summary.md").is_file() else ""
@@ -173,6 +174,47 @@ class NightlyPerfStepsTests(unittest.TestCase):
         self.assertNotIn("restarted on request", summary)
         self.assertIn("**missing**", summary)  # compared with the fetched history, as on a normal night
         self.assertTrue((self.dir / "work" / "ci-jobs.json").is_file())  # the rest of the step still ran
+
+    def test_the_job_log_names_each_failing_row(self):
+        # The nightly of 2026-10-03 (run 37098788944): the rows went only to the summary and the artifact.
+        self.runs(r3=["scorecard-report"], r2=["scorecard-report", "perf-history"])
+        fetch, perf, _, entries, summary, _ = self.night()
+        self.assertEqual((fetch, perf, entries), (0, 1, 2))  # tee keeps compare's exit code (pipefail)
+        self.assertIn("| `linux-gcc/net.ns02.loopback_pps_per_core` |", self.perf_log)  # the table
+        self.assertIn("::error title=perf missing::linux-gcc/net.ns02.loopback_pps_per_core: no value tonight",
+                      self.perf_log)
+        self.assertNotIn("::error", summary)  # the summary gets the markdown only
+        text = WORKFLOW.read_text(encoding="utf-8")
+        upload = text[text.index("name: perf-history"):]
+        self.assertIn("out/perf.md", upload[:upload.index("retention-days")])
+
+    def test_a_first_night_on_a_host_class_is_reported_not_failed(self):
+        # The history predates host fingerprints; tonight's linux-gcc result set records its host.
+        self.runs(r2=["scorecard-report", "perf-history"])
+        run = self.dir / "work" / "results" / "linux-gcc"
+        (run / "doctest").mkdir(parents=True)
+        (run / "run.json").write_text('{"run": "linux-gcc"}', encoding="utf-8")
+        (run / "host.json").write_text('{"cpu": "AMD EPYC 7763 64-Core Processor", "logical_cpus": 4}',
+                                       encoding="utf-8")
+        case = "perf: NS-0.2: loopback 100k pps per core without loss"
+        (run / "doctest" / "net_tests.perf.xml").write_text(
+            f'<doctest binary="net_tests"><TestCase name="{case}"><Message type="WARNING"><Text>1000000 sent '
+            f'-> 300000 pps per core</Text></Message><OverallResultsAsserts test_case_success="true" '
+            f'duration="0.5"/></TestCase></doctest>', encoding="utf-8")
+        (run / "doctest" / "net_tests.perf.status.json").write_text('{"returncode": 0}', encoding="utf-8")
+        fetch, perf, _, entries, summary, _ = self.night()
+        self.assertEqual((fetch, perf, entries), (0, 0, 2), self.perf_log)  # 300k against 480k: another class
+        self.assertIn("new-host-class (first night on this host class (AMD EPYC 7763 64-Core Processor, "
+                      "4 logical CPUs)", summary)
+        self.assertNotIn("::error", self.perf_log)
+        # The run page says so (a new class does not fail, so without this the night would leave no annotation).
+        self.assertIn("\n::warning title=perf new-host-class::linux-gcc on AMD EPYC 7763 64-Core Processor, "
+                      "4 logical CPUs (2 host classes with levels)\n", self.perf_log)
+        self.assertNotIn("::warning", summary)  # the summary gets the markdown only
+        for job in ("linux", "windows"):  # every native job records its host next to run.json
+            text = WORKFLOW.read_text(encoding="utf-8")
+            body = text[text.index(f"\n  {job}:"):]
+            self.assertIn('runners.py host --out "$', body[:body.index("- name: Configure")])
 
     def test_scheduled_runs_have_no_input(self):
         self.runs(r2=["scorecard-report", "perf-history"])

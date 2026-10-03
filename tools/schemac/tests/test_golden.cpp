@@ -67,6 +67,10 @@ constexpr GoldenOutput kOutputs[] = {
     {"go/golden.go", "golden.go.expected"},
     {"go/helios_codecs.go", "helios_codecs.go.expected"},
     {"golden.schema.json", "golden.schema.json.expected"},
+    {"cpp/golden.luau.gen.h", "golden.luau.gen.h.expected"},
+    {"cpp/golden.luau.gen.cpp", "golden.luau.gen.cpp.expected"},
+    {"luau/schema.d.luau", "schema.d.luau.expected"},
+    {"luau/fuel_costs.defaults.json", "fuel_costs.defaults.json.expected"},
 };
 
 TEST_CASE("golden: generator output matches the committed expectations") {
@@ -84,9 +88,11 @@ TEST_CASE("golden: generator output matches the committed expectations") {
     options.emitCpp = true;
     options.emitGo = true;
     options.emitJson = true;
+    options.emitLuau = true;
     options.cppOut = "cpp";
     options.goOut = "go";
     options.jsonOut = "golden.schema.json";
+    options.luauOut = "luau";
     auto c = compileFiles({{"golden/golden.hschema", *source}}, options, &fs);
     REQUIRE_MESSAGE(c->ok(), c->messages);
     CHECK_MESSAGE(c->diags.diagnostics().empty(), c->messages);
@@ -109,6 +115,64 @@ TEST_CASE("golden: generator output matches the committed expectations") {
     }
 }
 
+/// A schema set of the committed schemas/ corpus, compiled as CMake compiles it (against its lock).
+struct CorpusSet {
+    const char* name; ///< directory in tests/golden/corpus
+    std::vector<std::string> files;
+    const char* lock;
+    std::vector<std::pair<const char*, const char*>> outputs; ///< output suffix -> expected file
+};
+
+TEST_CASE("golden: the schemas/ corpus generates the committed Luau outputs") {
+    const std::vector<CorpusSet> sets = {
+        {"sample",
+         {"schemas/sample/common.hschema", "schemas/sample/ship.hschema", "schemas/sample/items.hschema"},
+         "schemas/sample/schema.lock.jsonc",
+         {{"cpp/sample/ship.luau.gen.h", "ship.luau.gen.h.expected"},
+          {"cpp/sample/ship.luau.gen.cpp", "ship.luau.gen.cpp.expected"},
+          {"luau/schema.d.luau", "schema.d.luau.expected"},
+          {"luau/fuel_costs.defaults.json", "fuel_costs.defaults.json.expected"}}},
+    };
+    for (const CorpusSet& set : sets) {
+        INFO(set.name);
+        MemoryFileSystem fs;
+        std::map<std::string, std::string> files;
+        for (const std::string& f : set.files) {
+            const auto text = readText(std::string(HELIOS_SOURCE_DIR) + "/" + f);
+            REQUIRE_MESSAGE(text, f);
+            files[f] = *text;
+        }
+        const auto lock = readText(std::string(HELIOS_SOURCE_DIR) + "/" + set.lock);
+        REQUIRE(lock);
+        fs.files[set.lock] = *lock;
+        CompileOptions options;
+        options.files = set.files;
+        options.includeDirs = {"schemas"};
+        options.lockPath = set.lock;
+        options.emitLuau = true;
+        options.cppOut = "cpp";
+        options.luauOut = "luau";
+        auto c = compileFiles(files, options, &fs);
+        REQUIRE_MESSAGE(c->ok(), c->messages);
+        CHECK_MESSAGE(!c->result.lockChanged, set.lock << " is stale; rebuild schemac_tests (which updates it) and commit it");
+        for (const auto& [suffix, expectedName] : set.outputs) {
+            const std::string* actual = c->output(suffix);
+            REQUIRE_MESSAGE(actual, suffix);
+            const std::string path = kGoldenDir + "/corpus/" + set.name + "/" + expectedName;
+            if (updateGolden()) {
+                writeText(path, *actual);
+                MESSAGE("updated " << path);
+                continue;
+            }
+            const auto expected = readText(path);
+            REQUIRE_MESSAGE(expected, "missing " << path << " (run with HELIOS_UPDATE_GOLDEN=1)");
+            const bool same = *expected == *actual;
+            CHECK_MESSAGE(same, path << " differs at " << firstDifference(*expected, *actual)
+                                     << "\n(if intended: HELIOS_UPDATE_GOLDEN=1 schemac_tests -tc=\"golden*\")");
+        }
+    }
+}
+
 TEST_CASE("golden: generation is deterministic and independent of declaration-irrelevant input") {
     const auto source = readText(kGoldenDir + "/golden.hschema");
     REQUIRE(source);
@@ -118,6 +182,7 @@ TEST_CASE("golden: generation is deterministic and independent of declaration-ir
     options.emitCpp = true;
     options.emitGo = true;
     options.emitJson = true;
+    options.emitLuau = true;
     auto a = compileFiles({{"golden/golden.hschema", *source}}, options);
     // Comments and whitespace do not change the output.
     std::string reformatted;

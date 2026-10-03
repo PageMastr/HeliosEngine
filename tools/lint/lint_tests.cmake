@@ -37,7 +37,6 @@ set(imageLines "")
 foreach(t IN LISTS gated)
   string(APPEND imageLines "$<TARGET_FILE:${t}>\n")
 endforeach()
-file(GENERATE OUTPUT ${CMAKE_BINARY_DIR}/helios_generated/isa_images.txt CONTENT "${imageLines}")
 set(isaTools "")
 if(CMAKE_OBJDUMP AND NOT MSVC)
   list(APPEND isaTools -DOBJDUMP=${CMAKE_OBJDUMP})
@@ -54,6 +53,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" AND NOT CMAKE_GENERATOR M
                  "Visual Studio builds are audited by the Ninja CI presets")
 endif()
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
+  # Generated only where lint_isa_audit reads it. The Visual Studio generators evaluate it once per
+  # configuration, $<TARGET_FILE> differs between them, and one path cannot hold differing content.
+  file(GENERATE OUTPUT ${CMAKE_BINARY_DIR}/helios_generated/isa_images.txt CONTENT "${imageLines}")
   # Sanitizer runtimes add their own .preinit_array entries, so the image check (exactly one
   # pre-initializer: the gate) only runs in normal builds.
   set(isaImages -DIMAGES_FILE=${CMAKE_BINARY_DIR}/helios_generated/isa_images.txt)
@@ -389,7 +391,10 @@ foreach(case
     "missing_layer|module 'mystery' has no layer"
     "layer_mismatch|contradicts the layering table"
     "flag_mismatch|helios_module.net EDITOR_ONLY. contradicts the layering table .* is not EDITOR_ONLY"
-    "unordered|module 'net' is not in HELIOS_MODULE_ORDER"
+    "peers_mismatch|helios_module.net PEERS physics. contradicts the layering table .* does not list 'physics' as a peer"
+    "redeclared_row|module 'net' already has a row in the layering table"
+    "unordered|layering check failed .1 violation.s.. rules.*module 'net' is not in HELIOS_MODULE_ORDER .add it"
+    "plain_executable|executable 'fx-rogue' under apps/ is not declared with helios_executable.., so no role check"
     "bad_order|HELIOS_MODULE_ORDER lists 'ecs' before its dependency 'reflect'")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)

@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,6 +171,103 @@ func TestParenBody(t *testing.T) {
 	} {
 		if got := parenBody(in); got != want {
 			t.Errorf("parenBody(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestWalkFiles pins the tree outside git: only the top-level build/ is build output.
+func TestWalkFiles(t *testing.T) {
+	root := t.TempDir()
+	for _, f := range []string{"build/gen.cpp", "tools/build/a.cpp", "engine/x/build/b.cpp", ".git/c", "d.cpp"} {
+		p := filepath.Join(root, filepath.FromSlash(f))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := walkFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "d.cpp engine/x/build/b.cpp tools/build/a.cpp"; strings.Join(got, " ") != want {
+		t.Errorf("got %q, want %q", strings.Join(got, " "), want)
+	}
+}
+
+func TestSpliceLines(t *testing.T) {
+	logical, origin := spliceLines([]string{`a \`, `b\ `, `c`, `d`, `e\`})
+	if got := strings.Join(logical, "|"); got != "a bc|d|e\\" {
+		t.Errorf("logical %q", got)
+	}
+	if got := fmt.Sprint(origin); got != "[0 3 4]" {
+		t.Errorf("origin %s", got)
+	}
+}
+
+func TestInactiveLines(t *testing.T) {
+	code := []string{
+		`#if 0`, `dead`, `# elif X`, `live`, `#else`, `live`, `#endif`,
+		`#if 1`, `live`, `#elif 1`, `dead`, `#else`, `dead`, `#endif`,
+		`#ifdef X`, `live`, `#  if (0)`, `dead`, `#  endif`, `#else`, `live`, `#endif`,
+		`#if false`, `#if 1`, `dead`, `#else`, `dead`, `#endif`, `#endif`, `#endif`, `live`,
+	}
+	var got []string
+	for i, dead := range inactiveLines(code) {
+		if code[i] == "dead" || code[i] == "live" {
+			got = append(got, map[bool]string{true: "dead", false: "live"}[dead])
+		} else if dead {
+			got = append(got, "directive marked dead: "+code[i])
+		}
+	}
+	var want []string
+	for _, l := range code {
+		if l == "dead" || l == "live" {
+			want = append(want, l)
+		}
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("got  %v\nwant %v", got, want)
+	}
+}
+
+func TestYamlCode(t *testing.T) {
+	for in, want := range map[string]string{
+		`run: x # c`:              `run: x `,
+		`# all`:                   ``,
+		`run: echo "a # b" # c`:   `run: echo "a # b" `,
+		`url: http://x/#frag`:     `url: http://x/#frag`,
+		`k: 'it''s # here' # end`: `k: 'it''s # here' `,
+	} {
+		if got := yamlCode(in); got != want {
+			t.Errorf("yamlCode(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestRepositoryMap pins the scopes 09 §5.10.4 (c) relies on: the C++ cell host and gateway
+// (engine/server, apps/cellserver, apps/gateway; WP-0.14) are checked by CONF-01, 02 and 04 through the
+// repository's map.
+func TestRepositoryMap(t *testing.T) {
+	m, bad := loadMap(filepath.Join("..", "..", "map.jsonc"), "tools/conformance/map.jsonc", All())
+	for _, b := range bad {
+		t.Errorf("map: %s:%d: %s", b.Path, b.Line, b.Message)
+	}
+	for _, id := range []string{"CONF-01", "CONF-02", "CONF-04"} {
+		r := Lookup(id)
+		scope := append([]string(nil), r.Scope...)
+		for _, e := range m {
+			for _, rid := range e.Rules {
+				if rid == id {
+					scope = append(scope, e.Paths...)
+				}
+			}
+		}
+		for _, f := range []string{"engine/server/src/ids.cpp", "apps/cellserver/main.cpp", "apps/gateway/main.cpp"} {
+			if !r.covers(scope, f) {
+				t.Errorf("%s does not read %s (09 §5.10.4 (c))", id, f)
+			}
 		}
 	}
 }

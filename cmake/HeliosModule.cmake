@@ -3,7 +3,8 @@
 # helios_declare_module(<name> <layer> [HEADLESS] [EDITOR_ONLY] [PEERS <module>...])
 #   Records a row of 02 §1.1's layering table (engine/CMakeLists.txt holds the full table). A module
 #   declared here gets its LAYER, flags and allowed same-layer peers from the row, so module
-#   CMakeLists.txt files need not repeat them.
+#   CMakeLists.txt files need not repeat them. A module has at most one row: declaring it again (for
+#   example from its own CMakeLists.txt, with other peers or flags) fails configure.
 #
 # helios_module(<name> [HEADLESS] [EDITOR_ONLY] [LAYER <n>] [PEERS <module>...]
 #               SOURCES ... DEPS ... PRIVATE_DEPS ...)
@@ -14,8 +15,9 @@
 #     third-party library (rhi/render/ui/audio/app/input, SDL3, ImGui, volk, ...).
 #   * EDITOR_ONLY: never linked by the client, launcher, bot, cell, gateway or voice executables, and
 #     never a dependency of a module that is not EDITOR_ONLY itself.
-#   A module with a table row takes its flags from the row; the call may repeat them but may not add
-#   one the row lacks (like a contradicting LAYER, that fails configure).
+#   A module with a table row takes its flags and peers from the row; the call may repeat them but
+#   may not add a flag or a peer the row lacks (like a contradicting LAYER, that fails configure).
+#   PEERS in the call is for a module without a row, which then passes LAYER too.
 #
 # helios_executable(<name> [ROLE <role>] [CPU_GATE|NO_CPU_GATE] SOURCES ... DEPS ...)
 #   ROLE is one of client launcher bootstrap bot cell gateway voice editor tool sample bench. When
@@ -77,6 +79,12 @@ endfunction()
 # ---------------------------------------------------------------------------------------------
 function(helios_declare_module name layer)
   cmake_parse_arguments(D "HEADLESS;EDITOR_ONLY" "" "PEERS" ${ARGN})
+  get_property(existing GLOBAL PROPERTY HELIOS_DECL_${name}_LAYER SET)
+  if(existing)
+    message(FATAL_ERROR "Module layering check failed:\n  helios layering: module '${name}' already has a row in the "
+                        "layering table (engine/CMakeLists.txt, 02 §1.1). A second helios_declare_module(${name}) "
+                        "would replace its layer, flags or peers\n")
+  endif()
   if(NOT layer MATCHES "^[1-5]$")
     message(FATAL_ERROR "helios_declare_module(${name}): layer must be 1..5 (02 §1.1), got '${layer}'")
   endif()
@@ -128,6 +136,13 @@ function(helios_module name)
         message(FATAL_ERROR "Module layering check failed:\n  helios layering: helios_module(${name} ${flag}) "
                             "contradicts the layering table (engine/CMakeLists.txt, 02 §1.1), whose row for "
                             "'${name}' is not ${flag}\n")
+      endif()
+    endforeach()
+    foreach(peer IN LISTS M_PEERS)
+      if(NOT peer IN_LIST declPeers)
+        message(FATAL_ERROR "Module layering check failed:\n  helios layering: helios_module(${name} PEERS ${peer}) "
+                            "contradicts the layering table (engine/CMakeLists.txt, 02 §1.1), whose row for "
+                            "'${name}' does not list '${peer}' as a peer\n")
       endif()
     endforeach()
   endif()

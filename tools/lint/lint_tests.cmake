@@ -389,7 +389,10 @@ foreach(case
     "missing_layer|module 'mystery' has no layer"
     "layer_mismatch|contradicts the layering table"
     "flag_mismatch|helios_module.net EDITOR_ONLY. contradicts the layering table .* is not EDITOR_ONLY"
-    "unordered|module 'net' is not in HELIOS_MODULE_ORDER"
+    "peers_mismatch|helios_module.net PEERS physics. contradicts the layering table .* does not list 'physics' as a peer"
+    "redeclared_row|module 'net' already has a row in the layering table"
+    "unordered|layering check failed .1 violation.s.. rules.*module 'net' is not in HELIOS_MODULE_ORDER .add it"
+    "plain_executable|executable 'fx-rogue' under apps/ is not declared with helios_executable.., so no role check"
     "bad_order|HELIOS_MODULE_ORDER lists 'ecs' before its dependency 'reflect'")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)

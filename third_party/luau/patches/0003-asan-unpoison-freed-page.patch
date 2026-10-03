@@ -1,0 +1,36 @@
+Helios patch 0003 asan-unpoison-freed-page (Luau 0.739; WP-0.10, RT-13's ASan-clean script_tests)
+
+Under AddressSanitizer, Luau poisons the blocks of its allocator pages that are not in use (newpage,
+freeblock, freegcoblock) and unpoisons a block when it hands it out. freepage then returns an empty page
+to lua_Alloc with those blocks still poisoned. With ASan's own malloc that is harmless: free() does not
+touch the block and a later malloc() marks it addressable again. Any other host allocator owns the memory
+again and may write it, or give it to its next allocation still marked poisoned. mimalloc (behind
+helios::alignedFree) fills freed blocks with 0xDF in debug builds, so every ScriptVm::create in the
+linux-debug-asan build failed with use-after-poison in mi_free the first time a page emptied (the old
+string table freed by luaS_resize during luaT_init). This patch unpoisons the whole page before freepage
+returns it (the page header was never poisoned). Outside ASan builds ASAN_UNPOISON_MEMORY_REGION expands
+to (void)0, so nothing changes there.
+
+Rebase notes: every path that returns a lua_Page to frealloc or cagealloc goes through freepage. An
+upstream change that frees pages elsewhere needs the same unpoison.
+
+Upstream status: not submitted. Upstream master's freepage is unchanged, and no upstream issue was found.
+Rebase on every Luau bump (K10), and delete the patch once upstream unpoisons freed pages. Licence: MIT
+(Helios, like Luau).
+
+diff --git a/VM/src/lmem.cpp b/VM/src/lmem.cpp
+index cc3f8bd..ee95afd 100644
+--- a/VM/src/lmem.cpp
++++ b/VM/src/lmem.cpp
+@@ -350,6 +350,11 @@ static void freepage(lua_State* L, lua_Page** pageset, lua_Page* page)
+             *pageset = page->listnext;
+     }
+ 
++    // Helios patch asan-unpoison-freed-page: the page goes back to the allocator addressable. Its free blocks are still
++    // poisoned, and an allocator that is not ASan's own may write freed memory (debug fills, its own metadata) or hand
++    // it to its next allocation, which ASan then reports as use-after-poison.
++    ASAN_UNPOISON_MEMORY_REGION(page, size_t(page->pageSize));
++
+     // so long
+     pagealloc<path, type>(g, page, page->pageSize, 0);
+ }

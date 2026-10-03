@@ -37,11 +37,22 @@ endforeach()
 string(APPEND helios_edui_themes_src "} // namespace helios::edui::detail\n")
 file(CONFIGURE OUTPUT ${HELIOS_EDUI_THEME_CPP} CONTENT "${helios_edui_themes_src}" @ONLY)
 
+# The editor font (07 §1.3): Roboto 2.138 Regular from third_party/roboto (Apache-2.0), embedded as
+# bytes at build time. Only Regular is used; ImGui 1.92 re-rasterizes it at every UI scale.
+set(HELIOS_EDUI_FONT ${PROJECT_SOURCE_DIR}/third_party/roboto/Roboto-Regular.ttf)
+set(HELIOS_EDUI_FONT_CPP ${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_font.cpp)
+add_custom_command(OUTPUT ${HELIOS_EDUI_FONT_CPP}
+  COMMAND ${CMAKE_COMMAND} -DINPUT=${HELIOS_EDUI_FONT} -DOUTPUT=${HELIOS_EDUI_FONT_CPP} -DSYMBOL=kRobotoRegular
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/embed_font.cmake
+  DEPENDS ${HELIOS_EDUI_FONT} ${CMAKE_CURRENT_SOURCE_DIR}/embed_font.cmake
+  COMMENT "Embedding Roboto-Regular.ttf"
+  VERBATIM)
+
 file(GLOB HELIOS_EDITORUI_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 # imgui_item_hooks.cpp belongs to tp_imgui (see the header comment).
 list(REMOVE_ITEM HELIOS_EDITORUI_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/imgui_item_hooks.cpp)
 helios_module(editorui
-  SOURCES ${HELIOS_EDITORUI_SOURCES} ${HELIOS_EDUI_THEME_CPP}
+  SOURCES ${HELIOS_EDITORUI_SOURCES} ${HELIOS_EDUI_THEME_CPP} ${HELIOS_EDUI_FONT_CPP}
   DEPS helios::toolsfw helios::rhi helios::render helios::core helios::reflect
   PRIVATE_DEPS helios::tp::imgui helios::tp::sdl3)
 target_include_directories(helios_editorui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -65,6 +76,7 @@ if(TARGET editorui_tests)
     HELIOS_EDUI_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/engine/toolsfw/samples/project"
     HELIOS_EDUI_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/golden"
     HELIOS_EDUI_THEME_DIR="${CMAKE_CURRENT_SOURCE_DIR}/themes"
+    HELIOS_EDUI_FONT_FILE="${HELIOS_EDUI_FONT}"
     HELIOS_EDUI_TEST_WORK_DIR="${CMAKE_CURRENT_BINARY_DIR}/editorui_test_work")
   set_tests_properties(editorui_tests PROPERTIES TIMEOUT 600)
 endif()

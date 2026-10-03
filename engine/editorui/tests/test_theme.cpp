@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <cstring>
 #include <string>
 
 #include "helios/core/fs.h"
@@ -10,6 +11,8 @@
 #include "helios/editorui/theme.h"
 #include "helios/editorui/ui_test.h"
 #include "imgui.h"
+
+#include "embedded_font.h"
 
 using namespace helios;
 using namespace helios::edui;
@@ -82,6 +85,23 @@ TEST_CASE("theme: embedded copies match the token files") {
         CHECK(fromFile->colors == builtin->colors);
         CHECK(fromFile->metrics.fontSize == builtin->metrics.fontSize);
     }
+}
+
+TEST_CASE("theme: the editor font is the embedded Roboto 2.138 Regular, byte for byte") {
+    auto file = fs::readFile(fs::pathFromUtf8(HELIOS_EDUI_FONT_FILE));
+    REQUIRE(file);
+    REQUIRE(file->size() == edui::detail::kRobotoRegularSize);
+    CHECK(std::memcmp(file->data(), edui::detail::kRobotoRegular, file->size()) == 0);
+
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    addEditorFont(io);
+    REQUIRE(io.Fonts->Sources.Size == 1);
+    CHECK(std::string_view(io.Fonts->Sources[0].Name) == "Roboto-Regular");
+    CHECK_FALSE(io.Fonts->Sources[0].FontDataOwnedByAtlas);  // the bytes are static
+    CHECK(io.Fonts->Sources[0].FontData == edui::detail::kRobotoRegular);
+    ImGui::DestroyContext(ctx);
 }
 
 TEST_CASE("theme: the contrast lint catches a low-contrast token pair") {

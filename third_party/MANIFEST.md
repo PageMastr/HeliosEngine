@@ -18,6 +18,7 @@ Vendored code is never edited in place: the few changes Helios needs are patches
 | meshoptimizer | zeux/meshoptimizer | v1.2 (9d9890c) | MIT | Mesh optimization, meshlets, LOD simplification |
 | cgltf | jkuhlmann/cgltf | v1.15 (360db1a) | MIT | glTF 2.0 import |
 | stb | nothings/stb | master (2c980bb) | MIT / public domain | Image load/write, font rasterization, Perlin noise |
+| Roboto | googlefonts/roboto | v2.138 (release asset `roboto-unhinted.zip`; `Roboto-Regular.ttf` SHA-256 f3edb8058e523f5612bfd99d0745e661568ad85e1b6217bc62f786fabae624c6) | Apache-2.0 | Editor UI font (07 §1.3), embedded in `helios_editorui`; only Regular is vendored |
 | miniaudio | mackron/miniaudio | 0.11.25 (9634bed) | MIT-0 / public domain | Audio device + mixing + 3D spatialization |
 | zstd | facebook/zstd | v1.5.7 (f8745da) | BSD-3 | Pak/chunk compression, network compression |
 | xxHash | Cyan4973/xxHash | v0.8.4 (c87183a) | BSD-2 | Content hashing (XXH3/XXH128) |

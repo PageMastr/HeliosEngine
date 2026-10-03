@@ -16,6 +16,7 @@
 #include "helios/core/types.h"
 
 struct ImGuiStyle;
+struct ImGuiIO;
 
 namespace helios::edui {
 
@@ -70,6 +71,11 @@ Result<Theme> builtinTheme(std::string_view name);
 
 /// Writes the theme into an ImGui style at `scale` (1 = 100 %): colors, metrics x scale.
 void applyTheme(const Theme& theme, f32 scale, ImGuiStyle& style);
+
+/// Adds the editor font (Roboto 2.138 Regular, embedded; 07 §1.3) to `io.Fonts` as the default font.
+/// Its size comes from the style (applyTheme sets FontSizeBase and FontScaleDpi), and ImGui 1.92
+/// rasterizes glyphs on demand at each size. Threading: the thread that owns the ImGui context.
+void addEditorFont(ImGuiIO& io);
 
 struct ContrastIssue {
     std::string foreground;

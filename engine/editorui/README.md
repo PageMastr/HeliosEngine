@@ -29,8 +29,12 @@ Each frame the editor renders is one render graph (`engine/render`):
 
 **DPI.** ImGui works in framebuffer pixels. The UI scale (`--scale`, `HELIOS_EDITOR_SCALE`, or else
 the display's content scale) goes into the style metrics and `FontScaleDpi`. Changing the scale
-re-rasterizes glyphs and rebuilds the default layout at the new size. Only the vector font embedded in
-Dear ImGui is used (a minimal ProggyForever, MIT), so every machine renders the same glyphs.
+re-rasterizes glyphs and rebuilds the default layout at the new size.
+
+**Font** (07 §1.3). The UI font is Roboto 2.138 Regular (Apache-2.0, `third_party/roboto`), embedded
+as bytes at build time (`embed_font.cmake`), so every machine renders the same glyphs and the goldens
+pin them. 07 §1.3's other fonts come with their first users: Roboto Mono with the code pane (T10, T19),
+a CJK fallback with localization previews (T25), and an icon font.
 
 ## Test mode and the harness (07 §4.4)
 
@@ -59,9 +63,9 @@ Dear ImGui is used (a minimal ProggyForever, MIT), so every machine renders the 
 
 ## Tests
 
-- **`editorui_tests`** (doctest, 36 cases; no GPU or display, so it runs on Windows CI too):
-  - themes and contrast, the embedded themes against the token files, pseudo-localization and
-    chords;
+- **`editorui_tests`** (doctest, 37 cases; no GPU or display, so it runs on Windows CI too):
+  - themes and contrast, the embedded themes against the token files, the embedded font against
+    `third_party/roboto`, pseudo-localization and chords;
   - the shell and grid on a headless ImGui context, driven by injected input: item paths, typed and
     dragged edits as `ui-scripted` transactions, Ctrl+Z/Ctrl+Y, check boxes, list buttons, the
     History panel, menus, the palette, the argument form;
@@ -84,5 +88,5 @@ Written for plan revision 6 (07 §1.3, §1.4, §4.4; 09 §2.1 WP-0.18) on 2026-0
 plan revision 11 on 2026-10-03, when the work was ported onto it: revisions 7–11 changed 02 §7.4, 04
 §3.2 and §10.2, 06 §1.2, ADR-004a, and 09's WP-0.10r row, §5.2a, §5.10.4, §7 and §8, none of which maps
 to this module; 07 and 09's WP-0.18 row are unchanged since revision 6. The Phase 0
-deviations from 07 are listed in the WP-0.18 row of 09 §8.1. Multi-viewport tear-offs, Roboto
-fonts, the `schemac` editor emitter and localization (T25) come later.
+deviations from 07 are listed in the WP-0.18 row of 09 §8.1. Multi-viewport tear-offs, the fonts
+other than Roboto Regular, the `schemac` editor emitter and localization (T25) come later.

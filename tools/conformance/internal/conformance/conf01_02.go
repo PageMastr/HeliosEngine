@@ -465,20 +465,32 @@ func (s *cSource) index(off int) int {
 func (s *cSource) line(off int) int { return s.origin[s.index(off)] + 1 }
 
 type cCall struct {
-	name string
-	line int
-	args []string // the arguments' source text (strings kept), split at top-level commas
+	name  string
+	line  int      // the physical line where the call starts
+	index int      // the logical line where it starts
+	args  []string // the arguments' source text (strings kept), split at top-level commas
 }
 
 // calls finds the calls whose name re matches (re ends with `\(`), with their arguments read up to the
 // closing parenthesis, across lines. An unterminated call yields the arguments seen so far.
 func (s *cSource) calls(re *regexp.Regexp) []cCall {
+	return s.callsAt(re.FindAllStringIndex(s.blank, -1))
+}
+
+// callsAt reads the calls that start at the given matches (offsets into text and blank, which agree): the
+// name is what precedes the first '(' of the match, and the arguments follow that parenthesis.
+func (s *cSource) callsAt(locs [][]int) []cCall {
 	var out []cCall
-	for _, m := range re.FindAllStringIndex(s.blank, -1) {
-		name := strings.TrimRight(strings.TrimSpace(s.blank[m[0]:m[1]-1]), " \t\n")
-		c := cCall{name: name, line: s.line(m[0])}
-		depth, from := 0, m[1]
-		for i := m[1]; i < len(s.blank); i++ {
+	for _, m := range locs {
+		open := strings.IndexByte(s.blank[m[0]:m[1]], '(')
+		if open < 0 {
+			continue
+		}
+		open += m[0] + 1
+		name := strings.TrimSpace(s.blank[m[0] : open-1])
+		c := cCall{name: name, line: s.line(m[0]), index: s.index(m[0])}
+		depth, from := 0, open
+		for i := open; i < len(s.blank); i++ {
 			ch := s.blank[i]
 			switch {
 			case ch == '(' || ch == '[' || ch == '{':

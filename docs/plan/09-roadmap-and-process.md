@@ -1127,7 +1127,12 @@ code it affects, wherever that code lives.
 #### 5.10.3 The conformance lint (`tools/conformance`, WP-0.2)
 
 - **Tool.** A Go tool: `go/analysis` passes for Go, ast-grep patterns for C++, and pattern rules for SQL, TOML,
-  JSONC and workflow YAML. It writes SARIF.
+  JSONC and workflow YAML. It writes SARIF. *Phase 0 (Director, 2026-09-30):* the rules are syntactic instead.
+  Go is parsed with the standard library's `go/parser`, and the tool resolves the constants a rule needs itself;
+  C and C++ go through a comment- and literal-aware token scanner. `go/analysis` drivers type-check, which needs
+  the backend's module graph and code that compiles, while the round audit reads working-tree code (D7); ast-grep
+  is an unvendored binary whose Go bindings need CGO, which ADR-014 rules out. `tools/conformance/README.md`
+  lists what each rule cannot see. A port to `go/analysis` and ast-grep changes no fixture.
 - **When it runs.** In the PR tier, over the changed paths. At every round audit, over the full tree and over
   any working-tree code that awaits its WP (D7): the auditor lists the findings, and the Director opens a
   rework WP in the same round for any finding that has none.

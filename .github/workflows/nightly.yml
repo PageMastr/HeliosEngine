@@ -65,7 +65,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
             libxi-dev libxkbcommon-dev libxext-dev libxfixes-dev libxss-dev libxtst-dev libdbus-1-dev \
-            libudev-dev mesa-vulkan-drivers xvfb spirv-tools ${{ matrix.validation_layer }}
+            libudev-dev mesa-vulkan-drivers xvfb dbus-daemon spirv-tools ${{ matrix.validation_layer }}
           dpkg-query -W spirv-tools mesa-vulkan-drivers ${{ matrix.validation_layer }}
           spirv-val --version | head -n 1
       - name: Configure

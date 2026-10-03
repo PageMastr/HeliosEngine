@@ -350,6 +350,11 @@ static void freepage(lua_State* L, lua_Page** pageset, lua_Page* page)
             *pageset = page->listnext;
     }
 
+    // Helios patch asan-unpoison-freed-page: the page goes back to the allocator addressable. Its free blocks are still
+    // poisoned, and an allocator that is not ASan's own may write freed memory (debug fills, its own metadata) or hand
+    // it to its next allocation, which ASan then reports as use-after-poison.
+    ASAN_UNPOISON_MEMORY_REGION(page, size_t(page->pageSize));
+
     // so long
     pagealloc<path, type>(g, page, page->pageSize, 0);
 }

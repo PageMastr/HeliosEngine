@@ -59,8 +59,10 @@
   },
 
   // Numbers the perf gates print, tracked night by night by tools/scorecard/perf.py against the 09 §5.8
-  // budgets of their category (render and runtime ±5 %, backend, editor and iteration ±10 %). `pattern`
-  // captures the number from a doctest case's MESSAGE lines or a gate's output.
+  // budgets of their category (render and runtime ±5 %, backend, editor and iteration ±10 %), per run and
+  // host class. `pattern` captures the number from a doctest case's MESSAGE lines or a gate's output. A
+  // `bound` (a number in `unit`) gates the value against the limit of the plan criterion it quotes instead
+  // of against its anchor: for ratios whose night-to-night noise dwarfs a relative budget.
   "perf_metrics": [
     {"id": "net.ns02.socket_pps_per_core", "criterion": "NS-0.2", "gate": "net_bench_gate",
      "pattern": "NS-0\\.2 socket: \\d+/\\d+ datagrams, (\\d+) pps per core", "unit": "pps/core", "better": "higher", "category": "runtime"},
@@ -75,7 +77,13 @@
      "pattern": "-> (\\d+) pps per core", "unit": "pps/core", "better": "higher", "category": "runtime"},
     {"id": "script.fuel_metering_overhead_pct", "criterion": "RT-13", "doctest": "script_tests",
      "case": "perf: fuel metering overhead and ns per fuel", "run": "linux-gcc",
-     "pattern": "metering overhead ([\\d.]+) %", "unit": "%", "better": "lower", "category": "runtime"},
+     "pattern": "metering overhead (-?\\d+(?:\\.\\d+)?(?:e[-+]?\\d+)?) %", "unit": "%", "better": "lower", "category": "runtime",
+     "bound": 10,
+     "note": "RT-13's ≤ 10 % metering overhead (04 §10.2, 02 §8.3, 09 WP-0.10r; script_tests_perf asserts it too), gated as that bound in percentage points: the overhead is a 2–8 % difference of two timings, so a 5 % relative budget (about 0.2 points) is far inside its noise (CV ≈ 36 % locally), and a night where the metered run beats the raw one prints a negative value. script.ns_per_fuel carries the relative 5 % budget for the same case"},
+    {"id": "script.ns_per_fuel", "criterion": "RT-13", "doctest": "script_tests",
+     "case": "perf: fuel metering overhead and ns per fuel", "run": "linux-gcc",
+     "pattern": "ns/fuel (\\d+(?:\\.\\d+)?(?:e[-+]?\\d+)?)", "unit": "ns", "better": "lower", "category": "runtime",
+     "note": "The metered Helios host's wall time per fuel on the RT-13 perf workload (best of 9): the timing behind the overhead, with CV ≈ 1 % (12 local runs at load 8)"},
     {"id": "script.trivial_resume_ns", "doctest": "script_tests",
      "case": "perf: host cost of a trivial resume versus FuelBudget::resumeCost", "run": "linux-gcc",
      "pattern": "trivial resume: ([\\d.]+) ns", "unit": "ns", "better": "lower", "category": "runtime"},

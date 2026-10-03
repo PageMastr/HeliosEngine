@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import math
 import re
 import subprocess
 import sys
@@ -44,7 +45,8 @@ GAP_KEYS = {"clause", "state", "owner", "pinned_by"}
 TOP_KEYS = {"version", "plan_rev", "covers", "runs", "gates", "criteria", "exit", "perf_metrics", "perf_accept"}
 RUN_KEYS = {"os", "default", "nightly", "description"}
 GATE_KEYS = {"runs", "min_seconds", "description"}
-METRIC_FIELDS = {"id", "criterion", "doctest", "case", "gate", "pattern", "unit", "better", "category", "run", "note"}
+METRIC_FIELDS = {"id", "criterion", "doctest", "case", "gate", "pattern", "unit", "better", "category", "run", "note",
+                 "bound"}
 METRIC_CATEGORIES = {"render", "runtime", "backend", "editor", "iteration"}
 ACCEPT_FIELDS = {"metric", "night", "value", "run", "reason"}
 OWNER = re.compile(r"^(?:WP-\d+\.\d+[a-z0-9]*|User|Director)(?:, (?:WP-\d+\.\d+[a-z0-9]*|User|Director))*$")
@@ -796,6 +798,13 @@ def _check_metrics(name: str, data: dict, errors: list[str]) -> None:
                 errors.append(f"{where}: 'pattern' must have exactly one group (the number)")
         except re.error as e:
             errors.append(f"{where}: bad 'pattern': {e}")
+        # An absolute bound is a plan criterion's limit in the metric's unit (RT-13's 10 % overhead): perf.py
+        # gates the value against it instead of against the anchor, so it must name the criterion it quotes.
+        if "bound" in m and not (isinstance(m["bound"], (int, float)) and not isinstance(m["bound"], bool)
+                                 and math.isfinite(m["bound"])):
+            errors.append(f"{where}: 'bound' must be a finite number (the criterion's limit in '{m.get('unit')}')")
+        elif "bound" in m and "criterion" not in m:
+            errors.append(f"{where}: a 'bound' quotes a plan criterion, so the metric must name its 'criterion'")
     _check_accepts(name, data, seen, errors)
 
 
@@ -810,6 +819,8 @@ def _check_accepts(name: str, data: dict, metric_ids: set, errors: list[str], to
     runs = data.get("runs") if isinstance(data.get("runs"), dict) else {}
     metric_runs = {m["id"]: m.get("run") for m in data.get("perf_metrics") or []
                    if isinstance(m, dict) and isinstance(m.get("id"), str)}
+    bounded = {m["id"] for m in data.get("perf_metrics") or []
+               if isinstance(m, dict) and isinstance(m.get("id"), str) and "bound" in m}
     for a in accepts:
         if not isinstance(a, dict):
             errors.append(f"{name}:1: every perf_accept item must be an object")
@@ -819,6 +830,8 @@ def _check_accepts(name: str, data: dict, metric_ids: set, errors: list[str], to
             errors.append(f"{where}: unknown field '{key}'")
         if a.get("metric") not in metric_ids:
             errors.append(f"{where}: 'metric' must name a declared perf metric")
+        elif a.get("metric") in bounded:
+            errors.append(f"{where}: the metric is gated against its plan 'bound', which no perf_accept moves")
         night = a.get("night")
         try:
             ok = isinstance(night, str) and datetime.strptime(night, "%Y-%m-%d").strftime("%Y-%m-%d") == night

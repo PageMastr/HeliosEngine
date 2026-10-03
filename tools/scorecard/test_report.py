@@ -596,6 +596,190 @@ class PerfTests(unittest.TestCase):
             entries = json.loads(out.read_text(encoding="utf-8"))["entries"]
             self.assertEqual((len(entries), entries[-1]["sha"]), (perf.HISTORY_LIMIT, "x"))
 
+    # --- WP-0.3, the nightly of 2026-10-03: name the failing rows, keep levels per host class, and gate a
+    # --- ratio such as RT-13's metering overhead against its plan bound.
+
+    @staticmethod
+    def on(cpu, e, run="linux-gcc"):
+        """`e` as measured by a result set whose host.json names `cpu` (4 logical CPUs)."""
+        fingerprint = {"cpu": cpu, "logical_cpus": 4}
+        e["hosts"] = {run: dict(fingerprint, **{"class": runners.host_class(fingerprint)})}
+        return e
+
+    def test_extract_records_each_runs_host_fingerprint(self):
+        with tempfile.TemporaryDirectory() as d:
+            results = Path(d)
+            for name, run in (("a", "linux-gcc"), ("b", "windows-vs2026"), ("c", "linux-go")):
+                (results / name).mkdir()
+                (results / name / "run.json").write_text(json.dumps({"run": run}), encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()) as text:
+                self.assertEqual(runners.main(["host", "--out", str(results / "a" / "host.json")]), 0)
+            (results / "b" / "host.json").write_text(
+                '{"cpu": "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz", "logical_cpus": 4}', encoding="utf-8")
+            entry = perf.extract(DATA, report.load_results(results, MODULE), "abc", "2026-09-26",
+                                 perf.load_hosts(results))
+        mine = runners.host_fingerprint()
+        self.assertTrue(mine["cpu"] and mine["logical_cpus"] >= 1, mine)
+        self.assertIn(f"host: {runners.host_class(mine)}", text.getvalue())
+        self.assertEqual(entry["hosts"]["linux-gcc"], dict(mine, **{"class": runners.host_class(mine)}))
+        self.assertEqual(perf.run_class(entry, "windows-vs2026"),
+                         "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz, 4 logical CPUs")
+        self.assertEqual(perf.run_class(entry, "linux-go"), perf.UNRECORDED)  # no host.json
+        cpuinfo = "processor\t: 0\nvendor_id\t: AuthenticAMD\nmodel name\t: AMD EPYC 7763 64-Core Processor\n"
+        self.assertEqual(runners._first_field(cpuinfo, ("model name",)), "AMD EPYC 7763 64-Core Processor")
+
+    def test_each_host_class_keeps_its_own_anchor_and_calibration(self):
+        a, b = "AMD EPYC 7763 64-Core Processor", "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
+        nights = [self.on(a, self.night(n, t=100.0)) for n in range(1, 6)]
+        nights += [self.on(b, self.night(6, t=150.0))]  # another CPU: not a regression, B's first night
+        nights += [self.on(a, self.night(7, t=110.0))]  # back on A: A's anchor still gates
+        nights += [self.on(b, self.night(n, t=150.0)) for n in range(8, 12)]  # B calibrates on its own nights
+        nights += [self.on(b, self.night(12, t=151.0)), self.on(b, self.night(13, t=170.0))]
+        nights += [self.on(a, self.night(14, t=101.0))]
+        history, verdicts = self.replay(nights)
+        self.assertEqual([v["t"] for v in verdicts], ["new"] + ["calibrating"] * 4 + ["new-host-class", "regression"] +
+                         ["calibrating"] * 4 + ["ok", "regression", "ok"])
+        stored = [e["metrics"]["linux-gcc/t"] for e in history["entries"]]
+        self.assertEqual([m["anchor"] for m in stored[5:7]], [150.0, 100.0])
+        self.assertEqual({m["host"] for m in stored}, {f"{a}, 4 logical CPUs", f"{b}, 4 logical CPUs"})
+        self.assertEqual({c: v["anchor"] for c, v in history["levels"]["linux-gcc/t"].items()},
+                         {f"{a}, 4 logical CPUs": 100.0, f"{b}, 4 logical CPUs": 150.0})
+        _, rows = perf.compare(*self.replay(nights[:5])[:1], self.on(b, self.night(6, t=150.0)), 5)
+        self.assertNotIn(rows[0]["verdict"], perf.FAILING)
+        self.assertIn(f"first night on this host class ({b}, 4 logical CPUs)", rows[0]["note"])
+        # Without host classes, night 6 would have been a 50 % regression against A's anchor.
+        _, plain = self.replay([self.night(n, t=100.0) for n in range(1, 6)] + [self.night(6, t=150.0)])
+        self.assertEqual(plain[-1]["t"], "regression")
+
+    def test_a_class_keeps_its_levels_past_the_history_limit(self):
+        a, b = "CPU A", "CPU B"
+        nights = [self.on(a, self.night(n, t=100.0)) for n in range(1, 6)]
+        nights += [self.on(b, self.night(n, t=150.0)) for n in range(6, 6 + perf.HISTORY_LIMIT + 5)]
+        history, _ = self.replay(nights)
+        self.assertNotIn(f"{a}, 4 logical CPUs", {e["metrics"]["linux-gcc/t"]["host"] for e in history["entries"]})
+        _, rows = perf.compare(history, self.on(a, self.night(80, t=110.0)), 5)
+        self.assertEqual((rows[0]["verdict"], rows[0]["anchor"]), ("regression", 100.0))
+        _, rows = perf.compare(history, self.on(a, self.night(80, t=100.0)), 5)
+        self.assertEqual(rows[0]["verdict"], "ok")
+
+    def test_an_accept_moves_the_level_of_its_nights_class_only(self):
+        a, b = "CPU A", "CPU B"
+        nights = [self.on(a, self.night(n, t=100.0)) for n in range(1, 6)]
+        nights += [self.on(b, self.night(n, t=200.0)) for n in range(6, 11)]
+        nights += [self.on(a, self.night(11, t=110.0))]
+        history, verdicts = self.replay(nights)
+        self.assertEqual(verdicts[-1]["t"], "regression")
+        record = [self.accept(11, 110.0)]
+        history, verdicts = self.replay([self.on(b, self.night(12, accepted=record, t=200.0)),
+                                         self.on(a, self.night(13, accepted=record, t=110.0)),
+                                         self.on(b, self.night(14, accepted=record, t=200.0))], history=history)
+        self.assertEqual([v["t"] for v in verdicts], ["ok", "ok", "ok"])
+        self.assertEqual([e["metrics"]["linux-gcc/t"]["anchor"] for e in history["entries"][-3:]], [200.0, 110.0, 200.0])
+
+    def test_a_history_from_before_fingerprints_starts_each_class_without_failing(self):
+        legacy, _ = self.replay([self.night(n, t=100.0, p=50.0) for n in range(1, 7)])
+        for e in legacy["entries"]:  # as the nightly wrote it before host fingerprints
+            for m in e["metrics"].values():
+                del m["host"]
+        del legacy["levels"]
+        _, rows = perf.compare(legacy, self.on("CPU A", self.night(7, t=300.0, p=10.0)), 5)
+        self.assertEqual({r["metric"]: r["verdict"] for r in rows},
+                         {"linux-gcc/t": "new-host-class", "linux-gcc/p": "new-host-class"})
+        # A night whose result set has no fingerprint is still compared with the levels from before.
+        _, rows = perf.compare(legacy, self.night(7, t=120.0, p=50.0), 5)
+        self.assertEqual({r["metric"]: r["verdict"] for r in rows},
+                         {"linux-gcc/t": "regression", "linux-gcc/p": "ok"})
+
+    def test_a_single_class_history_gives_the_verdicts_it_gave_before(self):
+        record = [self.accept(9, 104.0)]
+        series = [100.0, 94.0, 150.0, 100.0, 101.0, 103.0, 106.0, None, 104.0, 104.0, 109.0, 99.0, 104.0, 112.0]
+
+        def nights(cpu):
+            out = []
+            for n, t in enumerate(series, 1):
+                e = self.night(n, accepted=record if n >= 10 else (), p=50.0 + n, **({} if t is None else {"t": t}))
+                out.append(self.on(cpu, e) if cpu else e)
+            return out
+
+        plain, before = self.replay(nights(None))
+        hosted, after = self.replay(nights("CPU A"))
+        # What perf.py gave for this series before host classes (main at 803ac23), with or without fingerprints.
+        self.assertEqual([v.get("t") for v in before], ["new"] + ["calibrating"] * 4 +
+                         ["ok", "regression", "missing", "ok", "ok", "ok", "ok", "ok", "regression"])
+        self.assertEqual([v.get("p") for v in before], ["new"] + ["calibrating"] * 4 + ["ok"] * 9)
+        self.assertEqual(before, after)
+        levels = (lambda h: [{k: {f: m.get(f) for f in perf.LEVELS + ("verdict",)} for k, m in e["metrics"].items()}
+                             for e in h["entries"]])
+        self.assertEqual(levels(plain), levels(hosted))
+
+    def bounded(self, n, value, cpu="CPU A"):
+        e = self.on(cpu, self.night(n, t=value))
+        e["metrics"]["linux-gcc/t"].update(bound=10, unit="%")
+        return e
+
+    def test_a_bound_metric_is_gated_against_its_bound_on_every_night_and_class(self):
+        # RT-13's overhead: a 2-8 % difference of two timings, so a 5 % relative budget (0.2 points) is noise.
+        values = [4.0, 4.0, 4.0, 4.0, 4.0, 8.0, -0.2, 10.0, 10.5]
+        nights = [self.bounded(n, v) for n, v in enumerate(values, 1)]
+        nights += [self.bounded(10, 4.0, "CPU B"), self.bounded(11, 11.0, "CPU C")]
+        history, verdicts = self.replay(nights)
+        self.assertEqual([v["t"] for v in verdicts], ["new"] + ["calibrating"] * 4 + ["ok", "ok", "ok", "regression"] +
+                         ["new-host-class", "regression"])
+        _, rows = perf.compare(*self.replay(nights[:5])[:1], nights[5], 5)
+        self.assertEqual((rows[0]["verdict"], rows[0]["anchor_change"]), ("ok", 100.0))
+        self.assertIn("within its bound; drift against the anchor is reported, not gated", rows[0]["note"])
+        _, rows = perf.compare({}, self.bounded(1, 12.0), 5)
+        self.assertEqual((rows[0]["verdict"], rows[0]["note"]), ("regression", "worse than its bound of ≤ 10 %"))
+        self.assertIn("| ≤ 10 % (bound) | **regression** (worse than its bound of ≤ 10 %) |",
+                      perf.markdown(rows, self.bounded(1, 12.0)))
+        # Without the bound, the 8 % night is a 100 % regression of the anchor.
+        plain = [self.on("CPU A", self.night(n, t=v)) for n, v in enumerate(values[:6], 1)]
+        self.assertEqual(self.replay(plain)[1][-1]["t"], "regression")
+
+    def test_the_registry_reads_signed_overheads_and_three_decimal_core_counts(self):
+        data, _ = sc.load_jsonc(sc.ROOT / "scorecard.jsonc")
+        metrics = {m["id"]: m for m in data["perf_metrics"]}
+        overhead = metrics["script.fuel_metering_overhead_pct"]
+        self.assertEqual((overhead["bound"], overhead["criterion"], overhead["unit"]), (10, "RT-13", "%"))
+        run = report.Results("linux-gcc")
+        line = ("workload: 2400000 fuel (2398710 raw safepoints); raw 8120 us, raw+callback per safepoint 9300 us "
+                "(14.5 %), raw+callback every 64 8301 us (2.2 %), Helios 8300 us (metering overhead {} %), ns/fuel 3.45")
+        for printed, value in (("4.12", 4.12), ("-0.19", -0.19), ("-3", -3.0), ("1.5e-05", 1.5e-05),
+                               ("-2.5e-06", -2.5e-06), ("7", 7.0)):
+            run.messages[(overhead["doctest"], overhead["case"])] = [line.format(printed)]
+            self.assertEqual(perf.metric_values(overhead, [run]), {"linux-gcc": value}, printed)
+        cores = metrics["net.ns07.trunk_cell_cores"]
+        run.gates["net_bench_gate"] = ("pass", 600.0, "NS-0.7 trunk: 600 s, sent 11999995, delivered 11999995 "
+                                       "(20000 pps, 190.1 Mbit/s payload, 199.7 Mbit/s wire), drops 0.0000 %, "
+                                       "cell thread 0.245 cores, gateway thread 0.231 cores, rcvbuf 4096 KB")
+        self.assertEqual(perf.metric_values(cores, [run]), {"linux-gcc": 0.245})
+
+    def test_each_failing_row_is_annotated_for_the_run_page(self):
+        history, _ = self.replay([self.night(n, t=100.0, p=2.0) for n in range(1, 6)])
+        with tempfile.TemporaryDirectory() as d:
+            hist, entry, out = Path(d) / "h.json", Path(d) / "e.json", Path(d) / "n.json"
+            hist.write_text(json.dumps(history), encoding="utf-8")
+            for tonight, rc_want in ((self.night(6, t=119.5), 1), (self.night(6, t=101.0, p=2.0), 0)):
+                entry.write_text(json.dumps(tonight), encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()) as text:
+                    rc = perf.main(["compare", "--entry", str(entry), "--history", str(hist), "--out", str(out)])
+                commands = [line for line in text.getvalue().splitlines() if line.startswith("::")]
+                self.assertEqual(rc, rc_want)
+                if rc:
+                    self.assertEqual(commands, [
+                        "::error title=perf regression::linux-gcc/t 119.5 u vs anchor 100 (+19.5 %25)",
+                        "::error title=perf missing::linux-gcc/p: no value tonight"])
+                    self.assertIn("| `linux-gcc/t` | 119.5 u |", text.getvalue())  # the table too
+                else:
+                    self.assertEqual(commands, [])
+        # Workflow-command escaping: data and properties cannot break out of the command.
+        self.assertEqual(perf._command_data("50 %\r\n::x"), "50 %25%0D%0A::x")
+        self.assertEqual(perf._command_property("perf a:b,c"), "perf a%3Ab%2Cc")
+        rows = [{"metric": "linux-gcc/t", "value": 12.0, "unit": "%", "anchor": 4.0, "anchor_change": 200.0,
+                 "verdict": "regression", "note": "worse than its bound of ≤ 10 %", "bound": 10, "better": "lower"}]
+        self.assertEqual(perf.annotations(rows), ["::error title=perf regression::linux-gcc/t 12 %25 vs anchor 4 "
+                                                  "(+200.0 %25), bound ≤ 10 %25: worse than its bound of ≤ 10 %25"])
+
 
 class RunnerTests(unittest.TestCase):
     def test_gate_writes_junit_with_exit_code_and_output(self):

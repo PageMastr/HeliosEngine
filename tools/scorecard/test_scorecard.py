@@ -592,6 +592,20 @@ class PerfMetricTests(Fixture):
     def test_metric_cases_are_exact(self):
         self.assertFinding(self.run_check(self.with_metric(case="NS-0.1: *")), "take no '*'")
 
+    def test_a_bound_is_a_criterion_limit_that_no_accept_moves(self):
+        # WP-0.3: a ratio such as RT-13's metering overhead is gated against its plan bound, not its anchor.
+        self.assertEqual(self.run_check(self.with_metric(bound=10)), [])
+        self.assertEqual(self.run_check(self.with_metric(bound=0.5)), [])
+        for bad in ("10", True, float("inf"), None):
+            self.assertFinding(self.run_check(self.with_metric(bound=bad)), "'bound' must be a finite number")
+        data = self.with_metric(bound=10)
+        del data["perf_metrics"][0]["criterion"]
+        self.assertFinding(self.run_check(data), "must name its 'criterion'")
+        data = self.with_metric(bound=10)
+        data["perf_accept"] = [{"metric": "net.pps", "night": "2026-01-05", "value": 4.0, "run": "linux-gcc",
+                                "reason": "accepted"}]
+        self.assertFinding(self.run_check(data), "gated against its plan 'bound', which no perf_accept moves")
+
     def test_perf_accept_is_checked(self):
         good = {"metric": "net.pps", "night": "2026-01-05", "value": 1234.5, "run": "linux-gcc",
                 "reason": "new codec; accepted by the Director"}

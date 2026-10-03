@@ -57,8 +57,9 @@ into annotations.
 - **Perf metrics.** Each has one source (a gate, or a doctest binary and case, named exactly), a pattern with
   exactly one group, a unit, `better` (`lower` or `higher`) and a budget category. Every doctest source must
   exist in each inventory of its run's OS (every OS without a `run`), whether or not the metric names a
-  criterion. `perf_accept` records name a declared metric, a valid `night`, a declared `run` if any, and a
-  `reason`.
+  criterion. An optional `bound` (perf.py gates the value against it instead of the anchor) is a finite
+  number and needs the metric's `criterion`. `perf_accept` records name a declared metric without a
+  `bound`, a valid `night`, a declared `run` if any, and a `reason`.
 
 ## Entry format
 
@@ -120,6 +121,7 @@ clang-cl) and Go (Linux, Windows), runs `net_bench --gate` on GCC and VS 2026, a
 target under libFuzzer for 1 h (NS-0.4). Each job uploads a result set; the `scorecard` job evaluates them:
 
 ```
+python3 tools/scorecard/runners.py host --out R/host.json                       # CPU model, logical CPUs
 python3 tools/scorecard/runners.py doctest --build-dir B [--config C] [--perf] [--label-exclude RE] \
         --out R/doctest                                                          # per-case XML
 python3 tools/scorecard/runners.py gate --name net_bench_gate --build-dir B --out R/gates -- net_bench --gate
@@ -129,11 +131,12 @@ python3 tools/scorecard/perf.py extract --results results --sha SHA --out perf-e
 python3 tools/scorecard/perf.py compare --entry perf-entry.json --history last/perf-history.json --out perf-history.json
 ```
 
-A result set is a directory with `run.json` (`{"run": "<a declared run>"}`) and any of `ctest*.xml`
-(`ctest --output-junit`), `doctest/<binary>[.perf].xml` with its `.status.json`, `go*.json` (`go test -json`)
-and `gates/<gate>.xml`. The runner uses the working directory, environment and timeout that CTest would, and
-`--label-exclude` skips the entries `ctest -LE` skips: the Windows jobs have no GPU and pass `"gpu|perf"` to both
-steps. A doctest binary whose XML is unreadable (a crash) fails every case it cites. So does one that exits
+A result set is a directory with `run.json` (`{"run": "<a declared run>"}`) and any of `host.json` (the
+host fingerprint: `{"cpu": "<model name>", "logical_cpus": n}` from /proc/cpuinfo or lscpu on Linux, the
+registry on Windows), `ctest*.xml` (`ctest --output-junit`), `doctest/<binary>[.perf].xml` with its
+`.status.json`, `go*.json` (`go test -json`) and `gates/<gate>.xml`. The runner uses the working directory,
+environment and timeout that CTest would, and `--label-exclude` skips the entries `ctest -LE` skips: the
+Windows jobs have no GPU and pass `"gpu|perf"` to both steps. A doctest binary whose XML is unreadable (a crash) fails every case it cites. So does one that exits
 non-zero although every case passed (a sanitizer report at exit).
 
 - **Per criterion.** On each platform, a reference passes when it has results in the runs that count for it
@@ -151,7 +154,36 @@ non-zero although every case passed (a sanitizer report at exit).
 - **Perf history (09 §5.8).** `perf_metrics` name the numbers the perf gates print (a regex over a doctest
   case's MESSAGE lines or a gate's output; the case by its exact name). `compare` fails a gated metric that
   is worse than its **anchor** by more than its category's budget (render and runtime 5 %, 02 §8.3 for
-  runtime benchmarks; backend, editor and iteration 10 %).
+  runtime benchmarks; backend, editor and iteration 10 %), comparing each run only with earlier nights on
+  the same **host class** (below).
+  - **Failing rows are named in the log.** The perf step prints the table to the job log as well as to the
+    summary, and one `::error title=perf <verdict>::<metric> <value> vs anchor <a> (<drift> %)` workflow
+    command per failing row, so the run page's annotations name each failing metric (GitHub shows at most
+    10 error annotations per step; the table in the log has every row). The `perf-history` artifact holds
+    the night's `perf.md` next to the history.
+  - **Host classes.** Hosted runners of one image come on several kinds of machine: in its first week the
+    `ubuntu-24.04` runner showed at least three performance classes (raw socket ≈ 200k, 255k and 415k pps
+    per core; the PCG kernel 2.51, 1.98 and 2.99 ms), so one anchor for all of them turned a change of
+    machine into a regression (10-02: PCG +19.1 % on the fastest class) and a step on one class could hide
+    behind another. Whether the CPU model and count separate every such class is for the first
+    fingerprinted nights to show. Every native job writes its fingerprint (`runners.py host`: CPU model
+    name and logical CPU count) next to `run.json`, and the history keeps anchors, calibration, the rolling
+    baseline and applied accepts per run and class. Within a class every rule below holds unchanged. A metric's first night on
+    a class without its levels reads **`new-host-class`** (not failing, noted with the class) and is that
+    class's first calibration night; the other classes keep their levels for when the runner comes back,
+    including beyond the 60 retained entries (the history keeps every class's newest levels while the
+    metric is declared). A `perf_accept` record moves the level of the class its night ran on. Entries
+    from before fingerprints, and a result set without `host.json`, are the class `unrecorded`, so the
+    first fingerprinted night starts every metric's calibration on its class; the old levels, set on mixed
+    classes, stay with `unrecorded`.
+  - **Bounds.** A metric with a `bound` (a number in its unit, quoting the limit of the plan criterion it
+    names) is gated against that bound on every night and class, calibration nights included, instead of
+    against its anchor; its drift is reported, not gated, and no `perf_accept` can name it.
+    `script.fuel_metering_overhead_pct` is RT-13's "≤ 10 % overhead" (04 §10.2, 02 §8.3, WP-0.10r): a
+    2–8 % difference of two timings, whose relative noise (CV ≈ 36 % locally; once −0.19 %) no 5 %
+    relative budget can hold, so its pattern also accepts a sign and an exponent. Its timing,
+    `script.ns_per_fuel` (the metered host's ns per fuel on the same workload, CV ≈ 1 %), carries the
+    relative 5 % runtime budget.
   - The anchor does not follow: it is the median of the metric's first 5 values, or the value of the night
     a `perf_accept` record accepted. A metric's first night reads `new` and its next 4 read `calibrating`:
     they are recorded, not gated, and one outlier among them (a lucky or a bad night) does not set the
@@ -216,10 +248,14 @@ non-zero although every case passed (a sanitizer report at exit).
 - **Known limitation: hosted-runner noise.** Budgets are per night and hosted runners are noisy. A
   simulation of this comparator (one gated metric at the 5 % budget, Gaussian noise per night, 200 seeded
   years) gives a median of 0 red nights a year at σ = 1.5 % (90th percentile 2, worst 14) and 7 at
-  σ = 2.5 % (90th percentile 36, worst 112, longest red streak 7). With the 13 gated keys of today's
-  registry, σ = 2.5 % would make the perf step red on a large share of nights from noise alone. The gating
-  and the thresholds stay as the plan sets them; the real noise should be measured in the first weeks, and
-  the binding per-commit measurements move to the fixed runner and the lab (WP-0.4).
+  σ = 2.5 % (90th percentile 36, worst 112, longest red streak 7). With the 14 gated keys of today's
+  registry, σ = 2.5 % would make the perf step red on a large share of nights from noise alone. Host
+  classes remove the step between CPU models, not the noise within one (two VMs of one model still share
+  their hosts with other tenants), and a class the runner rarely lands on takes weeks to calibrate and is
+  ungated until then. The gating and the thresholds stay as the plan sets them. The nightly perf history on
+  hosted runners is drift tracking, not the binding gate: the binding per-commit perf gates on fixed
+  hardware are WP-0.4's (its runner and the lab), and until they exist a red or a green here is evidence
+  to read, not a measurement on REF.
 - **Expected red today.** `pcg_tests_perf` fails by design (K5b, armed by WP-0.9c's red outcome; 09 §8.1),
   so the GCC job's perf step is red every night, and `script_tests` is reported to abort under `linux-asan`
   (a mimalloc use-after-poison that predates the nightly; see #9). Both are real results, reported as such;

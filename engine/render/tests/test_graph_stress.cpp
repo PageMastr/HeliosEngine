@@ -787,6 +787,70 @@ void resetImports(rhi::Device& device, rhi::NullDevice& null, const Imports& imp
     REQUIRE(device.submit(rhi::Queue::Graphics, {&cmd, 1}).ok());
 }
 
+RgCompileOptions randomOptions(u64 seed, u64 stream) {
+    Pcg32 rng(seed, stream);
+    return {.cull = uniformU32Below(rng, 4) != 0,
+            .alias = uniformU32Below(rng, 4) != 0,
+            .asyncCompute = uniformU32Below(rng, 4) != 0,
+            .maxCommandLists = 1 + uniformU32Below(rng, 12)};
+}
+
+void destroyImports(rhi::Device& device, const Imports& imports) {
+    for (const GenResource& r : imports.resources) {
+        if (r.isTexture) {
+            device.destroy(r.handle);
+        } else {
+            device.destroy(r.bufferHandle);
+        }
+    }
+}
+
+TEST_CASE("graph stress: compiles into reused storage equal compiles into fresh storage") {
+    // compile() rebuilds the plan in the storage of the previous one (graph_compile.cpp), and reset()
+    // keeps that storage for the next graph. Over random graphs and options: a compile after one with
+    // other options, a recompile, and a compile of another graph after reset() (larger or smaller)
+    // must each give exactly the plan of a fresh graph.
+    NullDeviceFixture fx;
+    rhi::Device& device = *fx.device;
+    for (u64 seed = 1; seed <= 150; ++seed) {
+        CAPTURE(seed);
+        const u64 other = seed + 1000;
+        const RgCompileOptions optionsA = randomOptions(seed, 5);
+        const RgCompileOptions optionsB = randomOptions(seed, 6);
+        const Imports importsA = makeImports(device, seed);
+        const Imports importsB = makeImports(device, other);
+        Program prog;
+        auto freshPlan = [&](const char* name, const Imports& imports, u64 programSeed,
+                             const RgCompileOptions& options) {
+            RenderGraph graph(name);
+            buildProgram(graph, prog, imports, programSeed);
+            REQUIRE(graph.errors().empty());
+            REQUIRE(graph.compile(options).ok());
+            return fullPlanText(graph.plan());
+        };
+        const std::string planA = freshPlan("A", importsA, seed, optionsB);
+        const std::string planB = freshPlan("B", importsB, other, optionsA);
+
+        RenderGraph graph("A");
+        buildProgram(graph, prog, importsA, seed);
+        REQUIRE(graph.compile(optionsA).ok());
+        REQUIRE(graph.compile(optionsB).ok());
+        CHECK(fullPlanText(graph.plan()) == planA);
+        REQUIRE(graph.compile(optionsB).ok());
+        CHECK(fullPlanText(graph.plan()) == planA);
+        graph.reset("B");
+        buildProgram(graph, prog, importsB, other);
+        REQUIRE(graph.compile(optionsA).ok());
+        CHECK(fullPlanText(graph.plan()) == planB);
+        graph.reset("A");
+        buildProgram(graph, prog, importsA, seed);
+        REQUIRE(graph.compile(optionsB).ok());
+        CHECK(fullPlanText(graph.plan()) == planA);
+        destroyImports(device, importsA);
+        destroyImports(device, importsB);
+    }
+}
+
 TEST_CASE("graph stress: random DAGs match the reference simulator and run clean on Null") {
     NullDeviceFixture fx;
     rhi::Device& device = *fx.device;

@@ -665,3 +665,113 @@ TEST_CASE("graph: compile budget (200 passes)") {
 }
 
 } // namespace
+
+namespace {
+
+/// The budget test's chain (async every fifth pass, NeverCull roots, a shared counter) plus a mip
+/// chain read per mip, passes that are culled and an imported output that ends in Present, so that
+/// every compile step and the general barrier merge have work.
+void buildReuseGraph(RenderGraph& graph, u32 passes) {
+    std::vector<RgTexture> live;
+    RgBuffer counter;
+    RgTexture out =
+        graph.importTexture("Out", fakeTexture(1), importDesc(), {.finalState = ResourceState::Present});
+    RgTexture chain;
+    graph.addPass("Init", PassFlags::Compute, [&](RgBuilder& b) {
+        counter = b.write(b.create("Counter", kBuf));
+        chain = b.write(b.create("Chain", RgTextureDesc::tex2D(Format::RGBA16Float, 64, 64, 3)));
+    }, {});
+    for (u32 i = 0; i < passes; ++i) {
+        const PassFlags kind =
+            i % 5 == 4 ? PassFlags::AsyncCompute : (i % 3 == 0 ? PassFlags::Raster : PassFlags::Compute);
+        graph.addPass(std::format("P{}", i), kind | (i % 17 == 0 ? PassFlags::NeverCull : PassFlags::None),
+                      [&, i, kind](RgBuilder& b) {
+                          if (!live.empty()) b.read(live.back());
+                          if (live.size() > 2) b.read(live[live.size() - 3]);
+                          if (kind != PassFlags::Raster) b.read(chain, TextureRead::Sampled, {i % 3, 1, 0, 1});
+                          RgTexture t = b.create(std::format("T{}", i), i % 2 ? kTex : kHdr);
+                          live.push_back(kind == PassFlags::Raster ? b.colorAttachment(t, 0) : b.write(t));
+                          if (i % 10 == 0 && kind != PassFlags::Raster) counter = b.readWrite(counter);
+                      },
+                      {});
+        if (i % 25 == 24) {  // nothing reads it: culled
+            graph.addPass(std::format("Dead{}", i), PassFlags::Compute,
+                          [&](RgBuilder& b) { b.read(live.back()); b.write(b.create("Unused", kTex)); }, {});
+        }
+    }
+    graph.addPass("Final", PassFlags::Compute, [&](RgBuilder& b) {
+        b.read(live.back());
+        b.read(counter);
+        out = b.write(out);
+    }, {});
+}
+
+/// Addresses of plan storage that a compile reusing it keeps.
+struct PlanStorage {
+    const void* passes = nullptr;
+    const void* accesses = nullptr;
+    const void* preBarriers = nullptr;
+    const void* batches = nullptr;
+    const void* batchPasses = nullptr;
+    const void* lists = nullptr;
+    const void* listName = nullptr;
+    friend bool operator==(const PlanStorage&, const PlanStorage&) = default;
+};
+
+PlanStorage planStorage(const RgPlan& plan) {
+    REQUIRE(plan.passes.size() > 1);
+    REQUIRE(!plan.passes[0].preBarriers.empty());
+    REQUIRE(!plan.batches.empty());
+    REQUIRE(!plan.lists.empty());
+    REQUIRE(plan.lists[0].name.size() > 15);  // on the heap, not in the small-string buffer
+    return {plan.passes.data(),          plan.passes[1].accesses.data(), plan.passes[0].preBarriers.data(),
+            plan.batches.data(),         plan.batches[0].passes.data(),  plan.lists.data(),
+            plan.lists[0].name.data()};
+}
+
+} // namespace
+
+TEST_CASE("graph: recompiles and reset() reuse the plan storage and match a fresh compile") {
+    // graph_compile.cpp rebuilds the plan in the previous plan's storage. Whatever came before (a
+    // plan with other options, a recompile, another graph after reset()), the plan must be exactly
+    // what a compile into fresh storage gives (every field, list names and placement included).
+    RenderGraph fresh("StorageReuseFrame");
+    buildReuseGraph(fresh, 200);
+    REQUIRE(fresh.errors().empty());
+    REQUIRE(fresh.compile().ok());
+    const std::string expected = fullPlanText(fresh.plan());
+    REQUIRE(fresh.plan().stats.culledPassCount > 0);
+
+    RenderGraph graph("StorageReuseFrame");
+    buildReuseGraph(graph, 200);
+    // A different plan first: nothing culled, no async queue, no aliasing, two lists.
+    REQUIRE(graph.compile({.cull = false, .alias = false, .asyncCompute = false, .maxCommandLists = 2}).ok());
+    REQUIRE(fullPlanText(graph.plan()) != expected);
+    REQUIRE(graph.compile().ok());
+    CHECK(fullPlanText(graph.plan()) == expected);
+    const PlanStorage storage = planStorage(graph.plan());
+    REQUIRE(graph.compile().ok());
+    CHECK(fullPlanText(graph.plan()) == expected);
+    CHECK(planStorage(graph.plan()) == storage);  // the same memory: the recompile reused it
+
+    // reset(): an empty graph that keeps the storage, then a smaller graph, then the first one again.
+    graph.reset("Small");
+    CHECK(graph.name() == "Small");
+    CHECK(graph.passCount() == 0);
+    CHECK(graph.resourceCount() == 0);
+    CHECK(!graph.isCompiled());
+    CHECK(graph.plan().passes.empty());
+    CHECK(graph.plan().batches.empty());
+    CHECK(graph.plan().name.empty());
+    RenderGraph small("Small");
+    buildReuseGraph(small, 20);
+    REQUIRE(small.compile({.maxCommandLists = 3}).ok());
+    buildReuseGraph(graph, 20);
+    REQUIRE(graph.compile({.maxCommandLists = 3}).ok());
+    CHECK(fullPlanText(graph.plan()) == fullPlanText(small.plan()));
+    graph.reset("StorageReuseFrame");
+    buildReuseGraph(graph, 200);
+    REQUIRE(graph.compile().ok());
+    CHECK(fullPlanText(graph.plan()) == expected);
+    CHECK(planStorage(graph.plan()) == storage);
+}

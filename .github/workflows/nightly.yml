@@ -58,10 +58,11 @@ jobs:
       RESULTS: ${{ github.workspace }}/results/${{ matrix.run }}
     steps:
       - uses: actions/checkout@v5
-      - name: Record the run
+      - name: Record the run and its host (CPU model, logical CPUs; perf levels are kept per host class)
         run: |
           mkdir -p "$RESULTS"
           echo '{"run": "${{ matrix.run }}"}' > "$RESULTS/run.json"
+          python3 tools/scorecard/runners.py host --out "$RESULTS/host.json"
       - name: Install system packages
         run: |
           sudo apt-get update
@@ -129,10 +130,11 @@ jobs:
       RESULTS: ${{ github.workspace }}/results/${{ matrix.run }}
     steps:
       - uses: actions/checkout@v5
-      - name: Record the run
+      - name: Record the run and its host (CPU model, logical CPUs; perf levels are kept per host class)
         run: |
           New-Item -ItemType Directory -Force -Path $env:RESULTS | Out-Null
           Set-Content -Encoding ascii -Path "$env:RESULTS/run.json" -Value '{"run": "${{ matrix.run }}"}'
+          python tools/scorecard/runners.py host --out "$env:RESULTS/host.json"
       - uses: ilammy/msvc-dev-cmd@v1
         if: ${{ matrix.preset == 'windows-clang-cl' }}
         with:
@@ -361,9 +363,10 @@ jobs:
             --previous previous/scorecard-report.json ${{ github.event_name == 'schedule' && '--scheduled' || '' }} \
             --out out/scorecard-report.json --markdown out/scorecard.md > /dev/null
           cat out/scorecard.md >> "$GITHUB_STEP_SUMMARY"
-      - name: Perf history (±5 % render and runtime, ±10 % backend, editor, iteration)
+      - name: Perf history (±5 % render and runtime, ±10 % backend, editor, iteration; per host class)
         if: ${{ !cancelled() }}
         run: |
+          set -o pipefail
           status=0
           args=(--history previous/perf-history.json --require-history)
           if [ -f previous/perf-restart ]; then
@@ -374,8 +377,10 @@ jobs:
             args=(--note "$note perf-history artifact, so every metric starts new.")
           fi
           python3 tools/scorecard/perf.py extract --results results --sha "$GITHUB_SHA" --out out/perf-entry.json
+          # The table and one ::error annotation per failing row go to the job log as well (tee), so the
+          # run page names the failing metric without the summary or the artifact.
           python3 tools/scorecard/perf.py compare --entry out/perf-entry.json "${args[@]}" \
-            --out out/perf-history.json --markdown out/perf.md > perf-compare.log || status=$?
+            --out out/perf-history.json --markdown out/perf.md 2>&1 | tee perf-compare.log || status=$?
           if [ -f out/perf.md ]; then cat out/perf.md; else cat perf-compare.log; fi >> "$GITHUB_STEP_SUMMARY"
           exit $status
       - uses: actions/upload-artifact@v4
@@ -390,5 +395,7 @@ jobs:
         if: ${{ !cancelled() && hashFiles('out/perf-history.json') != '' }}
         with:
           name: perf-history
-          path: out/perf-history.json
+          path: |
+            out/perf-history.json
+            out/perf.md
           retention-days: 90

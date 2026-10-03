@@ -4,6 +4,7 @@ import contextlib
 import copy
 import io
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -693,6 +694,560 @@ class PerfTests(unittest.TestCase):
             self.assertEqual(rc, 1)
             entries = json.loads(out.read_text(encoding="utf-8"))["entries"]
             self.assertEqual((len(entries), entries[-1]["sha"]), (perf.HISTORY_LIMIT, "x"))
+
+    # --- WP-0.3, the nightly of 2026-10-03: name the failing rows, keep levels per host class, and gate a
+    # --- ratio such as RT-13's metering overhead against its plan bound.
+
+    @staticmethod
+    def on(cpu, e, run="linux-gcc"):
+        """`e` as measured by a result set whose host.json names `cpu` (4 logical CPUs)."""
+        fingerprint = {"cpu": cpu, "logical_cpus": 4}
+        e["hosts"] = {run: dict(fingerprint, **{"class": runners.host_class(fingerprint)})}
+        return e
+
+    def test_extract_records_each_runs_host_fingerprint(self):
+        with tempfile.TemporaryDirectory() as d:
+            results = Path(d)
+            for name, run in (("a", "linux-gcc"), ("b", "windows-vs2026"), ("c", "linux-go")):
+                (results / name).mkdir()
+                (results / name / "run.json").write_text(json.dumps({"run": run}), encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()) as text:
+                self.assertEqual(runners.main(["host", "--out", str(results / "a" / "host.json")]), 0)
+            (results / "b" / "host.json").write_text(
+                '{"cpu": "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz", "logical_cpus": 4}', encoding="utf-8")
+            entry = perf.extract(DATA, report.load_results(results, MODULE), "abc", "2026-09-26",
+                                 perf.load_hosts(results))
+        mine = runners.host_fingerprint()
+        self.assertTrue(mine["cpu"] and mine["logical_cpus"] >= 1, mine)
+        self.assertIn(f"host: {runners.host_class(mine)}", text.getvalue())
+        self.assertEqual(entry["hosts"]["linux-gcc"], dict(mine, **{"class": runners.host_class(mine)}))
+        self.assertEqual(perf.run_class(entry, "windows-vs2026"),
+                         "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz, 4 logical CPUs")
+        self.assertEqual(perf.run_class(entry, "linux-go"), perf.UNRECORDED)  # no host.json
+        cpuinfo = "processor\t: 0\nvendor_id\t: AuthenticAMD\nmodel name\t: AMD EPYC 7763 64-Core Processor\n"
+        self.assertEqual(runners._first_field(cpuinfo, ("model name",)), "AMD EPYC 7763 64-Core Processor")
+
+    def test_each_host_class_keeps_its_own_anchor_and_calibration(self):
+        a, b = "AMD EPYC 7763 64-Core Processor", "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
+        nights = [self.on(a, self.night(n, t=100.0)) for n in range(1, 6)]
+        nights += [self.on(b, self.night(6, t=150.0))]  # another CPU: not a regression, B's first night
+        nights += [self.on(a, self.night(7, t=110.0))]  # back on A: A's anchor still gates
+        nights += [self.on(b, self.night(n, t=150.0)) for n in range(8, 12)]  # B calibrates on its own nights
+        nights += [self.on(b, self.night(12, t=151.0)), self.on(b, self.night(13, t=170.0))]
+        nights += [self.on(a, self.night(14, t=101.0))]
+        history, verdicts = self.replay(nights)
+        self.assertEqual([v["t"] for v in verdicts], ["new"] + ["calibrating"] * 4 + ["new-host-class", "regression"] +
+                         ["calibrating"] * 4 + ["ok", "regression", "ok"])
+        stored = [e["metrics"]["linux-gcc/t"] for e in history["entries"]]
+        self.assertEqual([m["anchor"] for m in stored[5:7]], [150.0, 100.0])
+        self.assertEqual({m["host"] for m in stored}, {f"{a}, 4 logical CPUs", f"{b}, 4 logical CPUs"})
+        self.assertEqual({c: v["anchor"] for c, v in history["levels"]["linux-gcc/t"].items()},
+                         {f"{a}, 4 logical CPUs": 100.0, f"{b}, 4 logical CPUs": 150.0})
+        _, rows = perf.compare(*self.replay(nights[:5])[:1], self.on(b, self.night(6, t=150.0)), 5)
+        self.assertNotIn(rows[0]["verdict"], perf.FAILING)
+        self.assertIn(f"first night on this host class ({b}, 4 logical CPUs)", rows[0]["note"])
+        # Without host classes, night 6 would have been a 50 % regression against A's anchor.
+        _, plain = self.replay([self.night(n, t=100.0) for n in range(1, 6)] + [self.night(6, t=150.0)])
+        self.assertEqual(plain[-1]["t"], "regression")
+
+    def test_a_class_keeps_its_levels_past_the_history_limit(self):
+        a, b = "CPU A", "CPU B"
+        nights = [self.on(a, self.night(n, t=100.0)) for n in range(1, 6)]
+        nights += [self.on(b, self.night(n, t=150.0)) for n in range(6, 6 + perf.HISTORY_LIMIT + 5)]
+        history, _ = self.replay(nights)
+        self.assertNotIn(f"{a}, 4 logical CPUs", {e["metrics"]["linux-gcc/t"]["host"] for e in history["entries"]})
+        _, rows = perf.compare(history, self.on(a, self.night(80, t=110.0)), 5)
+        self.assertEqual((rows[0]["verdict"], rows[0]["anchor"]), ("regression", 100.0))
+        _, rows = perf.compare(history, self.on(a, self.night(80, t=100.0)), 5)
+        self.assertEqual(rows[0]["verdict"], "ok")
+
+    def test_an_accept_moves_the_level_of_its_nights_class_only(self):
+        a, b = "CPU A", "CPU B"
+        nights = [self.on(a, self.night(n, t=100.0)) for n in range(1, 6)]
+        nights += [self.on(b, self.night(n, t=200.0)) for n in range(6, 11)]
+        nights += [self.on(a, self.night(11, t=110.0))]
+        history, verdicts = self.replay(nights)
+        self.assertEqual(verdicts[-1]["t"], "regression")
+        record = [self.accept(11, 110.0)]
+        history, verdicts = self.replay([self.on(b, self.night(12, accepted=record, t=200.0)),
+                                         self.on(a, self.night(13, accepted=record, t=110.0)),
+                                         self.on(b, self.night(14, accepted=record, t=200.0))], history=history)
+        self.assertEqual([v["t"] for v in verdicts], ["ok", "ok", "ok"])
+        self.assertEqual([e["metrics"]["linux-gcc/t"]["anchor"] for e in history["entries"][-3:]], [200.0, 110.0, 200.0])
+
+    def test_a_history_from_before_fingerprints_starts_each_class_without_failing(self):
+        legacy, _ = self.replay([self.night(n, t=100.0, p=50.0) for n in range(1, 7)])
+        for e in legacy["entries"]:  # as the nightly wrote it before host fingerprints
+            for m in e["metrics"].values():
+                del m["host"]
+        del legacy["levels"]
+        _, rows = perf.compare(legacy, self.on("CPU A", self.night(7, t=300.0, p=10.0)), 5)
+        self.assertEqual({r["metric"]: r["verdict"] for r in rows},
+                         {"linux-gcc/t": "new-host-class", "linux-gcc/p": "new-host-class"})
+        # A night whose result set has no fingerprint is still compared with the levels from before.
+        _, rows = perf.compare(legacy, self.night(7, t=120.0, p=50.0), 5)
+        self.assertEqual({r["metric"]: r["verdict"] for r in rows},
+                         {"linux-gcc/t": "regression", "linux-gcc/p": "ok"})
+
+    def test_a_single_class_history_gives_the_verdicts_it_gave_before(self):
+        record = [self.accept(9, 104.0)]
+        series = [100.0, 94.0, 150.0, 100.0, 101.0, 103.0, 106.0, None, 104.0, 104.0, 109.0, 99.0, 104.0, 112.0]
+
+        def nights(cpu):
+            out = []
+            for n, t in enumerate(series, 1):
+                e = self.night(n, accepted=record if n >= 10 else (), p=50.0 + n, **({} if t is None else {"t": t}))
+                out.append(self.on(cpu, e) if cpu else e)
+            return out
+
+        plain, before = self.replay(nights(None))
+        hosted, after = self.replay(nights("CPU A"))
+        # What perf.py gave for this series before host classes (main at 803ac23), with or without fingerprints.
+        self.assertEqual([v.get("t") for v in before], ["new"] + ["calibrating"] * 4 +
+                         ["ok", "regression", "missing", "ok", "ok", "ok", "ok", "ok", "regression"])
+        self.assertEqual([v.get("p") for v in before], ["new"] + ["calibrating"] * 4 + ["ok"] * 9)
+        self.assertEqual(before, after)
+        levels = (lambda h: [{k: {f: m.get(f) for f in perf.LEVELS + ("verdict",)} for k, m in e["metrics"].items()}
+                             for e in h["entries"]])
+        self.assertEqual(levels(plain), levels(hosted))
+
+    def bounded(self, n, value, cpu="CPU A"):
+        e = self.on(cpu, self.night(n, t=value))
+        e["metrics"]["linux-gcc/t"].update(bound=10, unit="%")
+        return e
+
+    def test_a_bound_metric_is_gated_against_its_bound_on_every_night_and_class(self):
+        # RT-13's overhead: a 2-8 % difference of two timings, so a 5 % relative budget (0.2 points) is noise.
+        values = [4.0, 4.0, 4.0, 4.0, 4.0, 8.0, -0.2, 10.0, 10.5]
+        nights = [self.bounded(n, v) for n, v in enumerate(values, 1)]
+        nights += [self.bounded(10, 4.0, "CPU B"), self.bounded(11, 11.0, "CPU C")]
+        history, verdicts = self.replay(nights)
+        self.assertEqual([v["t"] for v in verdicts], ["new"] + ["calibrating"] * 4 + ["ok", "ok", "ok", "regression"] +
+                         ["new-host-class", "regression"])
+        _, rows = perf.compare(*self.replay(nights[:5])[:1], nights[5], 5)
+        self.assertEqual((rows[0]["verdict"], rows[0]["anchor_change"]), ("ok", 100.0))
+        self.assertIn("within its bound; drift against the anchor is reported, not gated", rows[0]["note"])
+        _, rows = perf.compare({}, self.bounded(1, 12.0), 5)
+        self.assertEqual((rows[0]["verdict"], rows[0]["note"]), ("regression", "worse than its bound of ≤ 10 %"))
+        self.assertIn("| ≤ 10 % (bound) | **regression** (worse than its bound of ≤ 10 %) |",
+                      perf.markdown(rows, self.bounded(1, 12.0)))
+        # Without the bound, the 8 % night is a 100 % regression of the anchor.
+        plain = [self.on("CPU A", self.night(n, t=v)) for n, v in enumerate(values[:6], 1)]
+        self.assertEqual(self.replay(plain)[1][-1]["t"], "regression")
+
+    def test_the_registry_reads_signed_overheads_and_three_decimal_core_counts(self):
+        data, _ = sc.load_jsonc(sc.ROOT / "scorecard.jsonc")
+        metrics = {m["id"]: m for m in data["perf_metrics"]}
+        overhead = metrics["script.fuel_metering_overhead_pct"]
+        self.assertEqual((overhead["bound"], overhead["criterion"], overhead["unit"]), (10, "RT-13", "%"))
+        run = report.Results("linux-gcc")
+        line = ("workload: 2400000 fuel (2398710 raw safepoints); raw 8120 us, raw+callback per safepoint 9300 us "
+                "(14.5 %), raw+callback every 64 8301 us (2.2 %), Helios 8300 us (metering overhead {} %), ns/fuel 3.45")
+        for printed, value in (("4.12", 4.12), ("-0.19", -0.19), ("-3", -3.0), ("1.5e-05", 1.5e-05),
+                               ("-2.5e-06", -2.5e-06), ("7", 7.0)):
+            run.messages[(overhead["doctest"], overhead["case"])] = [line.format(printed)]
+            self.assertEqual(report.metric_values(overhead, [run]), {"linux-gcc": value}, printed)
+        cores = metrics["net.ns07.trunk_cell_cores"]
+        run.gates["net_bench_gate"] = ("pass", 600.0, "NS-0.7 trunk: 600 s, sent 11999995, delivered 11999995 "
+                                       "(20000 pps, 190.1 Mbit/s payload, 199.7 Mbit/s wire), drops 0.0000 %, "
+                                       "cell thread 0.245 cores, gateway thread 0.231 cores, rcvbuf 4096 KB")
+        self.assertEqual(report.metric_values(cores, [run]), {"linux-gcc": 0.245})
+
+    def test_each_failing_row_is_annotated_for_the_run_page(self):
+        history, _ = self.replay([self.night(n, t=100.0, p=2.0) for n in range(1, 6)])
+        with tempfile.TemporaryDirectory() as d:
+            hist, entry, out = Path(d) / "h.json", Path(d) / "e.json", Path(d) / "n.json"
+            hist.write_text(json.dumps(history), encoding="utf-8")
+            for tonight, rc_want in ((self.night(6, t=119.5), 1), (self.night(6, t=101.0, p=2.0), 0)):
+                entry.write_text(json.dumps(tonight), encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()) as text:
+                    rc = perf.main(["compare", "--entry", str(entry), "--history", str(hist), "--out", str(out)])
+                commands = [line for line in text.getvalue().splitlines() if line.startswith("::")]
+                self.assertEqual(rc, rc_want)
+                if rc:
+                    self.assertEqual(commands, [
+                        "::error title=perf regression::linux-gcc/t 119.5 u vs anchor 100 (+19.5 %25)",
+                        "::error title=perf missing::linux-gcc/p: no value tonight"])
+                    self.assertIn("| `linux-gcc/t` | 119.5 u |", text.getvalue())  # the table too
+                else:
+                    self.assertEqual(commands, [])
+        # Workflow-command escaping: data and properties cannot break out of the command.
+        self.assertEqual(perf._command_data("50 %\r\n::x"), "50 %25%0D%0A::x")
+        self.assertEqual(perf._command_property("perf a:b,c"), "perf a%3Ab%2Cc")
+        rows = [{"metric": "linux-gcc/t", "value": 12.0, "unit": "%", "anchor": 4.0, "anchor_change": 200.0,
+                 "verdict": "regression", "note": "worse than its bound of ≤ 10 %", "bound": 10, "better": "lower"}]
+        self.assertEqual(perf.annotations(rows), ["::error title=perf regression::linux-gcc/t 12 %25 vs anchor 4 "
+                                                  "(+200.0 %25), bound ≤ 10 %25: worse than its bound of ≤ 10 %25"])
+
+    # --- PR #44 review round 1.
+
+    def test_a_rare_class_finishes_its_calibration(self):
+        # The runner lands on this class every 16th night, so its 5 calibration nights span more than 60 entries.
+        nights = [self.on("RARE" if n % 16 == 0 else "COMMON", self.night(n, t=100.0)) for n in range(1, 160)]
+        history, verdicts = self.replay(nights)
+        self.assertEqual([v["t"] for v in verdicts[15::16]][:6], ["new-host-class"] + ["calibrating"] * 4 + ["ok"])
+        _, rows = perf.compare(history, self.on("RARE", self.night(160, t=150.0)), 5)
+        self.assertEqual(rows[0]["verdict"], "regression")  # +50 % on the rare class
+        # The store keeps a class's calibration values only while it calibrates.
+        rare = history["levels"]["linux-gcc/t"]["RARE, 4 logical CPUs"]
+        self.assertEqual((rare["anchor"], rare["anchor_n"]), (100.0, 5))
+        self.assertNotIn("calibration", rare)
+        # Every 30th night: the anchor is the median of the class's first 5 nights, not of the ones still held.
+        values = {30: 100.0, 60: 300.0, 90: 101.0, 120: 99.0, 150: 102.0, 180: 400.0}
+        nights = [self.on("RARE" if n in values else "COMMON", self.night(n, t=values.get(n, 50.0)))
+                  for n in range(1, 181)]
+        history, verdicts = self.replay(nights)
+        self.assertEqual([verdicts[n - 1]["t"] for n in values],
+                         ["new-host-class"] + ["calibrating"] * 4 + ["regression"])
+        self.assertEqual(history["entries"][-1]["metrics"]["linux-gcc/t"]["anchor"], 101.0)
+        self.assertEqual(history["levels"]["linux-gcc/t"]["COMMON, 4 logical CPUs"]["anchor"], 50.0)
+        # A class whose entries have all left the history still has its levels: the runner's return to it is
+        # no first night on a class (no warning) and does not count towards host churn.
+        nights = [self.on("RARE" if n in (1, 70) else "COMMON", self.night(n, t=100.0)) for n in range(1, 71)]
+        history, verdicts = self.replay(nights)
+        held = {perf.run_class(e, "linux-gcc") for e in history["entries"][:-1]}
+        self.assertNotIn("RARE, 4 logical CPUs", held)
+        self.assertEqual((verdicts[-1]["t"], history["entries"][-1]["new_class_runs"]), ("calibrating", []))
+
+    def test_a_class_in_calibration_keeps_its_values_in_the_store(self):
+        history, _ = self.replay([self.on("CPU A", self.night(n, t=100.0 + n)) for n in range(1, 4)])
+        self.assertEqual(history["levels"]["linux-gcc/t"]["CPU A, 4 logical CPUs"]["calibration"],
+                         [101.0, 102.0, 103.0])
+        # A bound breach is not a clean value: it is left out of the calibration.
+        history, verdicts = self.replay([self.bounded(1, 4.0), self.bounded(2, 12.0), self.bounded(3, 5.0)])
+        self.assertEqual([v["t"] for v in verdicts], ["new", "regression", "ok"])
+        self.assertEqual(history["levels"]["linux-gcc/t"]["CPU A, 4 logical CPUs"]["calibration"], [4.0, 5.0])
+
+    def test_the_nightly_extract_carries_the_registry_bound_to_compare(self):
+        data, _ = sc.load_jsonc(sc.ROOT / "scorecard.jsonc")
+        overhead = next(m for m in data["perf_metrics"] if m["id"] == "script.fuel_metering_overhead_pct")
+        key, history = f"{overhead['run']}/{overhead['id']}", {}
+        with tempfile.TemporaryDirectory() as d:
+            results = Path(d)
+            (results / "a").mkdir()
+            (results / "a" / "run.json").write_text(json.dumps({"run": overhead["run"]}), encoding="utf-8")
+            (results / "a" / "host.json").write_text('{"cpu": "CPU A", "logical_cpus": 4}', encoding="utf-8")
+            for n, pct in enumerate((4.0, 4.0, 4.0, 4.0, 4.0, 8.0, 10.5), 1):
+                message = f"raw 8120 us, Helios 8300 us (metering overhead {pct:g} %), ns/fuel 3.45"
+                doctest_xml(results / "a" / "doctest" / f"{overhead['doctest']}.perf.xml",
+                            [(overhead["case"], True, message)])
+                entry = perf.extract(data, report.load_results(results, MODULE), f"sha{n}",
+                                     self.day(n) + "T03:17:00Z", perf.load_hosts(results))
+                self.assertEqual((entry["metrics"][key]["value"], entry["metrics"][key]["bound"]), (pct, 10))
+                history, rows = perf.compare(history, entry, 5)
+                row = next(r for r in rows if r["metric"] == key)
+                if n == 6:  # +100 % against the 4 % anchor, but within RT-13's bound
+                    self.assertEqual((row["verdict"], row["anchor_change"]), ("ok", 100.0))
+        self.assertEqual((row["verdict"], row["note"]), ("regression", "worse than its bound of ≤ 10 %"))
+
+    def test_no_table_line_can_become_a_workflow_command(self):
+        history, _ = self.replay([self.night(n, t=100.0) for n in range(1, 6)])
+        reason = "faster allocator\n::error::x\r::warning file=a::y"
+        tonight = self.night(6, accepted=[self.accept(6, 80.0, reason=reason)], t=80.0)
+        _, rows = perf.compare(history, tonight, 5)
+        self.assertEqual(rows[0]["verdict"], "accepted")
+        text = perf.markdown(rows, tonight)
+        self.assertIn("| accepted (perf_accept for", text)
+        self.assertEqual([line for line in text.splitlines() if line.lstrip().startswith("::")], [])
+        self.assertEqual(perf.annotations(rows), [])
+
+    def test_a_missing_night_keeps_the_class_of_its_levels(self):
+        nights = [self.on("CPU A", self.night(n, t=100.0, p=50.0)) for n in range(1, 6)]
+        nights += [self.on("CPU A", self.night(6, p=50.0))]  # t is missing tonight
+        history, verdicts = self.replay(nights)
+        self.assertEqual(verdicts[-1]["t"], "missing")
+        self.assertEqual(history["entries"][-1]["missing_levels"]["linux-gcc/t"]["host"], "CPU A, 4 logical CPUs")
+        # So a night without host.json is not compared with CPU A's levels.
+        _, rows = perf.compare(history, self.night(7, t=150.0, p=50.0), 5)
+        self.assertEqual({r["metric"]: r["verdict"] for r in rows},
+                         {"linux-gcc/t": "new-host-class", "linux-gcc/p": "new-host-class"})
+
+    def test_a_legacy_historys_levels_outlive_its_entries(self):
+        legacy, _ = self.replay([self.night(n, t=100.0) for n in range(1, 7)])
+        for e in legacy["entries"]:  # as the nightly wrote it before host fingerprints
+            for m in e["metrics"].values():
+                del m["host"]
+        del legacy["levels"]
+        legacy["version"] = 1
+        history, verdicts = self.replay([self.on("CPU A", self.night(n, t=300.0)) for n in range(7, 7 + 61)],
+                                        history=legacy)
+        self.assertEqual(verdicts[0]["t"], "new-host-class")
+        self.assertNotIn(perf.UNRECORDED, {e["metrics"]["linux-gcc/t"]["host"] for e in history["entries"]})
+        # A result set without host.json is still held to the levels from before fingerprints.
+        _, rows = perf.compare(history, self.night(70, t=120.0), 5)
+        self.assertEqual((rows[0]["verdict"], rows[0]["anchor"]), ("regression", 100.0))
+
+    def test_a_redeclared_metric_keeps_its_levels_past_the_history_limit(self):
+        nights = [self.on("CPU A", self.night(n, t=100.0, p=50.0)) for n in range(1, 6)]
+        nights += [self.on("CPU A", self.night(6, declared=("p",), p=50.0))]  # dropped from the registry
+        # Declared again but not produced: it was not missing last night, so it is not missing now.
+        nights += [self.on("CPU A", self.night(n, p=50.0)) for n in range(7, 7 + perf.HISTORY_LIMIT)]
+        history, verdicts = self.replay(nights)
+        self.assertNotIn("t", verdicts[-1])
+        self.assertNotIn("linux-gcc/t", {k for e in history["entries"] for k in e["metrics"]})
+        _, rows = perf.compare(history, self.on("CPU A", self.night(70, t=120.0, p=50.0)), 5)
+        self.assertEqual({r["metric"]: r["verdict"] for r in rows}, {"linux-gcc/t": "regression", "linux-gcc/p": "ok"})
+
+    def test_a_bounded_metric_is_not_offered_a_perf_accept(self):
+        history, _ = self.replay([self.bounded(n, 4.0) for n in range(1, 6)])
+        _, rows = perf.compare(history, self.bounded(6, 1.0), 5)
+        self.assertEqual((rows[0]["verdict"], rows[0]["anchor_change"]), ("ok", -75.0))
+        self.assertNotIn("perf_accept", rows[0]["note"])
+        plain, _ = self.replay([self.on("CPU A", self.night(n, t=4.0)) for n in range(1, 6)])
+        _, rows = perf.compare(plain, self.on("CPU A", self.night(6, t=1.0)), 5)
+        self.assertIn("accept it with perf_accept", rows[0]["note"])
+
+    def test_the_hosts_line_counts_each_runs_host_classes(self):
+        nights = [self.on(cpu, self.night(n, t=100.0)) for n, cpu in enumerate(("CPU A", "CPU B", "CPU C", "CPU B"), 1)]
+        history, rows = perf.compare(self.replay(nights[:-1])[0], nights[-1], 5)
+        self.assertIn("Hosts: `linux-gcc` on CPU B, 4 logical CPUs (3 host classes with levels).",
+                      perf.markdown(rows, nights[-1], levels=history["levels"]))
+        history, rows = perf.compare({}, nights[0], 5)
+        self.assertIn("Hosts: `linux-gcc` on CPU A, 4 logical CPUs (1 host class with levels).",
+                      perf.markdown(rows, nights[0], levels=history["levels"]))
+
+    def test_failing_rows_of_a_history_from_before_they_were_named_are_listed_once(self):
+        old, _ = self.replay([self.night(n, t=100.0, p=50.0) for n in range(1, 6)] +
+                             [self.night(6, t=130.0, p=50.0), self.night(7, t=100.0, p=50.0), self.night(8, t=100.0)])
+        for e in old["entries"]:  # as perf.py wrote it before host fingerprints (history version 1)
+            for m in e["metrics"].values():
+                del m["host"]
+        del old["levels"]
+        old["version"] = 1
+        lines = perf.unnamed_failures(old)
+        self.assertEqual(lines, [
+            f"{self.day(6)}, commit `sha6`: `linux-gcc/t` regression (130 u vs anchor 100, +30.0 %)",
+            f"{self.day(8)}, commit `sha8`: `linux-gcc/p` missing"])
+        with tempfile.TemporaryDirectory() as d:
+            hist, entry, out = Path(d) / "h.json", Path(d) / "e.json", Path(d) / "n.json"
+            hist.write_text(json.dumps(old), encoding="utf-8")
+            entry.write_text(json.dumps(self.on("CPU A", self.night(9, t=100.0, p=50.0))), encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()) as text:
+                rc = perf.main(["compare", "--entry", str(entry), "--history", str(hist), "--out", str(out)])
+            self.assertEqual(rc, 0)
+            for line in lines:
+                self.assertIn(f"\n- {line}\n", text.getvalue())
+            # The new history names its own failing rows, so the list is not repeated on later nights.
+            self.assertEqual(perf.unnamed_failures(json.loads(out.read_text(encoding="utf-8"))), [])
+
+    # --- PR #44 review round 2.
+
+    def test_a_fingerprint_that_never_repeats_does_not_stay_green(self):
+        # Every night lands on a class the history has never seen: no class calibrates, so nothing is gated.
+        nights = [self.on(f"CPU rev {n}", self.night(n, t=100.0 if n < 20 else 150.0)) for n in range(1, 40)]
+        history, verdicts = self.replay(nights)
+        self.assertTrue(any(v["t"] in perf.FAILING for v in verdicts), sorted({v["t"] for v in verdicts}))
+        # More than --window classes without a second night: from the 6th night on, every night fails.
+        self.assertEqual([v["t"] for v in verdicts], ["new"] + ["new-host-class"] * 4 + ["host-churn"] * 34)
+        self.assertEqual(history["entries"][-1]["metrics"]["linux-gcc/t"]["verdict"], "host-churn")
+        self.assertEqual(history["entries"][-1]["new_class_runs"], ["linux-gcc"])
+        # A churning night's value is clean: the store keeps it for its class's calibration.
+        self.assertEqual(history["levels"]["linux-gcc/t"]["CPU rev 39, 4 logical CPUs"]["calibration"], [150.0])
+
+    def test_host_churn_counts_only_classes_the_runner_has_not_come_back_to(self):
+        def verdicts(cpus, **values):
+            return [v["t"] for v in self.replay([self.on(cpu, self.night(n, **(values or {"t": 100.0})))
+                                                 for n, cpu in enumerate(cpus, 1)])[1]]
+
+        # A stable pool of up to --window CPU models never gets there; with 6, only while none has come back.
+        five, six = [f"CPU {n % 5}" for n in range(100)], [f"CPU {n % 6}" for n in range(100)]
+        self.assertNotIn("host-churn", verdicts(five))
+        self.assertEqual([n for n, v in enumerate(verdicts(six), 1) if v == "host-churn"], [6])
+        # Under churn, a night that a level gated keeps its verdict (`ok` here) and only ungated rows fail.
+        cpus = ["CPU A"] * 5 + [f"CPU rev {n}" for n in range(6)] + ["CPU A"]
+        self.assertEqual(verdicts(cpus), ["new"] + ["calibrating"] * 4 + ["new-host-class"] * 5 + ["host-churn"] +
+                         ["ok"])
+        # The churning nights still calibrate their classes: the class the runner settles on gates from its 6th.
+        cpus = [f"CPU rev {n}" for n in range(10)] + ["CPU Z"] * 7
+        _, rows = perf.compare(self.replay([self.on(c, self.night(n, t=100.0)) for n, c in enumerate(cpus, 1)])[0],
+                               self.on("CPU Z", self.night(18, t=150.0)), 5)
+        self.assertEqual(verdicts(cpus)[-7:], ["host-churn"] * 5 + ["ok", "ok"])
+        self.assertEqual(rows[0]["verdict"], "regression")
+        # A metric with a bound is gated on every class, so churn does not fail it; nor a metric that is not gated.
+        nights = [self.bounded(n, 4.0, f"CPU rev {n}") for n in range(1, 9)]
+        self.assertEqual([v["t"] for v in self.replay(nights)[1]], ["new"] + ["new-host-class"] * 7)
+        nights = [self.on(f"CPU rev {n}", self.night(n, d=1.0)) for n in range(1, 9)]
+        self.assertEqual([v["d"] for v in self.replay(nights)[1]], ["new"] + ["new-host-class"] * 7)
+
+    def test_a_new_host_class_is_a_warning_on_the_run_page_and_churn_one_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            hist, entry, out = Path(d) / "h.json", Path(d) / "e.json", Path(d) / "n.json"
+
+            def night(e):
+                if out.is_file():
+                    hist.write_text(out.read_text(encoding="utf-8"), encoding="utf-8")
+                entry.write_text(json.dumps(e), encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()) as text:
+                    rc = perf.main(["compare", "--entry", str(entry), "--history", str(hist), "--out", str(out)])
+                return rc, [line for line in text.getvalue().splitlines() if line.startswith("::")], text.getvalue()
+
+            rc, commands, text = night(self.on("CPU A", self.night(1, t=100.0, p=5.0)))
+            self.assertEqual((rc, commands), (0, ["::warning title=perf new-host-class::linux-gcc on CPU A, "
+                                                  "4 logical CPUs (1 host class with levels)"]))
+            rc, commands, text = night(self.on("CPU B", self.night(2, t=100.0, p=5.0)))
+            self.assertEqual((rc, commands), (0, ["::warning title=perf new-host-class::linux-gcc on CPU B, "
+                                                  "4 logical CPUs (2 host classes with levels)"]))
+            self.assertIn("Hosts: `linux-gcc` on CPU B, 4 logical CPUs (first night on this class; 2 host classes "
+                          "with levels).", text)
+            rc, commands, text = night(self.on("CPU A", self.night(3, t=100.0, p=5.0)))  # a class with levels
+            self.assertEqual((rc, commands), (0, []))
+            self.assertIn("(2 host classes with levels).", text)
+            for n in range(4, 8):
+                rc, commands, text = night(self.on(f"CPU rev {n}", self.night(n, t=100.0, p=5.0)))
+                self.assertEqual(rc, 0)  # CPU B and up to 4 new classes without a second night: not more than 5
+            rc, commands, text = night(self.on("CPU rev 8", self.night(8, t=100.0, p=5.0)))
+            self.assertEqual(rc, 1)
+            self.assertEqual(commands, [
+                "::warning title=perf new-host-class::linux-gcc on CPU rev 8, 4 logical CPUs (7 host classes with "
+                "levels)",
+                "::error title=perf host-churn::linux-gcc: 2 gated metric(s) not gated tonight. host churn: 6 host "
+                "classes of linux-gcc had their first night in the last 8 nights and none has had another, more "
+                "than --window 5, so its levels cannot calibrate (is its host fingerprint stable?)"])
+            self.assertIn("**Host churn: 6 host classes of linux-gcc", text)
+            self.assertIn("| **host-churn** (host churn on linux-gcc; tonight new-host-class (first night on this "
+                          "host class (CPU rev 8, 4 logical CPUs)", text)
+
+    def test_a_higher_is_better_bound_fails_only_below_it(self):
+        def floor(n, value):
+            e = self.on("CPU A", self.night(n, p=value))
+            e["metrics"]["linux-gcc/p"].update(bound=1000, unit="pps")
+            return e
+
+        values = [1200.0] * 5 + [999.0, 1000.0, 3000.0]
+        history, verdicts = self.replay([floor(n, v) for n, v in enumerate(values, 1)])
+        self.assertEqual([v["p"] for v in verdicts], ["new"] + ["calibrating"] * 4 + ["regression", "ok", "ok"])
+        self.assertEqual(history["entries"][5]["metrics"]["linux-gcc/p"]["verdict"], "regression")
+        _, rows = perf.compare(self.replay([floor(n, 1200.0) for n in range(1, 6)])[0], floor(6, 999.0), 5)
+        self.assertEqual(rows[0]["note"], "worse than its bound of ≥ 1000 pps")
+        self.assertIn("| ≥ 1000 pps (bound) |", perf.markdown(rows, floor(6, 999.0)))
+
+    def test_no_summary_line_can_become_a_workflow_command_or_split_a_table_row(self):
+        # The earlier-failures list holds stored keys, units and SHAs; the notes hold CPU model names.
+        old = {"version": 1, "entries": [{"date": self.day(1), "sha": "sha1\n::error::x", "metrics": {
+            "linux-gcc/t": {"value": 130.0, "unit": "u\r\n::warning::y", "anchor": 100.0, "verdict": "regression",
+                            "better": "lower"}}}]}
+        earlier = perf.unnamed_failures(old)
+        self.assertEqual(len(earlier), 1)
+        history, _ = self.replay([self.on("CPU A", self.night(n, t=100.0)) for n in range(1, 6)])
+        tonight = self.on("CPU | B", self.night(6, t=150.0))
+        _, rows = perf.compare(history, tonight, 5)
+        self.assertEqual(rows[0]["verdict"], "new-host-class")
+        text = perf.markdown(rows, tonight, earlier=earlier)
+        self.assertEqual([line for line in text.splitlines() if line.lstrip().startswith("::")], [])
+        self.assertIn("- 2026-01-02, commit `sha1 ::error`: `linux-gcc/t` regression (130 u ::warning::y vs", text)
+        table = [line for line in text.splitlines() if line.startswith("| `")]
+        self.assertEqual([len(re.findall(r"(?<!\\)\|", line)) for line in table], [9, 9])  # t, and p never measured
+        self.assertIn("(CPU \\| B, 4 logical CPUs)", table[0])
+
+    # --- PR #44 review round 3.
+
+    def test_classes_that_each_recur_a_few_times_do_not_stay_green(self):
+        # The fingerprint changes every 2nd night: each class comes back once, so none stays unreturned, and
+        # none reaches its 5 calibration nights. +50 % from night 60.
+        nights = [self.on(f"CPU rev {n // 2}", self.night(n, t=100.0 if n < 60 else 150.0)) for n in range(1, 151)]
+        history, verdicts = self.replay(nights)
+        self.assertTrue(any(v["t"] in perf.FAILING for v in verdicts), sorted({v["t"] for v in verdicts}))
+        # No night of the run's last 60 had a row that a level gated: every night from the 60th fails.
+        failing = [n for n, v in enumerate(verdicts, 1) if v["t"] in perf.FAILING]
+        self.assertEqual(failing, list(range(60, 151)))
+        self.assertEqual({v["t"] for v in verdicts[59:]}, {"host-churn"})
+        self.assertEqual([e["ungated_nights"] for e in history["entries"][-2:]],
+                         [{"linux-gcc": 149}, {"linux-gcc": 150}])
+        # Classes of 3 or 4 nights each, and pairs of classes of 2 to 4 nights each, interleaved: the same.
+        interleaved = []
+        for i in range(40):
+            a, b, na, nb = f"CPU {i}a", f"CPU {i}b", 2 + i % 3, 2 + (i + 1) % 3
+            interleaved += [a, b] * min(na, nb) + [a if na > nb else b] * abs(na - nb)
+        for cpus in ([f"CPU rev {n // 3}" for n in range(1, 151)],
+                     [f"CPU rev {n // 4}" for n in range(1, 151)], interleaved[:150]):
+            verdicts = self.replay([self.on(cpu, self.night(n, t=100.0)) for n, cpu in enumerate(cpus, 1)])[1]
+            self.assertEqual([n for n, v in enumerate(verdicts, 1) if v["t"] in perf.FAILING], failing)
+
+    def test_a_run_fails_its_ungated_rows_after_a_full_history_without_a_gated_night(self):
+        def churn(n):
+            return f"CPU rev {n // 2}"  # 2 nights per class: each comes back once, and none calibrates
+
+        def night(n, cpu, **values):
+            e = self.on(cpu, self.night(n, **values))
+            if "b" in values:
+                e["metrics"]["linux-gcc/b"].update(bound=10, unit="%")
+            return e
+
+        # Class A calibrates on nights 1-5 and gates night 6; then 60 churning nights, A, 60 more, A. `p` is
+        # first produced on night 66, so it reads `new` there; `b` has a bound and `d` is not gated, so
+        # neither fails, and `b`'s bound breach on night 30 is not a night that a level gated.
+        cpus = ["CPU A"] * 6 + [churn(n) for n in range(7, 67)] + ["CPU A"]
+        cpus += [churn(n) for n in range(68, 128)] + ["CPU A"]
+        nights = [night(n, cpu, t=100.0, b=12.0 if n == 30 else 4.0, d=1.0, **({"p": 5.0} if n >= 66 else {}))
+                  for n, cpu in enumerate(cpus, 1)]
+        history, verdicts = self.replay(nights)
+        self.assertEqual([n for n, v in enumerate(verdicts, 1) if "host-churn" in v.values()], [66, 127])
+        self.assertEqual(verdicts[29]["b"], "regression")
+        self.assertEqual(verdicts[65], {"t": "host-churn", "p": "host-churn", "b": "new-host-class",
+                                        "d": "new-host-class"})
+        self.assertEqual((verdicts[66]["t"], verdicts[127]["t"]), ("ok", "ok"))  # a gated night: count 0
+        self.assertEqual([e["ungated_nights"]["linux-gcc"] for e in history["entries"][-3:]], [59, 60, 0])
+        _, rows = perf.compare(self.replay(nights[:65])[0], nights[65], 5)
+        self.assertEqual(perf.annotations(rows), [
+            "::error title=perf host-churn::linux-gcc: 2 gated metric(s) not gated tonight. host churn: "
+            "none of the last 60 nights of linux-gcc had a metric that a level gated, a full history (60) or "
+            "more, so its host classes do not stay long enough to calibrate (is its host fingerprint "
+            "stable?)"])
+        # A history written before the count was stored: it is counted from the stored verdicts, back to the
+        # last night that a level gated (night 6 here).
+        legacy, _ = self.replay(nights[:64])
+        for e in legacy["entries"]:
+            del e["ungated_nights"]
+        _, rows = perf.compare(legacy, nights[64], 5)
+        self.assertEqual({r["metric"]: r["verdict"] for r in rows}["linux-gcc/t"], "calibrating")  # 59 nights
+        legacy, _ = self.replay([self.on(churn(n), self.night(n, t=100.0)) for n in range(1, 60)])
+        for e in legacy["entries"]:
+            del e["ungated_nights"]
+        _, rows = perf.compare(legacy, self.on(churn(60), self.night(60, t=100.0)), 5)
+        self.assertEqual(rows[0]["verdict"], "host-churn")
+        # Nights on which the run measured no gated metric without a bound do not count: a metric added after
+        # 70 of them reads `new`.
+        nights = [night(n, churn(n), b=4.0, d=1.0, **({"t": 100.0} if n == 71 else {})) for n in range(1, 72)]
+        history, verdicts = self.replay(nights)
+        self.assertEqual(verdicts[-1]["t"], "new")
+        self.assertEqual(history["entries"][-1]["ungated_nights"], {"linux-gcc": 1})
+        # A regression is a night that a level gated: 60 of them, then a new metric, which reads `new`.
+        nights = [self.on("CPU A", self.night(n, t=100.0 if n <= 5 else 150.0, **({"p": 5.0} if n == 66 else {})))
+                  for n in range(1, 67)]
+        history, verdicts = self.replay(nights)
+        self.assertEqual(verdicts[-1], {"t": "regression", "p": "new"})
+        self.assertEqual(history["entries"][-1]["ungated_nights"], {"linux-gcc": 0})
+        # Nights on which the run measured nothing do not reset the count, which outlives the entries: with 3
+        # such nights, the run's 60th night without a gated row is the 63rd of the history.
+        nights = [self.on(churn(n), self.night(n, **({} if n in (20, 30, 40) else {"t": 100.0})))
+                  for n in range(1, 71)]
+        verdicts = self.replay(nights)[1]
+        self.assertEqual([n for n, v in enumerate(verdicts, 1) if v["t"] in perf.FAILING],
+                         [20, 30, 40] + list(range(63, 71)))
+        self.assertEqual({verdicts[n - 1]["t"] for n in (20, 30, 40)}, {"missing"})
+
+    def test_host_churn_counts_classes_within_the_history_and_nights_the_run_measured(self):
+        def verdicts(cpus, skip=()):
+            nights = [self.on(cpu, self.night(n, **({} if n in skip else {"t": 100.0})))
+                      for n, cpu in enumerate(cpus, 1)]
+            return [v["t"] for v in self.replay(nights)[1]]
+
+        # A class counts while its first night is among the history's 60 entries, tonight's included.
+        cpus = ["CPU X0"] + ["CPU A"] * 54 + [f"CPU X{k}" for k in range(1, 6)]  # X0 is the 60th entry back
+        self.assertEqual([n for n, v in enumerate(verdicts(cpus), 1) if v == "host-churn"], [60])
+        cpus = ["CPU X0"] + ["CPU A"] * 55 + [f"CPU X{k}" for k in range(1, 6)]  # X0 is the 61st entry back
+        self.assertNotIn("host-churn", verdicts(cpus))
+        # A night on which the run measured nothing (a job that wrote host.json and crashed) is no return.
+        cpus = ["CPU X1", "CPU X2", "CPU X3", "CPU X1", "CPU X4", "CPU X5", "CPU X6"]
+        self.assertEqual(verdicts(cpus, skip=(4,)), ["new"] + ["new-host-class"] * 2 + ["missing"] +
+                         ["new-host-class"] * 2 + ["host-churn"])
+
+    def test_the_new_host_class_warning_escapes_its_data(self):
+        # host.json is read as written, so its CPU model can hold anything.
+        new, rows = perf.compare({}, self.on("CPU 100%\r\n::error::x", self.night(1, t=100.0)), 5)
+        self.assertEqual(perf.annotations(rows, new["entries"][-1], new["levels"]),
+                         ["::warning title=perf new-host-class::linux-gcc on CPU 100%25%0D%0A::error::x, "
+                          "4 logical CPUs (1 host class with levels)"])
 
 
 class RunnerTests(unittest.TestCase):

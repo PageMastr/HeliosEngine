@@ -1249,6 +1249,72 @@ class PerfTests(unittest.TestCase):
                          ["::warning title=perf new-host-class::linux-gcc on CPU 100%25%0D%0A::error::x, "
                           "4 logical CPUs (1 host class with levels)"])
 
+    # --- PR #44 review round 4 (nits 2 to 4).
+
+    def test_no_hosts_line_becomes_a_workflow_command(self):
+        tonight = self.on("CPU\n::stop-commands::x", self.night(1, t=100.0))
+        new, rows = perf.compare({}, tonight, 5)
+        text = perf.markdown(rows, new["entries"][-1], levels=new["levels"])
+        self.assertEqual([l for l in text.splitlines() if l.lstrip().startswith("::")], [])
+
+    def test_host_fingerprints_are_loaded_with_their_whitespace_collapsed(self):
+        # `runners.py host` collapses the model; a host.json written any other way is read as written, and a
+        # `::stop-commands::` line in the tee'd job log would hide every later ::error annotation.
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "a"
+            run.mkdir()
+            (run / "run.json").write_text('{"run": "linux-gcc"}', encoding="utf-8")
+            (run / "host.json").write_text(json.dumps({"cpu": " CPU\n::stop-commands::x\t\r\nrev 2 ",
+                                                       "logical_cpus": 4}), encoding="utf-8")
+            hosts = perf.load_hosts(Path(d))
+        self.assertEqual(hosts, {"linux-gcc": {"cpu": "CPU ::stop-commands::x rev 2", "logical_cpus": 4}})
+        # The class it names is the one `runners.py host` would have written for the same machine.
+        self.assertEqual(runners.host_class(hosts["linux-gcc"]), "CPU ::stop-commands::x rev 2, 4 logical CPUs")
+
+    def test_the_backstop_counts_each_run_on_its_own(self):
+        # linux-gcc's class changes every 2nd night; windows stays on one class and is gated from its 6th
+        # night. Windows' gated rows must not reset linux-gcc's count, nor the other way round.
+        history, red = {}, {"linux-gcc": [], "windows": []}
+        for n in range(1, 63):
+            e = self.on(f"CPU rev {n // 2}", self.night(n, t=100.0, runs=("linux-gcc", "windows")))
+            e["metrics"]["windows/t"] = dict(e["metrics"]["linux-gcc/t"])
+            e["hosts"]["windows"] = {"cpu": "WIN", "logical_cpus": 4, "class": "WIN, 4 logical CPUs"}
+            history, rows = perf.compare(history, e, 5)
+            for r in rows:
+                if r["verdict"] in perf.FAILING:
+                    red[r["metric"].split("/")[0]].append(n)
+        self.assertEqual(red, {"linux-gcc": [60, 61, 62], "windows": []})
+        self.assertEqual(history["entries"][-1]["ungated_nights"], {"linux-gcc": 62, "windows": 0})
+
+    def test_the_legacy_walk_counts_each_run_on_its_own(self):
+        # The same two runs, in a history written before the count was stored: the walk back over the stored
+        # verdicts must read each run's own rows, so windows' gated rows do not stop linux-gcc's count.
+        def night(n):
+            e = self.on(f"CPU rev {n // 2}", self.night(n, t=100.0, runs=("linux-gcc", "windows")))
+            e["metrics"]["windows/t"] = dict(e["metrics"]["linux-gcc/t"])
+            e["hosts"]["windows"] = {"cpu": "WIN", "logical_cpus": 4, "class": "WIN, 4 logical CPUs"}
+            return e
+
+        legacy, _ = self.replay([night(n) for n in range(1, 62)])
+        for e in legacy["entries"]:
+            del e["ungated_nights"]
+        new, rows = perf.compare(legacy, night(62), 5)
+        self.assertEqual({r["metric"]: r["verdict"] for r in rows if r["verdict"] != "never measured"},
+                         {"linux-gcc/t": "host-churn", "windows/t": "ok"})
+        # The walk sees the 60 retained entries (nights 2 to 61), so linux-gcc's count is 60 + tonight.
+        self.assertEqual(new["entries"][-1]["ungated_nights"], {"linux-gcc": 61, "windows": 0})
+
+    def test_an_accepted_row_is_a_night_that_a_level_gated(self):
+        # A perf_accept for tonight sets the level tonight is gated against, so that night resets the backstop's
+        # count like an `ok` one: 59 churning nights, an accepted night on a new class, then another new class.
+        nights = [self.on(f"CPU rev {n // 2}", self.night(n, t=100.0)) for n in range(1, 60)]
+        nights.append(self.on("CPU rev 30", self.night(60, accepted=[self.accept(60, 100.0)], t=100.0)))
+        nights.append(self.on("CPU rev 31", self.night(61, t=100.0)))
+        history, verdicts = self.replay(nights)
+        self.assertEqual([v["t"] for v in verdicts[58:]], ["calibrating", "accepted", "new-host-class"])
+        self.assertEqual([e["ungated_nights"] for e in history["entries"][-3:]],
+                         [{"linux-gcc": 59}, {"linux-gcc": 0}, {"linux-gcc": 1}])
+
 
 class RunnerTests(unittest.TestCase):
     def test_gate_writes_junit_with_exit_code_and_output(self):
@@ -1326,18 +1392,32 @@ class RunnerTests(unittest.TestCase):
                       "properties": [{"name": "LABELS", "value": ["vulkan-gpu", "shaders"]}]}]
             original = sc.ctest_tests
             sc.ctest_tests = lambda *args: tests
+            logs = {}
             try:
-                with contextlib.redirect_stdout(io.StringIO()):
-                    skipped = runners.main(["doctest", "--build-dir", "build", "--label-exclude", "gpu|perf",
-                                            "--out", str(work / "skip")])
-                    every = runners.main(["doctest", "--build-dir", "build", "--out", str(work / "all")])
+                for name, args in (("skip", ["--label-exclude", "gpu|perf"]), ("all", []),
+                                   ("anchored", ["--label-exclude", "^gpu$"])):
+                    with contextlib.redirect_stdout(io.StringIO()) as log:
+                        rc = runners.main(["doctest", "--build-dir", "build", *args, "--out", str(work / name)])
+                    logs[name] = (rc, log.getvalue())
             finally:
                 sc.ctest_tests = original
-            self.assertEqual(skipped, 0)
+            self.assertEqual(logs["skip"][0], 0)
             self.assertEqual(sorted(p.name for p in (work / "skip").iterdir()),
                              ["cpu_tests.status.json", "cpu_tests.xml"])
-            self.assertEqual(every, 1)
+            # The skip line names the label that matched, not every label of the entry.
+            self.assertIn("doctest: gpu_tests: not run (label gpu matches 'gpu|perf')\n", logs["skip"][1])
+            self.assertIn("doctest: vk_tests: not run (label vulkan-gpu matches 'gpu|perf')\n", logs["skip"][1])
+            self.assertEqual(logs["all"][0], 1)
             self.assertEqual(json.loads((work / "all" / "gpu_tests.status.json").read_text())["returncode"], 7)
+            # PR #32's review: an anchored pattern is matched against each label on its own, as ctest -LE does,
+            # so "^gpu$" skips gpu_tests (labels render, gpu) and runs vk_tests (vulkan-gpu); a search over the
+            # labels joined into one string would skip neither.
+            self.assertEqual(logs["anchored"][0], 1)  # vk_tests ran and exited 8
+            self.assertEqual(sorted(p.name for p in (work / "anchored").iterdir()),
+                             ["cpu_tests.status.json", "cpu_tests.xml", "vk_tests.status.json"])
+            self.assertEqual(json.loads((work / "anchored" / "vk_tests.status.json").read_text())["returncode"], 8)
+            self.assertIn("doctest: gpu_tests: not run (label gpu matches '^gpu$')\n", logs["anchored"][1])
+            self.assertNotIn("vk_tests: not run", logs["anchored"][1])
 
 
 if __name__ == "__main__":

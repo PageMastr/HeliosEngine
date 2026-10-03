@@ -343,9 +343,14 @@ report at exit).
   nights, however far apart they are. Host churn (above) fails only when it leaves a run without a gated
   night: under classes that each recur a few times, the first red is the run's 60th night without one
   (`host-churn`, not `regression`), and a run that has a gated night at least once in 60 is gated on
-  those nights only. A real regression that lands on the same night as a move of the
-  fleet to a new CPU model is calibrated into the new class's anchor, and if the old classes never come
-  back, nothing catches it. The gating and the thresholds stay as the plan sets them. The nightly perf
+  those nights only. A real regression that lands within the first 3 nights of a class the runner has
+  never measured on is calibrated into that class's anchor (the median of its 5 calibration nights, so 3
+  regressed values set it), and if no earlier class comes back, nothing catches it. The same holds for a
+  pool that keeps moving to new CPU models and never returns: each class gates a night, so neither churn
+  rule fires, and a regression is red for at most a class's nights minus its 5 calibration nights before
+  the next class absorbs it (at most 1 if each class lasts 6 nights, 5 if it lasts 10). Then only the
+  `new-host-class` warnings on the run page show the moves. Both come from re-anchoring per class. The
+  gating and the thresholds stay as the plan sets them. The nightly perf
   history on hosted runners is drift tracking, not the binding gate: the binding per-commit perf gates on
   fixed hardware are WP-0.4's (its runner and the lab), and until they exist a red or a green here is
   evidence to read, not a measurement on REF.

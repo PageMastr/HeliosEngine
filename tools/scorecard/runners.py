@@ -67,9 +67,11 @@ def run_doctest(build_dir: str, config: str | None, perf: bool, out: Path, ctest
         if scorecard.is_doctest_entry(test) != kind:
             continue
         labels = scorecard.test_property(test, "LABELS") or []
-        if label_exclude and any(re.search(label_exclude, label) for label in labels):
-            print(f"doctest: {test['name']}: not run (label {', '.join(labels)} matches {label_exclude!r})",
-                  flush=True)
+        # Each label on its own, as ctest -LE does: an anchored REGEX ("^gpu$") skips "gpu" but not "vulkan-gpu".
+        matched = [label for label in labels if label_exclude and re.search(label_exclude, label)]
+        if matched:
+            print(f"doctest: {test['name']}: not run (label{'s' if len(matched) > 1 else ''} {', '.join(matched)} "
+                  f"{'match' if len(matched) > 1 else 'matches'} {label_exclude!r})", flush=True)
             continue
         binary = test["name"].removesuffix("_perf")
         stem = binary + (".perf" if perf else "")

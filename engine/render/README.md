@@ -44,7 +44,8 @@ device.present(swapchain, r.graphics());
   Each compile rebuilds the plan in the storage of the previous one, with the compiler's scratch
   arrays kept alongside, so recompiling an unchanged graph allocates nothing once that storage has
   grown (counted for the 200-pass perf graph: 1,069 allocations in the first compile, 38 in the second,
-  none after); the plan is exactly what a compile into fresh storage gives (tested field by field).
+  none after, where the previous compiler made 4,718 in every compile); the plan is exactly what a
+  compile into fresh storage gives (tested field by field).
 * **Reuse**: `reset(name)` empties the graph for the next frame's setup but keeps that storage, so a
   renderer that keeps one `RenderGraph` and rebuilds it every frame compiles without reallocating its
   plan. A new `RenderGraph` per frame works as before and is only somewhat slower (below).
@@ -69,24 +70,33 @@ them. The scorecard tracks the gated value as `render.graph_compile_200_passes_m
 per host class). The Phase 2 topology cache has its own budget: a hit ≤ 0.05 ms.
 
 Until 2026-10-03 the compile had no margin on the nightly's most common hosted `ubuntu-24.04` class: best
-0.302–0.313 ms, median batch 0.309–0.323 ms, red on every night there (faster classes passed). The
-compiler now keeps its scratch and the previous plan's storage (above), uses flat arrays instead of a
-vector per pass, subresource, reader and batch, and folds happens-before per resource, so the test that
-aliasing and placement run on pairs of resources (placement on every pair in a heap) is a few compares
-instead of a walk over pass, batch and clock records. The plan is unchanged: besides the tests below,
-the full plans of the stress test's 300 random graphs × 2 frames (compiled and executed) and of the
-budget graph's shape at 10–400 passes under 24 option combinations each were byte-identical to the
-previous compiler's. Interleaved runs of the old and new `render_tests` (linux-gcc
-RelWithDebInfo) on the shared 4-vCPU dev container at load 14.9–15.9, 50 of each:
+0.302–0.313 ms, median batch 0.309–0.323 ms, red on every night there (faster classes passed). A
+callgrind profile of the perf case put 32 % of the compile's 3.55 M instructions in `malloc`/`free` (a
+vector per pass, subresource, reader, batch and barrier list, and a new plan each time) and 27 % in the
+happens-before test that aliasing and placement repeat for pairs of resources. The compiler
+now keeps its scratch and the previous plan's storage (above), uses flat arrays instead of those
+vectors, and folds happens-before per resource, so that test is a few compares instead of a walk over
+pass, batch and clock records: 1.20 M instructions per compile, 0.3 % of them in the allocator, with
+placement's pair test (29 %) the largest remaining step. The plan is unchanged: besides the tests
+below, the full plans (`fullPlanText`, every field) of the stress test's 300 random graphs × 2 frames
+(compiled and executed, plus 2 more option sets each) and of the budget graph's shape at 10–400 passes
+under 48 option and import combinations, 2,040 plans in all, were byte-identical to the previous
+compiler's.
 
-| `render_tests_perf` | Before: median (min–max) | After: median (min–max) | Change |
+Interleaved runs of the old (`main` at ee0a8af) and new `render_tests` (linux-gcc RelWithDebInfo, the
+nightly's configuration), alternating which goes first, on the shared 4-vCPU dev container while other
+agents built (1-minute load average 0.6–4.1), 60 runs of each:
+
+| `render_tests_perf` | Before: median (IQR; min–max) | After: median (IQR; min–max) | Change |
 |---|---|---|---|
-| Best of 10 batches (gated) | 0.303 ms (0.295–0.564) | 0.103 ms (0.101–0.176) | −66 % |
-| Median batch | 0.357 ms (0.305–2.487) | 0.108 ms (0.106–0.191) | −70 % |
+| Best of 10 batches (gated) | 0.302 ms (0.300–0.305; 0.291–0.594) | 0.104 ms (0.103–0.106; 0.102–0.181) | −66 % |
+| Median batch | 0.328 ms (0.317–0.343; 0.307–0.617) | 0.114 ms (0.111–0.120; 0.108–0.189) | −65 % |
 
-A new graph per compile, which allocates its plan, measured a best of 0.123–0.128 ms (before:
-0.281–0.294 ms; 3 runs each, not interleaved), and `reset()` with the graph rebuilt 0.094–0.096 ms. The
-margin on the hosted runner classes is verified only by the next nightly.
+The new compile was faster in all 60 pairs. The old one now measures about 0.30 ms here (0.21–0.26 ms
+when #18 landed), as slow as the failing hosted class. A new `RenderGraph` per compile, which allocates
+its plan (1,069 allocations), measured a best of 0.126 ms against 0.284 ms (medians of 20 interleaved
+runs each, −56 %), and `reset()` with the graph rebuilt 0.097 ms, so most of the gain does not depend
+on reusing one graph. The margin on the hosted runner classes is verified only by the next nightly.
 
 ## Shader reflection (03 §1.7)
 

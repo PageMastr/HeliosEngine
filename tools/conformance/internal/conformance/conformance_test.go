@@ -403,3 +403,34 @@ func TestPIIReportOrder(t *testing.T) {
 		last = at
 	}
 }
+
+// TestCMakeCommands: parentheses inside quoted arguments, bracket arguments and comments, and escaped
+// ones do not count toward a command's end, so they cannot swallow the commands after them; a command
+// still open at the end of the file is returned and reported as open.
+func TestCMakeCommands(t *testing.T) {
+	for _, c := range []struct {
+		src  string
+		want []string // name@line
+		open int
+	}{
+		{"message(STATUS \"ISA (avx2\")\nadd_compile_options(-mavx2)", []string{"message@1", "add_compile_options@2"}, 0},
+		{"string(REGEX REPLACE \"\\\\(.*\" \"\" s \"${v}\")\nx()", []string{"string@1", "x@2"}, 0},
+		{"string(APPEND l \"|R\\\"[^()]*\\\\(\")\nx()", []string{"string@1", "x@2"}, 0},
+		{"set(a \"multi\nline ( \\\" string\")\nx()", []string{"set@1", "x@3"}, 0},
+		{"set(a [=[ ( ]] ]=])\nx()", []string{"set@1", "x@2"}, 0},
+		{"#[[ (\n]] x()\ny()", []string{"x@2", "y@3"}, 0},
+		{"set(a \\()\nx() # comment (\ny( # (\n)", []string{"set@1", "x@2", "y@3"}, 0},
+		{"if(a) x() endif()", []string{"if@1", "x@1", "endif@1"}, 0},
+		{"set(a \"#\" b) # c(\nx()", []string{"set@1", "x@2"}, 0},
+		{"ok()\nmessage(\"never closed\"\nx()", []string{"ok@1", "message@2"}, 2},
+	} {
+		cmds, open := cmakeCommands(strings.Split(c.src, "\n"))
+		var got []string
+		for _, cmd := range cmds {
+			got = append(got, fmt.Sprintf("%s@%d", cmd.name, cmd.line))
+		}
+		if strings.Join(got, " ") != strings.Join(c.want, " ") || open != c.open {
+			t.Errorf("%q:\n got  %v (open %d)\n want %v (open %d)", c.src, got, open, c.want, c.open)
+		}
+	}
+}

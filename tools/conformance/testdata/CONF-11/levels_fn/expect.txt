@@ -1,0 +1,9 @@
+#! -rules CONF-11 -strict
+# A level set that today's helios_isa_avx2_flags() fills at file scope, and a cached copy that a helper
+# fills through a second producer (defined after its use), are level sets everywhere: on a target, on a
+# file, through $CACHE{} and through a foreach loop variable.
+engine/x/CMakeLists.txt:1: CONF-11
+engine/x/CMakeLists.txt:2: CONF-11
+engine/x/CMakeLists.txt:3: CONF-11
+engine/x/CMakeLists.txt:4: CONF-11
+engine/x/CMakeLists.txt:6: CONF-11

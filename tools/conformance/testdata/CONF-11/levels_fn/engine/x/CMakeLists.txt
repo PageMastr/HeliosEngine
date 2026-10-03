@@ -1,0 +1,7 @@
+target_compile_options(helios_x PRIVATE ${HELIOS_ISA_AVX2})
+set_source_files_properties(src/fast.cpp PROPERTIES COMPILE_OPTIONS "${HELIOS_ISA_AVX2}")
+target_compile_options(helios_x3 PRIVATE ${HELIOS_ISA_AVX2_CACHED})
+target_compile_options(helios_x4 PRIVATE $CACHE{HELIOS_ISA_AVX2_CACHED})
+foreach(flag IN LISTS HELIOS_ISA_AVX2)
+  target_compile_options(helios_x5 PRIVATE ${flag})
+endforeach()

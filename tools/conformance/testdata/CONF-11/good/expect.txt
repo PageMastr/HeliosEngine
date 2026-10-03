@@ -1,2 +1,3 @@
 #! -rules CONF-11 -strict
-# Level sets applied in cmake/HeliosIsa.cmake, baseline pins, SSE4.2, and names in comments.
+# Level sets applied in cmake/HeliosIsa.cmake, baseline pins (x86-64-v1 too), SSE4.2, names in comments
+# and messages, and try-compile probe flags.

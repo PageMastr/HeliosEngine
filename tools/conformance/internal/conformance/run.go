@@ -61,6 +61,21 @@ func (p *Pass) Report(file string, line int, format string, args ...any) {
 	*p.out = append(*p.out, Finding{Rule: p.Rule.ID, Path: file, Line: line, Message: msg})
 }
 
+// ReportTool records a ToolRule finding from inside a rule: a source file the rule cannot read as it
+// must, so that what it could not read fails the run instead of passing unseen.
+func (p *Pass) ReportTool(file string, line int, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	key := fmt.Sprintf("%s|%s:%d:%s", ToolRule, file, line, msg)
+	if p.seen == nil {
+		p.seen = map[string]bool{}
+	}
+	if p.seen[key] {
+		return
+	}
+	p.seen[key] = true
+	*p.out = append(*p.out, Finding{Rule: ToolRule, Path: file, Line: line, Message: msg})
+}
+
 // Finding is one diagnostic. Suppressed and Known are set by Run.
 type Finding struct {
 	Rule, Path  string

@@ -500,7 +500,7 @@ Result<void> Framework::close(const DocId& id, bool discard) {
     std::vector<usize> remap(m_history.size(), ~usize{0});
     for (usize i = 0; i < m_history.size(); ++i) {
         const auto docs = m_history[i].tx.documents();
-        if (std::find(docs.begin(), docs.end(), id) != docs.end()) {
+        if (containsDoc(docs, id)) {
             m_historyBytes -= m_history[i].tx.byteSize();
             continue;
         }
@@ -674,7 +674,7 @@ Result<TxId> FwAccess::finishCommit(Framework& fw, TxBuilder& b, Transaction tx)
     for (usize idx : fw.m_redoStack) {
         const auto rdocs = fw.m_history[idx].tx.documents();
         const bool shares = std::any_of(rdocs.begin(), rdocs.end(), [&](const DocId& d) {
-            return std::find(docs.begin(), docs.end(), d) != docs.end();
+            return containsDoc(docs, d);
         });
         if (shares) dropped.push_back(idx);
     }

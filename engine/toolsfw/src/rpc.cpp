@@ -644,7 +644,7 @@ void registerFrameworkRpc(RpcServer& server, Framework& fw) {
         for (const HistoryEntry& e : fw.history()) {
             if (doc) {
                 const auto docs = e.tx.documents();
-                if (std::find(docs.begin(), docs.end(), *doc) == docs.end()) continue;
+                if (!containsDoc(docs, *doc)) continue;
             }
             w.beginObject();
             w.key("id");

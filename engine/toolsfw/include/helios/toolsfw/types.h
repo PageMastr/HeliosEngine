@@ -3,8 +3,10 @@
 //
 // Threading: plain value types; the free functions are pure.
 
+#include <algorithm>
 #include <compare>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -49,6 +51,13 @@ struct TxId {
     friend bool operator==(const TxId&, const TxId&) = default;
     friend auto operator<=>(const TxId&, const TxId&) = default;
 };
+
+/// True when `ids` contains `id`. Use this rather than std::find over document ids: MSVC's STL
+/// (14.51) vectorizes std::find for trivially equality-comparable element types and, under
+/// clang-cl, static_asserts on a 16-byte Guid ("unexpected size").
+inline bool containsDoc(std::span<const DocId> ids, const DocId& id) noexcept {
+    return std::any_of(ids.begin(), ids.end(), [&](const DocId& d) { return d == id; });
+}
 
 /// 16 lowercase hex digits (content hashes in journals, RPC results and file headers).
 std::string hashHex(u64 hash);

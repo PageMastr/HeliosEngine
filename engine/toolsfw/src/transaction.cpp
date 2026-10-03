@@ -45,7 +45,7 @@ Op Op::inverse() const {
 std::vector<DocId> Transaction::documents() const {
     std::vector<DocId> out;
     for (const Op& op : ops) {
-        if (std::find(out.begin(), out.end(), op.doc) == out.end()) out.push_back(op.doc);
+        if (!containsDoc(out, op.doc)) out.push_back(op.doc);
     }
     return out;
 }

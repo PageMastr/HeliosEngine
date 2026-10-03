@@ -120,7 +120,8 @@ clang-cl) and Go (Linux, Windows), runs `net_bench --gate` on GCC and VS 2026, a
 target under libFuzzer for 1 h (NS-0.4). Each job uploads a result set; the `scorecard` job evaluates them:
 
 ```
-python3 tools/scorecard/runners.py doctest --build-dir B [--config C] [--perf] --out R/doctest   # per-case XML
+python3 tools/scorecard/runners.py doctest --build-dir B [--config C] [--perf] [--label-exclude RE] \
+        --out R/doctest                                                          # per-case XML
 python3 tools/scorecard/runners.py gate --name net_bench_gate --build-dir B --out R/gates -- net_bench --gate
 python3 tools/scorecard/report.py --results results --ci-jobs ci-jobs.json --previous last/scorecard-report.json \
         [--scheduled] --out scorecard-report.json --markdown scorecard.md
@@ -130,9 +131,10 @@ python3 tools/scorecard/perf.py compare --entry perf-entry.json --history last/p
 
 A result set is a directory with `run.json` (`{"run": "<a declared run>"}`) and any of `ctest*.xml`
 (`ctest --output-junit`), `doctest/<binary>[.perf].xml` with its `.status.json`, `go*.json` (`go test -json`)
-and `gates/<gate>.xml`. The runner uses the working directory, environment and timeout that CTest would. A
-doctest binary whose XML is unreadable (a crash) fails every case it cites. So does one that exits non-zero
-although every case passed (a sanitizer report at exit).
+and `gates/<gate>.xml`. The runner uses the working directory, environment and timeout that CTest would, and
+`--label-exclude` skips the entries `ctest -LE` skips: the Windows jobs have no GPU and pass `"gpu|perf"` to both
+steps. A doctest binary whose XML is unreadable (a crash) fails every case it cites. So does one that exits
+non-zero although every case passed (a sanitizer report at exit).
 
 - **Per criterion.** On each platform, a reference passes when it has results in the runs that count for it
   and none failed. A missing result or a skip is *unmeasured*. A gate that ran shorter than its

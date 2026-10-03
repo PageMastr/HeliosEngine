@@ -255,6 +255,60 @@ class RunsOnTests(unittest.TestCase):
         self.assertTrue(self.reaches("runs-on: [self-hosted, '${{ matrix.extra }}']",
                                      "strategy:\n  matrix:\n    extra: [win-gpu]\n"))
 
+    def test_matrix_keys_compare_without_case(self):
+        # matrix.os finds OS (DictionaryContextData looks keys up OrdinalIgnoreCase), and an `include` entry
+        # may spell the axis differently from the axis itself: every key that might be the axis counts.
+        for runs_on, strategy in (
+                ("runs-on: ${{ matrix.os }}",
+                 "strategy:\n  matrix:\n    os: [ubuntu-24.04]\n    include:\n      - OS: [self-hosted, win-gpu]\n"),
+                ("runs-on: ${{ matrix.os }}",
+                 "strategy:\n  matrix:\n    OS: [[self-hosted, win-gpu]]\n    include:\n      - os: ubuntu-24.04\n"),
+                ("runs-on: ${{ matrix.Os }}",
+                 "strategy:\n  matrix:\n    Os: [ubuntu-24.04]\n    include:\n      - os: [self-hosted, win-gpu]\n"),
+                # Two axes that differ only in case: the lookup may find either.
+                ("runs-on: ${{ matrix.os }}", "strategy:\n  matrix:\n    os: [ubuntu-24.04]\n    OS: [win-gpu]\n"),
+                # GitHub matches well-known keys exactly, so `INCLUDE` is most likely an axis; if its expansion
+                # folded case it would be `include`. The check reads it both ways.
+                ("runs-on: ${{ matrix.os }}",
+                 "strategy:\n  matrix:\n    os: [ubuntu-24.04]\n    INCLUDE:\n      - os: [self-hosted, win-gpu]\n")):
+            with self.subTest(strategy=strategy):
+                self.assertTrue(self.reaches(runs_on, strategy))
+        # Keys that fold to another name are other axes.
+        self.assertFalse(self.reaches("runs-on: ${{ matrix.os }}",
+                                      "strategy:\n  matrix:\n    os: [ubuntu-24.04]\n    os2: [win-gpu]\n"
+                                      "    include:\n      - osx: [self-hosted]\n"))
+
+    def test_case_variant_matrix_with_a_pr_trigger_fails(self):
+        rules, jobs = check("on: pull_request\njobs:\n  build:\n    strategy:\n      matrix:\n        os: [ubuntu-24.04]\n"
+                            "        include:\n          - OS: [self-hosted, win-gpu]\n    runs-on: ${{ matrix.os }}\n"
+                            "    steps:\n      - run: echo ${{ secrets.DEPLOY_KEY }}\n")
+        self.assertEqual(["build"], jobs)
+        self.assertLessEqual({"trigger", "secrets", "guard-ref", "guard-var", "permissions"}, rules)
+
+    def test_empty_and_blank_labels(self):
+        # A runs-on that names no label cannot be placed by this check: fail closed, not "does not reach".
+        for runs_on, extra in (("runs-on: []", ""), ("runs-on:\n  labels: []", ""), ("runs-on: ''", ""),
+                               ("runs-on: [' ', \"\\t\"]", ""),
+                               ("runs-on: ${{ matrix.os }}", "strategy:\n  matrix:\n    os: [[]]\n"),
+                               ("runs-on: ${{ matrix.os }}", "strategy:\n  matrix:\n    os: [ubuntu-24.04, '']\n")):
+            with self.subTest(runs_on=runs_on, extra=extra):
+                rules, _ = check(workflow("on: pull_request\n", with_job(**{"runs-on": runs_on}) +
+                                          textwrap.indent(extra, "    ")))
+                self.assertEqual({"runs-on"}, rules)
+        # A blank label beside real ones counts as absent, in case GitHub drops it.
+        self.assertTrue(self.reaches("runs-on: [self-hosted, '']"))
+        self.assertTrue(self.reaches("runs-on: [self-hosted, ' ', x64]"))
+        self.assertFalse(self.reaches("runs-on: [ubuntu-24.04, '']"))
+
+    def test_matrix_include_and_exclude_are_not_axes(self):
+        # `matrix.include` is no axis GitHub resolves to labels; whatever it reads as, fail closed.
+        for name in ("include", "Exclude"):
+            with self.subTest(name=name):
+                runs_on = "runs-on: ${{ matrix.%s }}" % name
+                rules, _ = check(workflow("on: pull_request\n", with_job(**{"runs-on": runs_on}) +
+                                          "    strategy:\n      matrix:\n        include:\n          - os: a\n"))
+                self.assertEqual({"runs-on"}, rules)
+
     def test_unresolvable_runs_on_fails_everywhere(self):
         for runs_on, extra in (("runs-on: ${{ vars.RUNNER }}", ""),
                                ("runs-on: ${{ matrix.os }}", "strategy:\n  matrix: ${{ fromJSON(inputs.m) }}\n"),

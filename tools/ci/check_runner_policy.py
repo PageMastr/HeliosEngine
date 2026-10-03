@@ -9,7 +9,8 @@ The `win-gpu` runner is the repository owner's own PC, so it may run only code t
 and merged. A job reaches that runner when its `runs-on` names `win-gpu`, or names only labels the runner
 carries (`self-hosted`, `windows`, `x64`, `win-gpu`; compared ignoring case and surrounding blanks), in any
 form: a string, a list, `labels:` under a runner group, or `${{ matrix.<axis> }}` over literal matrix
-values (axis lists and `include` entries). For every such job the workflow fails when:
+values (axis lists and `include` entries; matrix keys compare ignoring case, as GitHub's context lookup
+does). For every such job the workflow fails when:
 
   trigger      it has a trigger other than `schedule`, `workflow_dispatch` or `push` restricted to
                `branches: [main]` (`pull_request*`, `workflow_run`, `workflow_call`, `push` to other
@@ -30,8 +31,8 @@ values (axis lists and `include` entries). For every such job the workflow fails
 
 Two findings apply to every job of every workflow, because they hide whether a job reaches the runner:
 
-  runs-on      `runs-on` is missing (in a job that calls no reusable workflow) or is an expression other
-               than `${{ matrix.<axis> }}` over literal values;
+  runs-on      `runs-on` is missing (in a job that calls no reusable workflow), is an expression other
+               than `${{ matrix.<axis> }}` over literal values, or names no label that is not blank;
   reusable     the job calls a reusable workflow other than a file directly in this repository's
                `./.github/workflows/`.
 
@@ -680,20 +681,26 @@ def _label_sets(value, matrix) -> tuple[list[frozenset[str]] | None, str]:
         m = expr.fullmatch(item.strip())
         if not m or not isinstance(matrix, Map):
             return None
-        values = []
-        axis = matrix.get(m[1])
-        if isinstance(axis, Seq):
-            values += list(axis)
-        elif axis is not None:
+        # GitHub looks context keys up ignoring case (`matrix.os` finds `OS`), and an `include` entry may spell
+        # the axis differently from the axis itself, so every key that folds to the name counts. `include` and
+        # `exclude` are compared folded too: GitHub matches well-known keys exactly, but if its (unpublished)
+        # matrix expansion did not, `INCLUDE` entries would add combinations, so they are read both ways.
+        name, values = _fold(m[1]), []
+        if name in ("include", "exclude"):
             return None
-        include = matrix.get("include")
-        if include is not None and not isinstance(include, Seq):
-            return None
-        for entry in include or []:
-            if not isinstance(entry, Map):
-                return None
-            if m[1] in entry:
-                values.append(entry[m[1]])
+        for key, axis in matrix.items():
+            folded = _fold(str(key))
+            if folded == "include":
+                if not isinstance(axis, Seq):
+                    return None
+                for entry in axis:
+                    if not isinstance(entry, Map):
+                        return None
+                    values += [v for k, v in entry.items() if _fold(str(k)) == name]
+            if folded == name:
+                if not isinstance(axis, Seq):
+                    return None
+                values += list(axis)
         out = []
         for v in values:
             if isinstance(v, str) and "${{" not in v:
@@ -715,9 +722,13 @@ def _label_sets(value, matrix) -> tuple[list[frozenset[str]] | None, str]:
         if alternatives is None:
             return None, f"runs-on entry {entry!r} is an expression this check cannot resolve"
         combos = [c + a for c in combos for a in alternatives]
-    sets = [frozenset(_fold(x) for x in c) for c in combos]
+    # A blank label counts as absent (in case GitHub drops it, the rest must still be judged), and a combination
+    # left with no label is unresolvable rather than "does not reach": the check fails closed.
+    sets = [frozenset(_fold(x) for x in c) - {""} for c in combos]
     if group is not None:
         return None, "runs-on names a runner group, whose runners this check cannot see"
+    if not all(sets):
+        return None, "runs-on names no label (or only blank ones) in at least one combination"
     return sets, ""
 
 

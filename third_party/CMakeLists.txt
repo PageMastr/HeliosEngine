@@ -51,6 +51,13 @@ if(HELIOS_BUILD_GRAPHICS)
   set(SDL_CAMERA OFF CACHE BOOL "" FORCE)
   set(SDL_AUDIO OFF CACHE BOOL "" FORCE)         # audio goes through miniaudio
   set(SDL_VULKAN ON CACHE BOOL "" FORCE)
+  if(HELIOS_SANITIZE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # LeakSanitizer: link libX11 and its extensions instead of loading them, so they stay mapped.
+    # SDL_Quit would dlclose them, and libX11's process-lifetime caches (locale database, input
+    # method, resource-manager quarks) would then be unreachable and unsymbolised: "<unknown module>"
+    # leaks under SDL_Init in every sanitizer run that opens an X11 display (rhi_triangle_smoke).
+    set(SDL_X11_SHARED OFF CACHE BOOL "" FORCE)
+  endif()
   add_subdirectory(${TP}/sdl3 ${CMAKE_CURRENT_BINARY_DIR}/sdl3 EXCLUDE_FROM_ALL)
   add_library(helios::tp::sdl3 ALIAS SDL3-static)
 
@@ -167,6 +174,15 @@ foreach(t Luau.Common Luau.Ast Luau.Bytecode Luau.Inliner Luau.Compiler Luau.Con
     helios_tp_quiet(${t})
   endif()
 endforeach()
+# Debug sanitizer builds (linux-debug-asan) compile the interpreter loop at -O1. At -O0 ASan gives every
+# local of luau_execute its own redzoned stack slot: a 128 KiB frame (480 bytes at -O1), so the
+# LUAI_MAXCCALLS nested C calls a script may make (binding -> Luau -> binding) needed more than an 8 MiB
+# stack and crashed instead of raising Luau's C-stack error. -O1 keeps the full instrumentation (the ASan
+# docs recommend -O1 or higher). MSVC is left alone: /O1 conflicts with Debug's /RTC1.
+if(HELIOS_SANITIZE AND NOT MSVC)
+  set_source_files_properties(${TP}/luau/VM/src/lvmexecute.cpp TARGET_DIRECTORY Luau.VM
+    PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O1>")
+endif()
 add_library(tp_luau INTERFACE)
 target_link_libraries(tp_luau INTERFACE Luau.Compiler Luau.VM Luau.CodeGen)
 add_library(helios::tp::luau ALIAS tp_luau)

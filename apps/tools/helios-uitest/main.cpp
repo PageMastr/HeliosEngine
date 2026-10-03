@@ -174,6 +174,12 @@ bool Suite::compareGolden(const std::string& name, const fs::Path& capture) {
         return check(std::format("golden {}", name), false,
                      std::format("size {}x{}, golden {}x{}", test->width, test->height, ref->width, ref->height));
     }
+    // Identical images have a ꟻLIP error of exactly 0 everywhere, so they pass without the metric.
+    // ꟻLIP costs about a minute per 1080p image in Debug sanitizer builds, which run every test.
+    const u64 differing = render::countDifferentPixels(*ref, *test);
+    if (differing == 0) {
+        return check(std::format("golden {}", name), true, "identical to the golden (0 pixels differ, so ꟻLIP mean and max are 0)");
+    }
     auto flip = render::computeFlip(*ref, *test);
     if (!flip) return check(std::format("golden {}", name), false, flip.error().message);
     const f64 meanLimit = m_cl.getFloat("flip-mean", 0.01);
@@ -183,7 +189,7 @@ bool Suite::compareGolden(const std::string& name, const fs::Path& capture) {
     if (!ok) (void)render::writePng(m_out / fs::pathFromUtf8(name + ".flip.png"), render::flipErrorImage(*flip));
     return check(std::format("golden {}", name), ok,
                  std::format("FLIP mean {:.5f} (<= {}), max {:.3f}, {:.4f} % of pixels > 0.1 (<= {} %), {} pixel(s) differ", flip->mean,
-                             meanLimit, flip->max, hot * 100.0, hotLimit * 100.0, render::countDifferentPixels(*ref, *test)));
+                             meanLimit, flip->max, hot * 100.0, hotLimit * 100.0, differing));
 }
 
 /// ED-15: the shell and the property grid at 100 % and 200 %, dark and high contrast, against

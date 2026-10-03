@@ -223,17 +223,20 @@
       "title": "Physics hash (Phase 0 scope): the scripted scene's golden on every determinism toolchain and worker count, and the permuted-BodyID variant",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Phase 0 scope (02 §8.1): small hash; `stable-order` patch and stable body keys (RT-03 permuted variant). From RT-03: identical on every determinism toolchain (both MSVC toolsets, clang-cl, GCC, Clang and MinGW), at 1/4/16 workers; the permuted variant is rebuilt so that every `BodyID` differs and must give the identical hash; a CI build without the `stable-order` patch must fail it",
-      "notes": "The 1,000-body, 50-character, 10-vehicle scene, the AMD and Intel runs, the FBW hash and the slope-creep clause are RT-03's Phase 1 scope",
+      "notes": "The 1,000-body, 50-character, 10-vehicle scene, the AMD and Intel runs, the FBW hash and the slope-creep clause are RT-03's Phase 1 scope. The negative control (a build without third_party/jolt/patches/0001-stable-order.patch fails both permuted cases) is run by reverting the patch locally, not by a CI job; engine/physics/README.md records the result",
       "status": "partial",
       "tests": [
         {"doctest": "physics_tests", "case": "determinism: the scripted scene matches its golden hash (RT-03 Phase 0)"},
         {"doctest": "physics_tests", "case": "determinism: the golden holds at 1, 2, 4 and 16 workers"},
         {"doctest": "physics_tests", "case": "determinism: repeated runs in one process are identical"},
-        {"doctest": "physics_tests", "case": "determinism: permuted BodyIDs give the same result when no island has two contacts"}
+        {"doctest": "physics_tests", "case": "determinism: permuted BodyIDs give the same result when no island has two contacts"},
+        {"doctest": "physics_tests", "case": "determinism: permuted BodyIDs give the identical hash, multi-contact islands included (RT-03 permuted variant)"},
+        {"doctest": "physics_tests", "case": "determinism: permuted BodyIDs give the identical hash with a hull, a chassis and a character on four tiles each"},
+        {"doctest": "physics_tests", "case": "stable-order: ShipHull and Vehicle bodies keep no contact cache across steps (NoCrossUpdateCache)"},
+        {"doctest": "physics_tests", "case": "stable-order: NoCrossUpdateCache keeps the warm start between the collision steps of one step()"},
+        {"doctest": "physics_tests", "case": "stable-order: control: a Dynamic-layer body warm-starts from contacts cached by earlier steps"}
       ],
       "gaps": [
-        {"clause": "Permuted variant: multi-contact islands diverge until third_party/jolt/patches/stable-order is vendored; when it lands, a CI build without the patch must also fail the variant (the negative control)", "state": "failing", "owner": "WP-0.9",
-         "pinned_by": {"doctest": "physics_tests", "case": "determinism: KNOWN DIVERGENCE: permuted BodyIDs change multi-contact islands (stable-order patch pending)"}},
         {"clause": "MinGW: the cross-built binaries are never executed, so the hash is not checked on MinGW", "state": "unmeasured", "owner": "WP-0.1"}
       ]
     },

@@ -2,9 +2,11 @@ package conformance
 
 import (
 	"bytes"
+	"fmt"
 	"go/ast"
 	"go/token"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,6 +49,23 @@ var (
 	cStringRE = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
 )
 
+// The nats.go import paths. A file that imports one is NATS code, so a KV call in it whose bucket or key
+// the lint cannot resolve fails closed; methods are matched without types, so in other files only a
+// resolved lease or leader name is reported (session's own Store.Create is not KV compare-and-set).
+const (
+	jetstreamImport = "github.com/nats-io/nats.go/jetstream"
+	natsImport      = "github.com/nats-io/nats.go"
+)
+
+// natsAPIs reports whether gf imports jetstream (the current API) and nats.go (the legacy KV API).
+func natsAPIs(gf *goFile) (js, legacy bool) {
+	for _, imp := range gf.imps {
+		js = js || imp == jetstreamImport
+		legacy = legacy || imp == natsImport
+	}
+	return js, legacy
+}
+
 func checkKV(p *Pass, ttl bool) {
 	g := p.Tree.goIndex()
 	for _, f := range p.Files {
@@ -59,10 +78,12 @@ func checkKV(p *Pass, ttl bool) {
 			p.Report(f, 0, "cannot parse: %v", gf.Err)
 			continue
 		}
+		jsAPI, legacyAPI := natsAPIs(gf)
 		exempt := map[*ast.CallExpr]bool{}
 		if strings.HasSuffix(f, "_test.go") {
 			absenceChecks(gf.File, exempt)
 		}
+		configs := kvConfigNames(gf.File)
 		seen := map[*ast.CompositeLit]bool{}
 		ast.Inspect(gf.File, func(n ast.Node) bool {
 			switch x := n.(type) {
@@ -81,16 +102,30 @@ func checkKV(p *Pass, ttl bool) {
 								"in PostgreSQL, KV holds only read projections (05 §2.3, §1.4)", name, b)
 						}
 					}
+					// The bucket (KeyValue) or config (the others) is the last argument: jetstream's calls take a
+					// context first, the legacy API's do not.
+					if (jsAPI && len(x.Args) == 2 || legacyAPI && len(x.Args) == 1) && !exempt[x] &&
+						!kvBucketResolved(g, gf, x.Args[len(x.Args)-1], configs) {
+						p.Report(f, g.line(x.Pos()), "%s of a KV bucket the lint cannot resolve: lease and leader state "+
+							"lives in PostgreSQL (05 §2.3, §1.4); if this is a read projection, say so in a "+
+							"conformance:allow", name)
+					}
 				}
 				if ttl {
-					checkKVCallTTL(p, g, gf, x, name)
+					checkKVCallTTL(p, g, gf, x, name, jsAPI, legacyAPI)
 				}
 			case *ast.AssignStmt: // cfg.Bucket = "…" after the literal
 				for i, lhs := range x.Lhs {
 					if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Bucket" && !ttl && i < len(x.Rhs) {
-						if b, ok := g.String(gf, x.Rhs[i]); ok && leaseRE.MatchString(b) {
+						b, ok := g.String(gf, x.Rhs[i])
+						switch {
+						case ok && leaseRE.MatchString(b):
 							p.Report(f, g.line(x.Pos()), "KV bucket %q set on a config: lease and leader state lives "+
 								"in PostgreSQL, KV holds only read projections (05 §2.3, §1.4)", b)
+						case !ok && (jsAPI || legacyAPI):
+							p.Report(f, g.line(x.Pos()), "KV bucket set on a config from a value the lint cannot "+
+								"resolve: lease and leader state lives in PostgreSQL (05 §2.3, §1.4); if this is a "+
+								"read projection, say so in a conformance:allow")
 						}
 					}
 				}
@@ -106,15 +141,29 @@ func checkKV(p *Pass, ttl bool) {
 					return true
 				}
 				b, ok := bucketOf(g, gf, x)
-				if !ttl && !seen[x] && typeName(x.Type) == "KeyValueConfig" && ok && leaseRE.MatchString(b) {
-					p.Report(f, g.line(x.Pos()), "KeyValueConfig for bucket %q: lease and leader state lives in "+
-						"PostgreSQL, KV holds only read projections (05 §2.3, §1.4)", b)
+				kv := typeName(x.Type) == "KeyValueConfig"
+				if !ttl && !seen[x] && kv {
+					switch {
+					case ok && leaseRE.MatchString(b):
+						p.Report(f, g.line(x.Pos()), "KeyValueConfig for bucket %q: lease and leader state lives in "+
+							"PostgreSQL, KV holds only read projections (05 §2.3, §1.4)", b)
+					case !ok && field(x, "Bucket") != nil && (jsAPI || legacyAPI):
+						p.Report(f, g.line(x.Pos()), "KeyValueConfig for a bucket the lint cannot resolve: lease and "+
+							"leader state lives in PostgreSQL (05 §2.3, §1.4); if this is a read projection, say so in "+
+							"a conformance:allow")
+					}
 				}
-				if ttl && ok && leaseRE.MatchString(b) {
+				// A TTL on a KV bucket the lint cannot resolve fails closed too (CONF-01 reports the bucket);
+				// a stream's MaxAge is ordinary retention unless the stream is a lease bucket's KV_ stream.
+				if ttl && (ok && leaseRE.MatchString(b) || kv && !ok && (jsAPI || legacyAPI)) {
+					what := fmt.Sprintf("bucket %q", b)
+					if !ok {
+						what = "a bucket the lint cannot resolve"
+					}
 					for _, fl := range kvTTLFields {
 						if v := field(x, fl); v != nil {
-							p.Report(f, g.line(v.Pos()), "%s on bucket %q: lease expiry in NATS, where the holder "+
-								"rule keeps a region until a higher lease_gen (05 §1.4.2)", fl, b)
+							p.Report(f, g.line(v.Pos()), "%s on %s: lease expiry in NATS, where the holder "+
+								"rule keeps a region until a higher lease_gen (05 §1.4.2)", fl, what)
 						}
 					}
 				}
@@ -124,9 +173,64 @@ func checkKV(p *Pass, ttl bool) {
 	}
 }
 
+// kvConfigNames returns the names this file gives a KeyValueConfig whose bucket it sets: one initialised
+// from a KeyValueConfig literal that has a Bucket field, or one whose .Bucket it assigns. A bind call that
+// passes such a name is checked where the bucket is set; any other config variable fails closed.
+func kvConfigNames(file *ast.File) map[string]bool {
+	names := map[string]bool{}
+	note := func(lhs ast.Expr, rhs ast.Expr) {
+		if id, ok := lhs.(*ast.Ident); ok {
+			if cl := kvConfigLit(rhs); cl != nil && field(cl, "Bucket") != nil {
+				names[id.Name] = true
+			}
+		}
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			for i, lhs := range x.Lhs {
+				if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Bucket" {
+					if id, ok := sel.X.(*ast.Ident); ok {
+						names[id.Name] = true
+					}
+				} else if i < len(x.Rhs) {
+					note(lhs, x.Rhs[i])
+				}
+			}
+		case *ast.ValueSpec:
+			for i, id := range x.Names {
+				if i < len(x.Values) {
+					note(id, x.Values[i])
+				}
+			}
+		}
+		return true
+	})
+	return names
+}
+
+// kvBucketResolved reports whether the bucket argument of a KV bind call is one the lint can check: a
+// constant string, a KeyValueConfig literal with a constant Bucket, or a config variable whose bucket this
+// file sets (kvConfigNames; checked there).
+func kvBucketResolved(g *goIndex, gf *goFile, a ast.Expr, configs map[string]bool) bool {
+	if cl := kvConfigLit(a); cl != nil {
+		_, ok := bucketOf(g, gf, cl)
+		return ok
+	}
+	if _, ok := g.String(gf, a); ok {
+		return true
+	}
+	if u, ok := a.(*ast.UnaryExpr); ok && u.Op == token.AND {
+		a = u.X
+	}
+	id, ok := a.(*ast.Ident)
+	return ok && configs[id.Name]
+}
+
 // checkKVCallTTL reports per-key TTLs (jetstream.KeyTTL) on keys that are, or may be, lease state,
-// and compare-and-set (KV Create, or Update with a revision) on leader-like keys.
-func checkKVCallTTL(p *Pass, g *goIndex, gf *goFile, c *ast.CallExpr, name string) {
+// and compare-and-set (KV Create, or Update with a revision) on leader-like keys. In a file that imports
+// the API of the call's shape, a compare-and-set key the lint cannot resolve fails closed.
+func checkKVCallTTL(p *Pass, g *goIndex, gf *goFile, c *ast.CallExpr, name string, jsAPI, legacyAPI bool) {
 	key, keyOK := "", false
 	if len(c.Args) >= 2 {
 		key, keyOK = g.String(gf, c.Args[1])
@@ -147,9 +251,14 @@ func checkKVCallTTL(p *Pass, g *goIndex, gf *goFile, c *ast.CallExpr, name strin
 		}
 	}
 	cas := legacy || (name == "Update" && len(c.Args) == 4) || (name == "Create" && len(c.Args) >= 3)
-	if cas && keyOK && leaderKeyRE.MatchString(key) {
+	switch {
+	case cas && keyOK && leaderKeyRE.MatchString(key):
 		p.Report(gf.Path, g.line(c.Pos()), "KV compare-and-set (%s) on %q: leadership is a PostgreSQL row with "+
 			"term-fenced writes (05 §1.4.1)", name, key)
+	case cas && !keyOK && (legacy && legacyAPI || !legacy && jsAPI):
+		p.Report(gf.Path, g.line(c.Pos()), "KV compare-and-set (%s) on a key the lint cannot resolve: leadership is "+
+			"a PostgreSQL row with term-fenced writes (05 §1.4.1); if the key is not leader state, say so in a "+
+			"conformance:allow", name)
 	}
 }
 
@@ -356,20 +465,32 @@ func (s *cSource) index(off int) int {
 func (s *cSource) line(off int) int { return s.origin[s.index(off)] + 1 }
 
 type cCall struct {
-	name string
-	line int
-	args []string // the arguments' source text (strings kept), split at top-level commas
+	name  string
+	line  int      // the physical line where the call starts
+	index int      // the logical line where it starts
+	args  []string // the arguments' source text (strings kept), split at top-level commas
 }
 
 // calls finds the calls whose name re matches (re ends with `\(`), with their arguments read up to the
 // closing parenthesis, across lines. An unterminated call yields the arguments seen so far.
 func (s *cSource) calls(re *regexp.Regexp) []cCall {
+	return s.callsAt(re.FindAllStringIndex(s.blank, -1))
+}
+
+// callsAt reads the calls that start at the given matches (offsets into text and blank, which agree): the
+// name is what precedes the first '(' of the match, and the arguments follow that parenthesis.
+func (s *cSource) callsAt(locs [][]int) []cCall {
 	var out []cCall
-	for _, m := range re.FindAllStringIndex(s.blank, -1) {
-		name := strings.TrimRight(strings.TrimSpace(s.blank[m[0]:m[1]-1]), " \t\n")
-		c := cCall{name: name, line: s.line(m[0])}
-		depth, from := 0, m[1]
-		for i := m[1]; i < len(s.blank); i++ {
+	for _, m := range locs {
+		open := strings.IndexByte(s.blank[m[0]:m[1]], '(')
+		if open < 0 {
+			continue
+		}
+		open += m[0] + 1
+		name := strings.TrimSpace(s.blank[m[0] : open-1])
+		c := cCall{name: name, line: s.line(m[0]), index: s.index(m[0])}
+		depth, from := 0, open
+		for i := open; i < len(s.blank); i++ {
 			ch := s.blank[i]
 			switch {
 			case ch == '(' || ch == '[' || ch == '{':
@@ -404,8 +525,15 @@ var (
 	cAccessRE     = regexp.MustCompile(`^\s*(?:(?:public|private|protected)\s*:\s|\[\[[^\]]*\]\]\s*)+`)
 	cConstWordRE  = regexp.MustCompile(`\bconst\b`)
 	cConstexprRE  = regexp.MustCompile(`\bconstexpr\b`)
-	cStrLitRE     = regexp.MustCompile(`"((?:[^"\\\n]|\\.)*)"`)
-	cWrapRE       = regexp.MustCompile(`^(?:std::)?(?:string|string_view)\s*[({](.*)[)}]$|^static_cast\s*<[^>]*>\s*\((.*)\)$|^\(\s*(?:const\s+)?char\s*(?:const\s*)?\*\s*\)\s*(.*)$`)
+	cStaticRE     = regexp.MustCompile(`\bstatic\b`)
+	// An innermost template argument list, stripped repeatedly so that only a top-level const counts.
+	cTemplateArgsRE = regexp.MustCompile(`<[^<>]*>`)
+	// The head of a class, struct or union body (not an enum, a function returning a struct, or an
+	// initializer), once attributes, alignas and __declspec are dropped.
+	cClassHeadRE = regexp.MustCompile(`(?:^|[^\w])(?:class|struct|union)\b`)
+	cAttrRE      = regexp.MustCompile(`\[\[[^\]]*\]\]|\b(?:alignas|__declspec|__attribute__)\s*\((?:[^()]|\([^()]*\))*\)`)
+	cStrLitRE    = regexp.MustCompile(`"((?:[^"\\\n]|\\.)*)"`)
+	cWrapRE      = regexp.MustCompile(`^(?:std::)?(?:string|string_view)\s*[({](.*)[)}]$|^static_cast\s*<[^>]*>\s*\((.*)\)$|^\(\s*(?:const\s+)?char\s*(?:const\s*)?\*\s*\)\s*(.*)$`)
 	// A name, optionally qualified by namespaces or classes. A member access (a.b, p->b) is not a constant.
 	cQualIdentRE = regexp.MustCompile(`^(?:::\s*)?(?:[A-Za-z_]\w*\s*::\s*)*([A-Za-z_]\w*)$`)
 	kvSubjectRE  = regexp.MustCompile(`^\$KV\.([^.\s]+)`)
@@ -415,8 +543,9 @@ var (
 const cLits = `(?:"(?:[^"\\\n]|\\.)*"\s*)+`
 
 // cConstDecl reports whether prefix, the text of a statement before a declared name, makes that name a
-// constant: `constexpr`, or a `const` object (`const std::string k`, `static const char k[]`, `const char*
-// const k`). A pointer to const (`const char* k`) is not: the pointer can be re-pointed.
+// constant: `constexpr`, or a top-level `const` object (`const std::string k`, `static const char k[]`,
+// `const char* const k`). A pointer to const (`const char* k`) is not: the pointer can be re-pointed. Nor
+// is a `const` inside template arguments (`std::span<const char> k`).
 func cConstDecl(prefix string) bool {
 	prefix = cAccessRE.ReplaceAllString(prefix, "")
 	if !cDeclPrefixRE.MatchString(prefix) {
@@ -425,44 +554,41 @@ func cConstDecl(prefix string) bool {
 	if cConstexprRE.MatchString(prefix) {
 		return true
 	}
+	for {
+		stripped := cTemplateArgsRE.ReplaceAllString(prefix, " ")
+		if stripped == prefix {
+			break
+		}
+		prefix = stripped
+	}
 	if i := strings.LastIndex(prefix, "*"); i >= 0 {
 		prefix = prefix[i:]
 	}
 	return cConstWordRE.MatchString(prefix)
 }
 
-// cStrTable collects the string constants of the C-family files in the rule's scope, by bare name: the
-// `#define`s and the declarations of constants (cConstDecl). Assignments, members set elsewhere,
-// parameters and calls are not constants, so a bucket or key passed through one stays unresolved. A
-// name defined with several values keeps them all, and a bucket or key matches if any value does.
+// cStrTable collects the string constants of the C-family files in the rule's scope, by bare name
+// (cConstStrings). Assignments, members set elsewhere, parameters and calls are not constants, so a bucket
+// or key passed through one stays unresolved. A name defined with several values keeps them all, and a
+// bucket or key matches if any value does.
 func cStrTable(p *Pass) map[string][]string {
 	if p.cstr != nil {
 		return p.cstr
 	}
 	t := map[string][]string{}
-	add := func(name, lits string) {
-		v := ""
-		for _, m := range cStrLitRE.FindAllStringSubmatch(lits, -1) {
-			v += m[1]
-		}
-		for _, have := range t[name] {
-			if have == v {
-				return
-			}
-		}
-		t[name] = append(t[name], v)
-	}
 	for _, f := range p.Files {
 		if !cFamily.MatchString(f) {
 			continue
 		}
-		src := newCSource(p.Tree.Lines(f))
-		for _, m := range cDefineStrRE.FindAllStringSubmatch(src.text, -1) {
-			add(m[1], m[2])
-		}
-		for name, lits := range cConstStrings(src) {
+		for name, lits := range cConstStrings(newCSource(p.Tree.Lines(f))) {
 			for _, l := range lits {
-				add(name, l)
+				v := ""
+				for _, m := range cStrLitRE.FindAllStringSubmatch(l, -1) {
+					v += m[1]
+				}
+				if !slices.Contains(t[name], v) {
+					t[name] = append(t[name], v)
+				}
 			}
 		}
 	}
@@ -470,27 +596,71 @@ func cStrTable(p *Pass) map[string][]string {
 	return t
 }
 
-// cConstStrings returns the string-literal initializers of the constants src declares, by bare name.
+// cConstStrings returns the string-literal initializers of the constants src declares, by bare name: a
+// `#define NAME "…"`, and a declarator whose statement makes it a constant (cConstDecl) at namespace or
+// block scope, or as a `static` class member. A declarator inside parentheses or brackets is a parameter
+// (with its default argument), a call argument or a condition, never a constant, however the statement
+// before it reads; a non-static data member's initializer is only a default, which a constructor
+// overrides. Groups under `#if 0` are not read.
 func cConstStrings(src *cSource) map[string][]string {
+	dead := inactiveLines(src.blankLines)
+	out := map[string][]string{}
+	for _, m := range cDefineStrRE.FindAllStringSubmatchIndex(src.text, -1) {
+		if !dead[src.index(m[0])] {
+			out[src.text[m[2]:m[3]]] = append(out[src.text[m[2]:m[3]]], src.text[m[4]:m[5]])
+		}
+	}
 	// Statement boundaries: ; { } outside strings and comments, and every preprocessor line.
 	bounds := []byte(src.blank)
 	for i, l := range src.blankLines {
-		if strings.HasPrefix(strings.TrimSpace(l), "#") {
+		if strings.HasPrefix(strings.TrimSpace(l), "#") || dead[i] {
 			for k := src.starts[i]; k < src.starts[i]+len(l); k++ {
 				bounds[k] = ';'
 			}
 		}
 	}
-	out := map[string][]string{}
+	scope := cScopes(bounds)
 	for _, m := range cInitStrRE.FindAllStringSubmatchIndex(src.text, -1) {
 		start := bytes.LastIndexAny(bounds[:m[2]], ";{}") + 1
-		if bounds[m[2]] == ';' || !cConstDecl(src.blank[start:m[2]]) {
+		prefix := src.blank[start:m[2]]
+		switch {
+		case bounds[m[2]] == ';', scope[m[2]] == '(', scope[m[2]] == '[', !cConstDecl(prefix),
+			scope[m[2]] == 'c' && !cStaticRE.MatchString(prefix):
 			continue
 		}
 		for g := 4; g <= 8; g += 2 {
 			if m[g] >= 0 {
 				out[src.text[m[2]:m[3]]] = append(out[src.text[m[2]:m[3]]], src.text[m[g]:m[g+1]])
 			}
+		}
+	}
+	return out
+}
+
+// cScopes gives, for each offset of b (code with strings, comments and preprocessor lines blanked), the
+// innermost bracket open there: 0 at namespace scope, '(' or '[', 'c' in a class, struct or union body,
+// and '{' in any other brace (a function body, a lambda, a namespace or an initializer).
+func cScopes(b []byte) []byte {
+	out := make([]byte, len(b))
+	var stack []byte
+	for i, ch := range b {
+		switch ch {
+		case '(', '[':
+			stack = append(stack, ch)
+		case '{':
+			kind := byte('{')
+			head := b[bytes.LastIndexAny(b[:i], ";{}")+1 : i]
+			if cClassHeadRE.Match(head) && !bytes.ContainsAny(cAttrRE.ReplaceAll(head, nil), "(=") {
+				kind = 'c'
+			}
+			stack = append(stack, kind)
+		case ')', ']', '}':
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+		if len(stack) > 0 {
+			out[i] = stack[len(stack)-1]
 		}
 	}
 	return out

@@ -1,16 +1,41 @@
 #! -rules CONF-08 -strict
 # Go constants, keyed fields, a gateway port variable and a flag default; TOML array and table port;
 # a published UDP port; C++ constants (initialised with =, braces and parentheses), listen default and
-# connect default.
+# connect default. Compose: the published port, not the container port, with a host IP (v4 or v6) or
+# without, and a mapping with a variable (fails closed). TOML: port keys named for the gateway or in its
+# table, digit separators, a comment without a space, and a value the lint cannot read (fails closed).
+# C++: a constant from another constant, one from a call and a #define (fails closed on the call); an
+# ipv4 port, a connect default through constants, and a listen default from a call (fails closed). Go: a
+# port from a constant, from a call (fails closed), net.JoinHostPort and fmt.Sprintf addresses, and an
+# fmt.Sprintf address from variables (fails closed).
 deploy/compose.yml:3: CONF-08
+deploy/compose.yml:6: CONF-08
+deploy/compose.yml:7: CONF-08
+deploy/compose.yml:8: CONF-08
+deploy/compose.yml:9: CONF-08
+deploy/compose.yml:10: CONF-08
 deploy/helios.toml:2: CONF-08
 deploy/helios.toml:5: CONF-08
+deploy/helios.toml:6: CONF-08
+deploy/helios.toml:7: CONF-08
+deploy/helios.toml:10: CONF-08
 engine/net/include/ports.h:2: CONF-08
 engine/net/include/ports.h:3: CONF-08
 engine/net/include/ports.h:4: CONF-08
+engine/net/include/ports.h:6: CONF-08
+engine/net/include/ports.h:7: CONF-08
+engine/net/include/ports.h:8: CONF-08
 engine/server/src/gateway_config.cpp:1: CONF-08
 engine/server/src/gateway_config.cpp:2: CONF-08
+engine/server/src/gateway_config.cpp:5: CONF-08
+engine/server/src/gateway_config.cpp:7: CONF-08
+engine/server/src/gateway_config.cpp:8: CONF-08
 services/cmd/tool/main.go:5: CONF-08
 services/internal/platform/config.go:3: CONF-08
 services/internal/platform/config.go:7: CONF-08
 services/internal/platform/config.go:9: CONF-08
+services/internal/platform/ports.go:10: CONF-08
+services/internal/platform/ports.go:11: CONF-08
+services/internal/platform/ports.go:14: CONF-08
+services/internal/platform/ports.go:14: CONF-08
+services/internal/platform/ports.go:15: CONF-08

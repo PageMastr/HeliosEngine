@@ -43,14 +43,14 @@ a `good/` tree for their exemptions; `go test` compares both exactly, and CTest 
 
 | Rule | Anchor | What fails it | Kind | On the tree |
 |---|---|---|---|---|
-| CONF-01 | 05 §2.3, §1.4 | a JetStream KV bucket named `LEASES` or matching `(?i)lease\|leader\|fence` created, bound or read: Go `CreateKeyValue`, `CreateOrUpdateKeyValue`, `UpdateKeyValue`, `KeyValue` and `KeyValueConfig{Bucket: …}` (names resolved through constants, across packages), a `cfg.Bucket = …` assignment and a raw `$KV.<bucket>.` subject; nats.c `js_KeyValue`, `js_CreateKeyValue`/`js_UpdateKeyValue` and `kvConfig.Bucket`, with calls read across lines and names resolved through the scope's C and C++ string constants (`constexpr`/`const char*`, `char[]`, `std::string(_view)`, `#define`). A nats.c bucket the lint cannot resolve fails closed: a read projection bound through a variable carries a `conformance:allow`. A test that asserts the bucket is absent (`if _, err := js.KeyValue(…); err == nil { t.Fatal… }`, or the assignment then that `if`) is exempt | Go syntax; C token scan | passes |
-| CONF-02 | 05 §1.4.1–1.4.2 | `TTL`, `LimitMarkerTTL` or `MaxAge` on a lease-named KV bucket or KV stream; a per-key TTL (`jetstream.KeyTTL`) on a lease key or on a key the lint cannot resolve; KV compare-and-set (`Create`, or `Update` with a revision, in jetstream's and nats.go's legacy API) on a key matching `lease\|leader\|fence\|elect\|term\|lock`; the nats.c forms (`cfg->TTL` on a lease bucket or one the lint cannot resolve, `kvStore_Create`/`kvStore_Update` on a leader-like key or one the lint cannot resolve) | Go syntax; C token scan | passes |
+| CONF-01 | 05 §2.3, §1.4 | a JetStream KV bucket named `LEASES` or matching `(?i)lease\|leader\|fence` created, bound or read: Go `CreateKeyValue`, `CreateOrUpdateKeyValue`, `UpdateKeyValue`, `KeyValue` and `KeyValueConfig{Bucket: …}` (names resolved through constants, across packages), a `cfg.Bucket = …` assignment and a raw `$KV.<bucket>.` subject; nats.c `js_KeyValue`, `js_CreateKeyValue`/`js_UpdateKeyValue` and `kvConfig.Bucket`, with calls read across lines and names resolved through the scope's C and C++ string constants (`constexpr`/`const char*`, `char[]`, `std::string(_view)`, `#define`). A nats.c bucket the lint cannot resolve fails closed, and so does a Go one in NATS code (a file that imports nats.go or its `jetstream` package): a read projection bound through a variable carries a `conformance:allow`. A test that asserts the bucket is absent (`if _, err := js.KeyValue(…); err == nil { t.Fatal… }`, or the assignment then that `if`) is exempt | Go syntax; C token scan | passes |
+| CONF-02 | 05 §1.4.1–1.4.2 | `TTL`, `LimitMarkerTTL` or `MaxAge` on a lease-named KV bucket or KV stream; a per-key TTL (`jetstream.KeyTTL`) on a lease key or on a key the lint cannot resolve; KV compare-and-set (`Create`, or `Update` with a revision, in jetstream's and nats.go's legacy API) on a key matching `lease\|leader\|fence\|elect\|term\|lock`, or, in NATS code, on a key the lint cannot resolve; a TTL on a KV bucket the lint cannot resolve, in NATS code; the nats.c forms (`cfg->TTL` on a lease bucket or one the lint cannot resolve, `kvStore_Create`/`kvStore_Update` on a leader-like key or one the lint cannot resolve) | Go syntax; C token scan | passes |
 | CONF-03 | 05 §1.4.2 (holder rule) | the required test `conformance/holder_rule` (and any the map's `tests` add) missing from a language of the scope: Go needs `t.Run("holder_rule", …)` inside `func TestConformance`, C++ a `TEST_CASE("conformance/holder_rule…")` outside `#if 0`. It also fails a required test that is switched off: an unconditional `t.Skip` in `TestConformance` or the required case, a `//go:build` line on the file that defines `TestConformance`, or a C++ case marked `doctest::skip`, `may_fail`, `should_fail` or `expected_failures`. CI runs the tests (Go `services` job, C++ `server_tests`) | test presence | passes |
 | CONF-04 | ADR-004, 05 §1.4.5 | in ID code (a file that names `idgen`, `AllocateIdBlocks`, a minter, `composeBlockId`, `BlockIdLayout` or Snowflake, or is named `*id*`/`*ids*`/`*minter*`), an identifier or config key for a node, worker, machine or datacenter ID (camelCase split, so `workerID` counts and a task graph's `NodeId` elsewhere does not); anywhere in scope, the Snowflake 41/10/12 layout (`<< 22` with `<< 12`), the retired 41/5/8/9 layout (`<< 22`, `<< 17`, `<< 9`), and `<< 22` (the time prefix) outside `pkg/idgen` and `engine/ecs`'s `entity_id.*`/`registry.*`. Shift amounts are evaluated through constants (Go across packages, C++ `constexpr` across the scope's headers); a literal left operand (`1 << 12`) is a size, not a field, unless it scales a field (`ms * (1 << 22)`). Node-ID keys in `services/**/*.toml` count too | Go syntax; C token scan | passes |
 | CONF-05 | 05 §1.4.5 (who mints) | an import of `…/pkg/idgen`, or a call of `AllocateIdBlocks`, outside `services/internal/{identity, character, ledger, market, industry, mail, worldstate, world, activity, lifecycle, orchestrator, backend}`, `pkg/idgen` itself, `_test.go` files and test-helper packages (`testkit`, `testdata`, `testutil`, and `<name>test` for the store, db, nats and pg helpers and the minter packages; a name that only ends in "test", such as `latest`, is not one) | Go imports and calls | passes |
-| CONF-06 | 05 §1.4, §3 | in the **net schema** (below), a schema not named `svc_<service>` (`CREATE SCHEMA`, `ALTER SCHEMA … RENAME TO`, or a `Name` in `migrations.Schemas`); a table created in, or moved (`SET SCHEMA`) to, a schema other than its service's, or created unqualified; an `ALTER TABLE` of a table that no earlier migration of the service creates | SQL evaluation | passes |
-| CONF-07 | 05 §3, §6.6 (Phase 0 rule) | in the net schema, a column whose name's words are an e-mail, date of birth, IP address or real name (`email`, `email_norm`, `dob`, `date_of_birth`, `birthday`, `ip`, `ip_addr`, `client_ip`, `remote_addr`, `real_name`, `full_name`, `first_name`, `last_name`, `legal_name`, `given_name`, `family_name`, `surname`, …) or whose type is `INET`/`CIDR`, unless it is `*_ct` or `*_bidx`; any such column outside `svc_identity`; an `@pii` attribute in a `.hschema` package other than `identity` or `identity.*` | SQL evaluation; schema scan | passes |
-| CONF-08 | 04 §2; reconciliation #12 | a default gateway address or port other than 7777: Go values named for the gateway (keyed fields, var and const specs, assignments, calls with a `"gateway"` argument, and `…GatewayPort` integers); TOML keys or tables named for the gateway (`gateways = […]`, `[gateway] port`); a published `…/udp` port in YAML; C++ `k…GatewayPort` constants (initialised with `=`, `{…}` or `(…)`), and in files named for the gateway the `listen`/`connect` defaults (`"host:port"`, `Address::ipv4(…, port)`). Tests and fuzzers are skipped: they choose their own ports | Go syntax; TOML, YAML and C scans | passes |
+| CONF-06 | 05 §1.4, §3 | in the **net schema** (below), a schema not named `svc_<service>` (`CREATE SCHEMA`, `ALTER SCHEMA … RENAME TO`, or a `Name` in `migrations.Schemas`); a table created in, or moved (`SET SCHEMA`) to, a schema other than its service's, or created unqualified; a statement the evaluator cannot follow (fails closed, below) | SQL evaluation | passes |
+| CONF-07 | 05 §3, §6.6 (Phase 0 rule) | in the net schema, a column whose name's words are an e-mail, date of birth, IP address or real name (`email`, `email_norm`, `dob`, `date_of_birth`, `birthday`, `ip`, `ip_addr`, `client_ip`, `remote_addr`, `real_name`, `full_name`, `first_name`, `last_name`, `legal_name`, `given_name`, `family_name`, `surname`, …) or whose type is `INET`/`CIDR`, unless it is `*_ct` or `*_bidx`; any such column outside `svc_identity`; a statement the evaluator cannot follow (fails closed, below); an `@pii` attribute in a `.hschema` package other than `identity` or `identity.*` | SQL evaluation; schema scan | passes |
+| CONF-08 | 04 §2; reconciliation #12 | a default gateway address or port other than 7777: Go values named for the gateway (keyed fields, var and const specs, assignments, calls with a `"gateway"` argument), with address strings, `net.JoinHostPort` and `fmt.Sprintf` addresses evaluated, and a value named for the gateway port (`…GatewayPort`, `"gateway-port"`) evaluated through constants; TOML keys or tables named for the gateway (address strings, and the integer of a key named for a port: `[gateway] port`, `listen_port`, `gateway_port`); a published `…/udp` port in YAML (the host side of `[ip:]published:container/udp`, and the container side too); C++ `k…GatewayPort` constants (initialised with `=`, `{…}` or `(…)`) and `#define …GATEWAY…PORT`, and in files named for the gateway the `listen`/`connect` defaults (`"host:port"`, `Address::ipv4(…, port)`, `loopbackV4(port)`, an option's default argument), resolved through the scope's constants. A gateway port the rule reads but cannot resolve fails closed. Tests and fuzzers are skipped: they choose their own ports | Go syntax; TOML, YAML and C scans | passes |
 | CONF-09 | ADR-014 | a `go.mod` `go` directive other than 1.27.x, a `toolchain` other than go1.27.x, or no `go` directive; an `actions/setup-go` step (block or flow style) without `go-version-file: services/go.mod`, or with `go-version`; a `GOTOOLCHAIN` set in workflow YAML (an `env` key, `GOTOOLCHAIN=…` in a script or `$GITHUB_ENV`) to anything but `auto`, `local`, `path` or go1.27.x | go.mod and workflow YAML lines | passes |
 | CONF-10 | 08 §1.16; reconciliation #19 | `SDL_CreateRenderer` (and SDL3's other renderer constructors: `SDL_CreateRenderer*`, `SDL_CreateWindowAndRenderer`, `SDL_CreateSoftwareRenderer`, `SDL_CreateGPURenderer`) in C-family code (C++20 module units and `.tpp` too), including by name in a string or split by a backslash-newline splice, outside `apps/launcher/**` and engine/ui's SDL_Renderer backend (`engine/ui/**` paths containing `sdl_renderer`; WP-0.17 names the real files). `#if 0` groups are not read | comment-aware token scan | passes |
 | CONF-11 | ADR-011 amendment; 02 §1.1; reconciliation #25 | in CMake code (comments stripped): `HELIOS_ISA_AVX2_TARGETS` or `HELIOS_ISA_AVX2_SOURCE_PATTERNS`, and any other `set`/`list` of an `*avx*_{targets,sources,patterns,files,kernels,allowlist}` variable; `helios_avx2_sources()`, defined or called; `set_source_files_properties` or `set_property(SOURCE …)` carrying `/arch:AVX*` (or `-arch:AVX*`), `-mavx*`, `-mbmi*`, `-mf16c`, `-mlzcnt`, `-mfma` or a `-march=` other than `x86-64`/`x86-64-v1`, literally or through a variable (`${v}`, `$CACHE{v}`, or a `foreach` loop variable over one): one set from them or from `helios_isa_avx2_flags()` in the same function, or, in any file, a level set that `cmake/HeliosIsa.cmake` defines (a variable it sets from them, or fills by calling a function that returns them, outside a function, into the parent scope or the cache, such as 02 §1.1's `HELIOS_ISA_AVX2` or `helios_isa_avx2_flags(HELIOS_ISA_AVX2)`) and the output of a function there that returns them; the same flags in `target_compile_options`, `add_compile_options`, `add_definitions`, `set_target_properties`/`set_property(TARGET …)` `COMPILE_OPTIONS` or `INTERFACE_COMPILE_OPTIONS`, `set_property(DIRECTORY …)`/`set_directory_properties` `COMPILE_OPTIONS`, `CMAKE_<LANG>_FLAGS*` (not `CMAKE_REQUIRED_FLAGS`, which only feeds try-compile probes), or as option arguments of a call to a function or macro that the scanned CMake files define (a wrapper), anywhere but inside `helios_apply_isa_level` in `cmake/HeliosIsa.cmake`, the function that applies an image's level (exempt by that exact name, which WP-0.2r uses or renames here). The `levels` fixture seeds the regressions WP-0.2r's names make natural: `${HELIOS_ISA_AVX2}` on a file or a target, a function's output, and a per-target loop outside the level function; `levels_fn` fills the level set with today's `helios_isa_avx2_flags()` and caches a copy through a chain of functions. A command that never closes is a `conformance` finding (`unclosed`). The bad fixture is a verbatim copy of today's two lists, `helios_isa_avx2_flags()`, `helios_avx2_sources()` and `tp_jolt`'s options | CMake command scan | **known failing, owned by WP-0.2r** (11 pinned findings in 5 files; the ISA audit's own disassembly fixture in `tools/lint/lint_tests.cmake` carries a `conformance:allow`, as §5.10.3 prescribes) |
@@ -59,10 +59,17 @@ a `good/` tree for their exemptions; `go test` compares both exactly, and CTest 
 ## The net schema (CONF-06, CONF-07)
 
 The schema rules judge what a database holds after every migration, not each file alone (09 §5.10.4 (a)).
-For each service directory `services/migrations/<dir>/`, the `-- +goose Up` sections of its files are applied
-in version order: `CREATE SCHEMA`, `ALTER SCHEMA … RENAME TO`, `CREATE TABLE`, `ALTER TABLE` (`ADD`, `DROP` and
-`RENAME` of columns, `RENAME TO`, `SET SCHEMA`) and `DROP TABLE`. Comments, string literals, dollar-quoted
-bodies (functions, `DO` blocks) and `Down` sections are not statements of the net schema. Annotations are read as
+Service directories `services/migrations/<dir>/` are applied in `migrations.Schemas` order, as `migrations.Up`
+applies them (a directory it does not list comes after, by name), and the `-- +goose Up` sections of each one's
+files in version order: `CREATE SCHEMA`, `ALTER SCHEMA … RENAME TO`, `CREATE TABLE` (a `LIKE` element or an
+`INHERITS` clause copies the columns its source has at that point), `ALTER TABLE` (`ADD`, `DROP` and `RENAME` of
+columns, `ALTER COLUMN … TYPE`, `RENAME TO`, `SET SCHEMA`) and `DROP TABLE`. Comments, string literals, function
+bodies and `Down` sections are not statements of the net schema. A statement the evaluator cannot follow fails
+closed, under CONF-06 and CONF-07 both ("the net schema cannot be evaluated"): `CREATE TABLE … AS`, `PARTITION
+OF` or `OF type`, a materialized view, `SELECT … INTO`, a `DO` block in an `Up` section (its body runs with the
+migration and is not read), `LIKE` or `INHERITS` of a table no earlier statement creates, `ALTER TABLE` of such a
+table, `RENAME COLUMN` or `ALTER COLUMN … TYPE` of a column the table does not have, `ALTER TABLE … INHERIT`, and
+`-- +goose ENVSUB ON` with the `${…}` names it substitutes. Annotations are read as
 goose v3 reads them (`-- +goose down`, `--+goose Up`: any case and spacing), and statements are split as
 PostgreSQL lexes them: nested `/* */` comments, strings that span lines, `E'…'` backslash escapes, `"…"`
 identifiers, `$tag$` bodies whose tag has digits, and a `$` inside an identifier (`a$b$`). An annotation with
@@ -119,14 +126,25 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
 - **CONF-01 and CONF-02, Go**, match the jetstream and nats.go method names (`KeyValue`, `CreateKeyValue`, `Create`,
   `Update`, `KeyTTL`, …) without type information, which over-reports a same-named method of another type. Bucket
   and key names resolve through constants across packages, never through variables (`name := "leases"`,
-  `fmt.Sprintf`): an unresolved Go bucket is not reported (a `KeyTTL` key is). Names are looked up without scopes,
-  so a parameter or local that shadows a package-level constant resolves to that constant; this matters only for
-  `KeyTTL` and compare-and-set keys, which otherwise fail closed. A `$KV.` subject is read only as one literal.
+  `fmt.Sprintf`). In NATS code (a file that imports `github.com/nats-io/nats.go` or its `jetstream` package), a
+  bucket or compare-and-set key that does not resolve fails closed, in the call shapes of the API the file
+  imports: jetstream's `KeyValue(ctx, b)`, `CreateKeyValue(ctx, cfg)`, `Create(ctx, k, v, …)` and `Update(ctx, k, v,
+  rev)`, the legacy `KeyValue(b)`, `CreateKeyValue(cfg)`, `Create(k, v)` and `Update(k, v, rev)`, a
+  `KeyValueConfig{Bucket: …}` and a `cfg.Bucket = …`. A config variable passed to a bind call is checked where this
+  file sets its bucket (a `KeyValueConfig` literal with a `Bucket`, or a `.Bucket` assignment, matched by name);
+  otherwise it fails closed. A `KeyTTL` key that does not resolve fails closed in any file. Not seen: a KV call in
+  a file that reaches nats.go only through a wrapper package of its own, with a bucket or key the lint cannot
+  resolve (a resolved lease or leader name is still reported). Names are looked up without scopes, so a parameter
+  or local that shadows a package-level constant resolves to that constant; this matters only where an unresolved
+  name would fail closed. A `$KV.` subject is read only as one literal.
 - **CONF-01 and CONF-02, C and C++**, resolve buckets and keys through the scope's string constants by bare name (a
   name with several values matches if any value does). A string constant is a `#define` or the declaration of a
-  constant initialized with literals: `constexpr`, or a `const` object (`const std::string k = …`, `static const
-  char k[] = …`, `const char* const k = …`). Anything else fails closed: a parameter, a variable (a `const char* k`
-  can be re-pointed), a member access (`o.bucket`, `p->bucket`) or a call. Remaining limit: a parameter or local
+  constant initialized with literals, at namespace or block scope or as a `static` class member: `constexpr`, or a
+  top-level `const` object (`const std::string k = …`, `static const char k[] = …`, `const char* const k = …`).
+  Anything else fails closed: a parameter and its default argument (a declarator inside parentheses), a non-static
+  data member (its initializer is a default a constructor overrides), a variable (a `const char* k` can be
+  re-pointed, and a `const` inside template arguments, as in `std::span<const char> k`, is not top-level), a member
+  access (`o.bucket`, `p->bucket`) or a call. `#if 0` groups are not read. Remaining limit: a parameter or local
   with the same bare name as a string constant declared elsewhere in scope resolves to that constant (constants
   are `kPascalCase`, so such a collision is unlikely). Not seen: a nats.c call made through a macro or a function
   pointer. A `js_CreateKeyValue` whose `kvConfig` is filled in another file is reported as unresolved.
@@ -134,19 +152,26 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   vacuously, and it leaves a conditional skip (`if testing.Short()`) to CI, which runs the Go jobs without
   `-short`.
 - **CONF-04** evaluates shift amounts through constants (Go across packages, C++ `constexpr` across the scope) and
-  `+`. A C++ name defined more than once in scope counts with each of its values. Not seen: a shift amount in a
-  local variable (`shift := 22`), `iota`, and a layout built with arithmetic other than `<<` and `* (1 << n)`. "ID
-  code" is recognised by file name and keywords; a node-ID identifier elsewhere is not read.
+  `+`. A C++ name defined more than once in scope counts with each of its values; values of 64 and up are not
+  shift amounts and are dropped, so no bound on the combinations can lose one that is. C++ `#if 0` groups are not
+  read. Not seen: a shift amount in a local variable (`shift := 22`), `iota`, and a layout built with arithmetic
+  other than `<<` and `* (1 << n)`. "ID code" is recognised by file name and keywords; a node-ID identifier
+  elsewhere is not read.
 - **CONF-05** reads direct imports and calls; a package that re-exports `idgen` under another name is not followed.
 - **CONF-06 and CONF-07** evaluate the `-- +goose Up` SQL of each service. Not seen: DDL that a Go migration step
-  runs (`ExecContext` in `services/migrations/*.go`), DDL inside a `DO $$ … $$` block, and statements built in Go
-  strings. CONF-07 matches whole words of a column name: a plural (`emails`, `first_names`) and a quoted
-  identifier in another case (`"Email"`) are not matched, and `ALTER COLUMN … TYPE INET` is not followed.
-- **CONF-08** matches the forms of a gateway default the tree uses today. Not seen: a Go composite literal of a
-  gateway-named type (`GatewayConfig{Port: 7003}`); in gateway-named C and C++ files, an integer default of a
-  `*port*` name not named `…GatewayPort`, a `listen` default held in a differently named constant, and
-  `Address::ipv4(…, kName)` through a constant; in YAML, a Helm `gateway: {port: …}` or a Kubernetes Service
-  `port` with `protocol: UDP` (only compose's `…/udp` form is read). The PR #28 review lists these as follow-ups.
+  runs (`ExecContext` in `services/migrations/*.go`), statements built in Go strings, and DDL that a function the
+  migration calls runs (`SELECT f()`; only `DO` blocks fail closed). `ALTER TABLE` actions other than those
+  listed above are ignored. `INHERITS` copies the parent's columns once, so a column the parent drops later stays
+  on the child (an over-report) and one it adds later is judged on the parent only. CONF-07 matches whole words of
+  a column name: a plural (`emails`, `first_names`) and a quoted identifier in another case (`"Email"`) are not
+  matched.
+- **CONF-08** reads the forms of a gateway default listed in its row. Constants resolve by bare name (C and C++:
+  `constexpr` and `const` declarations and `#define`s across the scope, integer literals, casts and `+`; Go:
+  package constants), and a value in those forms that does not resolve fails closed. Not seen: a Go composite
+  literal of a gateway-named type with a differently named field (`GatewayConfig{Port: 7003}`); in C and C++, a
+  port in a differently named constant or variable that no `listen`/`connect`/gateway line passes on (an integer
+  default of a `*port*` name that is not `…GatewayPort`); in YAML, compose's long syntax (`target:`/`published:`)
+  and a Helm or Kubernetes `port` with `protocol: UDP` (only the short `…/udp` form is read).
 - **CONF-09** reads YAML line by line, without a YAML parser. Not seen: a `uses:` written as a block scalar or
   pulled in through an anchor or alias (`<<: *setup`); a `GOTOOLCHAIN` set outside `.github/` (a script under
   `tools/ci/` that a workflow runs) or by a variable that a step assembles. A `GOTOOLCHAIN` whose value is an

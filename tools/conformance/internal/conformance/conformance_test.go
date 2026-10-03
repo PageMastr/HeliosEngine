@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -165,14 +167,14 @@ func TestSuppressionReasons(t *testing.T) {
 	}
 }
 
-func TestParenBody(t *testing.T) {
+func TestParenSplit(t *testing.T) {
 	for in, want := range map[string]string{
 		"(a INT, b NUMERIC(10, 2)) PARTITION BY RANGE (a)": "a INT, b NUMERIC(10, 2)",
 		"(a INT) WITH (fillfactor = 70)":                   "a INT",
 		"(unterminated":                                    "unterminated",
 	} {
-		if got := parenBody(in); got != want {
-			t.Errorf("parenBody(%q) = %q, want %q", in, got, want)
+		if got, _ := parenSplit(in); got != want {
+			t.Errorf("parenSplit(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -209,7 +211,9 @@ func TestSpliceLines(t *testing.T) {
 }
 
 // TestCConstStrings pins which C and C++ declarations count as string constants for CONF-01 and CONF-02:
-// a name that is not one stays unresolved, so a bucket or key passed through it fails closed.
+// a name that is not one stays unresolved, so a bucket or key passed through it fails closed. Parameters
+// with defaults (after a braced or lambda default, or an #if in the list), non-static data members, a
+// const inside template arguments and `#if 0` groups are not constants; a local in a lambda body is.
 func TestCConstStrings(t *testing.T) {
 	src := newCSource(strings.Split(`#define kDef "def"
 namespace n { constexpr std::string_view kView{"view"}; }
@@ -229,14 +233,31 @@ const char* mutablePtr = "m";
 static const char* kMutable = "km";
 std::string mutableStr = "s";
 const auto lookedUp = find("k");
+void logTo(LogOptions opts = {}, const std::string& pname = "cell", int depth = 0);
+void elect(kvStore* kv, std::function<void()> done = [] {}, const char* const pkey = "zone.1", int n = 2);
+kvStore* openBucket(jsCtx* js,
+#if defined(HELIOS_TRACE_KV)
+                    Tracer* tracer,
+#endif
+                    const std::string& pbucket = "DIRECTORY", int history = 1);
+void run() { go([&] { const std::string kLocal = "local"; }); }
+struct Binding { const std::string subject = "orders"; static const char* const kSubj; };
+struct alignas(8) [[nodiscard]] Holder { static constexpr const char* kHeld = "held"; const char* const inst = "i"; };
+std::optional<const std::string> opt = "o";
+std::span<const char> view = "v";
+std::unique_ptr<const char* const> held = "h";
+#if 0
+#define kDeadDef "dd"
+constexpr const char* kDead = "dead";
+#endif
 `, "\n"))
 	var got []string
 	for name, lits := range cConstStrings(src) {
 		got = append(got, name+"="+strings.Join(lits, "|"))
 	}
 	sort.Strings(got)
-	want := `kArr="arr" kAttr="attr" "s" kBraced="braced" kMember="member" kParen="paren" kPtr2="ptr2" ` +
-		`kPtr="ptr" kQual="qual" kStr="str" kView="view"`
+	want := `kArr="arr" kAttr="attr" "s" kBraced="braced" kDef="def" kHeld="held" kLocal="local" kMember="member" ` +
+		`kParen="paren" kPtr2="ptr2" kPtr="ptr" kQual="qual" kStr="str" kView="view"`
 	if strings.Join(got, " ") != want {
 		t.Errorf("got  %s\nwant %s", strings.Join(got, " "), want)
 	}
@@ -264,6 +285,22 @@ func TestCEval(t *testing.T) {
 		if got := fmt.Sprint(cEval(expr, table, 0)); got != want {
 			t.Errorf("cEval(%s) = %s, want %s", expr, got, want)
 		}
+	}
+	// Reused names multiply the combinations (here 21 x 14, nearly all distinct): a 22 that comes last
+	// must not be lost to a bound on how many values one expression keeps.
+	for i := 1; i <= 20; i++ {
+		table["kWide"] = append(table["kWide"], strconv.Itoa(1000*i))
+	}
+	table["kWide"] = append(table["kWide"], "0")
+	for i := 30; i <= 42; i++ {
+		table["kNarrow"] = append(table["kNarrow"], strconv.Itoa(i))
+	}
+	table["kNarrow"] = append(table["kNarrow"], "22")
+	if got := cEval("kWide + kNarrow", table, 0); !slices.Contains(got, 22) || len(got) != 14 {
+		t.Errorf("cEval(kWide + kNarrow) = %v, want the 14 values below 64, 22 among them", got)
+	}
+	if got := cEval("kWide", table, 0); fmt.Sprint(got) != "[0]" {
+		t.Errorf("cEval(kWide) = %v, want [0]: values of 64 and up are not shift amounts", got)
 	}
 }
 
@@ -415,6 +452,9 @@ func TestSQLStatementsGooseAndLexing(t *testing.T) {
 			[]string{`ALTER TABLE a ADD COLUMN "it's;" TEXT, ADD COLUMN email TEXT`}},
 		{"ALTER TABLE a ADD COLUMN a$b$ TEXT; ALTER TABLE a ADD COLUMN email TEXT;",
 			[]string{"ALTER TABLE a ADD COLUMN a$b$ TEXT", "ALTER TABLE a ADD COLUMN email TEXT"}},
+		// The E of date'…' ends an identifier, so this is a plain string that a backslash does not escape.
+		{"SELECT date'x\\'; ALTER TABLE a ADD COLUMN email TEXT;",
+			[]string{"SELECT date''", "ALTER TABLE a ADD COLUMN email TEXT"}},
 	} {
 		var got []string
 		for _, st := range sqlStatements(strings.Split(c.src, "\n")) {

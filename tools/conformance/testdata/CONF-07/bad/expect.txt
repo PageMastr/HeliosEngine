@@ -5,7 +5,9 @@
 # column that only a misread of goose or PostgreSQL would drop or hide: a lower-case `-- +goose down`,
 # a $fn1$ body, an E'' escape, a multi-line string, a nested comment, a quoted identifier with a quote,
 # and a '$' inside an identifier. 00010: LIKE copies a plain email that its source then drops, a column
-# changed to INET, and a SELECT ... INTO that CONF-07 cannot follow (fails closed).
+# changed to INET, and a SELECT ... INTO that CONF-07 cannot follow (fails closed). 00011: CREATE TABLE IF
+# NOT EXISTS of a table that exists keeps it (and its email). 00012: ADD COLUMN after the descendants marker
+# `*`. 00013: quoted names with no space before the type or INTO.
 schemas/sample/player.hschema:6: CONF-07
 services/migrations/chat/00001_messages.sql:2: CONF-07
 services/migrations/identity/00001_profile.sql:4: CONF-07
@@ -23,3 +25,8 @@ services/migrations/identity/00009_identifier_dollar.sql:2: CONF-07
 services/migrations/identity/00010_like_and_type.sql:3: CONF-07
 services/migrations/identity/00010_like_and_type.sql:6: CONF-07
 services/migrations/identity/00010_like_and_type.sql:7: CONF-07
+services/migrations/identity/00011_if_not_exists.sql:2: CONF-07
+services/migrations/identity/00012_descendants.sql:3: CONF-07
+services/migrations/identity/00013_tight_lexing.sql:2: CONF-07
+services/migrations/identity/00013_tight_lexing.sql:3: CONF-07
+services/migrations/identity/00013_tight_lexing.sql:4: CONF-07

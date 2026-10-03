@@ -45,8 +45,8 @@ var (
 	cKVBindRE = regexp.MustCompile(`\bjs_(Create|Update)?KeyValue\s*\(`)
 	cBucketRE = regexp.MustCompile(`(?:\.|->)\s*Bucket\s*=\s*([^;]+);`)
 	cTTLRE    = regexp.MustCompile(`(\.|->)\s*(TTL|MaxAge|LimitMarkerTTL)\s*=`)
-	// nats.c code: a file that includes nats.h or names a kvConfig.
-	cNatsRE   = regexp.MustCompile(`#\s*include\s*[<"]nats/nats\.h[>"]|\bkvConfig\b`)
+	// nats.c code: a file that includes nats.h (`<nats.h>` or `<nats/nats.h>`) or names a kvConfig.
+	cNatsRE   = regexp.MustCompile(`#\s*include\s*[<"](?:nats/)?nats\.h[>"]|\bkvConfig\b`)
 	cCASRE    = regexp.MustCompile(`\bkvStore_(Create|Update)(String)?\s*\(`)
 	cStringRE = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
 )
@@ -86,6 +86,10 @@ func checkKV(p *Pass, ttl bool) {
 			absenceChecks(gf.File, exempt)
 		}
 		configs := kvConfigNames(gf.File)
+		var vars map[string]*cfgVar
+		if ttl {
+			vars = configVars(g, gf)
+		}
 		seen := map[*ast.CompositeLit]bool{}
 		ast.Inspect(gf.File, func(n ast.Node) bool {
 			switch x := n.(type) {
@@ -116,8 +120,11 @@ func checkKV(p *Pass, ttl bool) {
 				if ttl {
 					checkKVCallTTL(p, g, gf, x, name, jsAPI, legacyAPI)
 				}
-			case *ast.AssignStmt: // cfg.Bucket = "…" after the literal
+			case *ast.AssignStmt: // cfg.Bucket = "…" and cfg.TTL = … after the literal
 				for i, lhs := range x.Lhs {
+					if sel, ok := lhs.(*ast.SelectorExpr); ok && ttl && slices.Contains(kvTTLFields, sel.Sel.Name) {
+						checkTTLAssign(p, g, gf, sel, vars, jsAPI || legacyAPI)
+					}
 					if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Bucket" && !ttl && i < len(x.Rhs) {
 						b, ok := g.String(gf, x.Rhs[i])
 						switch {
@@ -209,6 +216,127 @@ func kvConfigNames(file *ast.File) map[string]bool {
 		return true
 	})
 	return names
+}
+
+// cfgVar is a name this file gives a KeyValueConfig (kv) or a StreamConfig, with the buckets (stream names)
+// the file sets on it.
+type cfgVar struct {
+	kv      bool
+	buckets []cfgBucket
+}
+
+type cfgBucket struct {
+	name string
+	ok   bool // false: a value the lint cannot resolve
+}
+
+// configVars returns the names this file gives a KeyValueConfig or a StreamConfig: a variable initialised
+// from a literal of the type or declared with it, and a parameter or struct field of it. Each carries the
+// buckets the file sets on it: the literal's Bucket (a stream's Name) and every `.Bucket` (`.Name`)
+// assignment. Names are matched without scopes, as kvConfigNames does.
+func configVars(g *goIndex, gf *goFile) map[string]*cfgVar {
+	vars := map[string]*cfgVar{}
+	declare := func(name string, typ ast.Expr) *cfgVar {
+		kind := typeName(typ)
+		if kind != "KeyValueConfig" && kind != "StreamConfig" {
+			return nil
+		}
+		if vars[name] == nil {
+			vars[name] = &cfgVar{kv: kind == "KeyValueConfig"}
+		}
+		return vars[name]
+	}
+	fromLit := func(name string, e ast.Expr) {
+		if u, ok := e.(*ast.UnaryExpr); ok && u.Op == token.AND {
+			e = u.X
+		}
+		if cl, ok := e.(*ast.CompositeLit); ok {
+			if v := declare(name, cl.Type); v != nil && (field(cl, "Bucket") != nil || field(cl, "Name") != nil) {
+				b, ok := bucketOf(g, gf, cl)
+				v.buckets = append(v.buckets, cfgBucket{b, ok})
+			}
+		}
+	}
+	ast.Inspect(gf.File, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			for i, lhs := range x.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && i < len(x.Rhs) {
+					fromLit(id.Name, x.Rhs[i])
+				}
+			}
+		case *ast.ValueSpec:
+			for i, id := range x.Names {
+				if x.Type != nil {
+					declare(id.Name, x.Type)
+				}
+				if i < len(x.Values) {
+					fromLit(id.Name, x.Values[i])
+				}
+			}
+		case *ast.Field: // parameters, results and struct fields
+			for _, id := range x.Names {
+				declare(id.Name, x.Type)
+			}
+		}
+		return true
+	})
+	ast.Inspect(gf.File, func(n ast.Node) bool {
+		if as, ok := n.(*ast.AssignStmt); ok {
+			for i, lhs := range as.Lhs {
+				if sel, ok := lhs.(*ast.SelectorExpr); ok && (sel.Sel.Name == "Bucket" || sel.Sel.Name == "Name") &&
+					i < len(as.Rhs) {
+					if v := vars[selectorBase(sel.X)]; v != nil {
+						b, ok := g.String(gf, as.Rhs[i])
+						v.buckets = append(v.buckets, cfgBucket{b, ok})
+					}
+				}
+			}
+		}
+		return true
+	})
+	return vars
+}
+
+// selectorBase names the value a selector reads: `cfg` for cfg.TTL, `kv` for s.kv.TTL.
+func selectorBase(e ast.Expr) string {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name
+	case *ast.SelectorExpr:
+		return x.Sel.Name
+	case *ast.StarExpr:
+		return selectorBase(x.X)
+	case *ast.ParenExpr:
+		return selectorBase(x.X)
+	}
+	return ""
+}
+
+// checkTTLAssign reports `cfg.TTL = …` (or MaxAge, LimitMarkerTTL) after the literal, where cfg is a config
+// this file names (configVars): on a lease-named bucket or stream, and, in NATS code, on a KV config whose
+// bucket the lint cannot resolve or this file does not set.
+func checkTTLAssign(p *Pass, g *goIndex, gf *goFile, sel *ast.SelectorExpr, vars map[string]*cfgVar, natsCode bool) {
+	v := vars[selectorBase(sel.X)]
+	if v == nil {
+		return
+	}
+	unresolved := v.kv && len(v.buckets) == 0
+	for _, b := range v.buckets {
+		switch {
+		case b.ok && leaseRE.MatchString(b.name):
+			p.Report(gf.Path, g.line(sel.Pos()), "%s on bucket %q: lease expiry in NATS, where the holder rule keeps a "+
+				"region until a higher lease_gen (05 §1.4.2)", sel.Sel.Name, b.name)
+			return
+		case !b.ok && v.kv:
+			unresolved = true
+		}
+	}
+	if unresolved && natsCode {
+		p.Report(gf.Path, g.line(sel.Pos()), "%s on a bucket the lint cannot resolve: lease expiry in NATS, where the "+
+			"holder rule keeps a region until a higher lease_gen (05 §1.4.2); if it is not lease state, say so in a "+
+			"conformance:allow", sel.Sel.Name)
+	}
 }
 
 // kvBucketResolved reports whether the bucket argument of a KV bind call is one the lint can check: a
@@ -652,8 +780,7 @@ func cScopes(b []byte) []byte {
 			stack = append(stack, ch)
 		case '{':
 			kind := byte('{')
-			head := b[bytes.LastIndexAny(b[:i], ";{}")+1 : i]
-			if cClassHeadRE.Match(head) && !bytes.ContainsAny(cAttrRE.ReplaceAll(head, nil), "(=") {
+			if cClassBody(b[bytes.LastIndexAny(b[:i], ";{}")+1 : i]) {
 				kind = 'c'
 			}
 			stack = append(stack, kind)
@@ -667,6 +794,26 @@ func cScopes(b []byte) []byte {
 		}
 	}
 	return out
+}
+
+// cClassBody reports whether the brace after head opens a class, struct or union body. The text after the
+// last class key, attributes removed and cut at the base clause's ':' (not '::'), is the class name: a
+// parenthesis or '=' there makes it a function (`struct S f() {`, `void g(struct S* p) {`) or an initializer
+// (`struct S s = {`), while template parameters before the key (`template <class T = int> struct X {`) and
+// template arguments in the base clause (`struct B : Base<(N > 1)> {`) do not count.
+func cClassBody(head []byte) bool {
+	keys := cClassHeadRE.FindAllIndex(head, -1)
+	if keys == nil {
+		return false
+	}
+	name := cAttrRE.ReplaceAll(head[keys[len(keys)-1][1]:], nil)
+	for k := 0; k < len(name); k++ {
+		if name[k] == ':' && (k+1 == len(name) || name[k+1] != ':') && (k == 0 || name[k-1] != ':') {
+			name = name[:k]
+			break
+		}
+	}
+	return !bytes.ContainsAny(name, "()=")
 }
 
 // cStrValues resolves an argument or initializer to its possible string values: literals (adjacent

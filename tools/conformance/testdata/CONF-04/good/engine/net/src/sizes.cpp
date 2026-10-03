@@ -11,3 +11,6 @@ constexpr unsigned kOldShift = 22;
 constexpr unsigned kOldShift = 20;
 #endif
 unsigned long long scaled(unsigned long long v) { return v << kOldShift; }
+// A brace-initialized literal is a size too.
+constexpr unsigned long long kWideBig = std::uint64_t{1} << 22;
+constexpr unsigned long long kWideBigU = std::uint64_t{ 1ull } << 22;

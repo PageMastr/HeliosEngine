@@ -32,8 +32,9 @@ var (
 	addrRE = regexp.MustCompile(`^(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]*):(\d{1,5})$`)
 	// C++ in a gateway file: the lines that set its client-side address.
 	cGatewayLineRE = regexp.MustCompile(`(?i)\b(listen|connect|gateway\w*)\b`)
-	// Address::ipv4(a, b, c, d, port), and the one-argument loopbackV4(port) family.
-	cIPv4CallRE = regexp.MustCompile(`\b(?:Address\s*::\s*)?ipv4\s*\(`)
+	// Address::ipv4(a, b, c, d, port), ipv4(octets, port), ipv6(groups, port) and ipv6Bytes(bytes, port): the
+	// port is the last argument. And the one-argument loopbackV4(port) family.
+	cIPv4CallRE = regexp.MustCompile(`\b(?:Address\s*::\s*)?(?:ipv4|ipv6|ipv6Bytes)\s*\(`)
 	cV4CallRE   = regexp.MustCompile(`\b(?:loopbackV4|anyV4|loopbackV6|anyV6)\s*\(`)
 	// A listen, connect or gateway option read with a default: args.get("connect", "", kDefault).
 	cOptionCallRE = regexp.MustCompile(`(?i)\b\w+\s*\(\s*"-{0,2}(?:listen|connect|[\w.-]*gateway)[\w.-]*"\s*,`)
@@ -45,17 +46,24 @@ var (
 	cCastRE       = regexp.MustCompile(`^(?:static_cast\s*<[^<>]*>|(?:std::)?u?int(?:16|32|64)_t|u16|u32|i32|int|unsigned)\s*[({](.*)[)}]$`)
 	tomlTableRE   = regexp.MustCompile(`^\s*\[+\s*([^\]]+?)\s*\]+`)
 	optionNameRE  = regexp.MustCompile(`^-{0,2}[\w.-]+$`)
-	tomlKeyRE     = regexp.MustCompile(`^\s*([A-Za-z0-9_.-]+)\s*=\s*(.*)$`)
+	tomlKeyRE     = regexp.MustCompile(`^\s*("[^"]*"|'[^']*'|[A-Za-z0-9_.-]+)\s*=\s*(.*)$`) // bare or quoted key
 	tomlIntRE     = regexp.MustCompile(`^[+]?\d[\d_]*$`)
 	// A port mapping token in compose or Helm YAML that ends in /udp, and its parts: an optional host IP,
 	// an optional published port (or range) and the container port (or range).
-	yamlUDPTokenRE = regexp.MustCompile(`[^\s"',]+/udp\b`)
-	yamlUDPRE      = regexp.MustCompile(`^(?:(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9A-Fa-f:]+\]):)?(?:(\d+)(?:-(\d+))?:)?(\d+)(?:-(\d+))?/udp$`)
+	// The protocol in any case: Docker lower-cases it.
+	yamlUDPTokenRE = regexp.MustCompile(`(?i)[^\s"',]+/udp\b`)
+	yamlUDPRE      = regexp.MustCompile(`(?i)^(?:(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9A-Fa-f:]+\]):)?(?:(\d+)(?:-(\d+))?:)?(\d+)(?:-(\d+))?/udp$`)
 	ipv6BracketRE  = regexp.MustCompile(`^\[[0-9A-Fa-f:]+\]:`)
 	testCodeRE     = regexp.MustCompile(`_test\.go$|(^|/)(tests?|fuzz|testdata)/`)
 	tomlStringRE   = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"|'([^']*)'`)
 	// A Go address format: something, a colon, then a verb ("127.0.0.1:%d", "%s:%d", ":%d").
 	goAddrFormatRE = regexp.MustCompile(`:%[-+# 0-9]*[dsvq]$`)
+	// An address without its port, which code completes by concatenation: "127.0.0.1:", "[::1]:", ":".
+	addrPrefixRE = regexp.MustCompile(`^(?:\[[0-9A-Fa-f:.]*\]|[A-Za-z0-9.-]*):$`)
+	// C++: what follows such a string when it is concatenated (`"host:" + p`, `std::string("host:") + p`,
+	// `os << "host:" << p`), and the port operand's std::to_string wrapper.
+	cConcatRE   = regexp.MustCompile(`^\s*\)*\s*(?:\+|<<)\s*`)
+	cToStringRE = regexp.MustCompile(`^(?:std\s*::\s*)?to_string\s*\(`)
 )
 
 // nameWords splits a name into lower-case words at case changes and non-alphanumerics
@@ -156,7 +164,7 @@ func tomlCode(l string) string {
 
 // checkGatewayPortTOML reads the keys and tables named for the gateway: address strings anywhere in
 // them, and the integer (or array, or quoted integer) values of keys named for a port, which must be
-// 7777. A port value the lint cannot read fails closed.
+// 7777; an inline table's keys are read the same way. A port value the lint cannot read fails closed.
 func checkGatewayPortTOML(p *Pass, f string) {
 	table := ""
 	for i, l := range p.Tree.Lines(f) {
@@ -169,39 +177,77 @@ func checkGatewayPortTOML(p *Pass, f string) {
 		if m == nil || !(gatewayNameRE.MatchString(m[1]) || gatewayNameRE.MatchString(table)) {
 			continue
 		}
-		val := strings.TrimSpace(m[2])
-		for _, s := range tomlStringRE.FindAllStringSubmatch(val, -1) {
-			if port, ok := portOf(s[1] + s[2]); ok && port != gatewayPort {
-				p.Report(f, i+1, "gateway address %q: the default gateway port is UDP 7777 (04 §2)", s[1]+s[2])
-			}
-		}
-		if !portName(m[1]) {
-			continue
-		}
-		items := []string{val}
-		if strings.HasPrefix(val, "[") && strings.HasSuffix(val, "]") {
-			items = strings.Split(strings.Trim(val, "[]"), ",")
-		}
-		for _, it := range items {
-			it = strings.TrimSpace(it)
-			if s := tomlStringRE.FindStringSubmatch(it); s != nil && s[0] == it {
-				if _, ok := portOf(s[1] + s[2]); ok {
-					continue // an address, checked above
-				}
-				it = s[1] + s[2]
-			}
-			if it == "" {
-				continue
-			}
-			if !tomlIntRE.MatchString(it) {
-				p.Report(f, i+1, unresolvedPort, "TOML "+m[1]+" = "+it)
-				continue
-			}
-			if n, _ := strconv.Atoi(strings.ReplaceAll(strings.TrimPrefix(it, "+"), "_", "")); n != gatewayPort {
-				p.Report(f, i+1, "gateway port %d: the default gateway port is UDP 7777 (04 §2)", n)
-			}
+		tomlGatewayValue(p, f, i+1, strings.Trim(m[1], `"'`), strings.TrimSpace(m[2]), 0)
+	}
+}
+
+// tomlGatewayValue checks one value of a key in a gateway context: address strings anywhere in it, the
+// port of a key named for a port, and the keys of an inline table (`listen = { host = "…", port = 7000 }`).
+func tomlGatewayValue(p *Pass, f string, line int, key, val string, depth int) {
+	for _, s := range tomlStringRE.FindAllStringSubmatch(val, -1) {
+		if port, ok := portOf(s[1] + s[2]); ok && port != gatewayPort && depth == 0 {
+			p.Report(f, line, "gateway address %q: the default gateway port is UDP 7777 (04 §2)", s[1]+s[2])
 		}
 	}
+	if !portName(key) {
+		if strings.HasPrefix(val, "{") && strings.HasSuffix(val, "}") && depth < 8 {
+			for _, kv := range tomlSplit(val[1 : len(val)-1]) {
+				if m := tomlKeyRE.FindStringSubmatch(kv); m != nil {
+					tomlGatewayValue(p, f, line, strings.Trim(m[1], `"'`), strings.TrimSpace(m[2]), depth+1)
+				}
+			}
+		}
+		return
+	}
+	items := []string{val}
+	if strings.HasPrefix(val, "[") && strings.HasSuffix(val, "]") {
+		items = strings.Split(strings.Trim(val, "[]"), ",")
+	}
+	for _, it := range items {
+		it = strings.TrimSpace(it)
+		if s := tomlStringRE.FindStringSubmatch(it); s != nil && s[0] == it {
+			if _, ok := portOf(s[1] + s[2]); ok {
+				continue // an address, checked above
+			}
+			it = s[1] + s[2]
+		}
+		if it == "" {
+			continue
+		}
+		if !tomlIntRE.MatchString(it) {
+			p.Report(f, line, unresolvedPort, "TOML "+key+" = "+it)
+			continue
+		}
+		if n, _ := strconv.Atoi(strings.ReplaceAll(strings.TrimPrefix(it, "+"), "_", "")); n != gatewayPort {
+			p.Report(f, line, "gateway port %d: the default gateway port is UDP 7777 (04 §2)", n)
+		}
+	}
+}
+
+// tomlSplit splits an inline table's body at the commas outside strings, arrays and inner tables.
+func tomlSplit(s string) []string {
+	var out []string
+	depth, quote, from := 0, byte(0), 0
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case quote == '"' && c == '\\':
+			i++
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '[' || c == '{':
+			depth++
+		case c == ']' || c == '}':
+			depth--
+		case c == ',' && depth == 0:
+			out = append(out, s[from:i])
+			from = i + 1
+		}
+	}
+	return append(out, s[from:])
 }
 
 // checkGatewayPortGo reads values named for the gateway: keyed fields, var and const specs and
@@ -230,7 +276,19 @@ func checkGatewayPortGo(p *Pass, f string) {
 		}
 		return "", false
 	}
-	check := func(name string, values ...ast.Expr) {
+	// goPort evaluates the port operand of an address built by concatenation or fmt.Sprint, looking
+	// through strconv.Itoa, strconv.FormatInt/FormatUint and fmt.Sprint.
+	goPort := func(e ast.Expr) (string, bool) {
+		if c, ok := e.(*ast.CallExpr); ok {
+			switch fn := calleeName(c); {
+			case (fn == "Itoa" || fn == "Sprint") && len(c.Args) == 1, (fn == "FormatInt" || fn == "FormatUint") && len(c.Args) == 2:
+				e = c.Args[0]
+			}
+		}
+		return goValue(e)
+	}
+	var check func(name string, values ...ast.Expr)
+	check = func(name string, values ...ast.Expr) {
 		portName := gatewayPortName(name)
 		for _, v := range values {
 			if portName {
@@ -260,9 +318,27 @@ func checkGatewayPortGo(p *Pass, f string) {
 				if _, closure := e.(*ast.FuncLit); closure {
 					return false // t.Run("gateway …", func…): the body is not the value
 				}
+				// A Port field inside a gateway value is the gateway port (&net.UDPAddr{Port: 7777}).
+				if kv, ok := e.(*ast.KeyValueExpr); ok {
+					if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Port" {
+						check(name+".Port", kv.Value)
+						return false
+					}
+				}
 				if s, ok := g.String(gf, e); ok {
 					addr(e, name, s)
 					return false
+				}
+				// "host:" + port: the port operand evaluated, or the address fails closed.
+				if b, ok := e.(*ast.BinaryExpr); ok && b.Op == token.ADD {
+					if host, ok := g.String(gf, b.X); ok && addrPrefixRE.MatchString(host) {
+						if port, ok := goPort(b.Y); ok {
+							addr(b, name, host+port)
+						} else {
+							p.Report(f, g.line(b.Pos()), unresolvedPort, "address "+strconv.Quote(host)+" + port in "+name)
+						}
+						return false
+					}
 				}
 				if c, ok := e.(*ast.CallExpr); ok {
 					switch fn := calleeName(c); {
@@ -291,6 +367,17 @@ func checkGatewayPortGo(p *Pass, f string) {
 						}
 						addr(c, name, fmt.Sprintf(strings.NewReplacer("%d", "%s", "%v", "%s", "%q", "%s").Replace(format), args...))
 						return false
+					case fn == "Sprint" && len(c.Args) == 2: // fmt.Sprint("127.0.0.1:", 7777)
+						host, ok := g.String(gf, c.Args[0])
+						if !ok || !addrPrefixRE.MatchString(host) {
+							break
+						}
+						if port, ok := goPort(c.Args[1]); ok {
+							addr(c, name, host+port)
+						} else {
+							p.Report(f, g.line(c.Pos()), unresolvedPort, "fmt.Sprint address in "+name)
+						}
+						return false
 					}
 				}
 				if lit, ok := e.(*ast.BasicLit); ok && lit.Kind == token.INT && portName {
@@ -304,6 +391,16 @@ func checkGatewayPortGo(p *Pass, f string) {
 	}
 	ast.Inspect(gf.File, func(n ast.Node) bool {
 		switch x := n.(type) {
+		case *ast.CompositeLit: // GatewayConfig{Port: 7003}: the Port field of a gateway-named type
+			if t := typeName(x.Type); gatewayNameRE.MatchString(t) {
+				for _, el := range x.Elts {
+					if kv, ok := el.(*ast.KeyValueExpr); ok {
+						if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Port" {
+							check(t+".Port", kv.Value)
+						}
+					}
+				}
+			}
 		case *ast.KeyValueExpr:
 			if k, ok := x.Key.(*ast.Ident); ok && gatewayNameRE.MatchString(k.Name) {
 				check(k.Name, x.Value)
@@ -465,17 +562,27 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 			func(m []string) bool { return gatewayPortName(m[1]) }) {
 			continue
 		}
-		for _, s := range cStringRE.FindAllStringSubmatch(l, -1) {
-			if port, ok := portOf(s[1]); ok {
+		for _, s := range cStringRE.FindAllStringSubmatchIndex(l, -1) {
+			lit := l[s[2]:s[3]]
+			if port, ok := portOf(lit); ok {
 				report(src.origin[i]+1, int64(port))
+			} else if c := cConcatRE.FindString(l[s[1]:]); c != "" && addrPrefixRE.MatchString(lit) {
+				// "host:" + port: evaluate the port operand, or fail closed.
+				vs := cPortValues(cPortOperand(l[s[1]+len(c):]), ints, 0)
+				if vs == nil {
+					p.Report(f, src.origin[i]+1, unresolvedPort, "address "+strconv.Quote(lit)+" + port")
+				}
+				for _, v := range vs {
+					report(src.origin[i]+1, v)
+				}
 			}
 		}
 	}
 	// Calls on those lines, with their arguments read across lines: the port argument of ipv4(…) and
 	// loopbackV4(…), and the default (last argument) of a listen, connect or gateway option.
 	for _, c := range src.callsAt(cIPv4CallRE.FindAllStringIndex(src.blank, -1)) {
-		if reads(c.index) && len(c.args) == 5 {
-			portArg(p, f, c, c.args[4], ints)
+		if reads(c.index) && len(c.args) >= 2 {
+			portArg(p, f, c, c.args[len(c.args)-1], ints)
 		}
 	}
 	for _, c := range src.callsAt(cV4CallRE.FindAllStringIndex(src.blank, -1)) {
@@ -507,6 +614,40 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 			}
 		}
 	}
+}
+
+// cPortOperand is the port operand at the start of s, after `"host:" +`: the argument of std::to_string(…),
+// or the expression up to the first top-level `)`, `,`, `;`, `+` or `<<`.
+func cPortOperand(s string) string {
+	s = strings.TrimSpace(s)
+	if m := cToStringRE.FindString(s); m != "" {
+		s = s[len(m)-1:]
+		if end := matchingParen(s); end > 0 {
+			return s[1:end]
+		}
+		return ""
+	}
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth == 0 {
+				return s[:i]
+			}
+			depth--
+		case ',', ';', '+':
+			if depth == 0 {
+				return s[:i]
+			}
+		case '<':
+			if depth == 0 && strings.HasPrefix(s[i:], "<<") {
+				return s[:i]
+			}
+		}
+	}
+	return s
 }
 
 // portArg checks the port argument of an address call.

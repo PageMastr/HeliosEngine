@@ -10,3 +10,5 @@ fallback_port = 7_777#a comment without a space
 listen_port = "7777"
 transport = "udp"
 report_interval = 5
+listen = { host = "0.0.0.0", port = 7777 }
+"public_port" = 7777

@@ -2,6 +2,7 @@
 // the ImGui docking shell over the ToolsFramework, rendering through the Helios RHI. This file only
 // parses the command line. See apps/editor/README.md.
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 
@@ -83,7 +84,10 @@ int run(const CommandLine& cl) {
     config.journal = !cl.has("no-journal");
     config.theme = std::string(cl.getString("theme", "dark"));
     if (auto file = cl.value("theme-file")) config.themeFile = fs::pathFromUtf8(*file);
-    config.scale = static_cast<f32>(cl.getFloat("scale", 0.0));
+    // Bounded in f64 (converting a double outside f32's range is undefined behaviour); create()
+    // clamps it to the supported range. Not positive, NaN included: the display's scale.
+    const f64 scale = cl.getFloat("scale", 0.0);
+    config.scale = scale > 0.0 ? static_cast<f32>(std::min(scale, 100.0)) : 0.0f;
     config.width = static_cast<u32>(cl.getInt("width", 1600));
     config.height = static_cast<u32>(cl.getInt("height", 900));
     config.pseudoLoc = cl.has("pseudo-loc");

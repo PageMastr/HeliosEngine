@@ -32,8 +32,11 @@ The built-in suite is the **ED-15 harness self-test** for the shell and the prop
 5. **Keyboard.** Ctrl+Shift+P opens the palette and runs a command. The View menu lists the theme
    commands. Ctrl+Tab reaches every panel.
 
-It writes `report.json` and the captures to `--out`. Exit code 0 when every check passes, 1 on a
-failure, 2 on a setup error. CTest: `editorui_ed15` (label `gpu`; under `xvfb-run -a` on Linux,
+It writes `report.json` and the captures to `--out`, which it deletes and recreates at start. So
+`--out` must be new, empty, or the `--out` of an earlier run (it holds `helios-uitest-out.txt` or
+`report.json`), and must not hold `--goldens` or `--fixture`; anything else is refused with exit
+code 2 before a file is touched (CTest `helios_uitest_out_guard`). Exit code 0 when every check
+passes, 1 on a failure, 2 on a setup error. CTest: `editorui_ed15` (label `gpu`; under `xvfb-run -a` on Linux,
 where lavapipe is the Vulkan device). Refresh the goldens with `--update-goldens` and review every
 image before committing.
 

@@ -101,6 +101,11 @@ struct UiInputEvent {
 
 inline constexpr u32 kModCtrl = 1, kModShift = 2, kModAlt = 4, kModSuper = 8;
 
+/// Bound of ui.move and ui.drag coordinates and offsets, in display pixels: far beyond any display.
+inline constexpr f64 kMaxUiPixels = 1.0e6;
+/// Bound of ui.scroll's mouse-wheel steps.
+inline constexpr f64 kMaxUiWheelSteps = 1.0e4;
+
 /// A chord "ctrl+shift+p" -> modifier bits + key name. InvalidArgument for unknown keys.
 Result<std::pair<u32, std::string>> parseChord(std::string_view chord);
 /// Key names parseChord() accepts (the host maps each to an SDL keycode and scancode).
@@ -153,17 +158,20 @@ public:
     static void namePopup(u32 popupId, std::string_view name);
 
     // ---- actions (ui.*) ----------------------------------------------------------------------
+    // Coordinates, offsets and wheel steps arrive as JSON numbers (f64): they are clamped to
+    // ±kMaxUiPixels and ±kMaxUiWheelSteps in f64 before they become f32, since converting a double
+    // outside f32's range (1e300) is undefined behaviour ([conv.double]). NaN counts as 0.
     void click(std::string path, u8 button, Completion done);
     void doubleClick(std::string path, Completion done);
     void hover(std::string path, Completion done);
-    void moveTo(f32 x, f32 y, Completion done);
+    void moveTo(f64 x, f64 y, Completion done);
     /// Drag from an item's center to another item's center, or by (dx, dy) pixels when `to` is empty.
-    void drag(std::string from, std::string to, f32 dx, f32 dy, Completion done);
+    void drag(std::string from, std::string to, f64 dx, f64 dy, Completion done);
     void type(std::string text, Completion done);
     /// Presses a chord: modifiers down, the key down/up `repeat` times, modifiers up, one event
     /// per frame ("ctrl+tab" x3 walks the Ctrl+Tab window list three steps).
     void key(std::string chord, u32 repeat, Completion done);
-    void scroll(std::string path, f32 steps, Completion done);
+    void scroll(std::string path, f64 steps, Completion done);
     /// Waits until the item exists (and, when given, is enabled / has the value).
     void waitFor(std::string path, std::optional<bool> enabled, std::optional<std::string> value, u32 timeoutFrames,
                  Completion done);

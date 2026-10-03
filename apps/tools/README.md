@@ -7,6 +7,7 @@ is added only when `HELIOS_BUILD_GRAPHICS` is on (`CMakeLists.txt`).
 | Tool | What it is | Builds in |
 |---|---|---|
 | [`helios-tool`](helios-tool/README.md) | The headless ToolsFramework CLI (07 §1.1, §1.2): `engine/toolsfw` without EditorUI or graphics | Every preset, headless included |
+| [`helios-uitest`](helios-uitest/README.md) | The editor UI test driver (07 §4.4, ED-15): starts `helios-editor --test-mode` on a copy of a project and drives it over the remote-control socket | Graphics presets |
 
 Each tool's README documents its command line, tests and plan conformance.
 
@@ -14,4 +15,4 @@ Each tool's README documents its command line, tests and plan conformance.
 
 Plan-Rev: 11
 
-Written for plan revision 11 (07 §1.1; 09 §2.1 WP-0.18) on 2026-10-03.
+Written for plan revision 11 (07 §1.1, §4.4; 09 §2.1 WP-0.18) on 2026-10-03.

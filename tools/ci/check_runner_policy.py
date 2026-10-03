@@ -7,7 +7,7 @@
 
 The `win-gpu` runner is the repository owner's own PC, so it may run only code that has been reviewed
 and merged. A job reaches that runner when its `runs-on` names `win-gpu`, or names only labels the runner
-carries (`self-hosted`, `windows`, `x64`, `win-gpu`; GitHub matches labels case-insensitively), in any
+carries (`self-hosted`, `windows`, `x64`, `win-gpu`; compared ignoring case and surrounding blanks), in any
 form: a string, a list, `labels:` under a runner group, or `${{ matrix.<axis> }}` over literal matrix
 values (axis lists and `include` entries). For every such job the workflow fails when:
 
@@ -18,22 +18,34 @@ values (axis lists and `include` entries). For every such job the workflow fails
   guard-var    ... nor `vars.HELIOS_WIN_GPU == 'enabled'` (the owner's switch: no variable, no job);
   secrets      the job, a job it needs (transitively) or the workflow's top level reads `secrets`,
                `github.token` or the whole `github` context in an expression (`if:` values are
-               expressions), or passes `secrets:` (including `secrets: inherit`) to a reusable workflow;
+               expressions; an expression ends at the first `}}` outside a '...' literal, as GitHub reads
+               it), or passes `secrets:` (including `secrets: inherit`) to a reusable workflow; or the job
+               needs a reusable-workflow call, whose jobs' secrets (environment secrets need no `secrets:`)
+               could reach it through outputs unseen, or a `needs` id that names no job;
   permissions  its token permissions (the job's, else the workflow's) are missing or broader than
                `contents: read`;
   pinning      a step `uses:` an action that is not local (`./...`) or pinned to a full commit SHA.
 
 Two findings apply to every job of every workflow, because they hide whether a job reaches the runner:
 
-  runs-on      `runs-on` is an expression other than `${{ matrix.<axis> }}` over literal values;
-  reusable     the job calls a reusable workflow outside this repository's `./.github/workflows/`.
+  runs-on      `runs-on` is missing (in a job that calls no reusable workflow) or is an expression other
+               than `${{ matrix.<axis> }}` over literal values;
+  reusable     the job calls a reusable workflow other than a file directly in this repository's
+               `./.github/workflows/`.
 
 Workflows are read with the strict YAML subset parser below (standard library only; the repository's
 Python tools add no dependencies). It fails closed: anchors, aliases, tags, merge keys, complex keys,
-duplicate keys, tabs in indentation and multiple documents are errors, so no construct can make this
-check see a different workflow than GitHub does. Findings print as `<file>:<line>: <rule>: <message>`
+duplicate keys, tabs in indentation, multiple documents, and characters that other YAML parsers read as
+line breaks (NEL, LS, PS) or refuse (other control characters, a BOM after the start) are errors rather
+than places where it could read a different workflow than GitHub does; a differential test compares it
+with PyYAML. Findings print as `<file>:<line>: <rule>: <message>`
 (tools/ci/ctest_to_sarif.py turns them into annotations); the exit code is 1 when there is any.
 CTest `lint_runner_policy` (label `lint`) runs it on every build, and tools/ci/run_lints.cmake runs it.
+
+What it does not see, and leaves to review: the contents of actions (a local `./` action is reviewed code
+of this repository; any action can read the job's token through an input default, as actions/checkout
+does, which is why the token is limited to `contents: read`), and data a job fetches at run time other
+than through `needs` (another job's artifacts, caches).
 
 The check is the PR-tier half of the policy. A branch's own workflow file can still request the runner
 on a push to that branch before any review, so the runner's job-started hook
@@ -62,6 +74,8 @@ REQUIRED_TERMS = {
                   ("vars.helios_win_gpu=='enabled'", "'enabled'==vars.helios_win_gpu")),
 }
 GUARD_TEXT = "if: github.ref == 'refs/heads/main' && vars.HELIOS_WIN_GPU == 'enabled'"
+# A reusable workflow of this repository, as GitHub reads one: a file directly in .github/workflows/.
+LOCAL_WORKFLOW_RE = re.compile(r"\./\.github/workflows/[^/]+\.ya?ml")
 
 
 # ------------------------------------------------------------------------------------------------
@@ -98,6 +112,11 @@ ESCAPES = {"0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n", "v
 HEX_ESCAPES = {"x": 2, "u": 4, "U": 8}
 UNSUPPORTED_START = {"&": "anchors", "*": "aliases", "!": "tags", "%": "directives",
                      "@": "reserved indicators", "`": "reserved indicators"}
+# Characters refused anywhere in a file. NEL, LS and PS are line breaks to YAML 1.1 parsers (LibYAML, PyYAML,
+# YamlDotNet), and this parser breaks lines at LF alone, so a key behind one would be a comment here and a key
+# there. The other C0 and C1 controls (but tab, LF, and CR before LF), DEL, a BOM after the start and the
+# non-characters U+FFFE and U+FFFF are outside YAML's printable set: parsers refuse them or read them differently.
+FORBIDDEN_CHARS = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\ufeff\ufffe\uffff]")
 
 
 def _closing_quote(text: str, quote: str) -> int | None:
@@ -293,6 +312,10 @@ class _Parser:
         text = text.replace("\r\n", "\n")
         if "\r" in text:
             raise YamlError(text[:text.index("\r")].count("\n") + 1, "bare carriage return")
+        bad = FORBIDDEN_CHARS.search(text)
+        if bad:
+            kind = "a line break to other YAML parsers" if bad[0] in "\x85\u2028\u2029" else "a control character"
+            raise YamlError(text[:bad.start()].count("\n") + 1, f"U+{ord(bad[0]):04X} ({kind}) is not allowed")
         self.lines = text.split("\n")
         if self.lines and self.lines[-1] == "":
             self.lines.pop()
@@ -357,7 +380,7 @@ class _Parser:
             raise YamlError(1, "empty workflow")
         if self.lines[k].startswith("%"):
             raise YamlError(k + 1, "YAML directives are not supported")
-        if self.lines[k].rstrip() == "---":
+        if self.lines[k].rstrip(" \t") == "---":
             self.i += 1
             k = self._next()
             if k is None:
@@ -621,10 +644,24 @@ def _credential(expr: str) -> bool:
 
 
 def _expressions(key: str | None, text: str) -> list[str]:
-    """The expression text in a value: all of an `if:` value, else every `${{ … }}`."""
+    """The expression text in a value: all of an `if:` value, else every `${{ … }}`. As GitHub's template reader
+    does, an expression ends at the first `}}` outside a '…' string literal (`''` toggles twice), so a `}}` inside
+    a literal does not end it. An unclosed `${{` (which GitHub refuses) runs to the end of the value."""
     if key == "if":
         return [text]
-    return re.findall(r"\$\{\{(.*?)\}\}", text, re.S)
+    out, start = [], text.find("${{")
+    while start >= 0:
+        i, quoted, end = start + 3, False, len(text)
+        while i < len(text):
+            if text[i] == "'":
+                quoted = not quoted
+            elif not quoted and text.startswith("}}", i):
+                end = i
+                break
+            i += 1
+        out.append(text[start + 3:end])
+        start = text.find("${{", end + 2)
+    return out
 
 
 def _label_sets(value, matrix) -> tuple[list[frozenset[str]] | None, str]:
@@ -674,10 +711,16 @@ def _label_sets(value, matrix) -> tuple[list[frozenset[str]] | None, str]:
         if alternatives is None:
             return None, f"runs-on entry {entry!r} is an expression this check cannot resolve"
         combos = [c + a for c in combos for a in alternatives]
-    sets = [frozenset(x.lower() for x in c) for c in combos]
+    sets = [frozenset(_fold(x) for x in c) for c in combos]
     if group is not None:
         return None, "runs-on names a runner group, whose runners this check cannot see"
     return sets, ""
+
+
+def _fold(text: str) -> str:
+    """A runner label or job id as compared: without surrounding blanks and in the widest case folding (upper,
+    then lower: the dotless i and the long s upper-case to I and S), so that any name that might match does."""
+    return text.strip().upper().lower()
 
 
 def _reaches_runner(sets: list[frozenset[str]]) -> bool:
@@ -799,17 +842,32 @@ def _pinned(uses: str) -> bool:
     return re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", uses) is not None
 
 
-def _needs(jobs: Map, job_id: str) -> list[str]:
-    """job_id and every job it needs, transitively."""
-    seen, todo = [], [job_id]
+def _needs(jobs: Map, job_id: str) -> tuple[list[str], list[tuple[int, str]]]:
+    """(job_id and every job it needs, transitively; problems as (line, message)). A `needs` id matches every job
+    whose id _fold()s to the same text, a superset of what GitHub may match. An id that matches no job, or a
+    `needs` that is neither an id nor a list of ids, is a problem: what it names is unknown."""
+    by_id: dict[str, list[str]] = {}
+    for j in jobs:
+        by_id.setdefault(_fold(j), []).append(j)
+    seen, todo, problems = [], [job_id], []
     while todo:
         j = todo.pop()
         if j in seen or not isinstance(jobs.get(j), Map):
             continue
         seen.append(j)
-        needs = jobs[j].get("needs")
-        todo += [needs] if isinstance(needs, str) else [n for n in needs or [] if isinstance(n, str)]
-    return seen
+        job = jobs[j]
+        needs = job.get("needs", "")
+        line = job.lines.get("needs", job.line)
+        if needs == "":
+            continue
+        for name in list(needs) if isinstance(needs, Seq) else [needs]:
+            if not isinstance(name, str):
+                problems.append((line, f"job `{j}` has a `needs` entry that is not a job id"))
+            elif _fold(name) not in by_id:
+                problems.append((line, f"job `{j}` needs `{name}`, which is not a job of this workflow"))
+            else:
+                todo += by_id[_fold(name)]
+    return seen, problems
 
 
 def _events(on) -> Map | None:
@@ -876,12 +934,15 @@ def check_workflow(path: Path, display: str) -> tuple[list[Finding], list[str]]:
             continue
         if "uses" in job:
             uses = job["uses"]
-            if not (isinstance(uses, str) and uses.startswith("./.github/workflows/")):
+            if not (isinstance(uses, str) and LOCAL_WORKFLOW_RE.fullmatch(uses)):
                 findings.append(Finding(display, job.lines["uses"], "reusable",
                                         f"job `{job_id}` calls `{uses}`: a reusable workflow outside this "
                                         "repository's ./.github/workflows/ may run jobs on win-gpu unseen"))
             continue
         if "runs-on" not in job:
+            findings.append(Finding(display, line, "runs-on",
+                                    f"job `{job_id}` has neither `runs-on` nor `uses`, so this check cannot tell "
+                                    "where it runs"))
             continue
         strategy = job.get("strategy")
         sets, why = _label_sets(job["runs-on"], strategy.get("matrix") if isinstance(strategy, Map) else None)
@@ -912,8 +973,19 @@ def check_workflow(path: Path, display: str) -> tuple[list[Finding], list[str]]:
         if problem:
             line = job.lines.get("permissions", workflow.lines.get("permissions", jobs.lines[job_id]))
             findings.append(Finding(display, line, "permissions", f"job `{job_id}`: {problem}"))
+        chain, problems = _needs(jobs, job_id)
+        for line, message in problems:
+            findings.append(Finding(display, line, "secrets",
+                                    f"job `{job_id}`: {message}, so this check cannot follow what reaches the job"))
+        for j in chain:
+            if "uses" in jobs[j]:
+                findings.append(Finding(display, jobs[j].lines["uses"], "secrets",
+                                        f"job `{job_id}` needs `{j}`, which calls the reusable workflow "
+                                        f"`{jobs[j]['uses']}`: its jobs' secrets (environment secrets need no "
+                                        "`secrets:`) can reach the runner through its outputs, out of this check's "
+                                        "sight; a win-gpu job may not need a reusable-workflow call"))
         scopes = [("the workflow's top level", top)] + [
-            ("the job" if j == job_id else f"job `{j}` (a job it needs)", jobs[j]) for j in _needs(jobs, job_id)]
+            ("the job" if j == job_id else f"job `{j}` (a job it needs)", jobs[j]) for j in chain]
         for scope, node in scopes:
             if isinstance(node, Map) and "secrets" in node and node is not top:
                 findings.append(Finding(display, node.lines["secrets"], "secrets",

@@ -203,6 +203,21 @@ class RunsOnTests(unittest.TestCase):
             with self.subTest(runs_on=runs_on):
                 self.assertFalse(self.reaches(runs_on))
 
+    def test_labels_compare_without_blanks_and_case(self):
+        # A label that might name the runner counts: blanks around it and case (including the Turkish dotless
+        # i and the long s, which upper-case to I and S) do not hide it.
+        for runs_on in ("runs-on: 'win-gpu '", "runs-on: [self-hosted, ' Win-GPU']", "runs-on: \"\\twin-gpu\"",
+                        "runs-on: [w\u0131n-gpu]", "runs-on: [\u017felf-hosted]",
+                        "runs-on: ${{ matrix.os }}\nstrategy:\n  matrix:\n    os: ['win-gpu ']"):
+            with self.subTest(runs_on=runs_on):
+                self.assertTrue(self.reaches(runs_on))
+
+    def test_a_job_without_runs_on_or_uses_fails(self):
+        # GitHub refuses such a job, but a key this check cannot see (a parser difference) must not make a job
+        # look harmless: no `runs-on` is a finding in every workflow.
+        rules, _ = check("on: pull_request\njobs:\n  build:\n    steps:\n      - run: echo x\n")
+        self.assertEqual({"runs-on"}, rules)
+
     def test_matrix_values(self):
         strategy = "strategy:\n  matrix:\n    os: [ubuntu-24.04, windows-latest]\n"
         self.assertFalse(self.reaches("runs-on: ${{ matrix.os }}", strategy))
@@ -226,10 +241,14 @@ class RunsOnTests(unittest.TestCase):
                 self.assertEqual({"runs-on"}, rules)
 
     def test_reusable_workflow_calls(self):
-        local = "jobs:\n  call:\n    uses: ./.github/workflows/build.yml\n"
-        self.assertEqual(set(), check(workflow("on: pull_request\n", local))[0])
+        for uses in ("./.github/workflows/build.yml", "./.github/workflows/build.yaml"):
+            with self.subTest(uses=uses):
+                self.assertEqual(set(), check(workflow("on: pull_request\n", f"jobs:\n  call:\n    uses: {uses}\n"))[0])
         for uses in ("octo/repo/.github/workflows/build.yml@v1",
-                     "PageMastr/HeliosEngine/.github/workflows/win-gpu.yml@feature"):
+                     "PageMastr/HeliosEngine/.github/workflows/win-gpu.yml@feature",
+                     # GitHub reads local reusable workflows from .github/workflows/ itself, never below or above it.
+                     "./.github/workflows/sub/build.yml", "./.github/workflows/../build.yml",
+                     "./.github/workflows/build.json", "./.github/workflows/build.yml@main", "./build.yml"):
             with self.subTest(uses=uses):
                 self.assertEqual({"reusable"}, check(workflow("on: pull_request\n", f"jobs:\n  call:\n    uses: {uses}\n"))[0])
 
@@ -244,6 +263,88 @@ class SecretsAndPermissionsTests(unittest.TestCase):
             with self.subTest(snippet=snippet):
                 job = with_job(steps="steps:\n  - run: echo\n" + textwrap.indent(snippet, "    "))
                 self.assertEqual({"secrets"}, check(workflow(job=job))[0])
+
+    def test_closing_braces_inside_a_string_literal(self):
+        # GitHub ends an expression at the first `}}` outside a '...' literal.
+        for value in ("\"${{ format('}}', secrets.KEY) }}\"", "\"${{ format('{0}}}', secrets.KEY) }}\"",
+                      "\"${{ format('}}', github.token) }}\"", "\"${{ format('it''s }}', secrets.KEY) }}\"",
+                      "\"x ${{ 'a' }} y ${{ format('}}}}', toJSON(secrets)) }}\"",
+                      "\"${{ secrets.KEY\"", "\"${{ 'unclosed }}' secrets.KEY\""):
+            with self.subTest(value=value):
+                job = with_job(steps=f"steps:\n  - run: echo\n    env:\n      K: {value}")
+                self.assertEqual({"secrets"}, check(workflow(job=job))[0])
+        # Text after an expression's end is not an expression.
+        job = with_job(steps="steps:\n  - run: echo\n    env:\n      K: \"${{ format('}}', github.sha) }} secrets.txt\"")
+        self.assertEqual(set(), check(workflow(job=job))[0])
+
+    def test_needs_ids_match_as_github_may_and_unknown_needs_fail(self):
+        prep = "jobs:\n  Prep:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo ${{ secrets.KEY }}\n"
+        for needs in ("needs: prep", "needs: [PREP]", "needs: [' prep ']"):
+            with self.subTest(needs=needs):
+                gpu = with_job(needs=needs).replace("jobs:\n", "")
+                self.assertEqual({"secrets"}, check(workflow(job=prep + gpu))[0])
+        clean = prep.replace(" ${{ secrets.KEY }}", "")
+        for needs in ("needs: missing", "needs: [Prep, missing]", "needs: [[Prep]]", "needs:\n  Prep: x"):
+            with self.subTest(needs=needs):
+                gpu = with_job(needs=needs).replace("jobs:\n", "")
+                self.assertEqual({"secrets"}, check(workflow(job=clean + gpu))[0])
+        self.assertEqual(set(), check(workflow(job=clean + with_job(needs="needs: Prep").replace("jobs:\n", "")))[0])
+
+    def test_a_needed_reusable_workflow_call_fails(self):
+        # Its jobs' secrets (environment secrets need no `secrets:` from the caller) and outputs are out of sight.
+        for call in ("  prep:\n    uses: ./.github/workflows/prep.yml\n",
+                     "  prep:\n    uses: ./.github/workflows/prep.yml\n    with:\n      x: y\n"):
+            for needs in ("needs: prep", "needs: [mid]"):
+                with self.subTest(call=call, needs=needs):
+                    mid = "  mid:\n    needs: prep\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo\n"
+                    gpu = with_job(needs=needs).replace("jobs:\n", "")
+                    rules, jobs = check(workflow(job="jobs:\n" + call + mid + gpu))
+                    self.assertEqual(({"secrets"}, ["gpu"]), (rules, jobs))
+        # A call the runner job does not need is checked on its own.
+        unrelated = "jobs:\n  prep:\n    uses: ./.github/workflows/prep.yml\n" + with_job().replace("jobs:\n", "")
+        self.assertEqual(set(), check(workflow(job=unrelated))[0])
+
+    def test_secrets_in_a_needed_local_reusable_workflow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "caller.yml").write_text(textwrap.dedent("""\
+                on:
+                  schedule:
+                    - cron: '0 4 * * *'
+                permissions:
+                  contents: read
+                jobs:
+                  prep:
+                    uses: ./.github/workflows/prep.yml
+                  gpu:
+                    needs: prep
+                    if: github.ref == 'refs/heads/main' && vars.HELIOS_WIN_GPU == 'enabled'
+                    runs-on: [self-hosted, win-gpu]
+                    steps:
+                      - run: echo "${{ needs.prep.outputs.blob }}"
+                """), encoding="utf-8")
+            (d / "prep.yml").write_text(textwrap.dedent("""\
+                on:
+                  workflow_call:
+                    outputs:
+                      blob:
+                        value: ${{ jobs.make.outputs.blob }}
+                jobs:
+                  make:
+                    runs-on: ubuntu-24.04
+                    environment: production
+                    outputs:
+                      blob: ${{ steps.s.outputs.blob }}
+                    steps:
+                      - id: s
+                        run: echo "blob=$(echo "$K" | base64 | rev)" >> "$GITHUB_OUTPUT"
+                        env:
+                          K: ${{ secrets.DEPLOY_KEY }}
+                """), encoding="utf-8")
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(1, policy.main(["--workflows", tmp]))
+            self.assertIn("caller.yml:", out.getvalue())
 
     def test_secrets_in_if_expressions_need_no_braces(self):
         job = with_job(steps="steps:\n  - run: echo\n    if: secrets.KEY != ''")
@@ -363,6 +464,29 @@ class ParserTests(unittest.TestCase):
             with self.subTest(text=text):
                 with self.assertRaisesRegex(policy.YamlError, message):
                     policy.parse_yaml(text)
+
+    def test_unicode_line_breaks_fail_closed(self):
+        # YAML 1.1 parsers (LibYAML, PyYAML, YamlDotNet) break lines at NEL, LS and PS; this parser does not, so
+        # it refuses them: a key behind one would be a comment here and a key there.
+        for br in ("\x85", "\u2028", "\u2029"):
+            with self.subTest(br=repr(br)):
+                text = ("on: pull_request\njobs:\n  build:\n"
+                        f"    # note{br}    runs-on: [self-hosted, win-gpu]\n    steps:\n      - run: echo x\n")
+                with self.assertRaisesRegex(policy.YamlError, "U\\+"):
+                    policy.parse_yaml(text)
+                self.assertEqual({"parse"}, check(text)[0])
+
+    def test_control_characters_fail_closed(self):
+        # Every C0 and C1 control but tab and line feed (and CR before LF), DEL, a BOM after the start, and the
+        # non-characters U+FFFE and U+FFFF: YAML parsers refuse them or read them differently.
+        for c in [chr(i) for i in range(0x20) if chr(i) not in "\t\n\r"] + \
+                 [chr(i) for i in range(0x7F, 0xA0)] + ["\ufeff", "\ufffe", "\uffff"]:
+            with self.subTest(c=repr(c)):
+                for text in (f"a: 'x{c}y'\n", f"a: x\n# {c}\n", f"a: [x, \"{c}\"]\n"):
+                    with self.assertRaises(policy.YamlError):
+                        policy.parse_yaml(text)
+        # A BOM at the start, CR LF line ends, tabs inside quoted values and U+00A0 are fine.
+        self.assertEqual({"a": "x\ty\u00a0", "b": "c"}, plain(policy.parse_yaml("\ufeffa: 'x\ty\u00a0'\r\nb: c\r\n")))
 
     def test_a_policy_relevant_key_cannot_hide_in_a_duplicate(self):
         with tempfile.TemporaryDirectory() as tmp:

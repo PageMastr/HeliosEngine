@@ -41,7 +41,7 @@
     "windows-lab": {"os": "windows", "default": false, "nightly": false,
                     "description": "WP-0.4's lab pair (09 §5.6 class H): server_tests_ns03_remote from the win-gpu runner's MSVC build against helios-gateway and helios-cell on a Linux lab host. Not produced yet: it needs the Linux lab host, then a job on the win-gpu runner (.github/workflows/win-gpu.yml), which the hosted nightly does not wait for"},
     "win-gpu": {"os": "windows", "default": false, "nightly": false,
-                "description": "WP-0.4's win-gpu runner, the owner's PC with a real GPU (09 §5.4a): .github/workflows/win-gpu.yml, daily and on dispatch, on main only, builds windows-vs2022 and runs the gpu-labelled CTests (the Vulkan goldens on the hardware adapter), ADR-0.9c's pcg_hnoise_bench --hardware-gpu and a strict net_bench --gate, and uploads this result set as the results-win-gpu artifact. Not produced yet: the owner registers the runner and sets HELIOS_WIN_GPU (docs/runbooks/win-gpu-runner.md); the nightly report does not read that artifact yet"}
+                "description": "WP-0.4's win-gpu runner, the owner's PC with a real GPU (09 §5.4a): .github/workflows/win-gpu.yml, daily and on dispatch, on main only, builds windows-vs2022 and runs the gpu-labelled CTests (the Vulkan goldens on the hardware adapter), ADR-0.9c's pcg_hnoise_bench --hardware-gpu and a strict net_bench --gate, and uploads this result set as the results-win-gpu artifact. Not produced yet: the owner registered the runner on 2026-10-03 but has not set HELIOS_WIN_GPU (docs/runbooks/win-gpu-runner.md); the nightly report does not read that artifact yet"}
   },
 
   // Commands the nightly workflow runs outside CTest; each writes one JUnit result named after the gate.
@@ -311,7 +311,7 @@
         {"ctest": "server_tests_ns03_remote", "platforms": ["windows"], "run": "windows-lab"}
       ],
       "gaps": [
-        {"clause": "H: no lab run yet, so the cross-host half is unmeasured (it counts as failing), and no MSVC-built client has run against a Linux gateway. WP-0.4 registers win-gpu and puts a Linux host on its network running `helios-cell --standalone --trunk-keys ring.json` and `helios-gateway --standalone --listen <lan-ip>:7777 --keys ring.json --trunk-keys ring.json`, allowed through the runner's LAN block with `tools/ci/runner/firewall.ps1 -AllowAddress <lan-ip>`; a win-gpu.yml job then builds windows-msvc-release on win-gpu, runs `ctest -R server_tests_ns03_remote` with HELIOS_NS03_GATEWAY=<lan-ip>:7777 and HELIOS_NS03_KEYS=ring.json, and uploads the result set as windows-lab", "state": "unmeasured", "owner": "WP-0.4"}
+        {"clause": "H: no lab run yet, so the cross-host half is unmeasured (it counts as failing), and no MSVC-built client has run against a Linux gateway. WP-0.4 puts a Linux host on the win-gpu runner's network running `helios-cell --standalone --trunk-keys ring.json` and `helios-gateway --standalone --listen <lan-ip>:7777 --keys ring.json --trunk-keys ring.json`, allowed through the runner's LAN block with `tools/ci/runner/firewall.ps1 -AllowAddress <lan-ip>`; a win-gpu.yml job then builds windows-msvc-release on win-gpu, runs `ctest -R server_tests_ns03_remote` with HELIOS_NS03_GATEWAY=<lan-ip>:7777 and HELIOS_NS03_KEYS=ring.json, and uploads the result set as windows-lab", "state": "unmeasured", "owner": "WP-0.4"}
       ]
     },
     {
@@ -468,7 +468,7 @@
       "status": "partial",
       "tests": [{"ctest": "rendertest.vulkan.*", "platforms": ["linux"]}, {"ctest": "rendertest.null.*"},
                 {"ctest": "rendertest.vulkan.*", "platforms": ["windows"], "run": "win-gpu"}],
-      "gaps": [{"clause": "Windows Vulkan goldens on a real GPU: .github/workflows/win-gpu.yml runs rendertest.vulkan.* on the win-gpu runner (the win-gpu run), but no run exists yet (the owner registers the runner and sets HELIOS_WIN_GPU, docs/runbooks/win-gpu-runner.md) and the nightly report does not read its results-win-gpu artifact yet (09 §5.4)", "state": "unmeasured", "owner": "WP-0.4, User"}]
+      "gaps": [{"clause": "Windows Vulkan goldens on a real GPU: .github/workflows/win-gpu.yml runs rendertest.vulkan.* on the win-gpu runner (the win-gpu run), but no run exists yet (the runner is registered; the owner has not set HELIOS_WIN_GPU, docs/runbooks/win-gpu-runner.md) and the nightly report does not read its results-win-gpu artifact yet (09 §5.4)", "state": "unmeasured", "owner": "WP-0.4, User"}]
     },
     {
       "id": "EXIT-0.cell-tick", "phase": 0, "source": "01 §5.4", "owner": "WP-0.14",

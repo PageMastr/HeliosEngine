@@ -16,7 +16,7 @@ you start it from the Actions tab ("Run workflow" on `main`). A queued job waits
    the Vulkan golden images (`rendertest.vulkan.*`, Khronos-validated), `rhi_tests_gpu`, `pcg_gpu_tests` and
    `rhi_triangle_smoke`;
 3. runs ADR-0.9c's `pcg_hnoise_bench --hardware-gpu` and a strict `net_bench --gate` (NS-0.2's re-test on fixed
-   hardware);
+   hardware), then fails if the goldens or the bench ran on a software rasterizer or found no GPU;
 4. uploads the `results-win-gpu` artifact (30 days).
 
 It never runs for pull requests. The layers, from the outside in:
@@ -55,6 +55,11 @@ The checker counts every label of the runner: a job whose `runs-on` uses only `s
 Steps 1, 2, 3 and 5 are the owner's steps of 2026-10-03; they are repeated here so that this page is complete.
 Run the commands in an elevated PowerShell (Run as administrator) unless a step says otherwise.
 
+**Already done on 2026-10-03?** Then the runner `helios-win-gpu` is registered and Idle, and what is left is:
+narrow the `hooks` ACL (the `icacls` line in step 3), install Go and set the execution policy (the `GoLang.Go` and
+`Set-ExecutionPolicy` lines of step 4, then restart the service), then steps 6, 7 and 8 and the verification
+checklist.
+
 ### 1. Prerequisites
 
 Windows 10 or 11 Pro with BitLocker, the latest GPU driver (Vulkan 1.3), and a data volume `D:` with about 100 GB free.
@@ -92,8 +97,9 @@ Set-ExecutionPolicy -Scope LocalMachine RemoteSigned       # Windows PowerShell'
 ```
 
 Ninja is not needed: `win-gpu.yml` uses the Visual Studio generator, so no third-party action has to set up the MSVC
-environment. Go is needed only so that configure succeeds; the job does not run Go. Restart the runner service (or the
-PC) after installing, so that it sees the new `PATH` and `VULKAN_SDK`.
+environment. Go is needed only so that configure succeeds; the job does not run Go. `python` must be on the machine
+`PATH` (the installer's "Add python.exe to PATH"; the job fails when `python` is missing or is only the Microsoft Store
+alias). Restart the runner service (or the PC) after installing, so that it sees the new `PATH` and `VULKAN_SDK`.
 
 ### 5. Register the runner
 
@@ -176,7 +182,8 @@ Do this after the setup and after any change to the PC, the hook or the firewall
   - `Test-NetConnection <your router's IP> -Port 80` fails, `Test-NetConnection github.com -Port 443` succeeds;
   - `git --version; cmake --version; python --version; go version; $env:VULKAN_SDK` all answer.
 - [ ] A dispatched run on `main`: "Set up runner" prints `job-started hook: workflow_dispatch job on refs/heads/main;
-      removed N entries ...`; "Runner isolation" and "LAN egress blocked" pass; the job builds.
+      removed N entries ...`; "Runner isolation" and "LAN egress blocked" pass; the job builds; "The goldens and the
+      bench ran on a hardware GPU" names your GPU.
 - [ ] The run's `results-win-gpu` artifact holds `run.json`, `host.json`, `ctest.xml`, `gates/`, `inventory.json`,
       `hnoise-win-gpu.json` and `rendertest/`.
 - [ ] The hook refuses unreviewed code. Push a throwaway branch whose only change is a workflow
@@ -196,6 +203,11 @@ Do this after the setup and after any change to the PC, the hook or the firewall
   finding to report, not a reason to run the runner interactively.
 - **Golden images**: the goldens were blessed on lavapipe (`golden/vulkan-llvmpipe/`); a real GPU may differ beyond
   the ꟻLIP tolerance. A failure is a finding for WP-0.12 (per-driver goldens), not a setting to relax.
+- **"did not run on a hardware GPU"**: the goldens or the bench used a software rasterizer, or saw no GPU at all.
+  With two GPUs, set `HELIOS_WIN_GPU_ADAPTER` (step 8). If the log says `no Vulkan physical devices` or `GPU:
+  unavailable`, the driver does not offer Vulkan to a service's session; that is a finding to report (the options
+  are the GPU-P VM of 09 §5.4a or a different runner setup, the owner's decision), not a reason to run the runner
+  from an interactive logon.
 
 ## Rotate or remove
 

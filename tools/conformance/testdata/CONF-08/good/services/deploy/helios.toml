@@ -8,3 +8,5 @@ gateways = ["127.0.0.1:7777"]
 port = 7777 # the only public game port
 fallback_port = 7_777#a comment without a space
 listen_port = "7777"
+transport = "udp"
+report_interval = 5

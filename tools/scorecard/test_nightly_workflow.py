@@ -391,7 +391,8 @@ class PerfLabelScopeTests(unittest.TestCase):
         # #45's round-2 review, N2: a CTest command without a label include still runs the perf entries if it
         # does not exclude them (`-R _perf`, a preset's filter, or `-Lperf`, which CTest 3.28 does not read as
         # a label filter, so it runs everything). Outside the perf step, each one excludes the label itself
-        # (-LE with a regex that matches `perf`) or takes its job's matrix `ctest_args`, every row of which does.
+        # (-LE with a regex that matches `perf`) or takes its job's matrix `ctest_args`, which every row sets
+        # to exclude it.
         text = WORKFLOW.read_text(encoding="utf-8")
         jobs = re.findall(r"^  ([\w-]+):$", text[text.index("\njobs:"):], re.M)
         checked = set()
@@ -405,7 +406,8 @@ class PerfLabelScopeTests(unittest.TestCase):
                     checked.add(step["name"])
                     self.assertTrue(excludes_perf(command) or
                                     (rows_exclude and "${{ matrix.ctest_args }}" in command), (job, command))
-        self.assertLessEqual({"Test (software Vulkan via lavapipe)", "Test (no GPU on hosted runners)"}, checked)
+        self.assertLessEqual({"Test (software Vulkan via lavapipe)", "Test (no GPU on hosted runners)"},
+                             checked)
 
 
 if __name__ == "__main__":

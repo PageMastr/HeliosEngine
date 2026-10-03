@@ -1560,8 +1560,9 @@ class GateClauseTests(unittest.TestCase):
         self.assertEqual(self.cells(r["NS-0.2"]), ("pass", "pass", "pass"))
         self.assertTrue(r["NS-0.2"]["by_approval"])
         # The exception (#45's round-2 review, blocking 1): a trunk that never connects ends the command at
-        # runTrunkGate's connect deadline, right after the 10 s stack run, so the run cannot reach min_seconds.
-        # NS-0.7 fails on its failure line, and NS-0.2's clauses fail on min_seconds, as the single result did.
+        # runTrunkGate's connect deadline, right after the 10 s stack run, so the run cannot reach
+        # min_seconds. NS-0.7 fails on its failure line, and NS-0.2's clauses fail on min_seconds, as the
+        # single result did.
         bench = sc.ROOT / "engine" / "net" / "bench"
         deadline = float(re.search(r"connectDeadline = monotonicSeconds\(\) \+ ([\d.]+);",
                                    (bench / "trunk_gate.h").read_text(encoding="utf-8"))[1])

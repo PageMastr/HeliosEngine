@@ -577,6 +577,29 @@ class ParserTests(unittest.TestCase):
             findings, _ = policy.check_workflow(path, "w.yml")
         self.assertEqual(["parse"], [f.rule for f in findings])
 
+    def test_deep_nesting_is_a_parse_finding_not_a_traceback(self):
+        # Every level costs the parser (and the policy walk) a Python frame; past the recursion limit the check
+        # must still report the file and fail, not crash with a RecursionError.
+        depth = sys.getrecursionlimit() + 200
+        texts = {
+            "flow": "on: pull_request\njobs:\n  a:\n    runs-on: " + "[" * depth + "win-gpu" + "]" * depth + "\n",
+            "block": "on: pull_request\njobs:\n  a:\n    runs-on: win-gpu\n    env:\n" + "".join(
+                " " * (6 + i) + f"k{i}:\n" for i in range(depth)) + " " * (6 + depth) + "v: 1\n",
+            "sequence": "on: pull_request\njobs:\n  a:\n    runs-on: win-gpu\n    steps:\n      " + "- " * depth + "x\n",
+        }
+        for name, text in texts.items():
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / "deep.yml"
+                    path.write_text(text, encoding="utf-8")
+                    findings, jobs = policy.check_workflow(path, "deep.yml")
+                    self.assertEqual((["parse"], []), ([f.rule for f in findings], jobs))
+                    self.assertIn("recursion limit", findings[0].message)
+                    out = io.StringIO()
+                    with redirect_stdout(out):
+                        self.assertEqual(1, policy.main([str(path)]))
+                self.assertRegex(out.getvalue(), r"(?m)^\S*deep\.yml:1: parse: nested deeper")
+
     @unittest.skipIf(yaml is None, "PyYAML is not installed")
     def test_agrees_with_pyyaml(self):
         texts = {p.name: p.read_text(encoding="utf-8") for p in sorted(WORKFLOWS.glob("*.y*ml"))}

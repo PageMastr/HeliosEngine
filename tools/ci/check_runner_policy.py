@@ -40,8 +40,9 @@ Workflows are read with the strict YAML subset parser below (standard library on
 Python tools add no dependencies). It fails closed: anchors, aliases, tags, merge keys, complex keys,
 duplicate keys, tabs in indentation, multiple documents, and characters that other YAML parsers read as
 line breaks (NEL, LS, PS) or refuse (other control characters, a BOM after the start) are errors rather
-than places where it could read a different workflow than GitHub does; a differential test compares it
-with PyYAML. Findings print as `<file>:<line>: <rule>: <message>`
+than places where it could read a different workflow than GitHub does, and so is nesting deeper than
+Python's recursion limit (a `parse` finding, not a traceback); a differential test compares it with
+PyYAML. Findings print as `<file>:<line>: <rule>: <message>`
 (tools/ci/ctest_to_sarif.py turns them into annotations); the exit code is 1 when there is any.
 CTest `lint_runner_policy` (label `lint`) runs it on every build, and tools/ci/run_lints.cmake runs it.
 
@@ -934,6 +935,16 @@ def _trigger_findings(workflow: Map) -> list[tuple[int, str]]:
 
 def check_workflow(path: Path, display: str) -> tuple[list[Finding], list[str]]:
     """(findings, runner jobs) of one workflow file."""
+    try:
+        return _check_workflow(path, display)
+    except RecursionError:
+        # The parser and the policy walk recurse once per nesting level; no real workflow nests deeply enough to
+        # reach Python's limit (about 1000 levels), so a file that does fails closed with a finding, not a traceback.
+        return [Finding(display, 1, "parse", f"nested deeper than this check can follow (Python's recursion limit, "
+                        f"{sys.getrecursionlimit()}); a workflow needs a few levels: flatten it")], []
+
+
+def _check_workflow(path: Path, display: str) -> tuple[list[Finding], list[str]]:
     try:
         workflow = parse_yaml(path.read_text(encoding="utf-8"))
     except YamlError as e:

@@ -22,21 +22,22 @@ you start it from the Actions tab ("Run workflow" on `main`). A queued job waits
 It never runs for pull requests. **The repository is public and anyone may fork it.** A pull request from a fork,
 and a push to any branch, runs that branch's own workflow files, and such a file can ask for this runner
 (`runs-on: [self-hosted, win-gpu]`) before anyone has reviewed it. Nothing in `main` can prevent that; the hook on the
-PC is what refuses those jobs, so **the runner service stays stopped while the hook is not installed** (steps 5-9).
+PC is what ends those jobs, so **the runner service stays stopped while the hook is not installed** (steps 5-9).
 The layers, from the outside in:
 
 | Layer | What it stops | Where |
 |---|---|---|
 | Fork approval | GitHub starts no workflow from an outside contributor's fork until you approve the run (step 8). By default GitHub asks only about first-time contributors | GitHub settings |
 | Triggers and guards | The workflow has only `schedule` and `workflow_dispatch`, and the job needs `main` and the repository variable `HELIOS_WIN_GPU=enabled`. Every PR runs `tools/ci/check_runner_policy.py` (CTest `lint_runner_policy`), which fails any workflow that could reach this runner and breaks a rule: other triggers, a missing guard, `secrets`, a token broader than `contents: read`, actions not pinned to a commit. It checks what is merged, not what a fork or a branch runs | `.github/workflows/`, `tools/ci/` |
-| The job-started hook | A workflow file on a fork or an unreviewed branch decides its own triggers and `runs-on`. The hook, installed on the PC, fails every job that is not a `schedule`, `push` or `workflow_dispatch` run of `refs/heads/main` (a fork's pull request runs as `pull_request` on `refs/pull/<n>/merge`), before any step runs | `D:\helios-ci\hooks\job-started.ps1` |
+| The job-started hook | A workflow file on a fork or an unreviewed branch decides its own triggers and `runs-on`. The hook, installed on the PC, ends every job that is not a `schedule`, `push` or `workflow_dispatch` run of `refs/heads/main` (a fork's pull request runs as `pull_request` on `refs/pull/<n>/merge`): it stops the runner's worker process (`Runner.Worker.exe`), which runs the job's steps, before the first of them. Failing the hook alone would not be enough: the runner would still run the job's steps marked `if: always()` (or `failure()`, `!cancelled()`) and its actions' `pre:` steps | `D:\helios-ci\hooks\job-started.ps1` |
 | The account | Jobs run as `helios-ci`, a standard user with no access to your profile, browser data, SSH keys or Git credentials | Windows |
 | The firewall | `helios-ci` cannot reach the home LAN (other PCs, the router's admin page, a NAS), LAN multicast and broadcast (mDNS, SSDP, LLMNR) or overlay networks such as Tailscale; the internet stays open | `tools/ci/runner/firewall.ps1` |
 | The wipe | The hook empties `D:\helios-ci\work` before each job, so no job sees an earlier job's files | the hook |
 
 What stays possible (K33's residual risk): code that has passed review and merged runs as `helios-ci` with internet
 access. Such code could change what the account itself owns: its profile, its PowerShell profile, the runner
-installation (`D:\helios-ci\runner`, including `.env`) and the runner's credentials there. It cannot reach your
+installation (`D:\helios-ci\runner`, including `.env`) and the runner's credentials there; through `.env` or the
+PowerShell profile (which the runner loads before the hook) it could switch the hook off. It cannot reach your
 account, your files, administrator rights or the LAN. It can reach programs on the PC itself that listen on the
 network, including on `localhost` (Windows Firewall does not filter loopback): keep such services (databases, dev
 servers, remote-control tools) behind a password, or stop them while the runner is enabled. If you suspect misuse,
@@ -188,7 +189,8 @@ GitHub → Settings → Actions → General → "Approval for running fork pull 
 pages: "Fork pull request workflows from outside collaborators") → **Require approval for all external contributors**
 → Save. By default GitHub asks only about contributors who have had nothing merged yet. With this setting, no
 workflow from a fork runs until you click "Approve and run"; approve a run only after reading its workflow files.
-The hook still refuses a fork's job on this runner if you do.
+If you do approve one, the hook still ends any of its jobs that ask for this runner before their first step (the last
+item of the checklist tests this).
 
 ### 9. Start the runner
 
@@ -199,7 +201,7 @@ Get-Service actions.runner.* | Set-Service -StartupType Automatic
 Get-Service actions.runner.* | Start-Service
 ```
 
-Then check that the hook refuses unreviewed code (the last item of the checklist below) before step 10.
+Then check that the hook ends unreviewed code's jobs (the last item of the checklist below) before step 10.
 
 ### 10. Switch the jobs on
 
@@ -234,17 +236,37 @@ Do this after the setup and after any change to the PC, the hook or the firewall
       firewall denied); the job builds; "The goldens and the bench ran on a hardware GPU" names your GPU.
 - [ ] The run's `results-win-gpu` artifact holds `run.json`, `host.json`, `ctest.xml`, `gates/`, `inventory.json`,
       `hnoise-win-gpu.json` and `rendertest/`.
-- [ ] The hook refuses unreviewed code. Push a throwaway branch whose only change is a workflow
-      `.github/workflows/hook-test.yml` with `on: push` and one job (`runs-on: [self-hosted, win-gpu]`, one step
-      `run: echo this must not run`). Its run must fail at "Set up runner" with `refused: ref 'refs/heads/<branch>'`,
-      and the echo must not appear. Delete the branch afterwards. (A run that is merely skipped by an `if:` does not
-      test the hook.)
+- [ ] The hook ends unreviewed code's jobs. Push a throwaway branch whose only change is a workflow
+      `.github/workflows/hook-test.yml`:
+
+      ```yaml
+      on: push
+      jobs:
+        hook-test:
+          runs-on: [self-hosted, win-gpu]
+          steps:
+            - if: always()
+              run: echo this must not run
+      ```
+
+      Its run must fail at "Set up runner", whose log shows `refused: ref 'refs/heads/<branch>'` and `ending the job`
+      (if the log is cut short there, that is the hook stopping the worker). No later step may run, and `this must
+      not run` must not appear anywhere in the log. Delete the branch afterwards. If the echo does appear, stop the
+      service at once (step 5) and report it: the hook did not end the job. (The `if: always()` is the point: a step
+      without it is skipped after any failed step, so it would pass even without the hook's stop. A run that is
+      merely skipped by a job-level `if:` does not test the hook.)
 
 ## Day to day
 
 - **Pause**: set `HELIOS_WIN_GPU` to anything else, or delete it: the job is skipped, not queued. Stopping the service
   also works, but scheduled jobs then queue for 24 h and fail.
 - **Schedule**: change the cron in `win-gpu.yml` through a PR.
+- **`refused:` at "Set up runner"**: the hook ended a job that is not an allowed run of `main`, for example a push
+  to another branch whose workflow asks for this runner. It stops the job's worker process, so the run fails there,
+  possibly with a message about the runner's worker; the runner stays online. Look at which branch or fork started it.
+- **"the parent process is not the runner's Runner.Worker.exe"** or **"could not end the job"** at "Set up runner":
+  the hook refused a job but could not end it, so that job's `if: always()` and `pre:` steps may have run. Stop the
+  service (step 5) and report it.
 - **"entries survived the wipe"** at "Set up runner": a leftover process holds files in `D:\helios-ci\work`. Reboot
   (or end `helios-ci`'s processes); the next job wipes again.
 - **`rhi_triangle_smoke`** opens a window. A service runs without a desktop, so it may fail on this runner; that is a
@@ -252,7 +274,7 @@ Do this after the setup and after any change to the PC, the hook or the firewall
 - **Golden images**: the goldens were blessed on lavapipe (`golden/vulkan-llvmpipe/`); a real GPU may differ beyond
   the ꟻLIP tolerance. A failure is a finding for WP-0.12 (per-driver goldens), not a setting to relax.
 - **"did not run on a hardware GPU"**: the goldens or the bench used a software rasterizer, or saw no GPU at all.
-  With two GPUs, set `HELIOS_WIN_GPU_ADAPTER` (step 8). If the log says `no Vulkan physical devices` or `GPU:
+  With two GPUs, set `HELIOS_WIN_GPU_ADAPTER` (step 10). If the log says `no Vulkan physical devices` or `GPU:
   unavailable`, the driver does not offer Vulkan to a service's session; that is a finding to report (the options
   are the GPU-P VM of 09 §5.4a or a different runner setup, the owner's decision), not a reason to run the runner
   from an interactive logon.

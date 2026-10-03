@@ -51,8 +51,10 @@ than through `needs` (another job's artifacts, caches).
 
 The check is the PR-tier half of the policy. A branch's own workflow file can still request the runner
 on a push to that branch before any review, so the runner's job-started hook
-(tools/ci/runner/job-started.ps1) refuses every job that is not a `schedule`, `push` or
-`workflow_dispatch` run of `refs/heads/main` (docs/runbooks/win-gpu-runner.md).
+(tools/ci/runner/job-started.ps1) ends every job that is not a `schedule`, `push` or
+`workflow_dispatch` run of `refs/heads/main` by stopping the runner's worker process before the job's
+first step; failing the hook alone would still let the job's `if: always()` steps and its actions'
+`pre:` steps run (docs/runbooks/win-gpu-runner.md).
 """
 
 from __future__ import annotations

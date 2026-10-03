@@ -6,9 +6,11 @@ name: win-gpu
 #     repository variable HELIOS_WIN_GPU=enabled (the owner's switch: unset, the job is skipped, not queued).
 #     tools/ci/check_runner_policy.py (CTest lint_runner_policy, every PR) fails any workflow that breaks this;
 #   - no secrets, a read-only token, results as artifacts, actions pinned to commit SHAs;
-#   - the runner's job-started hook (tools/ci/runner/job-started.ps1) refuses every job that is not a schedule, push
-#     or workflow_dispatch run of refs/heads/main, then empties the work directory; firewall.ps1 blocks the runner
-#     account from the home LAN. Setup, verification and rotation: docs/runbooks/win-gpu-runner.md.
+#   - the runner's job-started hook (tools/ci/runner/job-started.ps1) ends every job that is not a schedule, push
+#     or workflow_dispatch run of refs/heads/main by stopping the runner's worker process before the job's first
+#     step (a failed hook alone would still let `if: always()` steps and actions' pre: steps run), and empties the
+#     work directory for the others; firewall.ps1 blocks the runner account from the home LAN. Setup, verification
+#     and rotation: docs/runbooks/win-gpu-runner.md.
 # One job: the hook empties the work directory before every job, so separate jobs would each rebuild. It uploads
 # the `results-win-gpu` artifact in the nightly's result-set format (run.json, host.json, CTest JUnit, gate JUnit,
 # test inventory; tools/scorecard/README.md) for scorecard.jsonc's `win-gpu` run, plus ADR-0.9c's hnoise JSON and

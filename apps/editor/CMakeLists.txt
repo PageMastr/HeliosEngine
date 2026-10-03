@@ -16,8 +16,22 @@ if(HELIOS_BUILD_TESTS)
   else()
     find_program(HELIOS_XVFB_RUN xvfb-run)
     if(HELIOS_XVFB_RUN)
-      add_test(NAME helios_editor_smoke COMMAND ${HELIOS_XVFB_RUN} -a $<TARGET_FILE:helios-editor> ${helios_editor_smoke_args})
+      # Sanitizer builds keep LeakSanitizer clean without suppressions, as rhi_triangle_smoke does
+      # (apps/samples/rhi_triangle): a private session bus for libdbus, and lavapipe kept loaded
+      # (libX11 stays mapped through SDL_X11_SHARED=OFF in third_party/CMakeLists.txt).
+      set(helios_editor_launcher ${HELIOS_XVFB_RUN} -a)
+      if(HELIOS_SANITIZE)
+        find_program(HELIOS_DBUS_RUN_SESSION dbus-run-session)
+        if(HELIOS_DBUS_RUN_SESSION)
+          list(PREPEND helios_editor_launcher ${HELIOS_DBUS_RUN_SESSION} --)
+        endif()
+      endif()
+      add_test(NAME helios_editor_smoke COMMAND ${helios_editor_launcher} $<TARGET_FILE:helios-editor> ${helios_editor_smoke_args})
       set_tests_properties(helios_editor_smoke PROPERTIES LABELS gpu TIMEOUT 120)
+      if(HELIOS_SANITIZE)
+        set_tests_properties(helios_editor_smoke PROPERTIES ENVIRONMENT_MODIFICATION
+          "VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=set:1")
+      endif()
     endif()
   endif()
 endif()

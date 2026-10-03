@@ -23,7 +23,7 @@
     "linux-clang": {"os": "linux", "default": true,
                     "description": "Linux Clang RelWithDebInfo: every CTest except perf (lavapipe under Xvfb)"},
     "linux-asan": {"os": "linux", "default": false,
-                   "description": "Linux Clang Debug with ASan and UBSan"},
+                   "description": "Linux Clang Debug with ASan and UBSan: every CTest except perf"},
     "linux-fuzz": {"os": "linux", "default": true,
                    "description": "libFuzzer (Clang, -fsanitize=fuzzer with ASan and UBSan), 1 h per engine/net target"},
     "windows-vs2026": {"os": "windows", "default": true,
@@ -45,9 +45,26 @@
   },
 
   // Commands the nightly workflow runs outside CTest; each writes one JUnit result named after the gate.
+  // A gate that measures several criteria declares `cases`: runners.py gate adds one JUnit case per clause,
+  // read from the command's output (`result`: the line that reports the measurement; `failure`: the line it
+  // prints when the clause fails; a non-zero exit that no failure line explains, i.e. any code but 1 or 1 with
+  // no failure line, fails every clause), and each criterion cites only its own cases, so one criterion's
+  // failure line cannot fail another's (#43's review, N4). Every clause case carries the command's wall time,
+  // so a run that ends before min_seconds fails every clause (a trunk that never connects ends it ~18 s in).
   "gates": {
     "net_bench_gate": {"runs": ["linux-gcc", "windows-vs2026"], "min_seconds": 600,
-                       "description": "net_bench --gate: NS-0.2 raw and encrypted-stack pps per core, NS-0.7 600 s trunk run"},
+                       "description": "net_bench --gate: NS-0.2 raw and encrypted-stack pps per core, NS-0.7 600 s trunk run",
+                       "cases": {
+                         "NS-0.2 socket": {"criterion": "NS-0.2",
+                                           "result": "NS-0\\.2 socket: \\d+/\\d+ datagrams, \\d+ pps per core",
+                                           "failure": "NS-0\\.2 FAILED: needs 100k pps per core"},
+                         "NS-0.2 HTP stack": {"criterion": "NS-0.2",
+                                              "result": "NS-0\\.2 HTP stack: \\d+/\\d+ encrypted packets delivered, \\d+ packets per core",
+                                              "failure": "NS-0\\.2 FAILED: the HTP stack"},
+                         "NS-0.7 trunk": {"criterion": "NS-0.7",
+                                          "result": "NS-0\\.7 trunk: [\\d.]+ s, sent \\d+, delivered \\d+ \\(\\d+ pps",
+                                          "failure": "NS-0\\.7(?: FAILED|: trunk did not connect)"}
+                       }},
     "libfuzzer_packet_parser": {"runs": ["linux-fuzz"], "min_seconds": 3600,
                                 "description": "net_fuzz_packet_parser under libFuzzer for 1 h"},
     "libfuzzer_connection_receive": {"runs": ["linux-fuzz"], "min_seconds": 3600,
@@ -282,10 +299,11 @@
       "title": "Loopback 100k pps per core without loss",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Loopback 100k pps/core without loss",
-      "notes": "net_bench --gate measures raw datagrams and encrypted HTP packets through the full stack. Passed on the hosted Linux nightly on the repository owner's approval of 2026-09-30 (09 §5.6; the record quotes it): hosted Linux measured the encrypted stack at 88k to 132k packets per core with no code change, so linux-gcc runs `net_bench --gate --advisory ns02-stack`, which reports that one rate instead of failing on it. Raw datagrams (100k per core), loss at either level (none allowed), the stack's connection and NS-0.7 in the same run still fail the gate. Hosted Windows is not covered: its stack measured 85,399 and 84,970 on 2026-09-27 and 125,611 on 2026-10-03 (a strict pass), the owner has not confirmed the approval for it, and windows-vs2026 gates everything, as does any run without --advisory",
+      "notes": "net_bench --gate measures raw datagrams and encrypted HTP packets through the full stack; NS-0.2 reads that run's `NS-0.2 socket` and `NS-0.2 HTP stack` cases, so the NS-0.7 trunk run of the same command gates NS-0.7 and not NS-0.2, except a trunk that never connects: that ends the run at its 3 s connect deadline, long before the gate's min_seconds, so NS-0.2's cases fail too. Passed on the hosted Linux nightly on the repository owner's approval of 2026-09-30 (09 §5.6; the record quotes it): hosted Linux measured the encrypted stack at 88k to 132k packets per core with no code change, so linux-gcc runs `net_bench --gate --advisory ns02-stack`, which reports that one rate instead of failing on it. Raw datagrams (100k per core), loss at either level (none allowed) and a stack that never sent still fail their case, and NS-0.7 still gates NS-0.7. Hosted Windows is not covered: its stack measured 85,399 and 84,970 on 2026-09-27 and 125,611 on 2026-10-03 (a strict pass), the owner has not confirmed the approval for it, and windows-vs2026 gates everything, as does any run without --advisory",
       "status": "approved",
       "tests": [
-        {"gate": "net_bench_gate"},
+        {"gate": "net_bench_gate", "case": "NS-0.2 socket"},
+        {"gate": "net_bench_gate", "case": "NS-0.2 HTP stack"},
         {"doctest": "net_tests", "case": "perf: NS-0.2: loopback 100k pps per core without loss", "platforms": ["linux"]},
         {"evidence": "docs/evidence/ns-0.2-owner-approval-2026-09-30.md", "owner_approval": "2026-09-30",
          "advisory": ["net.ns02.stack_packets_per_core"], "advisory_runs": ["linux-gcc"]}
@@ -366,10 +384,10 @@
       "title": "Trunk throughput: 20k pps of 1,200 B payloads for 10 min",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Trunk throughput: one trunk connection sustains 20k pps of 1,200 B payloads (≈ 200 Mbit/s) for 10 min with < 0.1 % drops on ≤ 1 core, on loopback on Windows and Linux CI; otherwise the §2.6 fallback starts",
-      "notes": "net_bench --gate reads ≤ 1 core as ≤ 1 core for each side (the cell and gateway threads)",
+      "notes": "net_bench --gate reads ≤ 1 core as ≤ 1 core for each side (the cell and gateway threads). NS-0.7 reads that run's `NS-0.7 trunk` case, so an NS-0.2 failure of the same command (the strict Windows step's stack rate) does not fail NS-0.7",
       "status": "measured",
       "tests": [
-        {"gate": "net_bench_gate"},
+        {"gate": "net_bench_gate", "case": "NS-0.7 trunk"},
         {"doctest": "net_tests", "case": "perf: NS-0.7 (short run): trunk throughput over UDP loopback", "platforms": ["linux"]}
       ]
     },

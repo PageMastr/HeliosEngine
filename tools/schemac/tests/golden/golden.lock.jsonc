@@ -254,6 +254,10 @@
       "id": 453723727,
       "kind": "fn"
     },
+    "golden.all.Queries.opts": {
+      "id": 3260946985,
+      "kind": "fn"
+    },
     "golden.all.Queries.spawn": {
       "id": 3093412526,
       "kind": "fn"

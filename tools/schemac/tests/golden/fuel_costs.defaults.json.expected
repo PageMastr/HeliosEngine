@@ -10,6 +10,7 @@
     "2260578267": {"name": "golden.all.Queries.log", "cost": 2, "each": 1, "of": "text"},
     "2480763702": {"name": "golden.all.Queries.convert", "cost": 3, "each": 2, "of": "items"},
     "3068390829": {"name": "golden.all.Queries.clip", "cost": 1, "each": 0},
-    "3093412526": {"name": "golden.all.Queries.spawn", "cost": 50, "each": 4, "of": "thing"}
+    "3093412526": {"name": "golden.all.Queries.spawn", "cost": 50, "each": 4, "of": "thing"},
+    "3260946985": {"name": "golden.all.Queries.opts", "cost": 1, "each": 0}
   }
 }

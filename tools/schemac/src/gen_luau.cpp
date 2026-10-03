@@ -550,6 +550,7 @@ private:
             case Builtin::Vec3f:
                 w.line("const float* p = lua_tovector(c.L, idx);");
                 w.line("if (!p) badType(c, idx, \"vector\");");
+                w.line("checkFiniteVector(c, p);");
                 w.line("return ::helios::Vec3(p[0], p[1], p[2]);");
                 break;
             case Builtin::WorldPos:
@@ -590,7 +591,12 @@ private:
             w.line("return out;");
             break;
         case TypeKind::Optional:
-            w.line("if (lua_isnoneornil(c.L, idx)) return std::nullopt;");
+            // A nil costs a value too: otherwise a list<T?> of nils would loop over elements the cap
+            // never sees (list<list<u32?>> converted cap^2/8 elements in one call).
+            w.open("if (lua_isnoneornil(c.L, idx)) {");
+            w.line("take(c, 1);");
+            w.line("return std::nullopt;");
+            w.close();
             w.line(std::format("return check{}(c, idx);", codecOf(t->element, kCheck, key.member)));
             break;
         default: { // list, set, array
@@ -600,7 +606,7 @@ private:
             w.line("const int n = lua_objlen(c.L, idx);");
             if (t->kind == TypeKind::Array)
                 w.line(std::format("if (n != {0}) fail(c.L, std::format(\"{{}}: {{}} elements, exactly {0} required\", c.what, n));", t->arraySize));
-            w.line("reserve(c, n); // every element takes at least one value: fail before converting any");
+            w.line("reserve(c, n); // every element, nil included, takes at least one value: fail before converting any");
             w.line(std::format("{} out{{}};", C));
             if (t->kind == TypeKind::List) w.line("out.reserve(static_cast<usize>(n));");
             w.open("for (int i = 1; i <= n; ++i) {");
@@ -964,6 +970,15 @@ struct Nest {
     const double d = checkNumber(c, idx);
     if (!(std::fabs(d) <= static_cast<double>(FLT_MAX))) fail(c.L, std::format("{}: {} is not a finite f32", c.what, d));
     return static_cast<::helios::f32>(d);
+}
+
+/// A vector's components follow the f32 rule: finite (Luau vectors are floats already, so only NaN and inf).
+[[maybe_unused]] void checkFiniteVector(Ctx& c, const float* p) {
+    for (int i = 0; i < 3; ++i) {
+        if (std::isfinite(p[i])) continue;
+        const char* value = std::isnan(p[i]) ? "nan" : p[i] > 0 ? "inf" : "-inf"; // (a NaN's sign varies by platform)
+        fail(c.L, std::format("{}: component {} is {}, not a finite f32", c.what, "xyz"[i], value));
+    }
 }
 
 template <class T>

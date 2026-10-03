@@ -88,4 +88,7 @@ declare Queries: {
     bag: (b: BagInput) -> Bag,
     -- Fuel: 1; pure. Realms: server, client.
     tagged: (names: {string}, ratio: number) -> Tagged,
+    -- Nil elements of optional lists count against the per-call value cap like any other value.
+    -- Fuel: 1; pure. Realms: server, client.
+    opts: (xs: {{number?}}) -> number,
 }

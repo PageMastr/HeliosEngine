@@ -401,7 +401,7 @@ auto vm = ScriptVm::create(config, [&](Binder& b) {       // config.profile = Ho
     (04 §10.2). An implementation that needs a `Name` interns deliberately. A `Name` inside a struct
     *argument* is therefore an error. Inside a struct *result* it is pushed as text, and a `set<Name>`
     field is pushed in lexical order.
-  - `vec3f` is a Luau `vector`.
+  - `vec3f` is a Luau `vector`; its components follow the `f32` rule (NaN and ±inf are rejected).
   - `WorldPos` is the host's `WorldPos` userdata (`helios::FramePos` in C++, with its frame). It is not
     allowed inside structs, where it would lose the frame.
   - `Duration` is seconds, and `Tick` a number.
@@ -421,17 +421,20 @@ auto vm = ScriptVm::create(config, [&](Binder& b) {       // config.profile = Ho
     covers string (bytes), list and set (elements) parameters and the fields of struct parameters,
     recursively. Results are checked the same way: the fn's `@max` and struct fields' `@max`.
   - **Per-call budget.** One call converts at most `glueLimits.maxValues` values (8,192: every number,
-    string, table and element counts, so a table referenced from many places costs once per
-    reference) and `glueLimits.maxStringBytes` string bytes (256 KiB). A list longer than the values
-    left fails before its first element. The plan gives no default (02 §7.4, 04 §10.2), so these are
-    conservative and the host may change them.
+    string, table and element counts, a `nil` element of a `T?` list included, so a table referenced
+    from many places costs once per reference) and `glueLimits.maxStringBytes` string bytes
+    (256 KiB). A list longer than the values left fails before its first element. The plan gives no
+    default (02 §7.4, 04 §10.2), so these are conservative and the host may change them.
   - A value nests at most 32 tables; a cyclic table stops there.
   - Every rejection is a script error naming the fn, the argument and the cap, and the implementation is
     never called.
   - **Budget:** a call rejected by the caps fails in < 1 ms (`perf: rejecting a call over the per-call
     caps …` gates the median of 9 rejections: ≈ 0.2 ms for the reviewer's 22-table DAG, ≤ 0.05 ms for
     65,536 references to one 16 KiB string, GCC RelWithDebInfo). A call within the caps converts at
-    most 8,192 values; calibration (WP-1.6) folds that into the fn's `cost`.
+    most 8,192 values, and that work is not charged beyond the fn's `cost` (up to ≈ 0.8 ms for an
+    8,190-value `echo` pushed back, measured in review). Calibration (02 §7.4) takes the p95 over
+    zone traces, not the worst case at the caps, so it cannot cover this: a deterministic charge per
+    converted value and string byte, taken in the glue before the call, is a WP-1.6 follow-up.
 - **`schema.d.luau`** declares the scriptlib globals (each fn's doc comment, fuel charge and realms,
   `--!strict`) and the types their signatures reach:
   - `EntityId` and `<Record>Ref` as opaque `declare extern type`s;

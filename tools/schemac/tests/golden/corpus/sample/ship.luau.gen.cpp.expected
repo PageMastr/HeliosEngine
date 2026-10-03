@@ -112,6 +112,15 @@ struct Nest {
     return static_cast<::helios::f32>(d);
 }
 
+/// A vector's components follow the f32 rule: finite (Luau vectors are floats already, so only NaN and inf).
+[[maybe_unused]] void checkFiniteVector(Ctx& c, const float* p) {
+    for (int i = 0; i < 3; ++i) {
+        if (std::isfinite(p[i])) continue;
+        const char* value = std::isnan(p[i]) ? "nan" : p[i] > 0 ? "inf" : "-inf"; // (a NaN's sign varies by platform)
+        fail(c.L, std::format("{}: component {} is {}, not a finite f32", c.what, "xyz"[i], value));
+    }
+}
+
 template <class T>
 T checkInteger(Ctx& c, int idx, const char* type) {
     const double d = checkNumber(c, idx);

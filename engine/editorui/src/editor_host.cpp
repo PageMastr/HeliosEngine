@@ -12,6 +12,7 @@
 
 #include "helios/core/log.h"
 #include "helios/core/random.h"
+#include "display_scale.h"
 #include "editor_pipelines.h"
 #include "helios/editorui/imgui_renderer.h"
 #include "helios/editorui/localize.h"
@@ -147,6 +148,8 @@ struct EditorHost::Impl {
     Theme theme;
     std::string themeName;
     f32 scale = 1.0f;
+    /// --scale, HELIOS_EDITOR_SCALE or test mode chose the scale: display changes leave it alone.
+    bool scaleForced = false;
     bool styleDirty = true;
     std::optional<std::string> pendingTheme;
     std::optional<f32> pendingScale;
@@ -243,13 +246,13 @@ struct EditorHost::Impl {
             pendingTheme.reset();
         }
         if (pendingScale) {
-            const f32 s = std::clamp(*pendingScale, 0.5f, 4.0f);
+            const f32 s = std::clamp(*pendingScale, detail::kMinUiScale, detail::kMaxUiScale);
             if (s != scale) {
                 scale = s;
                 styleDirty = true;
-                // Dock nodes keep their pixel sizes when the display grows; rebuild the default
-                // layout so the panels keep their proportions at the new scale.
-                if (shell) shell->resetLayout();
+                // Test mode resizes the window with the scale, so the default layout is rebuilt to
+                // keep the panels' proportions for the goldens. A user's own dock layout is kept.
+                if (shell && config.testMode) shell->resetLayout();
                 if (config.testMode && window && presenting()) {
                     u32 w = 0, h = 0;
                     displayPixels(w, h);
@@ -757,16 +760,11 @@ Result<std::unique_ptr<EditorHost>> EditorHost::create(const EditorConfig& confi
             journalFile = sessions.empty() ? fs::Path() : sessions.back().path;
         }
         if (!journalFile.empty()) {
-            HELIOS_TRY_ASSIGN(const tf::RecoveryReport report, m.fw->recover(journalFile));
-            recoveryNote = std::format("Recovered {} transaction(s) from {}", report.replayed, fs::pathToUtf8(journalFile.filename()));
-            for (const tf::RecoveredDocument& d : report.documents) {
-                if (d.status != tf::DocRecovery::Replayed && d.status != tf::DocRecovery::UpToDate) {
-                    recoveryNote += std::format("; {}: {} {}", d.file, tf::docRecoveryName(d.status), d.message);
-                }
-            }
+            HELIOS_TRY_ASSIGN(recoveryNote, recoverJournal(*m.fw, journalFile));
             HELIOS_LOG_INFO("{}", recoveryNote);
         }
     }
+    // Without --recover the shell offers any unclean session (Output line, File > Recover).
 
     // ---- theme -----------------------------------------------------------------------------
     HELIOS_TRY(m.loadTheme(config.themeFile.empty() ? std::string_view(config.theme) : std::string_view("file")));
@@ -778,6 +776,7 @@ Result<std::unique_ptr<EditorHost>> EditorHost::create(const EditorConfig& confi
     // re-rasterization path as a per-monitor DPI change), then the display's content scale.
     f32 envScale = 0.0f;
     if (const char* env = SDL_getenv("HELIOS_EDITOR_SCALE"); env && *env) envScale = static_cast<f32>(SDL_atof(env));
+    m.scaleForced = config.scale > 0 || envScale > 0 || config.testMode;
     if (config.scale > 0) {
         m.scale = config.scale;
     } else if (envScale > 0) {
@@ -785,10 +784,11 @@ Result<std::unique_ptr<EditorHost>> EditorHost::create(const EditorConfig& confi
     } else if (config.testMode) {
         m.scale = 1.0f;
     } else {
+        // A first guess to size the window; the window's own display decides below.
         const f32 s = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
         m.scale = s > 0 ? s : 1.0f;
     }
-    m.scale = std::clamp(m.scale, 0.5f, 4.0f);
+    m.scale = std::clamp(m.scale, detail::kMinUiScale, detail::kMaxUiScale);
     const bool show = !config.testMode || config.present;
     m.config.present = show;
     u32 pw = 0, ph = 0;
@@ -802,6 +802,8 @@ Result<std::unique_ptr<EditorHost>> EditorHost::create(const EditorConfig& confi
     const std::string title = std::format("Helios Editor - {}", config.project);
     m.window = SDL_CreateWindow(title.c_str(), static_cast<int>(pw), static_cast<int>(ph), flags);
     if (!m.window) return Error{ErrorCode::Unsupported, std::format("SDL_CreateWindow: {}", SDL_GetError())};
+    // Per-monitor DPI (07 §1.3): the scale of the display the window opened on, not the primary's.
+    if (const auto s = detail::scaleForDisplay(m.scale, SDL_GetWindowDisplayScale(m.window), m.scaleForced)) m.scale = *s;
 
     rhi::DeviceDesc dd;
     dd.backend = rhi::Backend::Vulkan;
@@ -874,6 +876,11 @@ bool EditorHost::frame() {
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_EVENT_QUIT || e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) m.quit = true;
         if (e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) m.needResize = true;
+        // Moved to a monitor with another scale, or the user changed the display's scale: the
+        // fonts re-rasterize at the new scale (unless the scale was forced).
+        if (e.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED && m.window) {
+            if (const auto s = detail::scaleForDisplay(m.scale, SDL_GetWindowDisplayScale(m.window), m.scaleForced)) m.pendingScale = *s;
+        }
         // Test mode takes input only from ui.* actions, so OS events cannot disturb a run.
         if (!m.config.testMode) ImGui_ImplSDL3_ProcessEvent(&e);
     }
@@ -954,13 +961,23 @@ int EditorHost::run() {
     Impl& m = *m_impl;
     while (frame()) {
     }
-    if (m.fw && m.fw->journal()) (void)m.fw->journal()->close(true);
+    // 07 §1.2: an unclean journal is what makes the next start offer the replay. A failure exit or a
+    // quit with unsaved records (there is no save prompt yet) must leave it unclean.
+    if (m.fw && m.fw->journal()) (void)m.fw->journal()->close(journalEndsClean(m.exitCode, *m.fw));
     if (m.device && m.device->validationErrorCount() != 0 && m.exitCode == 0) {
         HELIOS_LOG_ERROR("{} RHI validation error(s)", m.device->validationErrorCount());
         m.exitCode = 2;
     }
     HELIOS_LOG_INFO("Editor ran {} frame(s)", m.frames);
     return m.exitCode;
+}
+
+bool EditorHost::journalEndsClean(int exitCode, const tf::Framework& framework) noexcept {
+    if (exitCode == 1) return false;
+    for (const tf::Document* d : framework.documents().documents()) {
+        if (d->dirty()) return false;
+    }
+    return true;
 }
 
 tf::Framework& EditorHost::framework() noexcept {

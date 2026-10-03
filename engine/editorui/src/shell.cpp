@@ -11,10 +11,12 @@
 #include "helios/editorui/localize.h"
 #include "helios/editorui/ui_test.h"
 #include "helios/toolsfw/framework.h"
+#include "helios/toolsfw/journal.h"
 #include "helios/toolsfw/json_util.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "misc/cpp/imgui_stdlib.h"
+#include "semantic_colors.h"
 
 namespace helios::edui {
 
@@ -74,7 +76,42 @@ std::string menuLabel(const char* label, std::string_view command) {
     return std::format("{}##{}", tr(label), command);
 }
 
+std::string lowerAscii(std::string s) {
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+fs::Path journalRootOf(const tf::Framework& fw) {
+    return fw.config().journalRoot.empty() ? tf::defaultJournalRoot() : fw.config().journalRoot;
+}
+
 } // namespace
+
+Result<std::string> recoverJournal(tf::Framework& framework, const fs::Path& journal) {
+    HELIOS_TRY_ASSIGN(const tf::RecoveryReport report, framework.recover(journal));
+    std::string note = std::format("Recovered {} transaction(s) from {}", report.replayed, fs::pathToUtf8(journal.filename()));
+    bool complete = true;
+    for (const tf::RecoveredDocument& d : report.documents) {
+        using enum tf::DocRecovery;
+        if (d.status == Replayed || d.status == UpToDate || d.status == Created) continue;
+        complete = false;
+        note += std::format("; {}: {} {}", d.file, tf::docRecoveryName(d.status), d.message);
+    }
+    if (report.replayed > 0) {
+        // What a replay cannot restore exactly (07 §1.2; tf::Framework::recover).
+        note += ". Recovered undo and redo steps are ordinary history entries now, and only the recovered "
+                "documents' part of a multi-document transaction was replayed";
+    }
+    if (complete) {
+        // Every document came back: mark the journal ended so it is not offered again.
+        auto writer = tf::JournalWriter::reopen(journal);
+        Result<void> marked = writer ? (*writer)->close(true) : Result<void>(writer.error());
+        if (!marked) note += std::format(" (could not mark {} recovered: {})", fs::pathToUtf8(journal.filename()), marked.error().message);
+    } else {
+        note += ". The session stays offered under File > Recover Unsaved Session";
+    }
+    return note;
+}
 
 Shell::Shell(tf::Framework& framework, ShellHost& host) : m_fw(framework), m_host(host) {
     for (std::string_view id : kPanelIds) m_panelOpen[std::string(id)] = true;
@@ -82,6 +119,7 @@ Shell::Shell(tf::Framework& framework, ShellHost& host) : m_fw(framework), m_hos
     m_menus["File"] = {{"doc.create", "New Record...", false},  {"doc.open", "Open Record...", false},
                        {"doc.save", "Save", false},              {"doc.saveAll", "Save All", false},
                        {"doc.revert", "Revert", true},           {"doc.reload", "Reload From Disk", true},
+                       {"app.recoverSession", "Recover Unsaved Session", false},
                        {"app.quit", "Exit", false}};
     m_menus["Edit"] = {{"edit.undo", "Undo", false},         {"edit.redo", "Redo", false},
                        {"doc.rename", "Rename...", true},     {"doc.destroy", "Delete Record", true},
@@ -108,6 +146,19 @@ Shell::Shell(tf::Framework& framework, ShellHost& host) : m_fw(framework), m_hos
     m_fw.addListener([this, alive = std::weak_ptr<int>(m_alive)](const tf::FrameworkEvent& e) {
         if (alive.lock()) onEvent(e);
     });
+    // 07 §1.2: after an unclean exit the editor offers the session's replay.
+    refreshRecoverable();
+    if (!m_recoverable.empty()) {
+        const tf::JournalSessionInfo& s = m_recoverable.back();
+        log(std::format("An earlier session ({}, {} transaction(s)) ended without saving or crashed: File > Recover Unsaved "
+                        "Session replays it",
+                        s.header.session, s.txCount));
+    }
+}
+
+void Shell::refreshRecoverable() {
+    m_recoverable = tf::listJournalSessions(journalRootOf(m_fw), m_fw.config().project, true);
+    // This process's own journal is never offered (listJournalSessions skips running sessions).
 }
 
 Shell::~Shell() = default;
@@ -161,10 +212,34 @@ void Shell::registerCommands() {
             return {};
         });
     }
-    add("app.quit", "Exit", "File", "Closes the editor (the journal is closed cleanly).", "Ctrl+Q", [this](tf::CommandContext&) -> Result<void> {
-        m_host.requestQuit();
-        return {};
-    });
+    add("app.quit", "Exit", "File",
+        "Closes the editor. The journal ends clean only when every record is saved, so unsaved edits can be recovered at the "
+        "next start.",
+        "Ctrl+Q", [this](tf::CommandContext&) -> Result<void> {
+            m_host.requestQuit();
+            return {};
+        });
+    {
+        tf::CommandDesc c;
+        c.id = "app.recoverSession";
+        c.label = "Recover Unsaved Session";
+        c.category = "File";
+        c.doc = "Replays the newest earlier session of this project that crashed or quit with unsaved records (07 §1.2); "
+                "Output lists what came back.";
+        c.headless = false;
+        c.canExecute = [this](const tf::CommandContext&) { return !m_recoverable.empty(); };
+        c.execute = [this](tf::CommandContext&) -> Result<void> {
+            refreshRecoverable();
+            if (m_recoverable.empty()) return Error{ErrorCode::NotFound, "no unclean session to recover"};
+            const fs::Path journal = m_recoverable.back().path;
+            auto note = recoverJournal(m_fw, journal);
+            refreshRecoverable();
+            if (!note) return std::move(note).error();
+            log(*note);
+            return {};
+        };
+        (void)bus.add(std::move(c));
+    }
     add("help.about", "About Helios", "Help", "Shows the editor version.", {}, [this](tf::CommandContext&) -> Result<void> {
         m_openAbout = true;
         return {};
@@ -369,14 +444,15 @@ void Shell::drawStatusBar() {
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     const f32 height = ImGui::GetFrameHeight();
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar;
-    ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImGui::GetStyleColorVec4(ImGuiCol_TitleBg));
+    ImGui::PushStyleColor(ImGuiCol_MenuBarBg, semanticColorVec4("statusBarBg"));
     if (ImGui::BeginViewportSideBar("##StatusBar", viewport, ImGuiDir_Down, height, flags)) {
         if (ImGui::BeginMenuBar()) {
             // Context accent (07 §1.3): neutral = a local session; shared edit instances and live
             // GM connections (amber, red + shard banner) arrive with T30/T27.
             const ImVec2 p = ImGui::GetCursorScreenPos();
             const f32 w = ImGui::GetFontSize() * 0.5f;
-            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(p.x, p.y), ImVec2(p.x + w, p.y + height), ImGui::GetColorU32(ImGuiCol_Border));
+            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(p.x, p.y), ImVec2(p.x + w, p.y + height),
+                                                      ImGui::GetColorU32(semanticColorVec4("accentLocal")));
             ImGui::Dummy(ImVec2(w, 0));
             ImGui::TextUnformatted(tr("LOCAL"));
             ImGui::Separator();
@@ -384,7 +460,9 @@ void Shell::drawStatusBar() {
             usize dirty = 0;
             for (const tf::Document* d : m_fw.documents().documents()) dirty += d->dirty() ? 1 : 0;
             ImGui::Separator();
+            if (dirty > 0) ImGui::PushStyleColor(ImGuiCol_Text, semanticColorVec4("dirty"));
             ImGui::TextUnformatted(std::format("{} {}", dirty, tr("unsaved")).c_str());
+            if (dirty > 0) ImGui::PopStyleColor();
             const std::string selected = selectedName();
             if (!selected.empty()) {
                 ImGui::Separator();
@@ -412,9 +490,10 @@ void Shell::drawDocuments() {
             ImGui::TableSetupColumn(tr("Name"), ImGuiTableColumnFlags_WidthStretch, 3.0f);
             ImGui::TableSetupColumn(tr("Table"), ImGuiTableColumnFlags_WidthStretch, 1.0f);
             std::vector<const tf::Document*> docs;
+            const std::string needle = lowerAscii(m_filter);  // case-insensitive, like the palette
             for (const tf::Document* d : m_fw.documents().documents()) {
                 if (d->destroyed()) continue;
-                if (!m_filter.empty() && d->name().find(m_filter) == std::string::npos) continue;
+                if (!needle.empty() && lowerAscii(d->name()).find(needle) == std::string::npos) continue;
                 docs.push_back(d);
             }
             std::sort(docs.begin(), docs.end(), [](const tf::Document* a, const tf::Document* b) { return a->name() < b->name(); });
@@ -560,22 +639,24 @@ void Shell::drawPalette() {
     const bool enter = ImGui::InputTextWithHint("##filter", tr("Type a command"), &m_paletteFilter, ImGuiInputTextFlags_EnterReturnsTrue);
     UiTest::annotate(m_paletteFilter, tr("Filter commands"));
     std::string first;
-    const auto lower = [](std::string s) {
-        for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return s;
-    };
-    const std::string needle = lower(m_paletteFilter);
-    UiTest::pushScope("list");
-    int shown = 0;
+    const std::string needle = lowerAscii(m_paletteFilter);
+    std::vector<const tf::CommandDesc*> matches;
     for (const tf::CommandDesc* c : m_fw.commands().commands()) {
-        if (!needle.empty() && lower(c->label).find(needle) == std::string::npos && lower(c->id).find(needle) == std::string::npos) continue;
-        if (shown++ >= 16) break;
+        if (!needle.empty() && lowerAscii(c->label).find(needle) == std::string::npos && lowerAscii(c->id).find(needle) == std::string::npos) continue;
+        matches.push_back(c);
+    }
+    // Every match is listed (07 §4.2: an empty filter lists every command); at most 16 rows show
+    // at once and the list scrolls.
+    constexpr usize kVisibleRows = 16;
+    const f32 rows = static_cast<f32>(std::clamp<usize>(matches.size(), 1, kVisibleRows));
+    ImGui::BeginChild("commands", ImVec2(0, rows * ImGui::GetTextLineHeightWithSpacing()), ImGuiChildFlags_None);
+    UiTest::pushScope("list");
+    // A command runs after the list is drawn: running it may close the popup.
+    const tf::CommandDesc* chosen = nullptr;
+    for (const tf::CommandDesc* c : matches) {
         if (first.empty()) first = c->id;
         const std::string label = std::format("{}  [{}]###{}", tr(c->label.c_str()), c->category, c->id);
-        if (ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_AllowOverlap)) {
-            ImGui::CloseCurrentPopup();
-            run(c->id, c->args.empty() ? std::string() : selectionArgs());
-        }
+        if (ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_AllowOverlap)) chosen = c;
         UiTest::annotate(c->id, c->doc);
         if (!c->shortcut.empty()) {
             ImGui::SameLine(ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(c->shortcut.c_str()).x + ImGui::GetCursorPosX());
@@ -583,6 +664,11 @@ void Shell::drawPalette() {
         }
     }
     UiTest::popScope();
+    ImGui::EndChild();
+    if (chosen) {
+        ImGui::CloseCurrentPopup();
+        run(chosen->id, chosen->args.empty() ? std::string() : selectionArgs());
+    }
     if (enter && !first.empty()) {
         ImGui::CloseCurrentPopup();
         const tf::CommandDesc* c = m_fw.commands().find(first);

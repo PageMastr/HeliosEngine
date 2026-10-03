@@ -8,7 +8,10 @@ helios_executable(helios-uitest
 # layout lints, UI-vs-RPC dual path, keyboard reachability. Needs a display and a Vulkan device:
 # Linux CI runs it under xvfb-run on lavapipe (label "gpu"); Windows jobs skip the gpu label.
 # Goldens: engine/editorui/tests/golden (refresh with --update-goldens and review the images).
-if(HELIOS_BUILD_TESTS AND TARGET helios-editor)
+# This directory is added only for graphics builds, which always build apps/editor; the editor is
+# named by generator expression, so it does not matter whether apps/editor is configured before or
+# after this directory (a missing helios-editor target fails generation instead of dropping the test).
+if(HELIOS_BUILD_TESTS AND EXISTS ${PROJECT_SOURCE_DIR}/apps/editor/CMakeLists.txt)
   set(helios_uitest_args --editor=$<TARGET_FILE:helios-editor>
       --fixture=${PROJECT_SOURCE_DIR}/engine/toolsfw/samples/project
       --goldens=${PROJECT_SOURCE_DIR}/engine/editorui/tests/golden

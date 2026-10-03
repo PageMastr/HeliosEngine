@@ -8,8 +8,11 @@
 #include <string>
 #include <vector>
 
+#include "display_scale.h"
 #include "edui_test_util.h"
+#include "helios/editorui/editor_host.h"
 #include "helios/editorui/localize.h"
+#include "helios/toolsfw/journal.h"
 #include "helios/toolsfw/json_util.h"
 
 using namespace helios;
@@ -226,6 +229,126 @@ TEST_CASE("shell: every command is exposed and the real shell is lint-clean at 1
         const auto issues = h.ui->lint(o);
         for (const LintIssue& i : issues) FAIL_CHECK(i.rule << " " << i.path << ": " << i.message);
     }
+}
+
+TEST_CASE("grid: unchecking an engaged optional clears it") {
+    ShellHarness h("grid_optional");
+    REQUIRE(click(h, kFrigateRow));
+    REQUIRE(click(h, "Inspector/grid/Grid/row[lootTable]/set"));  // engage: lootTable = its default
+    CHECK(h.get("lootTable") != "null");
+    // The commit clears the optional; the rest of that frame must not read its (now gone) value.
+    REQUIRE(click(h, "Inspector/grid/Grid/row[lootTable]/set"));
+    CHECK(h.get("lootTable") == "null");
+    REQUIRE(h.fw->history().size() == 2);
+    CHECK(h.ui->find("Inspector/grid/Grid/row[lootTable]/set")->value == "unset");
+}
+
+TEST_CASE("grid: removing a non-last element of an expanded list") {
+    ShellHarness h("grid_remove");
+    REQUIRE(click(h, kFrigateRow));
+    REQUIRE(click(h, "Inspector/grid/Grid/row[thrusters]/name"));  // expand the list
+    const std::string first = "Inspector/grid/Grid/row[thrusters]/row[thrusters[#66726967617465008000000000000001]]";
+    REQUIRE(h.ui->find(first + "/remove") != nullptr);
+    // The removal runs after the rows were drawn; drawing on would read past the shortened list.
+    REQUIRE(click(h, first + "/remove"));
+    CHECK(h.get("thrusters").find("thruster_main") == std::string::npos);
+    CHECK(h.get("thrusters").find("thruster_right") != std::string::npos);
+    CHECK(h.ui->find(first + "/remove") == nullptr);
+    // The last element too (its row was open: its fields are drawn in the same frame).
+    REQUIRE(click(h, "Inspector/grid/Grid/row[thrusters]/row[thrusters[#66726967617465008000000000000003]]/remove"));
+    CHECK(h.get("thrusters").find("thruster_right") == std::string::npos);
+    REQUIRE(h.fw->undo(tf::Origin::UiScripted));
+    REQUIRE(h.fw->undo(tf::Origin::UiScripted));
+    CHECK(h.frigate().text() == fs::readTextFile(h.frigate().path()).value());
+}
+
+TEST_CASE("shell: the palette lists every command, the Documents filter ignores case") {
+    ShellHarness h("shell_palette_all");
+    REQUIRE(click(h, "Documents/filter"));
+    auto typed = typeText(h, "FRIGATE");
+    REQUIRE_MESSAGE(typed, (typed ? std::string() : typed.error().message));
+    CHECK(h.ui->find(kFrigateRow) != nullptr);
+    CHECK(h.ui->find("Documents/docs/list/row[itm/scrap_plate]/select") == nullptr);
+    REQUIRE(key(h, "escape"));
+    REQUIRE(key(h, "ctrl+shift+p"));
+    usize listed = 0;
+    for (const UiItem& i : h.ui->items()) {
+        if (i.path.starts_with("Palette/") && i.path.find("/list/") != std::string::npos && i.kind == "item") ++listed;
+    }
+    CHECK(h.fw->commands().size() > 16);
+    CHECK(listed == h.fw->commands().size());  // 07 §4.2: an empty filter lists every command
+}
+
+TEST_CASE("shell: an earlier unclean session is offered and File > Recover Unsaved Session replays it") {
+    std::string expected;
+    const auto crashedSession = [&](const fs::Path& root) {
+        // An earlier editor session that edited the Frigate and never ended (crash, or a quit with
+        // unsaved records), written by another process: its header names another host and pid.
+        tf::FrameworkConfig cfg;
+        cfg.project = "edui-test";
+        cfg.projectRoot = root;
+        cfg.journalRoot = root / "journal-a";
+        cfg.session = "a";
+        auto fw = tf::Framework::create(cfg);
+        REQUIRE(fw);
+        REQUIRE((*fw)->openAll());
+        REQUIRE((*fw)->invoker(tf::Origin::Ui).invoke("doc.setProperty", R"({"doc":"hull/frigate","path":"mass","value":14500})"));
+        expected = (*fw)->documents().find(std::string_view("hull/frigate"))->text();
+        const fs::Path source = (*fw)->journal()->path();
+        fw->reset();
+        auto scan = tf::readJournal(source);
+        REQUIRE(scan);
+        tf::JournalHeader header = scan->header;
+        header.host = "some-other-host";
+        header.pid = 0x7ffffff0u;
+        auto w = tf::JournalWriter::create(tf::journalDirectory(root / "journal", "edui-test") / "crashed.hjl", header, {.fsync = false});
+        REQUIRE(w);
+        for (const tf::JournalRecord& r : scan->records) {
+            if (r.kind != tf::JournalRecordKind::End) REQUIRE((*w)->append(r));
+        }
+        REQUIRE((*w)->close(false));
+    };
+    ShellHarness h("shell_recover", 1920, 1080, crashedSession);
+    REQUIRE(h.shell->recoverableSessions().size() == 1);
+    const bool offered = std::any_of(h.shell->output().begin(), h.shell->output().end(),
+                                     [](const std::string& l) { return l.find("File > Recover Unsaved Session") != std::string::npos; });
+    CHECK(offered);
+    CHECK(h.get("mass") == "12000");
+    REQUIRE(click(h, "MainMenu/File"));
+    REQUIRE(click(h, "MainMenu/File/app.recoverSession"));
+    CHECK(h.get("mass") == "14500");
+    CHECK(h.frigate().text() == expected);
+    CHECK(h.frigate().dirty());
+    const bool recovered = std::any_of(h.shell->output().begin(), h.shell->output().end(),
+                                       [](const std::string& l) { return l.starts_with("Recovered 1 transaction(s)"); });
+    CHECK(recovered);
+    // Marked as ended: it is not offered again.
+    CHECK(h.shell->recoverableSessions().empty());
+    auto scan = tf::readJournal(tf::journalDirectory(h.root / "journal", "edui-test") / "crashed.hjl");
+    REQUIRE(scan);
+    CHECK(scan->clean);
+    CHECK_FALSE(h.fw->invoker(tf::Origin::UiScripted).canExecute("app.recoverSession"));
+}
+
+TEST_CASE("editor: the journal ends clean only after a normal exit with every record saved") {
+    ShellHarness h("editor_clean_exit");
+    CHECK(EditorHost::journalEndsClean(0, *h.fw));
+    CHECK(EditorHost::journalEndsClean(2, *h.fw));       // validation errors: the session itself was fine
+    CHECK_FALSE(EditorHost::journalEndsClean(1, *h.fw)); // device lost, swapchain failure
+    REQUIRE(h.fw->invoker(tf::Origin::UiScripted).invoke("doc.setProperty", R"({"doc":"hull/frigate","path":"mass","value":13000})"));
+    CHECK_FALSE(EditorHost::journalEndsClean(0, *h.fw)); // quit with an unsaved record: offer its replay
+    REQUIRE(h.fw->saveAll());
+    CHECK(EditorHost::journalEndsClean(0, *h.fw));
+}
+
+TEST_CASE("editor: the UI scale follows the window's display unless it was forced") {
+    using edui::detail::scaleForDisplay;
+    CHECK(scaleForDisplay(1.0f, 2.0f, false) == 2.0f);   // moved to a 200 % monitor
+    CHECK(scaleForDisplay(2.0f, 1.0f, false) == 1.0f);   // and back
+    CHECK_FALSE(scaleForDisplay(1.5f, 1.5f, false));     // no change
+    CHECK_FALSE(scaleForDisplay(1.0f, 2.0f, true));      // --scale, HELIOS_EDITOR_SCALE, test mode
+    CHECK_FALSE(scaleForDisplay(1.0f, 0.0f, false));     // the display reports no scale
+    CHECK(scaleForDisplay(1.0f, 9.0f, false) == edui::detail::kMaxUiScale);
 }
 
 TEST_CASE("shell: the shell's framework listener does not outlive the shell") {

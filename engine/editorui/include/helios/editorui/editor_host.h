@@ -13,6 +13,9 @@
 // backend seam), no layout file, a hidden window unless `present` is set, and frames rendered only
 // when a capture asks for one. Its edits carry Origin::UiScripted.
 //
+// Crash recovery (07 §1.2): `recover` replays a journal at start; otherwise the shell offers an
+// earlier unclean session. The journal ends clean only after a normal exit with every record saved.
+//
 // Remote control: the framework's JSON-RPC methods (tf::registerFrameworkRpc) plus
 //   ui.items {filter?}, ui.click {path, button?}, ui.doubleClick {path}, ui.hover {path},
 //   ui.move {x, y}, ui.drag {from, to? | dx, dy}, ui.type {text}, ui.key {chord},
@@ -47,7 +50,8 @@ struct EditorConfig {
     bool testMode = false;
     /// Show the window and present frames (test mode: off unless requested).
     bool present = true;
-    /// UI scale (1 = 100 %); 0 = the display's content scale (test mode: 1).
+    /// UI scale (1 = 100 %); 0 = the scale of the window's display, following it when the window
+    /// moves to another monitor (per-monitor DPI; test mode: 1). A non-zero value is kept.
     f32 scale = 0.0f;
     std::string theme = "dark";
     /// A theme token file to use instead of the built-in theme.
@@ -82,8 +86,12 @@ public:
     EditorHost& operator=(const EditorHost&) = delete;
 
     /// Runs frames until quit or maxFrames. Returns the process exit code (0 ok, 1 failure,
-    /// 2 RHI validation errors).
+    /// 2 RHI validation errors). The journal ends clean only per journalEndsClean().
     int run();
+    /// Whether a session that exits with `exitCode` closes its journal clean (07 §1.2): not after a
+    /// failure (exit code 1: device lost, swapchain failure) and not while a record has unsaved
+    /// edits, so the next start offers their replay.
+    static bool journalEndsClean(int exitCode, const tf::Framework& framework) noexcept;
     /// Runs one frame; false once the editor should exit.
     bool frame();
 

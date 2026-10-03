@@ -5,6 +5,7 @@
 
 #include <doctest/doctest.h>
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -159,13 +160,19 @@ struct ShellHarness {
     std::unique_ptr<UiTest> ui;
     Theme theme;
 
-    explicit ShellHarness(std::string_view name, f32 width = 1920, f32 height = 1080) {
+    /// `prepare` runs on the project copy before the framework opens it (journals of earlier
+    /// sessions go under `<root>/journal`, the harness framework's journal root; it journals
+    /// nothing itself).
+    explicit ShellHarness(std::string_view name, f32 width = 1920, f32 height = 1080,
+                          const std::function<void(const fs::Path& root)>& prepare = {}) {
         REQUIRE(tf::samples::registerSampleTypes());
         root = fixtureCopy(name);
+        if (prepare) prepare(root);
         tf::FrameworkConfig cfg;
         cfg.project = "edui-test";
         cfg.projectRoot = root;
         cfg.journal = false;
+        cfg.journalRoot = root / "journal";
         auto created = tf::Framework::create(cfg);
         REQUIRE(created);
         fw = std::move(*created);

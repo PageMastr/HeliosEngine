@@ -2,8 +2,11 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cmath>
+#include <format>
 #include <string>
+#include <vector>
 
 #include "helios/core/fs.h"
 #include "helios/editorui/localize.h"
@@ -101,6 +104,62 @@ TEST_CASE("theme: the contrast lint catches a low-contrast token pair") {
     bool sevenFails = false;
     for (const ContrastIssue& i : checkContrast(mid)) sevenFails = sevenFails || (i.foreground == "text" && i.required == 7.0);
     CHECK(sevenFails);
+}
+
+TEST_CASE("theme: the contrast lint checks the pairs the shell draws") {
+    auto t = builtinTheme("dark");
+    REQUIRE(t);
+    const auto has = [](const std::vector<ContrastIssue>& issues, std::string_view fg, std::string_view bg) {
+        return std::any_of(issues.begin(), issues.end(), [&](const ContrastIssue& i) { return i.foreground == fg && i.background == bg; });
+    };
+    // Round 1's dark values: disabled text on the selected Documents row (3.85:1) and input hints
+    // on a frame (4.35:1) are drawn, so the lint must see them.
+    Theme old = *t;
+    old.colors["textDisabled"] = *parseColor("#8C939D");
+    const auto issues = checkContrast(old);
+    CHECK(has(issues, "textDisabled", "header"));
+    CHECK(has(issues, "textDisabled", "frameBg"));
+    CHECK(has(issues, "textDisabled", "headerHovered over popupBg"));
+    // Semantic tokens are checked where they are drawn, and drawn from the applied theme.
+    Theme dim = *t;
+    dim.colors["dirty"] = dim.colors["statusBarBg"];
+    CHECK(has(checkContrast(dim), "dirty", "statusBarBg"));
+    Theme badge = *t;
+    badge.colors["badgeServer"] = badge.colors["windowBg"];
+    CHECK(has(checkContrast(badge), "badgeServer", "tableRowBgAlt"));
+    for (const ContrastPair& p : drawnContrastPairs()) {
+        CAPTURE(p.foreground);
+        CHECK(t->has(p.foreground));
+        CHECK(t->has(p.background));
+    }
+    ImGuiStyle style;
+    applyTheme(*t, 1.0f, style);
+    for (std::string_view token : {"badgeServer", "badgeClient", "dirty", "error", "statusBarBg", "accentLocal"}) {
+        CAPTURE(token);
+        CHECK(semanticColor(token) == t->color(token));
+    }
+    CHECK_FALSE(semanticColor("badgeServer") == semanticColor("badgeClient"));
+}
+
+TEST_CASE("theme: metrics outside their ranges are rejected") {
+    auto dark = builtinTheme("dark");
+    REQUIRE(dark);
+    std::string colors;
+    for (const auto& [name, c] : dark->colors) {
+        colors += std::format("{}\"{}\": \"#{:02X}{:02X}{:02X}\"", colors.empty() ? "" : ", ", name, packColor(c) & 0xFF,
+                              (packColor(c) >> 8) & 0xFF, (packColor(c) >> 16) & 0xFF);
+    }
+    const auto parse = [&](std::string_view metrics) {
+        return Theme::parse(std::format(R"({{"name": "x", "colors": {{{}}}, "metrics": {{{}}}}})", colors, metrics), "x.jsonc");
+    };
+    CHECK(parse(R"("fontSize": 16)"));
+    for (const char* bad : {R"("fontSize": -1)", R"("fontSize": 4000)", R"("framePaddingX": -3)", R"("windowBorderSize": 100)",
+                            R"("itemSpacingY": "wide")"}) {
+        CAPTURE(bad);
+        auto r = parse(bad);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().message.find("metric") != std::string::npos);
+    }
 }
 
 TEST_CASE("theme: a token file without every token is rejected") {

@@ -35,6 +35,10 @@ public:
     virtual Result<void> write(const void* data, usize size) = 0;
     /// Wakes blocked reads (they return 0) and disconnects.
     virtual void shutdown() noexcept = 0;
+    /// Half-closes: the peer reads end of stream, and this side can still read its answers
+    /// (`nc -N`, `socat`). Unix-domain sockets only; a named pipe has no half-close and returns
+    /// Unsupported.
+    virtual Result<void> shutdownWrite() = 0;
 };
 
 class Listener {

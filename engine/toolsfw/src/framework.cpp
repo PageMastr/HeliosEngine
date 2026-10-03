@@ -96,11 +96,14 @@ std::string sanitizeLabel(std::string label, std::string_view fallback) {
 // ---------------------------------------------------------------------------------------------
 // TxBuilder
 // ---------------------------------------------------------------------------------------------
-TxBuilder::TxBuilder(Framework& fw, Origin origin, std::string label) noexcept
-    : m_fw(&fw), m_origin(origin), m_label(std::move(label)) {}
+TxBuilder::TxBuilder(Framework& fw, Origin origin, std::string label)
+    : m_fw(&fw), m_origin(origin), m_label(std::move(label)) {
+    m_fw->m_builders.push_back(this);
+}
 
 TxBuilder::~TxBuilder() {
     if (!m_done) abort();
+    std::erase(m_fw->m_builders, this);
 }
 
 Result<void> TxBuilder::push(Op op) {
@@ -462,9 +465,26 @@ Result<usize> Framework::openAll() {
     return opened;
 }
 
+bool Framework::hasUnjournaledOps(const DocId& id) const {
+    return std::any_of(m_builders.begin(), m_builders.end(), [&](const TxBuilder* b) {
+        return !b->m_done && std::any_of(b->m_ops.begin(), b->m_ops.end(), [&](const Op& o) { return o.doc == id; });
+    });
+}
+
+namespace {
+Error pendingEdits(const Document& d, std::string_view what) {
+    return Error{ErrorCode::InvalidState,
+                 std::format("{}: cannot {} while an open transaction group or an uncommitted edit holds changes of it", d.name(), what)};
+}
+} // namespace
+
 Result<void> Framework::save(const DocId& id) {
     Document* d = m_workspace->find(id);
     if (!d) return noDocument(id);
+    // A save is the document's replay base: the group's edits would be in the file but journaled
+    // after it, so recovery would replay them onto a file that already holds them (a conflict that
+    // drops every later edit), or a cancelled group's edits would stay in the file.
+    if (hasUnjournaledOps(id)) return pendingEdits(*d, "save");
     JournalRecord rec;
     rec.kind = JournalRecordKind::Save;
     rec.doc = id;
@@ -481,8 +501,16 @@ Result<void> Framework::save(const DocId& id) {
         DocAccess::setBase(*d, text);
         rec.hash = hash64(text);
     }
-    if (auto r = journalRecord(rec); !r) HELIOS_LOG_ERROR(LogTools, "journal: {}", r.error());
+    const Result<void> journaled = journalRecord(rec);
     emit({FrameworkEvent::Kind::Saved, id, {}});
+    if (!journaled) {
+        // The file is written. Without its record, recovery would take the file for an external
+        // change and skip the document's later edits: say so instead of only logging it.
+        return Error{journaled.error().code,
+                     std::format("{} was saved, but the journal could not record it (a crash recovery would skip its later "
+                                 "edits until it is saved again): {}",
+                                 d->name(), journaled.error().message)};
+    }
     return {};
 }
 
@@ -490,7 +518,9 @@ Result<usize> Framework::saveAll() {
     usize saved = 0;
     std::vector<DocId> ids;
     for (Document* d : m_workspace->documents()) {
-        if (d->dirty()) ids.push_back(d->id());
+        if (!d->dirty()) continue;
+        if (hasUnjournaledOps(d->id())) return pendingEdits(*d, "save");
+        ids.push_back(d->id());
     }
     for (const DocId& id : ids) {
         HELIOS_TRY(save(id));
@@ -503,10 +533,7 @@ Result<void> Framework::close(const DocId& id, bool discard) {
     Document* d = m_workspace->find(id);
     if (!d) return noDocument(id);
     if (d->dirty() && !discard) return Error{ErrorCode::InvalidState, std::format("{} has unsaved changes", d->name())};
-    if (m_group) {
-        const bool touched = std::any_of(m_group->ops().begin(), m_group->ops().end(), [&](const Op& o) { return o.doc == id; });
-        if (touched) return Error{ErrorCode::InvalidState, "the document is part of an open transaction group"};
-    }
+    if (hasUnjournaledOps(id)) return pendingEdits(*d, "close");
     // History entries that touch the document can no longer be undone.
     std::vector<usize> keep;
     std::vector<HistoryEntry> history;
@@ -962,6 +989,13 @@ Result<TxId> FwAccess::syncWithDisk(Framework& fw, const DocId& id, bool discard
     Document* d = liveDocument(*fw.m_workspace, id);
     if (!d) return noDocument(id);
     if (d->path().empty()) return Error{ErrorCode::InvalidState, std::format("{} has no file", d->name())};
+    // The reload journals a new replay base after its own transaction. Inside a group that
+    // transaction would only join the group and reach the journal after the base (and a cancel
+    // would leave the base holding the cancelled edits), so a reload or revert waits for the group.
+    if (fw.inGroup()) {
+        return Error{ErrorCode::InvalidState, std::format("{}: cannot reload or revert inside a transaction group", d->name())};
+    }
+    if (fw.hasUnjournaledOps(id)) return pendingEdits(*d, "reload or revert");
     HELIOS_TRY_ASSIGN(const std::string text, fs::readTextFile(d->path()));
     const refl::TypeInfo& type = d->type();
     refl::Value theirs(type);
@@ -1035,8 +1069,17 @@ Result<TxId> FwAccess::syncWithDisk(Framework& fw, const DocId& id, bool discard
     rec.typeName = std::string(type.qualifiedName);
     rec.hash = hash64(text);
     if (d->text() != theirsText) rec.snapshot = d->text();
-    if (auto r = fw.journalRecord(rec); !r) HELIOS_LOG_ERROR(LogTools, "journal: {}", r.error());
+    const Result<void> journaled = fw.journalRecord(rec);
     fw.emit({FrameworkEvent::Kind::Reloaded, id, tx});
+    if (!journaled) {
+        // The reload stands (its transaction is journaled and undoable), but without the new base
+        // a crash recovery would take the file for an external change and skip the document's
+        // later edits. openDocument() fails in the same situation; here the caller learns it.
+        return Error{journaled.error().code,
+                     std::format("{} was reloaded, but the journal could not record its new content (a crash recovery would "
+                                 "skip its later edits until it is saved): {}",
+                                 d->name(), journaled.error().message)};
+    }
     return tx;
 }
 

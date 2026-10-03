@@ -267,8 +267,18 @@ std::vector<ContrastPair> drawnContrastPairs() {
         pairs.push_back({fg, "windowBg"});
         pairs.push_back({fg, "tableRowBgAlt"});
     }
+    // The badge follows the name on the same line, inside the span of the name cell's tree node,
+    // which ImGui fills with HeaderHovered while it is hovered and HeaderActive while it is pressed.
+    for (std::string_view fg : {"badgeServer", "badgeClient"}) {
+        pairs.push_back({fg, "headerHovered"});
+        pairs.push_back({fg, "headerActive"});
+    }
     pairs.push_back({"dirty", "windowBg"});
     pairs.push_back({"dirty", "statusBarBg"});
+    // Selected text in a text field: InputText draws Text over TextSelectedBg over FrameBg.
+    pairs.push_back({"text", "textSelectedBg", "frameBg"});
+    // Not listed: values of read-only fields, drawn disabled (ImGui's DisabledAlpha), are inactive
+    // controls, which WCAG 1.4.3 exempts from the contrast minimum.
     return pairs;
 }
 

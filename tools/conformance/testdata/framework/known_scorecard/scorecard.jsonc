@@ -1,0 +1,13 @@
+// The registry's EXIT-0.conformance item lists one gap per known-failing record.
+{
+  "exit": [
+    {"id": "EXIT-0.other", "gaps": [{"clause": "CONF-10 elsewhere", "state": "failing", "owner": "WP-9.8r"}]},
+    {
+      "id": "EXIT-0.conformance",
+      "gaps": [
+        {"clause": "CONF-10 fails on engine/x (known_failing.jsonc)", "state": "failing", "owner": "WP-9.7r, WP-9.9r"},
+        {"clause": "CONF-09 fails on engine/y", "state": "failing", "owner": "WP-9.8r"},
+      ],
+    },
+  ],
+}

@@ -15,9 +15,9 @@
 namespace helios::edui {
 
 f32 UiRect::overlap(const UiRect& o) const noexcept {
-    const f32 w = std::min(right(), o.right()) - std::max(x, o.x);
-    const f32 h = std::min(bottom(), o.bottom()) - std::max(y, o.y);
-    return (w > 0 && h > 0) ? w * h : 0.0f;
+    const f32 ow = std::min(right(), o.right()) - std::max(x, o.x);
+    const f32 oh = std::min(bottom(), o.bottom()) - std::max(y, o.y);
+    return (ow > 0 && oh > 0) ? ow * oh : 0.0f;
 }
 
 // ---------------------------------------------------------------------------------------------

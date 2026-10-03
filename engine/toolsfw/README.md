@@ -36,10 +36,11 @@ Its dependencies are `core` and `reflect`, plus `script` privately for the Luau 
   may run commands, so the group's origin is the origin of every edit in it. A new edit drops the
   redo entries of the documents it touches. The history is capped at 512 MB (past the cap, the
   oldest entries go until it is at 7/8 of it).
-- **Commit budget.** A commit, undo or redo costs O(its ops), whatever the session's length: the
-  history and log byte totals are running sums. A one-op commit stays ≤ 0.1 ms in RelWithDebInfo
-  (`perf:` case in `test_history.cpp`, which also requires the last 1,000 of 50,000 commits to cost
-  at most 3× the first 1,000).
+- **Commit budget.** The history and log byte totals are running sums, so no commit, undo or redo
+  walks the session's log. A commit costs O(its ops + the redo stack's entries) and an undo or redo
+  O(its ops + the history entries it scans past, undone ones included). A one-op commit stays
+  ≤ 0.1 ms in RelWithDebInfo (`perf:` case in `test_history.cpp`, which also requires the last 1,000
+  of 50,000 commits to cost at most 3× the first 1,000).
 - **Journal** (07 §1.2). Each session appends to `<journal root>/<project>/<session>.hjl`. The
   format is `"HJL1"`, then the header length and header JSON, then records of the form
   `u32 length | u32 check | JSON payload`. Record kinds are open, save, close, tx and end. A
@@ -48,7 +49,13 @@ Its dependencies are `core` and `reflect`, plus `script` privately for the Luau 
   A flusher thread makes appends durable within 50 ms (group commit); it calls `fsync` without
   holding the writer's lock, so a commit never waits for the disk. A reload of an external edit
   journals a new open record (the file's new hash, plus the merged text when unsaved local edits
-  survived the merge). `Framework::recover()` replays an unclean session onto the files. It
+  survived the merge). A save or a reload is a document's replay base, so neither may be journaled
+  while edits of the document are applied but not yet journaled: `save()`, `saveAll()`, `close()`
+  and `reloadFromDisk()` refuse (InvalidState) while an open group or an uncommitted `TxBuilder`
+  holds edits of the document, and a reload or revert refuses inside any group, since its own
+  transaction would join the group. A failed journal write of a save or reload record is returned
+  to the caller (the file is written or reloaded; recovery needs a later save).
+  `Framework::recover()` replays an unclean session onto the files. It
   verifies each file against the session's last open/save/reload hash, restores a reload's merged
   text, re-opens documents created in the session from their snapshot, and keeps each
   transaction's origin, label, merge key and Undo/Redo kind. Two limits are reported, not hidden:
@@ -61,7 +68,13 @@ Its dependencies are `core` and `reflect`, plus `script` privately for the Luau 
   transaction as the Undo or Redo of a transaction from an earlier session. The CLI rebuilds its
   linear undo stack from the project's journals, counting only transactions whose documents were
   saved afterwards in the same session, and continues the project's Lamport counter
-  (`FrameworkConfig::lamportFloor`) so ids never repeat across its processes.
+  (`FrameworkConfig::lamportFloor`) so ids never repeat across its processes when they run one
+  after another. Sessions that run at the same time (two `helios-tool` runs, or the editor and the
+  CLI, all user `local` by default) can still mint the same `(user, lamport)` id: ids are unique
+  per session, not per project, until the collaboration work gives every session its own user or
+  site id, and the CLI's cross-process undo assumes that its runs do not overlap. Each
+  run reads the project's journals at start-up, and nothing prunes clean sessions yet, so start-up
+  time grows with the project's journal history (follow-up: rotate or prune clean sessions).
 - **Remote control.** `RpcServer` accepts on its own threads and queues requests. Handlers run on
   the owner thread in `pump()`, and a handler may answer frames later through its `RpcResponder`
   (the editor's `ui.*` methods do). Endpoints are `\\.\pipe\<name>` (remote clients rejected; the
@@ -72,7 +85,8 @@ Its dependencies are `core` and `reflect`, plus `script` privately for the Luau 
   (beyond that the server stops reading, so the client blocks in its own write), 64 MiB per message
   and JSON nesting ≤ 128; and responses go through a per-connection queue drained by a writer
   thread, so `pump()` never blocks on a client, and a client that leaves more than 64 MiB unread is
-  disconnected.
+  disconnected. A client may half-close (`nc -N`, `socat`: shut its write side after the last
+  request); the server answers every request it read before closing the connection.
 
 Threading: a `Framework` and everything it owns are used from one owner thread. The journal
 flusher and the RPC reader and writer threads never touch documents.
@@ -87,11 +101,13 @@ checked against the project's records).
 
 ## Tests
 
-`toolsfw_tests` (doctest, 64 cases, plus 1 `perf:` case in `toolsfw_tests_perf`): transactions and
+`toolsfw_tests` (doctest, 72 cases, plus 1 `perf:` case in `toolsfw_tests_perf`): transactions and
 inverses, history and merging, nested groups, commands and arguments, documents and 3-way reload,
 the journal (torn tails at every cut point, group commit, recovery, recovery after a reload,
-cross-session reverts), RPC over the real socket or pipe (including a client that never reads and
-the connection, request and output bounds), and **ED-1** (`test_ed1.cpp`):
+cross-session reverts, and saves and reloads refused inside a group or an uncommitted builder,
+with recovery checked after each), RPC over the real socket or pipe (including a client that never
+reads, one that half-closes, and the connection, request and output bounds), and **ED-1**
+(`test_ed1.cpp`):
 
 - 10,000 random transactions (Set, Insert, Remove and Move over the Frigate, with rejected edits
   mixed in) are applied, then all undone, then all redone. After every undo and redo the canonical

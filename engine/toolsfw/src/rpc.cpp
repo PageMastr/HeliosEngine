@@ -173,6 +173,7 @@ struct RpcConn {
             const auto r = conn->write(line.data(), line.size());
             lock.lock();
             outboundBytes -= std::min(outboundBytes, line.size());
+            cv.notify_all();  // a half-closed connection's reader waits for the last answer
             if (!r) break;
         }
         lock.unlock();
@@ -223,13 +224,14 @@ struct RpcServerState {
                 break;
             }
         }
-        // Let a final error line go out before disconnecting.
-        for (int i = 0; i < 100; ++i) {
-            {
-                std::lock_guard lock(c->mutex);
-                if (c->outbound.empty() || c->closed.load()) break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        // End of stream may be a half-close (`nc -N`, `socat`: the client shut its write side
+        // after its last request and is still reading), and a final error line may be queued.
+        // Answer every request read so far and write it out before disconnecting. The wait ends
+        // early if the writer fails, the server stops, or the slow-reader cap closes the
+        // connection; meanwhile the connection keeps its slot (maxConnections).
+        {
+            std::unique_lock lock(c->mutex);
+            c->cv.wait(lock, [&] { return c->closed.load() || stopping.load() || (c->pending == 0 && c->outboundBytes == 0); });
         }
         c->close();
     }

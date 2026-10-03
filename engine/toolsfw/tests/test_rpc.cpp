@@ -2,6 +2,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <format>
@@ -318,6 +319,48 @@ TEST_CASE("rpc: limits bound connections, queued requests and unread responses")
         ok = r.ok();
     });
     CHECK(ok.load());
+}
+
+TEST_CASE("rpc: a client that half-closes after its requests still gets every answer") {
+    Fixture f("rpc_half_close");
+    auto server = RpcServer::start(endpoint("half"));
+    REQUIRE(server);
+    registerFrameworkRpc(**server, *f.fw);
+    auto conn = ipc::connect((*server)->endpoint(), 5000);
+    REQUIRE(conn);
+    constexpr usize kRequests = 3;
+    const std::string batch = pipelined(static_cast<int>(kRequests), "doc.text", R"({"doc":"hull/frigate"})");
+    REQUIRE((*conn)->write(batch.data(), batch.size()));
+    // `nc -N` and `socat` shut their write side after the last request and keep reading.
+    auto half = (*conn)->shutdownWrite();
+    if (!half) {
+        CHECK(half.errorCode() == ErrorCode::Unsupported);  // a named pipe has no half-close
+        return;
+    }
+    // Nobody pumps yet, so the server's reader sees the end of stream with every request queued.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    std::string got;
+    bool eof = false;
+    std::atomic<bool> done{false};
+    std::thread client([&] {
+        char buf[8192];
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+        while (!eof && std::chrono::steady_clock::now() < deadline) {
+            auto n = (*conn)->read(buf, sizeof(buf), 100);
+            if (!n) continue;  // timeout
+            if (*n == 0) {
+                eof = true;
+            } else {
+                got.append(buf, *n);
+            }
+        }
+        done = true;
+    });
+    pumpUntil(**server, [&] { return done.load(); }, std::chrono::seconds(30));
+    client.join();
+    CHECK(static_cast<usize>(std::count(got.begin(), got.end(), '\n')) == kRequests);
+    CHECK(got.find("\"id\":3,\"result\"") != std::string::npos);
+    CHECK(eof);  // then the server closes the connection
 }
 
 } // namespace

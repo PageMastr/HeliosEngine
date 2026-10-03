@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <format>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@
 #include "helios/editorui/localize.h"
 #include "helios/toolsfw/journal.h"
 #include "helios/toolsfw/json_util.h"
+#include "imgui.h"
 
 using namespace helios;
 using namespace helios::edui;
@@ -262,6 +264,18 @@ TEST_CASE("grid: removing a non-last element of an expanded list") {
     CHECK(h.frigate().text() == fs::readTextFile(h.frigate().path()).value());
 }
 
+TEST_CASE("grid: a badge is drawn inside its name cell's hover fill") {
+    // The premise of the badge-on-headerHovered/headerActive contrast pairs: the name cell's tree
+    // node spans the column, and the badge follows the label inside that span.
+    ShellHarness h("grid_badge_hover");
+    REQUIRE(click(h, kFrigateRow));
+    const UiItem* name = h.ui->find("Inspector/grid/Grid/row[prefab]/name");
+    REQUIRE(name != nullptr);
+    const f32 badge = ImGui::CalcTextSize("client").x;
+    REQUIRE(badge > 0.0f);
+    CHECK(name->rect.w > name->labelWidth + ImGui::GetStyle().ItemSpacing.x + badge);
+}
+
 TEST_CASE("shell: the palette lists every command, the Documents filter ignores case") {
     ShellHarness h("shell_palette_all");
     REQUIRE(click(h, "Documents/filter"));
@@ -279,35 +293,40 @@ TEST_CASE("shell: the palette lists every command, the Documents filter ignores 
     CHECK(listed == h.fw->commands().size());  // 07 §4.2: an empty filter lists every command
 }
 
+/// Writes an earlier editor session of the project that set the Frigate's mass and never ended (a
+/// crash, or a quit with unsaved records), as another host's process would have left it:
+/// `<root>/journal/edui-test/<file>`, session `session`. Returns the Frigate's text after the edit.
+std::string writeCrashedSession(const fs::Path& root, std::string_view file, std::string_view session, int mass) {
+    tf::FrameworkConfig cfg;
+    cfg.project = "edui-test";
+    cfg.projectRoot = root;
+    cfg.journalRoot = root / fs::pathFromUtf8("journal-" + std::string(session));
+    cfg.session = std::string(session);
+    auto fw = tf::Framework::create(cfg);
+    REQUIRE(fw);
+    REQUIRE((*fw)->openAll());
+    REQUIRE((*fw)->invoker(tf::Origin::Ui).invoke("doc.setProperty", std::format(R"({{"doc":"hull/frigate","path":"mass","value":{}}})", mass)));
+    const std::string text = (*fw)->documents().find(std::string_view("hull/frigate"))->text();
+    const fs::Path source = (*fw)->journal()->path();
+    fw->reset();
+    auto scan = tf::readJournal(source);
+    REQUIRE(scan);
+    tf::JournalHeader header = scan->header;
+    header.host = "some-other-host";
+    header.pid = 0x7ffffff0u;
+    auto w = tf::JournalWriter::create(tf::journalDirectory(root / "journal", "edui-test") / fs::pathFromUtf8(std::string(file)), header,
+                                       {.fsync = false});
+    REQUIRE(w);
+    for (const tf::JournalRecord& r : scan->records) {
+        if (r.kind != tf::JournalRecordKind::End) REQUIRE((*w)->append(r));
+    }
+    REQUIRE((*w)->close(false));
+    return text;
+}
+
 TEST_CASE("shell: an earlier unclean session is offered and File > Recover Unsaved Session replays it") {
     std::string expected;
-    const auto crashedSession = [&](const fs::Path& root) {
-        // An earlier editor session that edited the Frigate and never ended (crash, or a quit with
-        // unsaved records), written by another process: its header names another host and pid.
-        tf::FrameworkConfig cfg;
-        cfg.project = "edui-test";
-        cfg.projectRoot = root;
-        cfg.journalRoot = root / "journal-a";
-        cfg.session = "a";
-        auto fw = tf::Framework::create(cfg);
-        REQUIRE(fw);
-        REQUIRE((*fw)->openAll());
-        REQUIRE((*fw)->invoker(tf::Origin::Ui).invoke("doc.setProperty", R"({"doc":"hull/frigate","path":"mass","value":14500})"));
-        expected = (*fw)->documents().find(std::string_view("hull/frigate"))->text();
-        const fs::Path source = (*fw)->journal()->path();
-        fw->reset();
-        auto scan = tf::readJournal(source);
-        REQUIRE(scan);
-        tf::JournalHeader header = scan->header;
-        header.host = "some-other-host";
-        header.pid = 0x7ffffff0u;
-        auto w = tf::JournalWriter::create(tf::journalDirectory(root / "journal", "edui-test") / "crashed.hjl", header, {.fsync = false});
-        REQUIRE(w);
-        for (const tf::JournalRecord& r : scan->records) {
-            if (r.kind != tf::JournalRecordKind::End) REQUIRE((*w)->append(r));
-        }
-        REQUIRE((*w)->close(false));
-    };
+    const auto crashedSession = [&](const fs::Path& root) { expected = writeCrashedSession(root, "crashed.hjl", "a", 14500); };
     ShellHarness h("shell_recover", 1920, 1080, crashedSession);
     REQUIRE(h.shell->recoverableSessions().size() == 1);
     const bool offered = std::any_of(h.shell->output().begin(), h.shell->output().end(),
@@ -330,6 +349,39 @@ TEST_CASE("shell: an earlier unclean session is offered and File > Recover Unsav
     CHECK_FALSE(h.fw->invoker(tf::Origin::UiScripted).canExecute("app.recoverSession"));
 }
 
+TEST_CASE("shell: File > Discard Unsaved Session stops offering a session; a named session can be recovered") {
+    std::string older;
+    const auto twoCrashed = [&](const fs::Path& root) {
+        older = writeCrashedSession(root, "crashed1.hjl", "c1", 14500);
+        (void)writeCrashedSession(root, "crashed2.hjl", "c2", 13500);
+    };
+    ShellHarness h("shell_discard", 1920, 1080, twoCrashed);
+    REQUIRE(h.shell->recoverableSessions().size() == 2);
+    const bool offered = std::any_of(h.shell->output().begin(), h.shell->output().end(), [](const std::string& l) {
+        return l.find("File > Discard Unsaved Session") != std::string::npos && l.find("2 such sessions") != std::string::npos;
+    });
+    CHECK(offered);
+    // Discarding takes the newest (c2) without replaying it; its journal stays, marked ended.
+    REQUIRE(click(h, "MainMenu/File"));
+    REQUIRE(click(h, "MainMenu/File/app.discardSession"));
+    CHECK(h.get("mass") == "12000");
+    REQUIRE(h.shell->recoverableSessions().size() == 1);
+    CHECK(h.shell->recoverableSessions()[0].header.session == "c1");
+    auto discarded = tf::readJournal(tf::journalDirectory(h.root / "journal", "edui-test") / "crashed2.hjl");
+    REQUIRE(discarded);
+    CHECK(discarded->clean);
+    CHECK(std::any_of(discarded->records.begin(), discarded->records.end(),
+                      [](const tf::JournalRecord& r) { return r.kind == tf::JournalRecordKind::Tx; }));
+    // The older session was hidden behind it; it can also be named.
+    tf::CommandInvoker& ui = h.fw->invoker(tf::Origin::UiScripted);
+    CHECK(ui.invoke("app.recoverSession", R"({"session":"c2"})").errorCode() == ErrorCode::NotFound);
+    REQUIRE(ui.invoke("app.recoverSession", R"({"session":"c1"})"));
+    CHECK(h.get("mass") == "14500");
+    CHECK(h.frigate().text() == older);
+    CHECK(h.shell->recoverableSessions().empty());
+    CHECK_FALSE(ui.canExecute("app.discardSession"));
+}
+
 TEST_CASE("editor: the journal ends clean only after a normal exit with every record saved") {
     ShellHarness h("editor_clean_exit");
     CHECK(EditorHost::journalEndsClean(0, *h.fw));
@@ -349,6 +401,15 @@ TEST_CASE("editor: the UI scale follows the window's display unless it was force
     CHECK_FALSE(scaleForDisplay(1.0f, 2.0f, true));      // --scale, HELIOS_EDITOR_SCALE, test mode
     CHECK_FALSE(scaleForDisplay(1.0f, 0.0f, false));     // the display reports no scale
     CHECK(scaleForDisplay(1.0f, 9.0f, false) == edui::detail::kMaxUiScale);
+    // A scale the user picked under View > UI Scale stays on another monitor.
+    edui::detail::ScalePolicy policy;
+    CHECK(policy.onDisplayScale(1.0f, 2.0f) == 2.0f);
+    CHECK(policy.choose(1.5f) == 1.5f);
+    CHECK_FALSE(policy.onDisplayScale(1.5f, 2.0f));
+    CHECK(policy.choose(9.0f) == edui::detail::kMaxUiScale);
+    edui::detail::ScalePolicy forced;
+    forced.forced = true;
+    CHECK_FALSE(forced.onDisplayScale(1.0f, 2.0f));
 }
 
 TEST_CASE("shell: the shell's framework listener does not outlive the shell") {

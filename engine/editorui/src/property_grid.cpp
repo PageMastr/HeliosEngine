@@ -547,8 +547,8 @@ struct PropertyGrid::Impl {
             const bool quoted = current.size() >= 2 && current.front() == '"';
             std::string text = current;
             if (quoted) {
-                auto doc = refl::JsonDocument::parse(current);
-                if (doc) text = std::string(doc->root().asString());
+                auto parsed = refl::JsonDocument::parse(current);
+                if (parsed) text = std::string(parsed->root().asString());
             }
             ImGui::InputText("##value", &text);
             if (ImGui::IsItemDeactivatedAfterEdit()) set(path, quoted ? tf::json::quote(text) : text);

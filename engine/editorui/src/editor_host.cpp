@@ -148,8 +148,9 @@ struct EditorHost::Impl {
     Theme theme;
     std::string themeName;
     f32 scale = 1.0f;
-    /// --scale, HELIOS_EDITOR_SCALE or test mode chose the scale: display changes leave it alone.
-    bool scaleForced = false;
+    /// Whether display changes still move the scale (not after --scale, HELIOS_EDITOR_SCALE, test
+    /// mode or a View > UI Scale choice).
+    detail::ScalePolicy scalePolicy;
     bool styleDirty = true;
     std::optional<std::string> pendingTheme;
     std::optional<f32> pendingScale;
@@ -373,8 +374,9 @@ struct EditorHost::Impl {
             },
             [r, dd](render::RgContext& ctx) { r->record(ctx.cmd(), dd); });
         if (shot) {
-            render::RgBuffer rb = graph.importBuffer("EditorCapture", readback, device->bufferDesc(readback),
-                                                     {.finalState = rhi::ResourceState::HostRead});
+            render::RgImport readable;
+            readable.finalState = rhi::ResourceState::HostRead;
+            render::RgBuffer rb = graph.importBuffer("EditorCapture", readback, device->bufferDesc(readback), readable);
             graph.addPass(
                 "Capture", render::PassFlags::Copy | render::PassFlags::NeverCull,
                 [&](render::RgBuilder& b) {
@@ -776,7 +778,7 @@ Result<std::unique_ptr<EditorHost>> EditorHost::create(const EditorConfig& confi
     // re-rasterization path as a per-monitor DPI change), then the display's content scale.
     f32 envScale = 0.0f;
     if (const char* env = SDL_getenv("HELIOS_EDITOR_SCALE"); env && *env) envScale = static_cast<f32>(SDL_atof(env));
-    m.scaleForced = config.scale > 0 || envScale > 0 || config.testMode;
+    m.scalePolicy.forced = config.scale > 0 || envScale > 0 || config.testMode;
     if (config.scale > 0) {
         m.scale = config.scale;
     } else if (envScale > 0) {
@@ -803,7 +805,7 @@ Result<std::unique_ptr<EditorHost>> EditorHost::create(const EditorConfig& confi
     m.window = SDL_CreateWindow(title.c_str(), static_cast<int>(pw), static_cast<int>(ph), flags);
     if (!m.window) return Error{ErrorCode::Unsupported, std::format("SDL_CreateWindow: {}", SDL_GetError())};
     // Per-monitor DPI (07 §1.3): the scale of the display the window opened on, not the primary's.
-    if (const auto s = detail::scaleForDisplay(m.scale, SDL_GetWindowDisplayScale(m.window), m.scaleForced)) m.scale = *s;
+    if (const auto s = m.scalePolicy.onDisplayScale(m.scale, SDL_GetWindowDisplayScale(m.window))) m.scale = *s;
 
     rhi::DeviceDesc dd;
     dd.backend = rhi::Backend::Vulkan;
@@ -877,9 +879,9 @@ bool EditorHost::frame() {
         if (e.type == SDL_EVENT_QUIT || e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) m.quit = true;
         if (e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) m.needResize = true;
         // Moved to a monitor with another scale, or the user changed the display's scale: the
-        // fonts re-rasterize at the new scale (unless the scale was forced).
+        // fonts re-rasterize at the new scale (unless the scale was forced or picked by the user).
         if (e.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED && m.window) {
-            if (const auto s = detail::scaleForDisplay(m.scale, SDL_GetWindowDisplayScale(m.window), m.scaleForced)) m.pendingScale = *s;
+            if (const auto s = m.scalePolicy.onDisplayScale(m.scale, SDL_GetWindowDisplayScale(m.window))) m.pendingScale = *s;
         }
         // Test mode takes input only from ui.* actions, so OS events cannot disturb a run.
         if (!m.config.testMode) ImGui_ImplSDL3_ProcessEvent(&e);
@@ -1007,7 +1009,9 @@ void EditorHost::requestTheme(std::string_view name) {
     m_impl->pendingTheme = std::string(name);
 }
 void EditorHost::requestScale(f32 scale) {
-    m_impl->pendingScale = scale;
+    // Only View > UI Scale calls this (display changes set pendingScale directly): the user's
+    // choice stays when the window moves to another monitor.
+    m_impl->pendingScale = m_impl->scalePolicy.choose(scale);
 }
 void EditorHost::requestQuit() {
     m_impl->quit = true;

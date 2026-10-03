@@ -37,7 +37,7 @@ struct TextureSlot {
 } // namespace
 
 Result<std::unique_ptr<ImGuiRenderer>> ImGuiRenderer::create(rhi::Device& device, rhi::Format colorFormat) {
-    std::unique_ptr<ImGuiRenderer> r(new ImGuiRenderer(device, colorFormat));
+    std::unique_ptr<ImGuiRenderer> r(new ImGuiRenderer(device));
     rhi::GraphicsPipelineDesc desc;
     desc.vertex = rhi::ShaderDesc{helios_editorui_shaders::imgui(), "vsMain"};
     desc.fragment = rhi::ShaderDesc{helios_editorui_shaders::imgui(), "psMain"};

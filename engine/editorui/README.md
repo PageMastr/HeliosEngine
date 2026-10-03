@@ -31,8 +31,9 @@ Each frame the editor renders is one render graph (`engine/render`):
 the scale of the display the window is on) goes into the style metrics and `FontScaleDpi`. Without a
 forced scale it follows the window: `SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED` (moved to another
 monitor, or the display's scale changed) re-rasterizes glyphs at the new display's scale
-(`src/display_scale.h`). Test mode rebuilds the default layout at a new scale; a user's own dock
-layout is kept.
+(`src/display_scale.h`). A scale the user picks under *View > UI Scale* stays put for the session,
+like a forced one. Test mode rebuilds the default layout at a new scale; a user's own dock layout
+is kept.
 
 **Font** (07 §1.3). The UI font is Roboto 2.138 Regular (Apache-2.0, `third_party/roboto`), embedded
 as bytes at build time (`embed_font.cmake`), so every machine renders the same glyphs and the goldens
@@ -69,18 +70,21 @@ a CJK fallback with localization previews (T25), and an icon font.
 
 ## Tests
 
-- **`editorui_tests`** (doctest, 44 cases plus 1 `perf:` case; no GPU or display, so it runs on
+- **`editorui_tests`** (doctest, 48 cases plus 1 `perf:` case; no GPU or display, so it runs on
   Windows CI too):
   - themes and contrast (every text pair the shell draws, including disabled text and input hints
-    on selected and hovered rows and frames, and the badge, dirty and error tokens), theme metric
-    ranges, the embedded themes against the token files, the embedded font against
-    `third_party/roboto`, pseudo-localization and chords;
+    on selected and hovered rows and frames, the badges also on a hovered or pressed name cell,
+    selected text in a text field, and the dirty and error tokens, with the ratios also computed
+    outside the lint), theme metric ranges, the embedded themes against the token files, the
+    embedded font against `third_party/roboto`, pseudo-localization and chords;
   - the property grid's edits run after its rows are drawn: clearing an optional and removing a
     non-last element of an expanded list, which read a cleared value and past the shortened list
     while the edits ran inside the draw;
   - crash recovery: an earlier unclean session is offered (Output line, File > Recover Unsaved
-    Session) and replays; the journal ends clean only after a normal exit with every record saved;
-  - the per-monitor DPI policy;
+    Session) and replays, or File > Discard Unsaved Session stops offering it (its journal stays);
+    both take the newest session first or a named one; the journal ends clean only after a normal
+    exit with every record saved;
+  - the per-monitor DPI policy, including a scale picked under View > UI Scale staying put;
   - the shell and grid on a headless ImGui context, driven by injected input: item paths, typed and
     dragged edits as `ui-scripted` transactions, Ctrl+Z/Ctrl+Y, check boxes, list buttons, the
     History panel, menus, the palette (every command listed, scrolling), the case-insensitive

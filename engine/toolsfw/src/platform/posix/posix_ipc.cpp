@@ -159,6 +159,11 @@ public:
         ::shutdown(m_fd, SHUT_RDWR);
     }
 
+    Result<void> shutdownWrite() override {
+        if (::shutdown(m_fd, SHUT_WR) != 0) return sysError("shutdown");
+        return {};
+    }
+
 private:
     int m_fd;
     int m_wake[2] = {-1, -1};

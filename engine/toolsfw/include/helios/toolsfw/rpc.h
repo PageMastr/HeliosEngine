@@ -7,8 +7,16 @@
 // accepted). Batches are not supported. Requests larger than kRpcMaxMessageBytes close the
 // connection.
 //
-// Threading: RpcServer accepts and reads on its own threads and queues requests; handlers run on
-// the owner thread inside pump(). A handler may answer later (for example after some frames)
+// Bounds (RpcServerLimits): at most maxConnections clients; per connection at most
+// maxPendingRequests requests (and maxPendingBytes of request text) queued or awaiting an answer,
+// beyond which the server stops reading that connection, so its client blocks in its own write;
+// and at most maxOutboundBytes of unread responses and notifications, beyond which the client is
+// disconnected. A client that stops reading therefore never blocks the owner thread, and one
+// connection holds at most about kRpcMaxMessageBytes + maxPendingBytes + maxOutboundBytes.
+//
+// Threading: RpcServer accepts on one thread and reads and writes each connection on two more;
+// handlers run on the owner thread inside pump(), and their answers are queued for the writer, so
+// pump() never waits for a client. A handler may answer later (for example after some frames)
 // through its RpcResponder, from the owner thread. RpcClient is single-threaded.
 
 #include <atomic>
@@ -30,6 +38,20 @@ namespace helios::tf {
 class Framework;
 
 inline constexpr usize kRpcMaxMessageBytes = 64u << 20;
+
+/// Resource bounds of an RpcServer (see the header comment).
+struct RpcServerLimits {
+    /// Connected clients; another one gets an error line and is disconnected.
+    usize maxConnections = 8;
+    /// Requests of one connection that are queued or not yet answered.
+    usize maxPendingRequests = 64;
+    /// Request text of one connection that is queued or not yet answered (a single request is
+    /// always admitted when none is pending).
+    usize maxPendingBytes = kRpcMaxMessageBytes;
+    /// Responses and notifications one client has not read yet (a single line is always queued
+    /// when none is waiting).
+    usize maxOutboundBytes = kRpcMaxMessageBytes;
+};
 
 /// JSON-RPC error codes (the -32000..-32099 range is Helios-defined).
 namespace rpcerr {
@@ -54,6 +76,7 @@ struct RpcRequest {
     /// Compact JSON of "id" ("" for a notification, which gets no response).
     std::string id;
     u64 connection = 0;
+    usize bytes = 0;  ///< Size of the request line (RpcServerLimits::maxPendingBytes).
 };
 
 namespace detail {
@@ -61,7 +84,8 @@ struct RpcServerState;
 struct RpcPending;
 } // namespace detail
 
-/// Completes one request. Copyable; the first result()/error() wins.
+/// Completes one request. Copyable; the first result()/error() wins. The request holds one of its
+/// connection's pending slots until it is answered or every copy is destroyed.
 class RpcResponder {
 public:
     RpcResponder() = default;
@@ -83,7 +107,7 @@ using RpcHandler = std::function<void(const RpcRequest&, const RpcResponder&)>;
 class RpcServer {
 public:
     /// Starts listening on `endpointName` (see ipc::endpointPath).
-    static Result<std::unique_ptr<RpcServer>> start(std::string_view endpointName);
+    static Result<std::unique_ptr<RpcServer>> start(std::string_view endpointName, const RpcServerLimits& limits = {});
     ~RpcServer();
     RpcServer(const RpcServer&) = delete;
     RpcServer& operator=(const RpcServer&) = delete;
@@ -91,9 +115,12 @@ public:
     /// Adds or replaces a method. `doc` is listed by the built-in `rpc.methods`.
     void registerMethod(std::string name, RpcHandler handler, std::string doc = {});
     /// Dispatches every queued request on the calling (owner) thread. Returns how many ran.
+    /// Never blocks on a client: answers go to the connection's writer thread.
     usize pump();
-    /// Sends a JSON-RPC notification to every connected client (any thread).
+    /// Queues a JSON-RPC notification to every connected client (any thread; never blocks).
     void notifyAll(std::string_view method, std::string_view paramsJson);
+    /// Requests waiting for pump() (tests of the backpressure bound).
+    usize queuedRequests() const;
 
     const std::string& endpoint() const noexcept { return m_endpoint; }
     const std::string& path() const noexcept;

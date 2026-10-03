@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <format>
 
 #include "helios/core/version.h"
@@ -86,21 +87,101 @@ std::string errorLine(std::string_view id, i32 code, std::string_view message) {
 
 namespace detail {
 
+/// One client connection. The reader thread parses requests into the server queue; the writer
+/// thread drains `outbound`, so no other thread ever blocks on the client (07 §1.2: a stuck DCC
+/// plug-in must not freeze the editor's main thread).
 struct RpcConn {
     u64 id = 0;
+    RpcServerLimits limits;
     std::unique_ptr<ipc::Connection> conn;
-    std::mutex writeMutex;
     std::thread reader;
+    std::thread writer;
     std::atomic<bool> closed{false};
 
-    void send(std::string_view line) {
-        if (closed.load()) return;
-        std::lock_guard lock(writeMutex);
-        if (auto r = conn->write(line.data(), line.size()); !r) closed.store(true);
+    std::mutex mutex;  ///< Guards everything below.
+    std::condition_variable cv;
+    std::deque<std::string> outbound;
+    usize outboundBytes = 0;
+    usize pending = 0;       ///< Requests queued or being handled (slots).
+    usize pendingBytes = 0;
+
+    /// Disconnects: wakes the reader, the writer and anyone waiting for a slot. Any thread.
+    void close() {
+        {
+            std::lock_guard lock(mutex);
+            closed.store(true);
+            outbound.clear();
+            outboundBytes = 0;
+        }
+        cv.notify_all();
+        conn->shutdown();
+    }
+
+    /// Queues one line for the writer thread; never blocks. A client that has fallen
+    /// maxOutboundBytes behind (it stopped reading) is disconnected.
+    void send(std::string line) {
+        bool tooSlow = false;
+        {
+            std::lock_guard lock(mutex);
+            if (closed.load()) return;
+            if (!outbound.empty() && outboundBytes + line.size() > limits.maxOutboundBytes) {
+                tooSlow = true;
+            } else {
+                outboundBytes += line.size();
+                outbound.push_back(std::move(line));
+            }
+        }
+        if (tooSlow) {
+            HELIOS_LOG_WARN(LogTools, "rpc: connection {} stopped reading its responses; disconnecting it", id);
+            close();
+            return;
+        }
+        cv.notify_all();
+    }
+
+    /// Takes a request slot for `bytes` of request text, waiting while the connection is at its
+    /// limits (the reader then stops reading: backpressure). False once the connection closes.
+    bool acquire(usize bytes, const std::atomic<bool>& stopping) {
+        std::unique_lock lock(mutex);
+        cv.wait(lock, [&] {
+            return closed.load() || stopping.load() ||
+                   (pending < limits.maxPendingRequests && (pending == 0 || pendingBytes + bytes <= limits.maxPendingBytes));
+        });
+        if (closed.load() || stopping.load()) return false;
+        ++pending;
+        pendingBytes += bytes;
+        return true;
+    }
+
+    void release(usize bytes) {
+        {
+            std::lock_guard lock(mutex);
+            --pending;
+            pendingBytes -= bytes;
+        }
+        cv.notify_all();
+    }
+
+    void writerMain() {
+        std::unique_lock lock(mutex);
+        for (;;) {
+            cv.wait(lock, [&] { return closed.load() || !outbound.empty(); });
+            if (closed.load()) return;
+            std::string line = std::move(outbound.front());
+            outbound.pop_front();
+            lock.unlock();
+            const auto r = conn->write(line.data(), line.size());
+            lock.lock();
+            outboundBytes -= std::min(outboundBytes, line.size());
+            if (!r) break;
+        }
+        lock.unlock();
+        close();
     }
 };
 
 struct RpcServerState {
+    RpcServerLimits limits;
     std::unique_ptr<ipc::Listener> listener;
     std::thread acceptThread;
     mutable std::mutex mutex;
@@ -117,32 +198,49 @@ struct RpcServerState {
 
     void readerMain(const std::shared_ptr<RpcConn>& c) {
         std::string buffer;
+        usize scanned = 0;  // buffer[0, scanned) holds no '\n': each byte is searched once
         char chunk[64 * 1024];
-        while (!stopping.load()) {
+        bool open = true;
+        while (open && !stopping.load() && !c->closed.load()) {
             auto got = c->conn->read(chunk, sizeof(chunk));
             if (!got || *got == 0) break;
             buffer.append(chunk, *got);
             usize start = 0;
-            for (usize nl = buffer.find('\n'); nl != std::string::npos; nl = buffer.find('\n', start)) {
+            for (usize nl = buffer.find('\n', scanned); nl != std::string::npos; nl = buffer.find('\n', start)) {
                 std::string_view line(buffer.data() + start, nl - start);
                 if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
                 start = nl + 1;
-                if (!line.empty()) handleLine(c, line);
+                if (!line.empty() && !handleLine(c, line)) {
+                    open = false;
+                    break;
+                }
             }
+            if (!open) break;
             buffer.erase(0, start);
+            scanned = buffer.size();
             if (buffer.size() > kRpcMaxMessageBytes) {
                 c->send(errorLine({}, rpcerr::kInvalidRequest, "message too large"));
                 break;
             }
         }
-        c->closed.store(true);
+        // Let a final error line go out before disconnecting.
+        for (int i = 0; i < 100; ++i) {
+            {
+                std::lock_guard lock(c->mutex);
+                if (c->outbound.empty() || c->closed.load()) break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        c->close();
     }
 
-    void handleLine(const std::shared_ptr<RpcConn>& c, std::string_view line) {
+    /// Parses one line and queues the request. False when the connection closed while waiting
+    /// for a request slot.
+    bool handleLine(const std::shared_ptr<RpcConn>& c, std::string_view line) {
         auto doc = refl::JsonDocument::parse(line, "<rpc>");
         if (!doc) {
             c->send(errorLine({}, rpcerr::kParseError, doc.error().message));
-            return;
+            return true;
         }
         const refl::JsonValue v = doc->root();
         const refl::JsonValue idValue = v.isObject() ? v.get("id") : refl::JsonValue();
@@ -150,7 +248,7 @@ struct RpcServerState {
         const auto method = json::getString(v, "method");
         if (!v.isObject() || !method || (idValue.isValid() && !idValue.isString() && !idValue.isNumber() && !idValue.isNull())) {
             c->send(errorLine(id, rpcerr::kInvalidRequest, "expected a JSON-RPC 2.0 request object"));
-            return;
+            return true;
         }
         RpcRequest req;
         req.method = std::string(*method);
@@ -158,14 +256,17 @@ struct RpcServerState {
         if (params.isValid()) {
             if (!params.isObject()) {
                 c->send(errorLine(id, rpcerr::kInvalidParams, "params must be an object"));
-                return;
+                return true;
             }
             req.params = json::compact(params);
         }
         req.id = id;
         req.connection = c->id;
+        req.bytes = line.size();
+        if (!c->acquire(req.bytes, stopping)) return false;
         std::lock_guard lock(mutex);
         queue.push_back(std::move(req));
+        return true;
     }
 
     void acceptMain() {
@@ -178,18 +279,29 @@ struct RpcServerState {
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 continue;
             }
+            std::lock_guard lock(mutex);
+            const usize live = static_cast<usize>(
+                std::count_if(conns.begin(), conns.end(), [](const auto& p) { return !p.second->closed.load(); }));
+            if (live >= limits.maxConnections) {
+                // A fresh connection's socket buffer is empty, so this short write cannot block.
+                const std::string line = errorLine({}, rpcerr::kFailed, std::format("too many connections (limit {})", limits.maxConnections));
+                (void)(*conn)->write(line.data(), line.size());
+                (*conn)->shutdown();
+                continue;
+            }
             auto c = std::make_shared<RpcConn>();
             c->conn = std::move(*conn);
-            // The reader starts under the lock: reap() and the destructor touch `reader` only for
-            // connections they found in `conns`, so they never see it half assigned.
-            std::lock_guard lock(mutex);
+            c->limits = limits;
+            // The threads start under the lock: reap() and the destructor touch them only for
+            // connections they found in `conns`, so they never see them half assigned.
             c->id = nextConn++;
             conns[c->id] = c;
             c->reader = std::thread([this, c] { readerMain(c); });
+            c->writer = std::thread([c] { c->writerMain(); });
         }
     }
 
-    /// Joins the readers of closed connections (owner thread).
+    /// Joins the threads of closed connections (owner thread).
     void reap() {
         std::vector<std::shared_ptr<RpcConn>> dead;
         {
@@ -203,18 +315,33 @@ struct RpcServerState {
                 }
             }
         }
-        for (auto& c : dead) {
-            c->conn->shutdown();
-            if (c->reader.joinable()) c->reader.join();
-        }
+        for (auto& c : dead) join(*c);
+    }
+
+    static void join(RpcConn& c) {
+        c.close();
+        if (c.reader.joinable()) c.reader.join();
+        if (c.writer.joinable()) c.writer.join();
     }
 };
 
+/// One dispatched request: answers it once and gives its slot back to the connection.
 struct RpcPending {
-    std::weak_ptr<RpcServerState> server;
-    u64 connection = 0;
+    std::weak_ptr<RpcConn> conn;
     std::string id;
+    usize bytes = 0;
     std::atomic<bool> done{false};
+    std::atomic<bool> released{false};
+
+    ~RpcPending() { release(); }
+    void release() {
+        if (released.exchange(true)) return;
+        if (auto c = conn.lock()) c->release(bytes);
+    }
+    void answer(std::string line) {
+        if (auto c = conn.lock(); c && !id.empty()) c->send(std::move(line));
+        release();
+    }
 };
 
 } // namespace detail
@@ -224,18 +351,12 @@ struct RpcPending {
 // ---------------------------------------------------------------------------------------------
 void RpcResponder::result(std::string_view json) const {
     if (!m_pending || m_pending->done.exchange(true)) return;
-    if (m_pending->id.empty()) return;  // notification
-    if (auto s = m_pending->server.lock()) {
-        if (auto c = s->find(m_pending->connection)) c->send(responseLine(m_pending->id, json));
-    }
+    m_pending->answer(responseLine(m_pending->id, json));
 }
 
 void RpcResponder::error(i32 code, std::string_view message) const {
     if (!m_pending || m_pending->done.exchange(true)) return;
-    if (m_pending->id.empty()) return;
-    if (auto s = m_pending->server.lock()) {
-        if (auto c = s->find(m_pending->connection)) c->send(errorLine(m_pending->id, code, message));
-    }
+    m_pending->answer(errorLine(m_pending->id, code, message));
 }
 
 void RpcResponder::finish(const Result<std::string>& r) const {
@@ -253,11 +374,15 @@ bool RpcResponder::done() const noexcept {
 // ---------------------------------------------------------------------------------------------
 // RpcServer
 // ---------------------------------------------------------------------------------------------
-Result<std::unique_ptr<RpcServer>> RpcServer::start(std::string_view endpointName) {
+Result<std::unique_ptr<RpcServer>> RpcServer::start(std::string_view endpointName, const RpcServerLimits& limits) {
+    if (limits.maxConnections == 0 || limits.maxPendingRequests == 0) {
+        return Error{ErrorCode::InvalidArgument, "rpc: connection and request limits must be at least 1"};
+    }
     HELIOS_TRY_ASSIGN(auto listener, ipc::Listener::listen(endpointName));
     std::unique_ptr<RpcServer> server(new RpcServer());
     server->m_endpoint = std::string(endpointName);
     server->m_state = std::make_shared<detail::RpcServerState>();
+    server->m_state->limits = limits;
     server->m_state->listener = std::move(listener);
     detail::RpcServerState* st = server->m_state.get();
     st->acceptThread = std::thread([st] { st->acceptMain(); });
@@ -289,11 +414,7 @@ RpcServer::~RpcServer() {
         for (auto& [id, c] : m_state->conns) conns.push_back(c);
         m_state->conns.clear();
     }
-    for (auto& c : conns) {
-        c->closed.store(true);
-        c->conn->shutdown();
-        if (c->reader.joinable()) c->reader.join();
-    }
+    for (auto& c : conns) detail::RpcServerState::join(*c);
 }
 
 const std::string& RpcServer::path() const noexcept {
@@ -313,9 +434,9 @@ usize RpcServer::pump() {
     for (const RpcRequest& req : work) {
         RpcResponder responder;
         responder.m_pending = std::make_shared<detail::RpcPending>();
-        responder.m_pending->server = m_state;
-        responder.m_pending->connection = req.connection;
+        responder.m_pending->conn = m_state->find(req.connection);
         responder.m_pending->id = req.id;
+        responder.m_pending->bytes = req.bytes;
         const auto it = m_methods.find(req.method);
         if (it == m_methods.end()) {
             responder.error(rpcerr::kMethodNotFound, std::format("unknown method '{}'", req.method));
@@ -337,6 +458,11 @@ void RpcServer::notifyAll(std::string_view method, std::string_view paramsJson) 
         for (auto& [id, c] : m_state->conns) conns.push_back(c);
     }
     for (auto& c : conns) c->send(line);
+}
+
+usize RpcServer::queuedRequests() const {
+    std::lock_guard lock(m_state->mutex);
+    return m_state->queue.size();
 }
 
 usize RpcServer::connectionCount() const {

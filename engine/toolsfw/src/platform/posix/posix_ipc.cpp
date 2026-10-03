@@ -131,10 +131,18 @@ public:
     Result<void> write(const void* data, usize size) override {
         const char* p = static_cast<const char*>(data);
         while (size > 0) {
-            const ssize_t sent = ::send(m_fd, p, size, MSG_NOSIGNAL);
+            if (m_shut.load()) return Error{ErrorCode::IoError, "connection shut down"};
+            // Non-blocking send plus a poll that also watches the wake pipe: shutdown() always
+            // releases a writer whose peer stopped reading.
+            const ssize_t sent = ::send(m_fd, p, size, MSG_NOSIGNAL | MSG_DONTWAIT);
             if (sent < 0) {
                 if (errno == EINTR) continue;
-                return sysError("send");
+                if (errno != EAGAIN && errno != EWOULDBLOCK) return sysError("send");
+                pollfd fds[2] = {{m_fd, POLLOUT, 0}, {m_wake[0], POLLIN, 0}};
+                const int r = ::poll(fds, m_wake[0] >= 0 ? 2 : 1, -1);
+                if (r < 0 && errno != EINTR) return sysError("poll");
+                if (m_wake[0] >= 0 && (fds[1].revents & POLLIN)) return Error{ErrorCode::IoError, "connection shut down"};
+                continue;
             }
             p += sent;
             size -= static_cast<usize>(sent);

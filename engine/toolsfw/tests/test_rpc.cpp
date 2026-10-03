@@ -208,4 +208,116 @@ TEST_CASE("rpc: a server that goes away closes its clients' calls") {
     CHECK(RpcClient::connect("helios-test-nobody-listens", 50).errorCode() == ErrorCode::Timeout);
 }
 
+/// `n` pipelined JSON-RPC requests of `method` with `params`, one per line.
+std::string pipelined(int n, std::string_view method, std::string_view params) {
+    std::string out;
+    for (int i = 0; i < n; ++i) {
+        out += std::format(R"({{"jsonrpc":"2.0","id":{},"method":"{}","params":{}}})", i + 1, method, params);
+        out += '\n';
+    }
+    return out;
+}
+
+/// Pumps `server` on this thread until `done()` or `timeout`; returns how many requests ran.
+template <class Pred>
+usize pumpUntil(RpcServer& server, Pred&& done, std::chrono::milliseconds timeout) {
+    usize ran = 0;
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!done() && std::chrono::steady_clock::now() < deadline) {
+        ran += server.pump();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return ran;
+}
+
+TEST_CASE("rpc: a client that stops reading never blocks the owner thread") {
+    Fixture f("rpc_stall");
+    auto server = RpcServer::start(endpoint("stall"));
+    REQUIRE(server);
+    registerFrameworkRpc(**server, *f.fw);
+    auto conn = ipc::connect((*server)->endpoint(), 5000);
+    REQUIRE(conn);
+    // 2,000 pipelined doc.text requests: about 3 MB of responses, far more than the socket or pipe
+    // buffers hold, and the client never reads one of them.
+    constexpr usize kRequests = 2000;
+    const std::string batch = pipelined(static_cast<int>(kRequests), "doc.text", R"({"doc":"hull/frigate"})");
+    std::thread writer([&] { (void)(*conn)->write(batch.data(), batch.size()); });
+    // pump() runs on a helper thread, so a pump() that blocks fails this check instead of hanging it.
+    std::atomic<usize> handled{0};
+    std::atomic<bool> stop{false};
+    std::thread owner([&] {
+        while (!stop.load() && handled.load() < kRequests) {
+            handled += (*server)->pump();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (handled.load() < kRequests && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(handled.load() == kRequests);
+    stop = true;
+    (*conn)->shutdown();
+    owner.join();
+    writer.join();
+}
+
+TEST_CASE("rpc: limits bound connections, queued requests and unread responses") {
+    RpcServerLimits limits;
+    limits.maxConnections = 2;
+    limits.maxPendingRequests = 4;
+    limits.maxOutboundBytes = 64 * 1024;
+    auto server = RpcServer::start(endpoint("limits"), limits);
+    REQUIRE(server);
+    const std::string big = "\"" + std::string(16 * 1024, 'x') + "\"";
+    (*server)->registerMethod("test.big", [&](const RpcRequest&, const RpcResponder& r) { r.result(big); });
+    CHECK(RpcServer::start(endpoint("nolimits"), RpcServerLimits{.maxConnections = 0}).errorCode() == ErrorCode::InvalidArgument);
+
+    auto a = ipc::connect((*server)->endpoint(), 5000);
+    auto b = ipc::connect((*server)->endpoint(), 5000);
+    REQUIRE(a);
+    REQUIRE(b);
+    pumpUntil(**server, [&] { return (*server)->connectionCount() == 2; }, std::chrono::seconds(10));
+    REQUIRE((*server)->connectionCount() == 2);
+
+    // A third client gets an error line, then end of stream.
+    {
+        auto c = ipc::connect((*server)->endpoint(), 5000);
+        REQUIRE(c);
+        std::string got;
+        char buf[512];
+        for (int i = 0; i < 100; ++i) {
+            auto n = (*c)->read(buf, sizeof(buf), 100);
+            if (n && *n == 0) break;
+            if (n) got.append(buf, *n);
+        }
+        CHECK(got.find("too many connections") != std::string::npos);
+        CHECK((*server)->connectionCount() == 2);
+    }
+
+    // Backpressure: with nobody pumping, at most maxPendingRequests requests of a are queued; the
+    // rest wait in the socket (and then in the client's write).
+    const std::string batch = pipelined(100, "test.big", "{}");
+    std::thread writer([&] { (void)(*a)->write(batch.data(), batch.size()); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK((*server)->queuedRequests() <= limits.maxPendingRequests);
+    CHECK((*server)->queuedRequests() > 0);
+
+    // a never reads its 1.6 MB of responses: once they back up past the socket and
+    // maxOutboundBytes, a is disconnected, and pump() keeps running meanwhile.
+    pumpUntil(**server, [&] { return (*server)->connectionCount() == 1; }, std::chrono::seconds(30));
+    CHECK((*server)->connectionCount() == 1);
+    (*a)->shutdown();
+    writer.join();
+    // The freed slot admits a new client.
+    auto d = RpcClient::connect((*server)->endpoint(), 5000);
+    REQUIRE(d);
+    std::atomic<bool> ok{false};
+    withServer(**server, [&] {
+        auto r = (*d)->call("rpc.methods", {}, 10000);
+        ok = r.ok();
+    });
+    CHECK(ok.load());
+}
+
 } // namespace

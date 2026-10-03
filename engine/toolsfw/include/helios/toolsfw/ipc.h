@@ -30,7 +30,8 @@ public:
     /// Reads up to `size` bytes. 0 = the peer closed the stream. `timeoutMs` < 0 waits forever;
     /// on timeout returns ErrorCode::Timeout.
     virtual Result<usize> read(void* buffer, usize size, i32 timeoutMs = -1) = 0;
-    /// Writes every byte (fails once the peer is gone).
+    /// Writes every byte, waiting while the peer is not reading. Fails once the peer is gone or
+    /// shutdown() is called (which releases a writer blocked here).
     virtual Result<void> write(const void* data, usize size) = 0;
     /// Wakes blocked reads (they return 0) and disconnects.
     virtual void shutdown() noexcept = 0;

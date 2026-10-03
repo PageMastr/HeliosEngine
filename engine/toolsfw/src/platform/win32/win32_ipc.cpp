@@ -136,12 +136,14 @@ bool isDisconnect(DWORD code) noexcept {
 
 class Win32Connection final : public Connection {
 public:
-    Win32Connection(HANDLE pipe, bool server)
-        : m_pipe(pipe), m_server(server), m_stop(::CreateEventW(nullptr, TRUE, FALSE, nullptr)),
+    explicit Win32Connection(HANDLE pipe)
+        : m_pipe(pipe), m_stop(::CreateEventW(nullptr, TRUE, FALSE, nullptr)),
           m_readEvent(::CreateEventW(nullptr, TRUE, FALSE, nullptr)), m_writeEvent(::CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
     ~Win32Connection() override {
         shutdown();
-        if (m_server) ::DisconnectNamedPipe(m_pipe);
+        // No DisconnectNamedPipe: it discards data the client has not read yet (a final error
+        // line), and the instance is never reused. Closing the handle lets the client read what
+        // is buffered, then see the pipe as broken.
         ::CloseHandle(m_pipe);
         for (HANDLE h : {m_stop, m_readEvent, m_writeEvent}) {
             if (h) ::CloseHandle(h);
@@ -206,7 +208,6 @@ public:
 
 private:
     HANDLE m_pipe;
-    bool m_server;
     HANDLE m_stop;
     HANDLE m_readEvent;
     HANDLE m_writeEvent;
@@ -265,7 +266,7 @@ public:
             }
             HANDLE pipe = m_next;
             m_next = INVALID_HANDLE_VALUE;
-            return std::unique_ptr<Connection>(new Win32Connection(pipe, true));
+            return std::unique_ptr<Connection>(new Win32Connection(pipe));
         }
     }
 
@@ -316,7 +317,7 @@ Result<std::unique_ptr<Connection>> connect(std::string_view name, i32 timeoutMs
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(timeoutMs, 0));
     for (;;) {
         HANDLE h = ::CreateFileW(wide.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
-        if (h != INVALID_HANDLE_VALUE) return std::unique_ptr<Connection>(new Win32Connection(h, false));
+        if (h != INVALID_HANDLE_VALUE) return std::unique_ptr<Connection>(new Win32Connection(h));
         const DWORD err = ::GetLastError();
         if (err != ERROR_FILE_NOT_FOUND && err != ERROR_PIPE_BUSY) return winError(std::format("connect {}", path), err);
         if (std::chrono::steady_clock::now() >= deadline) return Error{ErrorCode::Timeout, std::format("no server at {}", path)};

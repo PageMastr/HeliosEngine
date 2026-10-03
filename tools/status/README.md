@@ -40,9 +40,8 @@ counted in an `(other)` row. The prose of §8.1 stays the Director's, and so do 
 ratchet state, which D6 also names: they are not generated yet (see the WP-0.3 row of §8.1).
 
 CTest `lint_status_unittest` (label `lint`) runs the seeded-fixture tests in `test_snapshot.py`. The
-check itself runs at the round audit. Registering it with the build-independent lints
-(`tools/ci/run_lints.cmake`) is WP-0.2's, once the in-progress modules are named, so that it does not fail
-parallel work mid-round (`CONSISTENCY.md`, round 5).
+check itself runs with the build-independent lints (`tools/ci/run_lints.cmake`, registered by WP-0.2 once
+the in-progress modules were named), which forwards `-DHELIOS_STATUS_PYTHON`, and at the round audit.
 
 ## Plan conformance
 

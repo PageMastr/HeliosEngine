@@ -25,7 +25,7 @@ Vendored code is never edited in place: the few changes Helios needs are patches
 | Recast/Detour | recastnavigation/recastnavigation | v1.6.0 (6dc1667) | zlib | Navmesh generation, pathfinding, crowds |
 | Monocypher | LoupVaillant/Monocypher | 4.0.3 (ab2b16d) | BSD-2 / CC0 | Ed25519 manifest signing, X25519/XChaCha20 utilities (4.0.3 fixes an EdDSA timing leak) |
 | Tracy | wolfpld/tracy | v0.14.1 (30997d5) | BSD-3 | Frame/zone profiler (enabled with `HELIOS_PROFILE=ON`; viewer must match 0.14.1) |
-| Luau | luau-lang/luau | 0.739 (a62362a) + 2 Helios patches | MIT | Gameplay scripting VM + compiler + native codegen + type analysis (editor) |
+| Luau | luau-lang/luau | 0.739 (a62362a) + 3 Helios patches | MIT | Gameplay scripting VM + compiler + native codegen + type analysis (editor) |
 | SDL3 | libsdl-org/SDL | release-3.4.16 (fa2c02b) | zlib | Windowing, input (IME, gamepads w/ rumble, raw mouse), replaces GLFW |
 | flecs | SanderMertens/flecs | v4.1.6 (fb55f3c) | MIT | Archetype ECS with relationships (single-file distr build) |
 | mimalloc | microsoft/mimalloc | v3.5.3 (d4881d3) | MIT | Heaps behind the tagged allocators (no global override) |
@@ -61,9 +61,11 @@ updated, and the tests named in its last column must pass. A patch that upstream
 |---|---|---|---|---|
 | `0001-codegen-fornloop-fuel.patch` | `CodeGen/src/IrTranslation.cpp`: native code emits the numeric-`for` interrupt in `FORNLOOP`, where the interpreter has it, instead of at the top of the loop body | Native code reached one more safepoint than the interpreter for every numeric loop left by `break` or `return`, so it counted different fuel, and every numeric-loop safepoint sat one body earlier, so kills stopped it elsewhere (RT-13's fuel identity, K39; 02 §7.4, 04 §10.2) | not submitted | `script_tests` (`determinism: numeric for loops left early …`, both `luau patches: codegen-fornloop-fuel …` cases); `sim_abi.script` |
 | `0002-fuel-counter.patch` | `VM/` and `CodeGen/`: an inline counter (`global_State::fuelcounter`, `lua_fuelcounter()`) decremented at every gc < 0 safepoint, in the interpreter (`VM_INTERRUPT`), the pattern matcher and native code (x64 and A64 `INTERRUPT` lowering and interrupt helpers); `interrupt(L, -1)` runs only when it reaches zero. A host that never arms it keeps stock behaviour | Calling the host at every safepoint cost 12–17 % of script time against RT-13's ≤ 10 %; `engine/script` arms the counter with the fuel left until its next decision point, so fuel counts are unchanged (K39; 02 §7.4, 04 §10.2) | not submitted | `script_tests` (`luau patches: fuel-counter …`, `fuel: the inline counter …`, `fuel: the host runs only at decision points …`, the counter bookkeeping cases in `test_fuel.cpp`, `perf: fuel metering overhead …`); `sim_abi.script` |
+| `0003-asan-unpoison-freed-page.patch` | `VM/src/lmem.cpp`: `freepage` unpoisons a page (under AddressSanitizer) before it returns it to `lua_Alloc` | Luau poisons the unused blocks of its pages and returned empty pages to `lua_Alloc` still poisoned; the host heap (mimalloc, whose debug fill writes freed blocks) then hit use-after-poison, so every `ScriptVm::create` failed in the `linux-debug-asan` build (RT-13's ASan-clean `script_tests`). Expands to `(void)0` outside ASan builds | not submitted (upstream master unchanged, no upstream issue) | `script_tests` (`luau patches: asan-unpoison-freed-page …`, and every case that creates a `ScriptVm`, under ASan); not a `sim_abi` input (no effect outside ASan builds) |
 
-The Luau patches, with the planned `det-math` patch (04 §10.2), are inputs of `sim_abi.script` (04 §6.7):
-the component covers Luau's bytecode version range and the ordered list of these patches. `sim_abi` itself is
+The Luau patches that change VM behaviour (0001 and 0002), with the planned `det-math` patch (04 §10.2), are
+inputs of `sim_abi.script` (04 §6.7): the component covers Luau's bytecode version range and the ordered list of
+these patches. 0003 compiles to nothing outside AddressSanitizer builds, so it is not an input. `sim_abi` itself is
 computed by WP-3.1 (planned region migration); until then this list is the record of what it must cover.
 
 ## Prebuilt tools (downloaded at configure time, never committed)

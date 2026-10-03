@@ -268,6 +268,21 @@ TEST_CASE("repl: rpc and event tables and the protocol hash") {
           hashOf("package test;\nstruct P { s: string @max(9) }\nevent E { p: P }\n"));
     CHECK(hashOf("package test;\nevent E { a: u8 }\n") != hashOf("package test;\nevent E @unreliable { a: u8 }\n"));
     {
+        // An enum value of INT64_MIN: -9223372036854775808ll does not fit long long (GCC and Clang warn),
+        // so the reader's validity check spells it as gen_cpp does.
+        CompileOptions options;
+        options.emitRepl = true;
+        options.cppOut = "cpp";
+        auto c = compileText("package test;\nenum K : i64 { Low = -9223372036854775808; High = 9223372036854775807 }\n"
+                             "component C replicate(all) { k: K }\n",
+                             options);
+        REQUIRE_MESSAGE(c->ok(), c->messages);
+        const std::string* src = c->output("cpp/test/t.repl.gen.cpp");
+        REQUIRE(src);
+        CHECK(src->find("v != (-9223372036854775807ll - 1) && v != 9223372036854775807ll") != std::string::npos);
+        CHECK(src->find("9223372036854775808") == std::string::npos);
+    }
+    {
         CompileOptions options;
         options.emitRepl = true;
         options.cppOut = "cpp";
@@ -303,6 +318,11 @@ TEST_CASE("repl: invalid @quant and fields the full-state codec cannot carry are
         {"n: u8 @quant(range=±8, bits=4)", "range quantization needs a float scalar or vector"},
         {"v: vec3f @quant(cubic, bits=4)", "unknown form 'cubic'"},
         {"v: vec3f @quant(range=±8, bits=4, spin=2)", "unknown argument 'spin'"},
+        // Round 3: a repeated argument or a second form left all but the last one ignored.
+        {"v: vec3f @quant(range=±8, bits=10, bits=12)", "bits= is given twice"},
+        {"v: vec3f @quant(range=±8, range=±16, bits=10)", "range= is given twice"},
+        {"p: WorldPos @quant(frame_cell, cell=4096m, cell=8192m, res=1/256m)", "cell= is given twice"},
+        {"p: WorldPos @quant(smallest3, frame_cell, cell=4096m, res=1/256m)", "a second form 'frame_cell' after 'smallest3'"},
         {"s: string", "which the Phase 0 full-state codec does not carry"},
         {"l: list<u8>", "which the Phase 0 full-state codec does not carry"},
         {"n: Name", "which the Phase 0 full-state codec does not carry"},

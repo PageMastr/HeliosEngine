@@ -11,6 +11,7 @@
 //
 // Threading: descriptors are immutable; BitWriter/BitReader are single-threaded values.
 
+#include <algorithm>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -143,15 +144,19 @@ u64 quantizeRange(f64 v, f64 min, f64 max, u32 bits) noexcept;
 f64 dequantizeRange(u64 q, f64 min, f64 max, u32 bits) noexcept;
 
 /// `q` normalised (in f64) as the index of its largest component plus the other three at `bits`
-/// (2–32; helios-schemac requires 3–32) bits each. A quaternion that is not finite or is near zero is
-/// sent as the identity, and a component that rounding would push past a unit quaternion is stepped
-/// toward 0, so readSmallest3 always accepts what this writes.
+/// (2–32, asserted; helios-schemac requires 3–32) bits each. A quaternion that is not finite or is
+/// near zero is sent as the identity, and a component that rounding would push past a unit
+/// quaternion is stepped toward 0, so readSmallest3 always accepts what this writes. Re-encoding a
+/// decoded rotation can give other bits (the largest index flips when two components are within a
+/// step, and above 24 bits the f32 result is coarser than a step), though it decodes to the same
+/// rotation within one step.
 void writeSmallest3(BitWriter& w, const Quat& q, u32 bits);
 /// Fails on truncated input and on three components whose squares sum past 1 (no unit quaternion).
 Result<Quat> readSmallest3(BitReader& r, u32 bits);
 
-/// Positions beyond ±2^62 steps of `res` (and non-finite ones) are clamped; a read index that would
-/// overflow fails.
+/// Each axis rounded to `res` and saturated at ±4e18 steps of `res` (a non-finite axis is sent as 0).
+/// readFrameCell accepts exactly that range, so it reads whatever this writes at any cell size, and
+/// fails on an offset of a whole cell or more and on a position beyond ±4e18 steps.
 void writeFrameCell(BitWriter& w, const WorldPos& p, f64 cell, f64 res, u32 bits);
 Result<WorldPos> readFrameCell(BitReader& r, f64 cell, f64 res, u32 bits);
 

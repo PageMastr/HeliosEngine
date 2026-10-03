@@ -1,8 +1,8 @@
 #! -rules CONF-03 -strict
 # The tests exist but CI would run nothing: a build constraint on the Go file, an unconditional t.Skip in
 # the holder_rule case (another case's skip is not CONF-03's business), and doctest::skip() on the C++ case,
-# also after another decorator (line 6).
+# also after another decorator (line 5).
 engine/server/tests/test_holder.cpp:4: CONF-03
-engine/server/tests/test_holder.cpp:6: CONF-03
+engine/server/tests/test_holder.cpp:5: CONF-03
 services/internal/orchestrator/conformance_test.go:1: CONF-03
 services/internal/orchestrator/conformance_test.go:13: CONF-03

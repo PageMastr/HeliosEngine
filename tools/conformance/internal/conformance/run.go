@@ -134,6 +134,10 @@ func Run(opts Options) (*Result, error) {
 		var bad []Finding
 		known, bad = loadKnown(knownFile, "tools/conformance/known_failing.jsonc")
 		findings = append(findings, bad...)
+		// A fixture tree has no scorecard; the repository always does (lint_scorecard).
+		if scorecard := filepath.Join(tree.Root, "scorecard.jsonc"); fileExists(scorecard) {
+			findings = append(findings, checkScorecard(scorecard, "tools/conformance/known_failing.jsonc", known)...)
+		}
 	}
 
 	selected := map[string]*Rule{}
@@ -237,6 +241,11 @@ func Run(opts Options) (*Result, error) {
 		return a.Rule < b.Rule
 	})
 	return &Result{Rules: rules, Files: len(tree.Files), Findings: findings}, nil
+}
+
+func fileExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.Mode().IsRegular()
 }
 
 func selectRules(ids []string) ([]*Rule, error) {

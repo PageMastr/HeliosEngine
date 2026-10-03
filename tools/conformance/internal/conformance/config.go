@@ -182,3 +182,52 @@ func loadKnown(file, rel string) ([]*Known, []Finding) {
 	}
 	return good, bad
 }
+
+// scorecardExit is the scorecard item that carries each known-failing record's gap (README).
+const scorecardExit = "EXIT-0.conformance"
+
+// checkScorecard cross-checks the known-failing records against scorecard.jsonc: each record's rule must
+// be named in a gap of EXIT-0.conformance whose owner list includes the record's owner, so a gap the
+// records hide from the run stays visible in the scorecard. rel is the records file, for findings.
+func checkScorecard(file, rel string, known []*Known) []Finding {
+	if len(known) == 0 {
+		return nil
+	}
+	data, err := os.ReadFile(file)
+	var doc struct {
+		Exit []struct {
+			ID   string `json:"id"`
+			Gaps []struct {
+				Clause string `json:"clause"`
+				Owner  string `json:"owner"`
+			} `json:"gaps"`
+		} `json:"exit"`
+	}
+	if err == nil {
+		err = json.Unmarshal([]byte(stripJSONC(string(data))), &doc)
+	}
+	if err != nil {
+		return []Finding{{Rule: ToolRule, Path: "scorecard.jsonc", Line: 1,
+			Message: fmt.Sprintf("cannot read the scorecard to check the known-failing records: %v", err)}}
+	}
+	var bad []Finding
+	for _, k := range known {
+		linked := false
+		for _, e := range doc.Exit {
+			if e.ID != scorecardExit {
+				continue
+			}
+			for _, g := range e.Gaps {
+				for _, o := range strings.Split(g.Owner, ",") {
+					linked = linked || strings.TrimSpace(o) == k.Owner && strings.Contains(g.Clause, k.Rule)
+				}
+			}
+		}
+		if !linked {
+			bad = append(bad, Finding{Rule: ToolRule, Path: rel, Line: k.line, Message: fmt.Sprintf(
+				"record %s (owner %s) has no gap in scorecard.jsonc's %s that names %s with owner %s; add one",
+				k.Rule, k.Owner, scorecardExit, k.Rule, k.Owner)})
+		}
+	}
+	return bad
+}

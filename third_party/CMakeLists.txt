@@ -51,6 +51,13 @@ if(HELIOS_BUILD_GRAPHICS)
   set(SDL_CAMERA OFF CACHE BOOL "" FORCE)
   set(SDL_AUDIO OFF CACHE BOOL "" FORCE)         # audio goes through miniaudio
   set(SDL_VULKAN ON CACHE BOOL "" FORCE)
+  if(HELIOS_SANITIZE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # LeakSanitizer: link libX11 and its extensions instead of loading them, so they stay mapped.
+    # SDL_Quit would dlclose them, and libX11's process-lifetime caches (locale database, input
+    # method, resource-manager quarks) would then be unreachable and unsymbolised: "<unknown module>"
+    # leaks under SDL_Init in every sanitizer run that opens an X11 display (rhi_triangle_smoke).
+    set(SDL_X11_SHARED OFF CACHE BOOL "" FORCE)
+  endif()
   add_subdirectory(${TP}/sdl3 ${CMAKE_CURRENT_BINARY_DIR}/sdl3 EXCLUDE_FROM_ALL)
   add_library(helios::tp::sdl3 ALIAS SDL3-static)
 

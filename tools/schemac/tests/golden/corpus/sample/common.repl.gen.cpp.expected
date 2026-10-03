@@ -14,7 +14,7 @@ const ComponentRepDesc& RepOf<::sample::common::Health>::desc() noexcept {
         {"shieldFraction", 3u, static_cast<::helios::u32>(offsetof(::sample::common::Health, shieldFraction)), 2, Lod::Core, false, Interp::None, Quantizer{Quant::Raw, 0, 0.0, 0.0, 0.0, 0.0}, 32u},
     };
     HELIOS_GEN_OFFSETOF_END
-    static const ComponentRepDesc desc{"sample.common.Health", 0x8fb0597au, Audience::All, Lod::Core, fields, 96u, 0x544cf06dc195cc09ull};
+    static const ComponentRepDesc desc{"sample.common.Health", 0x8fb0597au, Audience::All, Lod::Core, fields, 96u, 0x9e9f695061903d26ull};
     return desc;
 }
 
@@ -52,7 +52,7 @@ const ::helios::refl::repl::FileRepTables& commonReplication() noexcept {
     static const ComponentRepDesc* const components[] = {
         &RepOf<::sample::common::Health>::desc(),
     };
-    static const FileRepTables tables{components, {}, {}, 0x9e021e5eaa55590full};
+    static const FileRepTables tables{components, {}, {}, 0x02b34f6bb91d55f5ull};
     return tables;
 }
 

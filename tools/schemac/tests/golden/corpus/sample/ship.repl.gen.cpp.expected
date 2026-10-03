@@ -15,7 +15,7 @@ const ComponentRepDesc& RepOf<::sample::ship::ShipMotion>::desc() noexcept {
         {"angvel", 4u, static_cast<::helios::u32>(offsetof(::sample::ship::ShipMotion, angvel)), 3, Lod::Near, false, Interp::None, Quantizer{Quant::Range, 10, -8.0, 8.0, 0.0, 0.0}, 30u},
     };
     HELIOS_GEN_OFFSETOF_END
-    static const ComponentRepDesc desc{"sample.ship.ShipMotion", 0x91b7c36du, Audience::All, Lod::Core, fields, 410u, 0x0de19d818b5a4b5bull};
+    static const ComponentRepDesc desc{"sample.ship.ShipMotion", 0x91b7c36du, Audience::All, Lod::Core, fields, 410u, 0x92afa9ccca01b1daull};
     return desc;
 }
 
@@ -87,9 +87,9 @@ const ::helios::refl::repl::FileRepTables& shipReplication() noexcept {
         {"sample.ship.RequestDock", 0x2961a27du, RpcDirection::ClientToServer, true, 2.0, "interact"},
     };
     static const EventRep events[] = {
-        {"sample.ship.ShipDestroyed", 0x49a24256u, EventAudience::Relevant},
+        {"sample.ship.ShipDestroyed", 0x49a24256u, EventAudience::Relevant, true},
     };
-    static const FileRepTables tables{components, rpcs, events, 0x064bbe42cf89093eull};
+    static const FileRepTables tables{components, rpcs, events, 0x8fbafc7402fdd399ull};
     return tables;
 }
 

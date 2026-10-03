@@ -109,7 +109,8 @@ containers, variants, keyed lists, widening reads, corrupt input), builder types
 the registry (including concurrent readers during registration), property paths, diff/patch
 (including a randomized property test), record files, `Mut<C>`, and the replication primitives
 (bit streams at every width, hostile varints, range quantization within half a step, smallest-three
-quaternions (and hostile ones that cannot be a unit quaternion rejected), frame-cell positions exact
+quaternions (hostile ones that cannot be a unit quaternion rejected, while whatever the writer sends,
+NaN, zero and unnormalised input included, decodes at every width from 2 bits), frame-cell positions exact
 to half the resolution at 10¹³ m, out-of-range cells and offsets rejected, order-independent protocol
 hash). The generated-code side is tested by `schemac_tests`
 (tools/schemac).

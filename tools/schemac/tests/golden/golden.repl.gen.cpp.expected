@@ -14,7 +14,7 @@ const ComponentRepDesc& RepOf<::golden::all::Motion>::desc() noexcept {
         {"hp", 3u, static_cast<::helios::u32>(offsetof(::golden::all::Motion, hp)), 2, Lod::Core, false, Interp::None, Quantizer{Quant::Raw, 0, 0.0, 0.0, 0.0, 0.0}, 32u},
     };
     HELIOS_GEN_OFFSETOF_END
-    static const ComponentRepDesc desc{"golden.all.Motion", 0x5ac1f7a3u, Audience::Owner, Lod::Core, fields, 368u, 0x8f83441ab4b88ac3ull};
+    static const ComponentRepDesc desc{"golden.all.Motion", 0x5ac1f7a3u, Audience::Owner, Lod::Core, fields, 368u, 0x635c365a0254e7feull};
     return desc;
 }
 
@@ -75,7 +75,7 @@ const ComponentRepDesc& RepOf<::golden::all::Status>::desc() noexcept {
         {"score", 15u, static_cast<::helios::u32>(offsetof(::golden::all::Status, score)), 14, Lod::Core, false, Interp::None, Quantizer{Quant::Range, 20, -1000.0, 1000.0, 0.0, 0.0}, 20u},
     };
     HELIOS_GEN_OFFSETOF_END
-    static const ComponentRepDesc desc{"golden.all.Status", 0xdda8e05bu, Audience::All, Lod::Core, fields, 1045u, 0x1f0965d729fe2e39ull};
+    static const ComponentRepDesc desc{"golden.all.Status", 0xdda8e05bu, Audience::All, Lod::Core, fields, 1045u, 0xb86476a01b494630ull};
     return desc;
 }
 
@@ -259,9 +259,9 @@ const ::helios::refl::repl::FileRepTables& goldenReplication() noexcept {
         {"golden.all.Fire", 0x765256edu, RpcDirection::ClientToServer, false, 20.0, "combat"},
     };
     static const EventRep events[] = {
-        {"golden.all.Exploded", 0xc8e093cau, EventAudience::Relevant},
+        {"golden.all.Exploded", 0xc8e093cau, EventAudience::Relevant, true},
     };
-    static const FileRepTables tables{components, rpcs, events, 0xadb19ddafb53138full};
+    static const FileRepTables tables{components, rpcs, events, 0xf50b36ad1481202cull};
     return tables;
 }
 

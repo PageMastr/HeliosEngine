@@ -62,8 +62,9 @@ struct ComponentRepDesc {
     std::span<const FieldRep> fields; ///< in repIndex order
     u32 maxFullStateBits = 0;
     u64 hash = 0; ///< over the qualified name, type id, audience, LOD and every field's lock id, name, type,
-                  ///< change-mask index, LOD, prediction, interpolation and quantizer, plus the values of
-                  ///< the enums and flags the fields use; enters the protocol hash
+                  ///< change-mask index, LOD, prediction, interpolation, quantizer and worst-case bits, plus
+                  ///< the underlying types and values of the enums and flags the fields use; enters the
+                  ///< protocol hash
 };
 
 enum class RpcDirection : u8 { ClientToServer, ServerToClient, ServerToServer };
@@ -85,6 +86,7 @@ struct EventRep {
     std::string_view name;
     TypeId typeId = 0;
     EventAudience audience = EventAudience::Relevant;
+    bool reliable = true; ///< EVENT_R; false (`@unreliable`) is EVENT_U (04 §2.2)
 };
 
 /// The replication tables of one schema file (generated `<stem>Replication()`).
@@ -140,7 +142,12 @@ private:
 u64 quantizeRange(f64 v, f64 min, f64 max, u32 bits) noexcept;
 f64 dequantizeRange(u64 q, f64 min, f64 max, u32 bits) noexcept;
 
+/// `q` normalised (in f64) as the index of its largest component plus the other three at `bits`
+/// (2–32; helios-schemac requires 3–32) bits each. A quaternion that is not finite or is near zero is
+/// sent as the identity, and a component that rounding would push past a unit quaternion is stepped
+/// toward 0, so readSmallest3 always accepts what this writes.
 void writeSmallest3(BitWriter& w, const Quat& q, u32 bits);
+/// Fails on truncated input and on three components whose squares sum past 1 (no unit quaternion).
 Result<Quat> readSmallest3(BitReader& r, u32 bits);
 
 /// Positions beyond ±2^62 steps of `res` (and non-finite ones) are clamped; a read index that would

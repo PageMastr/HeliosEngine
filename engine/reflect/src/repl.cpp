@@ -18,6 +18,7 @@ u64 mask(u32 bits) noexcept { return bits >= 64 ? ~u64(0) : (u64(1) << bits) - 1
 u64 roundToU64(f64 x) noexcept { return static_cast<u64>(std::floor(x + 0.5)); }
 
 constexpr f64 kSmallest3Max = 0.70710678118654752440; // 1/√2: bound of the three smaller components
+constexpr f64 kSmallest3Margin = 1e-9;                  // writer's margin below the reader's sum limit
 
 } // namespace
 
@@ -92,15 +93,49 @@ f64 dequantizeRange(u64 q, f64 min, f64 max, u32 bits) noexcept {
 
 void writeSmallest3(BitWriter& w, const Quat& q, u32 bits) {
     f64 c[4] = {q.x, q.y, q.z, q.w};
+    // Normalise in f64 so that what is sent is a unit quaternion; one that is not finite or has no
+    // direction (NaN from a physics blow-up, all zero) is sent as the identity rather than as three
+    // components no unit quaternion has, which readSmallest3 rejects.
+    const f64 norm = std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2] + c[3] * c[3]);
+    if (!std::isfinite(norm) || norm < 1e-12) {
+        c[0] = c[1] = c[2] = 0;
+        c[3] = 1;
+    } else {
+        for (f64& x : c) x /= norm;
+    }
     u32 largest = 0;
     for (u32 i = 1; i < 4; ++i) {
         if (std::fabs(c[i]) > std::fabs(c[largest])) largest = i;
     }
     const f64 sign = c[largest] < 0 ? -1.0 : 1.0; // q and -q are the same rotation: send the positive one
-    w.write(largest, 2);
+    u64 v[3];
+    u32 n = 0;
     for (u32 i = 0; i < 4; ++i) {
-        if (i != largest) w.write(quantizeRange(c[i] * sign, -kSmallest3Max, kSmallest3Max, bits), bits);
+        if (i != largest) v[n++] = quantizeRange(c[i] * sign, -kSmallest3Max, kSmallest3Max, bits);
     }
+    // Rounding up can push the three squares past 1 (it does at 1 or 2 bits), which the reader rejects
+    // as corrupt: step the largest of them one step toward 0 until they fit, a margin below the reader's
+    // limit so that a differently contracted sum cannot disagree. With bits >= 2 that always ends, as
+    // the steps nearest 0 square-sum to < 1/6.
+    const u64 below = mask(bits) / 2; // the steps nearest 0 (2^bits - 1 steps: none is 0 itself)
+    const u64 above = below + 1;
+    for (;;) {
+        f64 sum = 0;
+        u32 far = 3;
+        f64 farthest = 0;
+        for (u32 k = 0; k < 3; ++k) {
+            const f64 d = dequantizeRange(v[k], -kSmallest3Max, kSmallest3Max, bits);
+            sum += d * d;
+            if ((v[k] < below || v[k] > above) && std::fabs(d) > farthest) {
+                farthest = std::fabs(d);
+                far = k;
+            }
+        }
+        if (sum <= 1.0 - kSmallest3Margin || far == 3) break;
+        v[far] = v[far] >= above ? v[far] - 1 : v[far] + 1;
+    }
+    w.write(largest, 2);
+    for (const u64 x : v) w.write(x, bits);
 }
 
 Result<Quat> readSmallest3(BitReader& r, u32 bits) {

@@ -10,9 +10,11 @@
 #include <cfloat>
 #include <cmath>
 #include <format>
+#include <initializer_list>
 #include <map>
 #include <optional>
 #include <set>
+#include <string_view>
 
 #include "code_writer.h"
 #include "generators.h"
@@ -42,11 +44,17 @@ std::string f64Literal(f64 v) {
     return s;
 }
 
-/// The unit suffix of a @quant number ("4096m" -> "m", "1/256m" -> "m", "8" -> "").
+/// The unit suffix of a @quant number ("4096m" -> "m", "1/256m" -> "m", "8" -> ""). A hex number
+/// ("0xA", whose digits are letters) has none.
 std::string quantUnit(const std::string& text) {
-    usize at = text.size();
-    while (at > 0 && std::isalpha(static_cast<unsigned char>(text[at - 1]))) --at;
-    return text.substr(at);
+    std::string_view last(text);
+    if (const usize slash = last.rfind('/'); slash != std::string_view::npos) last.remove_prefix(slash + 1);
+    if (last.starts_with("±")) last.remove_prefix(std::string_view("±").size());
+    if (last.starts_with('-') || last.starts_with('+')) last.remove_prefix(1);
+    if (last.starts_with("0x") || last.starts_with("0X")) return {};
+    usize at = last.size();
+    while (at > 0 && std::isalpha(static_cast<unsigned char>(last[at - 1]))) --at;
+    return std::string(last.substr(at));
 }
 
 /// "4096m" -> 4096, "1/256m" -> 0.00390625, "±8" -> 8 (the sign is the caller's business). Lengths
@@ -189,7 +197,9 @@ private:
         std::string form;
         std::optional<f64> range, cell, res;
         std::optional<u64> bits;
+        std::vector<std::string> keys;
         for (const AttrArg& arg : a->args) {
+            if (!arg.key.empty()) keys.push_back(arg.key);
             if (arg.key == "range" || arg.key == "cell" || arg.key == "res") {
                 // A unit other than metres would be dropped silently (cell=4km would be a 4 m cell).
                 if (const std::string unit = quantUnit(arg.value); !unit.empty() && unit != "m")
@@ -214,6 +224,20 @@ private:
         }
         bool isF64 = false;
         const u32 comps = floatComponents(f.type, isF64);
+        // An argument the form does not use would be ignored silently (frame_cell's offset width is
+        // derived from cell/res, so a bits= there changes nothing on the wire).
+        auto unused = [&](std::initializer_list<std::string_view> used) -> std::optional<std::string> {
+            for (const std::string& k : keys) {
+                if (std::find(used.begin(), used.end(), k) == used.end()) return k;
+            }
+            return std::nullopt;
+        };
+        const std::string formName = form.empty() ? "range" : form;
+        const std::optional<std::string> extra = form == "frame_cell"  ? unused({"cell", "res"})
+                                                 : form == "smallest3" ? unused({"bits"})
+                                                 : form.empty()        ? unused({"range", "bits"})
+                                                                       : std::nullopt;
+        if (extra) return fail(std::format("{}= is not an argument of the {} form (it would be ignored)", *extra, formName));
         if (form == "frame_cell") {
             if (f.type->kind != TypeKind::Builtin || f.type->builtin != Builtin::WorldPos) return fail("frame_cell needs a WorldPos");
             if (!cell || !res || *cell <= 0 || *res <= 0) return fail("frame_cell needs cell=<size> and res=<resolution>, e.g. cell=4096m, res=1/256m");
@@ -230,6 +254,8 @@ private:
         if (form == "smallest3") {
             if (f.type->kind != TypeKind::Builtin || f.type->builtin != Builtin::Quatf) return fail("smallest3 needs a quatf");
             if (!bits) return fail("smallest3 needs bits=n");
+            // At 1 or 2 bits rounding pushes most quaternions past unit length (a 1-bit step is ±1/√2).
+            if (*bits < 3) return fail("smallest3 needs bits=3 to 32");
             q.kind = Quant::Smallest3;
             q.bits = static_cast<u32>(*bits);
             return q;
@@ -315,8 +341,8 @@ private:
         std::string text = std::format("component {} {} {} {};", d->qualifiedName, d->typeId, audienceName(d), d->lod.empty() ? "core" : d->lod);
         std::map<std::string, const Decl*> reached; // enums and flags: a reader rejects undeclared values
         for (const RepField& r : fs) {
-            text += std::format("{}:{}:{}:{}:{}:{}:{}:{};", r.field->id, r.field->name, r.field->type->signature, r.field->repIndex, r.lod,
-                                r.field->predicted ? 1 : 0, r.interp, quantText(r.quant));
+            text += std::format("{}:{}:{}:{}:{}:{}:{}:{}:{};", r.field->id, r.field->name, r.field->type->signature, r.field->repIndex, r.lod,
+                                r.field->predicted ? 1 : 0, r.interp, quantText(r.quant), r.maxBits);
             std::vector<const Decl*> types;
             reachedBy(r.field->type, types);
             for (const Decl* t : types) reached.emplace(t->qualifiedName, t);
@@ -336,15 +362,23 @@ private:
         if (layout && t->decl) out.push_back(t->decl);
     }
 
-    /// One declaration's part of a payload: per field its name, type and explicit default (and lock
-    /// id when `withIds`), enum values, and variant alternatives. (@quant is valid only on replicated
-    /// component fields, which descHash covers, so a payload has none.)
+    /// One declaration's part of a payload: per field its name, type, explicit default and @max (and
+    /// lock id when `withIds`), an enum's or flags' underlying type (its raw wire width) and values, and
+    /// variant alternatives. (@quant is valid only on replicated component fields, which descHash
+    /// covers, so a payload has none.)
     static std::string layoutText(const Decl* d, bool withIds) {
         std::string out;
         for (const Field& f : d->fields) {
             out += withIds ? std::format("{}:", f.id) : std::string();
-            out += std::format("{}:{}:{};", f.name, f.type ? f.type->signature : "?", f.defaultValue ? f.defaultValue->json : "");
+            out += std::format("{}:{}:{}", f.name, f.type ? f.type->signature : "?", f.defaultValue ? f.defaultValue->json : "");
+            // A decoder rejects more than @max elements or bytes, so peers must agree on it.
+            if (const Attr* m = f.attr("max"); m && !m->args.empty()) {
+                u64 n = 0;
+                out += parseSchemaUnsigned(m->args[0].value, n) ? std::format(":max={}", n) : ":max=" + m->args[0].value;
+            }
+            out += ';';
         }
+        if (d->kind == DeclKind::Enum || d->kind == DeclKind::Flags) out += std::format(":{};", primName(d->underlying));
         for (const EnumVal& v : d->values) out += std::format("{}={};", v.name, v.value);
         for (const Alternative& a : d->alternatives) out += withIds ? std::format("|{}:{};", a.id, a.name) : std::format("|{};", a.name);
         return out;
@@ -363,6 +397,7 @@ private:
             const Decl* d = todo.back();
             todo.pop_back();
             std::vector<const Decl*> next;
+            reachedBy(d->result, next); // an rpc's `-> T` (04 §4.6 defines no reply yet; hashed so peers agree on it)
             for (const Field& f : d->fields) reachedBy(f.type, next);
             for (const Alternative& a : d->alternatives) {
                 if (a.type) next.push_back(a.type);
@@ -374,6 +409,7 @@ private:
             }
         }
         std::string text = layoutText(root, true);
+        if (root->result) text += "->" + root->result->signature + ";";
         for (const auto& [name, d] : reached) text += std::format(" {}{{{}}}", name, layoutText(d, false));
         return text;
     }
@@ -389,6 +425,7 @@ private:
     struct Event {
         const Decl* decl;
         std::string audience;
+        bool reliable; ///< EVENT_R, or EVENT_U with @unreliable (04 §2.2)
     };
 
     std::vector<Rpc> rpcs(const SourceFile* f) {
@@ -422,7 +459,7 @@ private:
                 D.error(d->loc, std::format("event '{}' has @audience({}); expected owner, relevant or party (04 §4.6)", d->name, a));
                 continue;
             }
-            out.push_back(Event{d, a == "owner" ? "Owner" : a == "party" ? "Party" : "Relevant"});
+            out.push_back(Event{d, a == "owner" ? "Owner" : a == "party" ? "Party" : "Relevant", d->attr("unreliable") == nullptr});
         }
         return out;
     }
@@ -434,7 +471,8 @@ private:
             parts.push_back(fnv1a64(std::format("rpc {} {} {} {} {} {};{}", r.decl->qualifiedName, r.decl->typeId, r.direction, r.reliable,
                                                 formatF64(r.rate), r.intent, payloadText(r.decl))));
         for (const Event& e : es)
-            parts.push_back(fnv1a64(std::format("event {} {} {};{}", e.decl->qualifiedName, e.decl->typeId, e.audience, payloadText(e.decl))));
+            parts.push_back(fnv1a64(std::format("event {} {} {} {};{}", e.decl->qualifiedName, e.decl->typeId, e.audience, e.reliable,
+                                                payloadText(e.decl))));
         return combine(parts);
     }
 
@@ -752,7 +790,9 @@ private:
         }
         if (!es.empty()) {
             w.open("static const EventRep events[] = {");
-            for (const Event& e : es) w.line(std::format("{{{}, {:#010x}u, EventAudience::{}}},", cppQuote(e.decl->qualifiedName), e.decl->typeId, e.audience));
+            for (const Event& e : es)
+                w.line(std::format("{{{}, {:#010x}u, EventAudience::{}, {}}},", cppQuote(e.decl->qualifiedName), e.decl->typeId, e.audience,
+                                   e.reliable ? "true" : "false"));
             w.close("};");
         }
         w.line(std::format("static const FileRepTables tables{{{}, {}, {}, {:#018x}ull}};", comps.empty() ? "{}" : "components", rs.empty() ? "{}" : "rpcs",

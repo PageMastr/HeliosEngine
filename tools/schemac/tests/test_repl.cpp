@@ -191,6 +191,7 @@ TEST_CASE("repl: rpc and event tables and the protocol hash") {
     REQUIRE(g.events.size() == 1);
     CHECK(g.events[0].name == "golden.all.Exploded");
     CHECK(g.events[0].audience == rp::EventAudience::Relevant);
+    CHECK(g.events[0].reliable);
     const rp::FileRepTables& ship = sample::ship::shipReplication();
     CHECK(ship.rpcs.size() == 1);
     CHECK(ship.rpcs[0].ratePerSecond == 2.0);
@@ -244,6 +245,37 @@ TEST_CASE("repl: rpc and event tables and the protocol hash") {
     CHECK(hashOf(nested) != hashOf(withEnum));
     CHECK(hashOf(withEnum) != hashOf("package test;\nenum K : u8 { A; B }\nstruct P { a: u8; k: K? }\nrpc R(ps: list<P> @max(4)) server->client reliable;\n"));
     CHECK(hashOf(nested) == hashOf("package test;\nstruct Unused { z: u8 }\nstruct P { a: u8 }\nrpc R(ps: list<P> @max(4)) server->client reliable;\n"));
+
+    // Round 2: an enum's or flags' underlying type is its raw wire width, which the lock lets widen.
+    CHECK(hashOf("package test;\nenum M : u8 { A }\ncomponent C replicate(all) { m: M }\n") !=
+          hashOf("package test;\nenum M : u16 { A }\ncomponent C replicate(all) { m: M }\n"));
+    CHECK(hashOf("package test;\nflags F : u8 { A }\ncomponent C replicate(all) { f: F }\n") !=
+          hashOf("package test;\nflags F : u32 { A }\ncomponent C replicate(all) { f: F }\n"));
+    CHECK(hashOf("package test;\nenum K : u8 { A }\nrpc R(k: K) server->client reliable;\n") !=
+          hashOf("package test;\nenum K : u16 { A }\nrpc R(k: K) server->client reliable;\n"));
+    // A top-level rpc's result, a payload @max (a decoder rejects more) and an event's reliability.
+    const std::string noResult = "package test;\nrpc R(x: u8) server->client reliable;\n";
+    CHECK(hashOf(noResult) != hashOf("package test;\nrpc R(x: u8) -> u8 server->client reliable;\n"));
+    CHECK(hashOf("package test;\nrpc R(x: u8) -> u8 server->client reliable;\n") !=
+          hashOf("package test;\nrpc R(x: u8) -> string server->client reliable;\n"));
+    CHECK(hashOf("package test;\nstruct P { a: u8 }\nrpc R(x: u8) -> P server->client reliable;\n") !=
+          hashOf("package test;\nstruct P { a: u16 }\nrpc R(x: u8) -> P server->client reliable;\n"));
+    CHECK(hashOf("package test;\nrpc R(x: list<u8> @max(4)) server->client reliable;\n") !=
+          hashOf("package test;\nrpc R(x: list<u8> @max(4096)) server->client reliable;\n"));
+    CHECK(hashOf("package test;\nrpc R(x: list<u8> @max(16)) server->client reliable;\n") ==
+          hashOf("package test;\nrpc R(x: list<u8> @max(0x10)) server->client reliable;\n"));
+    CHECK(hashOf("package test;\nstruct P { s: string @max(8) }\nevent E { p: P }\n") !=
+          hashOf("package test;\nstruct P { s: string @max(9) }\nevent E { p: P }\n"));
+    CHECK(hashOf("package test;\nevent E { a: u8 }\n") != hashOf("package test;\nevent E @unreliable { a: u8 }\n"));
+    {
+        CompileOptions options;
+        options.emitRepl = true;
+        options.cppOut = "cpp";
+        auto c = compileText("package test;\nevent E @unreliable { a: u8 }\n", options);
+        REQUIRE_MESSAGE(c->ok(), c->messages);
+        const std::string* src = c->output("cpp/test/t.repl.gen.cpp");
+        CHECK((src && src->find("{\"test.E\", ") != std::string::npos && src->find("EventAudience::Relevant, false}") != std::string::npos));
+    }
 }
 
 TEST_CASE("repl: invalid @quant and fields the full-state codec cannot carry are errors") {
@@ -260,6 +292,11 @@ TEST_CASE("repl: invalid @quant and fields the full-state codec cannot carry are
         {"v: vec3f @quant(range=±8, bits=0)", "bits= needs 1 to 32"},
         {"v: vec3f @quant(smallest3, bits=10)", "smallest3 needs a quatf"},
         {"q: quatf @quant(smallest3)", "smallest3 needs bits=n"},
+        {"q: quatf @quant(smallest3, bits=2)", "smallest3 needs bits=3 to 32"},
+        {"q: quatf @quant(smallest3, bits=1)", "smallest3 needs bits=3 to 32"},
+        {"p: WorldPos @quant(frame_cell, cell=4096m, res=1/256m, bits=8)", "bits= is not an argument of the frame_cell form"},
+        {"q: quatf @quant(smallest3, bits=10, range=±1)", "range= is not an argument of the smallest3 form"},
+        {"v: vec3f @quant(range=±8, bits=10, cell=4m)", "cell= is not an argument of the range form"},
         {"v: vec3f @quant(frame_cell, cell=4096m, res=1/256m)", "frame_cell needs a WorldPos"},
         {"p: WorldPos @quant(frame_cell, cell=10m, res=3m)", "cell must be a whole multiple"},
         {"p: WorldPos @quant(frame_cell, res=1m)", "frame_cell needs cell=<size> and res=<resolution>"},
@@ -278,8 +315,11 @@ TEST_CASE("repl: invalid @quant and fields the full-state codec cannot carry are
         CHECK_MESSAGE(messages.find(expected) != std::string::npos, messages);
     }
     CHECK(diagnosticsOf("event E @audience(everyone) { x: u8 }\n", options).find("expected owner, relevant or party") != std::string::npos);
-    // Units apply to lengths only: bits= takes any schema integer, hex included.
+    // Units apply to lengths only: bits= takes any schema integer, hex included, and a hex length has no unit.
     CHECK(diagnosticsOf("component C replicate(all) { v: vec3f @quant(range=±8, bits=0xA) }\n", options).empty());
+    CHECK(diagnosticsOf("component C replicate(all) { v: vec3f @quant(range=0xA, bits=10) }\n", options).empty());
+    CHECK(diagnosticsOf("component C replicate(all) { p: WorldPos @quant(frame_cell, cell=0x1000, res=1/0x100) }\n", options).empty());
+    CHECK(diagnosticsOf("component C replicate(all) { q: quatf @quant(smallest3, bits=3) }\n", options).empty());
     // Without --emit repl the same schemas compile.
     CHECK(diagnosticsOf("component C replicate(all) { s: string }\n").empty());
 }

@@ -559,9 +559,11 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
   | `frame_cell, cell=<m>, res=<m>` | `WorldPos` | the position rounded to `res`, per axis a zigzag varint cell index and the offset in ⌈log₂(cell/res)⌉ bits (04 §4.5: `cell=4096m, res=1/256m` is 20 bits per axis) |
   | none | fixed-size values | raw: `bool` 1 bit, integers and enums at their width, floats as IEEE bits, ids at 64 (`NetHandle` 32) |
 
-  `bits` is 1 to 32, and `cell` must be a whole multiple of `res` (2 to 2³² steps). Lengths are
-  metres: `m` or no unit (`cell=4km` is an error, not a 4 m cell); fractions (`1/256m`) and `±` are
-  accepted, and `range=x` is the same as `range=±x` (02 §3.1 writes `range=4096`, 04 §4.1
+  `bits` is 1 to 32 (3 to 32 for `smallest3`: at 1 or 2 bits rounding pushes most quaternions past
+  unit length), and `cell` must be a whole multiple of `res` (2 to 2³² steps). An argument the form
+  does not use (`bits=` on `frame_cell`, `range=` on `smallest3`) is an error, not ignored. Lengths
+  are metres: `m` or no unit (`cell=4km` is an error, not a 4 m cell); fractions (`1/256m`), hex
+  (`0xA`) and `±` are accepted, and `range=x` is the same as `range=±x` (02 §3.1 writes `range=4096`, 04 §4.1
   `range=±4096`). The bound must fit an `f32` component for `f32` fields, and the range's width must
   be finite. With 2ⁿ−1 steps, 0 is not exact in a symmetric range (`range=±4096, bits=16` sends a
   stationary velocity as +0.0625 m/s per axis); 04 §4.5's at-rest bit (WP-1.10) is meant to cover
@@ -570,6 +572,10 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
 - **Determinism.** Quantizers use f64 arithmetic with round-half-up, and frame cells use integer
   steps, so a cell and a client produce the same bits (04 §4.5), and a decoded state re-encodes to
   identical bits.
+- **Non-finite input** stays decodable: range maps NaN to its minimum, frame cells map a non-finite
+  axis to 0, and smallest-three normalises its input and sends a non-finite or zero quaternion as the
+  identity (and steps a rounded-up component back toward 0 when the three would exceed unit length),
+  so a reader always accepts what a writer wrote.
 - **Hostile input.** Readers are bounds-checked and never overread. They reject truncated streams,
   varints longer than 10 bytes or overlong, frame-cell offsets of a whole cell or more, cell indices
   whose position would overflow, enum values and flag bits the schema does not declare, and
@@ -578,17 +584,20 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
   - its replicated components;
   - its top-level rpcs, with direction, reliability, `@ratelimit` per second and `@intent` (service
     rpcs are backend calls, 05, not netcode);
-  - its events, with `@audience(owner|relevant|party)`, default `relevant`;
+  - its events, with `@audience(owner|relevant|party)`, default `relevant`, and reliability
+    (`@unreliable` is EVENT_U, otherwise EVENT_R; 04 §2.2);
   - a **protocol hash**, which is `protocolHash()` over the descriptor, rpc and event hashes.
   `protocolHash()` over several files' hashes gives a build's hash, independent of order; it is an
   input of 05 §1.14.1's compat fingerprint. For components it covers type and field ids, names,
-  types, audience, LOD, prediction, interpolation, every quantizer parameter and the values of the
-  enums and flags the fields use. For rpcs and events it covers the direction, reliability, rate,
-  intent and audience, and the payload: each argument's or field's lock id, name, type and explicit
-  default, and the fields, defaults, enum values and alternatives of every struct, variant, enum and
-  flags type the payload reaches (by name; reached types contribute no lock ids, so the hash does
-  not depend on which files are compiled). So any wire change changes it, and comments or
-  declaration order do not.
+  types, audience, LOD, prediction, interpolation, every quantizer parameter, each field's worst-case
+  bits, and the underlying types (the raw wire width) and values of the enums and flags the fields
+  use. For rpcs and events it covers the direction, reliability, rate, intent and audience, and the
+  payload: each argument's or field's lock id, name, type, explicit default and `@max`, a top-level
+  rpc's `-> T` result type (04 §4.6 defines no reply yet; the result is hashed so that peers agree on
+  it), and the fields, defaults, `@max`es, enum and flags underlying types and values, and
+  alternatives of every struct, variant, enum and flags type the payload reaches (by name; reached
+  types contribute no lock ids, so the hash does not depend on which files are compiled). So any
+  wire change changes it, and comments or declaration order do not.
 
 ## CMake: `helios_schema()`
 

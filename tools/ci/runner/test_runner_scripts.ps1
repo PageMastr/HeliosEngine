@@ -6,11 +6,13 @@
 # Everywhere: every .ps1 here parses and is ASCII; firewall.ps1's block lists (CIDR splitting around lab
 # addresses, IPv4 and IPv6, stray and non-canonical addresses) and the rules it adds and removes (the firewall
 # cmdlets mocked); job-started.ps1's refusal rules, how it ends a refused job (the process cmdlets mocked) and the
-# entries it would delete. The scripts have no test switch: their functions and constants are loaded from the
-# parsed files, so their last block (the run) never runs here. On Windows also the wipe itself on a scratch
-# tree under -WorkDir: a junction to a directory outside, a directory symbolic link where creating one is allowed,
-# read-only files and a deep tree; the links go, their targets stay. The last line says whether the wipe ran, and
-# CTest requires "(wipe: ran)" on Windows (tools/ci/CMakeLists.txt).
+# entries it would delete; every PowerShell block of docs/runbooks/win-gpu-runner.md parses, and its step 4b audit
+# (what helios-ci can open at the root of each local drive) runs against stand-ins for WMI and the ACL cmdlets. The
+# scripts have no test switch: their functions and constants are loaded from the parsed files, so their last block
+# (the run) never runs here. On Windows also the wipe itself on a scratch tree under -WorkDir: a junction to a
+# directory outside, a directory symbolic link where creating one is allowed, read-only files and a deep tree; the
+# links go, their targets stay. The last line says whether the wipe ran, and CTest requires "(wipe: ran)" on Windows
+# (tools/ci/CMakeLists.txt).
 param([string]$WorkDir = (Join-Path ([IO.Path]::GetTempPath()) ('helios-runner-scripts-' + [guid]::NewGuid().ToString('N'))))
 
 $ErrorActionPreference = 'Stop'
@@ -150,6 +152,144 @@ Assert-Throws { Invoke-HeliosCiFirewall -Account 'helios-ci' -AllowAddress '8.8.
 Assert-Throws { Invoke-HeliosCiFirewall -Account 'helios-ci' -AllowAddress '192.168.150' 6>$null } 'not written as a full' `
     'a shorthand lab address fails before any rule changes'
 Assert-Equal 0 $script:fwLog.Count 'a failed run removes no rule'
+
+# -- docs/runbooks/win-gpu-runner.md -------------------------------------------------------------------------
+# The owner pastes the runbook's PowerShell into an elevated window, so every block must parse. Step 4b's audit (what
+# helios-ci can read or change at the root of each local drive) runs here against stand-ins for WMI, Get-ChildItem
+# and Get-Acl (functions win over cmdlets); an ACL is an object with the members the audit reads.
+$repoRoot = Split-Path (Split-Path (Split-Path $here))
+$runbook = [IO.File]::ReadAllText([IO.Path]::Combine($repoRoot, 'docs', 'runbooks', 'win-gpu-runner.md'))
+$blocks = @([regex]::Matches($runbook, '(?ms)^[ \t]*```powershell[ \t]*\r?\n(.*?)^[ \t]*```') |
+        ForEach-Object { $_.Groups[1].Value })
+$script:checks++
+if ($blocks.Count -lt 10) {
+    $script:failures++
+    Write-Host "FAIL: the runbook has $($blocks.Count) PowerShell blocks; expected at least 10"
+}
+foreach ($block in $blocks) {
+    $tokens = $null
+    $errors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($block, [ref]$tokens, [ref]$errors)
+    Assert-Equal '' (($errors | ForEach-Object { "$($_.Extent.StartLineNumber): $($_.Message)" }) -join '; ') `
+        "the runbook block '$(($block.Trim() -split "`n")[0].Trim())' parses"
+}
+$audit = @($blocks | Where-Object { $_ -match '(?m)^# Step 4b audit:' })
+Assert-Equal 1 $audit.Count 'the runbook has one step 4b audit'
+
+$ciSid = 'S-1-5-21-1-2-3-1002'
+function New-AuditRule([string]$Sid, [int]$Rights, [string]$Type = 'Allow') {
+    return [pscustomobject]@{ IdentityReference = [pscustomobject]@{ Value = $Sid }; AccessControlType = $Type
+        FileSystemRights = $Rights }
+}
+function New-AuditAcl([string]$Owner, [object[]]$Rules = @()) {
+    $acl = [pscustomobject]@{ OwnerSid = $Owner; Rules = $Rules }
+    $acl | Add-Member -MemberType ScriptMethod -Name GetOwner -Value { param($Type) [pscustomobject]@{ Value = $this.OwnerSid } }
+    $acl | Add-Member -MemberType ScriptMethod -Name GetAccessRules -Value { param($Explicit, $Inherited, $Type) $this.Rules }
+    return $acl
+}
+# Runs the audit on $AuditDisks (drive -> file system), $AuditItems (drive root -> names) and $AuditAcls (path -> ACL,
+# or the message Get-Acl fails with), in a child scope so that its variables cannot change this script's. Leaves its
+# rows ('path|access|who') in $script:auditRows, its output in $script:auditOutput and its warnings in
+# $script:auditWarnings.
+function Invoke-HeliosCiAudit([hashtable]$AuditDisks, [hashtable]$AuditItems, [hashtable]$AuditAcls,
+    [string]$AuditAccount = $ciSid) {
+    function Get-CimInstance {
+        [CmdletBinding()]
+        param([Parameter(Position = 0)] [string]$ClassName, [string]$Filter)
+        if ($ClassName -eq 'Win32_UserAccount' -and $Filter -eq "LocalAccount = TRUE AND Name = 'helios-ci'") {
+            if ($AuditAccount) { [pscustomobject]@{ SID = $AuditAccount } }
+        } elseif ($ClassName -eq 'Win32_LogicalDisk' -and $Filter -eq 'DriveType = 2 OR DriveType = 3') {
+            foreach ($id in @($AuditDisks.Keys | Sort-Object)) { [pscustomobject]@{ DeviceID = $id; FileSystem = $AuditDisks[$id] } }
+        } else {
+            throw "unexpected Get-CimInstance $ClassName -Filter $Filter"
+        }
+    }
+    function Get-ChildItem {
+        [CmdletBinding()]
+        param([string]$LiteralPath, [switch]$Force)
+        if (-not $Force) { return }   # the audit must list hidden items too
+        foreach ($name in @($AuditItems[$LiteralPath])) { [pscustomobject]@{ Name = $name; FullName = $LiteralPath + $name } }
+    }
+    function Get-Acl {
+        [CmdletBinding()]
+        param([string]$LiteralPath)
+        $entry = $AuditAcls[$LiteralPath]
+        if ($entry -is [string]) { throw $entry }
+        if ($null -eq $entry) { throw "unexpected Get-Acl $LiteralPath" }
+        return $entry
+    }
+    function Write-Warning([string]$Message) { $script:auditWarnings.Add($Message) }
+    $script:auditWarnings = New-Object System.Collections.Generic.List[string]
+    $script:auditRows = @()
+    $script:auditOutput = @()
+    $savedDrive = $env:SystemDrive
+    $env:SystemDrive = 'C:'
+    try {
+        & {
+            $script:auditOutput = @(. ([scriptblock]::Create($audit[0])))
+            $script:auditRows = @($found | ForEach-Object { "$($_.Path)|$($_.Access)|$($_.Who)" })
+        }
+    } finally {
+        $env:SystemDrive = $savedDrive
+    }
+}
+if ($audit.Count -eq 1) {
+    $modify = 0x1301bf
+    $readExecute = 0x1200a9
+    $full = 0x1f01ff
+    $admins = New-AuditRule 'S-1-5-32-544' $full
+    $openToAll = @((New-AuditRule 'S-1-5-11' $modify), (New-AuditRule 'S-1-5-32-545' $readExecute), $admins)
+    $closed = New-AuditAcl 'S-1-5-32-544' @($admins, (New-AuditRule 'S-1-5-21-1-2-3-1001' $full))
+    $disks = @{ 'C:' = 'NTFS'; 'D:' = 'NTFS'; 'E:' = 'exFAT'; 'F:' = $null; 'G:' = 'ReFS' }
+    $items = @{
+        'C:\' = @('Windows', 'Program Files', 'Users', '$Recycle.Bin', 'pagefile.sys', 'dev', 'Unreadable', 'Closed',
+            'VulkanSDK', 'Traverse', 'GenericWrite', 'GenericRead', 'AppendOnly', 'Made', 'Granted', 'Denied')
+        'D:\' = @('helios-ci', 'System Volume Information', 'Windows', 'Users', 'taxes.pdf')
+        'G:\' = @('Archive')
+    }
+    $acls = @{
+        'C:\dev'          = New-AuditAcl 'S-1-5-21-1-2-3-1001' $openToAll
+        'C:\VulkanSDK'    = New-AuditAcl 'S-1-5-32-544' @($admins, (New-AuditRule 'S-1-5-32-545' $readExecute))
+        'C:\Closed'       = $closed
+        'C:\Traverse'     = New-AuditAcl 'S-1-5-32-544' @($admins, (New-AuditRule 'S-1-1-0' 0x100020))
+        'C:\GenericWrite' = New-AuditAcl 'S-1-5-32-544' @((New-AuditRule 'S-1-5-11' 0x40000000))
+        'C:\GenericRead'  = New-AuditAcl 'S-1-5-32-544' @((New-AuditRule 'S-1-5-6' 0x80000000))
+        'C:\AppendOnly'   = New-AuditAcl 'S-1-5-32-544' @((New-AuditRule 'S-1-5-113' 0x4))
+        'C:\Made'         = New-AuditAcl $ciSid
+        'C:\Granted'      = New-AuditAcl 'S-1-5-32-544' @($admins, (New-AuditRule $ciSid $full))
+        'C:\Denied'       = New-AuditAcl 'S-1-5-32-544' @($admins, (New-AuditRule $ciSid $full 'Deny'))
+        'C:\Unreadable'   = 'Attempted to perform an unauthorized operation.'
+        'D:\Windows'      = New-AuditAcl 'S-1-5-21-1-2-3-1001' $openToAll
+        'D:\Users'        = New-AuditAcl 'S-1-5-21-1-2-3-1001' @((New-AuditRule 'S-1-2-0' $readExecute))
+        'D:\taxes.pdf'    = New-AuditAcl 'S-1-5-21-1-2-3-1001' @((New-AuditRule 'S-1-5-15' $modify))
+        'G:\Archive'      = New-AuditAcl 'S-1-5-32-544' @((New-AuditRule 'S-1-5-11' $modify 'Deny'), (New-AuditRule 'S-1-5-11' $modify))
+    }
+    Invoke-HeliosCiAudit -AuditDisks $disks -AuditItems $items -AuditAcls $acls
+    Assert-Equal @(
+        'C:\dev|write|Authenticated Users: 1245631; Users: 1179817',
+        'C:\Unreadable|?|Attempted to perform an unauthorized operation.',
+        'C:\VulkanSDK|read|Users: 1179817',
+        'C:\GenericWrite|write|Authenticated Users: 1073741824',
+        'C:\GenericRead|read|SERVICE: -2147483648',
+        'C:\AppendOnly|write|Local account: 4',
+        'C:\Made|write|owner: helios-ci',
+        'C:\Granted|write|helios-ci: 2032127',
+        'D:\Windows|write|Authenticated Users: 1245631; Users: 1179817',
+        'D:\Users|read|LOCAL: 1179817',
+        'D:\taxes.pdf|write|This Organization: 1245631',
+        'E:\|write|every account (exFAT has no permissions)',
+        'G:\Archive|write|Authenticated Users: 1245631') $script:auditRows `
+        'the audit: what helios-ci can open, outside Windows'' own folders on the Windows drive and D:\helios-ci'
+    Assert-Equal @('F:\ has no file system (locked, or no medium): audit it again once it is open') $script:auditWarnings `
+        'the audit warns about a drive it cannot read'
+
+    Invoke-HeliosCiAudit -AuditDisks @{ 'C:' = 'NTFS' } -AuditItems @{ 'C:\' = @('Closed', 'Windows') } `
+        -AuditAcls @{ 'C:\Closed' = $closed }
+    Assert-Equal @('Nothing at the root of a local drive is open to helios-ci') $script:auditOutput 'the audit when nothing is open'
+    Assert-Equal 0 $script:auditRows.Count 'and it has no rows'
+    Assert-Throws { Invoke-HeliosCiAudit -AuditDisks @{} -AuditItems @{} -AuditAcls @{} -AuditAccount '' } 'do step 2 first' `
+        'the audit without the helios-ci account'
+}
 
 # -- job-started.ps1: which jobs run -------------------------------------------------------------------------
 . (Get-HeliosCiScriptDefinitions (Join-Path $here 'job-started.ps1'))

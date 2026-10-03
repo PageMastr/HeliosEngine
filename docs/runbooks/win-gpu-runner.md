@@ -30,8 +30,8 @@ The layers, from the outside in:
 | Fork approval | GitHub starts no workflow from an outside contributor's fork until you approve the run (step 8). By default GitHub asks only about first-time contributors | GitHub settings |
 | Triggers and guards | The workflow has only `schedule` and `workflow_dispatch`, and the job needs `main` and the repository variable `HELIOS_WIN_GPU=enabled`. Every PR runs `tools/ci/check_runner_policy.py` (CTest `lint_runner_policy`), which fails any workflow that could reach this runner and breaks a rule: other triggers, a missing guard, `secrets`, a token broader than `contents: read`, actions not pinned to a commit. It checks what is merged, not what a fork or a branch runs | `.github/workflows/`, `tools/ci/` |
 | The job-started hook | A workflow file on a fork or an unreviewed branch decides its own triggers and `runs-on`. The hook, installed on the PC, ends every job that is not a `schedule`, `push` or `workflow_dispatch` run of `refs/heads/main` (a fork's pull request runs as `pull_request` on `refs/pull/<n>/merge`): it stops the runner's worker process (`Runner.Worker.exe`), which runs the job's steps, before the first of them. Failing the hook alone would not be enough: the runner would still run the job's steps marked `if: always()` (or `failure()`, `!cancelled()`) and its actions' `pre:` steps | `D:\helios-ci\hooks\job-started.ps1` |
-| The account | Jobs run as `helios-ci`, a standard user with no access to your profile, browser data, SSH keys or Git credentials | Windows |
-| The firewall | `helios-ci` cannot reach the home LAN (other PCs, the router's admin page, a NAS), LAN multicast and broadcast (mDNS, SSDP, LLMNR) or overlay networks such as Tailscale; the internet stays open | `tools/ci/runner/firewall.ps1` |
+| The account | Jobs run as `helios-ci`, a standard user with no access to your profile, browser data, SSH keys or Git credentials, nor, once step 4b has closed them, to your folders elsewhere on the drives (Windows opens every folder created at the root of a drive to all accounts) | Windows; step 4b |
+| The firewall | `helios-ci` cannot reach the home LAN (other PCs, the router's LAN address, a NAS), LAN multicast and broadcast (mDNS, SSDP, LLMNR) or overlay networks such as Tailscale; the internet stays open, including the router's public address (below) | `tools/ci/runner/firewall.ps1` |
 | The wipe | The hook empties `D:\helios-ci\work` before each job, so no job sees an earlier job's files | the hook |
 
 What stays possible (K33's residual risk): code that has passed review and merged runs as `helios-ci` with internet
@@ -40,10 +40,18 @@ installation (`D:\helios-ci\runner`, including `.env`) and the runner's credenti
 off through `.env`, through the PowerShell profile (which the runner loads before the hook), or with
 `Set-ExecutionPolicy -Scope CurrentUser Restricted`: the CurrentUser scope takes precedence over the LocalMachine
 policy of step 4, so the hook would no longer start, and only an execution policy set by Group Policy prevents that
-(the checklist checks the scope). It cannot reach your account, your files, administrator rights or the LAN. It can
-reach programs on the PC itself that listen on the network, including on `localhost` (Windows Firewall does not
-filter loopback): keep such services (databases, dev servers, remote-control tools) behind a password, or stop them
-while the runner is enabled. If you suspect misuse, follow "Rotate" below.
+(the checklist checks the scope). It cannot reach your profile, administrator rights or the LAN, nor, after step 4b,
+your folders elsewhere on the drives. Like every local account, it can still read what Windows leaves open to all
+users (the machine-wide tools, which the build needs, `C:\ProgramData`, `C:\Users\Public` and whatever step 4b's
+audit lists as `read`), create folders in `C:\ProgramData` and at the root of a drive, and read and write a FAT32 or
+exFAT drive (most USB sticks) while one is plugged in. It can reach programs on the PC itself that listen on the
+network, including on `localhost` (Windows Firewall does not filter loopback): keep such services (databases, dev
+servers, remote-control tools) behind a password, or stop them while the runner is enabled. The firewall blocks
+private addresses only, so the router's public (WAN) address stays reachable: many routers show their admin page
+there to clients on the LAN, and NAT loopback passes port-forwarded traffic on to the LAN device behind it (a NAS),
+often with the router's LAN address as the source. That depends on the router; the checklist tests it, and if the
+admin page or a forwarded service answers, turn off the router's remote administration or NAT loopback (or the port
+forward). If you suspect misuse, follow "Rotate" below.
 
 ## Names (binding)
 
@@ -77,12 +85,15 @@ Get-Service actions.runner.* | Select-Object Name, Status, StartType      # Stop
 ```
 
 Then: narrow the `hooks` ACL (the `icacls` line in step 3), install Go and set the execution policy (the `GoLang.Go`
-and `Set-ExecutionPolicy` lines of step 4), then steps 6 to 10 and the verification checklist. Start the service only
-at step 9.
+and `Set-ExecutionPolicy` lines of step 4), close your folders to `helios-ci` (step 4b), then steps 6 to 10 and the
+verification checklist. Start the service only at step 9.
 
 ### 1. Prerequisites
 
-Windows 10 or 11 Pro with BitLocker, the latest GPU driver (Vulkan 1.3), and a data volume `D:` with about 100 GB free.
+Windows 10 or 11 Pro with BitLocker, the latest GPU driver (Vulkan 1.3), and a data volume `D:` with about 100 GB free
+that holds nothing but `D:\helios-ci` (09 §5.4a: the work directory on its own volume). Windows opens what is created
+at the root of a volume to every account (step 4b), so keep your own files off `D:`; if it already holds some, move
+them, or close them in step 4b.
 
 ### 2. The account
 
@@ -120,6 +131,111 @@ Ninja is not needed: `win-gpu.yml` uses the Visual Studio generator, so no third
 environment. Go is needed only so that configure succeeds; the job does not run Go. `python` must be on the machine
 `PATH` (the installer's "Add python.exe to PATH"; the job fails when `python` is missing or is only the Microsoft Store
 alias). The runner service sees the new `PATH` and `VULKAN_SDK` the next time it starts (step 9).
+
+### 4b. Close your own folders to `helios-ci`
+
+The account protects your profile (`C:\Users\<you>`), not the rest of the drives. The root of an NTFS volume (`C:\`,
+or a data volume that Windows formatted) gives Authenticated Users *Modify* and Users *Read & execute* on everything
+created below it, so on a default installation `helios-ci` can read, change, delete or encrypt `D:\Photos`,
+`D:\Backup`, `C:\dev` or `C:\src`. Only the profiles and `D:\helios-ci\runner`, `work` and `hooks` (step 3) are closed
+to it (Windows' own folders are readable, not writable). A FAT32 or exFAT drive has no permissions at all. The worst
+case is a clone of this repository outside your profile: merged code could change it, and the next time you build or
+validate from it (09 §5.9), that code runs as you. **Keep every clone of this repository inside your profile**, the
+one you validate from included (step 6 puts its clone there).
+
+List what `helios-ci` can open at the root of each local drive (elevated; it reads ACLs and changes nothing):
+
+```powershell
+# Step 4b audit: files and folders at the root of each local drive that helios-ci can read or change.
+$account = Get-CimInstance Win32_UserAccount -Filter "LocalAccount = TRUE AND Name = 'helios-ci'"
+if (-not $account) { throw 'There is no local account helios-ci yet: do step 2 first' }
+$ci = $account.SID
+# helios-ci and the groups that every account's token holds (a service's too).
+$anyone = @{ 'S-1-1-0' = 'Everyone'; 'S-1-2-0' = 'LOCAL'; 'S-1-5-6' = 'SERVICE'; 'S-1-5-11' = 'Authenticated Users'
+    'S-1-5-15' = 'This Organization'; 'S-1-5-32-545' = 'Users'; 'S-1-5-113' = 'Local account'; $ci = 'helios-ci' }
+$write = [int][Security.AccessControl.FileSystemRights]('WriteData, AppendData, WriteExtendedAttributes, ' +
+    'WriteAttributes, DeleteSubdirectoriesAndFiles, Delete, ChangePermissions, TakeOwnership') -bor 0x50000000
+$read = [int][Security.AccessControl.FileSystemRights]'ReadData' -bor 0x90000000
+# (0x50000000: generic all and generic write; 0x90000000: generic all and generic read)
+$everyDrive = '$Recycle.Bin', 'System Volume Information', 'pagefile.sys', 'swapfile.sys'
+$windowsDrive = 'Windows', 'Windows.old', 'Program Files', 'Program Files (x86)', 'ProgramData', 'Users',
+    'Documents and Settings', 'PerfLogs', 'Recovery', 'Boot', 'bootmgr', 'BOOTNXT', 'Config.Msi', 'OneDriveTemp',
+    'hiberfil.sys', 'DumpStack.log', 'DumpStack.log.tmp', '$WinREAgent', '$SysReset', '$GetCurrent', '$Windows.~BT',
+    '$Windows.~WS'
+$found = @(foreach ($disk in Get-CimInstance Win32_LogicalDisk -Filter 'DriveType = 2 OR DriveType = 3') {
+    $root = $disk.DeviceID + '\'
+    if (-not $disk.FileSystem) {
+        Write-Warning "$root has no file system (locked, or no medium): audit it again once it is open"
+        continue
+    }
+    if ($disk.FileSystem -notin 'NTFS', 'ReFS') {
+        [pscustomobject]@{ Path = $root; Access = 'write'; Who = "every account ($($disk.FileSystem) has no permissions)" }
+        continue
+    }
+    foreach ($item in Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue) {
+        if ($item.Name -in $everyDrive -or $item.FullName -eq 'D:\helios-ci' -or
+            ($disk.DeviceID -eq $env:SystemDrive -and $item.Name -in $windowsDrive)) { continue }
+        try { $acl = Get-Acl -LiteralPath $item.FullName -ErrorAction Stop }
+        catch { [pscustomobject]@{ Path = $item.FullName; Access = '?'; Who = $_.Exception.Message }; continue }
+        $bits = 0
+        $who = @()
+        $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+        if ($owner -and $anyone.ContainsKey($owner)) { $bits = $write; $who += "owner: $($anyone[$owner])" }
+        foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+            $sid = $rule.IdentityReference.Value
+            $mask = [int]$rule.FileSystemRights -band ($write -bor $read)
+            if ($rule.AccessControlType -eq 'Allow' -and $anyone.ContainsKey($sid) -and $mask) {
+                $bits = $bits -bor $mask
+                $who += "$($anyone[$sid]): $($rule.FileSystemRights)"
+            }
+        }
+        if ($bits) {
+            $access = if ($bits -band $write) { 'write' } else { 'read' }
+            [pscustomobject]@{ Path = $item.FullName; Access = $access; Who = $who -join '; ' }
+        }
+    }
+})
+if ($found.Count) { $found | Format-Table -Wrap -AutoSize } else { 'Nothing at the root of a local drive is open to helios-ci' }
+```
+
+It leaves out Windows' own folders and `D:\helios-ci`. `write` means that `helios-ci` can change or delete the item (or
+its permissions), `read` that it can read it; `Who` names the entries that allow it (Allow entries only: a Deny entry
+does not take a line off the list). `?` means the ACL could not be read: check that item with `icacls`. For every
+line:
+
+- **Your files, or a clone of a repository**: move it into your profile, or close it. A file at a drive root: move it
+  into your profile or into a folder you close. To close a folder, give yourself access first: with User Account
+  Control, your membership in Administrators counts only in an elevated window, so once Users and Authenticated Users
+  are gone, your everyday access comes from this entry alone (if you elevate with another account's password, set `$me`
+  to your own account's SID instead, which `whoami /user` shows in a window that is not elevated):
+
+  ```powershell
+  $dir = 'D:\Photos'                                                    # a folder the audit listed
+  $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value   # you (elevated, it is still your account)
+  icacls $dir /inheritance:d                    # turn the inherited entries into the folder's own
+  icacls $dir /grant "*${me}:(OI)(CI)F"
+  icacls $dir /remove:g '*S-1-1-0' '*S-1-2-0' '*S-1-5-6' '*S-1-5-11' '*S-1-5-15' '*S-1-5-32-545' '*S-1-5-113' helios-ci
+  ```
+
+- **A tool that the job uses** (for example `C:\VulkanSDK`, or a tool installed outside `C:\Program Files`):
+  `helios-ci` has to read it, so `read` is fine. `write` is not: code that `helios-ci` plants there runs as you the
+  next time you use the tool. Keep Users' read and execute and remove the rest:
+
+  ```powershell
+  $dir = 'C:\VulkanSDK'
+  icacls $dir /inheritance:d
+  icacls $dir /remove:g '*S-1-1-0' '*S-1-2-0' '*S-1-5-6' '*S-1-5-11' '*S-1-5-15' '*S-1-5-113' helios-ci
+  icacls $dir /grant:r '*S-1-5-32-545:(OI)(CI)RX'
+  ```
+
+- **Something you do not need** (for example a driver installer's leftover `C:\AMD` or `C:\NVIDIA`): delete it. An
+  item whose `Who` says `owner: helios-ci` was created by the runner account: find out why before you delete it.
+- **A FAT32 or exFAT drive**: unplug it while the runner is enabled, or keep nothing on it that is private or that you
+  run.
+
+Run the audit again until its `write` lines are at most such drives and its `read` lines are only tools the job uses. It reads the top
+level only: a folder you closed stays closed below, unless something below it grants access itself. A folder you
+create at a drive root later starts open again: run the audit after creating one (the checklist repeats it).
 
 ### 5. Register the runner
 
@@ -196,7 +312,7 @@ item of the checklist tests this).
 
 ### 9. Start the runner
 
-Only after steps 6, 7 and 8:
+Only after steps 4b, 6, 7 and 8:
 
 ```powershell
 Get-Service actions.runner.* | Set-Service -StartupType Automatic
@@ -226,12 +342,18 @@ Do this after the setup and after any change to the PC, the hook or the firewall
 - [ ] `Get-LocalGroupMember -SID S-1-5-32-544` does not list `helios-ci`.
 - [ ] `Get-ExecutionPolicy -List` shows `RemoteSigned` for `LocalMachine`.
 - [ ] `icacls D:\helios-ci\hooks` gives `helios-ci` `(RX)` only; `.env` has the hook line; the hash check above is True.
+- [ ] Step 4b's audit lists no `write` line but FAT32 or exFAT drives you accepted, and its `read` lines are only tools
+      the job uses.
 - [ ] `Get-NetFirewallRule -Group 'Helios CI runner: LAN block for helios-ci'` lists 3 rules (2 with `-AllowAddress`),
       Enabled, Outbound, Block; `... | Get-NetFirewallAddressFilter` shows the ranges of step 7;
       `Get-NetFirewallProfile | Select-Object Name, Enabled` shows every profile enabled.
 - [ ] As `helios-ci` (`runas /user:helios-ci powershell`):
   - `Get-ChildItem C:\Users\<you>` fails with access denied;
+  - for a folder that step 4b closed, `Get-ChildItem D:\Photos` and `Set-Content D:\Photos\probe.txt x` fail with
+    access denied, and for a tool folder, `Set-Content C:\VulkanSDK\probe.txt x` does too;
   - `Test-NetConnection <your router's IP> -Port 80` fails, `Test-NetConnection github.com -Port 443` succeeds;
+  - `Test-NetConnection <your public IP address> -Port 80` and `-Port 443` (the router's status page shows the
+    address) fail, or reach nothing you would mind `helios-ci` using (see "What stays possible" above);
   - `git --version; cmake --version; python --version; go version; $env:VULKAN_SDK` all answer;
   - `Get-ExecutionPolicy -Scope CurrentUser` answers `Undefined` (anything else overrides step 4's policy for
     `helios-ci`; `Restricted` there would keep the hook from running), and so does
@@ -298,8 +420,8 @@ Rotate (periodically, or at once if you suspect a job misbehaved):
    `C:\Users\helios-ci`), create it again (step 2), and delete everything in `D:\helios-ci\runner` and
    `D:\helios-ci\work`. Otherwise just reset its password: `Set-LocalUser helios-ci -Password (Read-Host -AsSecureString)`.
 4. Register again (step 5, which ends with stopping the service), add the hook line to `.env` again (step 6),
-   re-run `firewall.ps1` (step 7: a new account has a new SID), start the service (step 9), go through the
-   checklist, and set `HELIOS_WIN_GPU=enabled`.
+   re-run `firewall.ps1` (step 7: a new account has a new SID) and step 4b's audit, start the service (step 9), go
+   through the checklist, and set `HELIOS_WIN_GPU=enabled`.
 
 Remove for good: delete the `HELIOS_WIN_GPU` variable, `config.cmd remove --token <token>`,
 `.\tools\ci\runner\firewall.ps1 -Remove` (it also works after the account is gone), `Remove-LocalUser helios-ci`,

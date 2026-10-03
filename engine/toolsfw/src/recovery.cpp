@@ -2,17 +2,21 @@
 //
 // Per document the session's last "open" or "save" record is the replay base: the file on disk
 // must still hash to what that record says (the session wrote or read exactly those bytes), and
-// only the transactions after it are re-applied. A document created in the session and never
-// saved comes back from the snapshot in its Create op. Each journaled transaction (do, undo and
+// only the transactions after it are re-applied. A reload of an external edit journals a new
+// "open"; when unsaved local edits survived its merge, that record carries the merged text as a
+// snapshot, which is restored (one transaction) before the later transactions. A document created
+// in the session and never saved comes back from the snapshot in its Create op. Each journaled transaction (do, undo and
 // redo alike) is replayed as one new transaction with its original ops, label, origin and merge
 // key, so the recovered edits are undoable and journaled again in the new session.
 
 #include <algorithm>
 #include <format>
 #include <map>
+#include <optional>
 
 #include "helios/core/hash.h"
 #include "helios/toolsfw/framework.h"
+#include "helios/toolsfw/json_util.h"
 
 #include "doc_access.h"
 #include "framework_internal.h"
@@ -38,6 +42,7 @@ struct DocState {
     std::string typeName;
     u64 hash = 0;          ///< Hash the file must have (last open/save).
     usize baseRecord = 0;  ///< Index of that record.
+    std::optional<std::string> snapshot;  ///< The base's text when it differs from the file (merged reload).
     bool closed = false;
     bool active = false;   ///< Replay enabled.
     usize report = 0;      ///< Index into RecoveryReport::documents.
@@ -45,6 +50,24 @@ struct DocState {
 };
 
 } // namespace
+
+Result<void> detail::FwAccess::restoreSnapshot(Framework& fw, Document& d, std::string_view text) {
+    const refl::TypeInfo& type = d.type();
+    refl::Value target(type);
+    refl::RecordHeader header;
+    refl::ReadCtx ctx;
+    HELIOS_TRY(refl::readRecord(type, target.data(), text, header, ctx));
+    if (header.rid != d.header().rid) return Error{ErrorCode::InvalidState, "$rid differs from the file's"};
+    auto b = fw.begin(Origin::Import, "Recover unsaved edits: " + d.name());
+    b->m_replay = true;
+    HELIOS_TRY(b->set(d.id(), "$name", json::quote(header.name)));
+    HELIOS_TRY(b->set(d.id(), "$parent", json::quote(header.parent)));
+    HELIOS_TRY(b->set(d.id(), "$comment", json::quote(header.comment)));
+    HELIOS_TRY(applyDiff(*b, d, target.data()));
+    if (d.text() != text) return Error{ErrorCode::InvalidArgument, "the snapshot is not canonical"};
+    HELIOS_TRY(b->commit());
+    return {};
+}
 
 Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const RecoveryOptions& options) {
     if (m_group) return Error{ErrorCode::InvalidState, "cannot recover inside a transaction group"};
@@ -65,6 +88,7 @@ Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const Rec
             s.typeName = r.typeName;
             s.hash = r.hash;
             s.baseRecord = i;
+            s.snapshot = r.snapshot;
             s.closed = false;
             break;
         }
@@ -73,6 +97,7 @@ Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const Rec
             s.file = r.file;
             s.hash = r.hash;
             s.baseRecord = i;
+            s.snapshot.reset();
             break;
         }
         case JournalRecordKind::Close: docs[r.doc].closed = true; break;
@@ -128,7 +153,10 @@ Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const Rec
             report.documents.push_back(std::move(rd));
             continue;
         }
-        if (hash64(*bytes) != s.hash && !options.ignoreSourceChanges) {
+        const bool sourceChanged = hash64(*bytes) != s.hash;
+        if (sourceChanged && (!options.ignoreSourceChanges || s.snapshot)) {
+            // A snapshot is a whole-document state with no per-op preconditions: restoring it over
+            // a changed file would silently revert that change, so it is never forced.
             rd.status = DocRecovery::SourceChanged;
             rd.message = "the file changed after the session last read or saved it";
             report.documents.push_back(std::move(rd));
@@ -152,8 +180,18 @@ Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const Rec
             continue;
         }
         s.localId = open->id();
+        if (s.snapshot) {
+            if (auto restored = detail::FwAccess::restoreSnapshot(*this, *open, *s.snapshot); !restored) {
+                rd.status = DocRecovery::Conflict;
+                rd.message = "unsaved edits merged at a reload: " + restored.error().message;
+                report.documents.push_back(std::move(rd));
+                continue;
+            }
+            ++report.replayed;
+            ++rd.transactions;
+        }
         s.active = true;
-        rd.status = DocRecovery::UpToDate;
+        rd.status = s.snapshot ? DocRecovery::Replayed : DocRecovery::UpToDate;
         report.documents.push_back(std::move(rd));
     }
 

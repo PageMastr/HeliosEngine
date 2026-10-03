@@ -85,7 +85,8 @@ private:
 };
 
 /// Resolves a record file's type: an explicit type name, else the type whose `@table("<t>")` matches
-/// the first directory below `records/` ("records/hull/frigate.hrec" -> `@table("hull")`).
+/// the first directory below `records/` ("records/hull/frigate.hrec" -> `@table("hull")`). On
+/// Windows the comparison ignores ASCII case, like the file system.
 const refl::TypeInfo* recordTypeForPath(const refl::TypeRegistry& types, std::string_view relativePath);
 
 /// Canonical record text of a type-erased object (refl::writeRecord).
@@ -111,6 +112,8 @@ public:
     Document* find(const DocId& id) const noexcept;
     /// A live document by `$name` ("hull/frigate"), GUID text, or project-relative / absolute path.
     Document* find(std::string_view nameOrIdOrPath) const;
+    /// The live document of a file. On Windows paths compare without ASCII case, as NTFS does, so
+    /// a differently cased path finds the open document instead of opening the file twice.
     Document* findByPath(const fs::Path& path) const;
 
     /// Project-relative, '/'-separated path of `path` ("" when it is outside the root).

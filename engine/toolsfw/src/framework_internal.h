@@ -24,6 +24,9 @@ struct FwAccess {
     static void eraseHistoryEntries(Framework& fw, std::vector<usize> indices);
     static Result<Document*> openDocument(Framework& fw, const fs::Path& abs, const refl::TypeInfo* type, bool journal,
                                           DocId id);
+    /// Brings `d` to the record text `text` (a reload's journaled snapshot) as one Import
+    /// transaction; nothing changes when it fails.
+    static Result<void> restoreSnapshot(Framework& fw, Document& d, std::string_view text);
     /// External edit (3-way merge) or, with discardLocal, a revert to the file.
     static Result<TxId> syncWithDisk(Framework& fw, const DocId& id, bool discardLocal);
     static Result<void> journal(Framework& fw, const JournalRecord& record) { return fw.journalRecord(record); }

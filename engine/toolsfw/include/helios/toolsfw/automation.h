@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "helios/core/result.h"
+#include "helios/core/types.h"
 
 namespace helios::script {
 class ScriptVm;
@@ -42,10 +43,14 @@ public:
     Automation& operator=(const Automation&) = delete;
 
     /// Runs a script chunk to completion (it may not wait()). Errors come back with the Luau
-    /// message; a group left open by a failing Editor.transaction is rolled back.
+    /// message, prefixed with `chunkName`; a group left open by a failing Editor.transaction is
+    /// rolled back. Runs reuse one VM module, so the VM heap does not grow with the run count.
     Result<AutomationResult> run(std::string_view chunkName, std::string_view source);
+    /// Modules the editor VM holds (at most 1: every run reuses the same one).
+    usize loadedModules() const;
 
 private:
+    static constexpr std::string_view kModule = "automation";
     explicit Automation(Framework& framework) noexcept;
     Framework* m_framework;
     std::unique_ptr<script::ScriptVm> m_vm;

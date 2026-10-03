@@ -21,7 +21,12 @@
 //
 // Undo is a new inverse transaction (kind Undo), so the journal, remote clients and collaborators
 // see it (07 §1.2). History is global with per-document views; it survives saves and is capped at
-// `historyByteLimit` (512 MB) by dropping the oldest entries.
+// `historyByteLimit` (512 MB): past the cap the oldest entries are dropped down to 7/8 of it.
+//
+// Budget: a commit, undo or redo costs O(its ops), independent of the session's length; a one-op
+// edit stays ≤ 0.1 ms (RelWithDebInfo, the dev container), so 60 Hz gestures never approach a
+// frame (`perf:` case in tests/test_history.cpp, which also checks that the cost stays flat over
+// 50,000 commits).
 //
 // Threading: a Framework is owned by one thread (the editor's main thread, the tool's thread);
 // every member must be called from it. The journal flusher and the RPC server's IO threads never
@@ -68,6 +73,9 @@ struct FrameworkConfig {
     JournalOptions journalOptions;
     /// History cap (07 §1.2: 512 MB).
     u64 historyByteLimit = 512ull << 20;
+    /// Transaction ids continue after this Lamport counter. helios-tool passes the highest one in
+    /// the project's journals, so the ids of its separate processes never repeat.
+    u64 lamportFloor = 0;
     /// Clock for Transaction::time (unix nanoseconds); null = the system clock.
     std::function<i64()> clock;
     /// Keys for new keyed-list elements; null = Guid::generate(). Tests pass a seeded generator.
@@ -234,11 +242,18 @@ public:
     /// Starts a transaction for `origin`. Commit it with TxBuilder::commit().
     std::unique_ptr<TxBuilder> begin(Origin origin, std::string label = {});
     /// Groups the transactions of every command until endGroup() into one undo step (Luau
-    /// `Editor.transaction`, multi-command UI actions). Groups nest; the outermost commits.
+    /// `Editor.transaction`, multi-command UI actions). Groups nest; the outermost commits, with
+    /// the outermost origin and label. While a group is open, commands may run only through the
+    /// invoker of the group's origin (07 §1.2: the origin comes from the input path).
     void beginGroup(Origin origin, std::string label);
+    /// Closes the innermost level; closing the outermost commits the group.
     Result<TxId> endGroup();
+    /// Cancels the innermost level: a nested level rolls back only the ops made since its
+    /// beginGroup() and the enclosing levels stay open; the outermost level aborts the group.
     void cancelGroup();
-    bool inGroup() const noexcept { return m_groupDepth > 0; }
+    bool inGroup() const noexcept { return !m_groupMarks.empty(); }
+    /// Open group levels (0 = none).
+    usize groupDepth() const noexcept { return m_groupMarks.size(); }
 
     Result<TxId> undo(Origin origin, std::optional<DocId> doc = std::nullopt);
     Result<TxId> redo(Origin origin, std::optional<DocId> doc = std::nullopt);
@@ -298,6 +313,7 @@ private:
     std::vector<Transaction> m_log;
     std::vector<usize> m_redoStack;  ///< Indices into m_history, most recently undone last.
     u64 m_historyBytes = 0;
+    u64 m_logBytes = 0;              ///< Sum of byteSize() over m_log (kept, never re-summed).
     u64 m_lamport = 0;
     u64 m_changes = 0;
     bool m_lastCanMerge = false;     ///< The last history entry may absorb a same-mergeKey commit.
@@ -305,7 +321,7 @@ private:
     std::vector<PostCommitHook> m_postHooks;
     std::vector<std::function<void(const FrameworkEvent&)>> m_listeners;
     std::unique_ptr<TxBuilder> m_group;
-    u32 m_groupDepth = 0;
+    std::vector<usize> m_groupMarks;  ///< Per open group level: m_group's op count at its beginGroup().
 };
 
 } // namespace helios::tf

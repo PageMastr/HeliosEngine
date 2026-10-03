@@ -334,24 +334,37 @@ Result<void> Framework::init() {
     if (m_config.user.empty()) m_config.user = "local";
     if (m_config.journal) {
         const fs::Path root = m_config.journalRoot.empty() ? defaultJournalRoot() : m_config.journalRoot;
-        if (m_config.session.empty()) m_config.session = newSessionName();
-        JournalHeader header;
-        header.project = m_config.project;
-        header.session = m_config.session;
-        header.user = m_config.user;
-        header.host = os::hostName();
-        header.pid = os::currentProcessId();
-        header.created = now();
-        const fs::Path path = journalDirectory(root, m_config.project) / fs::pathFromUtf8(m_config.session + ".hjl");
-        HELIOS_TRY_ASSIGN(m_journal, JournalWriter::create(path, header, m_config.journalOptions));
+        // A default session name has one-second resolution: a second journaled Framework of the
+        // same project in the same second (reopening a project) takes the next free suffix. An
+        // explicit name must be free.
+        const bool named = !m_config.session.empty();
+        const std::string base = named ? m_config.session : newSessionName();
+        for (u32 attempt = 0;; ++attempt) {
+            m_config.session = attempt == 0 ? base : std::format("{}-{}", base, attempt + 1);
+            JournalHeader header;
+            header.project = m_config.project;
+            header.session = m_config.session;
+            header.user = m_config.user;
+            header.host = os::hostName();
+            header.pid = os::currentProcessId();
+            header.created = now();
+            const fs::Path path = journalDirectory(root, m_config.project) / fs::pathFromUtf8(m_config.session + ".hjl");
+            auto writer = JournalWriter::create(path, header, m_config.journalOptions);
+            if (writer) {
+                m_journal = std::move(*writer);
+                break;
+            }
+            if (named || writer.errorCode() != ErrorCode::AlreadyExists || attempt >= 999) return std::move(writer).error();
+        }
     }
+    m_lamport = m_config.lamportFloor;
     addPreCommitHook(&validateTransaction);
     if (m_config.builtinCommands) HELIOS_TRY(detail::registerBuiltinCommands(*this));
     return {};
 }
 
 Framework::~Framework() {
-    if (m_group) cancelGroup();
+    while (inGroup()) cancelGroup();
     if (m_journal) {
         if (auto r = m_journal->close(true); !r) HELIOS_LOG_ERROR(LogTools, "journal close failed: {}", r.error());
     }
@@ -539,16 +552,22 @@ Result<void> Framework::applyOp(const Op& op) {
             return Error{ErrorCode::AlreadyExists, std::format("{} is already open", op.file)};
         }
         if (existing) {
-            // Undo of a Destroy: restore the same document object.
+            // Undo of a Destroy: restore the same document object. Every check runs on a scratch
+            // copy first, so a failing op leaves the destroyed document as it was (TxBuilder's
+            // contract; raw ops come from replay, collaboration and patches).
             if (existing->type().qualifiedName != op.typeName) return Error{ErrorCode::InvalidState, "create: type mismatch"};
             refl::Value v(*type);
             refl::RecordHeader h;
             refl::ReadCtx ctx;
             HELIOS_TRY(refl::readRecord(*type, v.data(), *op.after, h, ctx));
+            if (recordText(*type, v.data(), h) != *op.after) return Error{ErrorCode::InvalidArgument, "create: snapshot is not canonical"};
+            if (h.rid != existing->header().rid) {
+                return Error{ErrorCode::InvalidState, std::format("create: $rid {} does not match the destroyed document's {}", h.rid,
+                                                                  existing->header().rid)};
+            }
             type->ops->copy(DocAccess::object(*existing), v.data());
-            DocAccess::header(*existing) = h;
+            DocAccess::header(*existing) = std::move(h);
             DocAccess::setDestroyed(*existing, false);
-            if (existing->text() != *op.after) return Error{ErrorCode::InvalidArgument, "create: snapshot is not canonical"};
             emit({FrameworkEvent::Kind::Created, op.doc, {}});
             return {};
         }
@@ -747,31 +766,40 @@ void FwAccess::eraseHistoryEntries(Framework& fw, std::vector<usize> indices) {
 } // namespace detail
 
 void Framework::pushLog(Transaction tx) {
+    m_logBytes += tx.byteSize();
     m_log.push_back(std::move(tx));
 }
 
 void Framework::trimHistory() {
-    // Oldest entries go first; the newest entry always stays undoable.
-    usize drop = 0;
-    u64 bytes = m_historyBytes;
-    while (bytes > m_config.historyByteLimit && drop + 1 < m_history.size()) {
-        bytes -= m_history[drop].tx.byteSize();
-        ++drop;
-    }
-    if (drop > 0) {
-        std::vector<usize> idx(drop);
-        for (usize i = 0; i < drop; ++i) idx[i] = i;
-        detail::FwAccess::eraseHistoryEntries(*this, std::move(idx));
+    // Commit cost must not grow with the session (a 60 Hz gesture commits for hours), so the byte
+    // totals are kept as running sums and nothing here walks the history or the log unless the cap
+    // is exceeded. Then the oldest entries go until the total is at most 7/8 of the cap: the
+    // O(entries) erase runs once per 1/8 of the cap, not on every commit. The newest entry always
+    // stays undoable.
+    const u64 limit = m_config.historyByteLimit;
+    const u64 target = limit - limit / 8;
+    if (m_historyBytes > limit) {
+        usize drop = 0;
+        u64 bytes = m_historyBytes;
+        while (bytes > target && drop + 1 < m_history.size()) {
+            bytes -= m_history[drop].tx.byteSize();
+            ++drop;
+        }
+        if (drop > 0) {
+            std::vector<usize> idx(drop);
+            for (usize i = 0; i < drop; ++i) idx[i] = i;
+            detail::FwAccess::eraseHistoryEntries(*this, std::move(idx));
+        }
     }
     // The log is capped by the same budget (it duplicates the history's data).
-    u64 logBytes = 0;
-    for (const Transaction& t : m_log) logBytes += t.byteSize();
-    usize logDrop = 0;
-    while (logBytes > m_config.historyByteLimit && logDrop + 1 < m_log.size()) {
-        logBytes -= m_log[logDrop].byteSize();
-        ++logDrop;
+    if (m_logBytes > limit) {
+        usize logDrop = 0;
+        while (m_logBytes > target && logDrop + 1 < m_log.size()) {
+            m_logBytes -= m_log[logDrop].byteSize();
+            ++logDrop;
+        }
+        if (logDrop > 0) m_log.erase(m_log.begin(), m_log.begin() + static_cast<isize>(logDrop));
     }
-    if (logDrop > 0) m_log.erase(m_log.begin(), m_log.begin() + static_cast<isize>(logDrop));
 }
 
 // ---- undo / redo ------------------------------------------------------------------------------
@@ -897,19 +925,28 @@ Result<TxId> Framework::revert(Origin origin, std::optional<DocId> doc, bool red
 
 // ---- groups -----------------------------------------------------------------------------------
 void Framework::beginGroup(Origin origin, std::string label) {
-    if (m_groupDepth++ == 0) m_group = begin(origin, std::move(label));
+    if (m_groupMarks.empty()) m_group = begin(origin, std::move(label));
+    // Where this level's ops start: cancelling it rolls back only what came after.
+    m_groupMarks.push_back(m_group->m_ops.size());
 }
 
 Result<TxId> Framework::endGroup() {
-    if (m_groupDepth == 0) return Error{ErrorCode::InvalidState, "no open transaction group"};
-    if (--m_groupDepth > 0) return TxId{};
+    if (m_groupMarks.empty()) return Error{ErrorCode::InvalidState, "no open transaction group"};
+    m_groupMarks.pop_back();
+    if (!m_groupMarks.empty()) return TxId{};
     std::unique_ptr<TxBuilder> group = std::move(m_group);
     return group->commit();
 }
 
 void Framework::cancelGroup() {
-    if (m_groupDepth == 0) return;
-    m_groupDepth = 0;
+    if (m_groupMarks.empty()) return;
+    const usize mark = m_groupMarks.back();
+    m_groupMarks.pop_back();
+    if (!m_groupMarks.empty()) {
+        // A nested level: the enclosing levels keep their ops and stay open.
+        detail::FwAccess::truncate(*m_group, mark);
+        return;
+    }
     std::unique_ptr<TxBuilder> group = std::move(m_group);
     group->abort();
 }
@@ -987,6 +1024,18 @@ Result<TxId> FwAccess::syncWithDisk(Framework& fw, const DocId& id, bool discard
     }
     HELIOS_TRY_ASSIGN(const TxId tx, b->commit());
     DocAccess::setBase(*d, theirsText);
+    // The file is the document's new replay base: journal it like an open, or recovery would
+    // compare the file with the session's first open and skip every later edit as "source
+    // changed". Local edits that survived a merge are not in the file, so the record carries the
+    // merged text; recovery restores it before replaying the transactions after this record.
+    JournalRecord rec;
+    rec.kind = JournalRecordKind::Open;
+    rec.doc = id;
+    rec.file = d->relativePath();
+    rec.typeName = std::string(type.qualifiedName);
+    rec.hash = hash64(text);
+    if (d->text() != theirsText) rec.snapshot = d->text();
+    if (auto r = fw.journalRecord(rec); !r) HELIOS_LOG_ERROR(LogTools, "journal: {}", r.error());
     fw.emit({FrameworkEvent::Kind::Reloaded, id, tx});
     return tx;
 }

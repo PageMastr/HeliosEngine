@@ -4,6 +4,7 @@
 #include <string>
 
 #include "helios/core/hash.h"
+#include "helios/core/platform.h"
 #include "helios/reflect/type_info.h"
 
 #include "doc_access.h"
@@ -49,16 +50,44 @@ std::string recordText(const refl::TypeInfo& type, const void* object, const ref
     return refl::writeRecord(type, object, header);
 }
 
+namespace {
+
+/// File-name equality as the platform's file system sees it: Windows (NTFS and the Win32 APIs)
+/// ignores case, so "Records/Hull/Frigate.hrec" is the same file as "records/hull/frigate.hrec"
+/// there. Only ASCII letters are folded (record paths are ASCII by convention).
+bool sameName(std::string_view a, std::string_view b) noexcept {
+    if constexpr (!platform::kIsWindows) {
+        return a == b;
+    } else {
+        if (a.size() != b.size()) return false;
+        for (usize i = 0; i < a.size(); ++i) {
+            const auto fold = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+            if (fold(a[i]) != fold(b[i])) return false;
+        }
+        return true;
+    }
+}
+
+bool samePath(const fs::Path& a, const fs::Path& b) {
+    if constexpr (!platform::kIsWindows) {
+        return a == b;
+    } else {
+        return sameName(fs::pathToGenericUtf8(a), fs::pathToGenericUtf8(b));
+    }
+}
+
+} // namespace
+
 const refl::TypeInfo* recordTypeForPath(const refl::TypeRegistry& types, std::string_view relativePath) {
     // "records/<table>/..." -> <table>. Accept a path that starts at the table directory too.
     std::string_view rest = relativePath;
-    if (rest.starts_with("records/")) rest.remove_prefix(8);
+    if (rest.size() >= 8 && sameName(rest.substr(0, 8), "records/")) rest.remove_prefix(8);
     const usize slash = rest.find('/');
     if (slash == std::string_view::npos || slash == 0) return nullptr;
     const std::string_view table = rest.substr(0, slash);
     for (const refl::TypeInfo* t : types.types()) {
         if (t->decl != refl::DeclKind::Record) continue;
-        if (const auto* tbl = t->attr<refl::attrs::Table>(); tbl && tbl->name == table) return t;
+        if (const auto* tbl = t->attr<refl::attrs::Table>(); tbl && sameName(tbl->name, table)) return t;
     }
     return nullptr;
 }
@@ -98,7 +127,7 @@ Document* Workspace::findByPath(const fs::Path& path) const {
     fs::Path abs = path.is_absolute() ? path : m_root / path;
     abs = abs.lexically_normal();
     for (Document* d : m_order) {
-        if (!d->destroyed() && !d->path().empty() && d->path() == abs) return d;
+        if (!d->destroyed() && !d->path().empty() && samePath(d->path(), abs)) return d;
     }
     return nullptr;
 }

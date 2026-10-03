@@ -289,10 +289,14 @@ void JournalWriter::flusherMain() {
         // Group commit: gather the appends of one window, then make them durable together.
         m_cv.wait_for(lock, m_options.flushInterval, [&] { return m_stop; });
         if (!m_dirty || m_closed) continue;
-        if (auto r = m_file.sync(); !r) {
-            HELIOS_LOG_ERROR(LogTools, "journal {}: sync failed: {}", fs::pathToGenericUtf8(m_path), r.error());
-        }
+        // fsync runs unlocked so append() on the commit path never waits for the disk; appends
+        // that land during it set m_dirty again for the next window. close() joins this thread
+        // before it closes the file.
         m_dirty = false;
+        lock.unlock();
+        const Result<void> r = m_file.sync();
+        lock.lock();
+        if (!r) HELIOS_LOG_ERROR(LogTools, "journal {}: sync failed: {}", fs::pathToGenericUtf8(m_path), r.error());
         ++m_syncs;
     }
 }
@@ -404,8 +408,11 @@ std::vector<JournalSessionInfo> listJournalSessions(const fs::Path& root, std::s
         info.header = scan->header;
         info.clean = scan->clean;
         info.tornBytes = scan->tornBytes;
-        info.txCount = static_cast<u64>(std::count_if(scan->records.begin(), scan->records.end(),
-                                                      [](const JournalRecord& r) { return r.kind == JournalRecordKind::Tx; }));
+        for (const JournalRecord& r : scan->records) {
+            if (r.kind != JournalRecordKind::Tx) continue;
+            ++info.txCount;
+            info.maxLamport = std::max(info.maxLamport, r.tx.id.lamport);
+        }
         if (uncleanOnly) {
             if (info.clean) continue;
             const bool thisHost = info.header.host == host;

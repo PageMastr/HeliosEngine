@@ -60,6 +60,24 @@ TEST_CASE("cmd: the invoker stamps the origin; arguments cannot") {
     CHECK_FALSE(parseOrigin("human"));
 }
 
+TEST_CASE("cmd: another input path's commands are refused while a group is open") {
+    Fixture f("cmd_group_origin");
+    f.fw->beginGroup(Origin::Ui, "Retune");
+    REQUIRE(f.fw->invoker(Origin::Ui).invoke("doc.setProperty", R"({"doc": "hull/frigate", "path": "mass", "value": 14000})"));
+    // An RPC command would otherwise join the group and be committed with origin ui.
+    auto rpc = f.fw->invoker(Origin::Rpc).invoke("doc.setProperty", R"({"doc": "hull/frigate", "path": "handling/yawRate", "value": 12})");
+    REQUIRE_FALSE(rpc);
+    CHECK(rpc.errorCode() == ErrorCode::InvalidState);
+    CHECK(f.get("handling/yawRate") == "30");
+    REQUIRE(f.fw->endGroup());
+    REQUIRE(f.fw->history().size() == 1);
+    CHECK(f.fw->history()[0].tx.origin == Origin::Ui);
+    CHECK(f.fw->history()[0].tx.ops.size() == 1);
+    // Once the group has closed, the RPC command runs with its own origin.
+    REQUIRE(f.fw->invoker(Origin::Rpc).invoke("doc.setProperty", R"({"doc": "hull/frigate", "path": "handling/yawRate", "value": 12})"));
+    CHECK(f.fw->log().back().origin == Origin::Rpc);
+}
+
 TEST_CASE("cmd: a failing command rolls back all of its edits") {
     Fixture f("cmd_rollback");
     const std::string before = f.doc().text();

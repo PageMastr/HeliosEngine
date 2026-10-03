@@ -44,6 +44,7 @@ STATUSES = {"measured", "partial", "unmeasured", "approved"}
 GAP_STATES = {"unmeasured", "failing"}
 REF_KINDS = {"ctest": set(), "doctest": {"case"}, "go": {"test"}, "gate": set(), "ci_job": set(), "evidence": set()}
 REF_OPTIONAL = {"platforms", "run", "note", "tags", "advisory", "advisory_runs", "owner_approval"}
+REF_KIND_OPTIONAL = {"gate": {"case"}}  # a gate that declares `cases` is cited one clause at a time
 TEST_KINDS = {"ctest", "doctest", "go", "gate"}  # references that run on a platform
 ENTRY_REQUIRED = {"id", "phase", "source", "owner", "title", "class", "platforms", "threshold", "status", "tests"}
 ENTRY_OPTIONAL = {"gaps", "notes", "follow_ups"}
@@ -53,7 +54,10 @@ FOLLOW_UP_KEYS = {"clause", "owner"}
 APPROVAL_DIR = "docs/evidence/"
 TOP_KEYS = {"version", "plan_rev", "covers", "runs", "gates", "criteria", "exit", "perf_metrics", "perf_accept"}
 RUN_KEYS = {"os", "default", "nightly", "description"}
-GATE_KEYS = {"runs", "min_seconds", "description"}
+GATE_KEYS = {"runs", "min_seconds", "description", "cases"}
+# One clause of a gate command: the criterion it belongs to, the line that reports its measurement, and the
+# line the command prints when the clause fails (runners.py gate turns each into its own JUnit case).
+GATE_CASE_KEYS = {"criterion", "result", "failure"}
 METRIC_FIELDS = {"id", "criterion", "doctest", "case", "gate", "pattern", "unit", "better", "category", "run", "note",
                  "bound"}
 METRIC_CATEGORIES = {"render", "runtime", "backend", "editor", "iteration"}
@@ -565,7 +569,7 @@ def _check_ref(where: str, ref, entry: dict, data: dict, ctx: dict, errors: list
         errors.append(f"{where}: a test reference needs exactly one of {', '.join(sorted(REF_KINDS))}")
         return
     label = ref_label(ref)
-    allowed = {kind} | REF_KINDS[kind] | REF_OPTIONAL
+    allowed = {kind} | REF_KINDS[kind] | REF_KIND_OPTIONAL.get(kind, set()) | REF_OPTIONAL
     for key in sorted(set(ref) - allowed):
         errors.append(f"{where}: unknown field '{key}' in {label}")
     for key in [kind, *sorted(REF_KINDS[kind])]:
@@ -660,6 +664,21 @@ def _check_ref(where: str, ref, entry: dict, data: dict, ctx: dict, errors: list
             gate_oses = {runs.get(r, {}).get("os") for r in gate.get("runs") or [] if isinstance(r, str)}
             for p in sorted(set(ref_platforms(entry, ref)) - gate_oses - {"any"}):
                 errors.append(f"{where}: {label} never runs on {p}")
+            # A gate that measures several criteria reports each clause as its own case, and each criterion
+            # cites only its own: a reference to the whole command would fail one criterion on another's clause.
+            cases = gate.get("cases") if isinstance(gate.get("cases"), dict) else None
+            case = ref.get("case")
+            if cases is None and "case" in ref:
+                errors.append(f"{where}: {label}: gate '{ref['gate']}' declares no 'cases'")
+            elif cases is not None and "case" not in ref:
+                errors.append(f"{where}: {label}: gate '{ref['gate']}' reports one case per clause, so a reference "
+                              f"names its clause with 'case' ({', '.join(sorted(cases))})")
+            elif cases is not None and (not isinstance(case, str) or case not in cases):
+                errors.append(f"{where}: {label}: '{case}' is not a case of gate '{ref['gate']}' "
+                              f"({', '.join(sorted(cases))})")
+            elif cases is not None and isinstance(cases[case], dict) and cases[case].get("criterion") != entry.get("id"):
+                errors.append(f"{where}: {label}: the case is {cases[case].get('criterion')}'s clause, so only "
+                              f"{cases[case].get('criterion')} cites it")
     if kind == "evidence":
         rel = Path(ref["evidence"])
         if rel.is_absolute() or ".." in rel.parts or ref["evidence"].startswith(("/", "\\")):
@@ -732,7 +751,33 @@ def _check_top(name: str, data: dict, errors: list[str]) -> list[int]:
                           f"positive integer")
         if not isinstance(gate.get("description", ""), str):
             errors.append(f"{name}:1: gate '{gate_name}': 'description' must be a string")
+        if "cases" in gate:
+            _check_gate_cases(name, gate_name, gate["cases"], errors)
     return covers
+
+
+def _check_gate_cases(name: str, gate_name: str, cases, errors: list[str]) -> None:
+    """A gate's `cases`: {case name: {"criterion", "result", "failure"}}, the two patterns valid regexes."""
+    if not isinstance(cases, dict) or not cases:
+        errors.append(f"{name}:1: gate '{gate_name}': 'cases' must be a non-empty object of clause cases")
+        return
+    for case_name, case in cases.items():
+        where = f"{name}:1: gate '{gate_name}' case '{case_name}'"
+        if not case_name.strip() or case_name == gate_name:
+            errors.append(f"{where}: a case needs a non-empty name other than its gate's")
+        if not isinstance(case, dict):
+            errors.append(f"{where}: must be an object with {', '.join(sorted(GATE_CASE_KEYS))}")
+            continue
+        for key in sorted(set(case) - GATE_CASE_KEYS):
+            errors.append(f"{where}: unknown field '{key}'")
+        for key in sorted(GATE_CASE_KEYS):
+            if not isinstance(case.get(key), str) or not case[key].strip():
+                errors.append(f"{where}: needs a non-empty string '{key}'")
+            elif key != "criterion":
+                try:
+                    re.compile(case[key])
+                except re.error as e:
+                    errors.append(f"{where}: '{key}' is not a valid regex: {e}")
 
 
 def validate(data: dict, text: str, path: Path, plan: Plan | None = None, ci_jobs: list[str] | None = None,
@@ -853,6 +898,17 @@ def validate(data: dict, text: str, path: Path, plan: Plan | None = None, ci_job
                                                               for r in tests):
                     errors.append(f"{where}: {ident}: {ref_label(gap['pinned_by'])} pins a failing clause, so it "
                                   f"cannot also be evidence")
+    # Every clause case is cited by its criterion, or that clause would be measured and never read.
+    for gate_name, gate in (data.get("gates") if isinstance(data.get("gates"), dict) else {}).items():
+        cases = gate.get("cases") if isinstance(gate, dict) and isinstance(gate.get("cases"), dict) else {}
+        for case_name, case in cases.items():
+            owner = case.get("criterion") if isinstance(case, dict) else None
+            cited = [e for e in items if e.get("id") == owner and any(
+                isinstance(r, dict) and r.get("gate") == gate_name and r.get("case") == case_name
+                for r in e.get("tests") or [])]
+            if isinstance(owner, str) and not cited:
+                errors.append(f"{name}:1: gate '{gate_name}' case '{case_name}': no {owner} entry cites it, so the "
+                              f"clause would be measured and never read")
     if plan:
         errors += plan.problems
         for phase in covers:

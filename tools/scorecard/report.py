@@ -9,10 +9,12 @@ DIR holds one directory per result set (a nightly job's artifact). Each has `run
   ctest*.xml                  CTest JUnit (`ctest --output-junit`)
   doctest/<binary>[.perf].xml doctest XML with <stem>.status.json (runners.py doctest)
   go*.json                    `go test -json` streams
-  gates/<gate>.xml            JUnit from runners.py gate
+  gates/<gate>.xml            JUnit from runners.py gate: case <gate> for the command, and one case per
+                              clause for a gate that declares `cases`
 --ci-jobs is the GitHub API's jobs listing of the latest completed ci.yml run on main.
 
-A reference passes on an OS when it has results in the runs that count for it and none of them failed;
+A reference passes on an OS when it has results in the runs that count for it and none of them failed (a
+`gate` reference with `case` reads that clause's case; a gate result without it reads as missing);
 a criterion passes when every reference passes on every platform and it has no gap. Anything else is
 fail (a failed reference or a failing gap) or unmeasured (no result, a skip, or an unmeasured gap).
 An entry that cites the repository owner's approval (09 §5.6; an evidence reference with `owner_approval`)
@@ -60,6 +62,7 @@ class Results:
         self.go: dict[tuple[str, str], str] = {}
         self.go_broken: set[str] = set()
         self.gates: dict[str, tuple[str, float, str]] = {}
+        self.gate_cases: dict[tuple[str, str], tuple[str, float, str]] = {}  # (gate, clause case)
 
 
 def junit_cases(path: Path) -> list[tuple[str, str, float, str]]:
@@ -131,8 +134,12 @@ def load_results(root: Path, module: str) -> list[Results]:
         for f in sorted(d.glob("go*.json")):
             read_go(res, f, module)
         for f in sorted((d / "gates").glob("*.xml")):
+            # <gate>.xml: the case named after the gate is the command's result, the others its clauses.
             for name, status, seconds, output in junit_cases(f):
-                res.gates[name] = (status, seconds, output)
+                if name == f.stem:
+                    res.gates[name] = (status, seconds, output)
+                else:
+                    res.gate_cases[(f.stem, name)] = (status, seconds, output)
         runs.append(res)
     return runs
 
@@ -162,6 +169,8 @@ def combine(statuses: list[str]) -> str:
         return "missing"
     if "fail" in statuses:
         return "fail"
+    if "missing" in statuses:
+        return "missing"
     return "pass" if all(s == "pass" for s in statuses) else "skip"
 
 
@@ -211,13 +220,17 @@ def eval_ref(ref: dict, os_name: str, entry: dict, data: dict, runs: list[Result
             hit = r.go.get((ref["go"], ref["test"]))
             hits = [hit] if hit else ["fail"] if ref["go"] in r.go_broken else []
             why = "package failed" if not hit and hits else ""
-        else:  # gate
-            gate = r.gates.get(ref["gate"])
+        else:  # gate, or with `case` one of its clauses
+            ran = r.gates.get(ref["gate"])
+            gate = r.gate_cases.get((ref["gate"], ref["case"])) if "case" in ref else ran
             need = ((data.get("gates") or {}).get(ref["gate"]) or {}).get("min_seconds")
             hits = []
-            if gate and not (scorecard.is_int(need) and need > 0):  # never a silent 0: the check rejects it too
+            if gate is None:
+                if ran is not None:  # the gate ran, and its result has no such clause: never a pass
+                    hits, why = ["missing"], f"the gate's result has no case '{ref['case']}'"
+            elif not (scorecard.is_int(need) and need > 0):  # never a silent 0: the check rejects it too
                 hits, why = ["fail"], "the gate declares no positive min_seconds"
-            elif gate:
+            else:
                 short = gate[0] == "pass" and gate[1] < need
                 hits = ["fail" if short else gate[0]]
                 why = f"ran {gate[1]:.0f} s of the required {need} s" if short else ""

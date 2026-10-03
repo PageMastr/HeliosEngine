@@ -107,9 +107,12 @@ the connection, request and output bounds), and **ED-1** (`test_ed1.cpp`):
 
 ## Plan conformance
 
-Plan-Rev: 11
+Plan-Rev: 12
 
 Written for plan revision 6 (07 §1.2, §4.4; 09 §2.1 WP-0.18) on 2026-09-25. Re-checked against plan
 revision 11 on 2026-10-03, when the work was ported onto it: revisions 7–11 changed 02 §7.4, 04 §3.2 and
 §10.2, 06 §1.2, ADR-004a, and 09's WP-0.10r row, §5.2a, §5.10.4, §7 and §8, none of which maps to this
 module; 07 and 09's WP-0.18 row are unchanged since revision 6.
+
+Re-checked against plan revision 12 on 2026-10-03: it changed 09 §0, §5.6, §5.7, §5.10.4, §8.1,
+§8.2 and PLAN.md §11 (owner approvals, NS-0.2), none of which maps to this module.

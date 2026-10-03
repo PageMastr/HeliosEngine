@@ -13,6 +13,9 @@ Each tool's README documents its command line, tests and plan conformance.
 
 ## Plan conformance
 
-Plan-Rev: 11
+Plan-Rev: 12
 
 Written for plan revision 11 (07 §1.1, §4.4; 09 §2.1 WP-0.18) on 2026-10-03.
+
+Re-checked against plan revision 12 on 2026-10-03: it changed 09 §0, §5.6, §5.7, §5.10.4, §8.1,
+§8.2 and PLAN.md §11 (owner approvals, NS-0.2), none of which maps to this directory.

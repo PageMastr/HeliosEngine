@@ -509,8 +509,12 @@ helios-schemac -I schemas --lock schemas/sample/schema.lock.jsonc --emit sql --s
 
   Scalar columns are `NOT NULL DEFAULT <the schema default>` (explicit or implicit: 0, `FALSE`, `''`,
   the nil UUID, the first enum value), so `ADD COLUMN` needs no backfill; key columns have no
-  default. A string default with a backslash is an `E'…'` literal (backslash and quote doubled), so it
-  reads the same whatever `standard_conforming_strings` is. `T?` columns are nullable without a default. `JSONB` columns are nullable, and NULL means
+  default. A string default with a backslash or a control character is an `E'…'` literal (backslash
+  and quote doubled, control characters as `\n`, `\r`, `\t`, `\b`, `\f` or `\xHH`), so every literal
+  stays on one line (goose reads a stub line by line, and a line inside a literal that reads
+  `-- +goose …` would be an annotation) and reads the same whatever `standard_conforming_strings` is.
+  A string default holding U+0000 is an error (`TEXT` cannot store it, and a NUL ends psql's input
+  line). `T?` columns are nullable without a default. `JSONB` columns are nullable, and NULL means
   the field's default (none for `T?`), as writers omit defaults (§3.7). `CHECK` constraints are named
   `<table>_<column>_check`.
 - **Migrations only expand** (05 §3.3: release N adds, contraction happens in N+2). A new struct is a
@@ -521,8 +525,13 @@ helios-schemac -I schemas --lock schemas/sample/schema.lock.jsonc --emit sql --s
   changed explicit default is `SET DEFAULT`; a revived field is `ADD COLUMN IF NOT EXISTS`, with a
   `-- TODO` when its column changed while it was removed (before the N+2 contract the old column still
   exists and keeps its old type). A removed field is only a
-  comment listing the `DROP COLUMN` for the contract release. Down reverses Up, last step first.
-  Against an up-to-date baseline the stub is empty (`SELECT 1;`). Copy a stub into
+  comment listing the `DROP COLUMN` for the contract release, and so is a table of the schema whose
+  struct was removed or lost `@sql` (`DROP TABLE`). The lock keeps such a struct's entry and table, so
+  that note stays in later stubs: the lock cannot tell when the contract release dropped the table. A
+  struct the run only imports keeps its table, and a schema whose last table goes gets no stub (drop
+  it by hand). Like the snapshot, this assumes one run compiles all of a service schema's structs.
+  Down reverses Up, last step first. Against an up-to-date baseline the stub's Up and Down are
+  `SELECT 1;`. Copy a stub into
   `services/migrations/<service>/` and review it: indexes, partitioning, grants and backfills are
   hand-written; a new `svc_ledger` table carries a `-- TODO` for 05 §3.3's range partitions, which
   `ALTER` cannot add later. The header lists the schema files sorted, so the command line's order
@@ -603,8 +612,9 @@ Names never interned and sets of names in lexical order, `@max` on string parame
 results, exact `T[N]`, exact integers up to 2⁵³ − 1, finite `f32`, and realm checks against the host
 profile. 22 mutants of the generator (the reviewer's 11 and 11 more) are each killed by a behavioural
 case. `test_sql.cpp` covers the column mapping, the migration stub
-(renames, widenings, `T→T?`, new columns and tables, removed fields as contract comments, Down in
-reverse, the empty stub, `--sql-baseline`) and the rules of `@sql`. The CTest `schemac_sql_postgres`
+(renames, widenings, `T→T?`, new columns and tables, removed fields and tables as contract comments,
+Down in reverse, the empty stub, `--sql-baseline`), string defaults (one line, `E'…'`, no NUL) and
+the rules of `@sql`. The CTest `schemac_sql_postgres`
 (`tests/sql_postgres.cmake`) runs them on a real PostgreSQL: it compiles `tests/sql/v1` and `v2` as two
 releases, checks that v1's and v2's stubs (plus v2's contract step) build exactly v2's snapshot
 (`pg_dump --schema-only`), that v2's Down returns to v1's snapshot, and that the committed SQL goldens

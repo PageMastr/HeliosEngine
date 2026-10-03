@@ -43,15 +43,37 @@ std::string ident(const std::string& name) {
     return reserved ? "\"" + name + "\"" : name;
 }
 
-/// A string literal that reads the same whatever `standard_conforming_strings` is. With it off, a
-/// backslash in '…' escapes the next character, so a backslash before a doubled quote would end the
-/// literal early; a string with a backslash therefore becomes E'…', where `\\` always means one.
+bool isControl(char c) {
+    const auto u = static_cast<unsigned char>(c);
+    return u < 0x20 || u == 0x7f;
+}
+
+/// A string literal that stays on one line and reads the same whatever `standard_conforming_strings`
+/// is. With that setting off, a backslash in '…' escapes the next character, so a backslash before a
+/// doubled quote would end the literal early. A raw line break would put the rest of the literal on
+/// lines that goose parses on their own (a line reading `-- +goose ENVSUB ON` inside the literal is an
+/// annotation), and a NUL ends psql's input line. So a string with a backslash or a control character
+/// becomes E'…', with `\\` doubled and each control character written as an escape. U+0000 is
+/// rejected before this (PostgreSQL TEXT cannot hold it); it would be `\x00`, which PostgreSQL refuses.
 std::string sqlString(std::string_view s) {
-    const bool escaped = s.find('\\') != std::string_view::npos;
+    const bool escaped = std::any_of(s.begin(), s.end(), [](char c) { return c == '\\' || isControl(c); });
     std::string out = escaped ? "E'" : "'";
     for (const char c : s) {
-        if (c == '\'' || (escaped && c == '\\')) out += c;
-        out += c;
+        switch (c) {
+        case '\'': out += "''"; break;
+        case '\\': out += "\\\\"; break; // (only in E'…')
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        case '\b': out += "\\b"; break;
+        case '\f': out += "\\f"; break;
+        default:
+            if (isControl(c)) {
+                out += std::format("\\x{:02X}", static_cast<unsigned char>(c));
+            } else {
+                out += c;
+            }
+        }
     }
     return out + "'";
 }
@@ -248,6 +270,16 @@ private:
         return nullptr;
     }
 
+    /// The declaration of the baseline entry `name` (lock id `id`) in this compilation: by lock id, which a
+    /// @was rename keeps, or by name for a type only imported here (imports get no lock id); or nullptr.
+    const Decl* declOf(const std::string& name, u32 id) const {
+        for (const Decl* d : S.decls) {
+            if (d->typeId == id) return d;
+        }
+        const auto it = S.declsByName.find(name);
+        return it == S.declsByName.end() ? nullptr : it->second;
+    }
+
     /// A baseline signature with the types renamed since then under their current names, so that a
     /// field of a renamed type is not a type change.
     std::string currentSignature(std::string_view sig) const {
@@ -319,6 +351,12 @@ private:
                 D.error(f->loc, std::format("field '{}' of '{}' cannot be a column of {}: {}", f->name, d->name, d->sqlTable, why));
                 ok = false;
                 continue;
+            }
+            if (const Value* v = f->defaultValue ? &*f->defaultValue : nullptr;
+                v && v->kind == Value::Kind::String && v->s.find('\0') != std::string::npos) {
+                D.error(f->loc, std::format("the default of field '{}' of '{}' holds U+0000, which a PostgreSQL TEXT column cannot store",
+                                            f->name, d->name));
+                ok = false;
             }
             const std::string name = snakeCase(f->name);
             if (name.size() > 63) { // PostgreSQL would truncate it silently
@@ -444,7 +482,7 @@ private:
     std::string migration(const std::string& schema, const std::vector<Table>& tables) const {
         CodeWriter up, down;
         std::vector<std::string> downs; // reversed at the end
-        std::vector<std::string> contract;
+        std::vector<std::string> contract, dropTables; // (columns, tables)
         for (const Table& t : tables) {
             const std::string qt = t.schema + "." + ident(t.name);
             if (!t.baseline) {
@@ -520,6 +558,18 @@ private:
                 for (const std::string& s : steps) up.line(s);
             }
         }
+        // A table of this schema that the baseline recorded and no struct stores any more: its struct was
+        // removed or lost @sql. The lock keeps the entry and its table, so the note stays in later stubs
+        // (it cannot tell when the contract release dropped the table). A struct this compilation only
+        // imports still has its @sql and is not generated here.
+        for (const auto& [name, lt] : B.types) {
+            if (!lt.sql.starts_with(schema + ".")) continue;
+            if (std::any_of(tables.begin(), tables.end(), [&](const Table& t) { return t.baseline == &lt; })) continue;
+            const Decl* decl = declOf(name, lt.id);
+            if (decl && !decl->sqlTable.empty()) continue;
+            dropTables.push_back(std::format("--   DROP TABLE {}.{}; -- {} (lock id {}) {}", schema, ident(lt.sql.substr(schema.size() + 1)),
+                                             decl ? decl->qualifiedName : name, lt.id, decl ? "is no longer @sql" : "was removed"));
+        }
         CodeWriter w;
         w.raw(header(schema, "Migration stub"));
         w.line("-- Expands the schema from the baseline lock to the current one (05 §3.3: release N only adds). Copy it to");
@@ -533,10 +583,12 @@ private:
         } else {
             w.raw(up.str().substr(1)); // (without the leading blank line)
         }
-        if (!contract.empty()) {
+        if (!contract.empty() || !dropTables.empty()) {
             w.line();
-            w.line("-- Contract release (N+2, 05 §3.3), once no reader uses these columns:");
+            w.line(std::format("-- Contract release (N+2, 05 §3.3), once no reader uses these {}:",
+                               dropTables.empty() ? "columns" : contract.empty() ? "tables" : "columns and tables"));
             for (const std::string& c : contract) w.line(c);
+            for (const std::string& c : dropTables) w.line(c);
         }
         w.line();
         w.line("-- +goose Down");

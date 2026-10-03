@@ -209,12 +209,19 @@ helios_net and the vendored read paths). Otherwise they are standalone replayers
 CTests (`--smoke 20000` over the committed seeds in `fuzz/corpus/<target>/`; regenerate seeds with
 `--make-seeds DIR`).
 
-**Gates** (`net_bench`; `--gate` runs the Phase 0 versions and exits non-zero on failure):
+**Gates** (`net_bench`; `--gate` runs the Phase 0 versions and exits non-zero on failure). The hosted
+nightly runs `net_bench --gate --advisory ns02-stack`: the encrypted stack's 100k packets per core is
+printed with an `NS-0.2 advisory:` line instead of failing, on the repository owner's approval of 2026-09-30
+([`docs/evidence/ns-0.2-owner-approval-2026-09-30.md`](../../docs/evidence/ns-0.2-owner-approval-2026-09-30.md),
+09 §5.6), because hosted runners measured it at 85k–132k with no code change. Nothing else relaxes: raw
+datagrams, loss at either level, a stack that never sent, and NS-0.7 still fail the run, and `--advisory`
+takes no other name and needs `--gate` (exit 2 otherwise; `bench/ns02_gate.h`, the `net.bench` doctest
+and the `net_bench_advisory_*` CTests). Run `net_bench --gate` without it locally and on fixed hardware.
 
 | Criterion | Measurement (this container, GCC 13 RelWithDebInfo, shared 4-core VM) |
 |---|---|
 | NS-0.1 handshake 1.5 RTT | server 75.6 ms, client 100.7 ms at 50 ms RTT (`net.endpoint`) |
-| NS-0.2 loopback 100k pps/core without loss | gated at both levels by `net_bench --gate`: ≈ 480k datagrams/s per core at L0 (send + receive on one core, 1,000,000/1,000,000; also `net.udp`), and 117k encrypted HTP packets/s per core through the full stack with both endpoints on one core (1,162,752/1,162,752 delivered, 10 s, load average 3.5) |
+| NS-0.2 loopback 100k pps/core without loss | passes on the owner's approval (above); gated at both levels by `net_bench --gate`: ≈ 480k datagrams/s per core at L0 (send + receive on one core, 1,000,000/1,000,000; also `net.udp`), and 117k encrypted HTP packets/s per core through the full stack with both endpoints on one core (1,162,752/1,162,752 delivered, 10 s, load average 3.5) |
 | NS-0.4 fuzzers 1 h clean | harnesses + seeds + CTest smoke; long runs under ASan/UBSan clean (see WP report); the 1 h libFuzzer nightly needs Clang's compiler-rt (absent in this container) |
 | NS-0.7 trunk 20k pps × 1,200 B, < 0.1 % drops, ≤ 1 core | `net_bench --gate`, 600 s, full datagrams (1,188 B STATE payload → 1,200 B netcode payload): 11,999,999 of 11,999,999 delivered (20,000 pps, 190.1 Mbit/s payload, 199.7 Mbit/s wire), 0 drops, cell thread 0.26 cores, gateway thread 0.29 cores; `net.trunk` repeats it for 1 s on every test run |
 
@@ -245,7 +252,9 @@ CTests (`--smoke 20000` over the committed seeds in `fuzz/corpus/<target>/`; reg
 
 ## Plan conformance
 
-Plan-Rev: 6
+Plan-Rev: 12
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
-`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.
+`docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked at revision 12 (09 §5.6's owner approval)
+on 2026-10-03: the approval adds `net_bench --advisory ns02-stack` and changes nothing in `helios_net`. No
+conformance delta is open; see §5.10.4 (c) there.

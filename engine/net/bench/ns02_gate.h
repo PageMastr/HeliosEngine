@@ -16,8 +16,8 @@ inline constexpr f64 kNs02PerCore = 100'000.0;
 inline constexpr std::string_view kNs02StackAdvisoryName = "ns02-stack";
 
 /// Why that rate may be advisory. Hosted runners' resources vary, so the level they measure does too
-/// (88k to 132k packets per core on Linux with no code change); the repository owner passed NS-0.2 on
-/// 2026-09-30 with a re-test on fixed hardware owed (WP-0.4).
+/// (88k to 132k packets per core on hosted Linux and 85k on hosted Windows, with no code change); the
+/// repository owner passed NS-0.2 on 2026-09-30 with a re-test on fixed hardware owed (WP-0.4).
 inline constexpr std::string_view kNs02StackAdvisoryReason =
     "owner approval 2026-09-30, evidence docs/evidence/ns-0.2-owner-approval-2026-09-30.md";
 

@@ -13,6 +13,11 @@ given inventories or a build directory, that every referenced CTest, doctest cas
 the platforms it is expected on. Findings print as `file:line: message`. `inventory` records the tests
 of a build (CTest names, doctest cases per binary) and of `go test -list` output as JSON.
 
+An entry may cite the repository owner's approval (09 §5.6): an `evidence` reference under docs/evidence/
+with `owner_approval` (the date) and `advisory` (the perf metrics of the one clause it passes, which the
+report shows beside the pass). The checker holds it to the plan's rule: one per criterion, a test that
+still runs, and the re-test it owes as a follow-up. The registry never relaxes a result itself.
+
 Standard library only, no network. The report and perf tools import this module; nothing here is
 thread-safe or meant to be.
 """
@@ -42,7 +47,7 @@ ENTRY_REQUIRED = {"id", "phase", "source", "owner", "title", "class", "platforms
 ENTRY_OPTIONAL = {"gaps", "notes", "follow_ups"}
 GAP_KEYS = {"clause", "state", "owner", "pinned_by"}
 FOLLOW_UP_KEYS = {"clause", "owner"}
-# The repository owner's approval of a criterion is a record under this directory (09 §5.6's M records).
+# The repository owner's approval of a criterion is a record under this directory, like 09 §5.6's M records.
 APPROVAL_DIR = "docs/evidence/"
 TOP_KEYS = {"version", "plan_rev", "covers", "runs", "gates", "criteria", "exit", "perf_metrics", "perf_accept"}
 RUN_KEYS = {"os", "default", "nightly", "description"}
@@ -208,6 +213,15 @@ def approval(entry: dict) -> dict | None:
     """The entry's owner-approval reference (an `evidence` reference with `owner_approval`), if any."""
     return next((r for r in entry.get("tests") or [] if isinstance(r, dict) and ref_kind(r) == "evidence"
                  and "owner_approval" in r), None)
+
+
+def metric_reads(metric: dict, ref: dict) -> bool:
+    """Whether a perf metric reads a test reference's output: the same gate, or the same doctest case."""
+    kind = ref_kind(ref)
+    if kind == "gate":
+        return "gate" in metric and metric["gate"] == ref["gate"]
+    return kind == "doctest" and metric.get("doctest") == ref["doctest"] and isinstance(metric.get("case"), str) \
+        and isinstance(ref.get("case"), str) and matches(metric["case"], ref["case"])
 
 
 def ref_platforms(entry: dict, ref: dict) -> list[str]:
@@ -579,8 +593,9 @@ def _check_ref(where: str, ref, entry: dict, data: dict, ctx: dict, errors: list
         errors.append(f"{where}: {label}: 'tags' (a string) applies to go references only")
     if "note" in ref and not isinstance(ref["note"], str):
         errors.append(f"{where}: {label}: 'note' must be a string")
-    # An owner approval passes a criterion whose own measurement it makes advisory, so both are held to the
-    # entry: the approval is a dated record under docs/evidence/, and nothing is advisory without one.
+    # The repository owner's approval (09 §5.6) is a dated record under docs/evidence/. `advisory` names the
+    # perf metrics of the one clause it passes, so the report can show their level beside the pass; it does
+    # not stop any reference from counting.
     if "owner_approval" in ref:
         date = ref["owner_approval"]
         if kind != "evidence" or ctx.get("pin"):
@@ -593,13 +608,25 @@ def _check_ref(where: str, ref, entry: dict, data: dict, ctx: dict, errors: list
         if kind == "evidence" and not ref["evidence"].startswith(APPROVAL_DIR):
             errors.append(f"{where}: {label}: an owner approval is a record under {APPROVAL_DIR}")
     if "advisory" in ref:
-        if ref["advisory"] is not True:
-            errors.append(f"{where}: {label}: 'advisory' must be true (leave it out for a reference that counts)")
-        elif kind not in TEST_KINDS or ctx.get("pin"):
-            errors.append(f"{where}: {label}: only an entry's test references (ctest, doctest, go, gate) can be advisory")
-        elif approval(entry) is None:
-            errors.append(f"{where}: {label} is advisory, which needs the owner approval that passes the entry: "
-                          f"an evidence reference with 'owner_approval'")
+        names = ref["advisory"]
+        if "owner_approval" not in ref or kind != "evidence" or ctx.get("pin"):
+            errors.append(f"{where}: {label}: 'advisory' names the perf metrics of the clause an owner approval "
+                          f"passes, so it goes on the approval's evidence reference")
+        elif not isinstance(names, list) or not names or not all(isinstance(n, str) for n in names) or \
+                len(set(names)) != len(names):
+            errors.append(f"{where}: {label}: 'advisory' must be a non-empty list of distinct perf metric ids")
+        else:
+            declared = data.get("perf_metrics") if isinstance(data.get("perf_metrics"), list) else []
+            metrics = {m.get("id"): m for m in declared if isinstance(m, dict)}
+            measured = [r for r in entry.get("tests") or [] if isinstance(r, dict) and ref_kind(r) in TEST_KINDS
+                        and isinstance(r.get(ref_kind(r)), str)]
+            for n in names:
+                m = metrics.get(n)
+                if m is None:
+                    errors.append(f"{where}: {label}: advisory metric '{n}' is not a declared perf metric")
+                elif m.get("criterion") != entry.get("id") or not any(metric_reads(m, r) for r in measured):
+                    errors.append(f"{where}: {label}: advisory metric '{n}' must be {entry.get('id')}'s and read one "
+                                  f"of its test references (the clause the approval passes is still measured)")
     if kind == "gate":
         gate = (data.get("gates") or {}).get(ref["gate"]) if isinstance(data.get("gates"), dict) else None
         if not isinstance(gate, dict):
@@ -765,6 +792,17 @@ def validate(data: dict, text: str, path: Path, plan: Plan | None = None, ci_job
             _check_ref(where, ref, entry, data, ctx, errors)
         if sum(1 for r in tests if isinstance(r, dict) and "owner_approval" in r) > 1:
             errors.append(f"{where}: {ident}: one owner approval per entry (the report names one record)")
+        # 09 §5.6: an approval passes a criterion whose gate keeps running and reporting, and it owes a
+        # re-test on fixed hardware, which the entry tracks as a follow-up.
+        if approval(entry) is not None:
+            if any(entry is x for x in exit_items):
+                errors.append(f"{where}: {ident}: an owner approval passes a criterion, not an exit item")
+            elif not any(isinstance(r, dict) and ref_kind(r) in TEST_KINDS for r in tests):
+                errors.append(f"{where}: {ident}: an owner approval leaves the criterion's measurement running "
+                              f"(09 §5.6), so the entry needs a test reference besides the record")
+            if not entry.get("follow_ups"):
+                errors.append(f"{where}: {ident}: an owner approval owes a re-test on fixed hardware (09 §5.6): "
+                              f"list it in 'follow_ups' with its owner")
         follow_ups = entry.get("follow_ups", [])
         if not isinstance(follow_ups, list):
             errors.append(f"{where}: {ident}: 'follow_ups' must be a list")

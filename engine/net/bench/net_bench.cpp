@@ -181,7 +181,8 @@ int main(int argc, char** argv) {
     for (usize i = 0; i < args.size(); ++i) {
         if (args[i] != "--advisory") continue;
         if (!gate || i + 1 >= args.size() || args[i + 1] != bench::kNs02StackAdvisoryName) {
-            HELIOS_LOG_ERROR("--advisory takes '{}' and applies to --gate only", bench::kNs02StackAdvisoryName);
+            HELIOS_LOG_ERROR("--advisory takes '{}' and applies to --gate only",
+                             bench::kNs02StackAdvisoryName);
             return 2;
         }
         stackAdvisory = true;
@@ -193,7 +194,7 @@ int main(int argc, char** argv) {
         const SocketResult s = runSocketPps(count);
         HELIOS_LOG_INFO("NS-0.2 socket: {}/{} datagrams, {:.0f} pps per core ({:.1f} ms CPU, {:.1f} ms wall)", s.received,
                         s.sent, s.ppsPerCore(), s.cpuSeconds * 1e3, s.wallSeconds * 1e3);
-        if (gate && (s.received != s.sent || s.ppsPerCore() < 100'000.0)) {
+        if (gate && (s.received != s.sent || s.ppsPerCore() < bench::kNs02PerCore)) {
             HELIOS_LOG_ERROR("NS-0.2 FAILED: needs 100k pps per core without loss");
             ok = false;
         }
@@ -203,19 +204,20 @@ int main(int argc, char** argv) {
         HELIOS_LOG_INFO("NS-0.2 HTP stack: {}/{} encrypted packets delivered, {:.0f} packets per core (send + receive, "
                         "1 thread)",
                         s.packets, s.sent, s.ppsPerCore());
-        const bench::Ns02Verdict verdict = bench::ns02StackVerdict(s.sent, s.packets, s.ppsPerCore(), stackAdvisory);
+        const bench::Ns02Verdict verdict =
+            bench::ns02StackVerdict(s.sent, s.packets, s.ppsPerCore(), stackAdvisory);
         if (gate && verdict == bench::Ns02Verdict::Fail) {
             HELIOS_LOG_ERROR("NS-0.2 FAILED: the HTP stack needs 100k encrypted packets per core without loss");
             ok = false;
         }
         // Printed on every advisory run, so that a passing log still says the rate was not gated.
         if (verdict == bench::Ns02Verdict::AdvisoryBelow) {
-            HELIOS_LOG_WARN("NS-0.2 advisory: {}. The HTP stack's {:.0f} packets per core is below 100k: reported, not "
-                            "failing (loss still fails)",
+            HELIOS_LOG_WARN("NS-0.2 advisory: {}. The HTP stack's {:.0f} packets per core is below 100k: "
+                            "reported, not failing (loss still fails)",
                             bench::kNs02StackAdvisoryReason, s.ppsPerCore());
         } else if (gate && stackAdvisory) {
-            HELIOS_LOG_INFO("NS-0.2 advisory: {}. The HTP stack's rate ({:.0f} packets per core) is not gated on this "
-                            "run",
+            HELIOS_LOG_INFO("NS-0.2 advisory: {}. The HTP stack's rate ({:.0f} packets per core) is not gated "
+                            "on this run",
                             bench::kNs02StackAdvisoryReason, s.ppsPerCore());
         }
     }
@@ -237,7 +239,8 @@ int main(int argc, char** argv) {
         }
     }
     if (gate) {
-        HELIOS_LOG_INFO("gates {}{}", ok ? "PASSED" : "FAILED", stackAdvisory ? " (NS-0.2's HTP stack rate advisory)" : "");
+        HELIOS_LOG_INFO("gates {}{}", ok ? "PASSED" : "FAILED",
+                        stackAdvisory ? " (NS-0.2's HTP stack rate advisory)" : "");
     }
     return ok ? 0 : 1;
 }

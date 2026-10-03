@@ -1,18 +1,23 @@
-"""The nightly's fetch and perf steps (.github/workflows/nightly.yml), run under bash against a fake `gh`.
+"""The nightly's fetch and perf steps (.github/workflows/nightly.yml), run under bash against a fake `gh`,
+and the scope of its one advisory gate.
 
 These steps decide whether tonight is compared with a perf history, so each way they can go wrong (an API
 error, a lost or expired artifact, a restart over a usable history) is a scenario here. POSIX only: the
-steps are bash, and the fake `gh` is a shell script.
+steps are bash, and the fake `gh` is a shell script. The advisory scope test reads the files and runs
+everywhere.
 """
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+
+import scorecard
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "nightly.yml"
@@ -174,6 +179,31 @@ class NightlyPerfStepsTests(unittest.TestCase):
         fetch, perf, previous, entries, _, _ = self.night(RESTART_PERF_HISTORY="")
         self.assertEqual((fetch, perf, entries), (0, 1, 2))
         self.assertNotIn("perf-restart", previous)
+
+
+class AdvisoryScopeTests(unittest.TestCase):
+    """NS-0.2's owner approval of 2026-09-30 relaxes one clause on the hosted nightly, the encrypted stack's
+    100k packets per core, through `net_bench --gate --advisory ns02-stack` (09 §5.6). This pins that scope:
+    another advisory in the nightly or another approval in the registry fails here until this test, and its
+    review, say otherwise."""
+
+    def test_only_ns02s_stack_rate_is_advisory(self):
+        commands = [line for line in WORKFLOW.read_text(encoding="utf-8").splitlines()
+                    if not line.lstrip().startswith("#")]
+        self.assertEqual([m for line in commands for m in re.findall(r"--advisory\b\s*(\S*)", line)],
+                         ["ns02-stack", "ns02-stack"])
+        gates = [line for line in commands if "-- net_bench --gate" in line]
+        self.assertEqual(len(gates), 2)  # linux-gcc and windows-vs2026
+        self.assertTrue(all(line.rstrip().endswith("-- net_bench --gate --advisory ns02-stack") for line in gates),
+                        gates)
+        data, _ = scorecard.load_jsonc(ROOT / "scorecard.jsonc")
+        approvals = {e["id"]: scorecard.approval(e) for e in data["criteria"] + data["exit"] if scorecard.approval(e)}
+        self.assertEqual(list(approvals), ["NS-0.2"])
+        self.assertEqual(approvals["NS-0.2"]["advisory"], ["net.ns02.stack_packets_per_core"])
+        self.assertEqual(approvals["NS-0.2"]["evidence"], "docs/evidence/ns-0.2-owner-approval-2026-09-30.md")
+        metric = next(m for m in data["perf_metrics"] if m["id"] == "net.ns02.stack_packets_per_core")
+        self.assertEqual((metric["criterion"], metric["gate"]), ("NS-0.2", "net_bench_gate"))
+        self.assertIn("NS-0\\.2 HTP stack", metric["pattern"])
 
 
 if __name__ == "__main__":

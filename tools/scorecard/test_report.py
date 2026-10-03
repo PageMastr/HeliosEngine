@@ -215,6 +215,60 @@ class ReportTests(unittest.TestCase):
                                    now=day + timedelta(days=1, hours=30))
         self.assertEqual(slow["criteria"][0]["streak"], 3)
 
+    def approved(self, platforms=("linux", "windows"), record="docs/record.md"):
+        entry = crit("NS-0.2", [{"gate": "net_bench_gate"},
+                                {"evidence": record, "owner_approval": "2026-09-30", "advisory": ["net.trunk_pps"]}],
+                     platforms=platforms)
+        entry["follow_ups"] = [{"clause": "re-test on fixed hardware", "owner": "WP-0.4"}]
+        return entry
+
+    def test_an_owner_approval_labels_the_pass_and_shows_the_advisory_level(self):
+        r = self.status(self.approved(platforms=("linux",)))
+        self.assertEqual(r["status"], "pass")
+        self.assertEqual(r["approval"], {"date": "2026-09-30", "evidence": "docs/record.md"})
+        self.assertEqual(r["platforms"]["linux"]["advisory"], ["linux-gcc net.trunk_pps 20,000 pps"])
+        self.assertEqual(r["follow_ups"], ["re-test on fixed hardware (WP-0.4)"])
+        data = dict(DATA, criteria=[self.approved(platforms=("linux",)), crit("NS-0.1", [{"ctest": "net_tests"}])],
+                    exit=[])
+        rep = report.build_report(data, self.runs, None, None, True, 0, self.root)
+        self.assertEqual((rep["summary"]["pass"], rep["summary"]["approved"]), (2, 1))
+        text = report.markdown(rep)
+        self.assertIn("2 of 2 criteria pass tonight (1 of them on an owner approval)", text)
+        self.assertIn("| NS-0.2 | passed (owner approval 2026-09-30, evidence docs/record.md) | passed (approval) | — |",
+                      text)
+        self.assertIn("advisory under the approval: linux: linux-gcc net.trunk_pps 20,000 pps; "
+                      "follow-up, not blocking: re-test on fixed hardware (WP-0.4) |", text)
+        self.assertIn("| NS-0.1 | pass | pass |", text)  # no approval, no label
+
+    def test_an_owner_approval_changes_no_result(self):
+        # Windows' gate ran 12 s of its 600: it fails with or without the approval, which still shows what
+        # it leaves open.
+        r = self.status(self.approved())
+        self.assertEqual((r["status"], r["platforms"]["linux"]["status"], r["platforms"]["windows"]["status"]),
+                         ("fail", "pass", "fail"))
+        self.assertEqual(r["platforms"]["windows"]["advisory"], ["net.trunk_pps not measured"])
+        rep = report.build_report(dict(DATA, criteria=[self.approved()], exit=[]), self.runs, None, None, True, 0,
+                                  self.root)
+        self.assertEqual(rep["summary"]["approved"], 0)
+        text = report.markdown(rep)
+        self.assertIn("| NS-0.2 | **FAIL** | pass | **FAIL** |", text)
+        self.assertIn("advisory under the approval: linux: linux-gcc net.trunk_pps 20,000 pps; "
+                      "windows: net.trunk_pps not measured; follow-up, not blocking", text)
+        self.assertIn("ran 12 s of the required 600 s", text)
+        self.assertNotIn("criteria pass tonight (", text)
+
+    def test_an_approval_without_its_record_is_not_shown(self):
+        r = self.status(self.approved(platforms=("linux",), record="docs/missing.md"))
+        self.assertEqual(r["status"], "unmeasured")
+        self.assertNotIn("approval", r)
+        self.assertNotIn("advisory", r["platforms"]["linux"])
+        text = report.markdown(report.build_report(
+            dict(DATA, criteria=[self.approved(platforms=("linux",), record="docs/missing.md")], exit=[]),
+            self.runs, None, None, True, 0, self.root))
+        self.assertIn("| NS-0.2 | unmeasured |", text)
+        self.assertNotIn("owner approval", text)
+        self.assertNotIn("follow-up", text)
+
 
 class PerfTests(unittest.TestCase):
     def test_extract_reads_declared_metrics_and_durations(self):

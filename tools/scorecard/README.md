@@ -4,7 +4,8 @@
 platforms, threshold and the tests that evidence it (09 §5.3 DoD item 8; 01 §3; 08 §4.4). It lives at the
 root because the plan names it without a directory and because CI, the nightly report and
 `tools/milestone/validate.ps1` all read it. The registry never says that a criterion passes: only
-test results do, in the nightly report (09 §5.6–5.8).
+test results do, in the nightly report (09 §5.6–5.8). An owner approval (below) labels a pass and names
+what it leaves open; it changes no result.
 
 ```
 python3 tools/scorecard/scorecard.py check                                  # registry vs the plan and ci.yml
@@ -40,7 +41,15 @@ into annotations.
   `plan_rev` a positive integer no higher than `docs/plan/PLAN-REV`, `source` a plan section
   (`04 §11.4`), `owner` WPs, `User` or `Director`. A run needs `os` and a boolean `default`; a gate needs
   declared `runs` and a positive integer `min_seconds`. `status` must agree with the entry: `measured`
-  (tests, no gaps), `partial` (tests and gaps) or `unmeasured` (gaps only).
+  (tests, no gaps), `approved` (tests, no gaps, and an owner approval), `partial` (tests and gaps) or
+  `unmeasured` (gaps only).
+- **Owner approvals (09 §5.6).** `owner_approval` goes only on an entry's `evidence` reference under
+  `docs/evidence/`, as a real `YYYY-MM-DD` date that is not in the future; one per entry, and never on an
+  exit item. The entry also needs a test reference that runs (the approved clause is still measured) and
+  at least one `follow_ups` item (the re-test the approval owes). `advisory`, on the same reference, is a
+  non-empty list of distinct perf metric ids, each declared for this criterion and read from one of its
+  test references (the same gate, or the same doctest case). `follow_ups` without an approval are
+  rejected: without one, an open clause is a gap.
 - **References.** Entries on `any` platform cite only `evidence` and `ci_job`. A reference's `platforms`
   are a subset of its entry's; `run` names a declared run on those platforms; `tags` is for `go` only.
   `ctest` names and doctest `case`s match literally except for `*`, and a name of wildcards only is
@@ -101,6 +110,26 @@ Optional on every reference: `platforms` (a subset of the entry's), `run` (only 
 for example `linux-asan` for "ASan-clean" clauses), `note`. Result sets are declared in `runs`. A
 reference without `run` counts in every `default` run of its OS, and fails if any of them fails.
 
+**Owner approvals** (09 §5.6). Only the repository owner may pass a clause that keeps failing for a reason
+outside the code, and the approval is a record under `docs/evidence/` that quotes the owner verbatim. The
+entry cites it and owes a re-test:
+
+```jsonc
+"status": "approved",
+"tests": [
+  {"gate": "net_bench_gate"},
+  {"evidence": "docs/evidence/ns-0.2-owner-approval-2026-09-30.md", "owner_approval": "2026-09-30",
+   "advisory": ["net.ns02.stack_packets_per_core"]}
+],
+"follow_ups": [{"clause": "Re-test … on fixed hardware …", "owner": "WP-0.4, WP-0.13"}]
+```
+
+The approval does not stop any reference from counting: what is relaxed, and where, is the gate command's
+business (NS-0.2's is `net_bench --gate --advisory ns02-stack`, which reports the encrypted stack's rate
+instead of failing on it, on the hosted nightly only). `advisory` names the perf metrics of the approved
+clause so that the report can show their level beside the pass. `follow_ups` are `{"clause", "owner"}`
+items that the approval leaves open; they do not block the pass, and the report lists them.
+
 **Runs and gates.** `runs` declares the result sets: `{"os": "linux"|"windows", "default": bool,
 "description": "…"}`. A `default` run counts for every reference of its OS without a `run`; others (ASan)
 count only where a reference names them. `gates` declares long gate commands:
@@ -116,12 +145,14 @@ and red), with the `owner` WP. `pinned_by` names a test that pins a known diverg
 ## The nightly report
 
 `.github/workflows/nightly.yml` builds and tests on Linux (GCC, Clang, ASan/UBSan), Windows (VS 2026, VS 2022,
-clang-cl) and Go (Linux, Windows), runs `net_bench --gate` on GCC and VS 2026, and runs each engine/net fuzz
-target under libFuzzer for 1 h (NS-0.4). Each job uploads a result set; the `scorecard` job evaluates them:
+clang-cl) and Go (Linux, Windows), runs `net_bench --gate --advisory ns02-stack` on GCC and VS 2026 (NS-0.2's
+owner approval; NS-0.7 and the rest of NS-0.2 still gate), and runs each engine/net fuzz target under
+libFuzzer for 1 h (NS-0.4). Each job uploads a result set; the `scorecard` job evaluates them:
 
 ```
 python3 tools/scorecard/runners.py doctest --build-dir B [--config C] [--perf] --out R/doctest   # per-case XML
-python3 tools/scorecard/runners.py gate --name net_bench_gate --build-dir B --out R/gates -- net_bench --gate
+python3 tools/scorecard/runners.py gate --name net_bench_gate --build-dir B --out R/gates -- net_bench --gate \
+        --advisory ns02-stack
 python3 tools/scorecard/report.py --results results --ci-jobs ci-jobs.json --previous last/scorecard-report.json \
         [--scheduled] --out scorecard-report.json --markdown scorecard.md
 python3 tools/scorecard/perf.py extract --results results --sha SHA --out perf-entry.json
@@ -139,6 +170,10 @@ although every case passed (a sanitizer report at exit).
   `min_seconds` fails, and so does a gate without one. The criterion passes when every reference passes on
   every platform and it has no gap.
   A broken pin (a `pinned_by` test that now fails) is reported so that the registry is updated.
+- **Owner approvals.** An approved entry is evaluated like any other. While its record exists, its pass
+  reads "passed (owner approval <date>, evidence <record>)" and each platform's cell "passed (approval)";
+  the row shows tonight's value of each `advisory` metric per run ("not measured" when no result set has
+  it) and lists the follow-ups, whatever the verdict. The summary counts the passes on an approval.
 - **Green (09 §5.6).** The report keeps a streak per criterion from last night's report: consecutive passing
   *scheduled* nightlies. A manual run never extends it, and a failure resets it. A scheduled report more than
   36 h after the previous scheduled one restarts every streak, because the night in between left no report
@@ -235,4 +270,4 @@ If the plan changes a threshold, the registry follows the plan, never the other 
 
 ## Plan conformance
 
-Plan-Rev: 6
+Plan-Rev: 12

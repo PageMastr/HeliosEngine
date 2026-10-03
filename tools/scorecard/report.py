@@ -15,10 +15,11 @@ DIR holds one directory per result set (a nightly job's artifact). Each has `run
 A reference passes on an OS when it has results in the runs that count for it and none of them failed;
 a criterion passes when every reference passes on every platform and it has no gap. Anything else is
 fail (a failed reference or a failing gap) or unmeasured (no result, a skip, or an unmeasured gap).
-An entry that cites the repository owner's approval (an evidence reference with `owner_approval`) may
-mark test references advisory: they are evaluated and shown with the numbers their perf metrics read,
-but do not count, and its pass reads "pass (owner approval <date>, evidence <record>)". Its follow-ups
-are listed, not counted. The streak counts consecutive passing scheduled reports (--previous is last night's report.json), and
+An entry that cites the repository owner's approval (09 §5.6; an evidence reference with `owner_approval`)
+is evaluated like any other: every reference counts, and the approval changes no result. Its pass reads
+"passed (owner approval <date>, evidence <record>)", and the row shows tonight's level of each perf metric
+the approval names `advisory` and lists its follow-ups, which do not block the pass.
+The streak counts consecutive passing scheduled reports (--previous is last night's report.json), and
 a criterion is green under 09 §5.6 at 3 (N, H) or 2 (W) passes; an M record is green once it exists.
 A scheduled night more than MAX_NIGHT_GAP_HOURS after the last scheduled report restarts every streak,
 because the night in between has no report and so no known result. Standard library only.
@@ -163,26 +164,21 @@ def combine(statuses: list[str]) -> str:
     return "pass" if all(s == "pass" for s in statuses) else "skip"
 
 
-def counting_runs(ref: dict, os_name: str, data: dict, runs: list[Results]) -> list[Results]:
-    """The result sets that count for a test reference on one OS: its `run`, else every default run."""
+def advisory_levels(approval: dict, os_name: str, data: dict, runs: list[Results]) -> list[str]:
+    """"<run> <metric> <value> <unit>" for each perf metric an owner approval names `advisory`, from tonight's
+    result sets on one OS, so that a pass on an approval shows the level its clause measured."""
     declared = data.get("runs") or {}
-    return [r for r in runs if declared.get(r.name, {}).get("os") == os_name and
-            (r.name == ref["run"] if "run" in ref else declared.get(r.name, {}).get("default"))]
-
-
-def advisory_values(ref: dict, os_name: str, entry: dict, data: dict, runs: list[Results]) -> list[str]:
-    """"<run> <metric> <value> <unit>" for each perf metric of the entry's criterion that reads this
-    reference's output (a gate's, or a doctest case's MESSAGE lines), so an advisory result shows its level."""
-    kind = scorecard.ref_kind(ref)
-    metrics = [m for m in data.get("perf_metrics") or [] if isinstance(m, dict) and m.get("criterion") == entry["id"]
-               and ((kind == "gate" and m.get("gate") == ref["gate"]) or
-                    (kind == "doctest" and m.get("doctest") == ref["doctest"] and m.get("case") == ref["case"]))]
-    counting = counting_runs(ref, os_name, data, runs)
+    on_os = [r for r in runs if declared.get(r.name, {}).get("os") == os_name]
+    metrics = {m.get("id"): m for m in data.get("perf_metrics") or [] if isinstance(m, dict)}
     out = []
-    for m in metrics:
-        for run, value in sorted(metric_values(m, counting).items()):
+    for name in approval.get("advisory") or []:
+        metric = metrics.get(name)
+        values = metric_values(metric, on_os) if metric else {}
+        if not values:
+            out.append(f"{name} not measured")
+        for run, value in sorted(values.items()):
             number = f"{value:,.0f}" if abs(value) >= 100 else f"{value:.3g}"
-            out.append(f"{run} {m['id']} {number} {m.get('unit', '')}".rstrip())
+            out.append(f"{run} {name} {number} {metric.get('unit', '')}".rstrip())
     return out
 
 
@@ -197,8 +193,11 @@ def eval_ref(ref: dict, os_name: str, entry: dict, data: dict, runs: list[Result
             return "missing", "no CI run listing"
         found = ci_jobs.get(ref["ci_job"])
         return (CI_CONCLUSION.get(found, "missing"), found or "not in the latest main CI run")
+    declared = data.get("runs") or {}
+    counting = [r for r in runs if declared.get(r.name, {}).get("os") == os_name and
+                (r.name == ref["run"] if "run" in ref else declared.get(r.name, {}).get("default"))]
     statuses, details = [], []
-    for r in counting_runs(ref, os_name, data, runs):
+    for r in counting:
         why = ""
         if kind == "ctest":
             hits = [s for n, (s, _) in r.ctest.items() if matches(n, ref["ctest"])]
@@ -232,21 +231,18 @@ def evaluate(entry: dict, data: dict, runs: list[Results], ci_jobs: dict | None,
     plats = entry.get("platforms") or []
     oses = ["any"] if plats == ["any"] else [p for p in plats if p in scorecard.OSES]
     per_os, notes = {}, []
-    # Advisory references stop counting only while the owner approval that allows them is on record; the
-    # report does not rely on the registry check having passed.
+    # The approval is shown only while its record exists; the report does not rely on the registry check.
     approval = scorecard.approval(entry)
-    approved = approval is not None and (repo / approval["evidence"]).is_file()
+    approved = approval is not None and isinstance(approval.get("evidence"), str) and \
+        (repo / approval["evidence"]).is_file()
     for os_name in oses:
         refs = [r for r in entry.get("tests") or [] if os_name == "any" or os_name in scorecard.ref_oses(entry, r, data)
                 or scorecard.ref_kind(r) in ("ci_job", "evidence")]
         results = []
         for ref in refs:
             status, detail = eval_ref(ref, os_name, entry, data, runs, ci_jobs, repo)
-            result = {"ref": scorecard.ref_label(ref), "status": status, "detail": detail}
-            if approved and ref.get("advisory") is True:
-                result.update(advisory=True, values=advisory_values(ref, os_name, entry, data, runs))
-            results.append(result)
-        statuses = [r["status"] for r in results if not r.get("advisory")]
+            results.append({"ref": scorecard.ref_label(ref), "status": status, "detail": detail})
+        statuses = [r["status"] for r in results]
         gap_states = [g.get("state") for g in entry.get("gaps") or []]
         if "fail" in statuses or "failing" in gap_states:
             status = "fail"
@@ -255,6 +251,8 @@ def evaluate(entry: dict, data: dict, runs: list[Results], ci_jobs: dict | None,
         else:
             status = "pass"
         per_os[os_name] = {"status": status, "refs": results}
+        if approved and os_name != "any":
+            per_os[os_name]["advisory"] = advisory_levels(approval, os_name, data, runs)
     for gap in entry.get("gaps") or []:
         pin = gap.get("pinned_by")
         if isinstance(pin, dict):
@@ -351,14 +349,9 @@ def markdown(report: dict) -> str:
         cells = {os_name: "passed (approval)" if by_approval and v["status"] == "pass" else ICON[v["status"]]
                  for os_name, v in c["platforms"].items()}
         failing: dict[str, list[tuple[str, str]]] = {}
-        advisory: dict[str, list[str]] = {}
         for os_name, v in c["platforms"].items():
             for r in v["refs"]:
-                if r.get("advisory"):
-                    advisory.setdefault(r["ref"], []).append(
-                        f"{os_name} {r['status']}" + (f" ({r['detail']})" if r["detail"] else "")
-                        + (f": {', '.join(r['values'])}" if r.get("values") else ""))
-                elif r["status"] != "pass":
+                if r["status"] != "pass":
                     failing.setdefault(r["ref"], []).append(
                         (os_name, r["status"] + (f": {r['detail']}" if r["detail"] else "")))
         why = list(c["gaps"])
@@ -368,9 +361,11 @@ def markdown(report: dict) -> str:
         why += c["notes"]
         text = "; ".join(why[:4]) + (f"; +{len(why) - 4} more" if len(why) > 4 else "")
         # What an approval leaves open is never cut off by the limit above.
-        text = "; ".join([t for t in [text] if t] + [f"advisory, not counted: {ref} ({'; '.join(where)})"
-                                                     for ref, where in advisory.items()]
-                         + [f"follow-up, not blocking: {f}" for f in c.get("follow_ups") or []])
+        levels = [f"{os_name}: {', '.join(v['advisory'])}" for os_name, v in c["platforms"].items()
+                  if v.get("advisory")]
+        opened = ([f"advisory under the approval: {'; '.join(levels)}"] if levels else []) + \
+            [f"follow-up, not blocking: {f}" for f in c.get("follow_ups") or []]
+        text = "; ".join([t for t in [text] if t] + opened)
         verdict = (f"passed (owner approval {c['approval']['date']}, evidence {c['approval']['evidence']})"
                    if by_approval else ICON[c["status"]])
         return (f"| {c['id']} | {verdict}{' (green)' if c['green'] else ''} | "

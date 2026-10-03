@@ -272,11 +272,16 @@
       "title": "Loopback 100k pps per core without loss",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Loopback 100k pps/core without loss",
-      "notes": "net_bench --gate measures raw datagrams and encrypted HTP packets through the full stack",
-      "status": "measured",
+      "notes": "net_bench --gate measures raw datagrams and encrypted HTP packets through the full stack. Passed on the repository owner's approval of 2026-09-30 (09 §5.6; the record quotes it): hosted runners measured the encrypted stack at 85k to 132k packets per core with no code change, so the nightly runs `net_bench --gate --advisory ns02-stack`, which reports that one rate instead of failing on it. Raw datagrams (100k per core), loss at either level (none allowed), the stack's connection and NS-0.7 in the same run still fail the gate, and a run without --advisory gates everything",
+      "status": "approved",
       "tests": [
         {"gate": "net_bench_gate"},
-        {"doctest": "net_tests", "case": "perf: NS-0.2: loopback 100k pps per core without loss", "platforms": ["linux"]}
+        {"doctest": "net_tests", "case": "perf: NS-0.2: loopback 100k pps per core without loss", "platforms": ["linux"]},
+        {"evidence": "docs/evidence/ns-0.2-owner-approval-2026-09-30.md", "owner_approval": "2026-09-30",
+         "advisory": ["net.ns02.stack_packets_per_core"]}
+      ],
+      "follow_ups": [
+        {"clause": "Re-test the encrypted stack's 100k packets per core on fixed hardware, without --advisory: `net_bench --gate` on WP-0.4's win-gpu runner and on a Linux lab host. If it is below 100k there, NS-0.2 goes back to failing and the stack gets a second pass (owner, 2026-09-30)", "owner": "WP-0.4, WP-0.13"}
       ]
     },
     {

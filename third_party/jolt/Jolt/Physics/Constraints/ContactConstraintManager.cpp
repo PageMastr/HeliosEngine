@@ -1148,8 +1148,8 @@ void ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
 	JPH_ASSERT(num_contact_points == (int)inManifold.mRelativeContactPointsOn2.size());
 
 	// Reserve space for new contact cache entry
-	// Note that for dynamic vs dynamic we always require the first body to have a lower body id to get a consistent key
-	// under which to look up the contact
+	// Note that for dynamic vs dynamic we always require the first body to come first in Body::sStableOrderLess to get a consistent key under which to look up the
+	// contact (Helios patch stable-order: AddContactConstraint swaps the bodies into that order; upstream: the first body has the lower body id)
 	MKeyValue *new_manifold_kv = mWriteCache->Create(ioContactAllocator, key, key_hash, num_contact_points);
 	if (new_manifold_kv == nullptr)
 		return; // Out of cache space

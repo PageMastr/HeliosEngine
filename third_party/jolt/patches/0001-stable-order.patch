@@ -167,7 +167,7 @@ index 07dacf3..7abf212 100644
  	/// The sub shape IDs were created in the previous simulation step, so if the structure of a shape changes (e.g. by adding/removing a child shape of a compound shape),
  	/// the sub shape ID may not be valid / may not point to the same sub shape anymore.
 diff --git a/Jolt/Physics/Constraints/ContactConstraintManager.cpp b/Jolt/Physics/Constraints/ContactConstraintManager.cpp
-index efb7aee..bb1b73f 100644
+index efb7aee..342b4b7 100644
 --- a/Jolt/Physics/Constraints/ContactConstraintManager.cpp
 +++ b/Jolt/Physics/Constraints/ContactConstraintManager.cpp
 @@ -840,6 +840,14 @@ JPH_INLINE ContactConstraintManager::ContactConstraint<Type1, Type2> *ContactCon
@@ -220,6 +220,17 @@ index efb7aee..bb1b73f 100644
  	{
  		body1 = &inBody1;
  		body2 = &inBody2;
+@@ -1140,8 +1148,8 @@ void ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
+ 	JPH_ASSERT(num_contact_points == (int)inManifold.mRelativeContactPointsOn2.size());
+ 
+ 	// Reserve space for new contact cache entry
+-	// Note that for dynamic vs dynamic we always require the first body to have a lower body id to get a consistent key
+-	// under which to look up the contact
++	// Note that for dynamic vs dynamic we always require the first body to come first in Body::sStableOrderLess to get a consistent key under which to look up the
++	// contact (Helios patch stable-order: AddContactConstraint swaps the bodies into that order; upstream: the first body has the lower body id)
+ 	MKeyValue *new_manifold_kv = mWriteCache->Create(ioContactAllocator, key, key_hash, num_contact_points);
+ 	if (new_manifold_kv == nullptr)
+ 		return; // Out of cache space
 @@ -1159,7 +1167,9 @@ void ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
  	settings.mIsSensor = inBody1.IsSensor() || inBody2.IsSensor();
  

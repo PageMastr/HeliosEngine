@@ -45,6 +45,8 @@ var (
 	cKVBindRE = regexp.MustCompile(`\bjs_(Create|Update)?KeyValue\s*\(`)
 	cBucketRE = regexp.MustCompile(`(?:\.|->)\s*Bucket\s*=\s*([^;]+);`)
 	cTTLRE    = regexp.MustCompile(`(\.|->)\s*(TTL|MaxAge|LimitMarkerTTL)\s*=`)
+	// nats.c code: a file that includes nats.h or names a kvConfig.
+	cNatsRE   = regexp.MustCompile(`#\s*include\s*[<"]nats/nats\.h[>"]|\bkvConfig\b`)
 	cCASRE    = regexp.MustCompile(`\bkvStore_(Create|Update)(String)?\s*\(`)
 	cStringRE = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
 )
@@ -351,7 +353,8 @@ func checkKVC(p *Pass, f string, ttl bool) {
 		ok     bool
 	}
 	var buckets []bucket
-	leaseBucket := false
+	// A kvConfig whose Bucket this file does not set is one the lint cannot resolve.
+	leaseBucket := cNatsRE.MatchString(src.text) && !cBucketRE.MatchString(src.blank)
 	for _, m := range cBucketRE.FindAllStringSubmatchIndex(src.blank, -1) {
 		vals, ok := cStrValues(src.text[m[2]:m[3]], consts)
 		buckets = append(buckets, bucket{m[0], vals, ok})

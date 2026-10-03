@@ -282,9 +282,12 @@ public:
                     lt->sql = d->sqlTable;
                     C.push_back(std::format("{}: SQL table {}", d->qualifiedName, d->sqlTable));
                 } else if (lt->sql != d->sqlTable) {
-                    D.error(d->loc, std::format("'{}' is stored in the table {} (lock id {}); a table cannot move to {} — declare a new type and "
-                                                "migrate the rows by hand",
-                                                d->qualifiedName, lt->sql, lt->id, d->sqlTable));
+                    // The common cause is a @was rename: the default table name follows the type's name.
+                    const usize dot = lt->sql.find('.');
+                    D.error(d->loc, std::format("'{}' is stored in the table {} (lock id {}); a table cannot move to {} — keep it with "
+                                                "@sql(schema=\"{}\", table=\"{}\"), or declare a new type and migrate the rows by hand",
+                                                d->qualifiedName, lt->sql, lt->id, d->sqlTable, lt->sql.substr(0, dot),
+                                                dot == std::string::npos ? lt->sql : lt->sql.substr(dot + 1)));
                 }
             }
             if (d->version < lt->version) {

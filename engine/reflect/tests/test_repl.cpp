@@ -115,6 +115,45 @@ TEST_CASE("repl: smallest-three quaternions round-trip within their precision") 
     CHECK(std::fabs(f64(unit->x) * unit->x + f64(unit->y) * unit->y + f64(unit->z) * unit->z + f64(unit->w) * unit->w - 1.0) < 1e-3);
 }
 
+TEST_CASE("repl: readSmallest3 accepts whatever writeSmallest3 writes") {
+    // The round-2 review: rounding up pushed three components past a unit quaternion (every input at
+    // bits=1, 3,314 of 20,000 at bits=2), and NaN and unnormalised input did so at any width.
+    for (const Quat q : {Quat(NAN, NAN, NAN, NAN), Quat(1, 1, 1, 1), Quat(0, 0, 0, 0), Quat(INFINITY, 0, 0, 0), Quat(1e-30f, 0, 0, 0)}) {
+        BitWriter w;
+        writeSmallest3(w, q, 10);
+        BitReader r(w.bytes(), w.bitCount());
+        CHECK(readSmallest3(r, 10));
+    }
+    auto decode = [](const Quat& q, u32 bits) {
+        BitWriter w;
+        writeSmallest3(w, q, bits);
+        BitReader r(w.bytes(), w.bitCount());
+        return readSmallest3(r, bits);
+    };
+    // Non-finite and zero quaternions are the identity; others are normalised first.
+    for (const Quat q : {Quat(NAN, 0, 0, 1), Quat(0, 0, 0, 0)}) {
+        auto id = decode(q, 10);
+        REQUIRE(id);
+        CHECK(std::fabs(id->w) > 0.999f);
+    }
+    auto half = decode(Quat(2, 2, 2, 2), 10);
+    REQUIRE(half);
+    CHECK(std::fabs(half->x - 0.5f) < 2e-3f);
+    CHECK(std::fabs(half->w - 0.5f) < 2e-3f);
+    // Every width from 2 bits up, on random unit and unnormalised quaternions.
+    SplitMix64 rng(0x5a13);
+    for (u32 bits = 2; bits <= 8; ++bits) {
+        u32 rejected = 0;
+        for (int i = 0; i < 20000; ++i) {
+            f32 c[4];
+            for (f32& x : c) x = static_cast<f32>(static_cast<f64>(rng.next() >> 11) / 9007199254740992.0 * 2 - 1);
+            if (!decode(Quat(c[0], c[1], c[2], c[3]), bits)) ++rejected;
+        }
+        INFO("bits=" << bits);
+        CHECK(rejected == 0);
+    }
+}
+
 TEST_CASE("repl: frame-cell positions are exact to half the resolution, even at 1e13 m") {
     const f64 cell = 4096, res = 1.0 / 256;
     for (const f64 v : {0.0, 0.001, -0.001, 4095.999, 4096.0, -4096.0, 123456.789, -9876543.21, 1e13, -1e13, 1e13 + 0.5}) {

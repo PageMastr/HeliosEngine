@@ -190,7 +190,7 @@ private:
         std::optional<f64> range, cell, res;
         std::optional<u64> bits;
         for (const AttrArg& arg : a->args) {
-            if (!arg.key.empty()) {
+            if (arg.key == "range" || arg.key == "cell" || arg.key == "res") {
                 // A unit other than metres would be dropped silently (cell=4km would be a 4 m cell).
                 if (const std::string unit = quantUnit(arg.value); !unit.empty() && unit != "m")
                     return fail(std::format("{}={}: unit '{}' is not supported (lengths are in m, or unitless)", arg.key, arg.value, unit));

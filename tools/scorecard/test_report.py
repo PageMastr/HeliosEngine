@@ -853,6 +853,26 @@ class PerfTests(unittest.TestCase):
                                        "cell thread 0.245 cores, gateway thread 0.231 cores, rcvbuf 4096 KB")
         self.assertEqual(report.metric_values(cores, [run]), {"linux-gcc": 0.245})
 
+    def test_the_registry_reads_the_value_the_render_graph_compile_gate_checks(self):
+        # render_tests_perf gates the best of 10 batches and also prints the median batch: the metric must read
+        # the best, from the MESSAGE exactly as test_graph_perf.cpp formats it (Python's format() reads the same
+        # "{}" and "{:.3f}" fields as std::format), so a reworded message fails here, not as a missing night.
+        data, _ = sc.load_jsonc(sc.ROOT / "scorecard.jsonc")
+        metric = next(m for m in data["perf_metrics"] if m["id"] == "render.graph_compile_200_passes_ms")
+        self.assertEqual((metric["category"], perf.BUDGET_PERCENT[metric["category"]], metric["unit"], metric["better"],
+                          metric["run"], metric["doctest"]), ("render", 5.0, "ms", "lower", "linux-gcc", "render_tests"))
+        self.assertNotIn("bound", metric)
+        source = (sc.ROOT / "engine" / "render" / "tests" / "test_graph_perf.cpp").read_text(encoding="utf-8")
+        self.assertIn(f'TEST_CASE("{metric["case"]}")', source)
+        call = re.search(r'MESSAGE\(std::format\(((?:\s*"(?:[^"\\]|\\.)*")+)', source)
+        self.assertIsNotNone(call)
+        message = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', call.group(1)))
+        run = report.Results("linux-gcc")
+        for best, median in ((0.104, 0.107), (0.302967, 0.31), (1.5, 0.2)):
+            line = message.format(200, best, median, 0.3, 0.2, "over", 118, 411)
+            run.messages[(metric["doctest"], metric["case"])] = [line]
+            self.assertEqual(report.metric_values(metric, [run]), {"linux-gcc": round(best, 3)}, line)
+
     def test_each_failing_row_is_annotated_for_the_run_page(self):
         history, _ = self.replay([self.night(n, t=100.0, p=2.0) for n in range(1, 6)])
         with tempfile.TemporaryDirectory() as d:

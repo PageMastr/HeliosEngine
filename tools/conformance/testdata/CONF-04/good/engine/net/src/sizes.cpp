@@ -4,3 +4,10 @@ constexpr unsigned long long kBig = 1ull << 22;
 unsigned long long pack(unsigned long long hi, unsigned lo) { return (hi << 32) | lo; }
 // nodeId in a comment, and a "node_id" string outside ID code
 const char* kLabel = "node_id";
+// A constant under #if 0 is never compiled, so its 22 is not a shift amount.
+#if 0
+constexpr unsigned kOldShift = 22;
+#else
+constexpr unsigned kOldShift = 20;
+#endif
+unsigned long long scaled(unsigned long long v) { return v << kOldShift; }

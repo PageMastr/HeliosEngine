@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -404,8 +405,15 @@ var (
 	cAccessRE     = regexp.MustCompile(`^\s*(?:(?:public|private|protected)\s*:\s|\[\[[^\]]*\]\]\s*)+`)
 	cConstWordRE  = regexp.MustCompile(`\bconst\b`)
 	cConstexprRE  = regexp.MustCompile(`\bconstexpr\b`)
-	cStrLitRE     = regexp.MustCompile(`"((?:[^"\\\n]|\\.)*)"`)
-	cWrapRE       = regexp.MustCompile(`^(?:std::)?(?:string|string_view)\s*[({](.*)[)}]$|^static_cast\s*<[^>]*>\s*\((.*)\)$|^\(\s*(?:const\s+)?char\s*(?:const\s*)?\*\s*\)\s*(.*)$`)
+	cStaticRE     = regexp.MustCompile(`\bstatic\b`)
+	// An innermost template argument list, stripped repeatedly so that only a top-level const counts.
+	cTemplateArgsRE = regexp.MustCompile(`<[^<>]*>`)
+	// The head of a class, struct or union body (not an enum, a function returning a struct, or an
+	// initializer), once attributes, alignas and __declspec are dropped.
+	cClassHeadRE = regexp.MustCompile(`(?:^|[^\w])(?:class|struct|union)\b`)
+	cAttrRE      = regexp.MustCompile(`\[\[[^\]]*\]\]|\b(?:alignas|__declspec|__attribute__)\s*\((?:[^()]|\([^()]*\))*\)`)
+	cStrLitRE    = regexp.MustCompile(`"((?:[^"\\\n]|\\.)*)"`)
+	cWrapRE      = regexp.MustCompile(`^(?:std::)?(?:string|string_view)\s*[({](.*)[)}]$|^static_cast\s*<[^>]*>\s*\((.*)\)$|^\(\s*(?:const\s+)?char\s*(?:const\s*)?\*\s*\)\s*(.*)$`)
 	// A name, optionally qualified by namespaces or classes. A member access (a.b, p->b) is not a constant.
 	cQualIdentRE = regexp.MustCompile(`^(?:::\s*)?(?:[A-Za-z_]\w*\s*::\s*)*([A-Za-z_]\w*)$`)
 	kvSubjectRE  = regexp.MustCompile(`^\$KV\.([^.\s]+)`)
@@ -415,8 +423,9 @@ var (
 const cLits = `(?:"(?:[^"\\\n]|\\.)*"\s*)+`
 
 // cConstDecl reports whether prefix, the text of a statement before a declared name, makes that name a
-// constant: `constexpr`, or a `const` object (`const std::string k`, `static const char k[]`, `const char*
-// const k`). A pointer to const (`const char* k`) is not: the pointer can be re-pointed.
+// constant: `constexpr`, or a top-level `const` object (`const std::string k`, `static const char k[]`,
+// `const char* const k`). A pointer to const (`const char* k`) is not: the pointer can be re-pointed. Nor
+// is a `const` inside template arguments (`std::span<const char> k`).
 func cConstDecl(prefix string) bool {
 	prefix = cAccessRE.ReplaceAllString(prefix, "")
 	if !cDeclPrefixRE.MatchString(prefix) {
@@ -425,44 +434,41 @@ func cConstDecl(prefix string) bool {
 	if cConstexprRE.MatchString(prefix) {
 		return true
 	}
+	for {
+		stripped := cTemplateArgsRE.ReplaceAllString(prefix, " ")
+		if stripped == prefix {
+			break
+		}
+		prefix = stripped
+	}
 	if i := strings.LastIndex(prefix, "*"); i >= 0 {
 		prefix = prefix[i:]
 	}
 	return cConstWordRE.MatchString(prefix)
 }
 
-// cStrTable collects the string constants of the C-family files in the rule's scope, by bare name: the
-// `#define`s and the declarations of constants (cConstDecl). Assignments, members set elsewhere,
-// parameters and calls are not constants, so a bucket or key passed through one stays unresolved. A
-// name defined with several values keeps them all, and a bucket or key matches if any value does.
+// cStrTable collects the string constants of the C-family files in the rule's scope, by bare name
+// (cConstStrings). Assignments, members set elsewhere, parameters and calls are not constants, so a bucket
+// or key passed through one stays unresolved. A name defined with several values keeps them all, and a
+// bucket or key matches if any value does.
 func cStrTable(p *Pass) map[string][]string {
 	if p.cstr != nil {
 		return p.cstr
 	}
 	t := map[string][]string{}
-	add := func(name, lits string) {
-		v := ""
-		for _, m := range cStrLitRE.FindAllStringSubmatch(lits, -1) {
-			v += m[1]
-		}
-		for _, have := range t[name] {
-			if have == v {
-				return
-			}
-		}
-		t[name] = append(t[name], v)
-	}
 	for _, f := range p.Files {
 		if !cFamily.MatchString(f) {
 			continue
 		}
-		src := newCSource(p.Tree.Lines(f))
-		for _, m := range cDefineStrRE.FindAllStringSubmatch(src.text, -1) {
-			add(m[1], m[2])
-		}
-		for name, lits := range cConstStrings(src) {
+		for name, lits := range cConstStrings(newCSource(p.Tree.Lines(f))) {
 			for _, l := range lits {
-				add(name, l)
+				v := ""
+				for _, m := range cStrLitRE.FindAllStringSubmatch(l, -1) {
+					v += m[1]
+				}
+				if !slices.Contains(t[name], v) {
+					t[name] = append(t[name], v)
+				}
 			}
 		}
 	}
@@ -470,27 +476,71 @@ func cStrTable(p *Pass) map[string][]string {
 	return t
 }
 
-// cConstStrings returns the string-literal initializers of the constants src declares, by bare name.
+// cConstStrings returns the string-literal initializers of the constants src declares, by bare name: a
+// `#define NAME "…"`, and a declarator whose statement makes it a constant (cConstDecl) at namespace or
+// block scope, or as a `static` class member. A declarator inside parentheses or brackets is a parameter
+// (with its default argument), a call argument or a condition, never a constant, however the statement
+// before it reads; a non-static data member's initializer is only a default, which a constructor
+// overrides. Groups under `#if 0` are not read.
 func cConstStrings(src *cSource) map[string][]string {
+	dead := inactiveLines(src.blankLines)
+	out := map[string][]string{}
+	for _, m := range cDefineStrRE.FindAllStringSubmatchIndex(src.text, -1) {
+		if !dead[src.index(m[0])] {
+			out[src.text[m[2]:m[3]]] = append(out[src.text[m[2]:m[3]]], src.text[m[4]:m[5]])
+		}
+	}
 	// Statement boundaries: ; { } outside strings and comments, and every preprocessor line.
 	bounds := []byte(src.blank)
 	for i, l := range src.blankLines {
-		if strings.HasPrefix(strings.TrimSpace(l), "#") {
+		if strings.HasPrefix(strings.TrimSpace(l), "#") || dead[i] {
 			for k := src.starts[i]; k < src.starts[i]+len(l); k++ {
 				bounds[k] = ';'
 			}
 		}
 	}
-	out := map[string][]string{}
+	scope := cScopes(bounds)
 	for _, m := range cInitStrRE.FindAllStringSubmatchIndex(src.text, -1) {
 		start := bytes.LastIndexAny(bounds[:m[2]], ";{}") + 1
-		if bounds[m[2]] == ';' || !cConstDecl(src.blank[start:m[2]]) {
+		prefix := src.blank[start:m[2]]
+		switch {
+		case bounds[m[2]] == ';', scope[m[2]] == '(', scope[m[2]] == '[', !cConstDecl(prefix),
+			scope[m[2]] == 'c' && !cStaticRE.MatchString(prefix):
 			continue
 		}
 		for g := 4; g <= 8; g += 2 {
 			if m[g] >= 0 {
 				out[src.text[m[2]:m[3]]] = append(out[src.text[m[2]:m[3]]], src.text[m[g]:m[g+1]])
 			}
+		}
+	}
+	return out
+}
+
+// cScopes gives, for each offset of b (code with strings, comments and preprocessor lines blanked), the
+// innermost bracket open there: 0 at namespace scope, '(' or '[', 'c' in a class, struct or union body,
+// and '{' in any other brace (a function body, a lambda, a namespace or an initializer).
+func cScopes(b []byte) []byte {
+	out := make([]byte, len(b))
+	var stack []byte
+	for i, ch := range b {
+		switch ch {
+		case '(', '[':
+			stack = append(stack, ch)
+		case '{':
+			kind := byte('{')
+			head := b[bytes.LastIndexAny(b[:i], ";{}")+1 : i]
+			if cClassHeadRE.Match(head) && !bytes.ContainsAny(cAttrRE.ReplaceAll(head, nil), "(=") {
+				kind = 'c'
+			}
+			stack = append(stack, kind)
+		case ')', ']', '}':
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+		if len(stack) > 0 {
+			out[i] = stack[len(stack)-1]
 		}
 	}
 	return out

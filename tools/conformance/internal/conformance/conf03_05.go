@@ -341,13 +341,20 @@ func checkLayouts(p *Pass, f string, shifts []shift) {
 
 // cConstTable collects `constexpr … NAME = expr;` from the C-family files in scope, by bare name. A name
 // defined more than once (kPageBits is 6 in one ECS header and 12 in another) keeps every definition.
+// Groups under `#if 0` are not read.
 func cConstTable(p *Pass) map[string][]string {
 	t := map[string][]string{}
 	for _, f := range p.Files {
 		if !cFamily.MatchString(f) {
 			continue
 		}
-		for _, m := range cConstRE.FindAllStringSubmatch(strings.Join(codeLines(p.Tree.Lines(f), true), "\n"), -1) {
+		code := codeLines(p.Tree.Lines(f), true)
+		for i, dead := range inactiveLines(code) {
+			if dead {
+				code[i] = ""
+			}
+		}
+		for _, m := range cConstRE.FindAllStringSubmatch(strings.Join(code, "\n"), -1) {
 			if v := strings.TrimSpace(m[2]); !slices.Contains(t[m[1]], v) {
 				t[m[1]] = append(t[m[1]], v)
 			}

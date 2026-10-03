@@ -3,7 +3,8 @@
 # helios_declare_module(<name> <layer> [HEADLESS] [EDITOR_ONLY] [PEERS <module>...])
 #   Records a row of 02 §1.1's layering table (engine/CMakeLists.txt holds the full table). A module
 #   declared here gets its LAYER, flags and allowed same-layer peers from the row, so module
-#   CMakeLists.txt files need not repeat them.
+#   CMakeLists.txt files need not repeat them. A module has at most one row: declaring it again (for
+#   example from its own CMakeLists.txt, with other peers or flags) fails configure.
 #
 # helios_module(<name> [HEADLESS] [EDITOR_ONLY] [LAYER <n>] [PEERS <module>...]
 #               SOURCES ... DEPS ... PRIVATE_DEPS ...)
@@ -14,12 +15,15 @@
 #     third-party library (rhi/render/ui/audio/app/input, SDL3, ImGui, volk, ...).
 #   * EDITOR_ONLY: never linked by the client, launcher, bot, cell, gateway or voice executables, and
 #     never a dependency of a module that is not EDITOR_ONLY itself.
-#   HEADLESS / EDITOR_ONLY flags from the call and from the table row are combined.
+#   A module with a table row takes its flags and peers from the row; the call may repeat them but
+#   may not add a flag or a peer the row lacks (like a contradicting LAYER, that fails configure).
+#   PEERS in the call is for a module without a row, which then passes LAYER too.
 #
 # helios_executable(<name> [ROLE <role>] [CPU_GATE|NO_CPU_GATE] SOURCES ... DEPS ...)
 #   ROLE is one of client launcher bootstrap bot cell gateway voice editor tool sample bench. When
 #   omitted it is inferred from the directory (apps/client -> client, apps/cellserver -> cell,
-#   apps/tools/* -> tool, apps/samples -> sample, engine/*/bench -> bench, ...). Client and server
+#   apps/tools/* -> tool, apps/samples -> sample, engine/*/bench -> bench, ...); a directory with no
+#   known role and no ROLE is a configure error, so every executable gets a role check. Client and server
 #   roles may not link EDITOR_ONLY modules; cell/gateway/voice/bot may link only HEADLESS modules.
 #   Windows executables get the Helios manifest (helios_windows_manifest). The CPU gate (a
 #   pre-initializer that refuses CPUs without AVX2, 02 §1.1 / 08 §2.2) is linked into every AVX2
@@ -29,9 +33,9 @@
 #   Declares a doctest executable registered with CTest.
 #
 # Configure-time checks (run once, deferred to the end of the top-level CMakeLists.txt): a module
-# depends only on lower layers or listed peers; the module graph is acyclic; HELIOS_MODULE_ORDER is a
-# topological order; the HEADLESS and EDITOR_ONLY rules above. Any violation stops configure with a
-# message that names the dependency path.
+# depends only on lower layers or listed peers; the module graph is acyclic; HELIOS_MODULE_ORDER lists
+# every module in a topological order; the HEADLESS and EDITOR_ONLY rules above. Any violation stops
+# configure with a message that names the dependency path.
 
 include_guard(GLOBAL)
 
@@ -76,6 +80,12 @@ endfunction()
 # ---------------------------------------------------------------------------------------------
 function(helios_declare_module name layer)
   cmake_parse_arguments(D "HEADLESS;EDITOR_ONLY" "" "PEERS" ${ARGN})
+  get_property(existing GLOBAL PROPERTY HELIOS_DECL_${name}_LAYER SET)
+  if(existing)
+    message(FATAL_ERROR "Module layering check failed:\n  helios layering: module '${name}' already has a row in the "
+                        "layering table (engine/CMakeLists.txt, 02 §1.1). A second helios_declare_module(${name}) "
+                        "would replace its layer, flags or peers\n")
+  endif()
   if(NOT layer MATCHES "^[1-5]$")
     message(FATAL_ERROR "helios_declare_module(${name}): layer must be 1..5 (02 §1.1), got '${layer}'")
   endif()
@@ -115,6 +125,27 @@ function(helios_module name)
   if(NOT layer MATCHES "^[1-5]$")
     message(FATAL_ERROR "Module layering check failed:\n  helios layering: module '${name}': LAYER must be 1..5, "
                         "got '${layer}'\n")
+  endif()
+  # The row is the declaration: a call may leave out the row's flags but may not add one it lacks.
+  if(NOT "${declLayer}" STREQUAL "")
+    foreach(flag HEADLESS EDITOR_ONLY)
+      set(rowFlag "${declHeadless}")
+      if(flag STREQUAL "EDITOR_ONLY")
+        set(rowFlag "${declEditorOnly}")
+      endif()
+      if(M_${flag} AND NOT rowFlag)
+        message(FATAL_ERROR "Module layering check failed:\n  helios layering: helios_module(${name} ${flag}) "
+                            "contradicts the layering table (engine/CMakeLists.txt, 02 §1.1), whose row for "
+                            "'${name}' is not ${flag}\n")
+      endif()
+    endforeach()
+    foreach(peer IN LISTS M_PEERS)
+      if(NOT peer IN_LIST declPeers)
+        message(FATAL_ERROR "Module layering check failed:\n  helios layering: helios_module(${name} PEERS ${peer}) "
+                            "contradicts the layering table (engine/CMakeLists.txt, 02 §1.1), whose row for "
+                            "'${name}' does not list '${peer}' as a peer\n")
+      endif()
+    endforeach()
   endif()
   set(headless OFF)
   if(M_HEADLESS OR "${declHeadless}")
@@ -184,7 +215,13 @@ function(helios_executable name)
     _helios_infer_role(role)
   endif()
   set(knownRoles client launcher bootstrap bot cell gateway voice editor tool sample bench)
-  if(NOT role STREQUAL "" AND NOT role IN_LIST knownRoles)
+  if(role STREQUAL "")
+    # Without a role no role check (02 §1.1: EDITOR_ONLY, HEADLESS-only servers) would see it.
+    file(RELATIVE_PATH rel "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
+    message(FATAL_ERROR "helios_executable(${name}): no ROLE given and none is known for '${rel}/' "
+                        "(pass ROLE <one of: ${knownRoles}>, or add the directory to _helios_infer_role "
+                        "in cmake/HeliosModule.cmake)")
+  elseif(NOT role IN_LIST knownRoles)
     message(FATAL_ERROR "helios_executable(${name}): unknown ROLE '${role}' (one of: ${knownRoles})")
   endif()
   add_executable(${name} ${E_SOURCES})

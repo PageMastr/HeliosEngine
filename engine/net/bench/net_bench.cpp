@@ -149,8 +149,10 @@ StackResult runStackPps(f64 seconds) {
 }
 
 void report(const bench::TrunkGateResult& r, f64 seconds) {
+    // Three decimals for the core counts: the nightly perf history (scorecard.jsonc) tracks the cell
+    // thread's, and at about 0.24 cores one step of a second decimal is already a 4 % change.
     HELIOS_LOG_INFO("NS-0.7 trunk: {:.0f} s, sent {}, delivered {} ({:.0f} pps, {:.1f} Mbit/s payload, {:.1f} Mbit/s "
-                    "wire), drops {:.4f} %, cell thread {:.2f} cores, gateway thread {:.2f} cores, rcvbuf {} KB, "
+                    "wire), drops {:.4f} %, cell thread {:.3f} cores, gateway thread {:.3f} cores, rcvbuf {} KB, "
                     "syscalls send {} recv {}",
                     seconds, r.sent, r.delivered, r.deliveredPps, r.payloadMbps, r.wireMbps, r.dropPercent,
                     r.senderCores, r.receiverCores, r.grantedReceiveBuffer / 1024, r.senderSendSyscalls,

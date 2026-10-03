@@ -1,10 +1,13 @@
 #! -rules CONF-08 -strict
 # Go constants, keyed fields, a gateway port variable and a flag default; TOML array and table port;
-# a published UDP port; a C++ constant, listen default and connect default.
+# a published UDP port; C++ constants (initialised with =, braces and parentheses), listen default and
+# connect default.
 deploy/compose.yml:3: CONF-08
 deploy/helios.toml:2: CONF-08
 deploy/helios.toml:5: CONF-08
 engine/net/include/ports.h:2: CONF-08
+engine/net/include/ports.h:3: CONF-08
+engine/net/include/ports.h:4: CONF-08
 engine/server/src/gateway_config.cpp:1: CONF-08
 engine/server/src/gateway_config.cpp:2: CONF-08
 services/cmd/tool/main.go:5: CONF-08

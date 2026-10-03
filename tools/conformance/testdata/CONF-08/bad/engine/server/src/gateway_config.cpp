@@ -6,3 +6,4 @@ Address listen = Address::ipv4(0, 0, 0, 0,
                                kListenPort);
 auto probe = parse(args.get("connect", "", kDefaultConnect));
 auto bound = parse(args.get("listen", "", defaultListen()));
+auto lport = args.getInt("listen-port", 0, kListenPort);

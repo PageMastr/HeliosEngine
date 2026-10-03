@@ -28,7 +28,6 @@ const unresolvedPort = "%s: a gateway port the lint cannot resolve; the default 
 
 var (
 	gatewayNameRE = regexp.MustCompile(`(?i)gateway`)
-	gatewayPortRE = regexp.MustCompile(`(?i)gateway[\w-]*port|port[\w-]*gateway`)
 	// host:port, [v6]:port or :port.
 	addrRE = regexp.MustCompile(`^(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]*):(\d{1,5})$`)
 	// C++ in a gateway file: the lines that set its client-side address.
@@ -37,19 +36,19 @@ var (
 	cIPv4CallRE = regexp.MustCompile(`\b(?:Address\s*::\s*)?ipv4\s*\(`)
 	cV4CallRE   = regexp.MustCompile(`\b(?:loopbackV4|anyV4|loopbackV6|anyV6)\s*\(`)
 	// A listen, connect or gateway option read with a default: args.get("connect", "", kDefault).
-	cOptionCallRE = regexp.MustCompile(`(?i)\b\w+\s*\(\s*"-{0,2}(?:listen|connect|[\w.-]*gateway[\w.-]*)"\s*,`)
-	// The declaration of a constant named for the gateway port, and its initializer.
-	cPortDeclRE = regexp.MustCompile(`\b(k\w*[Gg]ateway\w*[Pp]ort\w*|k\w*[Pp]ort\w*[Gg]ateway\w*)\s*` +
-		`(?:=\s*([^;=,{}][^;,{}]*)|\{([^{}]*)\}|\(([^()]*)\))\s*[;,]`)
-	cDefinePortRE = regexp.MustCompile(`(?mi)^[ \t]*#[ \t]*define[ \t]+(\w*gateway\w*port\w*|\w*port\w*gateway\w*)[ \t]+([^\n]*)$`)
+	cOptionCallRE = regexp.MustCompile(`(?i)\b\w+\s*\(\s*"-{0,2}(?:listen|connect|[\w.-]*gateway)[\w.-]*"\s*,`)
+	// The declaration of a k… constant and its initializer, and a #define; gatewayPortName picks those
+	// named for the gateway port.
+	cPortDeclRE   = regexp.MustCompile(`\b(k[A-Z_]\w*)\s*(?:=\s*([^;=,{}][^;,{}]*)|\{([^{}]*)\}|\(([^()]*)\))\s*[;,]`)
+	cDefinePortRE = regexp.MustCompile(`(?m)^[ \t]*#[ \t]*define[ \t]+(\w+)[ \t]+([^\n]*)$`)
 	// Integer constants for cPortValues: constexpr/const declarations and #defines.
 	cIntDeclRE   = regexp.MustCompile(`\b(?:constexpr|const)\b[^;{}()=]*?\b([A-Za-z_]\w*)\s*(?:=\s*([^;{}]+?)|\{([^{}]*)\})\s*;`)
 	cIntDefineRE = regexp.MustCompile(`(?m)^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]+([^\n]+)$`)
 	cIntLitRE    = regexp.MustCompile(`^(0[xX][0-9A-Fa-f']+|\d[\d']*)[uUlL]*$`)
 	cCastRE      = regexp.MustCompile(`^(?:static_cast\s*<[^<>]*>|(?:std::)?u?int(?:16|32|64)_t|u16|u32|i32|int|unsigned)\s*[({](.*)[)}]$`)
 	tomlTableRE  = regexp.MustCompile(`^\s*\[+\s*([^\]]+?)\s*\]+`)
+	optionNameRE = regexp.MustCompile(`^-{0,2}[\w.-]+$`)
 	tomlKeyRE    = regexp.MustCompile(`^\s*([A-Za-z0-9_.-]+)\s*=\s*(.*)$`)
-	tomlPortRE   = regexp.MustCompile(`(?i)port`)
 	tomlIntRE    = regexp.MustCompile(`^[+]?\d[\d_]*$`)
 	// A port mapping token in compose or Helm YAML that ends in /udp, and its parts: an optional host IP,
 	// an optional published port (or range) and the container port (or range).
@@ -61,6 +60,26 @@ var (
 	// A Go address format: something, a colon, then a verb ("127.0.0.1:%d", "%s:%d", ":%d").
 	goAddrFormatRE = regexp.MustCompile(`:%[-+# 0-9]*[dsvq]$`)
 )
+
+// nameWords splits a name into lower-case words at case changes and non-alphanumerics
+// (kDefaultGatewayPort, HELIOS_GATEWAY_PORT and "gateway-port" are all … gateway port).
+func nameWords(name string) []string {
+	return strings.FieldsFunc(strings.ToLower(camelRE.ReplaceAllString(name, "${1}_${2}")), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	})
+}
+
+// portName reports a name with the word port (listen_port, ports), not one that only contains it
+// (transport, report_interval); gatewayPortName one with the words gateway and port.
+func portName(name string) bool {
+	return slices.ContainsFunc(nameWords(name), func(w string) bool { return w == "port" || w == "ports" })
+}
+
+func gatewayPortName(name string) bool {
+	return portName(name) && slices.ContainsFunc(nameWords(name), func(w string) bool {
+		return w == "gateway" || w == "gateways"
+	})
+}
 
 func portOf(addr string) (int, bool) {
 	m := addrRE.FindStringSubmatch(addr)
@@ -159,7 +178,7 @@ func checkGatewayPortTOML(p *Pass, f string) {
 				p.Report(f, i+1, "gateway address %q: the default gateway port is UDP 7777 (04 §2)", s[1]+s[2])
 			}
 		}
-		if !tomlPortRE.MatchString(m[1]) {
+		if !portName(m[1]) {
 			continue
 		}
 		items := []string{val}
@@ -215,7 +234,7 @@ func checkGatewayPortGo(p *Pass, f string) {
 		return "", false
 	}
 	check := func(name string, values ...ast.Expr) {
-		portName := gatewayPortRE.MatchString(name)
+		portName := gatewayPortName(name)
 		for _, v := range values {
 			if portName {
 				// A value named for the gateway port is a port: evaluate it whole, or look into the call
@@ -312,14 +331,19 @@ func checkGatewayPortGo(p *Pass, f string) {
 				}
 			}
 		case *ast.CallExpr: // flag.String("gateway", "127.0.0.1:7000", …) and the like
-			named := ""
+			// Any string that mentions the gateway makes the call's addresses gateway addresses; only an
+			// option name ("gateway-port", not a sentence) can say that an integer is the gateway port.
+			named, option := false, "gateway"
 			for _, a := range x.Args {
-				if s, ok := g.String(gf, a); ok && gatewayNameRE.MatchString(s) && named == "" {
-					named = s
+				if s, ok := g.String(gf, a); ok && gatewayNameRE.MatchString(s) {
+					named = true
+					if optionNameRE.MatchString(s) && option == "gateway" {
+						option = s
+					}
 				}
 			}
-			if named != "" {
-				check(calleeName(x)+"("+named+")", x)
+			if named {
+				check(calleeName(x)+"("+option+")", x)
 				return false
 			}
 		}
@@ -431,6 +455,9 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 	}
 	for _, m := range cPortDeclRE.FindAllStringSubmatchIndex(src.blank, -1) {
 		name := src.text[m[2]:m[3]]
+		if !gatewayPortName(name) {
+			continue
+		}
 		init := ""
 		for g := 4; g <= 8; g += 2 {
 			if m[g] >= 0 {
@@ -449,6 +476,9 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 	}
 	for _, m := range cDefinePortRE.FindAllStringSubmatchIndex(src.text, -1) {
 		name, init := src.text[m[2]:m[3]], src.text[m[4]:m[5]]
+		if !gatewayPortName(name) {
+			continue
+		}
 		vs := cPortValues(init, ints, 0)
 		if vs == nil {
 			p.Report(f, src.line(m[0]), unresolvedPort, name+" "+strings.TrimSpace(init))
@@ -464,7 +494,8 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 		return gatewayFile && cGatewayLineRE.MatchString(l) || gatewayNameRE.MatchString(l)
 	}
 	for i, l := range src.logical {
-		if !reads(i) || cPortDeclRE.MatchString(src.blankLines[i]) {
+		if !reads(i) || slices.ContainsFunc(cPortDeclRE.FindAllStringSubmatch(src.blankLines[i], -1),
+			func(m []string) bool { return gatewayPortName(m[1]) }) {
 			continue
 		}
 		for _, s := range cStringRE.FindAllStringSubmatch(l, -1) {
@@ -493,6 +524,13 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 		def := c.args[len(c.args)-1]
 		vals, ok := cStrValues(def, strs)
 		if !ok {
+			// An integer default is the port itself (args.getInt("listen-port", 0, kPort)).
+			if vs := cPortValues(def, ints, 0); vs != nil {
+				for _, v := range vs {
+					report(c.line, v)
+				}
+				continue
+			}
 			p.Report(f, c.line, unresolvedPort, "default "+strings.TrimSpace(def)+" of "+c.args[0])
 			continue
 		}

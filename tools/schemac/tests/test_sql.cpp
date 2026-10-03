@@ -3,6 +3,8 @@
 // (test_golden.cpp) pin the full output; tools/schemac/tests/sql_postgres.cmake applies it to a real
 // PostgreSQL where one is installed.
 
+#include <algorithm>
+
 #include "test_util.h"
 #include "text.h"
 
@@ -363,6 +365,85 @@ TEST_CASE("sql: string defaults read the same whatever standard_conforming_strin
     INFO((s ? *s : std::string()));
     CHECK(contains(s, "    a TEXT NOT NULL DEFAULT E'\\\\''); CREATE TABLE public.scs_pwned (x int); --',\n"));
     CHECK(contains(s, "    b TEXT NOT NULL DEFAULT 'it''s',\n")); // no backslash: a plain literal
+}
+
+TEST_CASE("sql: string defaults stay on one line and hold no NUL") {
+    // A NUL ends psql's input line, so the rest of the snapshot shifts out of the literal and the next
+    // string default runs as SQL; PostgreSQL TEXT cannot hold U+0000 anyway.
+    MemoryFileSystem fs;
+    auto nul = compileSql("struct S @store(character) @sql(schema=\"svc_test\") { id: u32 @key;\n"
+                          "  a: string = \"\\0\"\n  b: string = \"); CREATE TABLE public.pwned (x int); --\" }",
+                          fs);
+    CHECK_FALSE(nul->ok());
+    CHECK_MESSAGE(nul->messages.find("the default of field 'a' of 'S' holds U+0000, which a PostgreSQL TEXT column cannot store") !=
+                      std::string::npos,
+                  nul->messages);
+    CHECK(nul->result.outputs.empty());
+    MemoryFileSystem fsU;
+    auto nulU = compileSql("struct S @store(character) @sql(schema=\"svc_test\") { id: u32 @key; a: Name = \"x\\u0000y\" }", fsU);
+    CHECK_FALSE(nulU->ok()); // \u0000 decodes to the same NUL
+    // goose parses a stub line by line: a line inside a literal that reads as an annotation is one
+    // (ENVSUB ON expanded the migration runner's environment into the stored default).
+    MemoryFileSystem fs2;
+    auto nl = compileSql("struct S @store(character) @sql(schema=\"svc_test\") { id: u32 @key;\n"
+                         "  a: string = \"x\\n-- +goose ENVSUB ON\\n${SECRET}\" }",
+                         fs2);
+    REQUIRE_MESSAGE(nl->ok(), nl->messages);
+    const std::string* s = nl->output("sql/svc_test/schema.sql");
+    INFO((s ? *s : std::string()));
+    CHECK(contains(s, "    a TEXT NOT NULL DEFAULT E'x\\n-- +goose ENVSUB ON\\n${SECRET}',\n"));
+    // Every control character is an escape, so each literal stays on one line; a backslash is doubled
+    // in the same E'…' literal, and the rest of the text (UTF-8 included) is copied.
+    MemoryFileSystem fs3;
+    auto ctl = compileSql("struct S @store(character) @sql(schema=\"svc_test\") { id: u32 @key;\n"
+                          "  a: string = \"t\\tr\\rb\\u0008f\\u000Cs\\u0001d\\u007F\\\\q'\\u00e9\" }",
+                          fs3);
+    REQUIRE_MESSAGE(ctl->ok(), ctl->messages);
+    const std::string* c = ctl->output("sql/svc_test/schema.sql");
+    INFO((c ? *c : std::string()));
+    CHECK(contains(c, "    a TEXT NOT NULL DEFAULT E't\\tr\\rb\\bf\\fs\\x01d\\x7F\\\\q''\xC3\xA9',\n"));
+    const std::string* m = ctl->output("sql/svc_test/migration.sql");
+    REQUIRE(m);
+    CHECK(contains(m, "DEFAULT E't\\tr\\rb\\bf\\fs\\x01d\\x7F\\\\q''\xC3\xA9',\n")); // the stub shares the column text
+    for (const std::string* text : {c, m}) {
+        CHECK(std::none_of(text->begin(), text->end(), [](char ch) { return (static_cast<unsigned char>(ch) < 0x20 && ch != '\n') || ch == 0x7f; }));
+    }
+}
+
+TEST_CASE("sql: a table no struct stores any more is listed for the contract release") {
+    // 05 §3.3: release N only expands, so a removed table, like a removed column, is a note for N+2.
+    MemoryFileSystem fs;
+    CompileOptions both = sqlOptions();
+    both.lockPath = "schemas/lock.jsonc";
+    both.files = {"schemas/test/a.hschema", "schemas/test/b.hschema"};
+    const std::string b = "package test;\nstruct Kept @store(character) @sql(schema=\"svc_test\") { id: u32 @key }\n";
+    auto first = compileFiles({{"schemas/test/a.hschema", "package test;\nimport \"b.hschema\";\n"
+                                                          "struct Live @store(character) @sql(schema=\"svc_test\") { id: u32 @key }\n"
+                                                          "struct Gone @store(character) @sql(schema=\"svc_test\") { id: u32 @key }\n"
+                                                          "struct Plain @store(character) @sql(schema=\"svc_test\") { id: u32 @key }\n"},
+                               {"schemas/test/b.hschema", b}},
+                              both, &fs);
+    REQUIRE_MESSAGE(first->ok(), first->messages);
+    fs.files["schemas/lock.jsonc"] = first->result.lockText;
+    // v2: Gone is removed, Plain loses @sql, and b.hschema is only imported (Kept is not generated here).
+    CompileOptions onlyA = sqlOptions();
+    onlyA.lockPath = "schemas/lock.jsonc";
+    auto second = compileFiles({{"schemas/test/a.hschema", "package test;\nimport \"b.hschema\";\n"
+                                                           "struct Live @store(character) @sql(schema=\"svc_test\") { id: u32 @key }\n"
+                                                           "struct Plain @store(character) { id: u32 @key }\n"},
+                                {"schemas/test/b.hschema", b}},
+                               onlyA, &fs);
+    REQUIRE_MESSAGE(second->ok(), second->messages);
+    const std::string* m = second->output("sql/svc_test/migration.sql");
+    INFO((m ? *m : std::string()));
+    CHECK(contains(m, "-- +goose Up\n-- No changes since the baseline lock.\nSELECT 1;\n")); // expand only: no DROP runs
+    CHECK(contains(m, "-- Contract release (N+2, 05 §3.3), once no reader uses these tables:\n"));
+    CHECK(contains(m, "--   DROP TABLE svc_test.gone; -- test.Gone (lock id "));
+    CHECK(contains(m, ") was removed\n"));
+    CHECK(contains(m, "--   DROP TABLE svc_test.plain; -- test.Plain (lock id "));
+    CHECK(contains(m, ") is no longer @sql\n"));
+    CHECK_FALSE(contains(m, "svc_test.kept")); // imported, still @sql
+    CHECK_FALSE(contains(second->output("sql/svc_test/schema.sql"), "gone"));
 }
 
 TEST_CASE("sql: a control character in a schema file name is an error") {

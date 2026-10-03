@@ -300,7 +300,7 @@ Result<TxId> TxBuilder::commit() {
 }
 
 void TxBuilder::abort() {
-    if (m_done) return;
+    if (m_done || !m_fw) return;
     m_fw->rollback(m_ops);
     m_ops.clear();
     m_baseRev.clear();
@@ -494,19 +494,21 @@ Result<usize> Framework::openAll() {
     return opened;
 }
 
-namespace {
-bool holdsOpsOf(const TxBuilder& b, const DocId& id) {
-    return std::any_of(b.ops().begin(), b.ops().end(), [&](const Op& o) { return o.doc == id; });
+bool TxBuilder::holdsOpsOf(const DocId& doc) const {
+    // An unfinished builder's m_baseRev lists exactly the documents its ops touch (push() adds a
+    // document with its first op, truncate() drops the ones no op touches any more), so this costs
+    // O(documents), not O(ops); push() asks it of every other live builder.
+    if (m_done) return false;
+    return std::any_of(m_baseRev.begin(), m_baseRev.end(), [&](const auto& p) { return p.first == doc; });
 }
-} // namespace
 
 bool Framework::hasUnjournaledOps(const DocId& id) const {
-    return std::any_of(m_builders.begin(), m_builders.end(), [&](const TxBuilder* b) { return !b->m_done && holdsOpsOf(*b, id); });
+    return std::any_of(m_builders.begin(), m_builders.end(), [&](const TxBuilder* b) { return b->holdsOpsOf(id); });
 }
 
 const TxBuilder* Framework::otherWriter(const TxBuilder& self, const DocId& id) const {
     for (const TxBuilder* b : m_builders) {
-        if (b != &self && !b->m_done && holdsOpsOf(*b, id)) return b;
+        if (b != &self && b->holdsOpsOf(id)) return b;
     }
     return nullptr;
 }

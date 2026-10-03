@@ -34,10 +34,12 @@
 // commit first with preconditions taken from the earlier, still unjournaled one, recovery would
 // stop at a conflict, and aborting the earlier one could not roll back under the later one. An op
 // on a document that another unfinished builder has edited is therefore refused (InvalidState):
-// commit or abort that builder first. The built-in commands, Luau and RPC never meet this: inside
-// a group every command writes into the group, and outside one each command commits before the
-// next runs. A command that edits through ctx.tx() and then invokes another command that edits the
-// same document does meet it.
+// commit or abort that builder first. The open group counts as such a builder, so inside a group a
+// builder from begin() (which folds into the group when it commits) may edit only documents the
+// group has not edited yet. The built-in commands, Luau and RPC never meet this: inside a group
+// every command writes into the group, and outside one each command commits before the next runs.
+// A command that edits through ctx.tx() and then invokes another command that edits the same
+// document does meet it (the inner command fails).
 //
 // Budget: the byte totals that cap the history and the log are running sums, so no commit walks
 // the session's log. A commit costs O(its ops + the redo stack's entries) and an undo or redo
@@ -159,6 +161,8 @@ private:
     Result<void> push(Op op);
     /// InvalidState once the Framework is gone.
     Result<void> attached() const;
+    /// True while this builder is unfinished and holds applied ops of `doc`.
+    bool holdsOpsOf(const DocId& doc) const;
 
     Framework* m_fw;  ///< Null once ~Framework has detached this builder.
     Origin m_origin;
@@ -266,7 +270,9 @@ public:
     Result<TxId> reloadFromDisk(const DocId& doc);
 
     // ---- transactions -------------------------------------------------------------------------
-    /// Starts a transaction for `origin`. Commit it with TxBuilder::commit().
+    /// Starts a transaction for `origin`. Commit it with TxBuilder::commit(). The builder may
+    /// outlive this Framework (see TxBuilder); see "Concurrent builders" above for which
+    /// documents it may edit while other builders are unfinished.
     std::unique_ptr<TxBuilder> begin(Origin origin, std::string label = {});
     /// Groups the transactions of every command until endGroup() into one undo step (Luau
     /// `Editor.transaction`, multi-command UI actions). Groups nest; the outermost commits, with

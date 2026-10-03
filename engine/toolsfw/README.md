@@ -33,9 +33,14 @@ Its dependencies are `core` and `reflect`, plus `script` privately for the Luau 
   (`beginGroup`/`endGroup`, and Luau's `Editor.transaction`) commit many commands as one step.
   Groups nest: cancelling a nested level (a failed inner `Editor.transaction` caught with `pcall`)
   rolls back only that level's edits, and while a group is open only its own input path's invoker
-  may run commands, so the group's origin is the origin of every edit in it. A new edit drops the
-  redo entries of the documents it touches. The history is capped at 512 MB (past the cap, the
-  oldest entries go until it is at 7/8 of it).
+  may run commands, so the group's origin is the origin of every edit in it. One unfinished
+  transaction at a time edits a document: an op on a document that another uncommitted `TxBuilder`
+  (the open group included) has edited fails with `InvalidState`, because the later transaction
+  could otherwise be journaled first with preconditions taken from the earlier, unjournaled one.
+  A `TxBuilder` may outlive its `Framework`: `~Framework` rolls an unfinished one back and detaches
+  it, and its later calls fail with `InvalidState`. A new edit drops the redo entries of the
+  documents it touches. The history is capped at 512 MB (past the cap, the oldest entries go until
+  it is at 7/8 of it).
 - **Commit budget.** The history and log byte totals are running sums, so no commit, undo or redo
   walks the session's log. A commit costs O(its ops + the redo stack's entries) and an undo or redo
   O(its ops + the history entries it scans past, undone ones included). A one-op commit stays
@@ -101,13 +106,13 @@ checked against the project's records).
 
 ## Tests
 
-`toolsfw_tests` (doctest, 72 cases, plus 1 `perf:` case in `toolsfw_tests_perf`): transactions and
+`toolsfw_tests` (doctest, 75 cases, plus 1 `perf:` case in `toolsfw_tests_perf`): transactions and
 inverses, history and merging, nested groups, commands and arguments, documents and 3-way reload,
 the journal (torn tails at every cut point, group commit, recovery, recovery after a reload,
 cross-session reverts, and saves and reloads refused inside a group or an uncommitted builder,
-with recovery checked after each), RPC over the real socket or pipe (including a client that never
-reads, one that half-closes, and the connection, request and output bounds), and **ED-1**
-(`test_ed1.cpp`):
+with recovery checked after each), one writer per document and builders that outlive their
+`Framework`, RPC over the real socket or pipe (including a client that never reads, one that
+half-closes, and the connection, request and output bounds), and **ED-1** (`test_ed1.cpp`):
 
 - 10,000 random transactions (Set, Insert, Remove and Move over the Frigate, with rejected edits
   mixed in) are applied, then all undone, then all redone. After every undo and redo the canonical

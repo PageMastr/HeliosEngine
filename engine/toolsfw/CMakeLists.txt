@@ -62,5 +62,12 @@ if(TARGET toolsfw_tests)
   target_compile_definitions(toolsfw_tests PRIVATE
     HELIOS_TOOLSFW_BURST_CHILD="$<TARGET_FILE:toolsfw_burst_child>"
     HELIOS_TOOLSFW_TEST_WORK_DIR="${CMAKE_CURRENT_BINARY_DIR}/toolsfw_test_work")
-  set_tests_properties(toolsfw_tests PROPERTIES TIMEOUT 900)
+  # Sanitizer Debug builds (the nightly's linux-asan job runs every test) execute ED-1's 10k-transaction
+  # cases about 15 times slower: the whole binary took 17 min under GCC 13 Debug + ASan/UBSan on a loaded
+  # 4-vCPU machine (1-1.5 min in RelWithDebInfo).
+  if(HELIOS_SANITIZE)
+    set_tests_properties(toolsfw_tests PROPERTIES TIMEOUT 3600)
+  else()
+    set_tests_properties(toolsfw_tests PROPERTIES TIMEOUT 900)
+  endif()
 endif()

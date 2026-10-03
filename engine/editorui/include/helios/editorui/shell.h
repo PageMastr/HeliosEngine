@@ -2,7 +2,8 @@
 // The editor shell (07 §1.3): main menu, dock space with the default layout, panels (Documents,
 // Inspector with the property grid, History, Output, Viewport), status bar with the context accent
 // (neutral = local session), command palette (Ctrl+Shift+P) and a generic argument form for
-// commands. Every action is a ToolsFramework command run through the host's UI invoker; the menus
+// commands. At start it offers the replay of an earlier unclean session (07 §1.2: an Output line and
+// File > Recover Unsaved Session). Every action is a ToolsFramework command run through the host's UI invoker; the menus
 // register what they expose with the command bus (the "command no menu exposes" layout lint).
 //
 // Threading: UI thread, inside an ImGui frame.
@@ -15,8 +16,11 @@
 #include <string_view>
 #include <vector>
 
+#include "helios/core/fs.h"
+#include "helios/core/result.h"
 #include "helios/core/types.h"
 #include "helios/editorui/property_grid.h"
+#include "helios/toolsfw/journal.h"
 
 namespace helios::tf {
 class Framework;
@@ -43,6 +47,13 @@ public:
     virtual u64 viewportTexture(u32 width, u32 height) = 0;
 };
 
+/// Replays the unclean journal `journal` into `framework` (07 §1.2) and returns the Output summary:
+/// the transactions replayed, every document that did not come back and why, and the limits of a
+/// replay (recovered undo and redo steps become ordinary history entries; only the recovered
+/// documents' part of a multi-document transaction is replayed). When every document came back,
+/// the journal gets its "end" record so the session is not offered again. Owner thread.
+Result<std::string> recoverJournal(tf::Framework& framework, const fs::Path& journal);
+
 /// Panel window names ("<title>###<id>"); the id part is the panel's stable path.
 inline constexpr std::string_view kPanelIds[] = {"Documents", "Inspector", "History", "Output", "Viewport"};
 
@@ -65,6 +76,9 @@ public:
     /// Opens the command palette / the argument form of a command (UI tests use the commands).
     void openPalette() noexcept { m_openPalette = true; }
     void openCommandForm(std::string commandId);
+    /// Earlier sessions of the project that crashed or quit with unsaved records, oldest first;
+    /// `app.recoverSession` (File > Recover Unsaved Session) replays the newest one.
+    const std::vector<tf::JournalSessionInfo>& recoverableSessions() const noexcept { return m_recoverable; }
 
 private:
     struct MenuEntry {
@@ -73,6 +87,7 @@ private:
         bool selectionArgs;  ///< Pass {"doc": <selected>}.
     };
     void registerCommands();
+    void refreshRecoverable();
     void onEvent(const tf::FrameworkEvent& e);
     void handleShortcuts();
     void drawMainMenu();
@@ -108,6 +123,7 @@ private:
     std::string m_formCommand;
     std::vector<std::pair<std::string, std::string>> m_formArgs;
     std::string m_formError;
+    std::vector<tf::JournalSessionInfo> m_recoverable;
     std::shared_ptr<int> m_alive = std::make_shared<int>(0);
 };
 

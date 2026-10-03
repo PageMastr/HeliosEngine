@@ -62,7 +62,9 @@ struct JournalRecord {
     std::string file;                    ///< Open/Save: project-relative source file.
     std::string typeName;                ///< Open: qualified record type.
     u64 hash = 0;                        ///< Open: source hash when opened; Save: hash written.
-    std::optional<std::string> snapshot; ///< Open: full record text for a never-saved document.
+    /// Open written after a reload whose merge kept unsaved local edits: the merged record text
+    /// (the file holds `hash`'s bytes; recovery restores this text before later transactions).
+    std::optional<std::string> snapshot;
     Transaction tx;                      ///< Tx.
     u64 offset = 0;                      ///< Byte offset of the record in the file.
 
@@ -144,7 +146,8 @@ private:
 fs::Path defaultJournalRoot();
 /// `<root>/<project>`; the project name is sanitized to a file-name-safe form.
 fs::Path journalDirectory(const fs::Path& root, std::string_view project);
-/// A new session name: `<yyyymmdd-hhmmss>-<pid>` (UTC).
+/// A new session name: `<yyyymmdd-hhmmss>-<pid>` (UTC). Framework appends `-2`, `-3`, ... when
+/// that journal already exists (two sessions of one process within a second).
 std::string newSessionName();
 
 struct JournalSessionInfo {
@@ -153,6 +156,7 @@ struct JournalSessionInfo {
     bool clean = false;
     u64 txCount = 0;
     u64 tornBytes = 0;
+    u64 maxLamport = 0;  ///< Highest transaction Lamport counter in the session.
 };
 
 /// The journals of a project, oldest first. `uncleanOnly` keeps sessions without an "end" record

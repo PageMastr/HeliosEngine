@@ -18,6 +18,7 @@ std::string lockKindOf(const Decl* d) {
     case DeclKind::Enum: return "enum";
     case DeclKind::Flags: return "flags";
     case DeclKind::Variant: return "variant";
+    case DeclKind::ScriptFn: return "fn";
     default: return "struct";
     }
 }
@@ -102,8 +103,15 @@ public:
                 !readString(v, "base", path, t.base, false) || !readStrings(v, "was", path, t.was) ||
                 !readU32(v, "nextField", path, t.nextField, false))
                 return false;
-            if (t.kind != "struct" && t.kind != "enum" && t.kind != "flags" && t.kind != "variant")
+            if (t.kind != "struct" && t.kind != "enum" && t.kind != "flags" && t.kind != "variant" && t.kind != "fn")
                 return fail(path + ".kind", std::format("unknown kind '{}'", t.kind));
+            if (t.kind == "fn") { // a scriptlib fn: only its binding id (02 §3.5 `luau`, §7.4)
+                for (const char* key : {"fields", "values", "nextField", "was", "version", "base", "sql"}) {
+                    if (yyjson_obj_get(v, key)) return fail(path, std::format("a fn entry has only 'id' and 'kind' (found '{}')", key));
+                }
+                out.types.emplace(name, std::move(t));
+                continue;
+            }
             const char* listKey = t.kind == "variant" ? "alternatives" : "fields";
             if (yyjson_val* fields = yyjson_obj_get(v, listKey)) {
                 if (!yyjson_is_arr(fields)) return fail(path + "." + listKey, "expected an array");
@@ -209,7 +217,7 @@ public:
         for (const auto& [name, t] : L.types) m_used.insert(t.id);
         std::map<std::string, const Decl*> claimedBy;
         for (Decl* d : S.decls) {
-            if (!d->emitted || !d->isLockable()) continue;
+            if (!d->emitted || (!d->isLockable() && d->kind != DeclKind::ScriptFn)) continue;
             LockType* lt = findOrCreate(d);
             if (!lt) continue;
             if (auto [it, fresh] = claimedBy.emplace(d->qualifiedName, d); !fresh) {
@@ -219,10 +227,16 @@ public:
             d->typeId = lt->id;
             const std::string kind = lockKindOf(d);
             if (lt->kind != kind) {
-                D.error(d->loc, std::format("'{}' was a {} (lock id {}); a type cannot change kind — declare a new type instead",
-                                            d->qualifiedName, lt->kind, lt->id));
+                if (kind == "fn" || lt->kind == "fn")
+                    D.error(d->loc, std::format("'{}' was a {} (lock id {}) and is now a {}; a lock entry cannot change between a scriptlib "
+                                                "fn and a type — use another name",
+                                                d->qualifiedName, lt->kind, lt->id, kind));
+                else
+                    D.error(d->loc, std::format("'{}' was a {} (lock id {}); a type cannot change kind — declare a new type instead",
+                                                d->qualifiedName, lt->kind, lt->id));
                 continue;
             }
+            if (d->kind == DeclKind::ScriptFn) continue; // a binding id only
             if (d->version < lt->version) {
                 D.error(d->loc, std::format("@version of '{}' decreased from {} to {}", d->qualifiedName, lt->version, d->version));
             } else if (d->version != lt->version) {
@@ -265,7 +279,7 @@ private:
         t.kind = lockKindOf(d);
         t.version = d->version;
         if (d->kind == DeclKind::Enum || d->kind == DeclKind::Flags) t.base = std::string(primName(d->underlying));
-        C.push_back(std::format("new type {} (id {})", d->qualifiedName, t.id));
+        C.push_back(std::format("new {} {} (id {})", d->kind == DeclKind::ScriptFn ? "fn" : "type", d->qualifiedName, t.id));
         return &L.types.emplace(d->qualifiedName, std::move(t)).first->second;
     }
 
@@ -508,7 +522,9 @@ std::string writeLock(const Lock& lock) {
             for (const std::string& w : t.was) o.str(w);
             o.endArray();
         }
-        if (t.kind == "enum" || t.kind == "flags") {
+        if (t.kind == "fn") {
+            // Binding id only: fuel costs are calibrated per binding id (02 §7.4), nothing else is locked.
+        } else if (t.kind == "enum" || t.kind == "flags") {
             o.key("values");
             o.beginArray();
             for (const LockEnumValue& v : t.values) {

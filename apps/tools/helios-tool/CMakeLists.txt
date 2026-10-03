@@ -4,24 +4,31 @@ helios_executable(helios-tool
   SOURCES main.cpp
   DEPS helios::toolsfw helios_toolsfw_samples helios::core)
 
-# helios-tool must stay headless: EditorUI or a graphics library in its link closure is an error.
-set(helios_tool_forbidden helios_editorui helios_rhi helios_render tp_imgui SDL3-static tp_volk)
-foreach(dep helios::toolsfw helios_toolsfw_samples helios::core)
-  if(TARGET ${dep})
-    get_target_property(real ${dep} ALIASED_TARGET)
-    if(NOT real)
-      set(real ${dep})
-    endif()
-    get_target_property(links ${real} LINK_LIBRARIES)
-    get_target_property(ilinks ${real} INTERFACE_LINK_LIBRARIES)
-    foreach(l ${links} ${ilinks})
-      string(REGEX REPLACE "^helios::" "helios_" l "${l}")
-      if(l IN_LIST helios_tool_forbidden)
-        message(FATAL_ERROR "helios-tool: ${dep} links ${l}; helios-tool must not link EditorUI or graphics (07 §1.1)")
-      endif()
-    endforeach()
+# helios-tool must stay headless: EditorUI, any other non-HEADLESS module but toolsfw, or a graphics
+# library anywhere in its link closure is an error. Deferred to the end of configure (after
+# helios_finalize_build), when every target's links are final, and walked transitively.
+function(_helios_tool_pred_forbidden tgt out)
+  set(hit OFF)
+  get_property(gfx GLOBAL PROPERTY HELIOS_GRAPHICS_THIRD_PARTY)
+  if(tgt IN_LIST gfx)
+    set(hit ON)
   endif()
-endforeach()
+  get_target_property(m "${tgt}" HELIOS_MODULE_NAME)
+  if(m AND NOT m STREQUAL "toolsfw")
+    get_target_property(headless "${tgt}" HELIOS_HEADLESS)
+    if(NOT headless)
+      set(hit ON)
+    endif()
+  endif()
+  set(${out} ${hit} PARENT_SCOPE)
+endfunction()
+function(_helios_tool_check_closure)
+  _helios_find_path(helios-tool _helios_tool_pred_forbidden path)
+  if(path)
+    message(FATAL_ERROR "helios-tool must not link EditorUI, graphics or other non-headless modules (07 §1.1): ${path}")
+  endif()
+endfunction()
+cmake_language(DEFER DIRECTORY ${CMAKE_SOURCE_DIR} CALL _helios_tool_check_closure)
 
 # CLI round trip over a copy of the sample project (engine/toolsfw/samples/project): validate,
 # fmt --check, apply, undo, redo (across processes, through the journal), journal list/show/verify,

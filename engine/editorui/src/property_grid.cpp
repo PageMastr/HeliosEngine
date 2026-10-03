@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "helios/core/assert.h"
 #include "helios/editorui/localize.h"
 #include "helios/editorui/ui_test.h"
 #include "helios/reflect/json.h"
@@ -17,6 +18,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "misc/cpp/imgui_stdlib.h"
+#include "semantic_colors.h"
 
 namespace helios::edui {
 
@@ -82,9 +84,24 @@ struct PropertyGrid::Impl {
     std::string docKey;
 
     // ---- commits -------------------------------------------------------------------------------
-    void commit(std::string_view command, std::string args) {
-        auto r = invoker.invoke(command, args);
-        grid.m_error = r ? std::string() : r.error().message;
+    // Edits are queued while the rows are drawn and run after the table ends. Running one inside
+    // the loop would change the document under the rows still being drawn: a cleared optional's
+    // value pointer, a removed element's slot and the cached element count all go stale (a null
+    // dereference or an out-of-range element read in the same frame).
+    std::vector<std::pair<std::string, std::string>> pending;
+
+    void commit(std::string_view command, std::string args) { pending.emplace_back(std::string(command), std::move(args)); }
+    void flush() {
+        bool failed = false;
+        for (auto& [command, args] : pending) {
+            auto r = invoker.invoke(command, args);
+            if (!r && !failed) {
+                grid.m_error = r.error().message;
+                failed = true;
+            }
+        }
+        if (!pending.empty() && !failed) grid.m_error.clear();
+        pending.clear();
     }
     std::string argsHead(const std::string& path) const {
         return std::format(R"({{"doc":{},"path":{})", tf::json::quote(docKey), tf::json::quote(path));
@@ -149,8 +166,7 @@ struct PropertyGrid::Impl {
             const bool client = refl::hasFlag(f->flags, refl::FieldFlags::ClientOnly);
             if (server || client) {
                 ImGui::SameLine();
-                ImGui::TextColored(ImGui::GetStyleColorVec4(server ? ImGuiCol_PlotHistogram : ImGuiCol_CheckMark), "%s",
-                                   tr(server ? "server" : "client"));
+                ImGui::TextColored(semanticColorVec4(server ? "badgeServer" : "badgeClient"), "%s", tr(server ? "server" : "client"));
             }
         }
         return open;
@@ -184,13 +200,16 @@ struct PropertyGrid::Impl {
             }
             UiTest::annotate(has ? "set" : "unset", tr("Set or clear the optional value"));
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip)) ImGui::SetTooltip("%s", tr("Set or clear the optional value"));
+            // Edits are deferred (see `pending`), so the value read above is still the one drawn here.
+            const void* inner = has ? t.ops->get(const_cast<void*>(v)) : nullptr;
+            HELIOS_ASSERT(!has || inner != nullptr, "property grid: optional '{}' changed while drawn", path);
             if (has && isInline(e)) {
                 ImGui::SameLine();
-                inlineEditor(e, t.ops->get(const_cast<void*>(v)), f, path);
+                inlineEditor(e, inner, f, path);
             }
             if (readOnly) ImGui::EndDisabled();
             if (open) {
-                children(e, t.ops->get(const_cast<void*>(v)), path);
+                children(e, inner, path);
                 ImGui::TreePop();
             }
             return;
@@ -305,6 +324,7 @@ struct PropertyGrid::Impl {
                 if (!byField.empty()) keyField = e.field(byField);
             }
             for (usize i = 0; i < n; ++i) {
+                HELIOS_ASSERT(i < t.ops->size(v), "property grid: list '{}' changed while drawn", path);
                 const void* ev = t.ops->element(const_cast<void*>(v), i);
                 std::string label;
                 std::string elemPath;
@@ -439,10 +459,22 @@ struct PropertyGrid::Impl {
             u64 umin = 0;
             u64 umax = bits >= 64 ? UINT64_MAX : (u64{1} << bits) - 1;
             if (range) {
-                smin = std::max(smin, static_cast<i64>(range->min));
-                smax = std::min(smax, static_cast<i64>(range->max));
-                umin = std::max<u64>(umin, static_cast<u64>(std::max(0.0, range->min)));
-                umax = std::min<u64>(umax, static_cast<u64>(std::max(0.0, range->max)));
+                // Clamp in f64 first: casting a bound outside the target type (@range(0, 1e20) on a
+                // u64) is undefined behaviour.
+                const auto toI64 = [](f64 x, i64 lo, i64 hi) {
+                    if (!(x > static_cast<f64>(lo))) return lo;
+                    if (!(x < static_cast<f64>(hi))) return hi;
+                    return static_cast<i64>(x);
+                };
+                const auto toU64 = [](f64 x, u64 hi) {
+                    if (!(x > 0.0)) return u64{0};
+                    if (!(x < static_cast<f64>(hi))) return hi;
+                    return static_cast<u64>(x);
+                };
+                smin = toI64(range->min, smin, smax);
+                smax = toI64(range->max, smin, smax);
+                umin = toU64(range->min, umax);
+                umax = toU64(range->max, umax);
             }
             const bool changed = sign ? ImGui::DragScalar("##value", dt, &s, 0.25f, &smin, &smax, fmt.c_str(), ImGuiSliderFlags_AlwaysClamp)
                                       : ImGui::DragScalar("##value", dt, &u, 0.25f, &umin, &umax, fmt.c_str(), ImGuiSliderFlags_AlwaysClamp);
@@ -529,7 +561,7 @@ struct PropertyGrid::Impl {
 };
 
 void PropertyGrid::draw(tf::Framework& framework, tf::CommandInvoker& invoker, const tf::Document& doc) {
-    Impl impl{*this, framework, invoker, doc, doc.id().toString(), {}};
+    Impl impl{*this, framework, invoker, doc, doc.id().toString(), {}, {}};
     UiTest::pushScope("Grid");
     // Header: record identity. $name is editable (doc.rename); $rid never changes.
     ImGui::AlignTextToFramePadding();
@@ -545,10 +577,15 @@ void PropertyGrid::draw(tf::Framework& framework, tf::CommandInvoker& invoker, c
     }
     // Type and file, wrapped to the panel width (a narrow Inspector must not clip them).
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", std::format("{}  {}{}", doc.type().qualifiedName, doc.relativePath(), doc.dirty() ? "  *" : "").c_str());
+    ImGui::TextWrapped("%s", std::format("{}  {}", doc.type().qualifiedName, doc.relativePath()).c_str());
     ImGui::PopStyleColor();
+    if (doc.dirty()) {
+        // The unsaved marker stays on the same line, so the rows below never move when it appears.
+        sameLineIfFits(ImGui::CalcTextSize("*").x);
+        ImGui::TextColored(semanticColorVec4("dirty"), "*");
+    }
     if (!m_error.empty()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_PlotHistogramHovered));
+        ImGui::PushStyleColor(ImGuiCol_Text, semanticColorVec4("error"));
         ImGui::TextWrapped("%s", m_error.c_str());
         ImGui::PopStyleColor();
     }
@@ -580,6 +617,7 @@ void PropertyGrid::draw(tf::Framework& framework, tf::CommandInvoker& invoker, c
         ImGui::EndTable();
     }
     UiTest::popScope();
+    impl.flush();
 }
 
 } // namespace helios::edui

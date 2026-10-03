@@ -69,7 +69,8 @@ struct Theme {
 std::vector<std::string_view> builtinThemeNames();
 Result<Theme> builtinTheme(std::string_view name);
 
-/// Writes the theme into an ImGui style at `scale` (1 = 100 %): colors, metrics x scale.
+/// Writes the theme into an ImGui style at `scale` (1 = 100 %): colors, metrics x scale. It also
+/// makes `theme` the source of semanticColor().
 void applyTheme(const Theme& theme, f32 scale, ImGuiStyle& style);
 
 /// Adds the editor font (Roboto 2.138 Regular, embedded; 07 §1.3) to `io.Fonts` as the default font.
@@ -77,14 +78,32 @@ void applyTheme(const Theme& theme, f32 scale, ImGuiStyle& style);
 /// rasterizes glyphs on demand at each size. Threading: the thread that owns the ImGui context.
 void addEditorFont(ImGuiIO& io);
 
+/// A token without an ImGui style slot, as the last applyTheme() set it: "badgeServer",
+/// "badgeClient", "dirty", "error", "statusBarBg", "accentLocal", "accentShared", "accentLive",
+/// "viewportBg", "viewportGrid" (any token works). Magenta before the first applyTheme().
+/// Process-wide; UI thread.
+Color semanticColor(std::string_view token) noexcept;
+
 struct ContrastIssue {
     std::string foreground;
-    std::string background;
+    std::string background;  ///< "<background>" or "<background> over <under>".
     f64 ratio = 0;
     f64 required = 0;
 };
 
-/// Checks every text-on-background pair the shell draws; empty when the theme passes.
+/// One foreground token drawn as text on a background: `background` composited over `under`
+/// (empty = the base windowBg), composited over windowBg.
+struct ContrastPair {
+    std::string_view foreground;
+    std::string_view background;
+    std::string_view under = {};
+};
+
+/// Every text-on-background pair the shell and the property grid draw (text, disabled text and
+/// input hints, the client/server badges, the dirty marker, errors).
+std::vector<ContrastPair> drawnContrastPairs();
+
+/// Checks every pair of drawnContrastPairs(); empty when the theme passes.
 std::vector<ContrastIssue> checkContrast(const Theme& theme);
 
 } // namespace helios::edui

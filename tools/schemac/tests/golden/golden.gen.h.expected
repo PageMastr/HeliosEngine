@@ -21,6 +21,9 @@ struct Owns;
 struct Fire;
 struct Req;
 struct Spellings;
+struct Pack;
+struct Bag;
+struct Tagged;
 struct StoreBuyRequest;
 /// Reference to a ThingDef record (serialized as its RecordId).
 using ThingRef = ::helios::refl::RecordRef<ThingDef>;
@@ -272,6 +275,33 @@ struct Spellings {
     [[nodiscard]] bool operator==(const Spellings& other) const noexcept;
 };
 
+/// A scriptlib argument: the glue gives fields a script omits their schema defaults.
+struct Pack {
+    std::string slot{};
+    ::helios::u16 count = 1u;
+
+    /// Field-wise equality (floats compare bitwise).
+    [[nodiscard]] bool operator==(const Pack& other) const noexcept;
+};
+
+/// @max on struct fields bounds arguments and results alike.
+struct Bag {
+    std::vector<::helios::u32> ids;
+    std::string tag{};
+
+    /// Field-wise equality (floats compare bitwise).
+    [[nodiscard]] bool operator==(const Bag& other) const noexcept;
+};
+
+/// A result with Names: pushed as text; a set of Names in lexical order.
+struct Tagged {
+    ::helios::Name label{};
+    std::set<::helios::Name> names;
+
+    /// Field-wise equality (floats compare bitwise).
+    [[nodiscard]] bool operator==(const Tagged& other) const noexcept;
+};
+
 using Money = ::helios::i64;
 
 struct Pair {
@@ -499,6 +529,45 @@ struct Codec<::golden::all::Spellings> : StructCodec<::golden::all::Spellings> {
     static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::Spellings& v);
     static void writeJsonFields(JsonWriter& w, const ::golden::all::Spellings& v);
     static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::Spellings& v, ReadCtx& ctx);
+};
+template <>
+struct TypeOf<::golden::all::Pack> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct Codec<::golden::all::Pack> : StructCodec<::golden::all::Pack> {
+    static bool isDefault(const ::golden::all::Pack& v) noexcept;
+    static bool equals(const ::golden::all::Pack& a, const ::golden::all::Pack& b) noexcept;
+    static void writeFields(TaggedWriter& w, const ::golden::all::Pack& v);
+    static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::Pack& v);
+    static void writeJsonFields(JsonWriter& w, const ::golden::all::Pack& v);
+    static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::Pack& v, ReadCtx& ctx);
+};
+template <>
+struct TypeOf<::golden::all::Bag> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct Codec<::golden::all::Bag> : StructCodec<::golden::all::Bag> {
+    static bool isDefault(const ::golden::all::Bag& v) noexcept;
+    static bool equals(const ::golden::all::Bag& a, const ::golden::all::Bag& b) noexcept;
+    static void writeFields(TaggedWriter& w, const ::golden::all::Bag& v);
+    static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::Bag& v);
+    static void writeJsonFields(JsonWriter& w, const ::golden::all::Bag& v);
+    static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::Bag& v, ReadCtx& ctx);
+};
+template <>
+struct TypeOf<::golden::all::Tagged> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct Codec<::golden::all::Tagged> : StructCodec<::golden::all::Tagged> {
+    static bool isDefault(const ::golden::all::Tagged& v) noexcept;
+    static bool equals(const ::golden::all::Tagged& a, const ::golden::all::Tagged& b) noexcept;
+    static void writeFields(TaggedWriter& w, const ::golden::all::Tagged& v);
+    static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::Tagged& v);
+    static void writeJsonFields(JsonWriter& w, const ::golden::all::Tagged& v);
+    static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::Tagged& v, ReadCtx& ctx);
 };
 template <>
 struct TypeOf<::golden::all::ThingDef::Shape> {

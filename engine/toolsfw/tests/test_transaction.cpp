@@ -291,6 +291,41 @@ TEST_CASE("tx: create and destroy records are undoable") {
     CHECK_FALSE(dup->createRecord(*type, "records/hull/x.json", h));
 }
 
+TEST_CASE("tx: a failing raw Create onto a destroyed document changes nothing") {
+    Fixture f("tx_create_restore");
+    const std::string snapshot = f.doc().text();
+    {
+        auto b = f.fw->begin(Origin::Ui, "delete");
+        REQUIRE(b->destroy(f.frigate));
+        REQUIRE(b->commit());
+    }
+    Op op;
+    op.kind = OpKind::Create;
+    op.doc = f.frigate;
+    op.typeName = std::string(f.doc().type().qualifiedName);
+    op.file = "records/hull/frigate.hrec";
+    const u64 revision = f.doc().revision();
+    for (const std::string& bad : {snapshot + "\n\n",  // not canonical
+                                   [&] {
+                                       std::string t = snapshot;  // another record's $rid
+                                       const usize at = t.find("\"$rid\": ");
+                                       REQUIRE(at != std::string::npos);
+                                       t[at + 8] = t[at + 8] == '4' ? '3' : '4';
+                                       return t;
+                                   }()}) {
+        op.after = bad;
+        auto b = f.fw->begin(Origin::Ui, "raw");
+        CHECK_FALSE(b->apply(op));
+        b->abort();
+        CHECK(f.doc().destroyed());
+        CHECK(f.doc().revision() == revision);
+    }
+    // The Destroy is still the newest history entry, and undoing it restores the same bytes.
+    REQUIRE(f.fw->undo(Origin::Ui));
+    CHECK_FALSE(f.doc().destroyed());
+    CHECK(f.doc().text() == snapshot);
+}
+
 TEST_CASE("tx: ops and transactions round-trip through JSON; inverses are involutions") {
     Fixture f("tx_json");
     auto b = f.fw->begin(Origin::Ui, "Several");

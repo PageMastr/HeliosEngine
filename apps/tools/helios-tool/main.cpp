@@ -36,7 +36,8 @@ Verbs
   apply --command=<id> [--args=<json>]
   apply --file=<commands.jsonl>     one {"command": id, "args": {...}} per line, one transaction
                                     (--no-save leaves files untouched: the edit is journal-only)
-  undo [--steps=<n>]                revert the last n helios-tool transactions on this project
+  undo [--steps=<n>]                revert the last n saved helios-tool transactions on this
+                                    project (journal-only --no-save edits are not on the stack)
   redo [--steps=<n>]                re-apply the last n reverted ones
   journal list [--all]              this project's journals (unclean sessions only without --all)
   journal show <file|latest> [--json]
@@ -81,6 +82,10 @@ struct Context {
     std::vector<std::string> args;  ///< Positional arguments after the verb.
 };
 
+fs::Path journalRootOf(const Context& c) {
+    return c.journalRoot.empty() ? tf::defaultJournalRoot() : c.journalRoot;
+}
+
 Result<std::unique_ptr<tf::Framework>> openFramework(const Context& c, bool journal) {
     tf::FrameworkConfig cfg;
     cfg.project = c.project;
@@ -88,6 +93,13 @@ Result<std::unique_ptr<tf::Framework>> openFramework(const Context& c, bool jour
     cfg.user = c.user;
     cfg.journal = journal && c.journal;
     cfg.journalRoot = c.journalRoot;
+    if (cfg.journal) {
+        // Each helios-tool run is its own session: continue the project's Lamport counter so
+        // transaction ids (and the undo/redo targets that name them) never repeat across runs.
+        for (const tf::JournalSessionInfo& s : tf::listJournalSessions(journalRootOf(c), c.project, false)) {
+            cfg.lamportFloor = std::max(cfg.lamportFloor, s.maxLamport);
+        }
+    }
     HELIOS_TRY_ASSIGN(auto fw, tf::Framework::create(cfg));
     HELIOS_TRY(fw->openAll());
     return fw;
@@ -128,7 +140,8 @@ int cmdFmt(const Context& c) {
         ++changed;
         out(std::format("{}{}\n", check ? "not canonical: " : "formatted: ", d->relativePath()));
         if (!check) {
-            if (auto r = fs::writeTextFile(d->path(), d->text()); !r) return fail(kFailed, std::format("{}", r.error()));
+            // Atomic like Framework::save: a crash mid-write never leaves a truncated record.
+            if (auto r = fs::writeTextFile(d->path(), d->text(), fs::WriteMode::Atomic); !r) return fail(kFailed, std::format("{}", r.error()));
         }
     }
     if (check && changed > 0) return kCheckFailed;
@@ -207,19 +220,34 @@ struct CliEntry {
 };
 
 /// Rebuilds helios-tool's linear undo stack from the project's journals (oldest first): Do
-/// transactions push, Undo pops onto the redo stack, Redo moves back.
+/// transactions push, Undo pops onto the redo stack, Redo moves back. Only transactions that
+/// reached the files count: every document they touch must have a later "save" record in the
+/// same session. A journal-only edit (`apply --no-save`, or a run whose save failed) never changed
+/// the files, so its inverse could never apply and would block every older undo.
 Result<std::pair<std::vector<CliEntry>, std::vector<CliEntry>>> cliStacks(const Context& c) {
-    const fs::Path root = c.journalRoot.empty() ? tf::defaultJournalRoot() : c.journalRoot;
     std::vector<CliEntry> done, redo;
-    for (const tf::JournalSessionInfo& s : tf::listJournalSessions(root, c.project, false)) {
+    for (const tf::JournalSessionInfo& s : tf::listJournalSessions(journalRootOf(c), c.project, false)) {
         HELIOS_TRY_ASSIGN(const tf::JournalScan scan, tf::readJournal(s.path));
+        // saved[i]: record i is a transaction whose every document is saved later in the session.
+        std::vector<bool> saved(scan.records.size(), false);
+        std::vector<tf::DocId> savedLater;
+        for (usize i = scan.records.size(); i-- > 0;) {
+            const tf::JournalRecord& r = scan.records[i];
+            if (r.kind == tf::JournalRecordKind::Save) {
+                if (!tf::containsDoc(savedLater, r.doc)) savedLater.push_back(r.doc);
+            } else if (r.kind == tf::JournalRecordKind::Tx) {
+                const auto docs = r.tx.documents();
+                saved[i] = std::all_of(docs.begin(), docs.end(), [&](const tf::DocId& d) { return tf::containsDoc(savedLater, d); });
+            }
+        }
         std::map<tf::DocId, std::string> files;
-        for (const tf::JournalRecord& r : scan.records) {
+        for (usize i = 0; i < scan.records.size(); ++i) {
+            const tf::JournalRecord& r = scan.records[i];
             if (r.kind == tf::JournalRecordKind::Open || r.kind == tf::JournalRecordKind::Save) {
                 if (!r.file.empty()) files[r.doc] = r.file;
                 continue;
             }
-            if (r.kind != tf::JournalRecordKind::Tx || r.tx.origin != tf::Origin::Cli) continue;
+            if (r.kind != tf::JournalRecordKind::Tx || r.tx.origin != tf::Origin::Cli || !saved[i]) continue;
             for (const tf::Op& op : r.tx.ops) {
                 if (!op.file.empty()) files[op.doc] = op.file;
             }
@@ -322,10 +350,6 @@ int cmdUndoRedo(const Context& c, bool undo) {
 }
 
 // ---- journal ---------------------------------------------------------------------------------------
-fs::Path journalRootOf(const Context& c) {
-    return c.journalRoot.empty() ? tf::defaultJournalRoot() : c.journalRoot;
-}
-
 Result<fs::Path> resolveJournal(const Context& c, std::string_view which, bool uncleanOnly) {
     if (which != "latest" && which != "auto") return fs::pathFromUtf8(which);
     const auto sessions = tf::listJournalSessions(journalRootOf(c), c.project, uncleanOnly);

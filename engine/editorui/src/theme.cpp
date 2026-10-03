@@ -13,6 +13,14 @@
 
 namespace helios::edui {
 
+namespace {
+/// The theme of the last applyTheme() (semanticColor()); UI thread.
+Theme& appliedTheme() {
+    static Theme theme;
+    return theme;
+}
+} // namespace
+
 Result<Color> parseColor(std::string_view text) {
     if (text.size() != 7 && text.size() != 9) return Error{ErrorCode::ParseError, std::format("bad color '{}'", text)};
     if (text[0] != '#') return Error{ErrorCode::ParseError, std::format("bad color '{}'", text)};
@@ -86,20 +94,30 @@ Result<Theme> Theme::parse(std::string_view jsonc, std::string_view sourceName) 
         t.colors.emplace(std::string(m.key), c);
     }
     const refl::JsonValue metrics = root.get("metrics");
-    const auto metric = [&](std::string_view key, f32& out) {
-        f32 v = 0;
-        if (metrics.get(key).getF32(v)) out = v;
+    // A token file comes from the user (--theme-file): metrics outside sane DIP ranges (a negative
+    // or huge font, padding that swallows the window) are rejected instead of reaching ImGui.
+    std::string badMetric;
+    const auto metric = [&](std::string_view key, f32& out, f32 lo, f32 hi) {
+        const refl::JsonValue v = metrics.get(key);
+        if (!v.isValid()) return;
+        f32 x = 0;
+        if (!v.getF32(x) || !std::isfinite(x) || x < lo || x > hi) {
+            if (badMetric.empty()) badMetric = std::format("metric '{}' must be a number in [{}, {}]", key, lo, hi);
+            return;
+        }
+        out = x;
     };
-    metric("fontSize", t.metrics.fontSize);
-    metric("windowRounding", t.metrics.windowRounding);
-    metric("frameRounding", t.metrics.frameRounding);
-    metric("tabRounding", t.metrics.tabRounding);
-    metric("windowBorderSize", t.metrics.windowBorderSize);
-    metric("frameBorderSize", t.metrics.frameBorderSize);
-    metric("framePaddingX", t.metrics.framePaddingX);
-    metric("framePaddingY", t.metrics.framePaddingY);
-    metric("itemSpacingX", t.metrics.itemSpacingX);
-    metric("itemSpacingY", t.metrics.itemSpacingY);
+    metric("fontSize", t.metrics.fontSize, 6, 72);
+    metric("windowRounding", t.metrics.windowRounding, 0, 24);
+    metric("frameRounding", t.metrics.frameRounding, 0, 24);
+    metric("tabRounding", t.metrics.tabRounding, 0, 24);
+    metric("windowBorderSize", t.metrics.windowBorderSize, 0, 4);
+    metric("frameBorderSize", t.metrics.frameBorderSize, 0, 4);
+    metric("framePaddingX", t.metrics.framePaddingX, 0, 32);
+    metric("framePaddingY", t.metrics.framePaddingY, 0, 32);
+    metric("itemSpacingX", t.metrics.itemSpacingX, 0, 32);
+    metric("itemSpacingY", t.metrics.itemSpacingY, 0, 32);
+    if (!badMetric.empty()) return Error{ErrorCode::ParseError, std::format("{}: {}", sourceName, badMetric)};
     if (t.name.empty()) return Error{ErrorCode::ParseError, std::format("{}: theme without a name", sourceName)};
     for (std::string_view token : requiredTokens()) {
         if (!t.has(token)) return Error{ErrorCode::ParseError, std::format("{}: missing color token '{}'", sourceName, token)};
@@ -128,6 +146,7 @@ void addEditorFont(ImGuiIO& io) {
 }
 
 void applyTheme(const Theme& theme, f32 scale, ImGuiStyle& style) {
+    appliedTheme() = theme;
     style = ImGuiStyle();
     const ThemeMetrics& m = theme.metrics;
     style.WindowRounding = m.windowRounding;
@@ -218,26 +237,54 @@ void applyTheme(const Theme& theme, f32 scale, ImGuiStyle& style) {
     }
 }
 
+Color semanticColor(std::string_view token) noexcept {
+    return appliedTheme().color(token);
+}
+
+std::vector<ContrastPair> drawnContrastPairs() {
+    std::vector<ContrastPair> pairs;
+    // Body text: panels, popups, input fields, menus, buttons, selected and hovered rows (headers),
+    // tabs, table headers and the alternate table rows, and the status bar.
+    for (std::string_view bg : {"windowBg", "childBg", "popupBg", "frameBg", "frameBgHovered", "frameBgActive", "titleBg",
+                                "titleBgActive", "menuBarBg", "button", "buttonHovered", "buttonActive", "header", "headerHovered",
+                                "headerActive", "tab", "tabHovered", "tabSelected", "tabDimmed", "tabDimmedSelected", "tableHeaderBg",
+                                "statusBarBg"}) {
+        pairs.push_back({"text", bg});
+    }
+    pairs.push_back({"text", "tableRowBgAlt"});
+    pairs.push_back({"text", "headerHovered", "popupBg"});  // the palette's hovered command
+    // Disabled text: notes and counts on panels and popups, input hints (InputTextWithHint draws
+    // them in TextDisabled on the frame), the Documents table's "Table" cell on selected, hovered
+    // and pressed rows and on alternate rows, and the palette's shortcuts on a hovered command.
+    for (std::string_view bg : {"windowBg", "childBg", "popupBg", "frameBg", "frameBgHovered", "frameBgActive", "header",
+                                "headerHovered", "headerActive", "tableRowBgAlt"}) {
+        pairs.push_back({"textDisabled", bg});
+    }
+    pairs.push_back({"textDisabled", "headerHovered", "popupBg"});
+    // Semantic text: the property grid's badges (on plain and alternate rows), its dirty marker
+    // and errors, and the status bar's unsaved count.
+    for (std::string_view fg : {"badgeServer", "badgeClient", "error"}) {
+        pairs.push_back({fg, "windowBg"});
+        pairs.push_back({fg, "tableRowBgAlt"});
+    }
+    pairs.push_back({"dirty", "windowBg"});
+    pairs.push_back({"dirty", "statusBarBg"});
+    return pairs;
+}
+
 std::vector<ContrastIssue> checkContrast(const Theme& theme) {
     std::vector<ContrastIssue> issues;
     const f64 required = theme.highContrast ? 7.0 : 4.5;
     const Color base = theme.color("windowBg");
-    static constexpr std::string_view kBackgrounds[] = {
-        "windowBg", "childBg",       "popupBg",   "frameBg", "frameBgHovered", "frameBgActive", "titleBg",
-        "titleBgActive", "menuBarBg", "button",   "buttonHovered", "buttonActive", "header", "headerHovered",
-        "headerActive", "tab",        "tabHovered", "tabSelected", "tabDimmed", "tabDimmedSelected", "tableHeaderBg",
-        "statusBarBg"};
-    for (std::string_view bg : kBackgrounds) {
-        const Color background = over(theme.color(bg), base);
-        const Color text = over(theme.color("text"), background);
-        const f64 ratio = contrastRatio(text, background);
-        if (ratio + 1e-9 < required) issues.push_back({"text", std::string(bg), ratio, required});
-    }
-    // Colored text the shell draws on the panel background (badges, dirty markers, errors).
-    for (std::string_view fg : {"badgeServer", "badgeClient", "dirty", "error", "checkMark"}) {
-        const Color background = base;
-        const f64 ratio = contrastRatio(over(theme.color(fg), background), background);
-        if (ratio + 1e-9 < required) issues.push_back({std::string(fg), "windowBg", ratio, required});
+    for (const ContrastPair& p : drawnContrastPairs()) {
+        const Color under = p.under.empty() ? base : over(theme.color(p.under), base);
+        const Color background = over(theme.color(p.background), under);
+        const f64 ratio = contrastRatio(over(theme.color(p.foreground), background), background);
+        if (ratio + 1e-9 < required) {
+            std::string bg(p.background);
+            if (!p.under.empty()) bg += " over " + std::string(p.under);
+            issues.push_back({std::string(p.foreground), std::move(bg), ratio, required});
+        }
     }
     return issues;
 }

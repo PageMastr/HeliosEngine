@@ -28,8 +28,11 @@ Each frame the editor renders is one render graph (`engine/render`):
    format encodes, so the bytes stay unchanged.
 
 **DPI.** ImGui works in framebuffer pixels. The UI scale (`--scale`, `HELIOS_EDITOR_SCALE`, or else
-the display's content scale) goes into the style metrics and `FontScaleDpi`. Changing the scale
-re-rasterizes glyphs and rebuilds the default layout at the new size.
+the scale of the display the window is on) goes into the style metrics and `FontScaleDpi`. Without a
+forced scale it follows the window: `SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED` (moved to another
+monitor, or the display's scale changed) re-rasterizes glyphs at the new display's scale
+(`src/display_scale.h`). Test mode rebuilds the default layout at a new scale; a user's own dock
+layout is kept.
 
 **Font** (07 §1.3). The UI font is Roboto 2.138 Regular (Apache-2.0, `third_party/roboto`), embedded
 as bytes at build time (`embed_font.cmake`), so every machine renders the same glyphs and the goldens
@@ -59,16 +62,29 @@ a CJK fallback with localization previews (T25), and an icon font.
   (03's goldens own the renderer) and the mask rectangles returned.
 - **Layout lints** (`ui.lint`): clipped labels, overlapping widgets, widgets outside a window that
   cannot scroll there, interactive items with no label or tooltip, low-contrast theme tokens,
-  commands that no menu exposes, and panels that Ctrl+Tab cannot reach.
+  commands that no menu exposes, and panels that Ctrl+Tab cannot reach. The contrast rule checks
+  `drawnContrastPairs()`: every foreground token on every background the shell and grid draw it
+  on. The semantic tokens (`badgeServer`, `badgeClient`, `dirty`, `error`, `statusBarBg`,
+  `accentLocal`) are drawn through `semanticColor()`.
 
 ## Tests
 
-- **`editorui_tests`** (doctest, 37 cases; no GPU or display, so it runs on Windows CI too):
-  - themes and contrast, the embedded themes against the token files, the embedded font against
+- **`editorui_tests`** (doctest, 44 cases plus 1 `perf:` case; no GPU or display, so it runs on
+  Windows CI too):
+  - themes and contrast (every text pair the shell draws, including disabled text and input hints
+    on selected and hovered rows and frames, and the badge, dirty and error tokens), theme metric
+    ranges, the embedded themes against the token files, the embedded font against
     `third_party/roboto`, pseudo-localization and chords;
+  - the property grid's edits run after its rows are drawn: clearing an optional and removing a
+    non-last element of an expanded list, which read a cleared value and past the shortened list
+    while the edits ran inside the draw;
+  - crash recovery: an earlier unclean session is offered (Output line, File > Recover Unsaved
+    Session) and replays; the journal ends clean only after a normal exit with every record saved;
+  - the per-monitor DPI policy;
   - the shell and grid on a headless ImGui context, driven by injected input: item paths, typed and
     dragged edits as `ui-scripted` transactions, Ctrl+Z/Ctrl+Y, check boxes, list buttons, the
-    History panel, menus, the palette, the argument form;
+    History panel, menus, the palette (every command listed, scrolling), the case-insensitive
+    Documents filter, the argument form;
   - every lint rule against a seeded violation;
   - the renderer on the Null RHI with state validation;
   - the ꟻLIP golden policy (it passes identical images and fails a one-pixel shift);

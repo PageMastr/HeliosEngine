@@ -3,7 +3,10 @@
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <format>
 #include <limits>
+
+#include "helios/core/platform.h"
 
 #include "helios/toolsfw/automation.h"
 #include "helios/toolsfw/json_util.h"
@@ -43,6 +46,23 @@ TEST_CASE("documents: types come from @table directories; lookups by name, id an
     REQUIRE(again);
     CHECK(*again == &d);
     CHECK(f.fw->open("records/hull/missing.hrec").errorCode() == ErrorCode::NotFound);
+}
+
+TEST_CASE("documents: path case follows the platform's file system") {
+    Fixture f("docs_case");
+    const auto& types = f.fw->types();
+    auto other = f.fw->open("Records/Hull/FRIGATE.hrec");
+    if constexpr (platform::kIsWindows) {
+        // NTFS ignores case: the same file must not become a second document.
+        REQUIRE(other);
+        CHECK(*other == &f.doc());
+        CHECK(recordTypeForPath(types, "Records/HULL/frigate.hrec") == types.find("sample.ship.ShipHullDef"));
+    } else {
+        // A case-sensitive file system has no such file.
+        CHECK(other.errorCode() == ErrorCode::NotFound);
+        CHECK(recordTypeForPath(types, "Records/HULL/frigate.hrec") == nullptr);
+    }
+    CHECK(f.fw->documents().size() == 1);
 }
 
 TEST_CASE("documents: a non-canonical file opens clean and saves canonical") {
@@ -96,6 +116,26 @@ TEST_CASE("validate: ranges, finiteness, @max, keys and headers") {
     std::vector<Issue> header;
     validateHeader(refl::RecordHeader{}, header);
     CHECK(header.size() == 2);
+}
+
+TEST_CASE("validate: each issue names the file of the document it was found in") {
+    Fixture f("docs_validate_files");
+    const refl::TypeInfo* type = f.fw->types().find("sample.ship.ShipHullDef");
+    REQUIRE(type);
+    refl::RecordHeader h;
+    h.rid = 98;
+    h.name = "hull/wren";
+    auto c = f.fw->begin(Origin::Cli);
+    auto wren = c->createRecord(*type, "records/hull/wren.hrec", h, R"({"mass": 500})");
+    REQUIRE(wren);
+    REQUIRE(c->commit());
+    auto b = f.fw->begin(Origin::Cli, "Two hulls");
+    REQUIRE(b->set(f.frigate, "mass", "13000"));
+    REQUIRE(b->set(*wren, "mass", "1"));  // @range(100, 1e9)
+    auto r = b->commit();
+    REQUIRE_FALSE(r);
+    CHECK(r.error().message.find("records/hull/wren.hrec") != std::string::npos);
+    CHECK(r.error().message.find("records/hull/frigate.hrec") == std::string::npos);
 }
 
 TEST_CASE("selection: history, named sets and forgetting documents") {
@@ -222,6 +262,57 @@ TEST_CASE("automation: Luau edits go through commands with origin luau") {
     CHECK_FALSE((*a)->run("io", R"(io.open("x"))"));
     CHECK((*a)->run("undo", R"(assert(Editor.undo()))"));
     CHECK(f.fw->log().back().origin == Origin::Luau);
+}
+
+TEST_CASE("automation: a caught nested Editor.transaction failure keeps the outer one atomic") {
+    Fixture f("docs_luau_nested");
+    auto a = Automation::create(*f.fw);
+    REQUIRE(a);
+    auto r = (*a)->run("nested", R"(
+        Editor.transaction("outer", function()
+            Record.set("hull/frigate", "mass", "15000")
+            local ok = pcall(function()
+                Editor.transaction("inner", function()
+                    Record.set("hull/frigate", "handling/rollRate", "95")
+                    error("x")
+                end)
+            end)
+            assert(not ok)
+            Record.set("hull/frigate", "handling/yawRate", "12")
+        end))");
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    CHECK(f.get("mass") == "15000");
+    CHECK(f.get("handling/yawRate") == "12");
+    CHECK(f.get("handling/rollRate") != "95");  // the inner level rolled back
+    REQUIRE(f.fw->history().size() == 1);       // one undo step, labelled by the outer transaction
+    CHECK(f.fw->history()[0].tx.label == "outer");
+    CHECK(f.fw->history()[0].tx.ops.size() == 2);
+    CHECK_FALSE(f.fw->inGroup());
+}
+
+TEST_CASE("automation: runs reuse one VM module; a caller's open group survives a run") {
+    Fixture f("docs_luau_runs");
+    auto a = Automation::create(*f.fw);
+    REQUIRE(a);
+    for (int i = 0; i < 20; ++i) {
+        auto r = (*a)->run(std::format("run{}", i), std::format("Editor.log('run {}')", i));
+        REQUIRE(r);
+        REQUIRE(r->log.size() == 1);
+        CHECK(r->log[0] == std::format("run {}", i));
+    }
+    CHECK((*a)->loadedModules() == 1);
+    // A failing first chunk does not wedge the module: the next run still runs.
+    auto fresh = Automation::create(*f.fw);
+    REQUIRE(fresh);
+    CHECK_FALSE((*fresh)->run("bad", "error('first')"));
+    auto second = (*fresh)->run("good", "Editor.log('second')");
+    REQUIRE(second);
+    CHECK(second->log.size() == 1);
+    // A group the caller opened stays open; only the script's own levels are cancelled.
+    f.fw->beginGroup(Origin::Luau, "Caller");
+    CHECK_FALSE((*a)->run("killed", R"(Editor.transaction("t", function() error("boom") end))"));
+    CHECK(f.fw->groupDepth() == 1);
+    f.fw->cancelGroup();
 }
 
 } // namespace

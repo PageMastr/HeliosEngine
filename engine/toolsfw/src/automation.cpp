@@ -50,6 +50,8 @@ struct AutomationBindings {
         lua_pushvalue(L, 2);
         const int status = script::callLuau(L, 0, 0);
         if (status != LUA_OK) {
+            // Only this level's edits roll back: a caller that catches the error with pcall keeps
+            // an enclosing Editor.transaction open and atomic.
             f.cancelGroup();
             lua_error(L);  // re-raise the callee's error object
         }
@@ -171,18 +173,38 @@ Result<std::unique_ptr<Automation>> Automation::create(Framework& framework) {
 
 Automation::Automation(Framework& framework) noexcept : m_framework(&framework) {}
 
+usize Automation::loadedModules() const {
+    return m_vm->hasModule(kModule) ? 1 : 0;
+}
+
 Automation::~Automation() = default;
 
 Result<AutomationResult> Automation::run(std::string_view chunkName, std::string_view source) {
     m_log.clear();
-    std::string name = std::format("run{}_", ++m_runs);
-    for (char c : chunkName) name.push_back((std::isalnum(static_cast<unsigned char>(c)) != 0) ? c : '_');
-    HELIOS_TRY(m_vm->loadModule(name, source));
-    auto r = m_vm->instantiateModule(name);
-    if (m_framework->inGroup()) m_framework->cancelGroup();
+    ++m_runs;
+    // Every run reuses one module: reloading it re-runs the chunk in a fresh environment and drops
+    // the previous run's exports, so the VM heap does not grow with the number of runs (a module
+    // per run would never be unloaded). The chunk name only labels errors.
+    std::string label;
+    for (char c : chunkName) label.push_back((std::isalnum(static_cast<unsigned char>(c)) != 0) ? c : '_');
+    const usize depth = m_framework->groupDepth();
+    Result<void> r;
+    if (!m_vm->hasModule(kModule)) {
+        HELIOS_TRY(m_vm->loadModule(kModule, source));
+        r = m_vm->instantiateModule(kModule);
+    } else {
+        r = m_vm->reloadModule(kModule, source);
+        // A first run that failed left the module loaded but never instantiated; reloading such a
+        // module only swaps its code.
+        if (r && !m_vm->moduleInfo(kModule)->instantiated) r = m_vm->instantiateModule(kModule);
+    }
+    // Groups the script left open (it was killed inside Editor.transaction) are rolled back; the
+    // caller's own groups stay.
+    while (m_framework->groupDepth() > depth) m_framework->cancelGroup();
     if (!r) {
         const script::ScriptError& e = m_vm->lastError();
-        return Error{r.error().code, e.isError() ? e.toString() : r.error().message};
+        return Error{r.error().code, std::format("{}: {}", label.empty() ? std::string("script") : label,
+                                                 e.isError() ? e.toString() : r.error().message)};
     }
     AutomationResult out;
     out.log = std::move(m_log);

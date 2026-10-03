@@ -13,3 +13,9 @@ func project(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
 	_, _ = kv.Update(ctx, "zone.42", nil, rev)
 	return nil
 }
+
+// A reviewed compare-and-set on a key the lint cannot resolve carries a suppression.
+func claimZone(ctx context.Context, kv jetstream.KeyValue, zone string, rev uint64) error {
+	_, err := kv.Update(ctx, zone, nil, rev) // conformance:allow CONF-02 DIRECTORY zone keys, not leader state
+	return err
+}

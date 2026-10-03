@@ -3,15 +3,23 @@
 # key (jetstream and the legacy API; kv.go:19 is both a lease TTL and CAS on a lease key), and the
 # nats.c forms: a TTL on a lease bucket and on one the lint cannot resolve, CAS on a #define'd leader key
 # and on an unresolved key (fails closed: desc.cpp's member assignment and re-pointable `key` must not
-# resolve the parameters of config.cpp:6 and leader.cpp:11). (CONF-01 also fires on these buckets; this
-# fixture runs CONF-02 alone.)
+# resolve the parameters of config.cpp:6 and leader.cpp:11, nor may elect_opts.cpp's default argument
+# `key = "zone.1"`). In Go NATS code, CAS on a key the lint cannot resolve and a TTL on a bucket it cannot
+# resolve fail closed (kv.go:18 is both an unresolved KeyTTL key and CAS on it; elect.go, both APIs).
+# (CONF-01 also fires on these buckets; this fixture runs CONF-02 alone.)
 apps/cell/config.cpp:6: CONF-02
 apps/cell/leader.cpp:8: CONF-02
 apps/cell/leader.cpp:11: CONF-02
 apps/cell/lease.cpp:5: CONF-02
 apps/cell/lease.cpp:7: CONF-02
+services/internal/orch/elect.go:16: CONF-02
+services/internal/orch/elect.go:17: CONF-02
+services/internal/orch/elect.go:18: CONF-02
+services/internal/orch/elect.go:19: CONF-02
+services/internal/orch/elect.go:20: CONF-02
 services/internal/orch/kv.go:15: CONF-02
 services/internal/orch/kv.go:17: CONF-02
+services/internal/orch/kv.go:18: CONF-02
 services/internal/orch/kv.go:18: CONF-02
 services/internal/orch/kv.go:19: CONF-02
 services/internal/orch/kv.go:19: CONF-02

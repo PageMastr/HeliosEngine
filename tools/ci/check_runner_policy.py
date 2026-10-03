@@ -14,7 +14,9 @@ values (axis lists and `include` entries). For every such job the workflow fails
   trigger      it has a trigger other than `schedule`, `workflow_dispatch` or `push` restricted to
                `branches: [main]` (`pull_request*`, `workflow_run`, `workflow_call`, `push` to other
                branches or to tags, ...);
-  guard-ref    the job's `if:` does not require `github.ref == 'refs/heads/main'` as a top-level `&&` term;
+  guard-ref    the job's `if:` does not require `github.ref == 'refs/heads/main'` as a top-level `&&` term
+               (a value with `${{ }}` must be exactly `${{ ... }}`: GitHub keeps any text around it, even a
+               blank or a block scalar's final line break, and a non-empty string is always true);
   guard-var    ... nor `vars.HELIOS_WIN_GPU == 'enabled'` (the owner's switch: no variable, no job);
   secrets      the job, a job it needs (transitively) or the workflow's top level reads `secrets`,
                `github.token` or the whole `github` context in an expression (`if:` values are
@@ -805,13 +807,17 @@ def _guard_findings(job: Map) -> list[tuple[int, str, str]]:
     value = job.get("if")
     if not isinstance(value, str) or not value.strip():
         return [(line, rule, f"no `if:` guard; use `{GUARD_TEXT}`") for rule in REQUIRED_TERMS]
-    text = value.strip()
+    # With ${{ }}, GitHub keeps the scalar's text around it, blanks and a block scalar's final line break included
+    # (format('{0}\n', ...)), and a non-empty string is true; so only an exact `${{ ... }}` is an expression.
+    # Without, the whole value is the expression, and the expression lexer skips blanks.
+    text = value if "${{" in value else value.strip()
     m = re.fullmatch(r"\$\{\{(.*)\}\}", text, re.S)
     if m and "${{" not in m[1] and "}}" not in m[1]:
         text = m[1]
     elif "${{" in text:
-        return [(line, rule, "`if:` mixes `${{ }}` with other text, which makes a non-empty string that is "
-                 f"always true; use `{GUARD_TEXT}`") for rule in REQUIRED_TERMS]
+        return [(line, rule, "`if:` has text around `${{ }}` (even a blank, or a `|` or `>` block's final line "
+                 f"break), which makes a non-empty string that is always true; use `{GUARD_TEXT}`")
+                for rule in REQUIRED_TERMS]
     terms = _conjuncts(text)
     if terms is None:
         return [(line, rule, "`if:` is not a conjunction (a top-level `||`, or unbalanced quotes or "

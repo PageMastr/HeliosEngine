@@ -192,6 +192,25 @@ class GuardTests(unittest.TestCase):
             with self.subTest(condition=condition):
                 self.assertEqual(rules, self.guard(condition))
 
+    GUARD = "github.ref == 'refs/heads/main' && vars.HELIOS_WIN_GPU == 'enabled'"
+
+    def test_text_around_the_guard_expression_fails(self):
+        # GitHub keeps the scalar's text around ${{ }} (format('{0}\n', ...)): a non-empty string, always true. A
+        # block scalar keeps its final line break unless it is `|-` or `>-`.
+        for condition in ("if: |\n  ${{ " + self.GUARD + " }}", "if: \"${{ " + self.GUARD + " }} \"",
+                          "if: \" ${{ " + self.GUARD + " }}\"", "if: >\n  ${{ " + self.GUARD + " }}",
+                          "if: \"${{ " + self.GUARD + " }}\\n\"", "if: '${{ " + self.GUARD.replace("'", "''") + " }}\t'"):
+            with self.subTest(condition=condition):
+                self.assertEqual({"guard-ref", "guard-var"}, self.guard(condition))
+
+    def test_plain_and_stripped_guards_still_pass(self):
+        # Without ${{ }} the whole value is the expression, and the expression lexer skips whitespace.
+        for condition in ("if: ${{ " + self.GUARD + " }}", "if: |-\n  ${{ " + self.GUARD + " }}",
+                          "if: >-\n  ${{ " + self.GUARD + " }}", "if: |\n  " + self.GUARD,
+                          "if: \" " + self.GUARD + " \""):
+            with self.subTest(condition=condition):
+                self.assertEqual(set(), self.guard(condition))
+
 
 class RunsOnTests(unittest.TestCase):
     def reaches(self, runs_on: str, extra: str = "") -> bool:

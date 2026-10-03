@@ -131,11 +131,19 @@ class ClauseLines:
         self._partial = bytearray()
 
     def feed(self, chunk: bytes) -> None:
-        self._partial += chunk
-        *lines, rest = self._partial.split(b"\n")
-        self._partial = bytearray(rest[:MAX_LINE])
-        for line in lines:
-            self._line(line)
+        start = 0
+        while True:
+            end = chunk.find(b"\n", start)
+            # Only a line's first MAX_LINE bytes are kept, so the rest of an over-long line is dropped, not
+            # spliced onto its head.
+            room = MAX_LINE - len(self._partial)
+            if room > 0:
+                self._partial += chunk[start:end if end >= 0 else len(chunk)][:room]
+            if end < 0:
+                return
+            self._line(bytes(self._partial))
+            self._partial = bytearray()
+            start = end + 1
 
     def finish(self) -> None:
         """The output ended: its last line need not end with a newline."""
@@ -144,7 +152,7 @@ class ClauseLines:
         self._partial = bytearray()
 
     def _line(self, raw: bytes) -> None:
-        text = raw[:MAX_LINE].decode("utf-8", "replace").strip()
+        text = raw.decode("utf-8", "replace").strip()  # strip: Windows output ends its lines with \r\n
         for name, patterns in self.patterns.items():
             for kind, pattern in zip(("result", "failure"), patterns):
                 if len(self.hits[name][kind]) < MAX_HITS and pattern.search(text):

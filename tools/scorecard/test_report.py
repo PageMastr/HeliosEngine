@@ -1618,8 +1618,9 @@ class GateClauseTests(unittest.TestCase):
             self.assertIn("ran 17 s of the required 600 s", r["platforms"]["windows"]["refs"][0]["detail"])
 
     def test_the_runner_streams_one_case_per_clause(self):
-        # run_gate on a command that prints the strict Windows night of 2026-09-27 in chunks that split lines.
-        text = WINDOWS_STACK_BELOW[1]
+        # run_gate on a command that prints the strict Windows night of 2026-09-27 in chunks that split lines,
+        # with Windows line ends.
+        text = WINDOWS_STACK_BELOW[1].replace("\n", "\r\n")
         script = ("import sys, time\n"
                   f"text = {text!r}\n"
                   "for i in range(0, len(text), 37):\n"
@@ -1652,6 +1653,27 @@ class GateClauseTests(unittest.TestCase):
         res.gates["net_bench_gate"] = cases[0][1:]
         metric = next(m for m in self.data["perf_metrics"] if m["id"] == "net.ns02.stack_packets_per_core")
         self.assertEqual(report.metric_values(metric, [res]), {"windows-vs2026": 85399.0})
+
+    def test_the_line_reader_is_bounded(self):
+        # An over-long line keeps only its first MAX_LINE bytes (the rest is dropped, not spliced onto it), and
+        # each pattern keeps its first MAX_HITS lines, whatever the command prints.
+        scanner = runners.ClauseLines(self.cases)
+        stack = WINDOWS_PASS[1].splitlines()[2].encode("utf-8")
+        for _ in range(3 * runners.MAX_LINE // 50_000 + 1):
+            scanner.feed(b"x" * 50_000)
+            self.assertLessEqual(len(scanner._partial), runners.MAX_LINE)
+        scanner.feed(stack + b"\n")  # the end of the long line: past its first MAX_LINE bytes, so not seen
+        self.assertEqual(scanner.hits["NS-0.2 HTP stack"]["result"], [])
+        for _ in range(3 * runners.MAX_HITS):
+            scanner.feed(stack[:40])
+            scanner.feed(stack[40:] + b"\n")
+        trunk = WINDOWS_PASS[1].splitlines()[4]
+        scanner.feed(trunk.encode("utf-8"))  # the output's last line, without a newline
+        self.assertEqual(scanner.hits["NS-0.7 trunk"]["result"], [])
+        scanner.finish()
+        self.assertEqual(scanner.hits["NS-0.7 trunk"]["result"], [trunk])
+        self.assertEqual(scanner.hits["NS-0.2 HTP stack"]["result"], [stack.decode()] * runners.MAX_HITS)
+        self.assertEqual(scanner.hits["NS-0.2 socket"], {"result": [], "failure": []})
 
     def test_the_runner_fails_a_clause_the_output_does_not_show(self):
         with tempfile.TemporaryDirectory() as d:

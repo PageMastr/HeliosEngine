@@ -646,6 +646,44 @@ TEST_CASE("journal: an uncommitted builder's edits block saving, closing and rel
     CHECK(f.fw->reloadFromDisk(f.frigate));
 }
 
+TEST_CASE("journal: an edit that would follow another transaction's uncommitted edit is refused; recovery keeps the later edits") {
+    Fixture f("interleaved_builders", /*journal=*/true);
+    CommandInvoker& ui = f.fw->invoker(Origin::Ui);
+    // A command that edits through its own transaction and then runs another command on the same
+    // document: before the fix, the inner command committed first with a precondition taken from
+    // the outer, unjournaled edit, and recovery stopped at a conflict.
+    CommandDesc c;
+    c.id = "test.editThenNested";
+    c.label = "Edit then nested";
+    c.execute = [](CommandContext& ctx) -> Result<void> {
+        const Document* d = ctx.framework().documents().find("hull/frigate");
+        HELIOS_TRY(ctx.tx().set(d->id(), "mass", "15000"));
+        auto nested = ctx.framework().invoker(ctx.origin()).invoke("doc.setProperty",
+                                                                   R"({"doc": "hull/frigate", "path": "mass", "value": 16000})");
+        CHECK(nested.errorCode() == ErrorCode::InvalidState);
+        return {};
+    };
+    REQUIRE(f.fw->commands().add(c));
+    REQUIRE(ui.invoke("test.editThenNested"));
+    CHECK(f.get("mass") == "15000");
+    // The same through a builder held by the caller.
+    auto outer = f.fw->begin(Origin::Ui, "Outer");
+    REQUIRE(outer->set(f.frigate, "handling/yawRate", "12"));
+    CHECK(ui.invoke("doc.setProperty", R"({"doc": "hull/frigate", "path": "handling/yawRate", "value": 13})").errorCode() ==
+          ErrorCode::InvalidState);
+    REQUIRE(outer->commit());
+    REQUIRE(ui.invoke("doc.setProperty", kSetRoll));
+    const std::string expected = f.doc().text();
+    const fs::Path journal = f.fw->journal()->path();
+    outer.reset();
+    f.fw.reset();
+
+    const Recovered r = recoverFixture(f, journal);
+    CHECK(r.status() == DocRecovery::Replayed);
+    CHECK(r.report.replayed == 3);
+    CHECK(r.text() == expected);
+}
+
 TEST_CASE("journal: a save or reload whose replay base cannot be journaled reports it") {
     Fixture f("base_not_journaled", /*journal=*/true);
     const fs::Path file = f.doc().path();

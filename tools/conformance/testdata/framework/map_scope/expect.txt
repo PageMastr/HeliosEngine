@@ -1,0 +1,2 @@
+#! -rules CONF-09 -strict
+tools/sidecar/go.mod:3: CONF-09

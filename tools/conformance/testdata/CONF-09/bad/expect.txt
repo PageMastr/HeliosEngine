@@ -1,0 +1,16 @@
+#! -rules CONF-09 -strict
+# Seeded: go.mod at 1.24; setup-go pinning a version, reading another go.mod, reading none, reading
+# services/go.mod but also pinning, a flow-style step pinning, and a flow sequence whose second step reads
+# another go.mod (each flow mapping is its own step); GOTOOLCHAIN overrides in a script,
+# an env map and $GITHUB_ENV. no_go_directive covers a go.mod without `go`.
+.github/workflows/ci.yml:4: CONF-09
+.github/workflows/ci.yml:8: CONF-09
+.github/workflows/ci.yml:11: CONF-09
+.github/workflows/ci.yml:14: CONF-09
+.github/workflows/ci.yml:18: CONF-09
+.github/workflows/ci.yml:19: CONF-09
+.github/workflows/ci.yml:22: CONF-09
+.github/workflows/ci.yml:24: CONF-09
+.github/workflows/ci.yml:26: CONF-09
+services/go.mod:3: CONF-09
+services/go.mod:5: CONF-09

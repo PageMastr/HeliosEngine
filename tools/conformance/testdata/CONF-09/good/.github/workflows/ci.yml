@@ -1,0 +1,18 @@
+jobs:
+  go:
+    env:
+      GOTOOLCHAIN: local   # the toolchain setup-go installed from services/go.mod
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: services/go.mod   # ADR-014
+          cache-dependency-path: services/go.sum
+      - name: Set up Go
+        uses: 'actions/setup-go@v6'
+        with:
+          cache: false
+          go-version-file: "services/go.mod"
+      - {uses: actions/setup-go@v6, with: {go-version-file: services/go.mod, cache: false}}
+      - run: GOTOOLCHAIN=go1.27.1 go test ./...   # GOTOOLCHAIN=go1.20 in a comment is not read
+      - run: GOTOOLCHAIN=auto go vet ./...

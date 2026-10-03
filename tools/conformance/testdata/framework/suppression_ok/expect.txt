@@ -1,0 +1,2 @@
+#! -rules CONF-10
+# Reasoned suppressions on the finding lines: nothing fails (both are listed as suppressed).

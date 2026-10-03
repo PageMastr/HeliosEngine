@@ -3,15 +3,9 @@
 # GatewayServer (usable in-process), the control-plane bus (nats.c, and an in-process fake), the
 # orchestrator client (lease holder rule, ID blocks) and the Go services' JSON contracts.
 #
-# 02 §1.1 names no module for the cell's zone host (it lists ZoneHost among what "the engine
-# provides", 02 §2.4); until engine/CMakeLists.txt gets this row (and HELIOS_MODULE_ORDER the
-# name, after authority), it is declared here. (Passing LAYER to helios_module() for an
-# undeclared module trips a quoting bug in cmake/HeliosModule.cmake, so the row form is used.)
+# Its row in engine/CMakeLists.txt gives the layer and peers (02 §1.1 names no module for the cell's
+# zone host yet; it lists ZoneHost among what "the engine provides", 02 §2.4).
 # nats.c and yyjson stay private (no third-party types in public headers).
-get_property(_heliosServerRow GLOBAL PROPERTY HELIOS_DECL_server_LAYER SET)
-if(NOT _heliosServerRow)
-  helios_declare_module(server 4 HEADLESS PEERS authority)
-endif()
 
 file(GLOB HELIOS_SERVER_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 

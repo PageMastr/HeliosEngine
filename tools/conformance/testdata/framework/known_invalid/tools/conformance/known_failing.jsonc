@@ -1,0 +1,5 @@
+{
+  "known_failing": [
+    {"rule": "CONF-10", "owner": "someone", "anchor": "", "reason": "", "paths": ["engine/x/**"]}
+  ]
+}

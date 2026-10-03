@@ -28,8 +28,14 @@ helios_declare_module(core 1 HEADLESS)
 helios_declare_module(math 1 HEADLESS)
 helios_declare_module(reflect 2 HEADLESS)
 helios_declare_module(asset 2 HEADLESS PEERS reflect)
-helios_declare_module(ecs 2 HEADLESS PEERS reflect)
-helios_declare_module(app 2 PEERS reflect)
+if(CASE STREQUAL "cycle" OR CASE STREQUAL "bridge_cycle")
+  # Declared peers of each other, so only the cycle check can catch it.
+  helios_declare_module(ecs 2 HEADLESS PEERS reflect app)
+  helios_declare_module(app 2 PEERS reflect ecs)
+else()
+  helios_declare_module(ecs 2 HEADLESS PEERS reflect)
+  helios_declare_module(app 2 PEERS reflect)
+endif()
 helios_declare_module(physics 3 HEADLESS)
 helios_declare_module(net 3 HEADLESS)
 helios_declare_module(render 3)
@@ -40,6 +46,10 @@ helios_declare_module(toolsfw 4 EDITOR_ONLY PEERS world assetpipe)
 set(order core math reflect asset ecs app physics net render world presentation assetpipe toolsfw)
 if(CASE STREQUAL "bad_order")
   set(order core math ecs reflect asset app physics net render world presentation assetpipe toolsfw)
+elseif(CASE STREQUAL "explicit_layer")
+  list(APPEND order zonehost)
+elseif(CASE STREQUAL "unordered")
+  list(REMOVE_ITEM order net) # declared, built and depended on, but missing from the order
 endif()
 set_property(GLOBAL PROPERTY HELIOS_MODULE_ORDER ${order})
 
@@ -59,9 +69,6 @@ if(CASE STREQUAL "same_layer")
   helios_module(ecs SOURCES ${src} DEPS helios::core helios::reflect)
   helios_module(app SOURCES ${src} DEPS helios::core helios::ecs) # ecs is not a listed peer of app
 elseif(CASE STREQUAL "cycle")
-  # Declared peers of each other, so only the cycle check can catch it.
-  helios_declare_module(ecs 2 HEADLESS PEERS reflect app)
-  helios_declare_module(app 2 PEERS reflect ecs)
   helios_module(ecs SOURCES ${src} DEPS helios::core helios::app)
   helios_module(app SOURCES ${src} DEPS helios::core helios::ecs)
 else()
@@ -82,6 +89,16 @@ elseif(CASE STREQUAL "genex_nested_condition")
 elseif(CASE STREQUAL "genex_if")
   helios_module(net SOURCES ${src} DEPS helios::core
     PRIVATE_DEPS "$<IF:$<AND:$<BOOL:0>,$<CONFIG:Debug>>,helios::tp::yyjson,helios::tp::sdl3>")
+elseif(CASE STREQUAL "flag_mismatch")
+  # The table does not make net EDITOR_ONLY; the call may not add the flag.
+  helios_module(net EDITOR_ONLY SOURCES ${src} DEPS helios::core)
+elseif(CASE STREQUAL "peers_mismatch")
+  # net's row lists no peers; the call may not grant itself physics (same layer).
+  helios_module(net PEERS physics SOURCES ${src} DEPS helios::core helios::physics)
+elseif(CASE STREQUAL "redeclared_row")
+  # A second row for net, with a peer the table does not give it.
+  helios_declare_module(net 3 HEADLESS PEERS physics)
+  helios_module(net SOURCES ${src} DEPS helios::core helios::physics)
 elseif(CASE STREQUAL "headless_graphics_tp")
   target_link_libraries(fx_helper INTERFACE helios::tp::sdl3)
   helios_module(net SOURCES ${src} DEPS helios::core PRIVATE_DEPS fx_helper)
@@ -113,6 +130,23 @@ elseif(CASE STREQUAL "explicit_layer")
   helios_module(zonehost HEADLESS LAYER 4 PEERS world SOURCES ${src} DEPS helios::world)
 endif()
 
+# Module edges that only a non-module target carries (an INTERFACE or STATIC helper between two
+# modules) are module edges too.
+if(CASE STREQUAL "bridge_upward")
+  add_library(fx_bridge INTERFACE) # reflect (L2) -> fx_bridge -> world (L4); also a cycle through ecs
+  target_link_libraries(fx_bridge INTERFACE helios::world)
+  target_link_libraries(helios_reflect PRIVATE fx_bridge)
+elseif(CASE STREQUAL "bridge_same_layer")
+  add_library(fx_bridge INTERFACE) # net -> fx_bridge -> physics, both L3, not peers
+  target_link_libraries(fx_bridge INTERFACE helios::physics)
+  target_link_libraries(helios_net PRIVATE fx_bridge)
+elseif(CASE STREQUAL "bridge_cycle")
+  add_library(fx_bridge STATIC ${src}) # ecs -> fx_bridge -> app -> ecs (declared peers): a cycle
+  target_link_libraries(fx_bridge PRIVATE helios::app)
+  target_link_libraries(helios_ecs PRIVATE fx_bridge)
+  target_link_libraries(helios_app PRIVATE helios::ecs)
+endif()
+
 # Executables. CPU gate off: the fixture has no engine/core hook target.
 if(CASE STREQUAL "editor_only_client")
   helios_executable(fx-client ROLE client NO_CPU_GATE SOURCES ${src} DEPS helios::presentation helios::toolsfw)
@@ -125,6 +159,14 @@ elseif(CASE STREQUAL "server_graphics")
   helios_executable(fx-cell ROLE cell NO_CPU_GATE SOURCES ${src} DEPS helios::world helios::presentation)
 else()
   helios_executable(fx-cell ROLE cell NO_CPU_GATE SOURCES ${src} DEPS helios::world)
+endif()
+if(CASE STREQUAL "editor_only_gateway")
+  helios_executable(fx-gateway ROLE gateway NO_CPU_GATE SOURCES ${src} DEPS helios::net helios::assetpipe)
+endif()
+if(CASE STREQUAL "plain_executable")
+  add_subdirectory(apps/rogue) # add_executable() under apps/, outside every role check
+elseif(CASE STREQUAL "unknown_role")
+  add_subdirectory(apps/zonehost) # helios_executable() without ROLE where no role can be inferred
 endif()
 # Tools may link editor-only modules.
 helios_executable(fx-cook ROLE tool NO_CPU_GATE SOURCES ${src} DEPS helios::assetpipe)

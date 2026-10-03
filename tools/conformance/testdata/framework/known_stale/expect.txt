@@ -1,0 +1,3 @@
+#! -rules CONF-10
+# The second record matches nothing: a closed gap must leave the list.
+tools/conformance/known_failing.jsonc:4: conformance

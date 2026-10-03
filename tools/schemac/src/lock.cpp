@@ -23,6 +23,26 @@ std::string lockKindOf(const Decl* d) {
     }
 }
 
+/// [A-Za-z_][A-Za-z0-9_]*, the lexer's identifiers: lock field and alternative names come from them.
+bool isLockIdentifier(std::string_view s) {
+    auto start = [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'; };
+    if (s.empty() || !start(s.front())) return false;
+    return std::all_of(s.begin(), s.end(), [&](char c) { return start(c) || (c >= '0' && c <= '9'); });
+}
+
+/// "svc_<service>.<table>" as sema builds it from @sql: lowercase letters, digits and '_', each part
+/// at most 63 bytes, the table starting with a letter.
+bool isSqlTable(std::string_view s) {
+    auto part = [](std::string_view p) {
+        return !p.empty() && p.size() <= 63 &&
+               std::all_of(p.begin(), p.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'; });
+    };
+    const usize dot = s.find('.');
+    if (dot == std::string_view::npos) return false;
+    const std::string_view schema = s.substr(0, dot), table = s.substr(dot + 1);
+    return part(schema) && schema.starts_with("svc_") && schema.size() > 4 && part(table) && table.front() >= 'a' && table.front() <= 'z';
+}
+
 /// Loader with path-qualified error messages.
 class LockReader {
 public:
@@ -146,15 +166,26 @@ public:
     /// Detects hand edits: duplicate ids, deleted entries, counters behind the ids.
     bool validate(const Lock& lock) {
         std::map<u32, std::string> typeIds;
+        std::map<std::string, std::string> tables;
         bool ok = true;
         for (const auto& [name, t] : lock.types) {
             const std::string path = "types." + name;
             if (t.id == 0) ok = fail(path, "type id 0 is invalid");
             if (auto [it, fresh] = typeIds.emplace(t.id, name); !fresh)
                 ok = fail(path, std::format("type id {} is also used by '{}'", t.id, it->second));
+            if (!t.sql.empty()) {
+                if (!isSqlTable(t.sql)) ok = fail(path + ".sql", std::format("'{}' is not a table of a service schema (svc_<service>.<table>)", t.sql));
+                if (auto [it, fresh] = tables.emplace(t.sql, name); !fresh)
+                    ok = fail(path, std::format("the table {} is also recorded by '{}'", t.sql, it->second));
+            }
             std::set<u32> ids;
             std::set<std::string> liveNames;
             for (const LockField& f : t.fields) {
+                // Names and types reach generated code (SQL column names, comments): only what the
+                // schema language can produce is accepted.
+                if (!isLockIdentifier(f.name)) ok = fail(path, std::format("'{}' is not an identifier", f.name));
+                if (std::any_of(f.type.begin(), f.type.end(), [](char ch) { return static_cast<unsigned char>(ch) < 0x20 || ch == 0x7f; }))
+                    ok = fail(path, std::format("the type of '{}' contains a control character", f.name));
                 if (f.id == 0) ok = fail(path, std::format("'{}' has id 0", f.name));
                 if (!ids.insert(f.id).second) ok = fail(path, std::format("id {} is used twice", f.id));
                 if (f.id >= t.nextField) ok = fail(path, std::format("id {} of '{}' is not below nextField {}", f.id, f.name, t.nextField));
@@ -239,7 +270,15 @@ public:
             if (d->kind == DeclKind::ScriptFn) continue; // a binding id only
             if (!d->sqlTable.empty()) {
                 // The table is the type's SQL identity (--emit sql diffs against it): recorded once, never moved.
-                if (lt->sql.empty()) {
+                const auto owner = std::find_if(L.types.begin(), L.types.end(),
+                                                [&](const auto& e) { return &e.second != lt && e.second.sql == d->sqlTable; });
+                if (lt->sql.empty() && owner != L.types.end()) {
+                    // A removed type (or one renamed without @was) still owns its table: a new type taking it
+                    // over would have the migration stub rewrite that table's columns by unrelated field ids.
+                    D.error(d->loc, std::format("the table {} belongs to '{}' (lock id {}); rename that type with @was to keep its table, "
+                                                "or store '{}' in a new table",
+                                                d->sqlTable, owner->first, owner->second.id, d->qualifiedName));
+                } else if (lt->sql.empty()) {
                     lt->sql = d->sqlTable;
                     C.push_back(std::format("{}: SQL table {}", d->qualifiedName, d->sqlTable));
                 } else if (lt->sql != d->sqlTable) {

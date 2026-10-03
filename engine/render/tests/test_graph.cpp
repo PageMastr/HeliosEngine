@@ -664,10 +664,6 @@ TEST_CASE("graph: compile budget (200 passes)") {
     CHECK(plan.stats.pooledBytes * 10 < plan.stats.transientBytes * 7);  // >= 30 % saved (03 §2.2 target)
 }
 
-} // namespace
-
-namespace {
-
 /// The budget test's chain (async every fifth pass, NeverCull roots, a shared counter) plus a mip
 /// chain read per mip, passes that are culled and an imported output that ends in Present, so that
 /// every compile step and the general barrier merge have work.
@@ -729,8 +725,6 @@ PlanStorage planStorage(const RgPlan& plan) {
             plan.lists[0].name.data()};
 }
 
-} // namespace
-
 TEST_CASE("graph: recompiles and reset() reuse the plan storage and match a fresh compile") {
     // graph_compile.cpp rebuilds the plan in the previous plan's storage. Whatever came before (a
     // plan with other options, a recompile, another graph after reset()), the plan must be exactly
@@ -775,3 +769,5 @@ TEST_CASE("graph: recompiles and reset() reuse the plan storage and match a fres
     CHECK(fullPlanText(graph.plan()) == expected);
     CHECK(planStorage(graph.plan()) == storage);
 }
+
+} // namespace

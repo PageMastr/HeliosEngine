@@ -42,20 +42,23 @@ type Pass struct {
 	Tests []string // conformance tests the map requires for the rule's anchors
 	out   *[]Finding
 	seen  map[string]bool
+	cstr  map[string][]string // the scope's C string constants (cStrTable), built on first use
 }
 
-// Report records a finding. line 0 means the finding has no line (a missing file or test). A rule
-// reports a line once, the unit a suppression covers; the first message wins.
+// Report records a finding. line 0 means the finding has no line (a missing file or test). Distinct
+// messages on one line are distinct findings (a suppression on the line covers them all); the same
+// message twice on a line is one.
 func (p *Pass) Report(file string, line int, format string, args ...any) {
-	key := fmt.Sprintf("%s:%d", file, line)
+	msg := fmt.Sprintf(format, args...)
+	key := fmt.Sprintf("%s:%d:%s", file, line, msg)
 	if p.seen == nil {
 		p.seen = map[string]bool{}
 	}
-	if line > 0 && p.seen[key] {
+	if p.seen[key] {
 		return
 	}
 	p.seen[key] = true
-	*p.out = append(*p.out, Finding{Rule: p.Rule.ID, Path: file, Line: line, Message: fmt.Sprintf(format, args...)})
+	*p.out = append(*p.out, Finding{Rule: p.Rule.ID, Path: file, Line: line, Message: msg})
 }
 
 // Finding is one diagnostic. Suppressed and Known are set by Run.
@@ -134,6 +137,10 @@ func Run(opts Options) (*Result, error) {
 		var bad []Finding
 		known, bad = loadKnown(knownFile, "tools/conformance/known_failing.jsonc")
 		findings = append(findings, bad...)
+		// A fixture tree has no scorecard; the repository always does (lint_scorecard).
+		if scorecard := filepath.Join(tree.Root, "scorecard.jsonc"); fileExists(scorecard) {
+			findings = append(findings, checkScorecard(scorecard, "tools/conformance/known_failing.jsonc", known)...)
+		}
 	}
 
 	selected := map[string]*Rule{}
@@ -258,6 +265,11 @@ func Run(opts Options) (*Result, error) {
 		return a.Rule < b.Rule
 	})
 	return &Result{Rules: rules, Files: len(tree.Files), Findings: findings}, nil
+}
+
+func fileExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.Mode().IsRegular()
 }
 
 func selectRules(ids []string) ([]*Rule, error) {

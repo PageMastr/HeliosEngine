@@ -23,7 +23,7 @@ artifact. CTest's original pass/fail result remains the CI gate.
 
 | Lint | Script | What fails it | Plan |
 |---|---|---|---|
-| Module layering | `cmake/HeliosLayering.cmake` (configure time) | upward or unlisted same-layer dependency, cycle, a module missing from `HELIOS_MODULE_ORDER` or the order not topological, a `helios_module()` LAYER, HEADLESS or EDITOR_ONLY that its table row in `engine/CMakeLists.txt` does not have, a module with neither a row nor a LAYER, a HEADLESS module reaching a non-HEADLESS module or a graphics library (volk, VMA, SDL3, ImGui, …), an `EDITOR_ONLY` module in a client/launcher/bot/cell/gateway/voice executable or under a runtime module, a server executable (cell, gateway, voice, bot) linking anything non-HEADLESS | 02 §1.1, RT-09 |
+| Module layering | `cmake/HeliosLayering.cmake` (configure time) | upward or unlisted same-layer dependency, cycle, a module missing from `HELIOS_MODULE_ORDER` or the order not topological, a `helios_module()` LAYER, HEADLESS, EDITOR_ONLY or PEERS entry that its table row in `engine/CMakeLists.txt` does not have, a second `helios_declare_module()` row for a module, a module with neither a row nor a LAYER, an executable under `apps/` that is not a `helios_executable()`, a HEADLESS module reaching a non-HEADLESS module or a graphics library (volk, VMA, SDL3, ImGui, …), an `EDITOR_ONLY` module in a client/launcher/bot/cell/gateway/voice executable or under a runtime module, a server executable (cell, gateway, voice, bot) linking anything non-HEADLESS | 02 §1.1, RT-09 |
 | ISA audit | `isa_audit.cmake` + `cmake/isa_allowlist.cmake` | AVX-class flags on a unit outside the allowlist (`tp_jolt`, `*_avx2.c(pp)` kernels; `/clang:`-forwarded flags included); FMA or AVX-512 on an allowlisted unit; any flag above x86-64-v1 on the CPU-gate units (`-msse3`…`-msse4.2`, `-mpopcnt`, `-mcx16`, `-mavx*`, `-mbmi*`, a `-march` other than `x86-64`, `/arch:` other than SSE2); `-march=native`, fast-math or FP contraction anywhere; a VEX/EVEX/opmask/BMI/LZCNT/POPCNT/MOVBE/CMPXCHG16B/AES/SHA/SSE3+ instruction (prefixes such as `lock` looked through), a weak/COMDAT/IFUNC symbol, an unlisted export or import (stack-protector and sanitizer symbols included) in a gate object; a gated ELF executable whose single `.preinit_array` entry is not the gate's `hcg_gate`, or that has `R_X86_64_IRELATIVE` relocations | 02 §1.1 "The audit", RT-09, CL-17 |
 | Licences | `licenses.cmake` + `license_policy.cmake` | a dependency without a top-level licence file, a licence file (nested ones too) that is copyleft/unknown (GPL family, MPL, EPL, Artistic, CC-BY-SA/NC/ND, JSON licence, …) and not one option of an explicit multi-licence choice naming a permissive licence, a dependency without its own row in `third_party/MANIFEST.md` (Name cell, its first word or the upstream repository name), a MANIFEST licence identifier outside MIT/BSD/zlib/Apache-2.0/Boost/ISC/PostgreSQL/public domain (CC0) | CLAUDE.md, 01 §5.2, ADR-012 |
 | Vendored patches | `vendor_patches.cmake` | a `third_party/<dep>/patches/` file not named `NNNN-<slug>.patch`, with no hunk, or not a row of the table under `third_party/MANIFEST.md`'s `### … (third_party/<dep>/patches/)` heading; a row there naming a missing file; a hunk whose post-image (context plus added lines) is not in the committed file, in hunk order; a truncated or malformed hunk; a patched file that is missing, or that the patch deletes but still exists. Line endings are normalized, so CRLF checkouts pass, and `\ No newline at end of file` markers are honoured (a post-image without a final newline must end the file); no git or network. It does not see an in-place edit outside every hunk: re-running `tools/vendor/fetch_third_party.sh <dep>` and diffing `third_party/` is the full proof | CLAUDE.md (vendored code), `third_party/MANIFEST.md` "Patches", K10 |
@@ -48,8 +48,9 @@ Waivers live next to the rules and carry a reason; every waiver is printed on ea
   under BSD). ISC (netcode's bundled libsodium subset) and the PostgreSQL licence are on 01 §5.2's
   scanner allowlist and on CLAUDE.md's.
 - The scanner covers the vendored tree (`third_party/`, `MANIFEST.md`). The Go modules that
-  `services/go.sum` pins are not vendored, so it does not see them: an open gap against 01 §5.2,
-  reported by WP-0.2.
+  `services/go.sum` pins are not vendored, so it does not see them: an open gap against 01 §5.2, owned
+  by the WP-0.2 follow-up (Go module licence scan) and recorded in the scorecard (`EXIT-0.conformance`).
+  A review sample of 51 of the 145 modules found only permissive licences.
 - `ip_names_policy.cmake`: reference names in engine test data and doc examples that predate the
   lint: `engine/ecs/tests/test_command_buffer.cpp` ("Kestrel"), `engine/reflect` (`hull/kestrel`,
   `ship.kestrel.name` in `record.h`, `types.h` and two tests) and
@@ -159,5 +160,6 @@ Plan-Rev: 3
 `isa_audit.cmake` was written to plan revision 3, before the ADR-011 amendment (revision 4). Its open deltas
 are in 09 §5.10.4 (b), and WP-0.2r reworks them, so this README keeps revision 3 (D7). The layering, licence,
 IP-name and manifest lints have no open delta: WP-0.2 checked them against revision 11 (02 §1.1, 01 §4.1,
-§5.2; revision 11 changed 04 §3.2 and status sections only) and added the `HELIOS_MODULE_ORDER` completeness and row-flag checks. `vendor_patches.cmake`
+§5.2; revision 11 changed 04 §3.2 and status sections only) and added the `HELIOS_MODULE_ORDER` completeness,
+row-flag, row-peer, single-row and `apps/` executable checks. `vendor_patches.cmake`
 (WP-0.10r) was written to plan revision 6, and `test_namespaces.cmake` (WP-0.1) to revision 10.

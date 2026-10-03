@@ -24,12 +24,56 @@ var _ = register(&Rule{
 // holderRuleTests are CONF-03's own required tests; the map can require more (D2 `tests`).
 var holderRuleTests = []string{"conformance/holder_rule"}
 
-var cTestCaseRE = regexp.MustCompile(`\b(?:DOCTEST_)?TEST_CASE\s*\(\s*"conformance/([A-Za-z0-9_]+)`)
+var (
+	cTestCaseRE = regexp.MustCompile(`\b(?:DOCTEST_)?TEST_CASE\s*\(\s*"conformance/([A-Za-z0-9_]+)`)
+	// A doctest decorator that turns the case off or lets it fail: CI would run nothing that can fail.
+	cTestOffRE = regexp.MustCompile(`\b(?:DOCTEST_)?TEST_CASE\s*\(\s*"conformance/([A-Za-z0-9_]+)[^"]*"\s*\*\s*` +
+		`doctest::(skip|may_fail|should_fail|expected_failures)\b`)
+)
+
+// skipsAlways returns the position of an unconditional t.Skip, t.Skipf or t.SkipNow among a test
+// body's top-level statements: such a test exists but never runs. A conditional skip (`if
+// testing.Short()`) is left to CI, which runs the Go jobs without -short.
+func skipsAlways(body *ast.BlockStmt) token.Pos {
+	if body == nil {
+		return token.NoPos
+	}
+	for _, st := range body.List {
+		if es, ok := st.(*ast.ExprStmt); ok {
+			if c, ok := es.X.(*ast.CallExpr); ok {
+				switch calleeName(c) {
+				case "Skip", "Skipf", "SkipNow":
+					return c.Pos()
+				}
+			}
+		}
+	}
+	return token.NoPos
+}
+
+// buildConstraint returns the position of a //go:build line above the package clause.
+func buildConstraint(f *ast.File) token.Pos {
+	for _, cg := range f.Comments {
+		if cg.Pos() > f.Package {
+			break
+		}
+		for _, c := range cg.List {
+			if strings.HasPrefix(c.Text, "//go:build") {
+				return c.Pos()
+			}
+		}
+	}
+	return token.NoPos
+}
 
 func checkRequiredTests(p *Pass) {
 	g := p.Tree.goIndex()
 	goCases, cCases := map[string]bool{}, map[string]bool{}
 	hasGo, hasC := "", ""
+	required := map[string]bool{}
+	for _, t := range append(append([]string(nil), holderRuleTests...), p.Tests...) {
+		required[strings.TrimPrefix(t, "conformance/")] = true
+	}
 	for _, f := range p.Files {
 		own := MatchAny(p.Rule.Scope, f) // report a missing test under the table's scope when it has files
 		if strings.HasSuffix(f, ".go") {
@@ -49,10 +93,21 @@ func checkRequiredTests(p *Pass) {
 				if !ok || fd.Name.Name != "TestConformance" || fd.Body == nil {
 					continue
 				}
+				if pos := buildConstraint(gf.File); pos.IsValid() {
+					p.Report(f, g.line(pos), "the file that defines TestConformance has a build constraint, so a CI "+
+						"job may never compile its required tests (09 §5.10.3)")
+				}
+				if pos := skipsAlways(fd.Body); pos.IsValid() {
+					p.Report(f, g.line(pos), "TestConformance skips unconditionally: its required tests never run")
+				}
 				ast.Inspect(fd.Body, func(n ast.Node) bool {
 					if c, ok := n.(*ast.CallExpr); ok && calleeName(c) == "Run" && len(c.Args) == 2 {
 						if s, ok := g.String(gf, c.Args[0]); ok {
 							goCases[s] = true
+							if pos := skipsAlways(goTestBody(g, gf, c.Args[1])); required[s] && pos.IsValid() {
+								p.Report(f, g.line(pos), "required test conformance/%s skips unconditionally: it "+
+									"exists but never runs", s)
+							}
 						}
 					}
 					return true
@@ -63,9 +118,21 @@ func checkRequiredTests(p *Pass) {
 		if hasC == "" || own && !MatchAny(p.Rule.Scope, hasC) {
 			hasC = f
 		}
-		for _, l := range codeLines(p.Tree.Lines(f), false) {
+		// Splices joined and `#if 0` groups skipped: a case that is never compiled does not count.
+		src := newCSource(p.Tree.Lines(f))
+		dead := inactiveLines(src.blankLines)
+		for i, l := range src.logical {
+			if dead[i] {
+				continue
+			}
 			for _, m := range cTestCaseRE.FindAllStringSubmatch(l, -1) {
 				cCases[m[1]] = true
+			}
+		}
+		for _, m := range cTestOffRE.FindAllStringSubmatchIndex(src.text, -1) {
+			if !dead[src.index(m[0])] && required[src.text[m[2]:m[3]]] {
+				p.Report(f, src.line(m[0]), "required test conformance/%s is marked doctest::%s: CI runs nothing that "+
+					"can fail", src.text[m[2]:m[3]], src.text[m[4]:m[5]])
 			}
 		}
 	}
@@ -80,6 +147,29 @@ func checkRequiredTests(p *Pass) {
 				"(05 §1.4.2; 09 §5.10.3)", t, t)
 		}
 	}
+}
+
+// goTestBody returns the body of a t.Run function argument: a function literal, or a function of the
+// same package named by an identifier.
+func goTestBody(g *goIndex, gf *goFile, fn ast.Expr) *ast.BlockStmt {
+	switch x := fn.(type) {
+	case *ast.FuncLit:
+		return x.Body
+	case *ast.Ident:
+		for _, f := range g.tree.Files {
+			if path.Dir(f) != gf.pkg || !strings.HasSuffix(f, ".go") {
+				continue
+			}
+			if pf := g.file(f).File; pf != nil {
+				for _, d := range pf.Decls {
+					if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == x.Name {
+						return fd.Body
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // scopeDir is the directory of the first scope glob that matches f ("engine/server/**" -> "engine/server"),
@@ -117,6 +207,8 @@ var (
 	cShiftRE    = regexp.MustCompile(`([A-Za-z0-9_)\]]+)\s*<<=?\s*\(?\s*((?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*|\d+)`)
 	cConstRE    = regexp.MustCompile(`\bconstexpr\s+[A-Za-z0-9_:<> ]*?\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;{}]+);`)
 	cIntTokenRE = regexp.MustCompile(`^(\d+)[uUlL]*$`)
+	cMulShiftRE = regexp.MustCompile(`\*\s*\(\s*1[uUlL]*\s*<<\s*((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*|\d+)\s*\)|` +
+		`\(\s*1[uUlL]*\s*<<\s*((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*|\d+)\s*\)\s*\*`)
 )
 
 func isNodeID(ident string) bool {
@@ -168,6 +260,24 @@ func checkNodeIDs(p *Pass) {
 							}
 						}
 					}
+					if x.Op == token.MUL { // ms * (1 << 22) is ms << 22
+						for _, op := range []ast.Expr{x.X, x.Y} {
+							for {
+								pe, ok := op.(*ast.ParenExpr)
+								if !ok {
+									break
+								}
+								op = pe.X
+							}
+							if sh, ok := op.(*ast.BinaryExpr); ok && sh.Op == token.SHL {
+								if one, ok := g.Int(gf, sh.X); ok && one == 1 {
+									if v, ok := g.Int(gf, sh.Y); ok {
+										shifts = append(shifts, shift{v, g.line(x.Pos())})
+									}
+								}
+							}
+						}
+					}
 				}
 				return true
 			})
@@ -193,6 +303,12 @@ func checkNodeIDs(p *Pass) {
 						continue
 					}
 					if v, ok := cEval(m[2], cConsts, 0); ok {
+						shifts = append(shifts, shift{v, i + 1})
+					}
+				}
+				// … unless it scales a field: ms * (1ull << 22) is ms << 22.
+				for _, m := range cMulShiftRE.FindAllStringSubmatch(l, -1) {
+					if v, ok := cEval(m[1]+m[2], cConsts, 0); ok {
 						shifts = append(shifts, shift{v, i + 1})
 					}
 				}
@@ -294,7 +410,7 @@ func minterAllowed(f string) bool {
 	}
 	parts := strings.Split(f, "/")
 	for i, part := range parts[:len(parts)-1] {
-		if strings.HasSuffix(part, "test") || part == "testkit" || part == "testdata" {
+		if testHelper(part) {
 			return true
 		}
 		if part == "internal" && i+1 < len(parts)-1 {
@@ -303,6 +419,26 @@ func minterAllowed(f string) bool {
 					return true
 				}
 			}
+		}
+	}
+	return false
+}
+
+// testHelper reports a test-helper package directory: testkit, testdata, testutil, or `<name>test` for
+// the store, db, nats and pg helpers and the minter packages (storetest, identitytest). A name that
+// merely ends in "test" (latest, contest, attest) is not one.
+func testHelper(dir string) bool {
+	switch dir {
+	case "testkit", "testdata", "testutil":
+		return true
+	}
+	base, ok := strings.CutSuffix(dir, "test")
+	if !ok || base == "" {
+		return false
+	}
+	for _, known := range append([]string{"store", "db", "nats", "pg"}, minterPackages...) {
+		if base == known {
+			return true
 		}
 	}
 	return false

@@ -1,4 +1,10 @@
 #! -rules CONF-10 -strict
+# Seeded: a call by name, two direct calls, a call in a C++20 module unit, a name split by a splice,
+# a call in the #else of an #if 0 and one under an unknown #ifdef.
 apps/client/main.cpp:5: CONF-10
+apps/client/overlay.cppm:4: CONF-10
 engine/render/src/overlay.cpp:5: CONF-10
 engine/render/src/overlay.cpp:7: CONF-10
+engine/render/src/spliced.cpp:4: CONF-10
+engine/render/src/spliced.cpp:10: CONF-10
+engine/render/src/spliced.cpp:14: CONF-10

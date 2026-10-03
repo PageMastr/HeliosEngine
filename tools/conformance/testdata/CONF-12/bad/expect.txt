@@ -1,6 +1,7 @@
 #! -rules CONF-12 -strict
 # A misplaced gate (.CRT$XIB, init_seg), ExitProcess, no /INCLUDE:, a foreign include and external
-# symbols in gate TUs; pre-gate hooks elsewhere, in a vendored patch too.
+# symbols in gate TUs (line 12 is both a .CRT$XIB entry and an external symbol); pre-gate hooks elsewhere,
+# in a vendored patch too.
 apps/tool/dispatch.cpp:2: CONF-12
 apps/tool/dispatch.cpp:3: CONF-12
 engine/core/src/cpugate/cpu_gate.c:2: CONF-12
@@ -11,6 +12,7 @@ engine/core/src/platform/win32/cpu_gate_hook.c:2: CONF-12
 engine/core/src/platform/win32/cpu_gate_hook.c:5: CONF-12
 engine/core/src/platform/win32/cpu_gate_hook.c:8: CONF-12
 engine/core/src/platform/win32/cpu_gate_hook.c:11: CONF-12
+engine/core/src/platform/win32/cpu_gate_hook.c:12: CONF-12
 engine/core/src/platform/win32/cpu_gate_hook.c:12: CONF-12
 engine/core/src/platform/win32/cpu_gate_hook.c:13: CONF-12
 engine/x/src/early.cpp:1: CONF-12

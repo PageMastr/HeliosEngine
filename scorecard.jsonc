@@ -506,7 +506,8 @@
       "tests": [{"ci_job": "Conformance lint (tools/conformance)"}, {"evidence": "tools/conformance/known_failing.jsonc"}],
       "gaps": [
         {"clause": "CONF-11 fails on the tree (known_failing.jsonc: the per-file AVX2 lists, helios_avx2_sources() and tp_jolt's PUBLIC ISA options; 09 §5.10.4 (b))", "state": "failing", "owner": "WP-0.2r"},
-        {"clause": "CONF-12 fails on the tree (known_failing.jsonc: the Windows gate in .CRT$XIB with ExitProcess and no /INCLUDE:; 09 §5.10.4 (b))", "state": "failing", "owner": "WP-0.5r"}
+        {"clause": "CONF-12 fails on the tree (known_failing.jsonc: the Windows gate in .CRT$XIB with ExitProcess and no /INCLUDE:; 09 §5.10.4 (b))", "state": "failing", "owner": "WP-0.5r"},
+        {"clause": "WP-0.2 follow-up (Go module licence scan): the licence scanner (lint_licenses) sees third_party/ and MANIFEST.md, not the Go modules that services/go.sum pins, which 01 §5.2's 'dependencies' covers. Not blocking: a review sample of 51 of the 145 modules was all permissive", "state": "unmeasured", "owner": "WP-0.2"}
       ]
     },
     {

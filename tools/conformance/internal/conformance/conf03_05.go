@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -302,13 +303,13 @@ func checkNodeIDs(p *Pass) {
 					if cIntTokenRE.MatchString(m[1]) { // 1 << 12 is a size, not a field
 						continue
 					}
-					if v, ok := cEval(m[2], cConsts, 0); ok {
+					for _, v := range cEval(m[2], cConsts, 0) {
 						shifts = append(shifts, shift{v, i + 1})
 					}
 				}
 				// … unless it scales a field: ms * (1ull << 22) is ms << 22.
 				for _, m := range cMulShiftRE.FindAllStringSubmatch(l, -1) {
-					if v, ok := cEval(m[1]+m[2], cConsts, 0); ok {
+					for _, v := range cEval(m[1]+m[2], cConsts, 0) {
 						shifts = append(shifts, shift{v, i + 1})
 					}
 				}
@@ -338,54 +339,110 @@ func checkLayouts(p *Pass, f string, shifts []shift) {
 	}
 }
 
-// cConstTable collects `constexpr … NAME = expr;` from the C-family files in scope, by bare name.
-func cConstTable(p *Pass) map[string]string {
-	t := map[string]string{}
+// cConstTable collects `constexpr … NAME = expr;` from the C-family files in scope, by bare name. A name
+// defined more than once (kPageBits is 6 in one ECS header and 12 in another) keeps every definition.
+func cConstTable(p *Pass) map[string][]string {
+	t := map[string][]string{}
 	for _, f := range p.Files {
 		if !cFamily.MatchString(f) {
 			continue
 		}
 		for _, m := range cConstRE.FindAllStringSubmatch(strings.Join(codeLines(p.Tree.Lines(f), true), "\n"), -1) {
-			if _, dup := t[m[1]]; !dup {
-				t[m[1]] = m[2]
+			if v := strings.TrimSpace(m[2]); !slices.Contains(t[m[1]], v) {
+				t[m[1]] = append(t[m[1]], v)
 			}
 		}
 	}
 	return t
 }
 
-// cEval evaluates a C++ constant: integer literals, names from the table (qualifiers dropped), + and
-// parentheses — enough for `kOffsetBits + kShardBits`.
-func cEval(expr string, t map[string]string, depth int) (int64, bool) {
+// cEvalMax bounds the values one expression can take (each reused name multiplies them).
+const cEvalMax = 256
+
+// cEval evaluates a C++ constant to every value it can take: integer literals, names from the table
+// (qualifiers dropped; a name defined more than once gives each of its values), + and parentheses —
+// enough for `kOffsetBits + kShardBits` and `(kOffsetBits) + (kShardBits)`. Nil means unresolved.
+func cEval(expr string, t map[string][]string, depth int) []int64 {
 	expr = strings.TrimSpace(expr)
-	for strings.HasPrefix(expr, "(") && strings.HasSuffix(expr, ")") {
+	for strings.HasPrefix(expr, "(") && matchingParen(expr) == len(expr)-1 {
 		expr = strings.TrimSpace(expr[1 : len(expr)-1])
 	}
 	if depth > 8 || expr == "" {
-		return 0, false
+		return nil
 	}
-	if parts := strings.Split(expr, "+"); len(parts) > 1 {
-		var sum int64
+	if parts := splitTopLevel(expr, '+'); len(parts) > 1 {
+		sums := []int64{0}
 		for _, part := range parts {
-			v, ok := cEval(part, t, depth+1)
-			if !ok {
-				return 0, false
+			vs := cEval(part, t, depth+1)
+			if vs == nil {
+				return nil
 			}
-			sum += v
+			var next []int64
+			for _, s := range sums {
+				for _, v := range vs {
+					if !slices.Contains(next, s+v) && len(next) < cEvalMax {
+						next = append(next, s+v)
+					}
+				}
+			}
+			sums = next
 		}
-		return sum, true
+		return sums
 	}
 	if m := cIntTokenRE.FindStringSubmatch(expr); m != nil {
-		v, err := strconv.ParseInt(m[1], 10, 64)
-		return v, err == nil
+		if v, err := strconv.ParseInt(m[1], 10, 64); err == nil {
+			return []int64{v}
+		}
+		return nil
 	}
 	if i := strings.LastIndex(expr, "::"); i >= 0 {
 		expr = expr[i+2:]
 	}
-	if v, ok := t[expr]; ok {
-		return cEval(v, t, depth+1)
+	var out []int64
+	for _, def := range t[expr] {
+		for _, v := range cEval(def, t, depth+1) {
+			if !slices.Contains(out, v) && len(out) < cEvalMax {
+				out = append(out, v)
+			}
+		}
 	}
-	return 0, false
+	return out
+}
+
+// matchingParen is the index of the parenthesis that closes s[0], or -1.
+func matchingParen(s string) int {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			if depth--; depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// splitTopLevel splits s at each sep outside parentheses.
+func splitTopLevel(s string, sep byte) []string {
+	var parts []string
+	depth, from := 0, 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case sep:
+			if depth == 0 {
+				parts = append(parts, s[from:i])
+				from = i + 1
+			}
+		}
+	}
+	return append(parts, s[from:])
 }
 
 // CONF-05 (05 §1.4.5 "Who mints"): only minting services import pkg/idgen or allocate ID blocks.

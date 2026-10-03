@@ -119,19 +119,24 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
 - **CONF-01 and CONF-02, Go**, match the jetstream and nats.go method names (`KeyValue`, `CreateKeyValue`, `Create`,
   `Update`, `KeyTTL`, …) without type information, which over-reports a same-named method of another type. Bucket
   and key names resolve through constants across packages, never through variables (`name := "leases"`,
-  `fmt.Sprintf`): an unresolved Go bucket is not reported (a `KeyTTL` key is). A `$KV.` subject is read only as one
-  literal.
+  `fmt.Sprintf`): an unresolved Go bucket is not reported (a `KeyTTL` key is). Names are looked up without scopes,
+  so a parameter or local that shadows a package-level constant resolves to that constant; this matters only for
+  `KeyTTL` and compare-and-set keys, which otherwise fail closed. A `$KV.` subject is read only as one literal.
 - **CONF-01 and CONF-02, C and C++**, resolve buckets and keys through the scope's string constants by bare name (a
-  name with several values matches if any value does); anything else fails closed. Not seen: a nats.c call made
-  through a macro or a function pointer. A `js_CreateKeyValue` whose `kvConfig` is filled in another file is
-  reported as unresolved.
+  name with several values matches if any value does). A string constant is a `#define` or the declaration of a
+  constant initialized with literals: `constexpr`, or a `const` object (`const std::string k = …`, `static const
+  char k[] = …`, `const char* const k = …`). Anything else fails closed: a parameter, a variable (a `const char* k`
+  can be re-pointed), a member access (`o.bucket`, `p->bucket`) or a call. Remaining limit: a parameter or local
+  with the same bare name as a string constant declared elsewhere in scope resolves to that constant (constants
+  are `kPascalCase`, so such a collision is unlikely). Not seen: a nats.c call made through a macro or a function
+  pointer. A `js_CreateKeyValue` whose `kvConfig` is filled in another file is reported as unresolved.
 - **CONF-03** checks that the required tests exist and are not switched off. It cannot tell a test that passes
   vacuously, and it leaves a conditional skip (`if testing.Short()`) to CI, which runs the Go jobs without
   `-short`.
 - **CONF-04** evaluates shift amounts through constants (Go across packages, C++ `constexpr` across the scope) and
-  `+`. Not seen: a shift amount in a local variable (`shift := 22`), `iota`, and a layout built with arithmetic other
-  than `<<` and `* (1 << n)`. "ID code" is recognised by file name and keywords; a node-ID identifier elsewhere is
-  not read.
+  `+`. A C++ name defined more than once in scope counts with each of its values. Not seen: a shift amount in a
+  local variable (`shift := 22`), `iota`, and a layout built with arithmetic other than `<<` and `* (1 << n)`. "ID
+  code" is recognised by file name and keywords; a node-ID identifier elsewhere is not read.
 - **CONF-05** reads direct imports and calls; a package that re-exports `idgen` under another name is not followed.
 - **CONF-06 and CONF-07** evaluate the `-- +goose Up` SQL of each service. Not seen: DDL that a Go migration step
   runs (`ExecContext` in `services/migrations/*.go`), DDL inside a `DO $$ … $$` block, and statements built in Go

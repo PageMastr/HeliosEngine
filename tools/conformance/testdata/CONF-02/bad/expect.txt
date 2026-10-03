@@ -2,8 +2,9 @@
 # TTL and MaxAge on lease buckets, per-key TTLs (an unresolved key and a lease key), CAS on the leader
 # key (jetstream and the legacy API; kv.go:19 is both a lease TTL and CAS on a lease key), and the
 # nats.c forms: a TTL on a lease bucket and on one the lint cannot resolve, CAS on a #define'd leader key
-# and on an unresolved key (fails closed). (CONF-01 also fires on these buckets; this fixture runs
-# CONF-02 alone.)
+# and on an unresolved key (fails closed: desc.cpp's member assignment and re-pointable `key` must not
+# resolve the parameters of config.cpp:6 and leader.cpp:11). (CONF-01 also fires on these buckets; this
+# fixture runs CONF-02 alone.)
 apps/cell/config.cpp:6: CONF-02
 apps/cell/leader.cpp:8: CONF-02
 apps/cell/leader.cpp:11: CONF-02

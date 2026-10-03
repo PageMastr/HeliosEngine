@@ -2,8 +2,10 @@
 # Created by literal and by variable, bound through a constant of another package, bound in a test
 # that uses it, a Bucket assigned after the literal, a raw $KV subject, and the nats.c forms: a
 # constant, a call wrapped across lines, a raw subject, and buckets the lint cannot resolve (fail closed):
-# js_KeyValue of a parameter, kvConfig.Bucket set from one, and js_CreateKeyValue with a kvConfig filled
-# elsewhere.
+# js_KeyValue of a parameter, kvConfig.Bucket set from one, js_CreateKeyValue with a kvConfig filled
+# elsewhere, and js_KeyValue of a member (desc.cpp, whose member assignment `d.name = "Cell"` must not
+# resolve kv_names.cpp's `name` parameters).
+engine/net/src/desc.cpp:10: CONF-01
 engine/net/src/kv.cpp:6: CONF-01
 engine/net/src/kv.cpp:9: CONF-01
 engine/net/src/kv_create.cpp:3: CONF-01

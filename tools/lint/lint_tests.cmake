@@ -356,6 +356,13 @@ helios_lint_test(lint_windows_manifest COMMAND ${CMAKE_COMMAND} ${manifestArgs} 
 helios_lint_test(lint_windows_manifest_fixture EXPECT_FAIL "longPathAware"
   COMMAND ${CMAKE_COMMAND} -DMANIFEST=${LINT_TESTS}/manifest/bad.manifest -P ${LINT}/windows_manifest.cmake)
 
+# tools/ci/run_lints.cmake forwards -DHELIOS_STATUS_PYTHON to the D6 status check (for a Python that is
+# not on PATH): a path that runs no Python must fail that check with its own diagnostic.
+helios_lint_test(lint_run_lints_status_python
+  EXPECT_FAIL "check_status:.*HELIOS_STATUS_PYTHON=.*no-such-python.*does not run Python.*lints failed:.*status"
+  COMMAND ${CMAKE_COMMAND} -DHELIOS_STATUS_PYTHON=${LINT_WORK}/no-such-python
+          -P ${PROJECT_SOURCE_DIR}/tools/ci/run_lints.cmake)
+
 # ---------------------------------------------------------------------------------------------
 # Module layering (02 §1.1): a fixture project configured once per case. Good graphs configure;
 # each seeded violation must stop configure with its diagnostic.
@@ -395,7 +402,11 @@ foreach(case
     "redeclared_row|module 'net' already has a row in the layering table"
     "unordered|layering check failed .1 violation.s.. rules.*module 'net' is not in HELIOS_MODULE_ORDER .add it"
     "plain_executable|executable 'fx-rogue' under apps/ is not declared with helios_executable.., so no role check"
-    "bad_order|HELIOS_MODULE_ORDER lists 'ecs' before its dependency 'reflect'")
+    "bad_order|HELIOS_MODULE_ORDER lists 'ecs' before its dependency 'reflect'"
+    "bridge_upward|module 'reflect' .layer 2. depends upward on 'world' .layer 4. .through fx_bridge."
+    "bridge_same_layer|module 'net' depends on same-layer module 'physics' .*.through fx_bridge."
+    "bridge_cycle|dependency cycle between modules: helios_ecs -> fx_bridge -> helios_app -> helios_ecs"
+    "unknown_role|helios_executable.fx-zonehost.: no ROLE given and none is known for.*'apps/zonehost/'")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)
   list(GET parts 1 expect)

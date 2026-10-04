@@ -154,9 +154,13 @@ void writeSmallest3(BitWriter& w, const Quat& q, u32 bits);
 /// Fails on truncated input and on three components whose squares sum past 1 (no unit quaternion).
 Result<Quat> readSmallest3(BitReader& r, u32 bits);
 
-/// Each axis rounded to `res` and saturated at ±4e18 steps of `res` (a non-finite axis is sent as 0).
-/// readFrameCell accepts exactly that range, so it reads whatever this writes at any cell size, and
-/// fails on an offset of a whole cell or more and on a position beyond ±4e18 steps.
+/// Each axis rounded to `res` and saturated at ±4e18 steps of `res` (a non-finite axis is sent as 0),
+/// with the offset in `bits` bits (asserted: enough for cell/res steps, at most 64). readFrameCell
+/// accepts exactly that range, so it reads whatever this writes at any cell size, and fails on an
+/// offset of a whole cell or more and on a position beyond ±4e18 steps. Re-encoding a decoded position
+/// gives the same bits when `res` is a power of two (04 §4.5's 1/256 m and 1/1024 m) at every position;
+/// with another `res` (1 mm, say) only below 2^50 steps, since from about 2^51 the f64 rounding of
+/// steps * res and of v / res together reach half a step.
 void writeFrameCell(BitWriter& w, const WorldPos& p, f64 cell, f64 res, u32 bits);
 Result<WorldPos> readFrameCell(BitReader& r, f64 cell, f64 res, u32 bits);
 

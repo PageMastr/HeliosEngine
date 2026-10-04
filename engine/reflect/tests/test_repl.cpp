@@ -2,6 +2,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 
@@ -262,6 +263,68 @@ TEST_CASE("repl: readFrameCell accepts whatever writeFrameCell writes, at any ce
             CHECK(readFrameCell(r, p.cell, p.res, p.bits).ok() == (total == kMax || total == -kMax));
         }
     }
+}
+
+TEST_CASE("repl: frame-cell positions re-encode to identical bits") {
+    // The round-5 review: v / res and steps * res are exact for a power-of-two res, so re-encoding a
+    // decoded position gives the same bits up to the saturation. Any other res rounds in both, and from
+    // about 2^51 steps the two roundings reach half a step (1,720 of 2,000,000 at 1 mm), so the claim
+    // stops at 2^50 steps there (about 10^12 m at 1 mm).
+    struct P {
+        f64 cell, res;
+        u32 bits;
+        f64 maxSteps;
+    };
+    const f64 k2p50 = 1125899906842624.0;
+    for (const P p : {P{4096, 1.0 / 256, 20, 4e18}, P{512, 1.0 / 1024, 19, 4e18}, P{4096, 0.001, 22, k2p50}, P{4096, 0.01, 19, k2p50},
+                      P{1, 0.1, 4, k2p50}, P{1, 1.0 / 3, 2, k2p50}}) {
+        SplitMix64 rng(0xfc);
+        u32 different = 0;
+        auto check = [&](f64 v) {
+            BitWriter a;
+            writeFrameCell(a, WorldPos{DVec3(v, -v, v / 7)}, p.cell, p.res, p.bits);
+            BitReader r(a.bytes(), a.bitCount());
+            auto back = readFrameCell(r, p.cell, p.res, p.bits);
+            REQUIRE(back);
+            BitWriter b;
+            writeFrameCell(b, *back, p.cell, p.res, p.bits);
+            if (a.bytes() != b.bytes()) ++different;
+        };
+        // Random step counts at every magnitude up to the bound, then the bound itself.
+        for (int i = 0; i < 200000; ++i) {
+            const f64 steps = std::ldexp(static_cast<f64>(rng.next() >> 11) / 9007199254740992.0, static_cast<int>(rng.next() % 63));
+            check((rng.next() & 1 ? -1.0 : 1.0) * std::min(steps, p.maxSteps) * p.res);
+        }
+        for (const f64 steps : {p.maxSteps, p.maxSteps - 1, p.maxSteps - 0.5, p.maxSteps / 3}) {
+            check(steps * p.res);
+            check(-steps * p.res);
+        }
+        INFO("cell=" << p.cell << " res=" << p.res << " up to " << p.maxSteps << " steps");
+        CHECK(different == 0);
+    }
+}
+
+TEST_CASE("repl: writeFrameCell asserts its offset width") {
+#if HELIOS_ENABLE_ASSERTS
+    static u32 failures = 0;
+    failures = 0;
+    const AssertHandler previous = setAssertHandler([](const AssertInfo&) {
+        ++failures;
+        return AssertAction::Continue;
+    });
+    BitWriter w;
+    const WorldPos p{DVec3(1, 2, 3)};
+    writeFrameCell(w, p, 4096, 1.0 / 256, 19); // 2^20 steps need 20 bits
+    writeFrameCell(w, p, 4096, 1.0 / 256, 20);
+    writeFrameCell(w, p, 4096, 1.0 / 256, 64);
+    writeFrameCell(w, p, 4096, 1.0 / 256, 65);
+    writeFrameCell(w, p, 3, 1, 1); // 3 steps need 2 bits
+    writeFrameCell(w, p, 3, 1, 2);
+    setAssertHandler(previous);
+    CHECK(failures == 3);
+#else
+    MESSAGE("asserts are compiled out in this build");
+#endif
 }
 
 TEST_CASE("repl: frame-cell positions are exact to half the resolution, even at 1e13 m") {

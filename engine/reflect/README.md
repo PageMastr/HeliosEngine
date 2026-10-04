@@ -110,16 +110,18 @@ the registry (including concurrent readers during registration), property paths,
 (including a randomized property test), record files, `Mut<C>`, and the replication primitives
 (bit streams at every width, hostile varints, range quantization within half a step, smallest-three
 quaternions (hostile ones that cannot be a unit quaternion rejected, while whatever the writer sends,
-NaN, zero and unnormalised input included, decodes at every width from 2 bits), frame-cell positions exact
-to half the resolution at 10¹³ m, out-of-range cells and offsets rejected, order-independent protocol
-hash). The generated-code side is tested by `schemac_tests`
-(tools/schemac).
+NaN, zero and unnormalised input included, decodes at every width from 2 bits; a decoded rotation
+re-encodes within one step; the `bits` range asserted), frame-cell positions exact to half the
+resolution at 10¹³ m and read back at every cell size up to the ±4·10¹⁸-step saturation, out-of-range
+cells and offsets rejected, re-encoding to the same bits (any position at a power-of-two `res`, below
+2⁵⁰ steps at another), the offset width asserted, order-independent protocol hash). The
+generated-code side is tested by `schemac_tests` (tools/schemac).
 
 ## Plan conformance
 
-Plan-Rev: 11
+Plan-Rev: 12
 
-`repl.h` was written to plan revision 11 by WP-0.7b (`--emit repl`, 02 §3.5; 04 §4.1, §4.5); the rest
+`repl.h` was written to plan revision 12 by WP-0.7b (`--emit repl`, 02 §3.5; 04 §4.1, §4.5); the rest
 was reconciled by hand with revision 6 on 2026-09-25, under `docs/plan/09-roadmap-and-process.md`
-§5.10.2 D7, and revisions 7–11 changed none of its anchors. No conformance delta is open; see §5.10.4
+§5.10.2 D7, and revisions 7–12 changed none of its anchors. No conformance delta is open; see §5.10.4
 (c) there.

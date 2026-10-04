@@ -344,4 +344,56 @@ TEST_CASE("repl: invalid @quant and fields the full-state codec cannot carry are
     CHECK(diagnosticsOf("component C replicate(all) { s: string }\n").empty());
 }
 
+TEST_CASE("repl: a schema file name that is not an identifier is an error, not code") {
+    // The round-5 review: <stem>Replication() (and --emit cpp's register<Stem>Types()) pasted the file's
+    // stem into C++. `ship-motion` and `2d` gave code that does not compile; the last name below closed
+    // the package namespace and defined a global function.
+    CompileOptions options;
+    options.emitCpp = true;
+    options.emitRepl = true;
+    const std::string body = "package t;\ncomponent C replicate(all) { v: f32 }\n";
+    for (const char* path : {"schemas/t/ship-motion.hschema", "schemas/t/2d.hschema", "schemas/t/ship motion.hschema",
+                             "schemas/t/_ship.hschema", "schemas/t/.hschema", "schemas/t/schiff\xC3\xA4.hschema",
+                             "schemas/t/x() noexcept;} int injected(){return 42;} namespace t{y.hschema"}) {
+        INFO(path);
+        auto c = compileFiles({{path, body}}, options);
+        CHECK_FALSE(c->ok());
+        CHECK(c->result.outputs.empty());
+        CHECK_MESSAGE(c->messages.find("which is not an identifier") != std::string::npos, c->messages);
+    }
+    // An import is checked the same way.
+    auto imported = compileFiles({{"schemas/t/a.hschema", "package t;\nimport \"2d.hschema\";\n"}, {"schemas/t/2d.hschema", "package t;\n"}},
+                                 options);
+    CHECK_FALSE(imported->ok());
+    CHECK_MESSAGE(imported->messages.find("the schema file 't/2d.hschema' is named '2d'") != std::string::npos, imported->messages);
+    // A letter, then letters, digits and '_'; whatever follows the first '.' is not part of the stem.
+    for (const char* path : {"schemas/t/ship_motion.hschema", "schemas/t/Ship2.hschema", "schemas/t/ship.v2-beta.hschema"}) {
+        INFO(path);
+        auto c = compileFiles({{path, body}}, options);
+        CHECK_MESSAGE(c->ok(), c->messages);
+    }
+
+    // Stems that differ only by '_' or the first letter's case name the same functions in one package,
+    // whether both are inputs or one imports the other; in two packages they do not clash.
+    CompileOptions both = options;
+    both.files = {"schemas/t/ship_motion.hschema", "schemas/t/shipMotion.hschema"};
+    auto clash = compileFiles({{"schemas/t/ship_motion.hschema", body}, {"schemas/t/shipMotion.hschema", "package t;\n"}}, both);
+    CHECK_FALSE(clash->ok());
+    CHECK_MESSAGE(clash->messages.find("are both in package 't' and would both define registerShipMotionTypes()") != std::string::npos,
+                  clash->messages);
+    auto viaImport = compileFiles(
+        {{"schemas/t/ship_motion.hschema", "package t;\nimport \"ShipMotion.hschema\";\n"}, {"schemas/t/ShipMotion.hschema", "package t;\n"}},
+        [&] {
+            CompileOptions o = options;
+            o.files = {"schemas/t/ship_motion.hschema"};
+            return o;
+        }());
+    CHECK_FALSE(viaImport->ok());
+    CHECK_MESSAGE(viaImport->messages.find("would both define registerShipMotionTypes()") != std::string::npos, viaImport->messages);
+    CompileOptions twoPackages = options;
+    twoPackages.files = {"schemas/t/ship_motion.hschema", "schemas/u/shipMotion.hschema"};
+    auto apart = compileFiles({{"schemas/t/ship_motion.hschema", body}, {"schemas/u/shipMotion.hschema", "package u;\n"}}, twoPackages);
+    CHECK_MESSAGE(apart->ok(), apart->messages);
+}
+
 } // namespace

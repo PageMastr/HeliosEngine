@@ -180,6 +180,10 @@ i64 floorDiv(i64 a, i64 b) noexcept { return a / b - ((a % b != 0) && ((a < 0) !
 
 void writeFrameCell(BitWriter& w, const WorldPos& p, f64 cell, f64 res, u32 bits) {
     const i64 steps = stepsPerCell(cell, res);
+    // Fewer bits than an offset needs would write offsets the reader misreads, more than 64 ones it cannot read.
+    HELIOS_ASSERT(bits >= static_cast<u32>(std::bit_width(static_cast<u64>(steps - 1))) && bits <= 64,
+                  "writeFrameCell needs {} to 64 offset bits for {} steps per cell, not {}", std::bit_width(static_cast<u64>(steps - 1)),
+                  steps, bits);
     for (const f64 v : {p.local.x, p.local.y, p.local.z}) {
         const f64 n = std::isfinite(v) ? std::clamp(std::floor(v / res + 0.5), -kMaxSteps, kMaxSteps) : 0.0;
         const i64 total = static_cast<i64>(n);

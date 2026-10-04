@@ -36,3 +36,11 @@ func retainMade() {
 	all[0].Bucket = "PRESENCE"
 	all[0].TTL = time.Hour
 }
+
+// A range variable over a parameter's collection whose bucket the loop sets.
+func retainEach(cfgs []jetstream.KeyValueConfig) {
+	for _, each := range cfgs {
+		each.Bucket = "PRESENCE"
+		each.TTL = time.Hour
+	}
+}

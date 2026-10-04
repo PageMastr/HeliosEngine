@@ -1,0 +1,135 @@
+#pragma once
+// The `.hrdb` v0 cooked record database (02 §3.3, §3.7): constants, the header, and the
+// little-endian field helpers shared by the cooker (cook.h) and the loader (record_db.h), so the two
+// cannot disagree on an offset.
+//
+// A database is one relocatable, little-endian blob, loaded zero-copy (memory-mapped). Every
+// reference inside it is self-relative and points forward: a RelSpan is {i32 offset, u32 count}, a
+// RelPtr is {i32 offset}, and the target is the address of the RelSpan/RelPtr field plus the offset.
+// Every out-of-line block starts 16-byte aligned (02 §3.7), and padding is zero.
+//
+//   [0, 64)    header (below)
+//   [64, 128)  root: types RelSpan<TypeEntry> · records RelSpan<RecordEntry> (sorted by RecordId) ·
+//              byName RelSpan<u32> (record indices sorted by $name) · tags RelSpan<TagEntry> (TagIndex
+//              order = byte-wise name order, implied ancestors included) · visibleTags RelSpan<u16>
+//              (the tags whose names this cook carries, ascending) · 24 reserved bytes
+//   [128, …)   the tables, then type and record names, then each record's fixed part followed by
+//              its out-of-line data, then tag names
+//
+// Header (byte offsets): 0 magic 'HRDB' u32 · 4 formatVersion u16 · 6 audience u8 · 7 reserved u8 ·
+//   8 rootTypeId u32 · 12 flags u32 (0) · 16 layoutHash u64 · 24 size u64 · 32 contentHash u64 (XXH3-64
+//   of [64, size)) · 40 reserved u64[2] · 56 headerHash u64 (XXH3-64 of [0, 56)).
+// TypeEntry (32 bytes): 0 typeId u32 · 4 fixedSize u32 · 8 layoutHash u64 · 16 name RelSpan<char> ·
+//   24 reserved u64.
+// RecordEntry (24 bytes): 0 rid u64 · 8 typeIndex u32 · 12 data RelPtr (the record's fixed part) ·
+//   16 name RelSpan<char>.
+// TagEntry (16 bytes): 0 name RelSpan<char> (empty when the name is withheld from this cook) ·
+//   8 parent u16 (0xFFFF for a root tag) · 10 subtreeEnd u16 · 12 depth u8 · 13 audience u8 ·
+//   14 flags u8 (kTagDeclared, kTagWithheld) · 15 reserved u8.
+//
+// Values are encoded by their cooked layout (layout.h). The header's layoutHash covers the format
+// version, the audience and every record type's cooked layout, so a database cooked against another
+// schema is refused (VersionMismatch) rather than misread; it is also what keys the DDC (02 §3.4).
+//
+// Threading: everything here is a pure function or a constant.
+
+#include <bit>
+#include <cstring>
+#include <span>
+#include <string_view>
+
+#include "helios/core/hash.h"
+#include "helios/core/types.h"
+
+namespace helios::records {
+
+static_assert(std::endian::native == std::endian::little,
+              "the cooked record format is little-endian and read in place (02 §3.7)");
+
+/// Which cook a database is (02 §3.3, §6.5). 0 is no audience, so a zeroed header is rejected.
+enum class CookAudience : u8 {
+    Client = 1, ///< records.client.hrdb: shared and client data, never server-only data (AAA-SEC-4).
+    Server = 2, ///< records.server.hrdb: shared and server data, never client-only data.
+};
+
+/// "client" / "server" ("unknown" otherwise).
+std::string_view cookAudienceName(CookAudience audience) noexcept;
+
+/// Dense index of a gameplay tag in a database's tag table (06 §1.1); the same values as
+/// gameplay::TagIndex for the same set of tag names.
+using TagIndex = u16;
+inline constexpr TagIndex kNoTag = 0xFFFF;
+
+namespace hrdb {
+
+inline constexpr u32 kMagic = 0x42445248u; ///< "HRDB" as little-endian bytes.
+inline constexpr u16 kFormatVersion = 0;   ///< v0 (WP-0.8).
+/// Type id of the root table layout (the header's rootTypeId).
+inline constexpr u32 kRootTypeId = fnv1a32("helios.records.RecordDb.v0");
+inline constexpr usize kHeaderBytes = 64;
+inline constexpr usize kHeaderHashedBytes = 56;
+inline constexpr usize kRootOffset = 64;
+inline constexpr usize kRootBytes = 64;
+inline constexpr usize kTablesOffset = kRootOffset + kRootBytes;
+inline constexpr usize kAlignment = 16;     ///< Every out-of-line block (02 §3.7).
+inline constexpr u64 kMaxFileSize = 0x7FFF'FFF0ull; ///< i32 self-relative offsets.
+inline constexpr usize kTypeEntryBytes = 32;
+inline constexpr usize kRecordEntryBytes = 24;
+inline constexpr usize kTagEntryBytes = 16;
+inline constexpr usize kRelSpanBytes = 8;
+inline constexpr u32 kMaxTags = 0xFFFE;     ///< Same as gameplay::kMaxTags.
+/// Out-of-line nesting (lists, maps, sets inside one another) a cook may produce and a loader accepts.
+inline constexpr u32 kMaxNesting = 64;
+
+// Root table field offsets (relative to kRootOffset).
+inline constexpr usize kRootTypes = 0;
+inline constexpr usize kRootRecords = 8;
+inline constexpr usize kRootByName = 16;
+inline constexpr usize kRootTags = 24;
+inline constexpr usize kRootVisibleTags = 32;
+
+inline constexpr u8 kTagDeclared = 1; ///< Declared by a tag record or used in a TagSet (not only implied).
+inline constexpr u8 kTagWithheld = 2; ///< Name withheld: only server-only data uses it (client cook).
+
+/// Decoded header fields, without validation.
+struct Header {
+    u32 magic = kMagic;
+    u16 formatVersion = kFormatVersion;
+    u8 audience = 0;
+    u8 reserved0 = 0;
+    u32 rootTypeId = kRootTypeId;
+    u32 flags = 0;
+    u64 layoutHash = 0;
+    u64 size = 0;
+    u64 contentHash = 0;
+    u64 reserved1 = 0;
+    u64 reserved2 = 0;
+    u64 headerHash = 0;
+};
+
+template <class T>
+inline T load(const u8* p) noexcept {
+    T v;
+    std::memcpy(&v, p, sizeof(T));
+    return v;
+}
+template <class T>
+inline void store(u8* p, T v) noexcept {
+    std::memcpy(p, &v, sizeof(T));
+}
+
+/// Writes the header fields to `out` (headerHash as given; see seal()).
+void encodeHeader(const Header& header, std::span<u8, kHeaderBytes> out) noexcept;
+/// Reads the header fields; no validation.
+Header decodeHeader(std::span<const u8, kHeaderBytes> in) noexcept;
+/// XXH3-64 of the encoded header's first kHeaderHashedBytes bytes.
+u64 computeHeaderHash(std::span<const u8, kHeaderBytes> encoded) noexcept;
+/// XXH3-64 of everything after the header (bytes [64, size)).
+u64 computeContentHash(std::span<const u8> file) noexcept;
+/// Recomputes contentHash and headerHash in place. The cooker seals what it writes; fuzzers and
+/// hostile-input tests reseal mutated files so the mutations reach the field validators. No-op for a
+/// file shorter than the header.
+void seal(std::span<u8> file) noexcept;
+
+} // namespace hrdb
+} // namespace helios::records

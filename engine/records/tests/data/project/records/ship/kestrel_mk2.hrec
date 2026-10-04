@@ -1,0 +1,8 @@
+{
+  "$rid": 872142931993027468,
+  "$name": "ship/kestrel_mk2",
+  "$parent": "ship/kestrel",
+  "label": "Kestrel Mk II",
+  "extras": ["mk2_extra"],
+  "mode": {"Cruise": {}}
+}

@@ -1,0 +1,9 @@
+{
+  "$rid": 5505769937651519472,
+  "$name": "ship/wren",
+  "name": "loc:ship.wren.name",
+  "mass": 800,
+  "tags": ["Ship.Class.Scout", "State.Docked"],
+  "formula": "formula WrenAgility(pilot, hull) = attr(pilot, Skill) * 0.5 + attr(hull, Agility)",
+  "parts": [499464797028555293]
+}

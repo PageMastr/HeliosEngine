@@ -60,7 +60,7 @@ At plan revision 12 the plan described Saltmarch two ways.
   `zone-tallis`. Every threshold and count is unchanged.
 
 The rest of the plan's mentions of Saltmarch name the outpost, its settlement or the "Signal from Saltmarch"
-quests, not a zone, and are unchanged. The pull request lists each of them.
+quests, not a zone, and are unchanged. PR #51 lists each of them.
 
 ## Code and content
 

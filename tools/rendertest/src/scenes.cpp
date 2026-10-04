@@ -58,7 +58,8 @@ struct PatternPush {
     u32 target, width, height, variant;
 };
 struct BlitPush {
-    u32 source, samplerIndex, mipCount, pad;
+    u32 source, samplerIndex, mipCount;
+    u32 extent;  ///< psMips: output width | height << 16
 };
 struct BlurPush {
     u32 source, target, width, height;
@@ -266,6 +267,7 @@ private:
         return texels;
     }
 
+    // 320 x 180 is also hard-wired in quads.slang, which places the quads on whole pixels.
     SceneInfo m_info{"bindless", "Eight quads sampling four bindless textures through four bindless samplers (RC-1)", 320,
                      180, 0.01, 0.5f, 0};
     rhi::PipelineH m_pso;
@@ -492,15 +494,16 @@ public:
         struct ViewData {
             RgTexture chain;
         };
+        const u32 extent = m_info.width | (m_info.height << 16);
         graph.addPass<ViewData>(
             "View", PassFlags::Raster,
             [&](RgBuilder& b, ViewData& data) {
                 data.chain = b.read(chain);
                 b.colorAttachment(output, 0, rhi::LoadOp::DontCare);
             },
-            [view, sampler](const ViewData& data, RgContext& ctx) {
+            [view, sampler, extent](const ViewData& data, RgContext& ctx) {
                 ctx.cmd().bindPipeline(view);
-                ctx.cmd().pushConstants(BlitPush{ctx.srv(data.chain), sampler, kMips, 0});
+                ctx.cmd().pushConstants(BlitPush{ctx.srv(data.chain), sampler, kMips, extent});
                 ctx.cmd().draw(3);
             });
     }

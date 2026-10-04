@@ -4,8 +4,10 @@
 //
 // Hostile input. open() checks the header and TOC checksums and then every field: offsets, sizes,
 // counts, codecs and reserved bytes are bounded by the file and by each other, so a read can only
-// touch bytes inside the blob region and allocates at most what the caller's asset size and one
-// asset block need. Anything else fails with a Result error (Corrupt, VersionMismatch, Unsupported,
+// touch bytes inside the blob region. A read allocates one asset block of scratch plus the output,
+// which read() grows only as blocks decode: an asset's rawSize is the TOC's claim, so a garbage block
+// fails before the claim costs memory. Each zstd block must be exactly one frame that states its
+// decoded size. Anything else fails with a Result error (Corrupt, VersionMismatch, Unsupported,
 // LimitExceeded, EndOfFile or IoError), never UB. Decoded assets are checked against the TOC's
 // XXH3-128 cookedHash. XXH3 detects corruption, not tampering: distribution integrity is BLAKE2b's
 // job (05 §7, 08 §2.5).
@@ -79,6 +81,10 @@ enum class RefetchStatus : u8 {
 class IBlockRefetcher {
 public:
     virtual ~IBlockRefetcher() = default;
+    /// Handles `block`, which failed its checksum: replace its bytes in the pak's source and return
+    /// Repaired, queue a re-fetch and return Pending, or return Failed. Runs on the reading thread
+    /// under `block.pak`'s repair lock, so calls for one pak are serialized; it must not read from or
+    /// call retryBlocks() on that pak (other paks are fine).
     virtual RefetchStatus refetch(const HpakBadBlock& block) = 0;
 };
 
@@ -95,6 +101,9 @@ struct HpakOpenOptions {
     std::optional<HpakPlatform> platform;
     /// Bad-block hook; null means every bad block fails with Corrupt.
     std::shared_ptr<IBlockRefetcher> refetcher;
+    /// read() and readInto() of an asset whose decoded size is above this fail with LimitExceeded, so a
+    /// runtime consumer can bound what one read may allocate. Capped at hpak::kMaxAssetSize.
+    u64 maxAssetSize = hpak::kMaxAssetSize;
 };
 
 /// Header fields of an open pak.
@@ -131,10 +140,12 @@ public:
 
     /// Decodes the asset `id`. NotFound when the pak has no such asset.
     Result<std::vector<u8>> read(AssetId id) const;
-    /// Decodes `entry`, which must be one of entries() (InvalidArgument otherwise).
+    /// Decodes `entry`, which must be one of entries() (InvalidArgument otherwise). The result grows
+    /// as blocks decode (past a 1 MiB start, to at most twice the bytes decoded), so a hostile rawSize
+    /// costs only what really decodes. LimitExceeded above HpakOpenOptions::maxAssetSize.
     Result<std::vector<u8>> read(const HpakEntry& entry) const;
     /// Decodes `entry` into `out`, whose size must equal entry.rawSize (InvalidArgument otherwise).
-    /// On failure `out` holds unspecified bytes.
+    /// LimitExceeded above HpakOpenOptions::maxAssetSize. On failure `out` holds unspecified bytes.
     Result<void> readInto(const HpakEntry& entry, std::span<u8> out) const;
 
     /// Verifies every pak block not yet verified (the launcher's full check; tests). Stops at the
@@ -142,7 +153,9 @@ public:
     Result<void> verifyAll() const;
     /// Resets the Pending and Bad blocks overlapping [offset, offset + size) to Unverified, so their
     /// next read verifies again (and may call the hook again). Call it once a re-fetch has landed.
-    void retryBlocks(u64 offset, u64 size);
+    /// Const like every other member: it changes only the atomic block states, under the repair lock,
+    /// so an installer can call it through the `const HpakReader` that mounts and hooks hand out.
+    void retryBlocks(u64 offset, u64 size) const;
     /// State of pak block `index` (Unverified for an index out of range).
     HpakBlockState blockState(u32 index) const noexcept;
 
@@ -150,12 +163,18 @@ private:
     HpakReader() = default;
     Result<void> parse(const HpakOpenOptions& options);
     bool owns(const HpakEntry& entry) const noexcept;
+    /// InvalidArgument for a foreign entry, LimitExceeded above m_maxAssetSize.
+    Result<void> checkReadable(const HpakEntry& entry) const;
+    /// Decodes `entry` into `out` (exactly rawSize bytes), or, when `grow` is set, appends to it.
+    Result<void> decode(const HpakEntry& entry, std::span<u8> out, std::vector<u8>* grow) const;
     /// Bytes [start, start + size) of the blob region with every pak block they touch verified.
     /// `scratch` holds the bytes; the returned span points into it.
     Result<std::span<const u8>> fetch(u64 start, u64 size, std::vector<u8>& scratch) const;
     /// Verifies pak block `index`, whose bytes the caller just read into `bytes` (re-read in place
-    /// when the hook repairs the block).
-    Result<void> verifyBlock(u32 index, std::span<u8> bytes) const;
+    /// when the hook repairs the block). `readAfterVerified`: the block was already Verified when
+    /// the caller read it, so the bytes are trusted unhashed; otherwise they are hashed even if
+    /// another reader has verified the block since.
+    Result<void> verifyBlock(u32 index, std::span<u8> bytes, bool readAfterVerified) const;
     u64 blockOffset(u32 index) const noexcept {
         return hpak::kHeaderBlockSize + u64(index) * hpak::kPakBlockSize;
     }
@@ -168,6 +187,7 @@ private:
     std::vector<u64> m_blockHashes;
     std::unique_ptr<std::atomic<u8>[]> m_blockStates;
     std::shared_ptr<IBlockRefetcher> m_refetcher;
+    u64 m_maxAssetSize = hpak::kMaxAssetSize;
     mutable std::mutex m_repairMutex;
 };
 

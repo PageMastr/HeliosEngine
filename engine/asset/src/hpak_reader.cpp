@@ -18,6 +18,11 @@ namespace {
 using namespace hpak;
 
 constexpr u64 kMaxStoredBlock = ZSTD_COMPRESSBOUND(kAssetBlockSize);
+// fetch() tracks the pak blocks of one stored asset block in a 64-bit mask.
+static_assert(kMaxStoredBlock / kPakBlockSize + 2 <= 64);
+/// What read() reserves up front (4 blocks, so most assets never reallocate); the rest grows as
+/// blocks decode (see decode()).
+constexpr u64 kInitialReadReserve = 4 * kAssetBlockSize;
 
 class FileSource final : public IHpakSource {
 public:
@@ -87,6 +92,13 @@ ZSTD_DCtx* threadDCtx() noexcept {
     return holder.ctx;
 }
 
+/// What a zstd frame header says about the decoded size, for errors.
+std::string describeFrameSize(unsigned long long declared) {
+    if (declared == ZSTD_CONTENTSIZE_ERROR) return "not a zstd frame";
+    if (declared == ZSTD_CONTENTSIZE_UNKNOWN) return "the zstd frame does not state its decoded size";
+    return std::format("the zstd frame declares {} decoded bytes", declared);
+}
+
 bool allZero(const u8* p, usize n) noexcept {
     return std::all_of(p, p + n, [](u8 b) { return b == 0; });
 }
@@ -112,6 +124,7 @@ Result<std::shared_ptr<HpakReader>> HpakReader::open(std::unique_ptr<IHpakSource
     reader->m_name = source->describe();
     reader->m_source = std::move(source);
     reader->m_refetcher = options.refetcher;
+    reader->m_maxAssetSize = std::min(options.maxAssetSize, kMaxAssetSize);
     HELIOS_TRY(reader->parse(options));
     return reader;
 }
@@ -260,20 +273,33 @@ bool HpakReader::owns(const HpakEntry& entry) const noexcept {
            before(&entry, m_entries.data() + m_entries.size());
 }
 
-Result<std::vector<u8>> HpakReader::read(const HpakEntry& entry) const {
+Result<void> HpakReader::checkReadable(const HpakEntry& entry) const {
     if (!owns(entry))
         return makeError(ErrorCode::InvalidArgument, "'{}': the entry is not one of this pak's", m_name);
-    std::vector<u8> out(static_cast<usize>(entry.rawSize)); // ≤ kMaxAssetSize (checked at open)
-    HELIOS_TRY(readInto(entry, out));
+    if (entry.rawSize > m_maxAssetSize)
+        return makeError(ErrorCode::LimitExceeded,
+                         "'{}': asset {} is {} bytes, above this reader's {}-byte cap", m_name, entry.id,
+                         entry.rawSize, m_maxAssetSize);
+    return {};
+}
+
+Result<std::vector<u8>> HpakReader::read(const HpakEntry& entry) const {
+    HELIOS_TRY(checkReadable(entry));
+    std::vector<u8> out;
+    out.reserve(static_cast<usize>(std::min(entry.rawSize, kInitialReadReserve)));
+    HELIOS_TRY(decode(entry, {}, &out));
     return out;
 }
 
 Result<void> HpakReader::readInto(const HpakEntry& entry, std::span<u8> out) const {
-    if (!owns(entry))
-        return makeError(ErrorCode::InvalidArgument, "'{}': the entry is not one of this pak's", m_name);
+    HELIOS_TRY(checkReadable(entry));
     if (out.size() != entry.rawSize)
         return makeError(ErrorCode::InvalidArgument, "'{}': asset {} is {} bytes, the buffer {}", m_name,
                          entry.id, entry.rawSize, out.size());
+    return decode(entry, out, nullptr);
+}
+
+Result<void> HpakReader::decode(const HpakEntry& entry, std::span<u8> out, std::vector<u8>* grow) const {
     std::vector<u8> scratch;
     u64 rel = 0;
     for (u32 k = 0; k < entry.blockCount; ++k) {
@@ -281,10 +307,33 @@ Result<void> HpakReader::readInto(const HpakEntry& entry, std::span<u8> out) con
         const u64 rawPos = u64(k) * kAssetBlockSize;
         const usize rawLen = static_cast<usize>(std::min(kAssetBlockSize, entry.rawSize - rawPos));
         HELIOS_TRY_ASSIGN(const std::span<const u8> bytes, fetch(entry.offset + rel, stored, scratch));
-        u8* dst = out.data() + rawPos;
+        u8* dst = nullptr;
+        if (grow) {
+            // Grow only as blocks arrive: rawSize is the TOC's claim (up to 2 GiB behind a pak of a few
+            // KB), so memory follows what really decoded: past read()'s 1 MiB start, at most twice it.
+            const u64 need = rawPos + rawLen;
+            if (need > grow->capacity()) {
+                const u64 doubled = std::max(need, 2 * u64(grow->capacity()));
+                grow->reserve(static_cast<usize>(std::min(entry.rawSize, doubled)));
+            }
+            grow->resize(static_cast<usize>(need));
+            dst = grow->data() + rawPos;
+        } else {
+            dst = out.data() + rawPos;
+        }
         if (entry.codec == HpakCodec::None) {
             std::memcpy(dst, bytes.data(), rawLen); // stored == rawLen (checked at open)
         } else {
+            // One frame per block that states its decoded size (the writer always does), checked before
+            // any byte is decoded.
+            const unsigned long long declared = ZSTD_getFrameContentSize(bytes.data(), bytes.size());
+            if (declared != rawLen)
+                return makeError(ErrorCode::Corrupt, "'{}': asset {} block {}: {}, expected {} decoded bytes",
+                                 m_name, entry.id, k, describeFrameSize(declared), rawLen);
+            if (ZSTD_findFrameCompressedSize(bytes.data(), bytes.size()) != bytes.size())
+                return makeError(ErrorCode::Corrupt,
+                                 "'{}': asset {} block {}: not exactly one zstd frame of {} bytes", m_name,
+                                 entry.id, k, bytes.size());
             ZSTD_DCtx* dctx = threadDCtx();
             if (!dctx) return Error{ErrorCode::OutOfMemory, "ZSTD_createDCtx failed"};
             const size_t n = ZSTD_decompressDCtx(dctx, dst, rawLen, bytes.data(), bytes.size());
@@ -298,7 +347,8 @@ Result<void> HpakReader::readInto(const HpakEntry& entry, std::span<u8> out) con
         }
         rel += stored;
     }
-    if (hash128(out.data(), out.size()) != entry.cookedHash)
+    const u8* data = grow ? grow->data() : out.data();
+    if (hash128(data, static_cast<usize>(entry.rawSize)) != entry.cookedHash)
         return makeError(ErrorCode::Corrupt, "'{}': asset {} does not match its cooked hash", m_name,
                          entry.id);
     return {};
@@ -308,10 +358,14 @@ Result<std::span<const u8>> HpakReader::fetch(u64 start, u64 size, std::vector<u
     HELIOS_ASSERT(size > 0 && start >= kHeaderBlockSize && start + size <= m_info.dataEnd);
     const u32 first = static_cast<u32>((start - kHeaderBlockSize) / kPakBlockSize);
     const u32 last = static_cast<u32>((start + size - 1 - kHeaderBlockSize) / kPakBlockSize);
-    bool verified = true;
-    for (u32 b = first; b <= last && verified; ++b)
-        verified = m_blockStates[b].load(std::memory_order_acquire) == toUnderlying(HpakBlockState::Verified);
-    if (verified) {
+    HELIOS_ASSERT(last - first < 64); // callers fetch one stored asset block (≤ kMaxStoredBlock)
+    // Which blocks were Verified before our read: only those bytes may skip the hash. A block verified
+    // (or repaired) by another reader after this point may be stale in our copy.
+    u64 trusted = 0;
+    for (u32 b = first; b <= last; ++b)
+        if (m_blockStates[b].load(std::memory_order_acquire) == toUnderlying(HpakBlockState::Verified))
+            trusted |= u64(1) << (b - first);
+    if (trusted == (u64(2) << (last - first)) - 1) {
         scratch.resize(static_cast<usize>(size));
         HELIOS_TRY(m_source->readAt(start, scratch));
         return std::span<const u8>(scratch.data(), scratch.size());
@@ -324,15 +378,18 @@ Result<std::span<const u8>> HpakReader::fetch(u64 start, u64 size, std::vector<u
     for (u32 b = first; b <= last; ++b) {
         const u64 from = blockOffset(b) - rangeStart;
         const u64 to = std::min(from + kPakBlockSize, u64(scratch.size()));
-        HELIOS_TRY(verifyBlock(b, std::span<u8>(scratch.data() + from, static_cast<usize>(to - from))));
+        HELIOS_TRY(verifyBlock(b, std::span<u8>(scratch.data() + from, static_cast<usize>(to - from)),
+                               ((trusted >> (b - first)) & 1) != 0));
     }
     return std::span<const u8>(scratch.data() + (start - rangeStart), static_cast<usize>(size));
 }
 
-Result<void> HpakReader::verifyBlock(u32 index, std::span<u8> bytes) const {
+Result<void> HpakReader::verifyBlock(u32 index, std::span<u8> bytes, bool readAfterVerified) const {
+    constexpr u8 kUnverified = toUnderlying(HpakBlockState::Unverified);
     constexpr u8 kVerified = toUnderlying(HpakBlockState::Verified);
     constexpr u8 kPending = toUnderlying(HpakBlockState::Pending);
     constexpr u8 kBad = toUnderlying(HpakBlockState::Bad);
+    if (readAfterVerified) return {}; // Verified is final, and a verified block's bytes do not change
     std::atomic<u8>& state = m_blockStates[index];
     const u64 offset = blockOffset(index);
     const auto pending = [&] {
@@ -343,14 +400,15 @@ Result<void> HpakReader::verifyBlock(u32 index, std::span<u8> bytes) const {
         return makeError(ErrorCode::Corrupt, "'{}': pak block {} (offset {}) {}", m_name, index, offset, why);
     };
 
+    // A block that turned Verified since our read is hashed too: our copy may predate its repair.
     u8 s = state.load(std::memory_order_acquire);
-    if (s == kVerified) return {};
     if (s == kPending) return pending();
     if (s == kBad) return bad("failed its checksum");
     const u64 expected = m_blockHashes[index];
     const u64 actual = hash64(bytes.data(), bytes.size());
     if (actual == expected) {
-        state.store(kVerified, std::memory_order_release);
+        u8 unverified = kUnverified;
+        state.compare_exchange_strong(unverified, kVerified, std::memory_order_acq_rel);
         return {};
     }
 
@@ -394,12 +452,12 @@ Result<void> HpakReader::verifyAll() const {
         const u64 offset = blockOffset(b);
         scratch.resize(static_cast<usize>(std::min(kPakBlockSize, m_info.dataEnd - offset)));
         HELIOS_TRY(m_source->readAt(offset, scratch));
-        HELIOS_TRY(verifyBlock(b, scratch));
+        HELIOS_TRY(verifyBlock(b, scratch, false));
     }
     return {};
 }
 
-void HpakReader::retryBlocks(u64 offset, u64 size) {
+void HpakReader::retryBlocks(u64 offset, u64 size) const {
     const u64 lo = std::max(offset, kHeaderBlockSize);
     const u64 hi = std::min(size > ~u64(0) - offset ? ~u64(0) : offset + size, m_info.dataEnd);
     if (lo >= hi) return;

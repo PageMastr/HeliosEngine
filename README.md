@@ -119,8 +119,8 @@ ctest --preset windows-msvc-release
 Other presets: `windows-msvc-debug`, `windows-clang-cl`, and `windows-vs2022` / `windows-vs2026`, which
 generate a Visual Studio solution under `build\<preset>\`. `windows-msvc-dev` is the modular dev build
 (`HELIOS_MODULAR=ON`, ADR-016): the engine modules link into three DLLs (`helios_runtime`, `helios_client`,
-`helios_editor`) and every image uses the `/MD` runtime, which game-module hot reload needs. Shipping
-builds stay monolithic and `/MT`.
+`helios_editor`; SDL3 and Dear ImGui are DLLs of their own) and every image uses the `/MD` runtime, which
+game-module hot reload needs. Shipping builds stay monolithic and `/MT`.
 
 **Run the sample:** `build\windows-msvc-release\bin\rhi_triangle.exe`.
 

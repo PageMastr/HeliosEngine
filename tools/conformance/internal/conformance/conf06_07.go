@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,12 +57,20 @@ var (
 	addColumnRE  = regexp.MustCompile(`(?is)^add\s+(?:column\s+)?(?:if\s+not\s+exists\s+)?` + identRE + `\s*(.*)$`)
 	// ADD COLUMN IF NOT EXISTS: PostgreSQL skips the action when the column exists, which keeps its type.
 	addIfNotExistsRE = regexp.MustCompile(`(?is)^add\s+(?:column\s+)?if\s+not\s+exists\b`)
-	dropColumnRE     = regexp.MustCompile(`(?is)^drop\s+(?:column\s+)?(?:if\s+exists\s+)?` + identRE + `(?:\s+(?:cascade|restrict))?$`)
-	renameColRE      = regexp.MustCompile(`(?is)^rename\s+(?:column\s+)?` + identRE + `\s+to\s+` + identRE + `$`)
-	renameTableRE    = regexp.MustCompile(`(?is)^rename\s+to\s+` + identRE + `$`)
-	setSchemaRE      = regexp.MustCompile(`(?is)^set\s+schema\s+` + identRE + `$`)
-	constraintRE     = regexp.MustCompile(`(?i)^(constraint|primary|unique|check|foreign|exclude)\b`)
-	alterTypeRE      = regexp.MustCompile(`(?is)^alter\s+(?:column\s+)?` + identRE + `\s+(?:set\s+data\s+)?type\s+(.*)$`)
+	// CREATE DOMAIN name [AS] type: a column of the domain has its base type.
+	createDomainRE = regexp.MustCompile(`(?is)^create\s+domain\s+` + identRE + `(?:\s*\.\s*` + identRE + `)?\s+(?:as\s+)?(.+)$`)
+	typeNameRE     = regexp.MustCompile(`(?is)^\s*` + identRE + `(?:\s*\.\s*` + identRE + `)?`)
+	// EXPLAIN with ANALYZE runs its statement (CREATE TABLE … AS among them); without it, nothing runs.
+	explainRE = regexp.MustCompile(`(?is)^explain\s+((?:\([^()]*\)\s*|(?:analy[sz]e|verbose)\s+)*)(.*)$`)
+	analyzeRE = regexp.MustCompile(`(?i)\banaly[sz]e\b`)
+	// A query after the column list: CREATE TABLE t (a, b) AS SELECT … names its columns, not their types.
+	tableAsRE     = regexp.MustCompile(`(?is)\bas\s*(?:\(|(?:select|with|values|table|execute)\b)`)
+	dropColumnRE  = regexp.MustCompile(`(?is)^drop\s+(?:column\s+)?(?:if\s+exists\s+)?` + identRE + `(?:\s+(?:cascade|restrict))?$`)
+	renameColRE   = regexp.MustCompile(`(?is)^rename\s+(?:column\s+)?` + identRE + `\s+to\s+` + identRE + `$`)
+	renameTableRE = regexp.MustCompile(`(?is)^rename\s+to\s+` + identRE + `$`)
+	setSchemaRE   = regexp.MustCompile(`(?is)^set\s+schema\s+` + identRE + `$`)
+	constraintRE  = regexp.MustCompile(`(?i)^(constraint|primary|unique|check|foreign|exclude)\b`)
+	alterTypeRE   = regexp.MustCompile(`(?is)^alter\s+(?:column\s+)?` + identRE + `\s+(?:set\s+data\s+)?type\s+(.*)$`)
 	// ALTER TABLE actions that change no column: constraints, column defaults, statistics and identity,
 	// ownership, triggers and row security, replica identity, clustering, storage parameters, the table's
 	// persistence, access method and tablespace, and partitions attached or detached.
@@ -107,10 +116,11 @@ type table struct {
 
 // netSchema is the evaluated state of every service's migrations.
 type netSchema struct {
-	tables    map[string]*table // schema.table
-	schemas   []schemaDecl      // CREATE SCHEMA / RENAME / Go-declared names, for CONF-06
-	misplaced []placement       // tables created or moved outside their service's schema
-	errors    []placement       // statements the evaluator cannot follow
+	tables    map[string]*table   // schema.table
+	schemas   []schemaDecl        // CREATE SCHEMA / RENAME / Go-declared names, for CONF-06
+	misplaced []placement         // tables created or moved outside their service's schema
+	errors    []placement         // statements the evaluator cannot follow
+	domains   map[string][]string // CREATE DOMAIN: bare name -> base types
 }
 
 type schemaDecl struct {
@@ -142,7 +152,7 @@ func evalSchemas(p *Pass) *netSchema {
 	if p.Tree.schema != nil {
 		return p.Tree.schema
 	}
-	ns := &netSchema{tables: map[string]*table{}}
+	ns := &netSchema{tables: map[string]*table{}, domains: map[string][]string{}}
 	p.Tree.schema = ns
 	renames := map[string]legacyRename{} // migration directory -> rename
 	order := map[string]int{}            // migration directory -> its index in Schemas (apply order)
@@ -254,7 +264,21 @@ func fileVersion(f string) int64 {
 
 func (ns *netSchema) apply(f string, st sqlStmt, own string, netName func(string) string) {
 	s := st.text
+	if m := explainRE.FindStringSubmatch(s); m != nil {
+		if analyzeRE.MatchString(m[1]) {
+			st.text = m[2]
+			ns.apply(f, st, own, netName)
+		}
+		return
+	}
 	switch {
+	case createDomainRE.MatchString(s):
+		m := createDomainRE.FindStringSubmatch(s)
+		name := unquote(m[1])
+		if m[2] != "" {
+			name = unquote(m[2])
+		}
+		ns.domains[name] = append(ns.domains[name], m[3])
 	case createSchemaRE.MatchString(s):
 		ns.schemas = append(ns.schemas, schemaDecl{netName(unquote(createSchemaRE.FindStringSubmatch(s)[1])), f, st.line, "CREATE SCHEMA"})
 	case renameSchemaRE.MatchString(s):
@@ -285,6 +309,11 @@ func (ns *netSchema) apply(f string, st sqlStmt, own string, netName func(string
 		}
 		t := &table{schema: schema, name: name, file: f, line: st.line, cols: map[string]*column{}}
 		body, rest := parenSplit(s[len(m[0])-1:])
+		if tableAsRE.MatchString(rest) {
+			ns.errors = append(ns.errors, placement{f, st.line, "CREATE TABLE " + schema + "." + name + " (…) AS " +
+				"creates its columns from a query the lint does not read"})
+			return
+		}
 		// LIKE src and INHERITS (parents) give the table the columns their sources have now.
 		copyFrom := func(src string) {
 			src = strings.TrimSpace(src)
@@ -455,6 +484,22 @@ func (ns *netSchema) reportSchemas(p *Pass) {
 	}
 }
 
+// piiType reports a column type that holds an IP address: inet or cidr, or a domain over one.
+func (ns *netSchema) piiType(typ string, depth int) bool {
+	if piiTypesRE.MatchString(typ) {
+		return true
+	}
+	m := typeNameRE.FindStringSubmatch(typ)
+	if m == nil || depth > 8 {
+		return false
+	}
+	name := unquote(m[1])
+	if m[2] != "" {
+		name = unquote(m[2])
+	}
+	return slices.ContainsFunc(ns.domains[name], func(base string) bool { return ns.piiType(base, depth+1) })
+}
+
 func (ns *netSchema) reportPII(p *Pass) {
 	// A statement the evaluator cannot follow may create or keep a PII column, so it fails this rule too: a
 	// CONF-06 suppression on its line does not hide it from the PII check.
@@ -475,7 +520,7 @@ func (ns *netSchema) reportPII(p *Pass) {
 		sort.Strings(names) // a stable report order: several columns can be reported on one line
 		for _, n := range names {
 			c := t.cols[n]
-			pii := piiWordRE.MatchString(c.name) || piiTypesRE.MatchString(c.typ)
+			pii := piiWordRE.MatchString(c.name) || ns.piiType(c.typ, 0)
 			switch {
 			case pii && !piiSafeRE.MatchString(c.name):
 				p.Report(c.file, c.line, "column %s.%s holds direct PII in plain text: store *_ct ciphertext or a "+

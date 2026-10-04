@@ -321,6 +321,8 @@ func checkGatewayPortGo(p *Pass, f string) {
 		}
 		return goValue(e)
 	}
+	// The literals a check has read, so that a gateway-typed literal under a gateway-named value is read once.
+	checked := map[*ast.CompositeLit]bool{}
 	var check func(name string, values ...ast.Expr)
 	check = func(name string, values ...ast.Expr) {
 		portName := gatewayPortName(name)
@@ -351,6 +353,9 @@ func checkGatewayPortGo(p *Pass, f string) {
 				}
 				if _, closure := e.(*ast.FuncLit); closure {
 					return false // t.Run("gateway …", func…): the body is not the value
+				}
+				if cl, ok := e.(*ast.CompositeLit); ok {
+					checked[cl] = true
 				}
 				// A Port field inside a gateway value is the gateway port (&net.UDPAddr{Port: 7777}).
 				if kv, ok := e.(*ast.KeyValueExpr); ok {
@@ -431,13 +436,19 @@ func checkGatewayPortGo(p *Pass, f string) {
 	}
 	ast.Inspect(gf.File, func(n ast.Node) bool {
 		switch x := n.(type) {
-		case *ast.CompositeLit: // GatewayConfig{Port: 7003}: the Port field of a gateway-named type
+		case *ast.CompositeLit:
+			// A literal of a gateway-named type is a gateway value under any name: its Port field and its
+			// addresses (GatewayConfig{Port: 7003, Addr: ":7000"}), also as an elided element of a slice,
+			// array or map literal ([]GatewayConfig{{Port: 7000}}).
+			if checked[x] {
+				return true
+			}
 			if t := typeName(x.Type); gatewayNameRE.MatchString(t) {
-				for _, el := range x.Elts {
-					if kv, ok := el.(*ast.KeyValueExpr); ok {
-						if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Port" {
-							check(t+".Port", kv.Value)
-						}
+				check(t, x)
+			} else if el := configElem(x.Type); el != nil && gatewayNameRE.MatchString(typeName(el)) {
+				for _, e := range elementLits(x) {
+					if e.Type == nil && !checked[e] {
+						check(typeName(el), e)
 					}
 				}
 			}

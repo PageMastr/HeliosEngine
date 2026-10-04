@@ -30,3 +30,5 @@ auto trunk =
 // Names whose words are not listen or connect: a trunk socket's bind address, a connected-peers scrape.
 net::Address trunkBind = net::Address::anyV4(7818);
 auto connectedPeers = scrape("10.0.0.9:9100");
+// An option call with a lambda argument: the `;` in its body is inside braces, so the call closes.
+auto listenChecked = parse(args.get("listen", [&] { audit("listen"); return true; }(), "0.0.0.0:7777"));

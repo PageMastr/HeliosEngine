@@ -119,7 +119,8 @@ you did not write first (`helios-tool journal show`) and run `helios-tool valida
   `<>:"|?*` (drive letters such as `C:` or `c:`, NTFS streams) and control characters; components
   ending in a dot or a space (Windows drops them, so `x.hrec.` would name `x.hrec`); Windows device
   names (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9` and their superscript forms,
-  `CONIN$`, `CONOUT$`, in any case and with any extension). The spelling rule is the same on every
+  `CONIN$`, `CONOUT$`, in any case and with any extension); a file name that does not end in
+  `.hrec` (in any ASCII case, as `openAll()` lists records). The spelling rule is the same on every
   platform, since a journal written on Linux may be replayed on Windows. The on-disk check then
   walks the existing components from the root without following them and resolves each link: it
   must lead to a directory or regular file inside the root's resolved path.

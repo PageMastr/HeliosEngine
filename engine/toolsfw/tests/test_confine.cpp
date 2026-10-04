@@ -130,6 +130,7 @@ TEST_CASE("confine: the spelling rule keeps every path inside the project") {
              {"records/COM10.hrec", "records/COM10.hrec"},
              {"records/nul_drone.hrec", "records/nul_drone.hrec"},
              {".hidden/x.hrec", ".hidden/x.hrec"},
+             {"records/hull/Frigate.HREC", "records/hull/Frigate.HREC"},  // as openAll() lists them
          }) {
         INFO(path);
         for (PathOrigin origin : {PathOrigin::Untrusted, PathOrigin::Caller}) {
@@ -151,7 +152,7 @@ TEST_CASE("confine: the spelling rule keeps every path inside the project") {
              "records/prn.tar.hrec", "records/a?.hrec", "records/a*.hrec", "records/a|b.hrec", "records/a\"b.hrec",
              "records/a<b.hrec", "records/a>b.hrec", std::string("records/a\0b.hrec", 16), "records/a\x01.hrec",
              "records/a\x1b[31m.hrec", "records/a\xC2\x9B.hrec", "records/x.sh", "records/hull/evil.bat", "evil.sh",
-             "records/x.HREC", ".hrec", "records/x.hrec/", "records/x.hrecx",
+             ".hrec", ".HREC", "records/x.hrec/", "records/x.hrecx", "records/x.hre", "records/xhrec",
          }) {
         INFO("refused: " << printable(path));
         for (PathOrigin origin : {PathOrigin::Untrusted, PathOrigin::Caller}) {

@@ -243,7 +243,12 @@ Result<ProjectFile> Workspace::confine(std::string_view path, PathOrigin origin,
         parts.push_back(part);
     }
     if (parts.empty()) return refuse("names no file");
-    if (parts.back().size() <= kRecordExtension.size() || !parts.back().ends_with(kRecordExtension)) {
+    // ASCII case aside, as openAll() lists record files (fs::listDirectory compares extensions so).
+    const std::string_view last = parts.back();
+    const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+    if (last.size() <= kRecordExtension.size() ||
+        !std::equal(kRecordExtension.begin(), kRecordExtension.end(), last.end() - static_cast<isize>(kRecordExtension.size()),
+                    [&](char a, char b) { return a == lower(b); })) {
         return refuse("record files end in .hrec");
     }
     ProjectFile out;

@@ -157,7 +157,8 @@ public:
     ///   wildcards) and control characters; a component that ends in '.' or ' ' (Windows drops
     ///   them, so `x.hrec.` names `x.hrec` and `.. ` names `..`); a Windows device name (CON, PRN,
     ///   AUX, NUL, COM0-9, LPT0-9 and their superscript forms, CONIN$, CONOUT$; any case, any
-    ///   extension); a last component that does not end in ".hrec".
+    ///   extension); a last component that does not end in ".hrec" (in any ASCII case, as
+    ///   openAll() lists record files).
     /// With PathCheck::OnDisk every existing component from the root down is also inspected
     /// without following it (lstat; GetFileAttributesW on Windows): a link (a symbolic link, or
     /// on Windows any reparse point, junctions and mount points included) must resolve to a

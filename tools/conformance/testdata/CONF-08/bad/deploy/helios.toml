@@ -26,3 +26,22 @@ gateway_ports = [
 ]
 banner = "see [docs"
 gateway_port = 7013
+
+# A supervised gateway's command line: its --listen and --connect addresses, and a port option.
+[[orchestrator.spawn]]
+name = "gw-1"
+args = ["--name", "gw-1", "--listen", "127.0.0.1:7040"]
+
+[[orchestrator.spawn]]
+name = "gw-2"
+args = [
+  "--connect=127.0.0.1:7041",
+  "--gateway-port", "7042",
+]
+
+[gateway.pool]
+motd = '''Don't [panic'''
+listeners = [{ host = "0.0.0.0", port = 7043 }]
+backups = [
+  { host = "0.0.0.0", port = 7044 },
+]

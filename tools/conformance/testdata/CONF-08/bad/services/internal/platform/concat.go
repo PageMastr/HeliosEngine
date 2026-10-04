@@ -28,3 +28,6 @@ var gatewayJoined = []string{
 	loopbackHost + ":" + strconv.Itoa(7035),
 	loopbackHost + ":" + portString(),
 }
+
+// Round 7: the same with the prefix in parentheses.
+var gatewayParen = (loopbackHost + ":") + strconv.Itoa(7047)

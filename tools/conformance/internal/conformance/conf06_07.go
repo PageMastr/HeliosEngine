@@ -43,7 +43,7 @@ var (
 	// words; *_ct ciphertext and *_bidx blind indexes are the allowed forms.
 	piiWordRE  = regexp.MustCompile(`(^|_)(e_?mail|email_norm|dob|date_of_birth|birth_?date|birthday|ip|ip_?addr(ess)?|ipv[46]|remote_addr|real_name|full_name|first_name|last_name|legal_name|given_name|family_name|surname)(_|$)`)
 	piiSafeRE  = regexp.MustCompile(`_(ct|bidx)$`)
-	piiTypesRE = regexp.MustCompile(`(?i)^(inet|cidr)\b`)
+	piiTypesRE = regexp.MustCompile(`(?i)^(?:"?pg_catalog"?\s*\.\s*)?"?(?:inet|cidr)(?:"|\b)`)
 	identRE    = `("[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)`
 	// CREATE SCHEMA name [AUTHORIZATION role], and nothing after it: a schema with elements (`CREATE SCHEMA s
 	// CREATE TABLE t (…)`) creates tables too, so it fails closed below.

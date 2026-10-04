@@ -17,6 +17,16 @@
 # option default on the line after the one that names the listen address (the option's on the call's
 # line). Go: literals of gateway-named types under other
 # names, as elided slice and map elements and with an address field, and under a gateway name (read once).
+# Round 7: TOML command lines outside a gateway table (an orchestrator.spawn args array): --listen with its
+# value in the next element, --connect=value, and a port option, also in a multi-line array. Arrays of
+# inline tables in a gateway table, on one line and on several, after a triple-quoted string that holds a
+# quote character and an unbalanced bracket.
+# C++: a brace initializer split after its brace, a call after a brace list on a continuation line, a
+# literal two lines below the read line, a string constant passed on (kFormsListen), and a port reported
+# once per line: an option default on the line of its --listen, a constant used beside its literal, and a
+# split declaration of a gateway-named constant; a `;` inside a for statement's parentheses does not end it.
+# Go: a parenthesised host + ":" prefix (concat.go), a nested collection's elided elements and an
+# unexported port field of a gateway-named type (gateway_values.go).
 deploy/compose.yml:3: CONF-08
 deploy/compose.yml:6: CONF-08
 deploy/compose.yml:7: CONF-08
@@ -35,6 +45,11 @@ deploy/helios.toml:17: CONF-08
 deploy/helios.toml:21: CONF-08
 deploy/helios.toml:23: CONF-08
 deploy/helios.toml:28: CONF-08
+deploy/helios.toml:33: CONF-08
+deploy/helios.toml:37: CONF-08
+deploy/helios.toml:37: CONF-08
+deploy/helios.toml:44: CONF-08
+deploy/helios.toml:45: CONF-08
 engine/net/include/ports.h:2: CONF-08
 engine/net/include/ports.h:3: CONF-08
 engine/net/include/ports.h:4: CONF-08
@@ -60,6 +75,14 @@ engine/server/src/gateway_forms.cpp:11: CONF-08
 engine/server/src/gateway_forms.cpp:13: CONF-08
 engine/server/src/gateway_forms.cpp:15: CONF-08
 engine/server/src/gateway_forms.cpp:16: CONF-08
+engine/server/src/gateway_forms.cpp:19: CONF-08
+engine/server/src/gateway_forms.cpp:21: CONF-08
+engine/server/src/gateway_forms.cpp:24: CONF-08
+engine/server/src/gateway_forms.cpp:26: CONF-08
+engine/server/src/gateway_forms.cpp:27: CONF-08
+engine/server/src/gateway_forms.cpp:29: CONF-08
+engine/server/src/gateway_forms.cpp:31: CONF-08
+engine/server/src/gateway_forms.cpp:33: CONF-08
 services/cmd/tool/main.go:5: CONF-08
 services/internal/platform/concat.go:13: CONF-08
 services/internal/platform/concat.go:14: CONF-08
@@ -69,6 +92,7 @@ services/internal/platform/concat.go:18: CONF-08
 services/internal/platform/concat.go:19: CONF-08
 services/internal/platform/concat.go:28: CONF-08
 services/internal/platform/concat.go:29: CONF-08
+services/internal/platform/concat.go:33: CONF-08
 services/internal/platform/config.go:3: CONF-08
 services/internal/platform/config.go:7: CONF-08
 services/internal/platform/config.go:9: CONF-08
@@ -77,6 +101,8 @@ services/internal/platform/gateway_values.go:5: CONF-08
 services/internal/platform/gateway_values.go:6: CONF-08
 services/internal/platform/gateway_values.go:7: CONF-08
 services/internal/platform/gateway_values.go:8: CONF-08
+services/internal/platform/gateway_values.go:13: CONF-08
+services/internal/platform/gateway_values.go:14: CONF-08
 services/internal/platform/ports.go:10: CONF-08
 services/internal/platform/ports.go:11: CONF-08
 services/internal/platform/ports.go:14: CONF-08

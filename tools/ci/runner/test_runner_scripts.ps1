@@ -8,8 +8,11 @@
 # cmdlets mocked); job-started.ps1's refusal rules, how it ends a refused job (the process cmdlets mocked) and the
 # entries it would delete; every PowerShell block of docs/runbooks/win-gpu-runner.md parses, and its step 4b audit
 # (what helios-ci can open at the root of each local drive), step 9's check before the service starts (the hook is
-# set in .env and readable by helios-ci) and the rotate blocks (what helios-ci owns; the hook's ACL for a new
-# account) run against stand-ins for WMI, the account, file, ACL and service cmdlets. The
+# set in .env, readable by helios-ci and not marked as downloaded, and the execution policy lets it run) and the
+# rotate blocks (what helios-ci owns; deleting its processes, profile and account; new folders and the hook's ACL for
+# a new account; the hook, .env and firewall rules before the runner is registered again) run against stand-ins for
+# WMI, the account, process, file, ACL, registry, git and service cmdlets; the "Already done" path and the
+# checklist name the steps that matter for a runner that already ran without the hook. The
 # scripts have no test switch: their functions and constants are loaded from the parsed files, so their last block
 # (the run) never runs here. On Windows also the wipe itself on a scratch tree under -WorkDir: a junction to a
 # directory outside, a directory symbolic link where creating one is allowed, read-only files and a deep tree; the
@@ -434,6 +437,10 @@ if ($step9.Count -eq 1) {
         @{ What = 'a group policy turns scripts off, over a RemoteSigned machine policy'; Env = $envLines; Acl = $hookAcl
             Sid = $ciSid; Error = 'execution policy is Restricted'
             Registry = @{ $machinePolicyKey = @{ ExecutionPolicy = 'RemoteSigned' }; $groupPolicyKey = @{ EnableScripts = 0 } } },
+        @{ What = 'a group policy turns scripts off and leaves an old ExecutionPolicy value'; Env = $envLines; Acl = $hookAcl
+            Sid = $ciSid; Error = 'execution policy is Restricted'
+            Registry = @{ $machinePolicyKey = @{ ExecutionPolicy = 'RemoteSigned' }
+                $groupPolicyKey = @{ EnableScripts = 0; ExecutionPolicy = 'Unrestricted' } } },
         @{ What = 'a group policy allows only signed scripts'; Env = $envLines; Acl = $hookAcl; Sid = $ciSid
             Error = 'execution policy is AllSigned'
             Registry = @{ $machinePolicyKey = @{ ExecutionPolicy = 'Unrestricted' }

@@ -40,11 +40,7 @@ installation (`D:\helios-ci\runner`, including `.env`) and the runner's credenti
 off through `.env`, through the PowerShell profile (which the runner loads before the hook), or with
 `Set-ExecutionPolicy -Scope CurrentUser Restricted`: the CurrentUser scope takes precedence over the LocalMachine
 policy of step 4, so the hook would no longer start, and only an execution policy set by Group Policy prevents that
-(the checklist checks the scope and the profiles). Code that ran as `helios-ci` while the runner had no working
-hook (a runner registered before step 9, "`File doesn't exist`" or "could not end the job" under "Day to day") was
-not reviewed at all, and it could have done the same: changed runner files, a profile or a copy of the runner's
-credentials leave nothing that a checklist could reliably find, and a job can delete its own log. Treat that as
-suspected misuse ("Rotate"). It cannot reach your profile, administrator rights or the LAN, nor, after step 4b,
+(the checklist checks the scope and the profiles). It cannot reach your profile, administrator rights or the LAN, nor, after step 4b,
 your folders elsewhere on the drives. Like every local account, it can still read what Windows leaves open to all
 users (the machine-wide tools, which the build needs, `C:\ProgramData` and whatever step 4b's audit lists as `read`),
 create files and folders in `C:\ProgramData` and `C:\Windows\Temp` and folders at the root of a drive, read and change
@@ -57,6 +53,12 @@ many routers show their admin page there to clients on the LAN, and NAT loopback
 the LAN device behind it (a NAS), often with the router's LAN address as the source. That depends on the router; the
 checklist tests it, and if the admin page or a forwarded service answers, turn off the router's remote administration
 or NAT loopback (or the port forward). If you suspect misuse, follow "Rotate" below.
+
+Code that ran as `helios-ci` while the runner had no working hook was not reviewed at all, and it could have done all
+of the above: that is a runner online before step 9 ("Already done" below), and the jobs behind "`File doesn't
+exist`" and "could not end the job" under "Day to day". Changed runner files, a planted profile or a copy of the
+runner's credentials leave nothing that a checklist could reliably find, and a job can delete its own log, so treat
+it as suspected misuse: Rotate with a new account and new runner folders.
 
 ## Names (binding)
 
@@ -271,11 +273,11 @@ helios-win-gpu`, `--labels win-gpu`, `--work D:\helios-ci\work` and `--runasserv
 password at the prompts. Never paste the token or the password anywhere else. The registration token is used once and
 is not stored; the runner keeps its own credentials in `D:\helios-ci\runner`.
 
-`config.cmd` starts the service at once, and the runner takes a job that waits for it within seconds. It never writes
-`.env` (on Windows only you do), so after a first registration the service runs without the hook. In an empty runner
-folder you can do steps 6 and 7 before this step instead, as "Rotate" does after a suspected misuse: the download
-holds no `.env`, so the service that `config.cmd` starts then reads your hook line, and the firewall already applies.
-Either way, stop it and keep it from starting until step 9:
+`config.cmd` starts the service at once, and the runner takes a job that waits for it within seconds. On Windows it
+never writes `.env`, so in a runner folder without one the service runs with no hook. Where you can, do steps 6 and 7
+before this step, as "Rotate" does after a suspected misuse: the download holds no `.env` either, so the service that
+`config.cmd` starts then reads your hook line, and the firewall rules already apply to its account. Either way, stop
+it and keep it from starting until step 9:
 
 ```powershell
 Get-Service actions.runner.* | Stop-Service
@@ -376,13 +378,14 @@ checklist checks:
     }
     # RemoteSigned refuses an unsigned script that carries the mark of a download (a browser's copy).
     if (Get-Item -LiteralPath $hook -Stream Zone.Identifier -ErrorAction SilentlyContinue) {
-        throw "$hook is marked as downloaded, so PowerShell would not run it: Unblock-File $hook, or copy it from a clone (step 6)"
+        throw "$hook is marked as downloaded, so PowerShell would not run it: Unblock-File $hook, or copy it " +
+            'from a clone (step 6)'
     }
     # Windows PowerShell runs the hook when PowerShell 7 is not installed. A group policy wins over step 4's setting.
     $gp = Get-ItemProperty -LiteralPath HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell -ErrorAction SilentlyContinue
     $lm = Get-ItemProperty -LiteralPath HKLM:\SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell `
         -ErrorAction SilentlyContinue
-    $policy = 'Restricted'                                  # Windows PowerShell's default when nothing is set
+    $policy = 'Restricted'                       # what Windows 10 and 11 use when nothing is set
     if ($gp -and $gp.PSObject.Properties['EnableScripts']) {
         if ($gp.EnableScripts -eq 1 -and $gp.PSObject.Properties['ExecutionPolicy']) { $policy = $gp.ExecutionPolicy }
     } elseif ($lm -and $lm.PSObject.Properties['ExecutionPolicy']) {
@@ -520,10 +523,10 @@ runner had no working hook:
    the SID that the `hooks` ACL and the firewall rules name.
 
    Suspected misuse: replace the account and the runner's folders, and install the hook and the firewall rules for
-   the new account **before** you register the runner again. `config.cmd` starts the service at once, every job that
-   asked for this runner since step 2 still waits in the queue (up to 24 h), and the new runner takes one within
-   seconds: without the hook and the firewall rules, that job would run all of its steps, with the LAN open. Run
-   blocks a to d in one elevated window, in this order.
+   the new account **before** you register the runner again. `config.cmd` starts the service at once, jobs that asked
+   for this runner while it was stopped or removed still wait in the queue (up to 24 h), and the new runner takes one
+   within seconds: without the hook and the firewall rules, that job would run all of its steps, with the LAN open.
+   Run blocks a to d in one elevated window, in this order.
 
    **a.** List what `helios-ci` owns outside its profile (it reads ACLs only, and may take a few minutes). Once the
    account is deleted, Windows shows these items' owner as a bare SID, and step 4b's audit no longer labels them
@@ -587,7 +590,9 @@ runner had no working hook:
    & {
        $ErrorActionPreference = 'Stop'
        if (-not $old) { throw 'no $old: run block a first, it sets it' }
-       if ((Get-LocalUser -Name helios-ci).SID.Value -eq $old) { throw 'helios-ci is the old account: do block b and step 2 first' }
+       if ((Get-LocalUser -Name helios-ci).SID.Value -eq $old) {
+           throw 'helios-ci is still the old account: do block b and step 2 first'
+       }
        $stamp = Get-Date -Format yyyyMMdd-HHmmss
        Rename-Item -LiteralPath D:\helios-ci\runner -NewName "runner.old-$stamp"
        Rename-Item -LiteralPath D:\helios-ci\work -NewName "work.old-$stamp"
@@ -629,8 +634,8 @@ runner had no working hook:
    ```
 
    Last, cancel the runs that still wait for this runner: Actions → filter `is:queued` → each run whose job waits for
-   a runner with the `win-gpu` label → Cancel workflow. The hook would end them, but then nothing rests on it. Go on
-   with step 4: the service that `config.cmd` starts runs the hook, and the firewall rules apply to its account.
+   a runner with the `win-gpu` label → Cancel workflow. The hook would end them too, but this way nothing rests on it.
+   Go on with step 4: the service that `config.cmd` starts runs the hook, and the firewall rules apply to its account.
 4. Register again (step 5, which ends with stopping the service), run step 4b's audit, start the service with step 9's
    block (it refuses while `.env` does not set the hook or `helios-ci` cannot read it), go through the checklist, and
    set `HELIOS_WIN_GPU=enabled`.

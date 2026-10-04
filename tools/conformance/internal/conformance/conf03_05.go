@@ -26,14 +26,34 @@ var _ = register(&Rule{
 var holderRuleTests = []string{"conformance/holder_rule"}
 
 var (
-	cTestCaseRE = regexp.MustCompile(`\b(?:DOCTEST_)?TEST_CASE\s*\(\s*"conformance/([A-Za-z0-9_]+)`)
-	// A doctest decorator that turns the case off or lets it fail: CI would run nothing that can fail.
-	// The decorator may come anywhere in the chain (`"…" * doctest::timeout(120) * doctest::skip()`), after
-	// decorators whose string arguments hold parentheses (`doctest::description("60 s (no responders)")`).
-	cTestOffRE = regexp.MustCompile(`\b(?:DOCTEST_)?TEST_CASE\s*\(\s*"conformance/([A-Za-z0-9_]+)[^"]*"\s*` +
-		`(?:\*\s*doctest::\w+\s*(?:\((?:[^()"]|"(?:[^"\\]|\\.)*")*\))?\s*)*\*\s*` +
-		`doctest::(skip|may_fail|should_fail|expected_failures)\b`)
+	// A doctest case's opening parenthesis, matched in the blanked text (so not inside a string).
+	cTestCaseRE = regexp.MustCompile(`\b(?:DOCTEST_)?TEST_CASE\s*\(`)
+	// The case's name, at the start of its argument.
+	cTestNameRE = regexp.MustCompile(`^\s*"conformance/([A-Za-z0-9_]+)[^"\n]*"`)
+	// A doctest decorator that turns the case off or lets it fail: CI would run nothing that can fail. It
+	// is searched for in the whole decorator chain with string and character literals blanked, so it is
+	// found after any decorator (`doctest::timeout(kOutage.count())`, `doctest::description("60 s (…)")`)
+	// and never inside a string.
+	cTestOffRE = regexp.MustCompile(`\bdoctest::(skip|may_fail|should_fail|expected_failures)\b`)
 )
+
+// closingParen returns the offset of the ')' that closes the '(' just before open in blanked text, or
+// len(blank) if the file ends first.
+func closingParen(blank string, open int) int {
+	depth := 0
+	for i := open; i < len(blank); i++ {
+		switch blank[i] {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth == 0 {
+				return i
+			}
+			depth--
+		}
+	}
+	return len(blank)
+}
 
 // skipsAlways returns the position of an unconditional t.Skip, t.Skipf or t.SkipNow among a test
 // body's top-level statements: such a test exists but never runs. A conditional skip (`if
@@ -122,21 +142,25 @@ func checkRequiredTests(p *Pass) {
 		if hasC == "" || own && !MatchAny(p.Rule.Scope, hasC) {
 			hasC = f
 		}
-		// Splices joined and `#if 0` groups skipped: a case that is never compiled does not count.
+		// Splices joined and `#if 0` groups skipped: a case that is never compiled does not count. The case's
+		// argument is read to its closing parenthesis over the blanked text, so nesting and literals in its
+		// decorators cannot end it early.
 		src := newCSource(p.Tree.Lines(f))
 		dead := inactiveLines(src.blankLines)
-		for i, l := range src.logical {
-			if dead[i] {
+		for _, m := range cTestCaseRE.FindAllStringIndex(src.blank, -1) {
+			if dead[src.index(m[0])] {
 				continue
 			}
-			for _, m := range cTestCaseRE.FindAllStringSubmatch(l, -1) {
-				cCases[m[1]] = true
+			end := closingParen(src.blank, m[1])
+			n := cTestNameRE.FindStringSubmatchIndex(src.text[m[1]:end])
+			if n == nil {
+				continue
 			}
-		}
-		for _, m := range cTestOffRE.FindAllStringSubmatchIndex(src.text, -1) {
-			if !dead[src.index(m[0])] && required[src.text[m[2]:m[3]]] {
+			name := src.text[m[1]+n[2] : m[1]+n[3]]
+			cCases[name] = true
+			if off := cTestOffRE.FindStringSubmatch(src.blank[m[1]+n[1] : end]); off != nil && required[name] {
 				p.Report(f, src.line(m[0]), "required test conformance/%s is marked doctest::%s: CI runs nothing that "+
-					"can fail", src.text[m[2]:m[3]], src.text[m[4]:m[5]])
+					"can fail", name, off[1])
 			}
 		}
 	}

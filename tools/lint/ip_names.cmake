@@ -3,9 +3,10 @@
 #   cmake -DSOURCE_DIR=<repository root> -DLINT_POLICY=<ip_names_policy.cmake> -P ip_names.cmake
 #
 # Fails on:
-#  * a reference-content name (Cinder Reach: Kestrel, Harrow, Tallis, ...) outside content/;
+#  * a reference-content name (Cinder Reach: Kestrel, Harrow, Tallis, ...) outside the content
+#    directories (HELIOS_IP_CONTENT_DIRS: content/ and docs/concept/);
 #  * an in-universe name from another franchise (Star Wars, EVE, Destiny, Star Citizen) anywhere;
-#  * a franchise title ("Star Wars", "EVE Online", ...) inside content/.
+#  * a franchise title ("Star Wars", "EVE Online", ...) inside the content directories.
 # Word and identifier-word matches (camelCase, snake_case, UPPER_CASE, paths) in text files;
 # findings are reported as path:line: name.
 

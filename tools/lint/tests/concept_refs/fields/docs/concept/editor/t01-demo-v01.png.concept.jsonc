@@ -1,0 +1,24 @@
+// Fixture sidecar.
+{
+  "image": "other.png",
+  "sha256": "ed26f33ed8bc59627a3dc51f90235ec05c77efe52b87773cc75dc8a68820a588",
+  "title": "Demo concept",
+  "author": "Fixture author",
+  "created": "4 Oct 2026",
+  "source": {
+    "kind": "owner",
+    "url": "",
+    "rights": ""
+  },
+  "tools": "Krita",
+  "ai": null,
+  "status": "final",
+  "elements": [
+    {"element": "viewport", "status": "maybe"}
+  ],
+  "phase": "Phase 1",
+  "planRefs": [],
+  "deviations": [],
+  "review": "editor/missing.review.md",
+  "license": "MIT"
+}

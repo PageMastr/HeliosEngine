@@ -120,6 +120,101 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" AND CMAKE_GENERATOR MATCH
 endif()
 
 # ---------------------------------------------------------------------------------------------
+# Link-model symbol audit (02 §1.4, ADR-016, WP-0.6c): every build runs the recorded-listing fixtures (ELF
+# `nm` and PE `dumpbin /exports` output); a modular build (HELIOS_MODULAR=ON) also audits its own images.
+# ---------------------------------------------------------------------------------------------
+set(symLint -DPOLICY=${LINT}/symbol_audit_policy.cmake -P ${LINT}/symbol_audit.cmake)
+foreach(fixture elf_ok pe_ok)
+  helios_lint_test(lint_symbol_audit_fixture_${fixture} COMMAND ${CMAKE_COMMAND}
+    -DFIXTURE=${LINT_TESTS}/symbols/${fixture} ${symLint})
+endforeach()
+foreach(case
+    "elf_group_export|failed .3 finding.*R1 helios_runtime exports 'mi_malloc' .T.*R1 helios_runtime exports 'ZSTD_compress' .T.*R1 helios_runtime exports '_ZN3JPH7Factory9sInstanceE' .D."
+    "elf_singleton|R2 SDL3 is in two images, helios_client and rhi_tests .'SDL_Init'."
+    "elf_duplicate_state|failed .1 finding.*R3 ecs_tests has its own copy of '_ZZN6helios3ecs11componentIdINS0_8PositionEEEjvE2id' .b., which helios_runtime defines"
+    "elf_game|failed .3 finding.*R6 game image game_bad has its own strong definition of '_ZN6helios3log5write.*R4 game image game_bad defines 'mi_malloc' from mimalloc.*R5 game image game_bad defines Helios data '_ZN6helios5probe8g_countsE' .B."
+    "pe_c_export|failed .2 finding.*P1 helios_runtime exports 'mi_malloc', a C name that is not helios_.*P1 helios_runtime exports 'yyjson_read_opts'"
+    "pe_no_exports|P1 helios_editor: no exports found")
+  string(REPLACE "|" ";" parts "${case}")
+  list(GET parts 0 fixture)
+  list(GET parts 1 expect)
+  helios_lint_test(lint_symbol_audit_fixture_${fixture} EXPECT_FAIL "${expect}"
+    COMMAND ${CMAKE_COMMAND} -DFIXTURE=${LINT_TESTS}/symbols/${fixture} ${symLint})
+endforeach()
+
+if(HELIOS_MODULAR)
+  get_property(symGroups GLOBAL PROPERTY HELIOS_LINK_GROUP_TARGETS)
+  get_property(symStandalone GLOBAL PROPERTY HELIOS_STANDALONE_TOOLS)
+  # Game images: link_model_probe keeps the game rules; link_model_bad_game breaks them (fixture below).
+  set(symGames link_model_probe)
+  set(symFixtures link_model_bad_game)
+  set(symLines "")
+  foreach(t IN LISTS symGroups)
+    string(APPEND symLines "group ${t} $<TARGET_FILE:${t}>\n")
+  endforeach()
+  set(symTool -DFORMAT=elf)
+  if(MSVC)
+    # PE images have no symbol table: the export tables of the groups (P1). The consumer and game rules
+    # run on the Linux modular build (linux-dev).
+    get_filename_component(symLinkerDir "${CMAKE_LINKER}" DIRECTORY)
+    find_program(HELIOS_DUMPBIN dumpbin HINTS "${symLinkerDir}")
+    set(symTool -DFORMAT=pe)
+    if(HELIOS_DUMPBIN)
+      list(APPEND symTool -DDUMPBIN=${HELIOS_DUMPBIN})
+    endif()
+  else()
+    if(CMAKE_NM)
+      list(APPEND symTool -DNM=${CMAKE_NM})
+    endif()
+    _helios_all_targets(symCandidates)
+    foreach(t IN LISTS symCandidates)
+      get_target_property(type ${t} TYPE)
+      get_target_property(excluded ${t} EXCLUDE_FROM_ALL)
+      if(NOT type MATCHES "^(EXECUTABLE|SHARED_LIBRARY|MODULE_LIBRARY)$" OR excluded OR t IN_LIST symGroups
+         OR t IN_LIST symStandalone OR t IN_LIST symFixtures)
+        continue()
+      endif()
+      if(t IN_LIST symGames)
+        string(APPEND symLines "game ${t} $<TARGET_FILE:${t}>\n")
+        continue()
+      endif()
+      # A consumer: an image that links a module (and so its group library).
+      _helios_find_path("${t}" _helios_is_module symPath)
+      if(symPath)
+        string(APPEND symLines "consumer ${t} $<TARGET_FILE:${t}>\n")
+      endif()
+    endforeach()
+  endif()
+  # Without its tool (nm, dumpbin) the audit fails and says so: a modular build never skips it.
+  set(symImages ${CMAKE_BINARY_DIR}/helios_generated/symbol_images_$<CONFIG>.txt)
+  file(GENERATE OUTPUT ${symImages} CONTENT "${symLines}")
+  helios_lint_test(lint_symbol_audit COMMAND ${CMAKE_COMMAND} -DIMAGES_FILE=${symImages} ${symTool}
+    -DWORK_DIR=${LINT_WORK}/symbols ${symLint})
+  set_tests_properties(lint_symbol_audit PROPERTIES TIMEOUT 900)
+  if(TARGET link_model_bad_game)
+    # The game rules against a real image (ELF): each rule must fire on link_model_bad_game.
+    set(symBad "")
+    foreach(t IN LISTS symGroups)
+      string(APPEND symBad "group ${t} $<TARGET_FILE:${t}>\n")
+    endforeach()
+    string(APPEND symBad "game link_model_bad_game $<TARGET_FILE:link_model_bad_game>\n")
+    set(symBadImages ${CMAKE_BINARY_DIR}/helios_generated/symbol_images_bad_game_$<CONFIG>.txt)
+    file(GENERATE OUTPUT ${symBadImages} CONTENT "${symBad}")
+    foreach(case
+        "r4|R4 game image link_model_bad_game defines '[^']*' from mimalloc"
+        "r5|R5 game image link_model_bad_game defines Helios data '_ZN6helios5probe7g_ticksE'"
+        "r6|R6 game image link_model_bad_game has its own strong definition of '_ZN6helios13memoryTagNameENS_9MemoryTagE'")
+      string(REPLACE "|" ";" parts "${case}")
+      list(GET parts 0 rule)
+      list(GET parts 1 expect)
+      helios_lint_test(lint_symbol_audit_game_${rule} EXPECT_FAIL "${expect}"
+        COMMAND ${CMAKE_COMMAND} -DIMAGES_FILE=${symBadImages} ${symTool} -DWORK_DIR=${LINT_WORK}/symbols_${rule}
+                ${symLint})
+    endforeach()
+  endif()
+endif()
+
+# ---------------------------------------------------------------------------------------------
 # Licence scanner (CLAUDE.md allowlist): third_party/*/LICENSE* (and nested licence files) and the
 # licence column of third_party/MANIFEST.md.
 # ---------------------------------------------------------------------------------------------

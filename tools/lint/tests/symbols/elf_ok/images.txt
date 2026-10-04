@@ -1,0 +1,4 @@
+format elf
+group helios_runtime
+consumer core_tests
+game game_probe

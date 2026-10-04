@@ -1,0 +1,5 @@
+0000000000001000 T helios_module_info
+0000000000001100 T _ZN6helios3log5writeENS0_5LevelESt17basic_string_viewIcSt11char_traitsIcEE
+0000000000001200 t mi_malloc
+0000000000001300 t _mi_page_malloc
+0000000000003000 B _ZN6helios5probe8g_countsE

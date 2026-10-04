@@ -101,6 +101,18 @@ function(_helios_write_api_headers)
 #  define HELIOS_${G}_API
 #endif
 
+#if HELIOS_LINK_MODULAR
+#ifdef __cplusplus
+extern \"C\" {
+#endif
+/* Names the modules linked into helios_${group}, separated by spaces (generated with the group). Any
+ * thread. Modular builds only. */
+HELIOS_${G}_API const char* helios_${group}_link_group_modules(void);
+#ifdef __cplusplus
+}
+#endif
+#endif
+
 #endif /* HELIOS_${G}_API_H */
 ")
     set(path "${HELIOS_MODULAR_INCLUDE_DIR}/helios/${group}_api.h")
@@ -237,7 +249,7 @@ function(helios_modular_finalize)
 #include \"helios/${group}_api.h\"
 
 /// Names the modules linked into this group library, separated by spaces. Any thread.
-extern \"C\" HELIOS_${G}_API const char* helios_${group}_link_group_modules() {
+extern \"C\" const char* helios_${group}_link_group_modules(void) {
     return \"${moduleText}\";
 }
 ")

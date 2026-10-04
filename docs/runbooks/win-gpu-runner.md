@@ -141,9 +141,9 @@ rights. In this elevated window, and with only the commands shown here:
    Take every other `PATH` line's entry off the `PATH` (Start → "Edit the system environment variables" →
    Environment Variables → `Path` or `PSModulePath`, under System variables or under your own → Edit → select the
    entry → Delete → OK → OK); step 4b's list deals with the folder itself later.
-3. Close this window and open a new elevated one (a window keeps the `PATH` it started with). Install the Vulkan SDK
-   again (step 4's line; if `winget` still finds the old installation, add `--force`) and close its new folder at once
-   with step 4b's block for a tool: nothing of `helios-ci` can run in between.
+3. Close this window and open a new elevated one (a window keeps the `PATH` it started with). If you deleted
+   `C:\VulkanSDK`, install the SDK again (step 4's line; if `winget` still finds the old installation, add `--force`)
+   and close its new folder at once with step 4b's block for a tool: nothing of `helios-ci` can run in between.
 4. Run the audit again: it must show no `PATH` line.
 
 Then start over, whatever the list of jobs showed: install Go and set the execution policy (the `GoLang.Go` and

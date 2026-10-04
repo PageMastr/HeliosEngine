@@ -1,0 +1,3 @@
+#! -rules CONF-01 -strict
+# DIRECTORY is a read projection (through a C++ constant too, and through a variable with a reviewed
+# suppression); the tests assert that LEASES and orch_leader are absent.

@@ -1,0 +1,10 @@
+#! -rules CONF-02 -strict
+# DIRECTORY with history, plain Puts, CAS on a zone key (and a reviewed CAS on a key the lint cannot
+# resolve), a store's own Create outside NATS code, and another struct's TTL outside nats.c code.
+# A TTL assigned after the literal to a projection's config, and MaxAge on an ordinary stream, also through
+# new(T), a range variable, elided collection elements and a make() collection. A config named like another
+# keeps its own buckets: a parameter whose bucket the function sets, a named result (shared.go), a range
+# variable whose bucket its loop sets (retain.go), and a config named like a parameter or field of another
+# type (named.go).
+# nats.c: an ordinary stream's MaxAge in a file that sets no Bucket, and CAS with a TTL on a zone key; a
+# MaxAge on a stream whose name does not resolve, in a file that uses no KV (retention.cpp).

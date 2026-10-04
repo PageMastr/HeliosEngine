@@ -1,0 +1,31 @@
+#! -rules CONF-01 -strict
+# Created by literal and by variable, bound through a constant of another package, bound in a test
+# that uses it, a Bucket assigned after the literal, a raw $KV subject, and the nats.c forms: a
+# constant, a call wrapped across lines, a raw subject, and buckets the lint cannot resolve (fail closed):
+# js_KeyValue of a parameter, kvConfig.Bucket set from one, js_CreateKeyValue with a kvConfig filled
+# elsewhere, and js_KeyValue of a member (desc.cpp, whose member assignment `d.name = "Cell"` must not
+# resolve kv_names.cpp's `name` parameters, nor may log_opts.cpp's default argument `name = "cell"`); in Go
+# NATS code, buckets the lint cannot resolve fail closed too (kv_unresolved.go, both APIs). A lease bucket
+# in an elided element of a collection literal counts (kv_elided.go).
+engine/net/src/desc.cpp:10: CONF-01
+engine/net/src/kv.cpp:6: CONF-01
+engine/net/src/kv.cpp:9: CONF-01
+engine/net/src/kv_create.cpp:3: CONF-01
+engine/net/src/kv_names.cpp:7: CONF-01
+engine/net/src/kv_names.cpp:8: CONF-01
+engine/net/src/kv_names.cpp:10: CONF-01
+engine/net/src/kv_names.cpp:12: CONF-01
+engine/net/src/kv_names.cpp:16: CONF-01
+services/internal/orch/kv.go:14: CONF-01
+services/internal/orch/kv.go:17: CONF-01
+services/internal/orch/kv.go:21: CONF-01
+services/internal/orch/kv_assign.go:11: CONF-01
+services/internal/orch/kv_assign.go:16: CONF-01
+services/internal/orch/kv_elided.go:6: CONF-01
+services/internal/orch/kv_test.go:13: CONF-01
+services/internal/orch/kv_unresolved.go:16: CONF-01
+services/internal/orch/kv_unresolved.go:17: CONF-01
+services/internal/orch/kv_unresolved.go:19: CONF-01
+services/internal/orch/kv_unresolved.go:21: CONF-01
+services/internal/orch/kv_unresolved.go:23: CONF-01
+services/internal/orch/kv_unresolved.go:24: CONF-01

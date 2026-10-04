@@ -234,6 +234,7 @@ void CharacterVirtual::sFillContactProperties(const CharacterVirtual *inCharacte
 	outContact.mMotionTypeB = inBody.GetMotionType();
 	outContact.mIsSensorB = inBody.IsSensor();
 	outContact.mUserData = inBody.GetUserData();
+	outContact.mObjectLayerB = inBody.GetObjectLayer(); // Helios patch stable-order
 	outContact.mMaterial = inCollector.GetContext()->GetMaterial(inResult.mSubShapeID2);
 }
 
@@ -249,6 +250,7 @@ void CharacterVirtual::sFillCharacterContactProperties(CharacterContact &outCont
 	outContact.mMotionTypeB = EMotionType::Kinematic; // Other character is kinematic, we can't directly move it
 	outContact.mIsSensorB = false;
 	outContact.mUserData = inOtherCharacter->GetUserData();
+	outContact.mObjectLayerB = cObjectLayerInvalid; // Helios patch stable-order: a character has no object layer
 	outContact.mMaterial = PhysicsMaterial::sDefault;
 }
 
@@ -1934,6 +1936,7 @@ void CharacterContact::RestoreState(StateRecorder &inStream)
 	inStream.Read(mCanPushCharacter);
 	mCharacterB = nullptr; // Cannot restore character B
 	mUserData = 0; // Cannot restore user data
+	mObjectLayerB = cObjectLayerInvalid; // Helios patch stable-order: not saved either (like the user data)
 	mMaterial = PhysicsMaterial::sDefault; // Cannot restore material
 }
 

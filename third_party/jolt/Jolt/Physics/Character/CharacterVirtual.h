@@ -143,6 +143,7 @@ public:
 	bool								mIsSensorB;												///< If B is a sensor
 	const CharacterVirtual *			mCharacterB = nullptr;									///< Character we're colliding with (if not nullptr). Note that this may be a dangling pointer when accessed through GetActiveContacts(), use mCharacterIDB instead.
 	uint64								mUserData;												///< User data of B
+	ObjectLayer							mObjectLayerB = cObjectLayerInvalid;					///< Helios patch stable-order: object layer of B (cObjectLayerInvalid for a character), with mUserData B's stable key
 	const PhysicsMaterial *				mMaterial;												///< Material of B
 	bool								mHadCollision = false;									///< If the character actually collided with the contact (can be false if a predictive contact never becomes a real one)
 	bool								mWasDiscarded = false;									///< If the contact validate callback chose to discard this contact or when the body is a sensor
@@ -536,10 +537,20 @@ public:
 
 private:
 	// Sorting predicate for making contact order deterministic
+	// Helios patch stable-order: bodies before characters (as upstream), then by B's stable key (object layer, user data) instead of BodyID / CharacterID, which remain the tie-break for equal keys
 	struct ContactOrderingPredicate
 	{
 		inline bool						operator () (const CharacterContact &inLHS, const CharacterContact &inRHS) const
 		{
+			if (inLHS.mBodyB.IsInvalid() != inRHS.mBodyB.IsInvalid())
+				return inRHS.mBodyB.IsInvalid();
+
+			if (inLHS.mObjectLayerB != inRHS.mObjectLayerB)
+				return inLHS.mObjectLayerB < inRHS.mObjectLayerB;
+
+			if (inLHS.mUserData != inRHS.mUserData)
+				return inLHS.mUserData < inRHS.mUserData;
+
 			if (inLHS.mBodyB != inRHS.mBodyB)
 				return inLHS.mBodyB < inRHS.mBodyB;
 

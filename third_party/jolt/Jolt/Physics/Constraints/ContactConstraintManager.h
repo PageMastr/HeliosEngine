@@ -89,6 +89,7 @@ public:
 		uint					mNumBodyPairs = 0;													///< Total number of body pairs added using this allocator
 		uint					mNumManifolds = 0;													///< Total number of manifolds added using this allocator
 		EPhysicsUpdateError		mErrors = EPhysicsUpdateError::None;								///< Errors reported on this allocator
+		bool					mFirstCollisionStep = false;										///< Helios patch stable-order: finding the collisions of the first collision step of an Update (NoCrossUpdateCache)
 	};
 
 	/// Get a new allocator context for storing contacts. Note that you should call this once and then add multiple contacts using the context.

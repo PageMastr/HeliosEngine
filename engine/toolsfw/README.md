@@ -128,12 +128,13 @@ you did not write first (`helios-tool journal show`) and run `helios-tool valida
   save records, Create and Destroy ops), on disk, before it reads a record file or applies
   anything; one bad entry refuses the whole recovery (InvalidArgument naming the journal, the
   record's index, offset, kind and document, and the path), so a hostile journal never
-  half-applies. `Framework::applyOp` gives a raw Create (replay, collaboration, patches) the rule,
-  on disk for a new file, and a Destroy must name its document's own file, the file a save
-  deletes. `Framework::open` / `doc.open` and `TxBuilder::createRecord` / `doc.create` take a
-  caller's path through it. At the time of use, `save()` (write or delete) and `reloadFromDisk()`
-  check the document's path again, because a link may appear inside the project after the open;
-  `helios-tool fmt`, `undo` and `redo` do the same.
+  half-applies. Every applied op gets the rule too (`TxBuilder::apply`, which replay,
+  collaboration and patches use): a Create's file, on disk for a new file, and a Destroy, which
+  must also name its document's own file, the file a save deletes. `Framework::open` /
+  `doc.open` and `TxBuilder::createRecord` / `doc.create` take a caller's path through it. At
+  the time of use, `save()` (write or delete) and `reloadFromDisk()` check the document's path
+  again, because a link may appear inside the project after the open; `helios-tool fmt`, `undo`
+  and `redo` do the same.
 - **The project.** The header must name `FrameworkConfig::project`, unless
   `RecoveryOptions::allowOtherProject` (`helios-tool journal replay --allow-other-project`) says
   otherwise. The header is not a security boundary (a crafted journal simply names the victim's

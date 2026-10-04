@@ -33,7 +33,8 @@ What the plan says:
 - Agents may produce "generative art only with 01 §5.2 provenance". (09 §4.2)
 - Footage of the look-and-feel reference titles "stays with the vendor and never enters the repository or
   the asset DB (§5.2)". (01 §3.3.1)
-- 01 §5.2 also rules out other franchises' names, species, factions, silhouettes and designs.
+- 01 §5.2 rules out the names, species, factions, silhouettes and designs of the franchises it lists, and
+  the [README](../../README.md#legal-and-ip) any other franchise's names, characters, art or audio.
 
 The rules of this folder (the owner's, 2026-10-04), which apply the plan's rules to concept art:
 
@@ -59,9 +60,9 @@ docs/concept/
   README.md                    this file: rules and index
   TEMPLATE.concept.jsonc       the sidecar template, field by field
   editor/  client/  launcher/  world/
-    <tool-or-area>-<subject>[-<variant>]-vNN.<ext>     e.g. editor/t01-world-saltmarch-v02.webp
-    <image>.concept.jsonc                              its sidecar, e.g. t01-world-saltmarch-v02.webp.concept.jsonc
-    <tool-or-area>-<subject>.review.md                 the review, shared by all versions
+    <tool-or-area>-<subject>[-<variant>]-vNN.<ext>   e.g. t01-world-saltmarch-v02.webp
+    <image>.concept.jsonc                            its sidecar: t01-world-saltmarch-v02.webp.concept.jsonc
+    <tool-or-area>-<subject>.review.md               the review, shared by all versions
 ```
 
 - Names are lower case, words joined by `-`, and end in a two-digit version.

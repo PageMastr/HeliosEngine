@@ -1,0 +1,8 @@
+# Each image's sha256 is recorded in its sidecar, so its bytes must never change on checkout: binary
+# (no line-ending conversion, no textual diff). Sidecars and notes are LF text on every platform.
+*.png binary
+*.webp binary
+*.jpg binary
+*.jpeg binary
+*.jsonc text eol=lf
+*.md text eol=lf

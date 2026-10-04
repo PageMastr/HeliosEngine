@@ -1,0 +1,23 @@
+// Fixture sidecar.
+{
+  "image": "hud-cut-v01.jpg",
+  "sha256": "a30f31a6a61325012e8c25deb3bd9b59dc9a2b4350b2b18e3c02dca9a87fea0b",
+  "title": "Demo concept",
+  "author": "Fixture author",
+  "created": "2026-10-04",
+  "source": {
+    "kind": "owner",
+    "url": "",
+    "rights": ""
+  },
+  "tools": ["Krita 5.2"],
+  "ai": null,
+  "licence": "MIT",
+  "ipReview": "Fixture: original shapes only.",
+  "status": "directional",
+  "elements": [],
+  "phase": "Ph1",
+  "planRefs": ["07 §2.1 T01"],
+  "deviations": [],
+  "review": ""
+}

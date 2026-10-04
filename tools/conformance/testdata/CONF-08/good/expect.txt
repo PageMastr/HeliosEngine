@@ -13,3 +13,7 @@
 # Go: gateway-typed literals at 7777, elided and with an address field.
 # TOML: a supervised gateway's command line at 7777; another process's options with other ports, and a
 # trailing --listen with no value.
+# C++: a block's body starts a new statement (after `) const {`, `) {` and a namespace name), so its addresses
+# are not read; an initializer split after its brace is read up to its end only; a parenthesis left open by
+# preprocessor branches ends with its block, so the next statements are read apart.
+# TOML: arrays of inline tables at 7777 after a triple-quoted string with a quote and a bracket.

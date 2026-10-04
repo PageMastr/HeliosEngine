@@ -38,3 +38,10 @@ args = [
   "--connect=127.0.0.1:7041",
   "--gateway-port", "7042",
 ]
+
+[gateway.pool]
+motd = '''Don't [panic'''
+listeners = [{ host = "0.0.0.0", port = 7043 }]
+backups = [
+  { host = "0.0.0.0", port = 7044 },
+]

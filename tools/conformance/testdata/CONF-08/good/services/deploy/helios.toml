@@ -35,3 +35,10 @@ args = ["--name", "gw-1", "--listen", "127.0.0.1:7777", "--connect=127.0.0.1:777
 [[orchestrator.spawn]]
 name = "cell-a"
 args = ["--name", "cell-a", "--zone", "tallis", "--metrics", "127.0.0.1:9100", "--listen"]
+
+[gateway.pool]
+motd = '''Don't [panic'''
+listeners = [{ host = "0.0.0.0", port = 7777 }]
+backups = [
+  { host = "0.0.0.0", port = 7777 },
+]

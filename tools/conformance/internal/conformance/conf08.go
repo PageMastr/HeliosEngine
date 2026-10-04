@@ -67,6 +67,8 @@ var (
 	// `std::string{"host:"} + p`, `os << "host:" << p`), and the port operand's std::to_string wrapper.
 	cConcatRE   = regexp.MustCompile(`^[\s)}]*(?:\+|<<)\s*`)
 	cToStringRE = regexp.MustCompile(`^(?:std\s*::\s*)?to_string\s*\(`)
+	// What follows a name being declared (`kListen = …`, `kListen{…}`, `kListen[] = …`).
+	cDeclaredRE = regexp.MustCompile(`^\s*(?:\[\s*\w*\s*\]\s*)?(?:=(?:[^=]|$)|\{)`)
 )
 
 // nameWords splits a name into lower-case words at case changes and non-alphanumerics
@@ -239,6 +241,14 @@ func tomlOpen(s string) int {
 			if c == quote {
 				quote = 0
 			}
+		case strings.HasPrefix(s[i:], `"""`) || strings.HasPrefix(s[i:], `'''`):
+			// A multi-line string (`'''Don't [panic'''`): its quotes and brackets are text. One that does not
+			// end in s runs on, so nothing after its start counts.
+			end := strings.Index(s[i+3:], s[i:i+3])
+			if end < 0 {
+				return depth
+			}
+			i += end + 5
 		case c == '"' || c == '\'':
 			quote = c
 		case c == '[' || c == '{':
@@ -259,10 +269,19 @@ func tomlGatewayValue(p *Pass, f string, line int, key, val string, depth int) {
 		}
 	}
 	if !portName(key) {
-		if strings.HasPrefix(val, "{") && strings.HasSuffix(val, "}") && depth < 8 {
+		switch {
+		case depth >= 8:
+		case strings.HasPrefix(val, "{") && strings.HasSuffix(val, "}"):
 			for _, kv := range tomlSplit(val[1 : len(val)-1]) {
 				if m := tomlKeyRE.FindStringSubmatch(kv); m != nil {
 					tomlGatewayValue(p, f, line, strings.Trim(m[1], `"'`), strings.TrimSpace(m[2]), depth+1)
+				}
+			}
+		case strings.HasPrefix(val, "[") && strings.HasSuffix(val, "]"):
+			// An array of inline tables (`listeners = [{ host = "0.0.0.0", port = 7777 }]`): each one's keys.
+			for _, el := range tomlSplit(val[1 : len(val)-1]) {
+				if el = strings.TrimSpace(el); strings.HasPrefix(el, "{") {
+					tomlGatewayValue(p, f, line, key, el, depth+1)
 				}
 			}
 		}
@@ -392,9 +411,10 @@ func checkGatewayPortGo(p *Pass, f string) {
 				if cl, ok := e.(*ast.CompositeLit); ok {
 					checked[cl] = true
 				}
-				// A Port field inside a gateway value is the gateway port (&net.UDPAddr{Port: 7777}).
+				// A Port field inside a gateway value is the gateway port (&net.UDPAddr{Port: 7777}), also an
+				// unexported one (gatewayOpts{port: 7777}).
 				if kv, ok := e.(*ast.KeyValueExpr); ok {
-					if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Port" {
+					if k, ok := kv.Key.(*ast.Ident); ok && strings.EqualFold(k.Name, "Port") {
 						check(name+".Port", kv.Value)
 						return false
 					}
@@ -405,14 +425,14 @@ func checkGatewayPortGo(p *Pass, f string) {
 				}
 				// "host:" + port: the port operand evaluated, or the address fails closed. With a host that
 				// does not evaluate, `host + ":" + port` parses as (host + ":") + port: the prefix is then the
-				// left operand's last string.
+				// left operand's last string (parentheses around either operand are looked through).
 				if b, ok := e.(*ast.BinaryExpr); ok && b.Op == token.ADD {
 					host, ok := g.String(gf, b.X)
-					if bx, add := b.X.(*ast.BinaryExpr); !ok && add && bx.Op == token.ADD {
+					if bx, add := ast.Unparen(b.X).(*ast.BinaryExpr); !ok && add && bx.Op == token.ADD {
 						host, ok = g.String(gf, bx.Y)
 					}
 					if ok && addrPrefixRE.MatchString(host) {
-						if port, ok := goPort(b.Y); ok {
+						if port, ok := goPort(ast.Unparen(b.Y)); ok {
 							addr(b, name, host+port)
 						} else {
 							p.Report(f, g.line(b.Pos()), unresolvedPort, "address "+strconv.Quote(host)+" + port in "+name)
@@ -469,23 +489,37 @@ func checkGatewayPortGo(p *Pass, f string) {
 			})
 		}
 	}
+	// elided reads the elements of a collection literal of element type el that elide their type, through
+	// nested collections (map[string][]GatewayConfig{"a": {{Port: 7000}}}): a gateway-typed one is checked.
+	var elided func(cl *ast.CompositeLit, el ast.Expr)
+	elided = func(cl *ast.CompositeLit, el ast.Expr) {
+		inner := configElem(el)
+		if inner == nil && !gatewayNameRE.MatchString(typeName(el)) {
+			return
+		}
+		for _, e := range elementLits(cl) {
+			switch {
+			case e.Type != nil: // typed: read as a literal of its own
+			case inner != nil:
+				elided(e, inner)
+			default:
+				check(typeName(el), e)
+			}
+		}
+	}
 	ast.Inspect(gf.File, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.CompositeLit:
 			// A literal of a gateway-named type is a gateway value under any name: its Port field and its
 			// addresses (GatewayConfig{Port: 7003, Addr: ":7000"}), also as an elided element of a slice,
-			// array or map literal ([]GatewayConfig{{Port: 7000}}).
+			// array or map literal ([]GatewayConfig{{Port: 7000}}), nested ones included.
 			if checked[x] {
 				return true
 			}
 			if t := typeName(x.Type); gatewayNameRE.MatchString(t) {
 				check(t, x)
-			} else if el := configElem(x.Type); el != nil && gatewayNameRE.MatchString(typeName(el)) {
-				for _, e := range elementLits(x) {
-					if e.Type == nil {
-						check(typeName(el), e)
-					}
-				}
+			} else if el := configElem(x.Type); el != nil {
+				elided(x, el)
 			}
 		case *ast.KeyValueExpr:
 			if k, ok := x.Key.(*ast.Ident); ok && gatewayNameRE.MatchString(k.Name) {
@@ -598,10 +632,17 @@ func cPortValues(expr string, t map[string][]string, depth int) []int64 {
 func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 	src := newCSource(p.Tree.Lines(f))
 	gatewayFile := gatewayNameRE.MatchString(f)
-	report := func(line int, port int64) {
-		if port != gatewayPort {
-			p.Report(f, line, "gateway address with port %d: the default gateway port is UDP 7777 (04 §2)", port)
+	// A port is reported once per line: a constant named on the line its literal is on, or a literal that is
+	// also an option's default, is the same finding.
+	seen := map[[2]int64]bool{}
+	reportAt := func(line int, port int64, format string, args ...any) {
+		if port != gatewayPort && !seen[[2]int64{int64(line), port}] {
+			seen[[2]int64{int64(line), port}] = true
+			p.Report(f, line, format, args...)
 		}
+	}
+	report := func(line int, port int64) {
+		reportAt(line, port, "gateway address with port %d: the default gateway port is UDP 7777 (04 §2)", port)
 	}
 	for _, m := range cPortDeclRE.FindAllStringSubmatchIndex(src.blank, -1) {
 		name := src.text[m[2]:m[3]]
@@ -645,8 +686,18 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 	}
 	// A value is read when its statement starts on, or reaches, a read line: its own line, or the earlier
 	// lines of an initializer split across lines (`net::Address listen =` then `Address::ipv4(…);`). A
-	// statement starts after `;`, `{` or `}`, or after a preprocessor line. carry[i] says whether the
-	// statement still open where line i starts has reached a read line (one pass, so no line is rescanned).
+	// statement starts after a boundary (cStmtBounds: a `;`, or a block's brace) or a preprocessor line.
+	// carry[i] says whether the statement still open where line i starts has reached a read line (one
+	// pass, so no line is rescanned).
+	bound := cStmtBounds(src)
+	lastBound := func(i int) int { // the offset in line i after its last boundary, or 0
+		for k := len(src.blankLines[i]) - 1; k >= 0; k-- {
+			if bound[src.starts[i]+k] {
+				return k + 1
+			}
+		}
+		return 0
+	}
 	carry := make([]bool, len(src.logical))
 	open := false
 	for i, bl := range src.blankLines {
@@ -655,40 +706,68 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 			open = false
 			continue
 		}
-		from := strings.LastIndexAny(bl, ";{}") + 1
+		from := lastBound(i)
 		part := src.logical[i][from:]
 		reached := gatewayFile && cGatewayLineRE.MatchString(part) || gatewayNameRE.MatchString(part)
 		open = reached || open && from == 0
 	}
 	stmtReads := func(off int) bool {
 		i := src.index(off)
-		return reads(i) || carry[i] && !strings.ContainsAny(src.blank[src.starts[i]:off], ";{}")
+		return reads(i) || carry[i] && !slices.Contains(bound[src.starts[i]:off], true)
 	}
 	// The calls a regexp matches, with their offsets.
 	calls := func(re *regexp.Regexp, text string) ([]cCall, [][]int) {
 		locs := re.FindAllStringIndex(text, -1)
 		return src.callsAt(locs), locs // every match ends in '(', so callsAt keeps them all, in order
 	}
-	// The option calls' argument spans: a default on a continuation line is the call's, reported on its line.
+	// The option calls' argument spans: a default on a continuation line is the call's, reported on its line,
+	// and a literal in a read option's span is left to the option (so it is reported once).
 	options, optionLocs := calls(cOptionCallRE, src.text)
-	var spans [][2]int
-	for _, m := range optionLocs {
+	type span struct {
+		from, to int
+		read     bool
+	}
+	var spans []span
+	for k, m := range optionLocs {
 		open := m[0] + strings.IndexByte(src.blank[m[0]:m[1]], '(') + 1
-		spans = append(spans, [2]int{open, closingParen(src.blank, open)})
+		spans = append(spans, span{open, closingParen(src.blank, open), stmtReads(m[0]) && len(options[k].args) >= 2})
 	}
-	inOption := func(off int) bool {
-		return slices.ContainsFunc(spans, func(s [2]int) bool { return s[0] <= off && off < s[1] })
+	// inOption: off is in an option call's arguments (in a read one's, with onlyRead).
+	inOption := func(off int, onlyRead bool) bool {
+		return slices.ContainsFunc(spans, func(s span) bool { return s.from <= off && off < s.to && (s.read || !onlyRead) })
 	}
+	strs := cStrTable(p)
 	// String literals on the read lines, and on the continuation lines of a statement that a read line
-	// starts (`std::string listen =` then `"127.0.0.1:7000";`).
+	// starts (`std::string listen =` then `"127.0.0.1:7000";`); and a string constant named there
+	// (`Address::parse(kDefaultListen)`), whose address is read as its literal would be. A name being
+	// declared is skipped: its literal is on the line.
 	for i, l := range src.logical {
 		read := reads(i)
 		if !read && !carry[i] || slices.ContainsFunc(cPortDeclRE.FindAllStringSubmatch(src.blankLines[i], -1),
 			func(m []string) bool { return gatewayPortName(m[1]) }) {
 			continue
 		}
+		// Read: on a read line, or in a statement that one starts, outside an option call that is read
+		// itself; on a continuation line, outside any option call (its default is the call's).
+		readsAt := func(off int) bool {
+			return (read || stmtReads(off)) && !inOption(off, true) && (read || !inOption(off, false))
+		}
+		bl := src.blankLines[i]
+		for _, m := range cIdentRE.FindAllStringIndex(bl, -1) {
+			name := bl[m[0]:m[1]]
+			if vals, ok := strs[name]; !ok || !readsAt(src.starts[i]+m[0]) || cDeclaredRE.MatchString(bl[m[1]:]) {
+				continue
+			} else {
+				for _, v := range vals {
+					if port, ok := portOf(v); ok {
+						reportAt(src.origin[i]+1, int64(port), "gateway address %q (%s): the default gateway port is "+
+							"UDP 7777 (04 §2)", v, name)
+					}
+				}
+			}
+		}
 		for _, s := range cStringRE.FindAllStringSubmatchIndex(l, -1) {
-			if off := src.starts[i] + s[0]; !read && (!stmtReads(off) || inOption(off)) {
+			if !readsAt(src.starts[i] + s[0]) {
 				continue
 			}
 			lit := l[s[2]:s[3]]
@@ -720,7 +799,6 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 			portArg(p, f, c, c.args[0], ints)
 		}
 	}
-	strs := cStrTable(p)
 	for k, c := range options {
 		if !stmtReads(optionLocs[k][0]) || len(c.args) < 2 {
 			continue
@@ -744,6 +822,98 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 			}
 		}
 	}
+}
+
+// cStmtBounds marks the statement boundaries in src.blank: a `;` (one inside parentheses only in a block
+// opened there, such as a lambda's body), and the braces of a block. The braces of an initializer
+// (cBlockBrace) are not boundaries, so `net::Address listen{` and `f(` then `{127, 0, 0, 1}, …);` stay one
+// statement. Preprocessor lines are skipped; a block's closing brace restores the parenthesis depth at its
+// opening, so an unbalanced parenthesis does not outlive its block.
+func cStmtBounds(src *cSource) []bool {
+	bound := make([]bool, len(src.blank))
+	type brace struct {
+		block bool
+		paren int
+	}
+	var braces []brace
+	paren, base, stmt := 0, 0, 0
+	for i, bl := range src.blankLines {
+		if strings.HasPrefix(strings.TrimSpace(bl), "#") {
+			continue
+		}
+		for k := 0; k < len(bl); k++ {
+			off := src.starts[i] + k
+			switch bl[k] {
+			case '(', '[':
+				paren++
+			case ')', ']':
+				paren = max(paren-1, 0)
+			case ';':
+				if paren <= base {
+					bound[off], stmt = true, off+1
+				}
+			case '{':
+				b := brace{cBlockBrace(src.blank[stmt:off]), paren}
+				braces = append(braces, b)
+				if b.block {
+					bound[off], stmt, base = true, off+1, paren
+				}
+			case '}':
+				b := brace{block: true, paren: paren}
+				if n := len(braces); n > 0 {
+					b, braces = braces[n-1], braces[:n-1]
+				}
+				if b.block {
+					bound[off], stmt, paren, base = true, off+1, b.paren, 0
+					for k := len(braces) - 1; k >= 0; k-- {
+						if braces[k].block {
+							base = braces[k].paren
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+	return bound
+}
+
+var (
+	cBlockWordRE = regexp.MustCompile(`\b(?:namespace|struct|class|union|enum|extern)\b`)
+	// A function's or lambda's trailing return type: `) -> net::Address`, `) const -> std::vector<int>`.
+	cTrailingReturnRE = regexp.MustCompile(`\)\s*(?:(?:const|noexcept|mutable|override|final)\s*)*->\s*[\w:<>,\s*&]+$`)
+)
+
+// cBlockBrace reports whether a `{` after stmt (the statement's text so far, blanked) opens a block: after
+// `)` (a function, control statement or lambda), `]` (a lambda), `}` (a constructor's initializer list),
+// `:` (a label), at a statement's start, after else, do, try or a function's qualifiers, after a trailing
+// return type (`) -> T`), and in a namespace, class, struct, union, enum or extern declaration. It opens an
+// initializer after a name (`listen{`), `=`, `,`, `(`, `{`, `return` or a template's `>`.
+func cBlockBrace(stmt string) bool {
+	t := strings.TrimRight(stmt, " \t\n\r")
+	if t == "" || cTrailingReturnRE.MatchString(t) {
+		return true
+	}
+	switch c := t[len(t)-1]; {
+	case c == ')' || c == ']' || c == '}' || c == ':' || c == ';':
+		return true
+	case c == '=' || c == ',' || c == '(' || c == '{':
+		return false
+	case c == '>':
+		return cBlockWordRE.MatchString(t)
+	case c == '_' || c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z':
+		w := t[strings.LastIndexFunc(t, func(r rune) bool {
+			return !(r == '_' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z')
+		})+1:]
+		switch w {
+		case "else", "do", "try", "const", "noexcept", "override", "final", "mutable":
+			return true
+		case "return":
+			return false
+		}
+		return cBlockWordRE.MatchString(t)
+	}
+	return true
 }
 
 // cPortOperand is the port operand at the start of s, after `"host:" +` or `<<`: the argument of

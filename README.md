@@ -36,6 +36,7 @@ OS for dedicated servers.
 | [`docs/plan/08-client-and-launcher.md`](docs/plan/08-client-and-launcher.md) | Game client, game UI, launcher/patcher, installer, crash reporting |
 | [`docs/plan/09-roadmap-and-process.md`](docs/plan/09-roadmap-and-process.md) | Phases 0–5, work packages, build process, testing, risk register, current status |
 | [`docs/research/`](docs/research/) | Ten research reports: EVE Online, SWG/SWGEmu, SWTOR/HeroEngine, Star Citizen, Destiny, Unreal/Godot, MMO backends, editors, sci-fi gameplay & graphics, tech selection |
+| [`docs/concept/`](docs/concept/README.md) | Concept-art references (editor first) with provenance sidecars and reviews; the plan wins where they differ |
 
 The plan was scored by three independent expert reviewers (server/backend, engine/rendering,
 tools/production) against the goal above over five review/revise rounds, finishing at **9.2 / 9.0 / 9.0**.

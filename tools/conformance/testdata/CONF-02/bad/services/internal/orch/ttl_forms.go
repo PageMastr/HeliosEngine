@@ -41,3 +41,11 @@ func made(n int) {
 	all := make([]jetstream.KeyValueConfig, n)
 	all[0].TTL = time.Second
 }
+
+// A variadic parameter is a slice of configs whose buckets come from the caller.
+func each(vcfgs ...jetstream.KeyValueConfig) {
+	for _, vc := range vcfgs {
+		vc.TTL = time.Second
+	}
+	vcfgs[0].TTL = time.Second
+}

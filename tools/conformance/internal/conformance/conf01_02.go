@@ -300,13 +300,16 @@ func configKind(typ ast.Expr) (kv, ok bool) {
 	return kind == "KeyValueConfig", kind == "KeyValueConfig" || kind == "StreamConfig"
 }
 
-// configElem returns the element type of a slice, array or map type expression, or nil.
+// configElem returns the element type of a slice, array or map type expression, or of a variadic
+// parameter's (`cfgs ...T`, a slice of T), or nil.
 func configElem(typ ast.Expr) ast.Expr {
 	switch t := typ.(type) {
 	case *ast.ArrayType:
 		return t.Elt
 	case *ast.MapType:
 		return t.Value
+	case *ast.Ellipsis:
+		return t.Elt
 	}
 	return nil
 }

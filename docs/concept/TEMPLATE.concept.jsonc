@@ -1,10 +1,10 @@
 // Concept-art sidecar template (docs/concept/README.md). Copy it next to the image as
-// `<image file name>.concept.jsonc` (for example `editor/t01-world-saltmarch-v02.webp.concept.jsonc`) and
+// `<image file name>.concept.jsonc` (for example `editor/t01-world-saltmarch-v03.webp.concept.jsonc`) and
 // fill in every field. tools/lint/concept_refs.cmake checks each sidecar, and this template too, so the
 // two stay in step. Comments and trailing commas are allowed; unknown fields fail the lint.
 {
   // The image's file name, without a directory.
-  "image": "t01-world-saltmarch-v02.webp",
+  "image": "t01-world-saltmarch-v03.webp",
   // sha256 of the image's bytes, 64 lower-case hex digits: `cmake -E sha256sum <image>`.
   "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   // A short title.
@@ -33,8 +33,9 @@
   //   "settings": "optional: seed, steps, strength, ...",
   //   "inputs": [
   //     // Every input image. `file` is a path relative to docs/concept if it is committed here (the
-  //     // lint then checks its sha256), otherwise a description. `source`: owner, commissioned, cc0, or
-  //     // ai-assisted (an earlier image in this folder).
+  //     // lint then checks its sha256), otherwise a description. `sha256` is the input file's hash
+  //     // either way. `source`: owner, commissioned, cc0, or ai-assisted (an earlier image committed in
+  //     // this folder, with its own sidecar).
   //     {"file": "editor/t01-world-saltmarch-v01.webp", "sha256": "...", "source": "ai-assisted"}
   //   ]
   // },

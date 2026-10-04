@@ -42,6 +42,40 @@ u32 entryIndex(const std::vector<u8>& pak, const Guid& guid) {
     return 0;
 }
 
+/// Replaces the one stored block of single-block zstd entry `i` with `frame`, which must fit the blob's
+/// 4 KiB slot, and reseals the pak so only the frame itself is wrong.
+void replaceFrame(std::vector<u8>& p, u32 i, const std::vector<u8>& frame) {
+    const u64 blob = loadLE<u64>(p.data() + entryAt(p, i) + 24);
+    const u32 block = loadLE<u32>(p.data() + entryAt(p, i) + 48);
+    HELIOS_VERIFY(frame.size() <= hpak::kBlobAlignment && blob + hpak::kBlobAlignment <= tocAt(p));
+    std::fill_n(p.begin() + static_cast<std::ptrdiff_t>(blob), hpak::kBlobAlignment, u8(0));
+    std::copy(frame.begin(), frame.end(), p.begin() + static_cast<std::ptrdiff_t>(blob));
+    storeLE<u64>(p.data() + entryAt(p, i) + 32, frame.size());
+    storeLE<u32>(p.data() + blockSizeAt(p, block), static_cast<u32>(frame.size()));
+    assetpipe::resealHpak(p);
+}
+
+/// A zstd frame (RFC 8878) holding `raw` (< 64 KiB) as one raw block; the header states the decoded
+/// size only when `statesSize`.
+std::vector<u8> rawZstdFrame(const std::vector<u8>& raw, bool statesSize) {
+    HELIOS_VERIFY(raw.size() >= 256 && raw.size() < 16 * 1024);
+    std::vector<u8> f = {0x28, 0xB5, 0x2F, 0xFD};
+    if (statesSize) {
+        f.push_back(0x60); // single segment, 2-byte content size (stored minus 256)
+        f.push_back(static_cast<u8>((raw.size() - 256) & 0xFF));
+        f.push_back(static_cast<u8>((raw.size() - 256) >> 8));
+    } else {
+        f.push_back(0x00); // no content size; a window descriptor follows
+        f.push_back(0x20); // 16 KiB window
+    }
+    const u32 blockHeader = static_cast<u32>(raw.size() << 3) | 1u; // raw block, last
+    f.push_back(static_cast<u8>(blockHeader & 0xFF));
+    f.push_back(static_cast<u8>((blockHeader >> 8) & 0xFF));
+    f.push_back(static_cast<u8>(blockHeader >> 16));
+    f.insert(f.end(), raw.begin(), raw.end());
+    return f;
+}
+
 struct Case {
     const char* name;
     std::function<void(std::vector<u8>&)> mutate;
@@ -195,6 +229,33 @@ TEST_CASE("hpak hostile: damaged blob bytes behind valid checksums fail the read
         REQUIRE(pak.ok());
         CHECK((*pak)->read(AssetId::fromGuid(guidOf(3))).errorCode() == ErrorCode::Corrupt);
     }
+    SUBCASE("a zstd frame that does not state its decoded size") {
+        const u32 small = entryIndex(base, guidOf(1)); // zstd, 1 block of 1000 bytes
+        std::vector<u8> sized = base, unsized = base;
+        replaceFrame(sized, small, rawZstdFrame(compressible(1000), true));
+        replaceFrame(unsized, small, rawZstdFrame(compressible(1000), false));
+        auto ok = openPak(std::move(sized));
+        auto bad = openPak(std::move(unsized));
+        REQUIRE(ok.ok());
+        REQUIRE(bad.ok());
+        // The same raw block decodes to the right bytes either way; only the stated size differs.
+        CHECK((*ok)->read(AssetId::fromGuid(guidOf(1))).value() == compressible(1000));
+        CHECK((*bad)->read(AssetId::fromGuid(guidOf(1))).errorCode() == ErrorCode::Corrupt);
+    }
+    SUBCASE("bytes after the zstd frame, even an empty second frame") {
+        const u32 small = entryIndex(base, guidOf(1));
+        const u64 blob = loadLE<u64>(base.data() + entryAt(base, small) + 24);
+        const u64 stored = loadLE<u64>(base.data() + entryAt(base, small) + 32);
+        std::vector<u8> frame(base.begin() + static_cast<std::ptrdiff_t>(blob),
+                              base.begin() + static_cast<std::ptrdiff_t>(blob + stored));
+        const std::vector<u8> empty = {0x28, 0xB5, 0x2F, 0xFD, 0x20, 0x00, 0x01, 0x00, 0x00};
+        frame.insert(frame.end(), empty.begin(), empty.end());
+        std::vector<u8> p = base;
+        replaceFrame(p, small, frame);
+        auto pak = openPak(std::move(p));
+        REQUIRE(pak.ok());
+        CHECK((*pak)->read(AssetId::fromGuid(guidOf(1))).errorCode() == ErrorCode::Corrupt);
+    }
     SUBCASE("a pak block without resealing fails its checksum") {
         std::vector<u8> p = base;
         p[rawBlob + 10] ^= 1;
@@ -204,6 +265,10 @@ TEST_CASE("hpak hostile: damaged blob bytes behind valid checksums fail the read
         CHECK((*pak)->verifyAll().errorCode() == ErrorCode::Corrupt);
     }
 }
+
+// An installer reaches paks through mounts (AssetLocation) and hooks (HpakBadBlock::pak), which hand
+// out const readers, and must be able to retry blocks through them.
+static_assert(requires(const HpakReader& r) { r.retryBlocks(0, 1); });
 
 /// Counts hook calls per block and answers with a scripted status.
 class CountingRefetcher final : public IBlockRefetcher {
@@ -325,6 +390,42 @@ TEST_CASE("hpak integrity: without a hook a bad block is Corrupt") {
     REQUIRE(pak.ok());
     CHECK((*pak)->read(AssetId::fromGuid(guidOf(1))).errorCode() == ErrorCode::Corrupt);
     CHECK((*pak)->blockState(0) == HpakBlockState::Bad);
+}
+
+TEST_CASE("hpak integrity: a block repaired by another reader after our range read is re-checked") {
+    // The middle asset (130 KiB raw) spans pak blocks 0..2, and both block 0 (inside a) and block 2
+    // (inside the middle asset) are bad. Thread t2 reads b and repairs block 2; its hook waits until
+    // t1 has read the middle asset's whole range, so t1's copy of block 2 predates the repair. t1 then
+    // waits for the repair lock on block 0 and finds block 2 Verified: it must not trust its stale copy.
+    Damaged d;
+    const HpakEntry* mid = d.pak->find(AssetId::fromGuid(guidOf(9)));
+    const u64 bad0 = d.a->offset + 5;
+    const u64 bad2 = hpak::kHeaderBlockSize + 130 * 1024; // pak block 2, inside the middle asset
+    const u8 good0 = d.source->get(bad0), good2 = d.source->get(bad2);
+    d.source->set(bad0, static_cast<u8>(good0 ^ 0xFF));
+    d.source->set(bad2, static_cast<u8>(good2 ^ 0xFF));
+    d.hook->status = RefetchStatus::Repaired;
+    std::atomic<bool> inHook2{false};
+    d.hook->onRefetch = [&](const HpakBadBlock& block) {
+        if (block.index == 2) {
+            const u64 reads = d.source->reads();
+            inHook2 = true;
+            while (d.source->reads() < reads + 1) std::this_thread::yield(); // t1's range read
+            d.source->set(bad2, good2);
+        } else {
+            d.source->set(bad0, good0);
+        }
+    };
+    Result<std::vector<u8>> gotB(Error{}), gotMid(Error{});
+    std::thread t2([&] { gotB = d.pak->read(*d.b); });
+    while (!inHook2) std::this_thread::yield();
+    std::thread t1([&] { gotMid = d.pak->read(*mid); });
+    t1.join();
+    t2.join();
+    CHECK(gotB.ok());
+    REQUIRE(gotMid.ok());
+    CHECK(*gotMid == incompressible(130 * 1024, 3));
+    CHECK(d.hook->calls == std::map<u32, int>{{0, 1}, {2, 1}});
 }
 
 TEST_CASE("hpak integrity: concurrent readers of one bad block call the hook once") {

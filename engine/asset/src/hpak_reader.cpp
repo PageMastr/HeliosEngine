@@ -284,11 +284,16 @@ Result<void> HpakReader::checkReadable(const HpakEntry& entry) const {
 }
 
 Result<std::vector<u8>> HpakReader::read(const HpakEntry& entry) const {
-    HELIOS_TRY(checkReadable(entry));
     std::vector<u8> out;
-    out.reserve(static_cast<usize>(std::min(entry.rawSize, kInitialReadReserve)));
-    HELIOS_TRY(decode(entry, {}, &out));
+    HELIOS_TRY(read(entry, out));
     return out;
+}
+
+Result<void> HpakReader::read(const HpakEntry& entry, std::vector<u8>& out) const {
+    HELIOS_TRY(checkReadable(entry));
+    out.clear();
+    out.reserve(static_cast<usize>(std::min(entry.rawSize, kInitialReadReserve)));
+    return decode(entry, {}, &out);
 }
 
 Result<void> HpakReader::readInto(const HpakEntry& entry, std::span<u8> out) const {
@@ -307,6 +312,18 @@ Result<void> HpakReader::decode(const HpakEntry& entry, std::span<u8> out, std::
         const u64 rawPos = u64(k) * kAssetBlockSize;
         const usize rawLen = static_cast<usize>(std::min(kAssetBlockSize, entry.rawSize - rawPos));
         HELIOS_TRY_ASSIGN(const std::span<const u8> bytes, fetch(entry.offset + rel, stored, scratch));
+        if (entry.codec == HpakCodec::Zstd) {
+            // Exactly one frame that states its decoded size (the writer always does): checked before
+            // the output grows for it or any byte decodes.
+            const unsigned long long declared = ZSTD_getFrameContentSize(bytes.data(), bytes.size());
+            if (declared != rawLen)
+                return makeError(ErrorCode::Corrupt, "'{}': asset {} block {}: {}, expected {} decoded bytes",
+                                 m_name, entry.id, k, describeFrameSize(declared), rawLen);
+            if (ZSTD_findFrameCompressedSize(bytes.data(), bytes.size()) != bytes.size())
+                return makeError(ErrorCode::Corrupt,
+                                 "'{}': asset {} block {}: not exactly one zstd frame of {} bytes", m_name,
+                                 entry.id, k, bytes.size());
+        }
         u8* dst = nullptr;
         if (grow) {
             // Grow only as blocks arrive: rawSize is the TOC's claim (up to 2 GiB behind a pak of a few
@@ -324,16 +341,6 @@ Result<void> HpakReader::decode(const HpakEntry& entry, std::span<u8> out, std::
         if (entry.codec == HpakCodec::None) {
             std::memcpy(dst, bytes.data(), rawLen); // stored == rawLen (checked at open)
         } else {
-            // One frame per block that states its decoded size (the writer always does), checked before
-            // any byte is decoded.
-            const unsigned long long declared = ZSTD_getFrameContentSize(bytes.data(), bytes.size());
-            if (declared != rawLen)
-                return makeError(ErrorCode::Corrupt, "'{}': asset {} block {}: {}, expected {} decoded bytes",
-                                 m_name, entry.id, k, describeFrameSize(declared), rawLen);
-            if (ZSTD_findFrameCompressedSize(bytes.data(), bytes.size()) != bytes.size())
-                return makeError(ErrorCode::Corrupt,
-                                 "'{}': asset {} block {}: not exactly one zstd frame of {} bytes", m_name,
-                                 entry.id, k, bytes.size());
             ZSTD_DCtx* dctx = threadDCtx();
             if (!dctx) return Error{ErrorCode::OutOfMemory, "ZSTD_createDCtx failed"};
             const size_t n = ZSTD_decompressDCtx(dctx, dst, rawLen, bytes.data(), bytes.size());

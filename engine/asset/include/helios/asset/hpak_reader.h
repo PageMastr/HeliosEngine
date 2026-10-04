@@ -144,6 +144,9 @@ public:
     /// as blocks decode (past a 1 MiB start, to at most twice the bytes decoded), so a hostile rawSize
     /// costs only what really decodes. LimitExceeded above HpakOpenOptions::maxAssetSize.
     Result<std::vector<u8>> read(const HpakEntry& entry) const;
+    /// read(entry) into `out`, replacing its contents and reusing its capacity (a loader's buffer).
+    /// On failure `out` holds unspecified bytes; its capacity grew only for blocks that decoded.
+    Result<void> read(const HpakEntry& entry, std::vector<u8>& out) const;
     /// Decodes `entry` into `out`, whose size must equal entry.rawSize (InvalidArgument otherwise).
     /// LimitExceeded above HpakOpenOptions::maxAssetSize. On failure `out` holds unspecified bytes.
     Result<void> readInto(const HpakEntry& entry, std::span<u8> out) const;
@@ -165,7 +168,8 @@ private:
     bool owns(const HpakEntry& entry) const noexcept;
     /// InvalidArgument for a foreign entry, LimitExceeded above m_maxAssetSize.
     Result<void> checkReadable(const HpakEntry& entry) const;
-    /// Decodes `entry` into `out` (exactly rawSize bytes), or, when `grow` is set, appends to it.
+    /// Decodes `entry` into `out` (exactly rawSize bytes) or, when `grow` is set, into `*grow`, which
+    /// it extends block by block.
     Result<void> decode(const HpakEntry& entry, std::span<u8> out, std::vector<u8>* grow) const;
     /// Bytes [start, start + size) of the blob region with every pak block they touch verified.
     /// `scratch` holds the bytes; the returned span points into it.

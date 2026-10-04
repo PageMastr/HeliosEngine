@@ -497,8 +497,9 @@ public:
         case Enc::KeyedList:
         case Enc::Set:
         case Enc::Map: {
-            if (depth >= hrdb::kMaxNesting) {
-                if (error.empty()) error = std::format("lists, sets and maps nest deeper than {}", hrdb::kMaxNesting);
+            const usize count = l.enc == Enc::List || l.enc == Enc::KeyedList ? ops.size(obj) : sortedEntries(t, obj).size();
+            if (count != 0 && depth >= hrdb::kMaxNesting) {
+                if (error.empty()) error = std::format("non-empty lists, sets and maps nest deeper than {}", hrdb::kMaxNesting);
                 return;
             }
             const u32 stride = l.stride();

@@ -90,7 +90,8 @@ docs/          master plan, research, ADRs
 | `services/` | Go backend skeleton: identity, sessions, connect tokens, orchestrator | Done for Phase 0 |
 | `engine/physics` | Jolt integration: one physics grid, handle-keyed bodies and shapes, deterministic queries, character mover | Done for Phase 0; the Jolt `stable-order` patch is still due |
 | `engine/pcg` | Fixed-point `hnoise` (scalar, SSE4.2, AVX2 and a bit-exact GPU twin) and the terrain-graph VM | Done for Phase 0; the throughput spike came out red (F3), see [ADR-0.9c](docs/adr/ADR-0.9c-hnoise-throughput.md) |
-| `engine/asset`, `engine/assetpipe` | Asset ids and handles with frame-boundary swaps; `.hpak` v0 paks: the reader (block verification, re-fetch hook, overlay mounts) and the writer | v0 (WP-0.8 part 1 of 3); records, `.meta` and the DDC are not started |
+| `engine/asset`, `engine/assetpipe` | Asset ids and handles with frame-boundary swaps; `.hpak` v0 paks: the reader (block verification, re-fetch hook, overlay mounts) and the writer | v0 (WP-0.8 part 1 of 3); `.meta` and the DDC are not started |
+| `engine/records`, `apps/tools/helios-cook` | Record cook (`.hrec` with `$parent` inheritance → `records.client.hrdb` / `records.server.hrdb`, AAA-SEC-4 split, tag table, HXL bytecode) and the zero-copy, fully validated `.hrdb` loader | v0 (WP-0.8 part 2 of 3) |
 | `engine/toolsfw`, `apps/tools/helios-tool` | ToolsFramework: documents over reflected data, command bus, property-path transactions with undo/redo, crash-recovery journal, JSON-RPC remote control, Luau automation; the headless CLI | Done for Phase 0 (WP-0.18) |
 | `engine/editorui`, `apps/editor`, `apps/tools/helios-uitest` | Editor: ImGui docking shell on the Helios RHI, property grid, themes and DPI scaling; the UI test driver with ꟻLIP goldens | Done for Phase 0 (WP-0.18); multi-viewport tear-offs are still due |
 | Client, launcher, asset import and cook, animation, audio, game UI | — | Not started (see roadmap) |

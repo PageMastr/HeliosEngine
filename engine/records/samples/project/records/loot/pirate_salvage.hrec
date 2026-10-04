@@ -1,0 +1,17 @@
+{
+  "$rid": 4831896910335876406,
+  "$name": "loot/pirate_salvage",
+  "$comment": "@server_only record type: no byte of it may reach the client cook (AAA-SEC-4).",
+  "entries": [
+    {
+      "$key": "6c6f6f74-0000-4000-8000-000000000001",
+      "itemName": "Sec4SentinelLootItem",
+      "weight": 2,
+      "maxCount": 3
+    },
+    {
+      "$key": "6c6f6f74-0000-4000-8000-000000000002",
+      "itemName": "SEC4-SENTINEL-salvage-note"
+    }
+  ]
+}

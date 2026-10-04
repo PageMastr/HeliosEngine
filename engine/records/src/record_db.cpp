@@ -183,9 +183,11 @@ public:
         case Enc::Set:
         case Enc::KeyedList:
         case Enc::Map: {
-            if (depth >= hrdb::kMaxNesting) return Error{ErrorCode::LimitExceeded, std::format("hrdb: nesting deeper than {} at {}", hrdb::kMaxNesting, at)};
             const u32 stride = l.stride();
             HELIOS_TRY_ASSIGN(const SpanRef s, span(at, stride));
+            if (s.count != 0 && depth >= hrdb::kMaxNesting) {
+                return Error{ErrorCode::LimitExceeded, std::format("hrdb: non-empty lists nest deeper than {} at {}", hrdb::kMaxNesting, at)};
+            }
             HELIOS_TRY(consume(u64{s.count} * stride));
             if (l.enc == Enc::KeyedList) {
                 HELIOS_TRY_ASSIGN(const SpanRef keys, span(at + 8, 16));

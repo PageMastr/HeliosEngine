@@ -78,8 +78,10 @@ inline constexpr usize kRecordEntryBytes = 24;
 inline constexpr usize kTagEntryBytes = 16;
 inline constexpr usize kRelSpanBytes = 8;
 inline constexpr u32 kMaxTags = 0xFFFE;     ///< Same as gameplay::kMaxTags.
-/// Out-of-line nesting (lists, maps, sets inside one another) a cook may produce and a loader accepts.
-inline constexpr u32 kMaxNesting = 64;
+/// Levels of non-empty lists, sets and maps inside one another that a cook may produce and a loader
+/// accepts. JSONC sources cannot nest much deeper anyway (refl::kMaxJsonDepth is 128 objects and arrays,
+/// and a recursive struct spends two of them per level).
+inline constexpr u32 kMaxNesting = 32;
 
 // Root table field offsets (relative to kRootOffset).
 inline constexpr usize kRootTypes = 0;

@@ -1,0 +1,26 @@
+{
+  "$rid": 9021162741047655247,
+  "$name": "hull/base_frigate",
+  "$comment": "Template of the sample frigates (setting-neutral sample record).",
+  "name": "loc:ship.base_frigate.name",
+  "faction": "Pilots",
+  "mass": 12000,
+  "thrusters": [
+    {
+      "$key": "66726967-6174-6500-8000-000000000001",
+      "bone": "thruster_main",
+      "maxForce": 250000
+    },
+    {
+      "$key": "66726967-6174-6500-8000-000000000002",
+      "bone": "thruster_left",
+      "dir": [-1, 0, 0],
+      "maxForce": 40000
+    }
+  ],
+  "hardpoints": [
+    {"slot": "nose", "offset": [0, 0.25, 4.5]}
+  ],
+  "handling": {"pitchRate": 45, "yawRate": 30, "rollRate": 90},
+  "aiHints": {"preferredRange": 800}
+}

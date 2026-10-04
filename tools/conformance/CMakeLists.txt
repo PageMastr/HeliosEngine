@@ -40,7 +40,7 @@ foreach(case IN LISTS cases)
   if(NOT EXISTS ${dir}/testdata/${case}/expect.txt)
     continue()
   endif()
-  file(STRINGS ${dir}/testdata/${case}/expect.txt lines)
+  file(STRINGS ${dir}/testdata/${case}/expect.txt lines ENCODING UTF-8) # comments may hold §, …
   set(args "")
   set(expect "")
   foreach(line IN LISTS lines)

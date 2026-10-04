@@ -146,7 +146,10 @@ build/fuzz/bin/asset_fuzz_hpak_reader -max_total_time=600 -rss_limit_mb=2048 cor
 ```
 
 A 15-minute local campaign (Clang 18, ASan and UBSan, one process, 2026-10-03) ran 4.14 million inputs at about
-4,600 per second, reached 1,280 coverage edges and found nothing. The nightly libFuzzer job (`nightly.yml`) runs
+4,600 per second, reached 1,280 coverage edges and found nothing; after the round-1 review fixes (2026-10-04), a
+10-minute one ran 2.69 million inputs at about 4,300 per second, reached 1,269 edges and found nothing. Seed 7 is a
+45 KB pak that claims a 2 GiB asset behind garbage blocks: with read() preallocating the claim (the bug the fixes
+removed), libFuzzer stops on it at once with `out-of-memory (malloc(2147483648))`. The nightly libFuzzer job (`nightly.yml`) runs
 only engine/net's targets; adding this one needs its matrix to name a target and corpus per gate and a scorecard
 gate with a criterion to hang on, which is not a small change
 (see Gaps).

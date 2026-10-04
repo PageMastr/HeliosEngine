@@ -30,7 +30,9 @@ nearest-filtered samples fell exactly on texel edges, where the texel picked dep
 interpolation and texel-coordinate precision: shifting the coordinates by 1e-5 on lavapipe reproduced both
 (bindless max 0.8118, the same value; mips mean 0.012–0.070). Both scenes now derive their sample positions
 from integer pixel coordinates and sample inside texels; the same ±1e-5 and ±1e-3 shifts then stay within
-ꟻLIP max 0.09 (bindless, its linear-filtered quads) and 0 (mips). The quads' `NonUniformResourceIndex`
+ꟻLIP max 0.09 (bindless, its linear-filtered quads) and 0 (mips). Hardware should not shift them at all: the
+positions are exact in fp32, and a quarter texel is exact at any sub-texel precision Vulkan allows
+(`subTexelPrecisionBits` ≥ 4). The quads' `NonUniformResourceIndex`
 was correct (the SPIR-V decorates the access chains, loads and the sampled image `NonUniform`).
 
 **Per-driver goldens (03 §8.4).** A difference the spec leaves to the driver gets a golden set per driver,

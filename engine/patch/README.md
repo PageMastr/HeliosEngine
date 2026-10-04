@@ -34,7 +34,7 @@ Depends on `helios::core`, Monocypher and zstd (both private). The launcher link
 ```cpp
 using namespace helios::patch;
 
-ManifestHeader h{.productId = "cinder-reach", .platform = "win64", .buildId = "2026.10.04-r1",
+ManifestHeader h{.productId = "sample-game", .platform = "win64", .buildId = "2026.10.04-r1",
                  .sequence = 42, .createdAt = now, .compatEpoch = 3};
 ManifestBuilder builder(h);
 for (const auto& [path, tier] : buildFiles) {

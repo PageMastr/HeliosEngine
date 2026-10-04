@@ -20,7 +20,7 @@
 #undef HELIOS_PATCH_SANITIZED
 #define HELIOS_PATCH_SANITIZED 1
 #elif defined(__has_feature)
-#if __has_feature(address_sanitizer) || __has_feature(undefined_behavior_sanitizer) || \
+#if __has_feature(address_sanitizer) || __has_feature(undefined_behavior_sanitizer) ||                       \
     __has_feature(thread_sanitizer) || __has_feature(memory_sanitizer)
 #undef HELIOS_PATCH_SANITIZED
 #define HELIOS_PATCH_SANITIZED 1
@@ -32,11 +32,11 @@
 #define HELIOS_PATCH_ASSERT_BUDGETS 0
 #endif
 
-namespace {
-
 using namespace helios;
 using namespace helios::patch;
 using Clock = std::chrono::steady_clock;
+
+namespace {
 
 f64 secondsSince(Clock::time_point t0) { return std::chrono::duration<f64>(Clock::now() - t0).count(); }
 
@@ -52,8 +52,6 @@ f64 bestSeconds(int runs, F&& f) {
     return best;
 }
 
-} // namespace
-
 TEST_CASE("perf: FastCDC boundary detection and chunking with BLAKE2b-256 IDs, one core") {
     const std::vector<u8> data = test::randomBytes(1, 64u << 20);
     const f64 mb = static_cast<f64>(data.size()) / 1e6;
@@ -64,12 +62,14 @@ TEST_CASE("perf: FastCDC boundary detection and chunking with BLAKE2b-256 IDs, o
     const f64 streamS = bestSeconds(3, [&] {
         std::vector<Chunk> out;
         for (usize at = 0; at < data.size(); at += 1u << 20)
-            chunker.update(std::span<const u8>(data).subspan(at, std::min<usize>(1u << 20, data.size() - at)), out);
+            chunker.update(std::span<const u8>(data).subspan(at, std::min<usize>(1u << 20, data.size() - at)),
+                           out);
         (void)chunker.finish(out);
         chunks = out.size();
     });
-    MESSAGE(std::format("boundaries {:.0f} MB/s, split + BLAKE2b {:.0f} MB/s, StreamChunker {:.0f} MB/s ({} chunks)",
-                        mb / cutS, mb / splitS, mb / streamS, chunks));
+    MESSAGE(std::format(
+        "boundaries {:.0f} MB/s, split + BLAKE2b {:.0f} MB/s, StreamChunker {:.0f} MB/s ({} chunks)",
+        mb / cutS, mb / splitS, mb / streamS, chunks));
 #if HELIOS_PATCH_ASSERT_BUDGETS
     CHECK(mb / cutS >= 1000.0);
     CHECK(mb / splitS >= 250.0);
@@ -82,7 +82,7 @@ TEST_CASE("perf: a 50 GB install's manifest reads and writes within budget") {
     constexpr u32 kFiles = 20'000;
     constexpr u32 kChunksPerFile = 35;
     ManifestHeader h;
-    h.productId = "cinder-reach";
+    h.productId = "sample-game";
     h.platform = "win64";
     h.buildId = "perf";
     ManifestBuilder b(h);
@@ -109,10 +109,13 @@ TEST_CASE("perf: a 50 GB install's manifest reads and writes within budget") {
     Manifest back;
     const f64 readS = bestSeconds(3, [&] { back = readManifest(bytes).value(); });
     CHECK(back == m);
-    MESSAGE(std::format("{} files, {} chunks, {:.1f} MB body: write {:.0f} ms, read {:.0f} ms", m.files.size(),
-                        m.chunks.size(), static_cast<f64>(bytes.size()) / 1e6, writeS * 1e3, readS * 1e3));
+    MESSAGE(std::format("{} files, {} chunks, {:.1f} MB body: write {:.0f} ms, read {:.0f} ms",
+                        m.files.size(), m.chunks.size(), static_cast<f64>(bytes.size()) / 1e6, writeS * 1e3,
+                        readS * 1e3));
 #if HELIOS_PATCH_ASSERT_BUDGETS
     CHECK(writeS <= 0.400);
     CHECK(readS <= 0.400);
 #endif
 }
+
+} // namespace

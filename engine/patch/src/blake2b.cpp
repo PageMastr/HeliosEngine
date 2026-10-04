@@ -12,7 +12,9 @@ static_assert(sizeof(crypto_blake2b_ctx) == detail::kBlake2bStateSize,
 static_assert(alignof(crypto_blake2b_ctx) <= 8, "Monocypher's BLAKE2b context needs more alignment");
 
 namespace {
-crypto_blake2b_ctx* ctx(unsigned char* state) noexcept { return reinterpret_cast<crypto_blake2b_ctx*>(state); }
+crypto_blake2b_ctx* ctx(unsigned char* state) noexcept {
+    return reinterpret_cast<crypto_blake2b_ctx*>(state);
+}
 
 // Monocypher may offset the message pointer even for an empty message; never hand it a null pointer.
 const u8* nonNull(std::span<const u8> data) noexcept {

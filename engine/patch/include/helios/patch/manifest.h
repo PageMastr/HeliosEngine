@@ -33,6 +33,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "helios/core/fs.h"
@@ -48,7 +49,7 @@ namespace hman {
 inline constexpr u32 kMagic = 0x4E414D48u; ///< "HMAN" as little-endian bytes.
 inline constexpr u16 kVersion = 0;         ///< The v0 format (WP-0.16 part 1).
 inline constexpr usize kHeaderSize = 352;
-inline constexpr usize kSignedBytes = 256;     ///< headerHash and (part 2) the signature cover [0, 256).
+inline constexpr usize kSignedBytes = 256; ///< headerHash and (part 2) the signature cover [0, 256).
 inline constexpr usize kHeaderHashOffset = 256;
 inline constexpr usize kSignatureOffset = 288;
 inline constexpr usize kSignatureSize = 64;
@@ -62,7 +63,7 @@ inline constexpr usize kPatchEntrySize = 80;
 
 inline constexpr usize kProductIdMax = 32; ///< productId: ^[a-z][a-z0-9-]{2,31}$ (08 §2.10.1).
 inline constexpr usize kPlatformMax = 32;  ///< platform: ^[a-z][a-z0-9_-]{1,31}$ ("win64", "linux64").
-inline constexpr usize kBuildIdMax = 64;   ///< buildId: ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ (a CDN path segment).
+inline constexpr usize kBuildIdMax = 64; ///< buildId: ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ (a CDN path segment).
 
 inline constexpr u64 kMaxBodySize = 256 * kMiB;
 inline constexpr u32 kMaxFiles = 1u << 20;
@@ -75,7 +76,7 @@ inline constexpr u32 kMaxPathBytes = 1024;
 inline constexpr u64 kMaxPackSize = 1 * kGiB;
 inline constexpr u64 kMaxPatchSize = u64(1) << 40;
 inline constexpr u8 kMaxTier = 2;
-inline constexpr u32 kNoPack = 0xFFFFFFFFu; ///< ManifestChunk::pack of a chunk stored loose on the CDN.
+inline constexpr u32 kNoPack = 0xFFFFFFFFu;  ///< ManifestChunk::pack of a chunk stored loose on the CDN.
 inline constexpr int kMaxZstdWindowLog = 25; ///< Readers refuse frames needing a larger window (32 MiB).
 
 /// The fixed header as stored, without validation (readManifestHeader validates).
@@ -137,7 +138,7 @@ struct ManifestHeader {
     u64 createdAt = 0;     ///< Unix seconds.
     u64 expiresAt = 0;     ///< Unix seconds; 0 = never, else after createdAt. Checked by part 2's TrustChain.
     u32 compatEpoch = 0;   ///< The build's content compat epoch (05 §1.14.1).
-    std::array<u8, hman::kKeyIdSize> keyId{};      ///< The keyset subkey that signs (part 2); zeros in v0.
+    std::array<u8, hman::kKeyIdSize> keyId{};         ///< The keyset subkey that signs (part 2); zeros in v0.
     std::array<u8, hman::kSignatureSize> signature{}; ///< Ed25519 over bytes [0, 256) (part 2); zeros in v0.
     friend bool operator==(const ManifestHeader&, const ManifestHeader&) = default;
 };
@@ -146,12 +147,12 @@ struct ManifestHeader {
 struct ManifestFile {
     std::string path; ///< Relative, '/'-separated, ASCII [A-Za-z0-9._+-] segments (README "Paths").
     u64 size = 0;
-    Hash256 hash;      ///< BLAKE2b-256 of the whole file (checked before the staging rename, 08 §2.5).
-    u32 firstRef = 0;  ///< Its first entry in Manifest::refs; its refs are contiguous and in file order.
-    u32 refCount = 0;  ///< 0 exactly when size is 0.
-    u64 group = 0;     ///< Tier-2 streaming group: the zone record hash (0 = none, 08 §2.6).
-    u32 language = 0;  ///< VO/text language code (0 = neutral).
-    u8 tier = 1;       ///< 0 = launcher, client and login area; 1 = common; 2 = streamable (08 §2.6).
+    Hash256 hash;     ///< BLAKE2b-256 of the whole file (checked before the staging rename, 08 §2.5).
+    u32 firstRef = 0; ///< Its first entry in Manifest::refs; its refs are contiguous and in file order.
+    u32 refCount = 0; ///< 0 exactly when size is 0.
+    u64 group = 0;    ///< Tier-2 streaming group: the zone record hash (0 = none, 08 §2.6).
+    u32 language = 0; ///< VO/text language code (0 = neutral).
+    u8 tier = 1;      ///< 0 = launcher, client and login area; 1 = common; 2 = streamable (08 §2.6).
     ManifestFileFlags flags = ManifestFileFlags::None;
     friend bool operator==(const ManifestFile&, const ManifestFile&) = default;
 };
@@ -165,11 +166,11 @@ struct ManifestChunkRef {
 
 /// A unique chunk.
 struct ManifestChunk {
-    Hash256 hash;                ///< BLAKE2b-256 of the raw bytes: the chunk ID.
-    u32 rawSize = 0;             ///< 1..fastcdc::kMaxSize.
-    u32 storedSize = 0;          ///< Bytes of its zstd object on the CDN; 0 = not recorded (loose only).
-    u32 pack = hman::kNoPack;    ///< Index into Manifest::packs, or kNoPack for a loose chunk.
-    u64 packOffset = 0;          ///< Offset of its stored bytes in the pack (0 when loose).
+    Hash256 hash;             ///< BLAKE2b-256 of the raw bytes: the chunk ID.
+    u32 rawSize = 0;          ///< 1..fastcdc::kMaxSize.
+    u32 storedSize = 0;       ///< Bytes of its zstd object on the CDN; 0 = not recorded (loose only).
+    u32 pack = hman::kNoPack; ///< Index into Manifest::packs, or kNoPack for a loose chunk.
+    u64 packOffset = 0;       ///< Offset of its stored bytes in the pack (0 when loose).
     friend bool operator==(const ManifestChunk&, const ManifestChunk&) = default;
 };
 
@@ -182,10 +183,10 @@ struct ManifestPack {
 
 /// A zstd --patch-from delta that turns an older version of a file into this one (05 §7).
 struct ManifestPatch {
-    u32 file = 0;       ///< Index into Manifest::files (the "to" side; its hash is the target).
-    Hash256 fromHash;   ///< BLAKE2b-256 of the older file; differs from the target's.
-    Hash256 patchHash;  ///< BLAKE2b-256 of the .zpatch object.
-    u64 patchSize = 0;  ///< 1..kMaxPatchSize.
+    u32 file = 0;      ///< Index into Manifest::files (the "to" side; its hash is the target).
+    Hash256 fromHash;  ///< BLAKE2b-256 of the older file; differs from the target's.
+    Hash256 patchHash; ///< BLAKE2b-256 of the .zpatch object.
+    u64 patchSize = 0; ///< 1..kMaxPatchSize.
     friend bool operator==(const ManifestPatch&, const ManifestPatch&) = default;
 };
 
@@ -193,10 +194,10 @@ struct ManifestPatch {
 /// valid ones, and writeManifest() refuses invalid ones.
 struct Manifest {
     ManifestHeader header;
-    std::vector<ManifestFile> files;  ///< Sorted by path (byte order), unique ignoring ASCII case.
+    std::vector<ManifestFile> files; ///< Sorted by path (byte order), unique ignoring ASCII case.
     std::vector<ManifestChunkRef> refs;
-    std::vector<ManifestChunk> chunks; ///< Sorted by hash, unique.
-    std::vector<ManifestPack> packs;   ///< Sorted by hash, unique.
+    std::vector<ManifestChunk> chunks;  ///< Sorted by hash, unique.
+    std::vector<ManifestPack> packs;    ///< Sorted by hash, unique.
     std::vector<ManifestPatch> patches; ///< Sorted by (file, fromHash), unique.
 
     /// The chunk refs of `file` (which must be one of this manifest's files).
@@ -229,7 +230,8 @@ struct ManifestWriteOptions {
 Result<std::vector<u8>> writeManifest(const Manifest& manifest, const ManifestWriteOptions& options = {});
 
 struct ManifestReadOptions {
-    u64 maxBodySize = hman::kMaxBodySize; ///< Larger bodies fail with LimitExceeded (at most kMaxBodySize).
+    u64 maxBodySize =
+        hman::kMaxBodySize; ///< Larger bodies fail with LimitExceeded; capped at, and 0 means, kMaxBodySize.
 };
 
 /// The validated fixed header of a .hman file, without decoding the payload.
@@ -244,7 +246,8 @@ struct ManifestHeaderInfo {
 
 /// Validates the header of `file` (its first 352 bytes and the payload size): cheap enough to refuse a
 /// wrong product, platform or sequence before decoding anything.
-Result<ManifestHeaderInfo> readManifestHeader(std::span<const u8> file, const ManifestReadOptions& options = {});
+Result<ManifestHeaderInfo> readManifestHeader(std::span<const u8> file,
+                                              const ManifestReadOptions& options = {});
 
 /// Reads and validates a whole .hman file.
 Result<Manifest> readManifest(std::span<const u8> file, const ManifestReadOptions& options = {});

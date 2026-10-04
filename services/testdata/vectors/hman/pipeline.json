@@ -1,7 +1,7 @@
 {
  "comment": "Shared .hman v0 pipeline vector (WP-0.16): Go pkg/manifest and C++ engine/patch generate each file's bytes (services/pkg/cdc/cdctest), chunk them with FastCDC, build the manifest with their Builder from this description, and must write exactly pipeline.hman (codec none). Both read pipeline.hman, pipeline.go-zstd.hman (written by Go) and pipeline.cpp-zstd.hman (written by C++) back to the same manifest. Files are listed out of order on purpose. Hashes of packs and patches are placeholders.",
  "header": {
-  "productId": "cinder-reach",
+  "productId": "sample-game",
   "platform": "win64",
   "buildId": "2026.10.04-r1",
   "sequence": 42,
@@ -22,7 +22,7 @@
    "tier": 1
   },
   {
-   "path": "bin/CinderReach.exe",
+   "path": "bin/SampleGame.exe",
    "input": {
     "kind": "random",
     "seed": 22,
@@ -117,20 +117,20 @@
  ],
  "storedSizes": [
   {
-   "file": "bin/CinderReach.exe",
+   "file": "bin/SampleGame.exe",
    "chunk": 1,
    "storedSize": 70000
   }
  ],
  "patches": [
   {
-   "path": "bin/CinderReach.exe",
+   "path": "bin/SampleGame.exe",
    "fromHash": "4444444444444444444444444444444444444444444444444444444444444444",
    "patchHash": "5555555555555555555555555555555555555555555555555555555555555555",
    "patchSize": 60000
   },
   {
-   "path": "bin/CinderReach.exe",
+   "path": "bin/SampleGame.exe",
    "fromHash": "2222222222222222222222222222222222222222222222222222222222222222",
    "patchHash": "3333333333333333333333333333333333333333333333333333333333333333",
    "patchSize": 51234

@@ -38,8 +38,6 @@ ChunkedFile streamChunks(std::span<const u8> data, u64 seed) {
     return file;
 }
 
-} // namespace
-
 TEST_CASE("fastcdc: the shared vectors (Go pkg/cdc reproduces the same file)") {
     const test::Json j = test::loadJson(test::vectorsDir() / "fastcdc.json");
     yyjson_val* root = j.root();
@@ -161,3 +159,5 @@ TEST_CASE("fastcdc: chunkFile reads through the platform layer") {
     CHECK(chunkFile(*dir / "missing.bin").errorCode() == ErrorCode::NotFound);
     (void)fs::removeAll(*dir);
 }
+
+} // namespace

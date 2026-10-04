@@ -80,6 +80,11 @@ constexpr u32 kMaxStoredSize = fastcdc::kMaxSize + 4096; // a stored chunk: one 
 /// The largest payload a body of `bodySize` bytes may have (codec Zstd): above zstd's compress bound.
 constexpr u64 maxPayload(u64 bodySize) noexcept { return bodySize + bodySize / 128 + 4096; }
 
+/// The body cap a read applies: the option, at most kMaxBodySize; 0 means kMaxBodySize (as in Go).
+u64 effectiveMaxBody(const ManifestReadOptions& options) noexcept {
+    return options.maxBodySize == 0 ? kMaxBodySize : std::min(options.maxBodySize, kMaxBodySize);
+}
+
 bool inRange(char c, char lo, char hi) noexcept { return c >= lo && c <= hi; }
 bool isLowerAlnum(char c) noexcept { return inRange(c, 'a', 'z') || inRange(c, '0', '9'); }
 bool isAlnum(char c) noexcept { return isLowerAlnum(c) || inRange(c, 'A', 'Z'); }
@@ -90,7 +95,8 @@ bool validProductId(std::string_view s) noexcept {
 }
 bool validPlatform(std::string_view s) noexcept {
     if (s.size() < 2 || s.size() > kPlatformMax || !inRange(s[0], 'a', 'z')) return false;
-    return std::all_of(s.begin() + 1, s.end(), [](char c) { return isLowerAlnum(c) || c == '-' || c == '_'; });
+    return std::all_of(s.begin() + 1, s.end(),
+                       [](char c) { return isLowerAlnum(c) || c == '-' || c == '_'; });
 }
 bool validBuildId(std::string_view s) noexcept {
     if (s.empty() || s.size() > kBuildIdMax || !isAlnum(s[0])) return false;
@@ -108,7 +114,8 @@ bool windowsDeviceName(std::string_view segment) noexcept {
     for (usize i = 0; i < stem.size(); ++i) s[i] = asciiLower(stem[i]);
     const std::string_view low(s, stem.size());
     if (low == "con" || low == "prn" || low == "aux" || low == "nul") return true;
-    return stem.size() == 4 && (low.substr(0, 3) == "com" || low.substr(0, 3) == "lpt") && inRange(s[3], '0', '9');
+    return stem.size() == 4 && (low.substr(0, 3) == "com" || low.substr(0, 3) == "lpt") &&
+           inRange(s[3], '0', '9');
 }
 
 bool validSegment(std::string_view seg) noexcept {
@@ -134,8 +141,10 @@ u64 bodySizeFor(u64 files, u64 refs, u64 chunks, u64 packs, u64 patches, u64 str
 }
 
 Result<void> validateHeaderFields(const ManifestHeader& h) {
-    if (!validProductId(h.productId)) return invalid("productId '{}' is not ^[a-z][a-z0-9-]{{2,31}}$", h.productId);
-    if (!validPlatform(h.platform)) return invalid("platform '{}' is not ^[a-z][a-z0-9_-]{{1,31}}$", h.platform);
+    if (!validProductId(h.productId))
+        return invalid("productId '{}' is not ^[a-z][a-z0-9-]{{2,31}}$", h.productId);
+    if (!validPlatform(h.platform))
+        return invalid("platform '{}' is not ^[a-z][a-z0-9_-]{{1,31}}$", h.platform);
     if (!validBuildId(h.buildId))
         return invalid("buildId '{}' is not ^[A-Za-z0-9][A-Za-z0-9._-]{{0,63}}$", h.buildId);
     if (h.expiresAt != 0 && h.expiresAt <= h.createdAt)
@@ -178,7 +187,8 @@ Result<std::vector<u8>> decompress(std::span<const u8> payload, u64 bodySize) {
     ZSTD_inBuffer in{payload.data(), payload.size(), 0};
     for (;;) {
         if (produced == out.size()) {
-            if (out.size() == cap) return corrupt("the zstd payload decodes to more than bodySize ({})", bodySize);
+            if (out.size() == cap)
+                return corrupt("the zstd payload decodes to more than bodySize ({})", bodySize);
             out.resize(static_cast<usize>(std::min<u64>(cap, u64(out.size()) * 2)));
         }
         ZSTD_outBuffer o{out.data(), out.size(), produced};
@@ -201,7 +211,8 @@ Result<std::vector<u8>> decompress(std::span<const u8> payload, u64 bodySize) {
 
 /// Decodes the body tables (layout and reserved-field checks only; validateManifest does the rest).
 Result<void> decodeBody(std::span<const u8> body, Manifest& m) {
-    if (body.size() < kBodyHeaderSize) return corrupt("the body is {} bytes, shorter than its header", body.size());
+    if (body.size() < kBodyHeaderSize)
+        return corrupt("the body is {} bytes, shorter than its header", body.size());
     const u8* p = body.data();
     const u32 fileCount = loadLE<u32>(p + 0);
     const u32 chunkCount = loadLE<u32>(p + 4);
@@ -212,10 +223,11 @@ Result<void> decodeBody(std::span<const u8> body, Manifest& m) {
     if (loadLE<u64>(p + 24) != 0) return corrupt("reserved body-header bytes are not zero");
     if (fileCount > kMaxFiles || chunkCount > kMaxChunks || refCount > kMaxRefs || packCount > kMaxPacks ||
         patchCount > kMaxPatches || stringBytes > kMaxStringBytes)
-        return makeError(ErrorCode::LimitExceeded,
-                         "counts {} files, {} chunks, {} refs, {} packs, {} patches, {} path bytes exceed the "
-                         "limits",
-                         fileCount, chunkCount, refCount, packCount, patchCount, stringBytes);
+        return makeError(
+            ErrorCode::LimitExceeded,
+            "counts {} files, {} chunks, {} refs, {} packs, {} patches, {} path bytes exceed the "
+            "limits",
+            fileCount, chunkCount, refCount, packCount, patchCount, stringBytes);
     const u64 expected = bodySizeFor(fileCount, refCount, chunkCount, packCount, patchCount, stringBytes);
     if (expected != body.size())
         return corrupt("the body is {} bytes, its counts need {}", body.size(), expected);
@@ -234,7 +246,8 @@ Result<void> decodeBody(std::span<const u8> body, Manifest& m) {
         ManifestFile& f = m.files[i];
         const u32 pathOffset = loadLE<u32>(e + 0);
         const u32 pathLength = loadLE<u32>(e + 4);
-        if (pathOffset != pathAt) return corrupt("file {}: path offset {} is not {} (paths in file order)", i, pathOffset, pathAt);
+        if (pathOffset != pathAt)
+            return corrupt("file {}: path offset {} is not {} (paths in file order)", i, pathOffset, pathAt);
         if (pathLength == 0 || pathLength > kMaxPathBytes || pathLength > stringBytes - pathAt)
             return corrupt("file {}: path length {} is out of range", i, pathLength);
         f.path.assign(reinterpret_cast<const char*>(strings + pathAt), pathLength);
@@ -303,7 +316,8 @@ bool isValidManifestPath(std::string_view path) noexcept {
     usize start = 0;
     for (;;) {
         const usize slash = path.find('/', start);
-        const std::string_view seg = path.substr(start, slash == std::string_view::npos ? path.npos : slash - start);
+        const std::string_view seg =
+            path.substr(start, slash == std::string_view::npos ? path.npos : slash - start);
         if (!validSegment(seg)) return false;
         if (slash == std::string_view::npos) return true;
         start = slash + 1;
@@ -314,15 +328,19 @@ Result<void> validateManifest(const Manifest& m) {
     HELIOS_TRY(validateHeaderFields(m.header));
     const u64 files = m.files.size(), refs = m.refs.size(), chunks = m.chunks.size(), packs = m.packs.size(),
               patches = m.patches.size();
-    if (files > kMaxFiles || chunks > kMaxChunks || refs > kMaxRefs || packs > kMaxPacks || patches > kMaxPatches)
-        return makeError(ErrorCode::LimitExceeded, "{} files, {} chunks, {} refs, {} packs, {} patches exceed the limits",
-                         files, chunks, refs, packs, patches);
+    if (files > kMaxFiles || chunks > kMaxChunks || refs > kMaxRefs || packs > kMaxPacks ||
+        patches > kMaxPatches)
+        return makeError(ErrorCode::LimitExceeded,
+                         "{} files, {} chunks, {} refs, {} packs, {} patches exceed the limits", files,
+                         chunks, refs, packs, patches);
     u64 stringBytes = 0;
     for (const ManifestFile& f : m.files) stringBytes += f.path.size();
-    if (stringBytes > kMaxStringBytes) return makeError(ErrorCode::LimitExceeded, "{} path bytes exceed the limit", stringBytes);
+    if (stringBytes > kMaxStringBytes)
+        return makeError(ErrorCode::LimitExceeded, "{} path bytes exceed the limit", stringBytes);
     const u64 bodySize = bodySizeFor(files, refs, chunks, packs, patches, stringBytes);
     if (bodySize > kMaxBodySize)
-        return makeError(ErrorCode::LimitExceeded, "the body would be {} bytes, above {}", bodySize, kMaxBodySize);
+        return makeError(ErrorCode::LimitExceeded, "the body would be {} bytes, above {}", bodySize,
+                         kMaxBodySize);
 
     // Files: valid paths in strictly increasing byte order, no two equal ignoring ASCII case, no file
     // that is also another file's directory; tags in range; refs contiguous and tiling the file.
@@ -332,9 +350,11 @@ Result<void> validateManifest(const Manifest& m) {
     u64 refAt = 0;
     for (usize i = 0; i < m.files.size(); ++i) {
         const ManifestFile& f = m.files[i];
-        if (!isValidManifestPath(f.path)) return invalid("file {}: '{}' is not a valid manifest path", i, f.path);
+        if (!isValidManifestPath(f.path))
+            return invalid("file {}: '{}' is not a valid manifest path", i, f.path);
         if (i > 0 && !(m.files[i - 1].path < f.path))
-            return invalid("file {}: '{}' is not after '{}' (sorted, unique paths)", i, f.path, m.files[i - 1].path);
+            return invalid("file {}: '{}' is not after '{}' (sorted, unique paths)", i, f.path,
+                           m.files[i - 1].path);
         std::string low(f.path);
         for (char& c : low) c = asciiLower(c);
         if (!lowered.insert(std::move(low)).second)
@@ -342,17 +362,22 @@ Result<void> validateManifest(const Manifest& m) {
         if (f.tier > kMaxTier) return invalid("file '{}': tier {} is not 0, 1 or 2", f.path, f.tier);
         if ((toUnderlying(f.flags) & ~kManifestFileFlagsKnown) != 0)
             return invalid("file '{}': unknown flags {:#x}", f.path, toUnderlying(f.flags));
-        if (f.firstRef != refAt) return invalid("file '{}': first ref {} is not {}", f.path, f.firstRef, refAt);
-        if (f.refCount > refs - refAt) return invalid("file '{}': {} refs run past the ref table", f.path, f.refCount);
+        if (f.firstRef != refAt)
+            return invalid("file '{}': first ref {} is not {}", f.path, f.firstRef, refAt);
+        if (f.refCount > refs - refAt)
+            return invalid("file '{}': {} refs run past the ref table", f.path, f.refCount);
         u64 offset = 0;
         for (u32 k = 0; k < f.refCount; ++k) {
             const ManifestChunkRef& r = m.refs[refAt + k];
-            if (r.chunk >= chunks) return invalid("file '{}' ref {}: chunk {} does not exist", f.path, k, r.chunk);
-            if (r.offset != offset) return invalid("file '{}' ref {}: offset {} is not {}", f.path, k, r.offset, offset);
+            if (r.chunk >= chunks)
+                return invalid("file '{}' ref {}: chunk {} does not exist", f.path, k, r.chunk);
+            if (r.offset != offset)
+                return invalid("file '{}' ref {}: offset {} is not {}", f.path, k, r.offset, offset);
             offset += m.chunks[r.chunk].rawSize;
             chunkUsed[r.chunk] = true;
         }
-        if (offset != f.size) return invalid("file '{}': its chunks hold {} bytes, its size is {}", f.path, offset, f.size);
+        if (offset != f.size)
+            return invalid("file '{}': its chunks hold {} bytes, its size is {}", f.path, offset, f.size);
         refAt += f.refCount;
     }
     if (refAt != refs) return invalid("{} refs belong to no file", refs - refAt);
@@ -367,9 +392,12 @@ Result<void> validateManifest(const Manifest& m) {
     std::vector<bool> packUsed(m.packs.size(), false);
     for (usize i = 0; i < m.chunks.size(); ++i) {
         const ManifestChunk& c = m.chunks[i];
-        if (i > 0 && !(m.chunks[i - 1].hash < c.hash)) return invalid("chunk {}: IDs are not sorted and unique", i);
-        if (c.rawSize == 0 || c.rawSize > fastcdc::kMaxSize) return invalid("chunk {}: raw size {} is out of range", i, c.rawSize);
-        if (c.storedSize > kMaxStoredSize) return invalid("chunk {}: stored size {} is out of range", i, c.storedSize);
+        if (i > 0 && !(m.chunks[i - 1].hash < c.hash))
+            return invalid("chunk {}: IDs are not sorted and unique", i);
+        if (c.rawSize == 0 || c.rawSize > fastcdc::kMaxSize)
+            return invalid("chunk {}: raw size {} is out of range", i, c.rawSize);
+        if (c.storedSize > kMaxStoredSize)
+            return invalid("chunk {}: stored size {} is out of range", i, c.storedSize);
         if (!chunkUsed[i]) return invalid("chunk {} belongs to no file", c.hash.toHex());
         if (c.pack == kNoPack) {
             if (c.packOffset != 0) return invalid("chunk {}: a loose chunk has a pack offset", i);
@@ -377,23 +405,28 @@ Result<void> validateManifest(const Manifest& m) {
             if (c.pack >= packs) return invalid("chunk {}: pack {} does not exist", i, c.pack);
             const u64 packSize = m.packs[c.pack].size;
             if (c.storedSize == 0 || c.packOffset > packSize || c.storedSize > packSize - c.packOffset)
-                return invalid("chunk {}: {} stored bytes at {} do not fit pack {} ({} bytes)", i, c.storedSize,
-                               c.packOffset, c.pack, packSize);
+                return invalid("chunk {}: {} stored bytes at {} do not fit pack {} ({} bytes)", i,
+                               c.storedSize, c.packOffset, c.pack, packSize);
             packUsed[c.pack] = true;
         }
     }
     for (usize i = 0; i < m.packs.size(); ++i) {
         const ManifestPack& p = m.packs[i];
-        if (i > 0 && !(m.packs[i - 1].hash < p.hash)) return invalid("pack {}: IDs are not sorted and unique", i);
-        if (p.size == 0 || p.size > kMaxPackSize) return invalid("pack {}: size {} is out of range", i, p.size);
+        if (i > 0 && !(m.packs[i - 1].hash < p.hash))
+            return invalid("pack {}: IDs are not sorted and unique", i);
+        if (p.size == 0 || p.size > kMaxPackSize)
+            return invalid("pack {}: size {} is out of range", i, p.size);
         if (!packUsed[i]) return invalid("pack {} holds no chunk", p.hash.toHex());
     }
     for (usize i = 0; i < m.patches.size(); ++i) {
         const ManifestPatch& q = m.patches[i];
         if (q.file >= files) return invalid("patch {}: file {} does not exist", i, q.file);
-        if (i > 0 && !patchLess(m.patches[i - 1], q)) return invalid("patch {}: not sorted by (file, fromHash) and unique", i);
-        if (q.fromHash == m.files[q.file].hash) return invalid("patch {}: it patches '{}' into itself", i, m.files[q.file].path);
-        if (q.patchSize == 0 || q.patchSize > kMaxPatchSize) return invalid("patch {}: size {} is out of range", i, q.patchSize);
+        if (i > 0 && !patchLess(m.patches[i - 1], q))
+            return invalid("patch {}: not sorted by (file, fromHash) and unique", i);
+        if (q.fromHash == m.files[q.file].hash)
+            return invalid("patch {}: it patches '{}' into itself", i, m.files[q.file].path);
+        if (q.patchSize == 0 || q.patchSize > kMaxPatchSize)
+            return invalid("patch {}: size {} is out of range", i, q.patchSize);
     }
     return {};
 }
@@ -428,8 +461,8 @@ Result<std::vector<u8>> encodeManifestBody(const Manifest& m) {
     HELIOS_TRY(validateManifest(m));
     u64 stringBytes = 0;
     for (const ManifestFile& f : m.files) stringBytes += f.path.size();
-    const u64 size = bodySizeFor(m.files.size(), m.refs.size(), m.chunks.size(), m.packs.size(), m.patches.size(),
-                                 stringBytes);
+    const u64 size = bodySizeFor(m.files.size(), m.refs.size(), m.chunks.size(), m.packs.size(),
+                                 m.patches.size(), stringBytes);
     std::vector<u8> body(static_cast<usize>(size), 0);
     u8* p = body.data();
     storeLE<u32>(p + 0, static_cast<u32>(m.files.size()));
@@ -498,8 +531,8 @@ Result<std::vector<u8>> writeManifest(const Manifest& m, const ManifestWriteOpti
         std::memcpy(out.data() + kHeaderSize, body.data(), body.size());
     } else {
         out.resize(kHeaderSize + ZSTD_compressBound(body.size()));
-        const usize n = ZSTD_compress(out.data() + kHeaderSize, out.size() - kHeaderSize, body.data(), body.size(),
-                                      options.zstdLevel);
+        const usize n = ZSTD_compress(out.data() + kHeaderSize, out.size() - kHeaderSize, body.data(),
+                                      body.size(), options.zstdLevel);
         if (ZSTD_isError(n)) return makeError(ErrorCode::Unknown, "zstd: {}", ZSTD_getErrorName(n));
         out.resize(kHeaderSize + n);
     }
@@ -534,11 +567,14 @@ Result<ManifestHeaderInfo> readManifestHeader(std::span<const u8> file, const Ma
     const std::span<const u8, kHeaderSize> head(file.data(), kHeaderSize);
     const RawHeader h = decodeHeader(head);
     if (h.magic != kMagic) return corrupt("not a .hman file (magic {:#010x})", h.magic);
-    if (h.version != kVersion) return makeError(ErrorCode::VersionMismatch, ".hman version {} (this reader: {})", h.version, kVersion);
+    if (h.version != kVersion)
+        return makeError(ErrorCode::VersionMismatch, ".hman version {} (this reader: {})", h.version,
+                         kVersion);
     if (h.headerSize != kHeaderSize) return corrupt("header size {} is not {}", h.headerSize, kHeaderSize);
     if (computeHeaderHash(head) != h.headerHash) return corrupt("the header hash does not match");
     if (h.flags != 0) return makeError(ErrorCode::Unsupported, "unknown header flags {:#x}", h.flags);
-    if (h.codec > toUnderlying(ManifestCodec::Zstd)) return makeError(ErrorCode::Unsupported, "unknown codec {}", h.codec);
+    if (h.codec > toUnderlying(ManifestCodec::Zstd))
+        return makeError(ErrorCode::Unsupported, "unknown codec {}", h.codec);
     if (!allZero(h.reserved0, 3) || h.reserved1 != 0 || !allZero(h.reserved2, 16))
         return corrupt("reserved header bytes are not zero");
 
@@ -558,14 +594,19 @@ Result<ManifestHeaderInfo> readManifestHeader(std::span<const u8> file, const Ma
     info.header.signature = h.signature;
     if (auto ok = validateHeaderFields(info.header); !ok) return corrupt("{}", ok.error().message);
 
-    const u64 maxBody = std::min(options.maxBodySize, kMaxBodySize);
-    if (h.bodySize < kBodyHeaderSize) return corrupt("bodySize {} is shorter than the body header", h.bodySize);
-    if (h.bodySize > maxBody) return makeError(ErrorCode::LimitExceeded, "bodySize {} is above {}", h.bodySize, maxBody);
+    const u64 maxBody = effectiveMaxBody(options);
+    if (h.bodySize < kBodyHeaderSize)
+        return corrupt("bodySize {} is shorter than the body header", h.bodySize);
+    if (h.bodySize > maxBody)
+        return makeError(ErrorCode::LimitExceeded, "bodySize {} is above {}", h.bodySize, maxBody);
     if (h.payloadSize != file.size() - kHeaderSize)
-        return corrupt("payloadSize {} but {} bytes follow the header", h.payloadSize, file.size() - kHeaderSize);
-    if (h.codec == toUnderlying(ManifestCodec::None) ? h.payloadSize != h.bodySize
-                                                       : (h.payloadSize == 0 || h.payloadSize > maxPayload(h.bodySize)))
-        return corrupt("payloadSize {} does not fit bodySize {} for codec {}", h.payloadSize, h.bodySize, h.codec);
+        return corrupt("payloadSize {} but {} bytes follow the header", h.payloadSize,
+                       file.size() - kHeaderSize);
+    if (h.codec == toUnderlying(ManifestCodec::None)
+            ? h.payloadSize != h.bodySize
+            : (h.payloadSize == 0 || h.payloadSize > maxPayload(h.bodySize)))
+        return corrupt("payloadSize {} does not fit bodySize {} for codec {}", h.payloadSize, h.bodySize,
+                       h.codec);
     info.codec = static_cast<ManifestCodec>(h.codec);
     info.bodySize = h.bodySize;
     info.payloadSize = h.payloadSize;
@@ -597,9 +638,10 @@ Result<Manifest> readManifest(std::span<const u8> file, const ManifestReadOption
 Result<Manifest> readManifestFile(const fs::Path& path, const ManifestReadOptions& options) {
     HELIOS_TRY_ASSIGN(fs::File f, fs::File::open(path, fs::OpenMode::Read));
     HELIOS_TRY_ASSIGN(const u64 size, f.size());
-    const u64 maxBody = std::min(options.maxBodySize, kMaxBodySize);
+    const u64 maxBody = effectiveMaxBody(options);
     if (size > kHeaderSize + maxPayload(maxBody))
-        return makeError(ErrorCode::LimitExceeded, "'{}': {} bytes is larger than any manifest this reader accepts",
+        return makeError(ErrorCode::LimitExceeded,
+                         "'{}': {} bytes is larger than any manifest this reader accepts",
                          fs::pathToUtf8(path), size);
     std::vector<u8> bytes(static_cast<usize>(size));
     HELIOS_TRY(f.readExact(bytes.data(), bytes.size()));
@@ -620,7 +662,8 @@ Result<void> ManifestBuilder::addFile(ManifestFileInput file) {
     u64 offset = 0;
     for (const Chunk& c : file.content.chunks) {
         if (c.offset != offset || c.size == 0 || c.size > fastcdc::kMaxSize)
-            return invalid("'{}': chunk at {} ({} bytes) does not continue at {}", file.path, c.offset, c.size, offset);
+            return invalid("'{}': chunk at {} ({} bytes) does not continue at {}", file.path, c.offset,
+                           c.size, offset);
         offset += c.size;
     }
     if (offset != file.content.size)
@@ -639,7 +682,8 @@ void ManifestBuilder::setStoredSize(const Hash256& chunk, u32 storedSize) {
     m_placements.push_back(Placement{chunk, Hash256{}, 0, storedSize, false});
 }
 
-void ManifestBuilder::addPatch(std::string path, const Hash256& fromHash, const Hash256& patchHash, u64 patchSize) {
+void ManifestBuilder::addPatch(std::string path, const Hash256& fromHash, const Hash256& patchHash,
+                               u64 patchSize) {
     m_patches.push_back(PendingPatch{std::move(path), fromHash, patchHash, patchSize});
 }
 
@@ -663,7 +707,8 @@ Result<Manifest> ManifestBuilder::build() const {
     for (const ManifestChunk& c : all) {
         if (!m.chunks.empty() && m.chunks.back().hash == c.hash) {
             if (m.chunks.back().rawSize != c.rawSize)
-                return invalid("chunk {} has sizes {} and {}", c.hash.toHex(), m.chunks.back().rawSize, c.rawSize);
+                return invalid("chunk {} has sizes {} and {}", c.hash.toHex(), m.chunks.back().rawSize,
+                               c.rawSize);
             continue;
         }
         m.chunks.push_back(c);
@@ -679,14 +724,17 @@ Result<Manifest> ManifestBuilder::build() const {
         mf.language = f->language;
         mf.tier = f->tier;
         mf.flags = f->flags;
-        for (const Chunk& c : f->content.chunks) m.refs.push_back(ManifestChunkRef{*m.findChunk(c.hash), c.offset});
+        for (const Chunk& c : f->content.chunks)
+            m.refs.push_back(ManifestChunkRef{*m.findChunk(c.hash), c.offset});
         m.files.push_back(std::move(mf));
     }
 
     m.packs = m_packs;
-    std::sort(m.packs.begin(), m.packs.end(), [](const ManifestPack& a, const ManifestPack& b) { return a.hash < b.hash; });
+    std::sort(m.packs.begin(), m.packs.end(),
+              [](const ManifestPack& a, const ManifestPack& b) { return a.hash < b.hash; });
     for (usize i = 1; i < m.packs.size(); ++i)
-        if (m.packs[i - 1].hash == m.packs[i].hash) return invalid("pack {} is added twice", m.packs[i].hash.toHex());
+        if (m.packs[i - 1].hash == m.packs[i].hash)
+            return invalid("pack {} is added twice", m.packs[i].hash.toHex());
     std::vector<bool> placed(m.chunks.size(), false);
     for (const Placement& p : m_placements) {
         const std::optional<u32> chunk = m.findChunk(p.chunk);
@@ -696,9 +744,11 @@ Result<Manifest> ManifestBuilder::build() const {
         ManifestChunk& c = m.chunks[*chunk];
         c.storedSize = p.storedSize;
         if (p.packed) {
-            const auto it = std::lower_bound(m.packs.begin(), m.packs.end(), p.pack,
-                                             [](const ManifestPack& k, const Hash256& h) { return k.hash < h; });
-            if (it == m.packs.end() || it->hash != p.pack) return invalid("pack {} is not declared", p.pack.toHex());
+            const auto it =
+                std::lower_bound(m.packs.begin(), m.packs.end(), p.pack,
+                                 [](const ManifestPack& k, const Hash256& h) { return k.hash < h; });
+            if (it == m.packs.end() || it->hash != p.pack)
+                return invalid("pack {} is not declared", p.pack.toHex());
             c.pack = static_cast<u32>(it - m.packs.begin());
             c.packOffset = p.offset;
         }
@@ -706,7 +756,8 @@ Result<Manifest> ManifestBuilder::build() const {
     for (const PendingPatch& q : m_patches) {
         const ManifestFile* f = m.findFile(q.path);
         if (!f) return invalid("a patch names '{}', which is not a file", q.path);
-        m.patches.push_back(ManifestPatch{static_cast<u32>(f - m.files.data()), q.fromHash, q.patchHash, q.patchSize});
+        m.patches.push_back(
+            ManifestPatch{static_cast<u32>(f - m.files.data()), q.fromHash, q.patchHash, q.patchSize});
     }
     std::sort(m.patches.begin(), m.patches.end(), patchLess);
     HELIOS_TRY(validateManifest(m));

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -411,10 +412,10 @@ func TestPipelineCrossLanguageRead(t *testing.T) {
 	}
 }
 
+// equalManifests compares field by field (a nil and an empty table are equal).
 func equalManifests(a, b *manifest.Manifest) bool {
-	ja, _ := json.Marshal(a)
-	jb, _ := json.Marshal(b)
-	return bytes.Equal(ja, jb)
+	return a.Header == b.Header && slices.Equal(a.Files, b.Files) && slices.Equal(a.Refs, b.Refs) &&
+		slices.Equal(a.Chunks, b.Chunks) && slices.Equal(a.Packs, b.Packs) && slices.Equal(a.Patches, b.Patches)
 }
 
 func TestSharedHostileCases(t *testing.T) {

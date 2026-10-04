@@ -1,6 +1,8 @@
 // BLAKE2b-256 over Monocypher: known answers, streaming equivalence, hex.
 #include <doctest/doctest.h>
 
+#include <algorithm>
+#include <cctype>
 #include <string_view>
 
 #include "patch_test_util.h"
@@ -9,13 +11,14 @@ using namespace helios;
 using namespace helios::patch;
 
 namespace {
+
 std::span<const u8> text(std::string_view s) { return {reinterpret_cast<const u8*>(s.data()), s.size()}; }
-} // namespace
 
 TEST_CASE("blake2b: BLAKE2b-256 known answers") {
     // BLAKE2b with a 32-byte digest (RFC 7693 parameters; the values b2sum -l 256 prints).
     CHECK(blake2b256({}).toHex() == "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8");
-    CHECK(blake2b256(text("abc")).toHex() == "bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319");
+    CHECK(blake2b256(text("abc")).toHex() ==
+          "bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319");
     CHECK(blake2b256(text("The quick brown fox jumps over the lazy dog")).toHex() ==
           "01718cec35cd3d796dd00020e0bfecb473ad23457d063b75eff29c0ffa2e58a9");
 }
@@ -52,3 +55,5 @@ TEST_CASE("blake2b: hex round trip, ordering and zero") {
     lo.bytes[31] = 0xFF;
     CHECK(lo < hi); // byte-wise (memcmp) order, as Go's bytes.Compare
 }
+
+} // namespace

@@ -52,7 +52,8 @@ inline Hash256 getHash(yyjson_val* obj, const char* key) {
 inline std::vector<u8> fromHex(std::string_view hex) {
     REQUIRE(hex.size() % 2 == 0);
     std::vector<u8> out(hex.size() / 2);
-    for (usize i = 0; i < out.size(); ++i) out[i] = static_cast<u8>(std::stoul(std::string(hex.substr(2 * i, 2)), nullptr, 16));
+    for (usize i = 0; i < out.size(); ++i)
+        out[i] = static_cast<u8>(std::stoul(std::string(hex.substr(2 * i, 2)), nullptr, 16));
     return out;
 }
 
@@ -83,7 +84,8 @@ inline std::vector<u8> generateInput(yyjson_val* in) {
         const usize at = static_cast<usize>(getU64(in, "at"));
         REQUIRE(at <= size);
         std::vector<u8> out = randomBytes(seed, size);
-        const std::vector<u8> ins = randomBytes(getU64(in, "insertSeed"), static_cast<usize>(getU64(in, "insertSize")));
+        const std::vector<u8> ins =
+            randomBytes(getU64(in, "insertSeed"), static_cast<usize>(getU64(in, "insertSize")));
         out.insert(out.begin() + static_cast<std::ptrdiff_t>(at), ins.begin(), ins.end());
         return out;
     }

@@ -99,7 +99,7 @@ void heliosFuzzSeeds(std::vector<std::vector<uint8_t>>& out) {
         return v;
     };
     ManifestHeader header;
-    header.productId = "cinder-reach";
+    header.productId = "sample-game";
     header.platform = "linux64";
     header.buildId = "fuzz-1";
     header.sequence = 7;
@@ -160,7 +160,8 @@ void heliosFuzzSeeds(std::vector<std::vector<uint8_t>>& out) {
 
     // A header that claims a 16 MiB + 1 body (LimitExceeded) and a zstd payload of zeros (Corrupt).
     std::vector<u8> claim = out[1];
-    hman::RawHeader h = hman::decodeHeader(std::span<const u8, hman::kHeaderSize>(claim.data(), hman::kHeaderSize));
+    hman::RawHeader h =
+        hman::decodeHeader(std::span<const u8, hman::kHeaderSize>(claim.data(), hman::kHeaderSize));
     h.bodySize = kMaxBody + 1;
     h.codec = 1;
     const std::span<u8, hman::kHeaderSize> head(claim.data(), hman::kHeaderSize);

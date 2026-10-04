@@ -2,7 +2,9 @@
 // shared hostile cases and names, truncation and bit-flip sweeps, zstd bounds and the builder.
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cstdlib>
+#include <iterator>
 #include <map>
 
 #include "patch_test_util.h"
@@ -59,7 +61,8 @@ ManifestBuilder pipelineBuilder(const std::vector<usize>& order = {}) {
     }
     usize idx, max;
     yyjson_val* v;
-    yyjson_arr_foreach(test::get(root, "packs"), idx, max, v) b.addPack(test::getHash(v, "hash"), test::getU64(v, "size"));
+    yyjson_arr_foreach(test::get(root, "packs"), idx, max, v)
+        b.addPack(test::getHash(v, "hash"), test::getU64(v, "size"));
     yyjson_arr_foreach(test::get(root, "placements"), idx, max, v) {
         const Chunk& c = chunks.at(test::getStr(v, "file")).at(static_cast<usize>(test::getU64(v, "chunk")));
         b.placeChunk(c.hash, test::getHash(v, "pack"), test::getU64(v, "offset"),
@@ -114,8 +117,6 @@ std::vector<u8> applyHostile(std::vector<u8> b, yyjson_val* c) {
     return b;
 }
 
-} // namespace
-
 TEST_CASE("manifest: the C++ writer reproduces the shared pipeline.hman byte for byte") {
     const Manifest m = pipeline();
     const Result<std::vector<u8>> raw = writeManifest(m, rawOptions());
@@ -125,7 +126,7 @@ TEST_CASE("manifest: the C++ writer reproduces the shared pipeline.hman byte for
         usize at = 0;
         while (at < raw->size() && at < golden.size() && (*raw)[at] == golden[at]) ++at;
         FAIL("the C++ writer differs from pipeline.hman at byte " << at << " (" << raw->size() << " vs "
-                                                                   << golden.size() << " bytes)");
+                                                                  << golden.size() << " bytes)");
     }
     // Files added in another order build the same manifest.
     const Result<Manifest> reversed = pipelineBuilder({7, 6, 5, 4, 3, 2, 1, 0}).build();
@@ -156,8 +157,10 @@ TEST_CASE("manifest: every shared golden reads back to the description, whicheve
         const Result<ManifestHeaderInfo> info = readManifestHeader(file);
         REQUIRE(info.ok());
         CHECK(info->header == want.header);
-        CHECK(info->codec == (std::string_view(name) == "pipeline.hman" ? ManifestCodec::None : ManifestCodec::Zstd));
-        CHECK(info->headerHash == hman::computeHeaderHash(std::span<const u8, hman::kHeaderSize>(file.data(), hman::kHeaderSize)));
+        CHECK(info->codec ==
+              (std::string_view(name) == "pipeline.hman" ? ManifestCodec::None : ManifestCodec::Zstd));
+        CHECK(info->headerHash == hman::computeHeaderHash(std::span<const u8, hman::kHeaderSize>(
+                                      file.data(), hman::kHeaderSize)));
         const Result<Manifest> viaFile = readManifestFile(hmanDir() / name);
         REQUIRE(viaFile.ok());
         CHECK(*viaFile == want);
@@ -186,7 +189,8 @@ TEST_CASE("manifest: the shared identifier and path vectors") {
         std::vector<std::string> out;
         usize idx, max;
         yyjson_val* s;
-        yyjson_arr_foreach(test::get(group, key), idx, max, s) out.emplace_back(yyjson_get_str(s), yyjson_get_len(s));
+        yyjson_arr_foreach(test::get(group, key), idx, max, s)
+            out.emplace_back(yyjson_get_str(s), yyjson_get_len(s));
         REQUIRE(!out.empty());
         return out;
     };
@@ -226,7 +230,8 @@ TEST_CASE("manifest: every truncation and every byte flip fails, except in the u
         REQUIRE_MESSAGE(readManifest(b).ok() == inSignature, "flipping byte " << i);
     }
     const std::vector<u8> z = test::readBytes(hmanDir() / "pipeline.cpp-zstd.hman");
-    for (usize n = hman::kHeaderSize; n < z.size(); n += 7) REQUIRE(!readManifest(std::span<const u8>(z).first(n)).ok());
+    for (usize n = hman::kHeaderSize; n < z.size(); n += 7)
+        REQUIRE(!readManifest(std::span<const u8>(z).first(n)).ok());
 }
 
 TEST_CASE("manifest: a zstd payload must decode to exactly bodySize, within the body cap") {
@@ -316,19 +321,23 @@ TEST_CASE("manifest: the builder refuses what the format cannot hold") {
     };
     Hash256 other;
     other.bytes[0] = 1;
-    CHECK(fails([&](ManifestBuilder& x) { x.placeChunk(file.chunks[0].hash, other, 0, 10); }) == ErrorCode::InvalidArgument);
+    CHECK(fails([&](ManifestBuilder& x) { x.placeChunk(file.chunks[0].hash, other, 0, 10); }) ==
+          ErrorCode::InvalidArgument);
     CHECK(fails([&](ManifestBuilder& x) { x.setStoredSize(other, 10); }) == ErrorCode::InvalidArgument);
     CHECK(fails([&](ManifestBuilder& x) {
               x.setStoredSize(file.chunks[0].hash, 10);
               x.setStoredSize(file.chunks[0].hash, 11);
           }) == ErrorCode::InvalidArgument);
-    CHECK(fails([&](ManifestBuilder& x) { x.addPatch("missing", other, other, 3); }) == ErrorCode::InvalidArgument);
-    CHECK(fails([&](ManifestBuilder& x) { REQUIRE(x.addFile(input("A/b")).ok()); }) == ErrorCode::InvalidArgument);
+    CHECK(fails([&](ManifestBuilder& x) { x.addPatch("missing", other, other, 3); }) ==
+          ErrorCode::InvalidArgument);
+    CHECK(fails([&](ManifestBuilder& x) { REQUIRE(x.addFile(input("A/b")).ok()); }) ==
+          ErrorCode::InvalidArgument);
     CHECK(fails([&](ManifestBuilder& x) {
               REQUIRE(x.addFile(input("docs/readme")).ok());
               REQUIRE(x.addFile(input("Docs/readme")).ok());
           }) == ErrorCode::InvalidArgument);
-    CHECK(fails([&](ManifestBuilder& x) { x.addPack(other, 100); }) == ErrorCode::InvalidArgument); // holds no chunk
+    CHECK(fails([&](ManifestBuilder& x) { x.addPack(other, 100); }) ==
+          ErrorCode::InvalidArgument); // holds no chunk
     CHECK(fails([&](ManifestBuilder& x) {
               ManifestFileInput bad = input("b");
               bad.content.chunks[0].size -= 1;
@@ -348,7 +357,7 @@ TEST_CASE("manifest: lookups agree with the tables") {
     }
     CHECK(m.findFile("nope") == nullptr);
     CHECK_FALSE(m.findChunk(Hash256{}).has_value());
-    const ManifestFile* exe = m.findFile("bin/CinderReach.exe");
+    const ManifestFile* exe = m.findFile("bin/SampleGame.exe");
     REQUIRE(exe != nullptr);
     CHECK(exe->tier == 0);
     CHECK(hasFlag(exe->flags, ManifestFileFlags::Executable));
@@ -382,3 +391,5 @@ TEST_CASE("manifest: a skippable zstd frame before the payload's frames is allow
     REQUIRE_MESSAGE(m.ok(), m.error().toString());
     CHECK(*m == pipeline());
 }
+
+} // namespace

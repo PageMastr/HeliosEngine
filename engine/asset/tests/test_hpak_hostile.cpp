@@ -571,6 +571,19 @@ TEST_CASE("hpak integrity: an I/O error while checking a bad block is returned a
         REQUIRE(d.pak->read(*d.a).ok()); // the repaired bytes verify without another hook call
         CHECK(d.hook->calls == std::map<u32, int>{{0, 1}});
     }
+    SUBCASE("the re-read after a Repaired answer whose repair did not take") {
+        // The documented exception to "at most once per block until retryBlocks()": nothing verified
+        // the repair, so the block stays Unverified and its next read reports the still-bad bytes.
+        d.hook->status = RefetchStatus::Repaired;
+        d.hook->onRefetch = [&](const HpakBadBlock&) { d.source->failReadAfter(0); };
+        CHECK(d.pak->read(*d.a).errorCode() == ErrorCode::IoError);
+        CHECK(d.pak->blockState(0) == HpakBlockState::Unverified);
+        d.hook->status = RefetchStatus::Failed;
+        d.hook->onRefetch = nullptr;
+        CHECK(d.pak->read(*d.a).errorCode() == ErrorCode::Corrupt);
+        CHECK(d.hook->calls == std::map<u32, int>{{0, 2}}); // no retryBlocks() in between
+        CHECK(d.pak->blockState(0) == HpakBlockState::Bad);
+    }
     SUBCASE("the re-read before the hook") {
         d.source->failReadAfter(1); // the range read succeeds, the locked re-read fails
         CHECK(d.pak->read(*d.a).errorCode() == ErrorCode::IoError);

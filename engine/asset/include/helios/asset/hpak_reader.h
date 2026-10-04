@@ -14,10 +14,12 @@
 //
 // Bad blocks. A pak block that fails its checksum calls the IBlockRefetcher (08 §2.6: the
 // StreamingInstaller's `demand`; a later WP connects it), at most once per block until
-// retryBlocks() resets it, and then fails or re-reads according to what the hook returns. Before
-// the hook runs, the reader re-reads the block under the repair lock, so a reader whose copy
-// predates a repair or a landed re-fetch never reports it again. Verified is final: a hook's answer
-// never overrides a block another reader verified meanwhile.
+// retryBlocks() resets it, and then fails or re-reads according to what the hook returns. The one
+// exception: after a Repaired answer whose re-read hits an I/O error, the block stays Unverified, so
+// its next read calls the hook again if the bytes are still bad. Before the hook runs, the reader
+// re-reads the block under the repair lock, so a reader whose copy predates a repair or a landed
+// re-fetch never reports it again. Verified is final: a hook's answer never overrides a block
+// another reader verified meanwhile.
 //
 // Threading: an open HpakReader is immutable except for its per-block verification state, which
 // is atomic. read(), readInto(), verifyAll(), find(), entries(), info() and blockState() are safe
@@ -85,16 +87,19 @@ enum class RefetchStatus : u8 {
 /// for bytes the source holds when the lock is taken: the reader re-reads the block under the lock
 /// first, so a reader's stale copy never reaches the hook. An I/O error during that re-read, or
 /// during the re-read after Repaired, fails that read with the error and leaves the block Unverified
-/// (its next read checks it again).
+/// (its next read checks it again). That is the one exception to "at most once": if the hook answered
+/// Repaired but the bytes are still bad, and the re-read after it failed, the next read calls the hook
+/// again without a retryBlocks(), since the repair was never verified.
 class IBlockRefetcher {
 public:
     virtual ~IBlockRefetcher() = default;
     /// Handles `block`, which failed its checksum: replace its bytes in the pak's source and return
     /// Repaired, queue a re-fetch and return Pending, or return Failed. Runs on the reading thread
     /// under `block.pak`'s repair lock, so calls for one pak are serialized; it must not read from or
-    /// call retryBlocks() on that pak (other paks are fine). The answer applies only while the block
-    /// is still Unverified: if the bytes become good and another reader verifies them before the hook
-    /// returns, the block stays Verified.
+    /// call retryBlocks() on that pak. Other paks are fine, as long as no hook reads back into a pak
+    /// whose repair lock this thread holds (two paks whose hooks read each other can deadlock). The
+    /// answer applies only while the block is still Unverified: if the bytes become good and another
+    /// reader verifies them before the hook returns, the block stays Verified.
     virtual RefetchStatus refetch(const HpakBadBlock& block) = 0;
 };
 

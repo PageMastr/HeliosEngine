@@ -99,8 +99,11 @@ meshes.commitSwaps();                          // at the frame or tick boundary
 - **Bad blocks.** A mismatch calls `IBlockRefetcher::refetch` on the reading thread, under the pak's repair lock,
   **at most once per block** until `retryBlocks()` covers it. `Repaired`: the reader re-reads the block once and
   verifies it (still bad: `Bad`). `Pending`: reads of the block fail with `Busy`, without reading it, until the
-  installer calls `retryBlocks()` after its re-fetch lands. `Failed` (or no hook): `Corrupt`. The hook must not
-  read from the same reader.
+  installer calls `retryBlocks()` after its re-fetch lands. `Failed` (or no hook): `Corrupt`. The one exception
+  to "at most once": when the re-read after a `Repaired` answer hits an I/O error, the repair was never
+  verified, so the block stays `Unverified` and its next read calls the hook again if the bytes are still bad.
+  The hook must not read from the same reader; other paks are fine, as long as no hook reads back into a pak
+  whose repair lock the thread holds (two paks whose hooks read each other can deadlock).
 - **Stale copies.** A read hashes every block that was not `Verified` before it read the bytes, and before the
   hook runs the reader re-reads the block under the lock: a reader whose copy predates a repair, or a landed
   re-fetch and its `retryBlocks()`, finds the good bytes instead of reporting the block again, and the hook's

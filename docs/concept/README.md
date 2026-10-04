@@ -102,4 +102,4 @@ does.
 
 | Concept | Area | Latest version | Status | Phase | Review |
 |---|---|---|---|---|---|
-| `t01-world-saltmarch`: T01 World Editor on the Saltmarch container | editor | none committed: v01 has no recorded provenance; v02 pending from the owner | — | Ph1 layout | [review](editor/t01-world-saltmarch.review.md) |
+| `t01-world-saltmarch`: T01 World Editor on the Saltmarch container | editor | none (v01 is not committed: its provenance is not recorded) | v02 pending from the owner | Ph1 layout | [review](editor/t01-world-saltmarch.review.md) |

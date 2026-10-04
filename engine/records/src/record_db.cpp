@@ -422,7 +422,7 @@ RecordView RecordDb::record(usize index) const noexcept {
     const usize e = m->recordEntry(index);
     const Impl::TypeSlot& t = m->types[load<u32>(m->at(e + 8))];
     const usize data = e + 12 + static_cast<usize>(load<i32>(m->at(e + 12)));
-    return RecordView{load<u64>(m->at(e)), m->recordName(index), t.type, ValueView(this, t.layout, m->at(data))};
+    return RecordView{load<u64>(m->at(e)), m->recordName(index), t.type, ValueView(t.layout, m->at(data))};
 }
 
 RecordView RecordDb::find(refl::RecordId id) const noexcept {
@@ -573,8 +573,8 @@ usize ValueView::size() const noexcept {
 ValueView ValueView::operator[](usize i) const noexcept {
     HELIOS_ASSERT(i < size() && enc() != Enc::Map);
     const u32 stride = m_layout->stride();
-    if (enc() == Enc::Array) return {m_db, m_layout->element, m_data + i * stride};
-    return {m_db, m_layout->element, span(0, stride).data() + i * stride};
+    if (enc() == Enc::Array) return {m_layout->element, m_data + i * stride};
+    return {m_layout->element, span(0, stride).data() + i * stride};
 }
 
 Guid ValueView::keyAt(usize i) const noexcept {
@@ -585,12 +585,12 @@ Guid ValueView::keyAt(usize i) const noexcept {
 
 ValueView ValueView::mapKey(usize i) const noexcept {
     HELIOS_ASSERT(enc() == Enc::Map && i < size());
-    return {m_db, m_layout->key, span(0, m_layout->entrySize).data() + i * m_layout->entrySize};
+    return {m_layout->key, span(0, m_layout->entrySize).data() + i * m_layout->entrySize};
 }
 
 ValueView ValueView::mapValue(usize i) const noexcept {
     HELIOS_ASSERT(enc() == Enc::Map && i < size());
-    return {m_db, m_layout->element, span(0, m_layout->entrySize).data() + i * m_layout->entrySize + m_layout->payloadOffset};
+    return {m_layout->element, span(0, m_layout->entrySize).data() + i * m_layout->entrySize + m_layout->payloadOffset};
 }
 
 bool ValueView::hasValue() const noexcept {
@@ -600,7 +600,7 @@ bool ValueView::hasValue() const noexcept {
 
 ValueView ValueView::value() const noexcept {
     HELIOS_ASSERT(hasValue());
-    return {m_db, m_layout->element, m_data + m_layout->payloadOffset};
+    return {m_layout->element, m_data + m_layout->payloadOffset};
 }
 
 u32 ValueView::alternative() const noexcept {
@@ -609,7 +609,7 @@ u32 ValueView::alternative() const noexcept {
 }
 
 ValueView ValueView::alternativeValue() const noexcept {
-    return {m_db, m_layout->alternatives[alternative()], m_data + m_layout->payloadOffset};
+    return {m_layout->alternatives[alternative()], m_data + m_layout->payloadOffset};
 }
 
 // ---------------------------------------------------------------------------------------------

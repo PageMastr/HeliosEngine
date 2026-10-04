@@ -14,7 +14,8 @@
 // Fuzzed by fuzz/fuzz_hrdb_loader.cpp.
 //
 // Threading: a RecordDb is immutable after open; every const method is safe to call from any thread.
-// Views borrow the RecordDb and must not outlive it.
+// Views borrow the RecordDb's bytes and layouts and must not outlive it (moving the RecordDb keeps them
+// valid).
 
 #include <memory>
 #include <optional>
@@ -32,14 +33,12 @@
 
 namespace helios::records {
 
-class RecordDb;
-
-/// A cooked value of a known layout (no ownership). Accessors assert that the layout fits the call.
+/// A cooked value of a known layout (no ownership; valid while its RecordDb lives, moves included).
+/// Accessors require a valid view and assert that the layout fits the call.
 class ValueView {
 public:
     ValueView() noexcept = default;
-    ValueView(const RecordDb* db, const CookedLayout* layout, const u8* data) noexcept
-        : m_db(db), m_layout(layout), m_data(data) {}
+    ValueView(const CookedLayout* layout, const u8* data) noexcept : m_layout(layout), m_data(data) {}
 
     bool isValid() const noexcept { return m_layout != nullptr; }
     const CookedLayout& layout() const noexcept { return *m_layout; }
@@ -64,7 +63,7 @@ public:
 
     /// Struct field (an invalid view if the field does not exist or this cook dropped it).
     ValueView field(std::string_view name) const noexcept;
-    ValueView field(const CookedLayout::Field& f) const noexcept { return {m_db, f.layout, m_data + f.offset}; }
+    ValueView field(const CookedLayout::Field& f) const noexcept { return {f.layout, m_data + f.offset}; }
 
     /// Element count of a List, KeyedList, Set, Map or Array.
     usize size() const noexcept;
@@ -88,7 +87,6 @@ public:
 private:
     std::span<const u8> span(usize at, usize stride) const noexcept;
 
-    const RecordDb* m_db = nullptr;
     const CookedLayout* m_layout = nullptr;
     const u8* m_data = nullptr;
 };

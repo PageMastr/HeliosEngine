@@ -32,7 +32,7 @@ TEST_CASE("cook: the test project cooks, and records without $parent read back a
     CHECK(out.stats.clientRecords == 10); // all but the server-only loot table
     CHECK(out.stats.serverRecords == 10); // all but the client-only skin
     CHECK(out.stats.inherited == 2);
-    CHECK(out.stats.formulas == 3);
+    CHECK(out.stats.formulas == 4);
     const RecordDb client = open(out.client);
     const RecordDb server = open(out.server);
     CHECK(client.audience() == CookAudience::Client);
@@ -263,7 +263,11 @@ TEST_CASE("cook: tags compile to the TagIndex table gameplay::TagRegistry assign
     gameplay::TagRegistry::Builder b;
     REQUIRE(b.add("Ship.Class.Frigate", gameplay::Audience::All).ok());
     REQUIRE(b.add("State.Docked", gameplay::Audience::Owner).ok());
-    for (const char* t : {"Ship.Role.Escort", "Ship.Class.Scout", "Sec4Sentinel.Server.Tag"}) REQUIRE(b.add(t).ok());
+    // TagSet values, then the tags of tag queries and of formulas (tag(self, …)).
+    for (const char* t : {"Ship.Role.Escort", "Ship.Class.Scout", "Sec4Sentinel.Server.Tag", "Ship.Class", "Ship.Role.Scout",
+                          "Faction.Neutral", "Ship.Mod.Afterburner"}) {
+        REQUIRE(b.add(t).ok());
+    }
     auto reg = b.build();
     REQUIRE(reg.ok());
     REQUIRE((*reg)->size() == server.tagCount());
@@ -285,6 +289,8 @@ TEST_CASE("cook: tags compile to the TagIndex table gameplay::TagRegistry assign
     CHECK(server.tag(tags.tags()[1]).name == "State.Docked");
     CHECK(server.tag(server.findTag("Ship.Class.Frigate")).audience == 2);
     CHECK(server.tag(server.findTag("Ship")).declared == false);
+    CHECK(server.findTag("Ship.Mod.Afterburner") != kNoTag); // only a formula names it
+    CHECK(server.findTag("Faction.Neutral") != kNoTag);      // only a tag query names it
 
     const refl::TypeInfo& shipT = type("test.records.ShipDef");
     const refl::TypeInfo& tagT = type("helios.gameplay.TagDef");
@@ -315,8 +321,8 @@ TEST_CASE("cook: identical inputs give byte-identical cooks, pinned by a golden 
     // come out of every toolchain (GCC and Clang locally, MSVC and clang-cl in CI).
     MESSAGE("client ", a.client.size(), " bytes, xxh3 ", std::format("{:#018x}", hash64(a.client.data(), a.client.size())));
     MESSAGE("server ", a.server.size(), " bytes, xxh3 ", std::format("{:#018x}", hash64(a.server.data(), a.server.size())));
-    CHECK(hash64(a.client.data(), a.client.size()) == 0x4a2357b89651340aull);
-    CHECK(hash64(a.server.data(), a.server.size()) == 0x2edda2c81d1f1a42ull);
+    CHECK(hash64(a.client.data(), a.client.size()) == 0xad47303144c02b83ull);
+    CHECK(hash64(a.server.data(), a.server.size()) == 0x8c35681c8131c834ull);
 }
 
 TEST_CASE("cook: lists nested deeper than hrdb::kMaxNesting are refused; the limit itself cooks and loads") {

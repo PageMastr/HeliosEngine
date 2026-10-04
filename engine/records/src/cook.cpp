@@ -298,15 +298,11 @@ private:
             if (isRecordRef(t)) {
                 checkRef(t, refValue(obj));
             } else if (t.qualifiedName == "TagSet") {
-                for (const Name tag : static_cast<const refl::TagSet*>(obj)->tags()) {
-                    if (!isValidTagName(tag.view())) {
-                        error(std::format("invalid tag name '{}'", tag.view()));
-                        continue;
-                    }
-                    tags[std::string(tag.view())].client |= client;
-                }
+                for (const Name tag : static_cast<const refl::TagSet*>(obj)->tags()) useTag(tag.view(), client, "");
             } else if (t.qualifiedName == "HxlExpr") {
-                compile(static_cast<const refl::HxlExpr*>(obj)->text);
+                compile(static_cast<const refl::HxlExpr*>(obj)->text, client);
+            } else if (t.qualifiedName == "TagQuery") {
+                queryTags(static_cast<const refl::TagQuery*>(obj)->text, client);
             }
             return;
         case Kind::List:
@@ -365,24 +361,54 @@ private:
         }
     }
 
-    void compile(const std::string& source) {
+    void useTag(std::string_view tag, bool client, std::string_view where) {
+        if (!isValidTagName(tag)) {
+            error(std::format("invalid tag name '{}'{}", tag, where));
+            return;
+        }
+        tags[std::string(tag)].client |= client;
+    }
+
+    /// Tags a TagQuery names (`all(A.B, C) any(D) none(E)`), so each has a TagIndex. The query itself
+    /// stays text in v0: gameplay compiles it against the hot set (06 §1.1).
+    void queryTags(std::string_view text, bool client) {
+        usize i = 0;
+        while (i < text.size()) {
+            if (!isSegChar(text[i]) && text[i] != '.') {
+                ++i;
+                continue;
+            }
+            const usize start = i;
+            while (i < text.size() && (isSegChar(text[i]) || text[i] == '.')) ++i;
+            const std::string_view word = text.substr(start, i - start);
+            if (word != "all" && word != "any" && word != "none") useTag(word, client, " in a tag query");
+        }
+    }
+
+    void compile(const std::string& source, bool client) {
         if (source.empty()) return;
         if (auto it = m_failed.find(source); it != m_failed.end()) {
             error(it->second);
             return;
         }
-        if (bytecode.contains(source)) return;
-        hxl::CompileOptions opts;
-        opts.params = m_options.hxlParams;
-        hxl::Diagnostic diag;
-        auto program = hxl::compile(source, opts, &diag);
-        if (!program) {
-            std::string msg = std::format("formula does not compile: {}", diag.status != hxl::Status::Ok ? diag.toString() : program.error().message);
-            error(msg);
-            m_failed.emplace(source, std::move(msg));
-            return;
+        auto it = m_tagSymbols.find(source);
+        if (it == m_tagSymbols.end()) {
+            hxl::CompileOptions opts;
+            opts.params = m_options.hxlParams;
+            hxl::Diagnostic diag;
+            auto program = hxl::compile(source, opts, &diag);
+            if (!program) {
+                std::string msg =
+                    std::format("formula does not compile: {}", diag.status != hxl::Status::Ok ? diag.toString() : program.error().message);
+                error(msg);
+                m_failed.emplace(source, std::move(msg));
+                return;
+            }
+            bytecode.emplace(source, program->encode());
+            it = m_tagSymbols.emplace(source, program->tagSymbols()).first;
         }
-        bytecode.emplace(source, program->encode());
+        // Tags a formula tests (tag(p, A.B)) get a TagIndex like the tags records hold.
+        for (const std::string& tag : it->second) useTag(tag, client, " in a formula");
     }
 
     const std::unordered_map<refl::RecordId, const Rec*>& m_byId;
@@ -391,6 +417,7 @@ private:
     const Rec* m_rec = nullptr;
     std::vector<Seg> m_path;
     std::unordered_map<std::string, std::string> m_failed;
+    std::unordered_map<std::string, std::vector<std::string>> m_tagSymbols;
 };
 
 // ---------------------------------------------------------------------------------------------

@@ -3,6 +3,7 @@
   "$name": "ship/kestrel_mk2",
   "$parent": "ship/kestrel",
   "label": "Kestrel Mk II",
+  "formula": "select(tag(self, Ship.Mod.Afterburner), 2, 1)",
   "extras": ["mk2_extra"],
   "mode": {"Cruise": {}}
 }

@@ -5,6 +5,7 @@
 #include <format>
 #include <unordered_set>
 
+#include "helios/core/assert.h"
 #include "helios/core/hash.h"
 
 namespace helios::records {
@@ -97,19 +98,55 @@ LayoutCache::~LayoutCache() = default;
 
 Result<const CookedLayout*> LayoutCache::get(const refl::TypeInfo& type) {
     auto built = build(type);
+    // The elements of lists, sets and maps are built only once the by-value chain that reached them
+    // has closed: a span's size does not depend on its element, and a type may hold a list of
+    // something that holds it by value (a dialogue node's choices, each with an optional next node).
+    // Building those elements eagerly would meet their container's struct half built, and refuse a
+    // legal schema or not depending on which type was asked for first.
+    // First in, first out: the first error reported is the one in the earliest field.
+    for (usize i = 0; built && i < m_deferred.size(); ++i) {
+        HELIOS_ASSERT(m_open.empty(), "a by-value chain is closed before its containers' elements are built");
+        m_base = std::move(m_deferred[i].where);
+        auto el = buildElements(*m_deferred[i].layout);
+        if (!el) built = Error{el.error().code, m_base.empty() ? el.error().message : std::format("{}: {}", m_base, el.error().message)};
+    }
+    m_deferred.clear();
+    m_base.clear();
     if (!built) {
         // Drop everything this call created: some of it is incomplete.
         for (CookedLayout* l : m_pending) m_layouts.erase(l->type);
         m_pending.clear();
         m_open.clear();
+        m_deferred.clear();
+        m_where.clear();
         return built.error();
     }
     finish();
     return static_cast<const CookedLayout*>(*built);
 }
 
+Result<void> LayoutCache::buildElements(CookedLayout& l) {
+    const refl::TypeInfo& type = *l.type;
+    if (type.kind == Kind::Map) {
+        HELIOS_TRY_ASSIGN(l.key, build(type.key()));
+    }
+    HELIOS_TRY_ASSIGN(l.element, build(type.element()));
+    return {};
+}
+
+std::string LayoutCache::where() const {
+    std::string s = m_base;
+    for (const std::string& w : m_where) {
+        if (!s.empty()) s += ": ";
+        s += w;
+    }
+    return s;
+}
+
 Result<const CookedLayout*> LayoutCache::byValue(const refl::TypeInfo& type, std::string_view what) {
     HELIOS_TRY_ASSIGN(CookedLayout* l, build(type));
+    // Everything on the current by-value chain is open; reaching one of them again would make its
+    // size depend on itself. Containers end the chain (their elements are built later).
     if (std::find(m_open.begin(), m_open.end(), l) != m_open.end()) {
         return makeError(ErrorCode::InvalidArgument, "{}: type '{}' contains itself by value", what, type.qualifiedName);
     }
@@ -202,23 +239,24 @@ Result<CookedLayout*> LayoutCache::build(const refl::TypeInfo& type) {
         if (type.kind == Kind::Set && !type.element().ops->keyLess) {
             return makeError(ErrorCode::Unsupported, "set '{}' has no canonical element order", type.qualifiedName);
         }
-        HELIOS_TRY_ASSIGN(l.element, build(type.element()));
         if (type.kind == Kind::KeyedList) {
             span(Enc::KeyedList, 16);
         } else {
             span(type.kind == Kind::List ? Enc::List : Enc::Set, 8);
         }
+        m_deferred.push_back(Deferred{&l, where()});
         break;
     }
     case Kind::Map: {
         if (!type.key().ops->keyLess) return makeError(ErrorCode::Unsupported, "map '{}' has no canonical key order", type.qualifiedName);
-        HELIOS_TRY_ASSIGN(l.key, build(type.key()));
-        HELIOS_TRY_ASSIGN(l.element, build(type.element()));
         span(Enc::Map, 8);
+        m_deferred.push_back(Deferred{&l, where()});
         break;
     }
     case Kind::Optional: {
+        m_open.push_back(&l);
         HELIOS_TRY_ASSIGN(l.element, byValue(type.element(), type.qualifiedName));
+        m_open.pop_back();
         l.enc = Enc::Optional;
         l.align = std::max<u32>(1, l.element->align);
         l.payloadOffset = alignUp(1, l.align);
@@ -226,7 +264,12 @@ Result<CookedLayout*> LayoutCache::build(const refl::TypeInfo& type) {
         break;
     }
     case Kind::Array: {
+        // A zero-length array would give its lists a zero stride: the loader could then not bound a
+        // list's count by the bytes it occupies (schemac allows sizes 1..65536 only).
+        if (type.arraySize == 0) return makeError(ErrorCode::Unsupported, "array type '{}' has no elements", type.qualifiedName);
+        m_open.push_back(&l);
         HELIOS_TRY_ASSIGN(l.element, byValue(type.element(), type.qualifiedName));
+        m_open.pop_back();
         const u64 bytes = u64{type.arraySize} * l.element->size;
         if (bytes > (1ull << 24)) return makeError(ErrorCode::LimitExceeded, "array type '{}' is larger than 16 MiB", type.qualifiedName);
         l.enc = Enc::Array;
@@ -240,12 +283,14 @@ Result<CookedLayout*> LayoutCache::build(const refl::TypeInfo& type) {
         if (type.alternatives.empty()) return makeError(ErrorCode::Unsupported, "variant '{}' has no alternatives", type.qualifiedName);
         u32 align = 4;
         u32 largest = 0;
+        m_open.push_back(&l);
         for (const refl::VariantAlt& alt : type.alternatives) {
             HELIOS_TRY_ASSIGN(const CookedLayout* a, byValue(alt.type(), type.qualifiedName));
             l.alternatives.push_back(a);
             align = std::max(align, a->align);
             largest = std::max(largest, a->size);
         }
+        m_open.pop_back();
         l.enc = Enc::Variant;
         l.align = align;
         l.payloadOffset = alignUp(4, align);
@@ -271,8 +316,10 @@ Result<void> LayoutCache::buildStruct(CookedLayout& l) {
                              l.type->qualifiedName, f.name, sideName(m_audience), other->qualifiedName,
                              cookAudienceName(m_audience), m_audience == CookAudience::Client ? "server" : "client");
         }
+        m_where.push_back(std::format("field '{}.{}'", l.type->qualifiedName, f.name));
         auto fl = byValue(ft, std::format("{}.{}", l.type->qualifiedName, f.name));
-        if (!fl) return Error{fl.error().code, std::format("field '{}.{}': {}", l.type->qualifiedName, f.name, fl.error().message)};
+        if (!fl) return Error{fl.error().code, std::format("{}: {}", m_where.back(), fl.error().message)};
+        m_where.pop_back();
         offset = alignUp(offset, (*fl)->align);
         l.fields.push_back(CookedLayout::Field{&f, *fl, offset});
         offset += (*fl)->size;

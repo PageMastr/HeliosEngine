@@ -102,23 +102,35 @@ public:
 
     CookAudience audience() const noexcept { return m_audience; }
 
-    /// The layout of `type` (InvalidArgument for an AAA-SEC-4 violation, Unsupported for a type v0
-    /// cannot cook). The hash of a returned layout covers kind, sizes, offsets, field ids and names,
-    /// enum values and alternatives of every layout reachable from it, in an order that does not
-    /// depend on which type was asked for first, so a cooker and a loader that build their caches in
-    /// different orders agree.
+    /// The layout of `type` (InvalidArgument for an AAA-SEC-4 violation or a type that contains itself
+    /// by value, Unsupported for a type v0 cannot cook). Recursion through a list, set or map is fine
+    /// (a span's size does not depend on its element), whichever type of the cycle is asked for first.
+    /// The hash of a returned layout covers kind, sizes, offsets, field ids and names, enum values and
+    /// alternatives of every layout reachable from it, in an order that does not depend on which type
+    /// was asked for first, so a cooker and a loader that build their caches in different orders agree.
     Result<const CookedLayout*> get(const refl::TypeInfo& type);
 
 private:
+    /// A list, set or map whose element (and key) layouts are built once the by-value chain closes.
+    struct Deferred {
+        CookedLayout* layout = nullptr;
+        std::string where; ///< The field path that reached it, for errors.
+    };
+
     Result<CookedLayout*> build(const refl::TypeInfo& type);
     Result<void> buildStruct(CookedLayout& l);
+    Result<void> buildElements(CookedLayout& l);
     Result<const CookedLayout*> byValue(const refl::TypeInfo& type, std::string_view what);
+    std::string where() const;
     void finish();
 
     CookAudience m_audience;
     std::unordered_map<const refl::TypeInfo*, std::unique_ptr<CookedLayout>> m_layouts;
-    std::vector<CookedLayout*> m_pending;   ///< Built, but entry sizes and hashes not computed yet.
-    std::vector<const CookedLayout*> m_open; ///< Struct layouts whose fields are being built.
+    std::vector<CookedLayout*> m_pending;    ///< Built, but entry sizes and hashes not computed yet.
+    std::vector<const CookedLayout*> m_open; ///< The by-value chain being built (structs, optionals, arrays, variants).
+    std::vector<Deferred> m_deferred;        ///< Containers whose elements are not built yet.
+    std::vector<std::string> m_where;        ///< Field frames of the current chain ("field 'T.f'").
+    std::string m_base;                      ///< The path of the deferred container being built.
 };
 
 } // namespace helios::records

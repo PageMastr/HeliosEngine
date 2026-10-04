@@ -96,11 +96,38 @@ inline refl::Value decoded(const RecordDb& db, const RecordView& r) {
     return v;
 }
 
-/// Resets the top-level fields `audience` drops to their defaults (what the cook leaves out).
+/// Resets every field `audience` drops to its default (what the cook leaves out), at any depth: in
+/// nested structs, list and array elements, optionals, map values and variant alternatives.
 inline void strip(const refl::TypeInfo& t, void* obj, CookAudience audience) {
-    refl::Value fresh(t);
-    for (const refl::FieldInfo& f : t.fields) {
-        if (!keepsField(f, audience)) f.type().ops->copy(f.ptr(obj), f.ptr(fresh.data()));
+    const refl::TypeOps& ops = *t.ops;
+    switch (t.kind) {
+    case refl::Kind::Struct: {
+        refl::Value fresh(t);
+        for (const refl::FieldInfo& f : t.fields) {
+            if (keepsField(f, audience)) {
+                strip(f.type(), f.ptr(obj), audience);
+            } else {
+                f.type().ops->copy(f.ptr(obj), f.ptr(fresh.data()));
+            }
+        }
+        return;
+    }
+    case refl::Kind::List:
+    case refl::Kind::KeyedList:
+    case refl::Kind::Array:
+        for (usize i = 0, n = ops.size(obj); i < n; ++i) strip(t.element(), ops.element(obj, i), audience);
+        return;
+    case refl::Kind::Optional:
+        if (ops.has(obj)) strip(t.element(), ops.get(obj), audience);
+        return;
+    case refl::Kind::Map: {
+        std::vector<const void*> keys;
+        ops.forEach(obj, &keys, [](void* user, const void* k, const void*) { static_cast<std::vector<const void*>*>(user)->push_back(k); });
+        for (const void* k : keys) strip(t.element(), ops.find(obj, k), audience);
+        return;
+    }
+    case refl::Kind::Variant: strip(t.alternatives[ops.index(obj)].type(), ops.alt(obj), audience); return;
+    default: return;
     }
 }
 

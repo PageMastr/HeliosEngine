@@ -30,6 +30,53 @@ namespace {
 bool isSegStart(char c) noexcept { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_'; }
 bool isSegChar(char c) noexcept { return isSegStart(c) || (c >= '0' && c <= '9'); }
 
+/// gameplay's tag-query grammar (engine/gameplay/src/tags.cpp parseQuery; records is L2 and cannot link
+/// L4 gameplay, and the tag-numbering test cross-checks the two): `all(A, B) any(C) none(D)`, each
+/// clause at most once, in any order, with one or more comma-separated tag names; whitespace between
+/// tokens; nothing else. Appends the tag names in order of appearance.
+Result<void> parseTagQuery(std::string_view text, std::vector<std::string_view>& names) {
+    usize i = 0;
+    bool seen[3] = {false, false, false};
+    auto skipWs = [&] {
+        while (i < text.size() && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n' || text[i] == '\r')) ++i;
+    };
+    auto readName = [&](usize& start) -> std::string_view {
+        start = i;
+        while (i < text.size() && (isSegChar(text[i]) || text[i] == '.')) ++i;
+        return text.substr(start, i - start);
+    };
+    while (true) {
+        skipWs();
+        if (i >= text.size()) return {};
+        usize kwStart = 0;
+        const std::string_view kw = readName(kwStart);
+        const int clause = kw == "all" ? 0 : kw == "any" ? 1 : kw == "none" ? 2 : -1;
+        if (clause < 0) return makeError(ErrorCode::ParseError, "tag query: expected all(, any( or none( at offset {}", kwStart);
+        if (seen[clause]) return makeError(ErrorCode::ParseError, "tag query: duplicate {}() clause at offset {}", kw, kwStart);
+        seen[clause] = true;
+        skipWs();
+        if (i >= text.size() || text[i] != '(') return makeError(ErrorCode::ParseError, "tag query: expected '(' at offset {}", i);
+        ++i;
+        while (true) {
+            skipWs();
+            usize nameStart = 0;
+            const std::string_view name = readName(nameStart);
+            if (!isValidTagName(name)) return makeError(ErrorCode::ParseError, "tag query: expected a tag name at offset {}", nameStart);
+            names.push_back(name);
+            skipWs();
+            if (i < text.size() && text[i] == ',') {
+                ++i;
+                continue;
+            }
+            if (i < text.size() && text[i] == ')') {
+                ++i;
+                break;
+            }
+            return makeError(ErrorCode::ParseError, "tag query: expected ',' or ')' at offset {}", i);
+        }
+    }
+}
+
 std::string_view parentTag(std::string_view name) noexcept {
     const usize dot = name.rfind('.');
     return dot == std::string_view::npos ? std::string_view() : name.substr(0, dot);
@@ -375,20 +422,17 @@ private:
         tags[std::string(tag)].client |= client;
     }
 
-    /// Tags a TagQuery names (`all(A.B, C) any(D) none(E)`), so each has a TagIndex. The query itself
-    /// stays text in v0: gameplay compiles it against the hot set (06 §1.1).
+    /// Checks a TagQuery and gives each tag it names a TagIndex. The query itself stays text in v0:
+    /// gameplay compiles it against the hot set at run time (06 §1.1), so a query it would refuse must
+    /// fail here, and only real tag names may take a slot in the table (one more slot renumbers every
+    /// tag after it).
     void queryTags(std::string_view text, bool client) {
-        usize i = 0;
-        while (i < text.size()) {
-            if (!isSegChar(text[i]) && text[i] != '.') {
-                ++i;
-                continue;
-            }
-            const usize start = i;
-            while (i < text.size() && (isSegChar(text[i]) || text[i] == '.')) ++i;
-            const std::string_view word = text.substr(start, i - start);
-            if (word != "all" && word != "any" && word != "none") useTag(word, client, " in a tag query");
+        std::vector<std::string_view> names;
+        if (auto r = parseTagQuery(text, names); !r) {
+            error(r.error().message);
+            return;
         }
+        for (const std::string_view n : names) useTag(n, client, " in a tag query");
     }
 
     void compile(const std::string& source, bool client) {

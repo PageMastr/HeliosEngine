@@ -98,6 +98,14 @@ TEST_CASE("cook: $parent inheritance overrides fields, merges structs and keyed 
     CHECK(k.slots[1].weight == 5.0f);
     CHECK(k.slots[2].slot == Name("ventral"));
     CHECK(k.slots[2].grade == Grade::High);
+    // Server {} fields of the elements merge like the others (the server cook keeps them).
+    CHECK(k.mounts[0].note == "SEC4-NESTED-base-mount-main");
+    CHECK(k.mounts[0].noteTags == base.mounts[0].noteTags);
+    CHECK(k.mounts[1].note == "SEC4-NESTED-skiff-mount-override");
+    CHECK(k.mounts[2].note == "SEC4-NESTED-skiff-mount-append");
+    CHECK(k.slots[0].note == "SEC4-NESTED-base-slot-nose");
+    CHECK(k.slots[1].note == "SEC4-NESTED-skiff-slot-override");
+    CHECK(k.slots[2].note == "SEC4-NESTED-skiff-slot-append");
     // @merge(append) appends; plain lists, maps, variants and optionals replace.
     CHECK(k.extras == std::vector<Name>{Name("base_extra"), Name("skiff_extra")});
     CHECK(k.nested == std::vector<std::vector<i32>>{{9}});
@@ -262,8 +270,10 @@ TEST_CASE("cook: tags compile to the TagIndex table gameplay::TagRegistry assign
     REQUIRE(b.add("Ship.Class.Frigate", gameplay::Audience::All).ok());
     REQUIRE(b.add("State.Docked", gameplay::Audience::Owner).ok());
     // TagSet values, then the tags of tag queries and of formulas (tag(self, …)).
-    for (const char* t : {"Ship.Role.Escort", "Ship.Class.Scout", "Sec4Sentinel.Server.Tag", "Ship.Class", "Ship.Role.Scout",
-                          "Faction.Neutral", "Ship.Mod.Afterburner"}) {
+    for (const char* t : {"Ship.Role.Escort", "Ship.Class.Scout", "Sec4Sentinel.Server.Tag", "Sec4Sentinel.Nested.BaseMount",
+                          "Sec4Sentinel.Nested.BaseSlot", "Sec4Sentinel.Nested.SkiffOverride", "Sec4Sentinel.Nested.SkiffAppend",
+                          "Sec4Sentinel.Nested.Roster", "Sec4Sentinel.Nested.Primary", "Sec4Sentinel.Nested.Bay",
+                          "Sec4Sentinel.Nested.Spare", "Ship.Class", "Ship.Role.Scout", "Faction.Neutral", "Ship.Mod.Afterburner"}) {
         REQUIRE(b.add(t).ok());
     }
     auto reg = b.build();
@@ -304,6 +314,80 @@ TEST_CASE("cook: tags compile to the TagIndex table gameplay::TagRegistry assign
     CHECK(hasDiag(d, "s.hrec", "tags: invalid tag name 'a..b'"));
 }
 
+TEST_CASE("cook: tag queries follow gameplay's grammar; a malformed one fails the cook and takes no TagIndex") {
+    const refl::TypeInfo& shipT = type("test.records.ShipDef");
+    auto withQuery = [&](std::string_view q) {
+        std::string json; // the query as a JSON string body
+        for (const char c : q) json += c == '\t' ? std::string("\\t") : c == '\n' ? std::string("\\n") : std::string(1, c);
+        return std::vector<SourceRecord>{source("q.hrec", shipT, std::format(R"({{"$rid": 90, "$name": "s/q", "query": "{}"}})", json))};
+    };
+    struct Bad {
+        const char* query;
+        const char* error;
+    };
+    for (const Bad& b : {Bad{"Ship.Class", "tag query: expected all(, any( or none( at offset 0"},
+                         Bad{"all(Ship.Class", "tag query: expected ',' or ')' at offset 14"},
+                         Bad{"all(A) all(B)", "tag query: duplicate all() clause at offset 7"},
+                         Bad{"every(A)", "tag query: expected all(, any( or none( at offset 0"},
+                         Bad{"all(A) junk", "tag query: expected all(, any( or none( at offset 7"},
+                         Bad{"all()", "tag query: expected a tag name at offset 4"},
+                         Bad{"any(A,)", "tag query: expected a tag name at offset 6"},
+                         Bad{"none(A) (B)", "tag query: expected all(, any( or none( at offset 8"},
+                         Bad{"all (A.9)", "tag query: expected a tag name at offset 5"}}) {
+        INFO(b.query);
+        const std::vector<CookDiagnostic> d = cookErrors(withQuery(b.query));
+        INFO(dump(d));
+        REQUIRE(d.size() == 1);
+        CHECK(d[0].path == "q.hrec");
+        CHECK(d[0].message == std::string("query: ") + b.error);
+        // gameplay refuses the same text with the same message at run time (the grammars must agree).
+        gameplay::TagRegistry::Builder g;
+        auto r = g.markHotFromQuery(b.query);
+        REQUIRE_FALSE(r.ok());
+        CHECK(r.error().message == b.error);
+    }
+    // Well-formed queries cook, and only their tag names enter the table.
+    for (const char* q : {"", " \t ", "none(A)", "any( A.B ,C )\n all(D)", "all(A) any(B) none(C)"}) {
+        INFO(q);
+        auto out = cook(withQuery(q));
+        REQUIRE_MESSAGE(out.ok(), (out.ok() ? "" : out.error().message));
+        gameplay::TagRegistry::Builder g;
+        CHECK(g.markHotFromQuery(q).ok());
+        const RecordDb db = open(out->server);
+        for (usize i = 0; i < db.tagCount(); ++i) {
+            const std::string_view n = db.tag(static_cast<TagIndex>(i)).name;
+            CHECK_MESSAGE((n == "A" || n == "A.B" || n == "B" || n == "C" || n == "D"), n);
+        }
+    }
+}
+
+TEST_CASE("cook: a type recursive through a list of structs that hold it by value cooks and decodes") {
+    // DlgNode { choices: list<DlgChoice> }, DlgChoice { next: DlgNode? } (schemac accepts it).
+    const std::vector<SourceRecord> s = {source("dlg.hrec", type("test.records.DlgDef"), R"({"$rid": 95, "$name": "dlg/1", "root": {
+      "text": "hello", "choices": [{"label": "bye"}, {"label": "more", "next": {"text": "deeper", "choices": [
+        {"label": "end", "next": {"text": "leaf"}}]}}]}})")};
+    auto out = cook(s);
+    REQUIRE_MESSAGE(out.ok(), (out.ok() ? "" : out.error().message));
+    for (const std::vector<u8>* bytes : {&out->client, &out->server}) {
+        const RecordDb db = open(*bytes);
+        const refl::Value v = decoded(db, db.find(95));
+        const auto& d = *static_cast<const DlgDef*>(v.data());
+        CHECK(d.root.text == "hello");
+        REQUIRE(d.root.choices.size() == 2);
+        CHECK(d.root.choices[0].label == "bye");
+        CHECK_FALSE(d.root.choices[0].next.has_value());
+        REQUIRE(d.root.choices[1].next.has_value());
+        const DlgNode& deeper = *d.root.choices[1].next;
+        CHECK(deeper.text == "deeper");
+        REQUIRE(deeper.choices.size() == 1);
+        REQUIRE(deeper.choices[0].next.has_value());
+        CHECK(deeper.choices[0].next->text == "leaf");
+        CHECK(deeper.choices[0].next->choices.empty());
+        const ValueView root = db.find(95).value.field("root");
+        CHECK(root.field("choices")[1].field("next").value().field("text").asText() == "deeper");
+    }
+}
+
 TEST_CASE("cook: identical inputs give byte-identical cooks, pinned by a golden hash") {
     std::vector<SourceRecord> sources = projectSources();
     const CookOutput a = cookProject();
@@ -319,8 +403,8 @@ TEST_CASE("cook: identical inputs give byte-identical cooks, pinned by a golden 
     // come out of every toolchain (GCC and Clang locally, MSVC and clang-cl in CI).
     MESSAGE("client ", a.client.size(), " bytes, xxh3 ", std::format("{:#018x}", hash64(a.client.data(), a.client.size())));
     MESSAGE("server ", a.server.size(), " bytes, xxh3 ", std::format("{:#018x}", hash64(a.server.data(), a.server.size())));
-    CHECK(hash64(a.client.data(), a.client.size()) == 0x0174baa4ac0f45bfull);
-    CHECK(hash64(a.server.data(), a.server.size()) == 0xe66e0b6f3c9c3afdull);
+    CHECK(hash64(a.client.data(), a.client.size()) == 0x23f970e4eb86aac5ull);
+    CHECK(hash64(a.server.data(), a.server.size()) == 0xf81a6f0d881a05adull);
 }
 
 TEST_CASE("cook: lists nested deeper than hrdb::kMaxNesting are refused; the limit itself cooks and loads") {

@@ -11,18 +11,28 @@ flags Perm : u16 {
   Admin
 }
 
-/// A thruster on a ship; ship lists of mounts are keyed by GUID.
+/// A thruster on a ship; ship lists of mounts are keyed by GUID. Its server {} part plants AAA-SEC-4
+/// sentinels inside shared composites (keyed lists merged through $parent, optionals).
 struct Mount {
   bone:  Name
   force: f32 = 10
   dir:   vec3f = [0, 0, -1]
+  server {
+    note:     string
+    noteTags: TagSet
+  }
 }
 
-/// A hardpoint; lists of slots are keyed by the slot name.
+/// A hardpoint; lists of slots are keyed by the slot name. Its server {} part plants AAA-SEC-4
+/// sentinels in @keyed(field) merges, map values and plain lists.
 struct Slot {
   slot:   Name
   grade:  Grade
   weight: f32
+  server {
+    note:     string
+    noteTags: TagSet
+  }
 }
 
 /// Crew seats: a keyed list inside an optional (read whole, never merged).
@@ -34,6 +44,19 @@ struct Roster {
 struct TreeNode {
   value: i32
   kids:  list<TreeNode>
+}
+
+/// A dialogue node: recursive through a list of structs that hold the node by value (schemac accepts
+/// it; the cooked layout must too, whichever of the two types is laid out first).
+struct DlgNode {
+  text:    string
+  choices: list<DlgChoice>
+}
+
+/// One choice of a dialogue node.
+struct DlgChoice {
+  label: string
+  next:  DlgNode?
 }
 
 /// Server-only drop table: never part of a client cook.
@@ -58,6 +81,11 @@ record PartDef @table("part") {
 /// A recursive record (nesting limits).
 record TreeDef @table("tree") {
   root: TreeNode
+}
+
+/// A dialogue: recursion through a struct inside a list.
+record DlgDef @table("dlg") {
+  root: DlgNode
 }
 
 /// Every cooked encoding, plus client {} and server {} blocks.
@@ -103,6 +131,9 @@ record ShipDef @table("ship") {
   nested:   list<list<i32>>
   drop:     LootRef? @opaque
   roster:   Roster?
+  primary:  Mount
+  bays:     map<Name, Slot>
+  spares:   list<Slot>
   client {
     skin:     SkinRef?
     hudColor: color

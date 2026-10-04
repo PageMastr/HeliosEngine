@@ -34,18 +34,21 @@
     {
       "$key": "62617365-6d6f-756e-8000-000000000001",
       "bone": "thruster_main",
-      "force": 250000
+      "force": 250000,
+      "note": "SEC4-NESTED-base-mount-main",
+      "noteTags": ["Sec4Sentinel.Nested.BaseMount"]
     },
     {
       "$key": "62617365-6d6f-756e-8000-000000000002",
       "bone": "thruster_left",
       "force": 40000,
-      "dir": [-1, 0, 0]
+      "dir": [-1, 0, 0],
+      "note": "SEC4-NESTED-base-mount-left"
     }
   ],
   "slots": [
-    {"slot": "nose", "grade": "Low", "weight": 1},
-    {"slot": "dorsal", "grade": "Mid", "weight": 2}
+    {"slot": "nose", "grade": "Low", "weight": 1, "note": "SEC4-NESTED-base-slot-nose", "noteTags": ["Sec4Sentinel.Nested.BaseSlot"]},
+    {"slot": "dorsal", "grade": "Mid", "weight": 2, "note": "SEC4-NESTED-base-slot-dorsal"}
   ],
   "extras": ["base_extra"],
   "parts": [499464797028555293, 2792622146083070695],
@@ -57,6 +60,23 @@
   "mode": {"Warp": {"target": "home", "spool": "3s"}},
   "nested": [[1, 2], [], [3]],
   "drop": 2531117344111056078,
+  "roster": {
+    "seats": [
+      {
+        "$key": "62617365-7365-6174-8000-000000000001",
+        "bone": "seat_pilot",
+        "note": "SEC4-NESTED-roster-seat",
+        "noteTags": ["Sec4Sentinel.Nested.Roster"]
+      }
+    ]
+  },
+  "primary": {"bone": "thruster_primary", "note": "SEC4-NESTED-primary", "noteTags": ["Sec4Sentinel.Nested.Primary"]},
+  "bays": {
+    "aft": {"slot": "aft", "grade": "Low", "weight": 4, "note": "SEC4-NESTED-bay-aft", "noteTags": ["Sec4Sentinel.Nested.Bay"]}
+  },
+  "spares": [
+    {"slot": "spare", "grade": "High", "weight": 0.5, "note": "SEC4-NESTED-spare", "noteTags": ["Sec4Sentinel.Nested.Spare"]}
+  ],
   "skin": 1759060513237310278,
   "hudColor": [0, 1, 0, 1],
   "loot": 2531117344111056078,

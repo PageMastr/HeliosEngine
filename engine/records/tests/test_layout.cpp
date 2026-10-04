@@ -1,4 +1,6 @@
 // Cooked layouts (layout.h): sizes, alignment, the audience filter and order-independent hashes.
+#include <array>
+
 #include "test_util.h"
 
 using namespace helios;
@@ -91,6 +93,90 @@ TEST_CASE("layout: hashes do not depend on the order layouts are built in") {
     LayoutCache c(CookAudience::Server);
     const u64 direct = (*c.get(type("test.records.TreeNode")))->hash;
     CHECK(direct == (*a.get(type("test.records.TreeNode")))->hash);
+}
+
+TEST_CASE("layout: recursion through a list of structs that hold the type by value works in any build order") {
+    // DlgNode { choices: list<DlgChoice> }, DlgChoice { next: DlgNode? }: DlgChoice holds DlgNode by
+    // value, DlgNode holds DlgChoice only through a span. Each of the three types first, in a fresh cache
+    // per audience, gives the same layouts and hashes.
+    const char* names[] = {"test.records.DlgNode", "test.records.DlgChoice", "test.records.DlgDef"};
+    for (const CookAudience audience : {CookAudience::Client, CookAudience::Server}) {
+        std::vector<std::vector<u64>> hashes;
+        for (const char* first : names) {
+            INFO(first);
+            LayoutCache cache(audience);
+            auto f = cache.get(type(first));
+            REQUIRE_MESSAGE(f.ok(), (f.ok() ? "" : f.error().message));
+            std::vector<u64> h;
+            for (const char* n : names) {
+                auto l = cache.get(type(n));
+                REQUIRE_MESSAGE(l.ok(), (l.ok() ? "" : l.error().message));
+                h.push_back((*l)->hash);
+            }
+            auto node = cache.get(type("test.records.DlgNode"));
+            auto choice = cache.get(type("test.records.DlgChoice"));
+            CHECK((*node)->field("choices")->layout->element == *choice);
+            CHECK((*choice)->field("next")->layout->element == *node);
+            CHECK((*choice)->size == 8 + (*choice)->field("next")->layout->size); // label span + DlgNode? inline
+            CHECK((*node)->size == 16);                                           // two spans
+            hashes.push_back(std::move(h));
+        }
+        CHECK(hashes[0] == hashes[1]);
+        CHECK(hashes[0] == hashes[2]);
+    }
+}
+
+// Hand-made TypeInfos of types that contain themselves by value: no C++ type or schema can (they would
+// have infinite size), but TypeInfos are plain data (dynamic packages later), and a layout must never be
+// sized from a half-built one. Each loop is struct `loop.S { v: <wrapper> }` with the wrapper holding S.
+const refl::TypeInfo& loopStruct(int wrapper) noexcept;
+template <int W>
+const refl::TypeInfo& loopStructFn() noexcept {
+    return loopStruct(W);
+}
+template <int W>
+const refl::TypeInfo& loopWrapper() noexcept {
+    static const refl::VariantAlt alt{"S", 1, &loopStructFn<W>};
+    static const refl::TypeInfo t = [] {
+        refl::TypeInfo i;
+        i.qualifiedName = W == 0 ? "loop.S?" : W == 1 ? "loop.S[2]" : "loop.V";
+        i.kind = W == 0 ? refl::Kind::Optional : W == 1 ? refl::Kind::Array : refl::Kind::Variant;
+        if (W == 2) {
+            i.alternatives = std::span<const refl::VariantAlt>(&alt, 1);
+        } else {
+            i.elementFn = &loopStructFn<W>;
+            i.arraySize = 2;
+        }
+        return i;
+    }();
+    return t;
+}
+const refl::TypeInfo& loopStruct(int wrapper) noexcept {
+    static const refl::FieldInfo fields[3] = {{"v", 1, 0, &loopWrapper<0>}, {"v", 1, 0, &loopWrapper<1>}, {"v", 1, 0, &loopWrapper<2>}};
+    static const std::array<refl::TypeInfo, 3> types = [] {
+        std::array<refl::TypeInfo, 3> t{};
+        for (int w = 0; w < 3; ++w) {
+            t[static_cast<usize>(w)].qualifiedName = "loop.S";
+            t[static_cast<usize>(w)].kind = refl::Kind::Struct;
+            t[static_cast<usize>(w)].fields = std::span<const refl::FieldInfo>(&fields[w], 1);
+        }
+        return t;
+    }();
+    return types[static_cast<usize>(wrapper)];
+}
+
+TEST_CASE("layout: a type that contains itself by value is refused through an optional, array or variant, whichever comes first") {
+    for (const refl::TypeInfo* wrapper : {&loopWrapper<0>(), &loopWrapper<1>(), &loopWrapper<2>()}) {
+        INFO(wrapper->qualifiedName);
+        for (const bool wrapperFirst : {true, false}) {
+            LayoutCache cache(CookAudience::Server);
+            auto l = cache.get(wrapperFirst ? *wrapper : wrapper->kind == refl::Kind::Variant ? wrapper->alternatives[0].type()
+                                                                                                : wrapper->element());
+            REQUIRE_FALSE(l.ok());
+            CHECK(l.error().code == ErrorCode::InvalidArgument);
+            CHECK(l.error().message.find("contains itself by value") != std::string::npos);
+        }
+    }
 }
 
 } // namespace

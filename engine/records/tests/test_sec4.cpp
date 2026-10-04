@@ -139,6 +139,19 @@ TEST_CASE("AAA-SEC-4: the client cook of the test records holds no server-only f
         CHECK_MESSAGE(containsText(server, s), s);
         CHECK_MESSAGE(!containsText(client, s), s);
     }
+    // Server {} fields of structs nested in shared data: keyed lists by $key in the template, merged
+    // into and appended to through $parent; @keyed(slot) lists likewise; an optional holding a keyed
+    // list; a struct by value; a map value; a plain list. Each value and server-only tag is distinct.
+    for (const std::string_view s :
+         {"SEC4-NESTED", "SEC4-NESTED-base-mount-main", "SEC4-NESTED-base-mount-left", "SEC4-NESTED-base-slot-nose",
+          "SEC4-NESTED-base-slot-dorsal", "SEC4-NESTED-skiff-mount-override", "SEC4-NESTED-skiff-mount-append",
+          "SEC4-NESTED-skiff-slot-override", "SEC4-NESTED-skiff-slot-append", "SEC4-NESTED-roster-seat", "SEC4-NESTED-primary",
+          "SEC4-NESTED-bay-aft", "SEC4-NESTED-spare", "Sec4Sentinel.Nested", "Sec4Sentinel.Nested.BaseMount",
+          "Sec4Sentinel.Nested.BaseSlot", "Sec4Sentinel.Nested.SkiffOverride", "Sec4Sentinel.Nested.SkiffAppend",
+          "Sec4Sentinel.Nested.Roster", "Sec4Sentinel.Nested.Primary", "Sec4Sentinel.Nested.Bay", "Sec4Sentinel.Nested.Spare"}) {
+        CHECK_MESSAGE(containsText(server, s), s);
+        CHECK_MESSAGE(!containsText(client, s), s);
+    }
     CHECK(containsValue(server, kSecretCode));
     CHECK_FALSE(containsValue(client, kSecretCode));
     CHECK(containsValue(server, threatConst)); // the server formula's constant, in its bytecode
@@ -157,6 +170,19 @@ TEST_CASE("AAA-SEC-4: the client cook of the test records holds no server-only f
         const bool kept = ship.layout().field(f.name) != nullptr;
         CHECK_MESSAGE(kept == !refl::hasFlag(f.flags, FieldFlags::ServerOnly), f.name);
     }
+    // ... and none in the layouts of the structs shared fields hold.
+    for (const char* f : {"mounts", "slots", "primary", "bays", "spares"}) {
+        const CookedLayout& fl = *ship.layout().field(f)->layout;
+        const CookedLayout& elem = fl.enc == Enc::Struct ? fl : *fl.element;
+        INFO(f);
+        REQUIRE(elem.enc == Enc::Struct);
+        CHECK(elem.field("note") == nullptr);
+        CHECK(elem.field("noteTags") == nullptr);
+        CHECK((elem.field("weight") != nullptr || elem.field("force") != nullptr));
+    }
+    const ValueView sshipNested = s.find(kBase).value;
+    CHECK(sshipNested.field("primary").field("note").asText() == "SEC4-NESTED-primary");
+    CHECK(sshipNested.field("bays").mapValue(0).field("note").asText() == "SEC4-NESTED-bay-aft");
     // The @opaque shared reference cooks as the bare id of a record the client does not have.
     REQUIRE(ship.field("drop").hasValue());
     CHECK(ship.field("drop").value().asRecordId() == kLoot);
@@ -177,7 +203,8 @@ TEST_CASE("AAA-SEC-4: the client cook of the test records holds no server-only f
             CHECK(ct.name == st.name);
         }
     }
-    CHECK(withheld == 3); // Sec4Sentinel, Sec4Sentinel.Server, Sec4Sentinel.Server.Tag
+    // Sec4Sentinel, Sec4Sentinel.Server, Sec4Sentinel.Server.Tag, Sec4Sentinel.Nested and its eight leaves.
+    CHECK(withheld == 12);
     CHECK(withheld == out.stats.withheldTags);
     CHECK(c.findTag("Ship.Role.Escort") != kNoTag); // used by shared data too
 

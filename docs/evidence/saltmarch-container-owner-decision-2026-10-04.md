@@ -11,8 +11,8 @@
 
 ## The question and the answer
 
-The lead asked the owner "Which should it be?" and offered two options. The lead's task brief records them
-as follows (the options are its summary; the owner's answer is verbatim):
+The Director (the orchestrating agent, 09 §5.1) asked the owner "Which should it be?" and offered two options.
+Its task brief for this record summarizes them as follows; the owner's answer below is verbatim.
 
 - **Option A:** Saltmarch is an object container inside the single Phase 1 zone `tallis`, with its files at
   `content/zones/tallis/saltmarch.hcont` and `content/zones/tallis/saltmarch.entities/<guid>.hent`, edited in

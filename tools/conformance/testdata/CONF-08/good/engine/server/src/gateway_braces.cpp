@@ -1,6 +1,7 @@
 // A block's braces end a read statement: a lambda's body, a constructor's body after its initializer list,
 // a labelled block, a body after a trailing return type, a struct with a templated base, a function-try
-// block, a do statement and a returned lambda. None of these addresses is the gateway's.
+// block, a do statement, a returned lambda and an immediately-invoked one whose capture names connect. None
+// of these addresses is the gateway's.
 void hooks(Server& server) {
     server.onConnect(
         [&] {
@@ -37,6 +38,11 @@ auto onConnect() {
     return [connect_] {
         metrics.push("10.0.0.9:9100");
     };
+}
+void probeNow(bool connect) {
+    [connect] {
+        metrics.push("10.0.0.9:9100");
+    }();
 }
 // `;` ends a statement inside a lambda's body in a call's parentheses, also after an inner lambda closes.
 void spawn() {

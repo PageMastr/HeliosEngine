@@ -577,3 +577,56 @@ func TestISAEnvRefOnce(t *testing.T) {
 		t.Errorf("want 2 findings on engine/clang/CMakeLists.txt:15-16, got %d", seen)
 	}
 }
+
+// TestCBlockBrace: how CONF-08 tells a block's `{` (a statement boundary) from an initializer's, by the
+// statement text before it (blanked: a string keeps its quotes). It pins the cases the fixtures cannot reach
+// in valid C++ (an empty statement before a brace, an unmatched `]`) and the rest beside them.
+func TestCBlockBrace(t *testing.T) {
+	for _, tc := range []struct {
+		stmt  string
+		block bool
+	}{
+		{"", true},                                    // a bare block at a statement's start
+		{"  \n\t", true},                              // only white space since the boundary
+		{"void f()", true},                            // a function body
+		{"if (x)", true},                              // a control statement
+		{"auto f() -> net::Address", true},            // a trailing return type
+		{"[&]() mutable -> int", true},                // a lambda's trailing return type
+		{"Probe::Probe(Net& n) : connect_{n}", true},  // a constructor body after its initializer list
+		{"case Mode::Connect:", true},                 // a labelled block
+		{"for (;;) x;", true},                         // a `;` that is no boundary, then a brace
+		{"extern \" \"", true},                        // extern "C" {, blanked
+		{"namespace helios::net", true},               // a namespace
+		{"struct ConnectStats : Counters<int>", true}, // a class head with a templated base
+		{"else", true},
+		{"do", true},
+		{"try", true},
+		{"void f() const", true},
+		{"void f() noexcept", true},
+		{"void f() override", true},
+		{"void f() final", true},
+		{"[x]() mutable", true},
+		{"[connect]", true},              // an immediately-invoked lambda at a statement's start
+		{"run([&]", true},                // a lambda's introducer after `(`
+		{"auto f = [x]", true},           // after `=`
+		{"if (x) [[likely]]", true},      // an attribute before a block
+		{"x]", true},                     // an unmatched `]`
+		{"net::Address listen", false},   // an initializer after a name
+		{"net::Address listen =", false}, // after `=`
+		{"pick(kFallback,", false},       // after a comma
+		{"pick(", false},                 // after `(`
+		{"std::vector<std::string> listen{", false},
+		{"return", false},                                 // a returned braced list
+		{"auto listen = std::vector<std::string>", false}, // a template's `>`
+		{"net::Address listen[1]", false},                 // an array bound
+		{"std::string listen[1][1]", false},               // two bounds
+		{"auto* listen = new std::array<int, 2>[n]", false},
+		{"auto* listen = new T[n]", false},
+		{"return [x]", true}, // a returned lambda
+		{"throw [x]", true},
+	} {
+		if got := cBlockBrace(tc.stmt); got != tc.block {
+			t.Errorf("cBlockBrace(%q) = %v, want %v", tc.stmt, got, tc.block)
+		}
+	}
+}

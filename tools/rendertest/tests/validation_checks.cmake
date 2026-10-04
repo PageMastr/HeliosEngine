@@ -26,13 +26,15 @@
 #
 # Cases 1-4 and 6 change what the loader loads through environment variables, so cases 1-3 first check
 # that the variables take effect (`--print-probe`: the RHI reports Khronos validation active only when
-# the layer is in the call chain); cases 4 and 6 (VK_LAYER_PATH, like case 2) run when case 2's did. The Windows loader ignores VK_LOADER_LAYERS_DISABLE, VK_LAYER_PATH
-# and VK_ADD_LAYER_PATH in a high-integrity process (an elevated one, or a service such as the win-gpu
-# runner: the SERVICE group grants SeImpersonatePrivilege, which raises the token to High), and a loader
-# settings file (Vulkan Configurator) can force the layer on or off on any platform. Where the
+# the layer is in the call chain); cases 4 and 6 (VK_LAYER_PATH, like case 2) run when case 2's did. The
+# Windows loader ignores VK_LOADER_LAYERS_DISABLE, VK_LAYER_PATH and VK_ADD_LAYER_PATH in a high-integrity
+# process (an elevated one, or most likely a service such as the win-gpu runner: the SERVICE group grants
+# SeImpersonatePrivilege, which raises the token to High; the job prints the level), and a loader settings
+# file or an override layer (Vulkan Configurator) can force the layer on or off on any platform. Where the
 # environment cannot take the layer away, a "validated" pass is the truth (the layer did report itself),
-# the case cannot be exercised, and the script says so: on Windows it is a NOTE (the win-gpu job prints
-# the integrity level and the loader settings for the record), on Linux it fails, so CI keeps them all.
+# the case cannot be exercised, and the script says so: on Windows it is a NOTE (the win-gpu job turns it
+# into a warning and prints the integrity level and the loader settings), on Linux it fails, so CI keeps
+# them all.
 # Inputs: -DRENDERTEST=<exe> -DOUT=<scratch dir> [-DLAYER=<layer manifest found at configure time>]
 #         [-DFAKE_LAYER_INITFAIL=<dir> -DFAKE_LAYER_NODRIVER=<dir> -DFAKE_LAYER_PASSTHROUGH=<dir>]
 #         (directories of the fake manifests)

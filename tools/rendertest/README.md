@@ -126,7 +126,7 @@ fails without any layer, and, where configure found the layer, through the `--pr
 that `HELIOS_RHI_VALIDATION=1` validates a default device but not the probe. Each case that hides or
 replaces the layer through the loader's environment first checks that the environment takes effect: the
 Windows loader ignores `VK_LOADER_LAYERS_DISABLE`, `VK_LAYER_PATH` and `VK_ADD_LAYER_PATH` in a process of
-High integrity or above (elevated, or a service such as the `win-gpu` runner), and a loader settings file
+High integrity or above (elevated, or most likely a service such as the `win-gpu` runner), and a loader settings file
 can force the layer on. Where the RHI still finds the layer in the call chain, the case cannot be set up:
 on Windows the check prints `NOTE: not checked` with the reason (the `win-gpu` job turns each into a warning on
 the run), on Linux it fails, so CI runs every case.

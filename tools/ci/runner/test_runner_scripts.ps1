@@ -578,11 +578,12 @@ if ($rotateService.Count -eq 1) {
     Assert-Equal @("stop $runnerService force=True", "sc.exe delete $runnerService", 'remove group GITHUB_ActionsRunner_G1a2b3') `
         $script:rotateLog.ToArray() 'rotating stops and deletes the runner''s service, then deletes config.cmd''s group'
     Assert-Equal 'What is left (nothing below this line):' $script:rotateOutput[-1] 'and nothing is left of either'
-    try { Invoke-HeliosCiRotateService @("$runnerService", 'actions.runner.PageMastr-scifi-test.helios-win-gpu') @('GITHUB_ActionsRunner_G1a2b3', 'GITHUB_ActionsRunner_G4c5d6') } `
+    $oldName = 'actions.runner.PageMastr-scifi-test.helios-win-gpu'   # registered before the repository's rename
+    try { Invoke-HeliosCiRotateService @($runnerService, $oldName) @('GITHUB_ActionsRunner_G1a2b3', 'GITHUB_ActionsRunner_G4c5d6') }
     catch { $script:rotateLog.Add("error: $($_.Exception.Message)") }
-    Assert-Equal @("stop $runnerService force=True", "sc.exe delete $runnerService", 'stop actions.runner.PageMastr-scifi-test.helios-win-gpu force=True',
-        'sc.exe delete actions.runner.PageMastr-scifi-test.helios-win-gpu', 'remove group GITHUB_ActionsRunner_G1a2b3',
-        'remove group GITHUB_ActionsRunner_G4c5d6') $script:rotateLog.ToArray() 'every runner service and group goes (one from before the rename too)'
+    Assert-Equal @("stop $runnerService force=True", "sc.exe delete $runnerService", "stop $oldName force=True", "sc.exe delete $oldName",
+        'remove group GITHUB_ActionsRunner_G1a2b3', 'remove group GITHUB_ActionsRunner_G4c5d6') $script:rotateLog.ToArray() `
+        'every runner service and group goes (one from before the rename too)'
     try { Invoke-HeliosCiRotateService } catch { $script:rotateLog.Add("error: $($_.Exception.Message)") }
     Assert-Equal 0 $script:rotateLog.Count 'with neither left, deleting the runner does nothing and does not fail'
     Assert-Throws { Invoke-HeliosCiRotateService @($runnerService) @('GITHUB_ActionsRunner_G1a2b3') "sc.exe delete $runnerService" } `
@@ -883,8 +884,10 @@ Assert-Equal $true ($remove.Contains('do Rotate''s step 2') -and
 $riskStart = $runbook.IndexOf('What stays possible (K33''s residual risk)')
 $riskEnd = $runbook.IndexOf('## Names (binding)')
 $risk = if ($riskStart -ge 0 -and $riskEnd -gt $riskStart) { $runbook.Substring($riskStart, $riskEnd - $riskStart) -replace '\s+', ' ' } else { '' }
-Assert-Equal $true ($risk.Contains('It cannot reach administrator rights either, **as long as you never run anything from `D:\helios-ci` in an elevated window once the service has run**') -and
-    -not $risk.Contains('administrator rights or the LAN')) 'the residual risk makes "no administrator rights" conditional on never running D:\helios-ci elevated'
+$conditional = 'It cannot reach administrator rights either, **as long as you never run anything from `D:\helios-ci` in an ' +
+    'elevated window once the service has run**'
+Assert-Equal $true ($risk.Contains($conditional) -and -not $risk.Contains('administrator rights or the LAN')) `
+    'the residual risk makes "no administrator rights" conditional on never running D:\helios-ci elevated'
 
 # The runner was online without the hook from 2026-10-03: the runbook's "Already done" path shows the jobs that ran
 # and sends the owner through Rotate, whatever they show (a job can delete its own log); and since step 4b had not
@@ -896,7 +899,8 @@ $already = if ($alreadyStart -ge 0 -and $alreadyEnd -gt $alreadyStart) { $runboo
 Assert-Equal $true ($already -match "Get-ChildItem D:\\helios-ci\\runner\\_diag -Filter 'Worker_\*\.log'") `
     '"Already done" lists the jobs that ran without the hook'
 $alreadyText = $already -replace '\s+', ' '
-Assert-Equal $true ($alreadyText -match 'Start over either way.*follow "Rotate" below from its step 2\. It removes the runner with Windows'' own tools, never with `config\.cmd`') `
+Assert-Equal $true ($alreadyText -match ('Start over either way.*follow "Rotate" below from its step 2\. ' +
+        'It removes the runner with Windows'' own tools, never with `config\.cmd`')) `
     '"Already done" removes the runner without config.cmd, then replaces the account and D:\helios-ci'
 Assert-Equal $false ($already -match 'steps 6 to 10') '"Already done" no longer goes on with the same account and runner folder'
 Assert-Equal $true ($alreadyText.Contains('every folder that step 4b''s first audit lists as `write`, including `C:\VulkanSDK`') -and

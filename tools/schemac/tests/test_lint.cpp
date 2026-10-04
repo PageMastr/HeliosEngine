@@ -305,6 +305,22 @@ TEST_CASE("lint: a keyed list entry's tag and length are counted") {
     CHECK(small->messages.find("size.unreliable") == std::string::npos);
 }
 
+TEST_CASE("lint: a --lint-out path that another output uses is an error") {
+    // #33's round 6 made two outputs at one path an error. The check runs after the lint pass, so the
+    // report is one of the outputs it compares.
+    CompileOptions options = lintOptions();
+    options.emitCpp = true;
+    options.cppOut = "cpp";
+    options.lintOut = "cpp/test/t.gen.h";
+    auto c = compileText("package test;\nstruct S { a: u8 }\n", options);
+    CHECK_FALSE(c->ok());
+    CHECK_MESSAGE(c->messages.find("two outputs would be written to 'cpp/test/t.gen.h': give each its own path") != std::string::npos,
+                  c->messages);
+    options.lintOut = "lint.json";
+    auto apart = compileText("package test;\nstruct S { a: u8 }\n", options);
+    CHECK_MESSAGE(apart->ok(), apart->messages);
+}
+
 TEST_CASE("perf: --emit lint is O(n log n) in its findings") {
     // PR #35's round 3: add() scanned every earlier finding, so the lint was quadratic in its findings
     // (20,000 took 1.07 s, 40,000 took 4.1 s). Budget: 40,000 findings, the frontend included, in <= 1 s

@@ -776,7 +776,7 @@ case. `test_lint.cpp` covers both size budgets (what counts as network input, `s
 `T[N]`, one report per struct or message, service rpc argument names, `@unreliable` events, `TagSet`
 bytes, the exact worst case against 1,186 B), the report's positions and SEC-1 table, and `--Werror`
 (the warnings it promotes stay in the report; `test_cli.cpp` checks that a run failing before the lint
-pass removes an older report). `test_repl.cpp` runs the generated replication code of the golden
+pass removes an older report), and a `--lint-out` that another output uses (an error). `test_repl.cpp` runs the generated replication code of the golden
 fixture and the sample schemas: descriptors against the schema and the `TypeInfo` (ids, offsets,
 change-mask indices), full-state round trips within each quantizer's precision (and frame-cell at 1/256 m,
 range and raw fields re-encoding to the same bits), every truncated prefix and random input rejected cleanly, an undeclared enum value, the rpc

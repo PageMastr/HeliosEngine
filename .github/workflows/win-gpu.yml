@@ -188,16 +188,22 @@ jobs:
       # (the tool builds under engine/render/ until tools/CMakeLists.txt lists it), not a guessed path.
       - name: Locate the rendertest output (from CTest)
         run: |
-          $listing = & ctest --test-dir $env:BUILD -C $env:CONFIG -N -R '^rendertest\.report$' --show-only=json-v1
-          if ($LASTEXITCODE -ne 0) { throw 'ctest could not list rendertest.report' }
-          $report = @(($listing | Out-String | ConvertFrom-Json).tests | Where-Object { $_.name -eq 'rendertest.report' })
-          if ($report.Count -ne 1) { throw 'CTest lists no rendertest.report test, so the rendertest output is unknown' }
-          $command = @($report[0].command)
-          $at = [Array]::IndexOf($command, '--out')
-          if ($at -lt 0 -or $at + 1 -ge $command.Count) { throw "rendertest.report has no --out argument: $($command -join ' ')" }
-          $out = [IO.Path]::GetFullPath($command[$at + 1])
-          Write-Output "rendertest output: $out"
-          "RENDERTEST_OUT=$out" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # Not fatal here, so the GPU tests still run: "The goldens and the bench ran on a hardware GPU" fails on it.
+          try {
+            $listing = & ctest --test-dir $env:BUILD -C $env:CONFIG -N -R '^rendertest\.report$' --show-only=json-v1
+            if ($LASTEXITCODE -ne 0) { throw 'ctest could not list rendertest.report' }
+            $report = @(($listing | Out-String | ConvertFrom-Json).tests | Where-Object { $_.name -eq 'rendertest.report' })
+            if ($report.Count -ne 1) { throw 'CTest lists no rendertest.report test' }
+            $command = @($report[0].command)
+            $at = [Array]::IndexOf($command, '--out')
+            if ($at -lt 0 -or $at + 1 -ge $command.Count) { throw "rendertest.report has no --out argument: $($command -join ' ')" }
+            $out = [IO.Path]::GetFullPath($command[$at + 1])
+            Write-Output "rendertest output: $out"
+            "RENDERTEST_OUT=$out" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          } catch {
+            Write-Output "::error::The rendertest output directory is unknown: $($_.Exception.Message)"
+          }
+          exit 0  # the runner would otherwise return ctest's exit code
 
       # Diagnostics only; this step never fails the job. What the Vulkan loader sees in this process, so a GPU test
       # failure explains itself from the log. In a process of High integrity or above the loader ignores
@@ -373,10 +379,14 @@ jobs:
           $adapter = '"adapter": "((?:[^"\\]|\\.)*)"'
           $missing = @()     # no result, or a result without an adapter: the work did not run (see the steps above)
           $onSoftware = @()  # a result from a software rasterizer: the wrong adapter was picked
-          if (-not $env:RENDERTEST_OUT) { throw 'The rendertest output directory is unknown (see "Locate the rendertest output")' }
-          $dir = Join-Path $env:RENDERTEST_OUT 'vulkan'
-          $results = @(Get-ChildItem -LiteralPath $dir -Filter *.json -ErrorAction SilentlyContinue)
-          if ($results.Count -eq 0) { $missing += "no rendertest results in $dir" }
+          if ($env:RENDERTEST_OUT) {
+            $dir = Join-Path $env:RENDERTEST_OUT 'vulkan'
+            $results = @(Get-ChildItem -LiteralPath $dir -Filter *.json -ErrorAction SilentlyContinue)
+            if ($results.Count -eq 0) { $missing += "no rendertest results in $dir" }
+          } else {
+            $results = @()
+            $missing += 'the rendertest output directory is unknown (see "Locate the rendertest output (from CTest)")'
+          }
           foreach ($file in $results) {
             $text = Get-Content -LiteralPath $file.FullName -Raw
             $m = [regex]::Match($text, $adapter)

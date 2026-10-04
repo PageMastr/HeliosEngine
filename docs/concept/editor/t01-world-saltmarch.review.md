@@ -75,9 +75,9 @@ Harrow, the plan's own setting (01 §4.2), with no third-party IP, inside the co
 - [ ] **Collaboration, as a second frame (Ph2–3; 07 §1.8, T30):** the amber accent with
   `SHARED · zone-tallis`; other users' outlines with name tags; `Participants` and `Locks / Notes` tabs;
   `Behind main: 4 commits`.
-- [ ] **Fonts.** The monospace font copies today's stopgap ProggyForever (editorui README). The plan's
-  fonts are Roboto and Roboto Mono (07 §1.3): Roboto at about 15 px for the chrome, Roboto Mono only for
-  paths and GUIDs.
+- [ ] **Fonts.** The monospace font copies the stopgap bitmap font the editor used before PR #42. The
+  plan's fonts are Roboto and Roboto Mono (07 §1.3), and the editor has drawn with Roboto 2.138 since
+  PR #42: Roboto at about 15 px for the chrome, Roboto Mono only for paths and GUIDs.
 
 ## Nice
 
@@ -111,8 +111,9 @@ dropped because the plan does not require the art to show them.
 
 ## Today against the concept
 
-Today's editor (PR #41) has docking, a property grid with units, enums, groups and client/server badges,
-History and Output, the status bar, and dark and high-contrast themes. The viewport is still empty.
+Today's editor (PRs #41 and #42) has docking, a property grid with units, enums, groups and client/server
+badges, History and Output, the status bar, dark and high-contrast themes, and Roboto as its UI font. The
+viewport is still empty.
 
 | Missing | Delivered by |
 |---|---|
@@ -127,4 +128,4 @@ History and Output, the status bar, and dark and high-contrast themes. The viewp
 | Saltmarch content | WP-1.22 |
 | Vegetation and weather in the painted look (Phase 1 has only a 2D cloud shell, AAA-REN-6) | Ph3, WP-3.5 |
 | Volumetric clouds | Ph4, WP-4.1 |
-| Roboto fonts | No WP named; the editorui README says "later" |
+| Roboto Mono for paths and GUIDs | With the code pane (T10, T19), per the editorui README |

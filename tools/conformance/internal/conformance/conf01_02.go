@@ -485,23 +485,24 @@ func configVars(g *goIndex, gf *goFile) cfgVars {
 	// must not borrow another's: an element of a KV collection with no buckets (a parameter's), and a KV
 	// parameter or struct field named like a config whose buckets come only from literals, add a bucket the
 	// lint cannot resolve, unless the file assigns a `.Bucket = …` on the name (it may be this one's; it is
-	// not tracked to one of them).
+	// not tracked to one of them). A parameter collection gets its bucket before the merges, so that its
+	// range variables and element copies take it too; a parameter config after them, since an element named
+	// like one takes the merged buckets first.
+	outsideIn := func(names map[string]bool, m map[string]*cfgVar) {
+		for name := range names {
+			if v := m[name]; v != nil && v.kv && len(v.buckets) > 0 && !assigned[v] {
+				v.buckets = append(v.buckets, cfgBucket{})
+			}
+		}
+	}
+	outsideIn(outsideColls, c.colls)
 	for _, m := range merges {
 		m[0].buckets = append(m[0].buckets, m[1].buckets...)
 		if m[1].kv && len(m[1].buckets) == 0 && !assigned[m[0]] {
 			m[0].buckets = append(m[0].buckets, cfgBucket{})
 		}
 	}
-	for _, o := range []struct {
-		names map[string]bool
-		m     map[string]*cfgVar
-	}{{outside, c.vars}, {outsideColls, c.colls}} {
-		for name := range o.names {
-			if v := o.m[name]; v != nil && v.kv && len(v.buckets) > 0 && !assigned[v] {
-				v.buckets = append(v.buckets, cfgBucket{})
-			}
-		}
-	}
+	outsideIn(outside, c.vars)
 	return c
 }
 

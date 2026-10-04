@@ -13,3 +13,7 @@ var gatewayUDP = &net.UDPAddr{Port: gamePort}
 var gatewayConfig = GatewayConfig{Port: 7777, AdminPort: 9090}
 
 type GatewayConfig struct{ Port, AdminPort int }
+
+// The same with a host variable: host + ":" + port.
+var loopbackHost = "127.0.0.1"
+var gatewayHosted = loopbackHost + ":" + strconv.Itoa(gamePort)

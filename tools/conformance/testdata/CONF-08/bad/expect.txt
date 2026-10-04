@@ -11,6 +11,11 @@
 # Round 5: C++ ipv4 with an octet array, ipv6 and ipv6Bytes, and "host:" + port (one fails closed); Go
 # "host:" + port (one fails closed), fmt.Sprint, and a Port field of a gateway-named value or type; TOML
 # an inline table and a quoted key; YAML /UDP in upper case.
+# Round 6: Go host + ":" + port with a host variable (one fails closed); TOML multi-line arrays of
+# addresses and ports, reported on the key's line; C++ std::string{"host:"} + port, `<< kBase + 1` (+
+# binds tighter than <<), and a call, a string and an option default on the line after the one that names
+# the listen address (the option's on the call's line). Go: literals of gateway-named types under other
+# names, as elided slice and map elements and with an address field.
 deploy/compose.yml:3: CONF-08
 deploy/compose.yml:6: CONF-08
 deploy/compose.yml:7: CONF-08
@@ -25,6 +30,9 @@ deploy/helios.toml:7: CONF-08
 deploy/helios.toml:10: CONF-08
 deploy/helios.toml:13: CONF-08
 deploy/helios.toml:14: CONF-08
+deploy/helios.toml:17: CONF-08
+deploy/helios.toml:21: CONF-08
+deploy/helios.toml:23: CONF-08
 engine/net/include/ports.h:2: CONF-08
 engine/net/include/ports.h:3: CONF-08
 engine/net/include/ports.h:4: CONF-08
@@ -45,6 +53,11 @@ engine/server/src/gateway_forms.cpp:6: CONF-08
 engine/server/src/gateway_forms.cpp:7: CONF-08
 engine/server/src/gateway_forms.cpp:8: CONF-08
 engine/server/src/gateway_forms.cpp:9: CONF-08
+engine/server/src/gateway_forms.cpp:10: CONF-08
+engine/server/src/gateway_forms.cpp:11: CONF-08
+engine/server/src/gateway_forms.cpp:13: CONF-08
+engine/server/src/gateway_forms.cpp:15: CONF-08
+engine/server/src/gateway_forms.cpp:16: CONF-08
 services/cmd/tool/main.go:5: CONF-08
 services/internal/platform/concat.go:13: CONF-08
 services/internal/platform/concat.go:14: CONF-08
@@ -52,9 +65,14 @@ services/internal/platform/concat.go:15: CONF-08
 services/internal/platform/concat.go:17: CONF-08
 services/internal/platform/concat.go:18: CONF-08
 services/internal/platform/concat.go:19: CONF-08
+services/internal/platform/concat.go:28: CONF-08
+services/internal/platform/concat.go:29: CONF-08
 services/internal/platform/config.go:3: CONF-08
 services/internal/platform/config.go:7: CONF-08
 services/internal/platform/config.go:9: CONF-08
+services/internal/platform/gateway_values.go:4: CONF-08
+services/internal/platform/gateway_values.go:5: CONF-08
+services/internal/platform/gateway_values.go:6: CONF-08
 services/internal/platform/ports.go:10: CONF-08
 services/internal/platform/ports.go:11: CONF-08
 services/internal/platform/ports.go:14: CONF-08

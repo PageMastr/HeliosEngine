@@ -21,3 +21,10 @@ var settings = GatewayConfig{Port: 7034}
 type GatewayConfig struct{ Port int }
 
 func portString() string { return "7777" }
+
+// host + ":" + port with a host variable parses as (host + ":") + port: the prefix is ":".
+var loopbackHost = "127.0.0.1"
+var gatewayJoined = []string{
+	loopbackHost + ":" + strconv.Itoa(7035),
+	loopbackHost + ":" + portString(),
+}

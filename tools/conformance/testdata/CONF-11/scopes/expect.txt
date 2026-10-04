@@ -1,0 +1,41 @@
+#! -rules CONF-11 -strict
+# Variables across function and macro definitions (engine/y). A file-scope variable stays tracked after a
+# definition (5), and a function body sees the file's variables, also one set after the definition (3,
+# 12); a body's own set() stays local (18 passes) unless it is PARENT_SCOPE (19) or in a macro (24).
+# string() writes the output argument: REPLACE (6), REGEX REPLACE (7) and JOIN (10); a REPLACE whose
+# pattern names a flag removes it (8 passes). Level sets from HeliosIsa.cmake: a producer defined in mixed
+# case (25), a macro called at file scope (26) and a file-scope foreach over the level set (27).
+# What a body hands its caller (engine/z): an output argument set with PARENT_SCOPE (5), also when the call
+# is inside another function (8), a macro's output argument (14), return(PROPAGATE) (20), a callee that
+# reads its caller's local (22), a CACHE entry set in a body (32) and an output argument forwarded to
+# another producer (37). A local the callee does not hand back stays local (43 passes). Functions are
+# global: tools/z's return(PROPAGATE) (45) and output argument (47) reach engine/z, read first.
+# A level set built by a foreach over literal flags (engine/y 28). A producer chain learnt over two passes
+# (engine/a 2: tools/b's _outer reads tools/c's _inner). The root's and cmake/*.cmake's file-scope flag
+# variables reach every directory (engine/pcg 1, 2); engine/CMakeLists.txt's reach its subdirectories
+# (engine/pcg 3) and not apps/q.
+engine/a/CMakeLists.txt:2: CONF-11
+engine/pcg/CMakeLists.txt:1: CONF-11
+engine/pcg/CMakeLists.txt:2: CONF-11
+engine/pcg/CMakeLists.txt:3: CONF-11
+engine/y/CMakeLists.txt:3: CONF-11
+engine/y/CMakeLists.txt:5: CONF-11
+engine/y/CMakeLists.txt:6: CONF-11
+engine/y/CMakeLists.txt:7: CONF-11
+engine/y/CMakeLists.txt:10: CONF-11
+engine/y/CMakeLists.txt:12: CONF-11
+engine/y/CMakeLists.txt:19: CONF-11
+engine/y/CMakeLists.txt:24: CONF-11
+engine/y/CMakeLists.txt:25: CONF-11
+engine/y/CMakeLists.txt:26: CONF-11
+engine/y/CMakeLists.txt:27: CONF-11
+engine/y/CMakeLists.txt:28: CONF-11
+engine/z/CMakeLists.txt:5: CONF-11
+engine/z/CMakeLists.txt:8: CONF-11
+engine/z/CMakeLists.txt:14: CONF-11
+engine/z/CMakeLists.txt:20: CONF-11
+engine/z/CMakeLists.txt:22: CONF-11
+engine/z/CMakeLists.txt:32: CONF-11
+engine/z/CMakeLists.txt:37: CONF-11
+engine/z/CMakeLists.txt:45: CONF-11
+engine/z/CMakeLists.txt:47: CONF-11

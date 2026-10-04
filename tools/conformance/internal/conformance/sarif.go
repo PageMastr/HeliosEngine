@@ -5,9 +5,10 @@ import (
 	"io"
 )
 
-// WriteSARIF writes the result as SARIF 2.1.0 (§5.10.3 "It writes SARIF"). Every finding is an
-// `error`; a suppressed one carries an inSource suppression with its reason, and a known-failing one
-// an external suppression naming its owner WP, so code scanning shows each for what it is.
+// WriteSARIF writes the result as SARIF 2.1.0 (§5.10.3 "It writes SARIF"). A failing finding is an
+// `error`. A suppressed one carries an inSource suppression with its reason, and a known-failing one
+// an external suppression naming its owner WP; both are `note`s, because code scanning does not apply
+// SARIF suppressions on upload and would otherwise fail a PR's check on a reviewed line it touches.
 func (r *Result) WriteSARIF(w io.Writer) error {
 	type text struct {
 		Text string `json:"text"`
@@ -37,6 +38,9 @@ func (r *Result) WriteSARIF(w io.Writer) error {
 		Message      text          `json:"message"`
 		Locations    []location    `json:"locations"`
 		Suppressions []suppression `json:"suppressions,omitempty"`
+		// The finding's fingerprint (rule, file, message, trimmed source line), which known-failing
+		// records pin; code scanning uses it to track a result across line moves.
+		PartialFingerprints map[string]string `json:"partialFingerprints"`
 	}
 	rules := []rule{{ID: ToolRule, ShortDescription: text{"The lint's own configuration, suppressions and inputs"}}}
 	for _, ru := range r.Rules {
@@ -49,10 +53,13 @@ func (r *Result) WriteSARIF(w io.Writer) error {
 		if f.Line > 0 {
 			loc.Region = &region{StartLine: f.Line}
 		}
-		res := result{RuleID: f.Rule, Level: "error", Message: text{f.Message}, Locations: []location{{loc}}}
+		res := result{RuleID: f.Rule, Level: "error", Message: text{f.Message}, Locations: []location{{loc}},
+			PartialFingerprints: map[string]string{"heliosConformance/v1": f.Fingerprint}}
 		if f.Suppressed != "" {
+			res.Level = "note"
 			res.Suppressions = []suppression{{"inSource", f.Suppressed}}
 		} else if f.Known != nil {
+			res.Level = "note"
 			res.Suppressions = []suppression{{"external",
 				"known failing, owned by " + f.Known.Owner + " (" + f.Known.Anchor + "): " + f.Known.Reason}}
 		}

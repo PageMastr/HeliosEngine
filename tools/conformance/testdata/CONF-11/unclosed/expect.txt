@@ -1,0 +1,4 @@
+#! -rules CONF-11 -strict
+# A command still open at the end of the file: what follows it was never read as commands, so the run
+# fails (fail closed) instead of passing it unseen; its text is still scanned as that command's.
+tools/lint/broken.cmake:2: conformance

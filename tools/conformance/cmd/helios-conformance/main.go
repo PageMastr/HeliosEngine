@@ -1,7 +1,7 @@
 // Command helios-conformance is the plan-conformance lint (docs/plan/09-roadmap-and-process.md
 // §5.10.3; tools/conformance/README.md):
 //
-//	go run ./cmd/helios-conformance [-root DIR] [-rules CONF-01,…] [-strict] [-sarif FILE] [-list]
+//	go run ./cmd/helios-conformance [-root DIR] [-rules CONF-01,…] [-strict] [-sarif FILE] [-fingerprints] [-list]
 //
 // It exits 1 when a finding fails the run (anything not suppressed in source or covered by a
 // known-failing record, plus stale records and malformed or unused suppressions), and 2 on a usage
@@ -23,6 +23,7 @@ func main() {
 	strict := flag.Bool("strict", false, "ignore tools/conformance/known_failing.jsonc")
 	sarif := flag.String("sarif", "", "also write SARIF 2.1.0 to this file")
 	list := flag.Bool("list", false, "list the rules and exit")
+	fingerprints := flag.Bool("fingerprints", false, "end each finding's line with its fingerprint (for known_failing.jsonc)")
 	flag.Parse()
 
 	if *list {
@@ -42,6 +43,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "helios-conformance:", err)
 		os.Exit(2)
 	}
+	res.ShowFingerprints = *fingerprints
 	res.WriteText(os.Stdout)
 	if *sarif != "" {
 		f, err := os.Create(*sarif)

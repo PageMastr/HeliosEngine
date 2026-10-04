@@ -82,7 +82,8 @@ docs/concept/
   on an image without a sidecar or with a wrong sha256, a sidecar without an image, a missing or unknown
   sidecar field or a value outside its set, an image over the limits or whose bytes do not match its
   extension, a file type this folder does not take, an image outside the four area directories or
-  misnamed, and an image whose concept is not in the index below.
+  misnamed, and an image whose concept is not in the [index](#index) below (by its concept name or a
+  file name of the concept).
 - **The IP-name lint** ([`tools/lint/ip_names.cmake`](../../tools/lint/ip_names.cmake)) scans this folder
   like `content/`: *Cinder Reach* names are allowed here, other franchises' names and titles are not.
 

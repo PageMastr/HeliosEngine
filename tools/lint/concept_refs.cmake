@@ -6,13 +6,15 @@
 #  * a file type the folder does not take (images .png/.webp/.jpg/.jpeg, `<image>.concept.jsonc`
 #    sidecars, Markdown, .gitattributes), or an upper-case extension;
 #  * an image outside editor/, client/, launcher/ or world/, or not named
-#    `<tool-or-area>-<subject>[-<variant>]-vNN.<ext>`, or whose concept name is not in README.md's index;
+#    `<tool-or-area>-<subject>[-<variant>]-vNN.<ext>`, or whose concept name is not in the `## Index`
+#    section of README.md (as the concept name or a file name of the concept, `<concept>-vNN.<ext>`);
 #  * an image over 1 MB (1,048,576 bytes) or 2,560 px on its long side, or whose bytes do not match
 #    its extension;
-#  * an image without a sidecar, a sidecar without an image, and a sidecar (or TEMPLATE.concept.jsonc)
+#  * an image without a sidecar, a sidecar without an image (or next to a file that is not an image),
+#    and a sidecar (or TEMPLATE.concept.jsonc)
 #    that is not JSONC, lacks a required field, has an unknown one, a value of the wrong type or
 #    outside its set, or a sha256 that does not match the image;
-#  * a missing README.md (the index).
+#  * a missing README.md, or one without a `## Index` section.
 # The files: in a git checkout those git tracks or would track (an ignored .DS_Store does not count);
 # elsewhere every file. Findings are `path: message`, or `path:line: message` in a sidecar (the line
 # of the field, best effort). JSONC is read with CMake's JSON parser, which takes comments and trailing
@@ -41,7 +43,7 @@ set(kNamePattern "^[a-z0-9]+(-[a-z0-9]+)+-v[0-9][0-9]\\.(png|webp|jpg|jpeg)$")
 string(REPEAT "[0-9a-f]" 64 kHex64)
 set(kSha "^${kHex64}$")
 set(kSha_DESC "64 lower-case hex digits")
-set(kDate "^[0-9][0-9][0-9][0-9]-[01][0-9]-[0-3][0-9]$")
+set(kDate "^[0-9][0-9][0-9][0-9]-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")
 set(kDate_DESC "a YYYY-MM-DD date")
 set(kPhase "^Ph[0-5]$")
 set(kPhase_DESC "Ph0 to Ph5")
@@ -304,11 +306,10 @@ function(_cr_sidecar rel imageAbs)
           _cr_string(inSha "ai.inputs[${i}].sha256" inputs "RE:kSha" "${text}" ai inputs ${i} sha256)
           _cr_string(inSource "ai.inputs[${i}].source" inputs "IN:kInputSources" "${text}"
                      ai inputs ${i} source)
-          # An input committed here (a path relative to docs/concept) must be the bytes recorded.
-          set(inAbs "${concept}/${inFile}")
-          if(NOT inFile STREQUAL "" AND NOT IS_ABSOLUTE "${inFile}" AND EXISTS "${inAbs}"
-             AND NOT IS_DIRECTORY "${inAbs}")
-            file(SHA256 "${inAbs}" inActual)
+          # An input committed here (an image of this folder, by its path relative to docs/concept)
+          # must be the bytes recorded. Anything else is a description of an input kept elsewhere.
+          if(NOT inFile STREQUAL "" AND "${inFile}" IN_LIST images)
+            file(SHA256 "${concept}/${inFile}" inActual)
             if(NOT inSha STREQUAL "" AND NOT inSha STREQUAL inActual)
               _cr_field_find(inputs "'ai.inputs[${i}].sha256' does not match docs/concept/${inFile}")
             endif()
@@ -509,21 +510,30 @@ endforeach()
 list(REMOVE_DUPLICATES rels)
 list(SORT rels)
 
-set(readme "")
+# The index: README.md from its `## Index` heading to the next `## ` heading (its `###` subsections
+# included).
+set(index "")
 if(EXISTS "${concept}/README.md")
   file(READ "${concept}/README.md" readme)
+  string(REGEX MATCH "(^|\n)## Index[ \t]*\r?\n.*" index "${readme}")
+  string(REGEX REPLACE "^\n?## Index[^\n]*\n" "" index "${index}")
+  string(REGEX REPLACE "(^|\n)## [^\n]*.*" "" index "${index}")
+  if(NOT readme MATCHES "(^|\n)## Index[ \t]*\r?\n")
+    _cr_find("docs/concept/README.md: no '## Index' section (the table of concepts)")
+  endif()
 else()
   _cr_find("docs/concept/README.md: missing (the index and the rules)")
 endif()
 
 set(images "")
 set(sidecars "")
+set(template "")
 foreach(rel IN LISTS rels)
   set(shown "docs/concept/${rel}")
   if(rel STREQUAL "README.md" OR rel MATCHES "(^|/)\\.gitattributes$")
     continue()
   elseif(rel STREQUAL "TEMPLATE.concept.jsonc")
-    _cr_sidecar("${rel}" "")
+    set(template "${rel}")
   elseif(rel MATCHES "\\.concept\\.jsonc$")
     list(APPEND sidecars "${rel}")
   elseif(rel MATCHES "\\.md$")
@@ -549,7 +559,7 @@ foreach(rel IN LISTS images)
     _cr_find("${shown}: name is not <tool-or-area>-<subject>[-<variant>]-vNN.<ext> in lower case")
   else()
     string(REGEX REPLACE "-v[0-9][0-9]\\.[a-z]+$" "" conceptName "${name}")
-    if(NOT readme MATCHES "(^|[^a-z0-9-])${conceptName}([^a-z0-9-]|$)")
+    if(NOT index MATCHES "(^|[^a-z0-9-])${conceptName}(-v[0-9][0-9])?([^a-z0-9-]|$)")
       _cr_find("${shown}: concept '${conceptName}' is not in the index (docs/concept/README.md)")
     endif()
   endif()
@@ -574,10 +584,16 @@ foreach(rel IN LISTS images)
   endif()
 endforeach()
 
+if(template)
+  _cr_sidecar("${template}" "")
+endif()
 foreach(rel IN LISTS sidecars)
   string(REGEX REPLACE "\\.concept\\.jsonc$" "" imageRel "${rel}")
   if(NOT EXISTS "${concept}/${imageRel}" OR IS_DIRECTORY "${concept}/${imageRel}")
     _cr_find("docs/concept/${rel}: orphan sidecar: docs/concept/${imageRel} does not exist")
+    continue()
+  elseif(NOT imageRel IN_LIST images)
+    _cr_find("docs/concept/${rel}: orphan sidecar: docs/concept/${imageRel} is not an image")
     continue()
   endif()
   _cr_sidecar("${rel}" "${concept}/${imageRel}")

@@ -50,8 +50,8 @@
   "elements": [
     {"element": "viewport painting", "status": "mood-only", "note": "Ph3-4 look; Phase 1 renders far less"}
   ],
-  // The phase the image targets: Ph0 to Ph5.
-  "phase": "Ph1",
+  // The phase the image targets: Ph0 to Ph5 (the latest phase of what it shows).
+  "phase": "Ph2",
   // The plan sections it illustrates.
   "planRefs": ["07 §2.1 T01", "07 §1.5", "02 §5.6"],
   // Known differences from the plan; the review has the detail.

@@ -227,16 +227,17 @@ helios_lint_test(lint_concept_refs_fixture_ok COMMAND ${CMAKE_COMMAND}
   -DSOURCE_DIR=${LINT_TESTS}/concept_refs/ok ${crLint})
 foreach(case
     "no_sidecar|docs/concept/editor/t01-demo-v01.png: no sidecar"
-    "orphan|README.md: missing .the index.*orphan sidecar: docs/concept/editor/t01-demo-v01.png does not exist"
+    "orphan|README.md: missing .the index.*orphan sidecar: docs/concept/editor/t01-demo-v01.png does not exist.*notes.md.concept.jsonc: orphan sidecar: docs/concept/world/notes.md is not an image"
     "sha_mismatch|${crSide}:4: sha256 [0-9a-f]+ does not match the image .ed26f33e"
     "fields|failed .11 finding.*:23: unknown field 'license'.*:3: 'image' is 'other.png', not this sidecar's image.*:7: 'created' is '4 Oct 2026'.*:1: missing required field 'ipReview'.*:15: 'status' is 'final', not one of binding, directional, mood-only.*:19: 'phase' is 'Phase 1'.*:13: 'tools' must be an array.*:20: 'planRefs' needs at least 1.*:1: missing required field 'licence'.*:16: 'elements.0..status' is 'maybe'.*:22: 'review' names docs/concept/editor/missing.review.md, which does not exist"
-    "provenance|failed .9 finding.*t01-ai-v01.png.concept.jsonc:12: missing required field 'ai.prompt'.*:15: 'ai.inputs.0..source' is 'screenshot'.*:15: 'ai.inputs.1.' is ai-assisted, so it must be an image in docs/concept.*:15: 'ai.inputs.2..sha256' does not match docs/concept/editor/t01-cc0-v01.png.*t01-cc0-v01.png.concept.jsonc:9: source.kind 'cc0' needs 'source.url'.*:13: a CC0 image keeps licence 'CC0-1.0', not 'MIT'.*t01-owner-v01.png.concept.jsonc:14: 'ai' must be null unless.*t01-paid-v01.png.concept.jsonc:9: source.kind 'commissioned' needs 'source.rights'.*:13: 'licence' is 'CC-BY-4.0'"
+    "provenance|failed .10 finding.*t01-ai-v01.png.concept.jsonc:12: missing required field 'ai.prompt'.*:15: 'ai.inputs.0..source' is 'screenshot'.*:15: 'ai.inputs.1.' is ai-assisted, so it must be an image in docs/concept.*:15: 'ai.inputs.2..sha256' does not match docs/concept/editor/t01-cc0-v01.png.*:15: 'ai.inputs.3.' is ai-assisted, so it must be an image.*t01-cc0-v01.png.concept.jsonc:9: source.kind 'cc0' needs 'source.url'.*:13: a CC0 image keeps licence 'CC0-1.0', not 'MIT'.*t01-owner-v01.png.concept.jsonc:14: 'ai' must be null unless.*t01-paid-v01.png.concept.jsonc:9: source.kind 'commissioned' needs 'source.rights'.*:13: 'licence' is 'CC-BY-4.0'"
     "limits|failed .5 finding.*hud-tall-v01.jpg: 1 x 2600 px, over 2560 px.*t01-wide-v01.png: 2561 x 1 px.*vista-wide-v01.webp: 2600 x 1 px.*vista-wide-v02.webp: 1 x 2600 px.*vista-wide-v03.webp: 2600 x 1 px"
     "files|failed .8 finding.*editor/source.psd: not allowed here.*t01-demo-v01.PNG: not allowed here.*t01-demo-v01.gif: not allowed here.*editor/T01_World.png: name is not.*t01-fake-v01.png: is not a readable PNG file.*editor/t01-world.png: name is not.*ships/x-y-v01.png: not directly in an area directory.*docs/concept/t01-root-v01.png: not directly in an area"
     "headers|failed .4 finding.*hud-cut-v01.jpg: is a JPEG file without a readable frame header.*t01-cut-v01.png: is not a readable PNG.*vista-cut-v01.webp: is a truncated WebP.*vista-cut-v02.webp: is a WebP file whose size cannot be read"
     "index|docs/concept/editor/t01-demo-v01.png: concept 't01-demo' is not in the index"
+    "no_index|docs/concept/README.md: no '## Index' section"
     "jsonc|${crSide}:3: not valid JSONC: Missing.*t01-demo-v02.png.concept.jsonc:1: not a JSON object"
-    "template|docs/concept/TEMPLATE.concept.jsonc:1: missing required field 'ipReview'")
+    "template|TEMPLATE.concept.jsonc:7: 'created' is '2026-13-01', not a YYYY-MM-DD date.*TEMPLATE.concept.jsonc:1: missing required field 'ipReview'")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)
   list(GET parts 1 expect)

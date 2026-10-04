@@ -1,4 +1,6 @@
-# Fixture index
+# Fixture
+
+## Index
 
 | Concept | Notes |
 |---|---|

@@ -12,7 +12,7 @@
   "ai": {
     "tool": "Generator",
     "model": "model-x",
-    "inputs": [{"file": "Capture of a commercial game", "sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "source": "screenshot"}, {"file": "editor/t01-gone-v01.png", "sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef", "source": "ai-assisted"}, {"file": "editor/t01-cc0-v01.png", "sha256": "1212121212121212121212121212121212121212121212121212121212121212", "source": "cc0"}]
+    "inputs": [{"file": "Capture of a commercial game", "sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "source": "screenshot"}, {"file": "editor/t01-gone-v01.png", "sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef", "source": "ai-assisted"}, {"file": "editor/t01-cc0-v01.png", "sha256": "1212121212121212121212121212121212121212121212121212121212121212", "source": "cc0"}, {"file": "README.md", "sha256": "3434343434343434343434343434343434343434343434343434343434343434", "source": "ai-assisted"}]
   },
   "licence": "MIT",
   "ipReview": "Fixture: original shapes only.",

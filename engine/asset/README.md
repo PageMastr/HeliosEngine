@@ -102,16 +102,16 @@ meshes.commitSwaps();                          // at the frame or tick boundary
 ## Performance
 
 No plan budget covers these paths, so v0 states its own (`perf:` cases in `tests/test_perf.cpp`, label `perf`,
-nightly; asserted in optimized builds without sanitizers). Measured on the shared 4-vCPU dev VM, GCC 13,
-RelWithDebInfo, 2026-10-03:
+nightly; asserted in optimized builds without sanitizers). Measured on the shared, loaded 4-vCPU dev VM, GCC 13,
+RelWithDebInfo, 2026-10-03 (three runs):
 
 | Path | Budget | Measured |
 |---|---|---|
-| `HpakReader::open` of a 100k-asset pak (6.4 MB TOC) | ≤ 60 ms | 6.9 ms |
-| `PakMountTable::mount` of it | ≤ 40 ms | 7.3 ms |
-| `PakMountTable::find`, random ids, 100k-asset table | ≤ 250 ns mean | 90 ns |
-| First read: block verify + zstd decode + cooked hash, 35 MB of mixed assets, one thread | ≥ 300 MB/s (≤ 0.85 ms per 256 KiB block) | 798 MB/s |
-| Later reads (blocks already verified) | ≥ 400 MB/s | 851 MB/s |
+| `HpakReader::open` of a 100k-asset pak (6.4 MB TOC) | ≤ 60 ms | 6.9–7.6 ms |
+| `PakMountTable::mount` of it | ≤ 40 ms | 7.1–7.3 ms |
+| `PakMountTable::find`, random ids, 100k-asset table | ≤ 250 ns mean | 69–90 ns |
+| First read: block verify + zstd decode + cooked hash, 35 MB of mixed assets, one thread | ≥ 300 MB/s (≤ 0.85 ms per 256 KiB block) | 768–798 MB/s |
+| Later reads (blocks already verified) | ≥ 400 MB/s | 807–851 MB/s |
 
 The read budget is twice 02 §5.7's sustained I/O budget (150 MB/s), so one decode thread keeps up with the disk.
 
@@ -134,8 +134,10 @@ cmake --build build/fuzz --target asset_fuzz_hpak_reader
 build/fuzz/bin/asset_fuzz_hpak_reader -max_total_time=600 -rss_limit_mb=2048 corpus-copy/
 ```
 
-The nightly libFuzzer job (`nightly.yml`) runs only engine/net's targets; adding this one needs its matrix to
-name a target and corpus per gate and a scorecard gate with a criterion to hang on, which is not a small change
+A 15-minute local campaign (Clang 18, ASan and UBSan, one process, 2026-10-03) ran 4.14 million inputs at about
+4,600 per second, reached 1,280 coverage edges and found nothing. The nightly libFuzzer job (`nightly.yml`) runs
+only engine/net's targets; adding this one needs its matrix to name a target and corpus per gate and a scorecard
+gate with a criterion to hang on, which is not a small change
 (see Gaps).
 
 ## Gaps (v0)

@@ -52,12 +52,13 @@ include_guard(GLOBAL)
 set(HELIOS_LINK_GROUPS runtime client editor)
 set(HELIOS_MODULAR_INCLUDE_DIR "${CMAKE_BINARY_DIR}/helios_generated/include")
 
-# Sets <out> to the link group of a module with the given flags (02 §1.4).
+# Sets <out> to the link group of a module with the given flags (02 §1.4). EDITOR_ONLY wins over HEADLESS:
+# an editor-only module must never reach helios_runtime, which every server and the client link.
 function(helios_link_group_of out headless editorOnly)
-  if(headless)
-    set(${out} runtime PARENT_SCOPE)
-  elseif(editorOnly)
+  if(editorOnly)
     set(${out} editor PARENT_SCOPE)
+  elseif(headless)
+    set(${out} runtime PARENT_SCOPE)
   else()
     set(${out} client PARENT_SCOPE)
   endif()

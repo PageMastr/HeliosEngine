@@ -12,7 +12,7 @@
 #             Probe module; part 1 audits fixture images.
 # A FIXTURE directory holds recorded tool output instead: images.txt ("format elf|pe", then
 # "<role> <name>" lines) and, per image, <name>.symtab and <name>.dynsym (`nm -p --defined-only`, without
-# and with -D) or <name>.exports (`dumpbin /exports`).
+# and with -D; game images need no .dynsym) or <name>.exports (`dumpbin /exports`).
 #
 # ELF images (nm):
 #   R1  a group exports only Helios code: every strong exported definition is in namespace helios or is a
@@ -23,7 +23,8 @@
 #       state (02 §1.4 "Singletons").
 #   R3  a consumer or game image has no copy of mutable Helios data that a group defines (a header-defined
 #       inline or template static, a function-local static of an inline function): on Windows every image
-#       has its own (02 §1.4 "No per-image caches of global state").
+#       has its own (02 §1.4 "No per-image caches of global state"). Data that an executable imports from
+#       a group by copy relocation (in both images' dynamic symbol tables) is one instance, not a copy.
 #   R4  a game image defines nothing from flecs, Jolt, Luau, mimalloc or Tracy;
 #   R5  a game image defines no mutable data in namespace helios (it imports engine state, never owns it);
 #   R6  a game image has no strong definition of a function that a group exports (it imports engine code).
@@ -214,9 +215,11 @@ if(format STREQUAL "elf")
       endif()
       math(EXPR exported "${exported} + 1")
       if(s MATCHES "${HELIOS_SYMBOL_OWNED_REGEX}")
+        string(MD5 k "${s}")
         if(t STREQUAL "T")
-          string(MD5 k "${s}")
           set(EXPORT_${k} "${name}")
+        elseif(t MATCHES "^[bBdDvVu]$")
+          set(EXPORTED_DATA_${k} "${name}") # for R3: what a consumer may import by copy relocation
         endif()
       elseif(t MATCHES "^[BDGRST]$" AND NOT s IN_LIST HELIOS_SYMBOL_LINKER_DEFINED)
         _fail("R1 ${name} exports '${s}' (${t}), which is not Helios code: a group exports only Helios objects, and third-party archives stay hidden (02 §1.4)")
@@ -238,6 +241,24 @@ if(format STREQUAL "elf")
       _listing("${name}" "${path}" symtab "^[0-9a-fA-F]* [A-Za-z] " lines)
     else()
       _listing("${name}" "${path}" symtab "${dataOrMarker}" lines)
+    endif()
+    # A consumer's dynamic symbol table holds the data it imports by copy relocation (an executable that
+    # reads exported engine data, such as log::detail::g_globalLevel through an inline function). ELF
+    # binds the group to that copy, so the process has one instance: for R3 it is an import, not a copy.
+    # A per-image copy of header-defined state is hidden (consumers build with -fvisibility=hidden) and
+    # never appears there.
+    set(imported "")
+    if(role STREQUAL "consumer")
+      _listing("${name}" "${path}" dynsym " [bBdDvVu] _Z" dynLines)
+      foreach(line IN LISTS dynLines)
+        _nm_line("${line}" dt ds)
+        if(NOT ds STREQUAL "")
+          string(MD5 k "${ds}")
+          if(DEFINED EXPORTED_DATA_${k})
+            list(APPEND imported "${k}")
+          endif()
+        endif()
+      endforeach()
     endif()
     set(forbiddenSeen "")
     foreach(line IN LISTS lines)
@@ -261,6 +282,8 @@ if(format STREQUAL "elf")
         string(MD5 k "${s}")
         if(role STREQUAL "group")
           set(DATA_${k} "${name}")
+        elseif(k IN_LIST imported)
+          # Imported through a copy relocation (see above): one instance per process.
         elseif(DEFINED DATA_${k})
           _fail("R3 ${name} has its own copy of '${s}' (${t}), which ${DATA_${k}} defines: header-defined state is per image on Windows (02 §1.4, no per-image caches of global state)")
         elseif(role STREQUAL "game")

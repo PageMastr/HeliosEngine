@@ -1,5 +1,6 @@
-# Module-layering fixture (tools/lint/CMakeLists.txt runs it once per HELIOS_FIXTURE_CASE). It uses the
-# real cmake/HeliosModule.cmake and a miniature copy of engine/CMakeLists.txt's table. Good cases
+# Module-layering fixture (tools/lint/lint_tests.cmake runs it once per HELIOS_FIXTURE_CASE, in the shipping
+# and the modular link flavour: -DHELIOS_MODULAR=OFF|ON). It uses the real cmake/HeliosModule.cmake and a
+# miniature copy of engine/CMakeLists.txt's table. Good cases
 # print HELIOS_FIXTURE_CONFIGURE_OK after the checks; bad cases must stop configure with the
 # "helios layering:" diagnostic the test expects. LANGUAGES NONE keeps it fast: no compiler is
 # probed, and the fixture stops before generation (its sources are never compiled).
@@ -170,6 +171,11 @@ elseif(CASE STREQUAL "unknown_role")
 endif()
 # Tools may link editor-only modules.
 helios_executable(fx-cook ROLE tool NO_CPU_GATE SOURCES ${src} DEPS helios::assetpipe)
+if(CASE STREQUAL "direct_objects")
+  # Modular builds (HELIOS_MODULAR=ON): the module's object library instead of helios::core would put a
+  # second copy of core's code and state into the tool, beside helios_runtime's.
+  target_link_libraries(fx-cook PRIVATE helios_core)
+endif()
 
 # Runs after helios_finalize_build (deferred calls run in scheduling order), so it is only reached
 # when the checks passed. Stop before generation: the dummy sources have no enabled language.

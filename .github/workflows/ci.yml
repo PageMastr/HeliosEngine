@@ -58,7 +58,7 @@ jobs:
       - name: Symbol audit (link groups' export tables)
         run: ctest --preset windows-msvc-dev -R "^lint_symbol_audit"
       - name: Test (no GPU on hosted runners)
-        run: ctest --preset windows-msvc-dev -LE "gpu|perf"
+        run: ctest --preset windows-msvc-dev -LE "gpu|perf" -E "^lint_symbol_audit"
 
   # Supported floor: VS 2022 17.14 / MSVC 14.44 on the pinned windows-2022 image (ADR-001).
   windows-msvc-floor:

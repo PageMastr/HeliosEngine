@@ -619,20 +619,38 @@ foreach(case
     "bridge_upward|module 'reflect' .layer 2. depends upward on 'world' .layer 4. .through fx_bridge."
     "bridge_same_layer|module 'net' depends on same-layer module 'physics' .*.through fx_bridge."
     "bridge_cycle|dependency cycle between modules: helios_ecs -> fx_bridge -> helios_app -> helios_ecs"
-    "unknown_role|helios_executable.fx-zonehost.: no ROLE given and none is known for.*'apps/zonehost/'")
+    "unknown_role|helios_executable.fx-zonehost.: no ROLE given and none is known for.*'apps/zonehost/'"
+    # Modular builds only (HELIOS_MODULAR=ON): an image that links a module's object library directly.
+    "modular:direct_objects|'fx-cook' links the module object library 'helios_core' directly")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)
   list(GET parts 1 expect)
-  add_test(NAME lint_layering_${fixture}
-    COMMAND ${CMAKE_COMMAND} -S ${LINT_TESTS}/layering -B ${LINT_WORK}/layering/${fixture} ${layeringGenerator}
-            -DHELIOS_FIXTURE_CASE=${fixture} -DHELIOS_SOURCE_DIR=${PROJECT_SOURCE_DIR})
-  set_tests_properties(lint_layering_${fixture} PROPERTIES LABELS lint TIMEOUT 120
-    PASS_REGULAR_EXPRESSION "${expect}")
-  if(expect STREQUAL "HELIOS_FIXTURE_CONFIGURE_OK")
-    set_tests_properties(lint_layering_${fixture} PROPERTIES FAIL_REGULAR_EXPRESSION "helios layering:")
-  else()
-    set_tests_properties(lint_layering_${fixture} PROPERTIES FAIL_REGULAR_EXPRESSION "HELIOS_FIXTURE_CONFIGURE_OK")
+  # Every case runs in both link flavours (ADR-016): the checks must see the same graph whether
+  # helios::<module> names a static library or a link group's interface (cmake/HeliosModular.cmake).
+  set(flavours "shipping;modular")
+  if(fixture MATCHES "^modular:(.*)$")
+    set(fixture "${CMAKE_MATCH_1}")
+    set(flavours modular)
   endif()
+  foreach(flavour IN LISTS flavours)
+    if(flavour STREQUAL "modular")
+      set(name lint_layering_modular_${fixture})
+      set(modular ON)
+    else()
+      set(name lint_layering_${fixture})
+      set(modular OFF)
+    endif()
+    add_test(NAME ${name}
+      COMMAND ${CMAKE_COMMAND} -S ${LINT_TESTS}/layering -B ${LINT_WORK}/layering/${flavour}_${fixture}
+              ${layeringGenerator} -DHELIOS_FIXTURE_CASE=${fixture} -DHELIOS_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+              -DHELIOS_MODULAR=${modular})
+    set_tests_properties(${name} PROPERTIES LABELS lint TIMEOUT 120 PASS_REGULAR_EXPRESSION "${expect}")
+    if(expect STREQUAL "HELIOS_FIXTURE_CONFIGURE_OK")
+      set_tests_properties(${name} PROPERTIES FAIL_REGULAR_EXPRESSION "helios layering:")
+    else()
+      set_tests_properties(${name} PROPERTIES FAIL_REGULAR_EXPRESSION "HELIOS_FIXTURE_CONFIGURE_OK")
+    endif()
+  endforeach()
 endforeach()
 
 # RC-1's shipped-pipelines lint (WP-0.12), registered by its owner.

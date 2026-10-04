@@ -184,12 +184,6 @@ Document* Workspace::findByPath(const fs::Path& path) const {
     return nullptr;
 }
 
-std::string Workspace::relativeTo(const fs::Path& path) const {
-    if (m_root.empty()) return fs::pathToGenericUtf8(path);
-    const fs::Path abs = path.is_absolute() ? path : m_root / path;
-    return underRoot(m_root, abs).value_or(std::string());
-}
-
 Result<ProjectFile> Workspace::confine(std::string_view path, PathOrigin origin, PathCheck check) const {
     const auto refuse = [&](std::string_view why) {
         return Error{ErrorCode::InvalidArgument, std::format("{}: {}", shown(path), why)};

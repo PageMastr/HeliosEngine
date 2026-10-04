@@ -138,10 +138,6 @@ public:
     /// a differently cased path finds the open document instead of opening the file twice.
     Document* findByPath(const fs::Path& path) const;
 
-    /// Project-relative, '/'-separated path of `path` ("" when it is outside the root or is the
-    /// root). On Windows the root prefix compares without ASCII case, as NTFS does. Lexical only.
-    std::string relativeTo(const fs::Path& path) const;
-
     /// The project-confinement rule: every path that a journal record, a raw op or a caller names
     /// goes through it before a file is read, written, created or deleted (README, "The journal
     /// is untrusted input"). Accepted is a `.hrec` file inside the project:

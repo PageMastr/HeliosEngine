@@ -87,6 +87,14 @@ std::string stemOf(const std::string& logical) {
     return dot == std::string::npos ? name : name.substr(0, dot);
 }
 
+/// A letter, then ASCII letters, digits and '_': generated C++ names functions after the stem
+/// (register<Stem>Types(), <stem>Replication()), and Go skips files whose name starts with '_'.
+bool isStemIdentifier(std::string_view stem) {
+    auto letter = [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); };
+    return !stem.empty() && letter(stem[0]) &&
+           std::all_of(stem.begin(), stem.end(), [&](char c) { return letter(c) || (c >= '0' && c <= '9') || c == '_'; });
+}
+
 /// Declarations whose layout is part of `t`'s layout (by value or as container elements; record
 /// refs are plain ids and do not count).
 void layoutDeps(const Type* t, std::vector<const Decl*>& out) {
@@ -205,6 +213,15 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
                                           printable(logical), static_cast<unsigned>(static_cast<unsigned char>(*bad))));
             return nullptr;
         }
+        // The stem becomes part of C++ function names, so it must be an identifier: unchecked, `ship-motion`
+        // and `2d` gave code that does not compile and `x() noexcept;} int injected(){...} y` gave code
+        // (PR #33's round-5 review).
+        if (const std::string stem = stemOf(logical); !isStemIdentifier(stem)) {
+            diags.error(from, std::format("the schema file '{}' is named '{}' up to its first '.', which is not an identifier (a letter, "
+                                          "then letters, digits and '_'); generated C++ names functions after it, so rename the file",
+                                          logical, stem));
+            return nullptr;
+        }
         if (stack.size() >= kMaxImportDepth) {
             diags.error(from, std::format("imports nest more than {} files deep (at '{}')", kMaxImportDepth, path));
             return nullptr;
@@ -272,6 +289,18 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
     {
         std::map<std::string, const SourceFile*> stems;
         std::map<std::string, const SourceFile*> logicals;
+        // register<Stem>Types() and <stem>Replication() drop '_' and the first letter's case, so
+        // `ship_motion` and `shipMotion` in one package would define the same C++ functions (a link error).
+        // Imports count too: whatever links one file's generated code links its imports' code.
+        std::map<std::pair<std::string, std::string>, const SourceFile*> cppNames;
+        for (const auto& f : S.files) {
+            const std::string name = pascalCase(f->stem);
+            auto [it, ok] = cppNames.emplace(std::pair(f->ast.package, name), f.get());
+            if (!ok && it->second->logicalPath != f->logicalPath)
+                diags.error({}, std::format("'{}' and '{}' are both in package '{}' and would both define register{}Types() in "
+                                            "generated C++; rename one",
+                                            it->second->path, f->path, f->ast.package, name));
+        }
         for (const auto& f : S.files) {
             if (!f->generate) continue;
             if (auto [it, ok] = logicals.emplace(f->logicalPath, f.get()); !ok)
@@ -284,6 +313,27 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
     }
 
     if (!analyze(S, diags, SemaOptions{options.namingLints})) return result;
+
+    // Generated C++ declares register<Stem>Types() and <stem>Replication() in the package's namespace. A
+    // top-level declaration of that name there makes `::pkg::<name>` name the function, not the type, so
+    // the generated code does not compile (PR #33's round-6 review: `component shipReplication` in
+    // ship.hschema). Imports count, as for the stems above.
+    {
+        std::map<std::pair<std::string, std::string>, const SourceFile*> functions;
+        for (const auto& f : S.files) {
+            functions.emplace(std::pair(f->ast.package, "register" + pascalCase(f->stem) + "Types"), f.get());
+            functions.emplace(std::pair(f->ast.package, camelCase(f->stem) + "Replication"), f.get());
+        }
+        for (const Decl* d : S.decls) {
+            // Services and formulas are not emitted as C++ names (their rpcs' request structs are).
+            if (d->cppPath.size() != 1 || d->kind == DeclKind::Service || d->kind == DeclKind::Formula) continue;
+            if (auto it = functions.find(std::pair(d->package, d->cppPath[0])); it != functions.end())
+                diags.error(d->loc, std::format("'{}' has the name of the function {}() that generated C++ for '{}' declares in package '{}'; "
+                                                "rename it",
+                                                d->qualifiedName, d->cppPath[0], it->second->path, d->package));
+        }
+        if (diags.hasErrors()) return result;
+    }
 
     // Stable ids from the lock. `baseline` keeps the lock as it was, for --emit sql's migration stub.
     Lock baseline;
@@ -350,6 +400,29 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
     }
     if (options.emitSql) {
         for (OutputFile& o : generateSql(S, baseline, options, diags)) result.outputs.push_back(std::move(o));
+    }
+    if (options.emitRepl) {
+        for (OutputFile& o : generateRepl(S, options, diags)) result.outputs.push_back(std::move(o));
+    }
+    if (options.emitLint) { // last: the report lists every warning of this compilation
+        for (OutputFile& o : generateLint(S, options, diags)) result.outputs.push_back(std::move(o));
+    }
+    // Two outputs at one path would overwrite each other: --emit repl's header of `t/ship.hschema` is
+    // `t/ship.repl.gen.h`, which is also --emit cpp's header of `t/ship.repl.hschema` in another package
+    // (PR #33's round-6 review; `.luau.gen.*` and `.samples.gen.h` likewise). Paths compare without ASCII
+    // case, as file names do on Windows and macOS. (After another error nothing is written, and the Go
+    // stem check above already reports two `<stem>.go`.) After --emit lint, so --lint-out counts too.
+    if (!diags.hasErrors()) {
+        std::map<std::string, const OutputFile*> paths;
+        for (const OutputFile& o : result.outputs) {
+            std::string key = normalizePath(o.path);
+            std::transform(key.begin(), key.end(), key.begin(), [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; });
+            if (auto [it, ok] = paths.emplace(std::move(key), &o); !ok)
+                diags.error({}, std::format("two outputs would be written to '{}'{}: give each its own path (rename a schema file or "
+                                            "change an output option)",
+                                            o.path,
+                                            it->second->path == o.path ? "" : std::format(" and '{}'", it->second->path)));
+        }
     }
     result.ok = !diags.hasErrors();
     return result;

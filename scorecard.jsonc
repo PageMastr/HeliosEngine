@@ -479,7 +479,7 @@
       "status": "measured",
       "tests": [
         {"doctest": "schemac_tests", "case": "golden: generator output matches the committed expectations"},
-        {"doctest": "schemac_tests", "case": "golden: the schemas/ corpus generates the committed Luau and SQL outputs"},
+        {"doctest": "schemac_tests", "case": "golden: the schemas/ corpus generates the committed Luau, SQL, replication and lint outputs"},
         {"doctest": "schemac_tests", "case": "go interop: generated Go matches the C++ codecs byte for byte"},
         {"doctest": "schemac_tests", "case": "luau: the generated glue converts arguments and results through a script VM"},
         {"doctest": "schemac_tests", "case": "luau: the generated glue charges each fn's schema fuel"},

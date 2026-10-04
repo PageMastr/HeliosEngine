@@ -263,8 +263,8 @@ Result<void> registerBuiltinCommands(Framework& fw) {
         c.id = "doc.open";
         c.label = "Open Record";
         c.category = "File";
-        c.doc = "Opens a record file (project-relative or absolute).";
-        c.args = {arg("file", ArgType::String, true, "Record file")};
+        c.doc = "Opens a record file inside the project (project-relative, or absolute under the project root).";
+        c.args = {arg("file", ArgType::String, true, "Record file (.hrec inside the project)")};
         c.execute = [](CommandContext& ctx) -> Result<void> {
             HELIOS_TRY_ASSIGN(const std::string file, ctx.stringArg("file"));
             HELIOS_TRY_ASSIGN(Document* d, ctx.framework().open(fs::pathFromUtf8(file)));

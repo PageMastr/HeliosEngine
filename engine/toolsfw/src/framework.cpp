@@ -253,9 +253,8 @@ Result<DocId> TxBuilder::createRecord(const refl::TypeInfo& type, std::string_vi
         return Error{ErrorCode::InvalidArgument, std::format("{} is not a record type", type.qualifiedName)};
     }
     const Workspace& ws = *m_fw->m_workspace;
-    std::string rel = ws.relativeTo(ws.absolute(file));
-    if (rel.empty()) return Error{ErrorCode::InvalidArgument, std::format("'{}' is outside the project", file)};
-    if (!rel.ends_with(".hrec")) return Error{ErrorCode::InvalidArgument, std::format("'{}': record files end in .hrec", file)};
+    // The project-confinement rule; the Create op checks the disk when it applies.
+    HELIOS_TRY_ASSIGN(ProjectFile target, ws.confine(file, PathOrigin::Caller, PathCheck::Lexical));
     refl::RecordHeader h = header;
     if (h.rid == 0) h.rid = refl::mintRecordId();
     if (!refl::isValidRecordId(h.rid)) return Error{ErrorCode::InvalidArgument, "invalid $rid"};
@@ -270,7 +269,7 @@ Result<DocId> TxBuilder::createRecord(const refl::TypeInfo& type, std::string_vi
     op.kind = OpKind::Create;
     op.doc = m_fw->newKey();
     op.typeName = std::string(type.qualifiedName);
-    op.file = std::move(rel);
+    op.file = std::move(target.relative);
     op.after = recordText(type, value.data(), h);
     const DocId id = op.doc;
     HELIOS_TRY(push(std::move(op)));
@@ -423,22 +422,23 @@ Result<void> Framework::journalRecord(const JournalRecord& record) {
 
 // ---- documents --------------------------------------------------------------------------------
 Result<Document*> Framework::open(const fs::Path& file, const refl::TypeInfo* type) {
-    const fs::Path abs = file.is_absolute() ? file.lexically_normal() : m_workspace->absolute(fs::pathToUtf8(file));
-    if (Document* d = m_workspace->findByPath(abs)) return d;
-    return openInternal(abs, type, true);
+    HELIOS_TRY_ASSIGN(const ProjectFile target, m_workspace->confine(fs::pathToUtf8(file), PathOrigin::Caller));
+    if (Document* d = m_workspace->findByPath(target.absolute)) return d;
+    return openInternal(target, type, true);
 }
 
-Result<Document*> Framework::openInternal(const fs::Path& abs, const refl::TypeInfo* type, bool journal) {
-    return detail::FwAccess::openDocument(*this, abs, type, journal, newKey());
+Result<Document*> Framework::openInternal(const ProjectFile& file, const refl::TypeInfo* type, bool journal) {
+    return detail::FwAccess::openDocument(*this, file, type, journal, newKey());
 }
 
 namespace detail {
 
-Result<Document*> FwAccess::openDocument(Framework& fw, const fs::Path& abs, const refl::TypeInfo* type, bool journal,
+Result<Document*> FwAccess::openDocument(Framework& fw, const ProjectFile& file, const refl::TypeInfo* type, bool journal,
                                          DocId id) {
     Workspace& ws = *fw.m_workspace;
+    const fs::Path& abs = file.absolute;
+    const std::string& rel = file.relative;
     HELIOS_TRY_ASSIGN(const std::string text, fs::readTextFile(abs));
-    const std::string rel = ws.relativeTo(abs);
     const refl::TypeInfo* t = type ? type : recordTypeForPath(ws.types(), rel);
     if (!t) {
         return Error{ErrorCode::NotFound,
@@ -449,7 +449,7 @@ Result<Document*> FwAccess::openDocument(Framework& fw, const fs::Path& abs, con
     if (auto r = refl::readRecord(*t, DocAccess::object(*doc), text, DocAccess::header(*doc), ctx); !r) {
         return Error{r.error().code, std::format("{}: {}", fs::pathToGenericUtf8(abs), r.error().message)};
     }
-    for (const std::string& w : ctx.warnings()) HELIOS_LOG_WARN(LogTools, "{}: {}", rel.empty() ? fs::pathToGenericUtf8(abs) : rel, w);
+    for (const std::string& w : ctx.warnings()) HELIOS_LOG_WARN(LogTools, "{}: {}", rel, w);
     DocAccess::setPath(*doc, abs, rel);
     DocAccess::setBase(*doc, std::string(doc->text()));
     Document* raw = DocAccess::add(ws, std::move(doc));
@@ -527,16 +527,21 @@ Result<void> Framework::save(const DocId& id) {
     // after it, so recovery would replay them onto a file that already holds them (a conflict that
     // drops every later edit), or a cancelled group's edits would stay in the file.
     if (hasUnjournaledOps(id)) return pendingEdits(*d, "save");
+    if (d->path().empty()) return Error{ErrorCode::InvalidState, std::format("{} has no file", d->name())};
+    // Writing or deleting is a use of the path: check it again now, since a link may have
+    // appeared inside the project after the document was opened or created.
+    if (auto file = m_workspace->confine(d->relativePath(), PathOrigin::Untrusted); !file) {
+        return Error{file.error().code, std::format("{}: refusing to save: {}", d->name(), file.error().message)};
+    }
     JournalRecord rec;
     rec.kind = JournalRecordKind::Save;
     rec.doc = id;
     rec.file = d->relativePath();
     if (d->destroyed()) {
-        if (!d->path().empty() && fs::exists(d->path())) HELIOS_TRY(fs::remove(d->path()));
+        if (fs::exists(d->path())) HELIOS_TRY(fs::remove(d->path()));
         DocAccess::clearBase(*d);
         rec.hash = 0;
     } else {
-        if (d->path().empty()) return Error{ErrorCode::InvalidState, std::format("{} has no file", d->name())};
         const std::string text = d->text();
         HELIOS_TRY(fs::createDirectories(d->path().parent_path()));
         HELIOS_TRY(fs::writeTextFile(d->path(), text, fs::WriteMode::Atomic));
@@ -616,11 +621,20 @@ Result<void> Framework::applyOp(const Op& op) {
         if (!type) return Error{ErrorCode::NotFound, std::format("unknown record type {}", op.typeName)};
         Document* existing = ws.find(op.doc);
         if (existing && !existing->destroyed()) return Error{ErrorCode::InvalidState, std::format("document {} already exists", op.doc)};
-        const fs::Path abs = ws.absolute(op.file);
+        // Raw ops come from journals, collaborators and patches: the project-confinement rule.
+        // Restoring a destroyed document (an undo) touches no file, so only its spelling is
+        // checked; a new document's file must not exist yet, which looks at the disk.
+        HELIOS_TRY_ASSIGN(const ProjectFile file,
+                          ws.confine(op.file, PathOrigin::Untrusted, existing ? PathCheck::Lexical : PathCheck::OnDisk));
+        const fs::Path& abs = file.absolute;
         if (Document* other = ws.findByPath(abs); other && other != existing) {
             return Error{ErrorCode::AlreadyExists, std::format("{} is already open", op.file)};
         }
         if (existing) {
+            if (!sameRelativePath(file.relative, existing->relativePath())) {
+                return Error{ErrorCode::InvalidArgument, std::format("create: '{}' is not the file of the destroyed document {} ('{}')",
+                                                                     file.relative, op.doc, existing->relativePath())};
+            }
             // Undo of a Destroy: restore the same document object. Every check runs on a scratch
             // copy first, so a failing op leaves the destroyed document as it was (TxBuilder's
             // contract; raw ops come from replay, collaboration and patches).
@@ -644,7 +658,7 @@ Result<void> Framework::applyOp(const Op& op) {
         auto doc = std::make_unique<Document>(op.doc, *type, refl::RecordHeader{}, abs);
         refl::ReadCtx ctx;
         HELIOS_TRY(refl::readRecord(*type, DocAccess::object(*doc), *op.after, DocAccess::header(*doc), ctx));
-        DocAccess::setPath(*doc, abs, ws.relativeTo(abs));
+        DocAccess::setPath(*doc, abs, file.relative);
         if (doc->text() != *op.after) return Error{ErrorCode::InvalidArgument, "create: snapshot is not canonical"};
         DocAccess::touch(*doc);
         DocAccess::add(ws, std::move(doc));
@@ -654,6 +668,12 @@ Result<void> Framework::applyOp(const Op& op) {
     case OpKind::Destroy: {
         Document* d = ws.find(op.doc);
         if (!d || d->destroyed()) return noDocument(op.doc);
+        // The file a save then deletes is the document's own; the op must name that file.
+        HELIOS_TRY_ASSIGN(const ProjectFile file, ws.confine(op.file, PathOrigin::Untrusted, PathCheck::Lexical));
+        if (!sameRelativePath(file.relative, d->relativePath())) {
+            return Error{ErrorCode::InvalidArgument,
+                         std::format("destroy: '{}' is not the file of document {} ('{}')", file.relative, op.doc, d->relativePath())};
+        }
         if (!op.before || d->text() != *op.before) return Error{ErrorCode::InvalidState, std::format("conflict: {} changed", d->name())};
         DocAccess::setDestroyed(*d, true);
         m_selection.forgetDocument(op.doc);
@@ -1038,6 +1058,7 @@ Result<TxId> FwAccess::syncWithDisk(Framework& fw, const DocId& id, bool discard
         return Error{ErrorCode::InvalidState, std::format("{}: cannot reload or revert inside a transaction group", d->name())};
     }
     if (fw.hasUnjournaledOps(id)) return pendingEdits(*d, "reload or revert");
+    HELIOS_TRY(fw.m_workspace->confine(d->relativePath(), PathOrigin::Untrusted));  // a link may have appeared since the open
     HELIOS_TRY_ASSIGN(const std::string text, fs::readTextFile(d->path()));
     const refl::TypeInfo& type = d->type();
     refl::Value theirs(type);

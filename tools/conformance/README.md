@@ -31,7 +31,9 @@ finding fails the run, 2 a usage or I/O error.
 - **`cmake -P tools/ci/run_lints.cmake`**, with the other build-independent lints.
 - **CI**: the `Conformance lint (tools/conformance)` job vets and tests the tool, runs it over the full tree
   (a superset of §5.10.3's "changed paths"; the known-failing records make that possible), and uploads the
-  SARIF as an artifact and to code scanning (category `helios-conformance`).
+  SARIF as an artifact and to code scanning (category `helios-conformance`). In the SARIF a failing finding is
+  an `error`; a suppressed or known-failing one is a `note` with its suppression, because code scanning does
+  not apply SARIF suppressions on upload and would fail a PR's check on a reviewed line the PR touches.
 
 ## Rules
 
@@ -51,6 +53,8 @@ a `good/` tree for their exemptions; `go test` compares both exactly, and CTest 
 | CONF-08 | 04 §2; reconciliation #12 | a default gateway address or port other than 7777: Go values named for the gateway (keyed fields, var and const specs, assignments, calls with a `"gateway"` argument), with address strings, `net.JoinHostPort`, `fmt.Sprintf` and `fmt.Sprint` addresses and `"host:" + strconv.Itoa(port)` (also `host + ":" + port` with a host variable) evaluated, the `Port` field of such a value (`&net.UDPAddr{Port: …}`), a literal of a gateway-named type under any name (`GatewayConfig{Port: …, Addr: …}`, also as an elided slice or map element: `[]GatewayConfig{{Port: …}}`), and a value named for the gateway port (the words gateway and port: `…GatewayPort`, `"gateway-port"`) evaluated through constants; TOML keys (bare or quoted) or tables named for the gateway (address strings, and the integer of a key with the word port: `[gateway] port`, `listen_port`, `gateway_port`, not `transport`; an inline table's keys too: `listen = { host = …, port = … }`; a multi-line array is read whole, on its key's line); a published `…/udp` (or `/UDP`) port in YAML (the host side of `[ip:]published:container/udp`, and the container side too); C++ `k…GatewayPort` constants (initialised with `=`, `{…}` or `(…)`) and `#define …GATEWAY_PORT`, and in files named for the gateway the `listen`/`connect` defaults (`"host:port"`, `"host:" + std::to_string(port)`, `std::string{"host:"} + …`, `os << "host:" << port`, `Address::ipv4(…, port)`, `ipv4(octets, port)`, `ipv6(groups, port)`, `ipv6Bytes(bytes, port)`, `loopbackV4(port)`, an option's default argument, an address or an integer; also on the continuation lines of a statement that such a line starts: `net::Address listen =` then `Address::ipv4(…);`), resolved through the scope's constants. A gateway port the rule reads but cannot resolve fails closed. Tests and fuzzers are skipped: they choose their own ports | Go syntax; TOML, YAML and C scans | passes |
 | CONF-09 | ADR-014 | a `go.mod` `go` directive other than 1.27.x, a `toolchain` other than go1.27.x, or no `go` directive; an `actions/setup-go` step (block or flow style) without `go-version-file: services/go.mod`, or with `go-version`; a `GOTOOLCHAIN` set in workflow YAML (an `env` key, `GOTOOLCHAIN=…` in a script or `$GITHUB_ENV`) to anything but `auto`, `local`, `path` or go1.27.x | go.mod and workflow YAML lines | passes |
 | CONF-10 | 08 §1.16; reconciliation #19 | `SDL_CreateRenderer` (and SDL3's other renderer constructors: `SDL_CreateRenderer*`, `SDL_CreateWindowAndRenderer`, `SDL_CreateSoftwareRenderer`, `SDL_CreateGPURenderer`) in C-family code (C++20 module units and `.tpp` too), including by name in a string or split by a backslash-newline splice, outside `apps/launcher/**` and engine/ui's SDL_Renderer backend (`engine/ui/**` paths containing `sdl_renderer`; WP-0.17 names the real files). `#if 0` groups are not read | comment-aware token scan | passes |
+| CONF-11 | ADR-011 amendment; 02 §1.1; reconciliation #25 | in CMake code (comments stripped): `HELIOS_ISA_AVX2_TARGETS` or `HELIOS_ISA_AVX2_SOURCE_PATTERNS`, and any other `set`/`list` of an `*avx*_{targets,sources,patterns,files,kernels,allowlist}` variable; `helios_avx2_sources()`, defined or called; `set_source_files_properties` or `set_property(SOURCE …)` carrying `/arch:AVX*` (or `-arch:AVX*`), `-mavx*`, `-mbmi*`, `-mf16c`, `-mlzcnt`, `-mfma` or a `-march=` other than `x86-64`/`x86-64-v1` (and, failing closed, a `-march=`, `/arch:` or `-m` whose value is a variable or a generator expression: `-march=${level}`, `/arch:${v}`, `-march=$<…>`, `-m${ext}`), literally or through a variable (`${v}`, `$CACHE{v}`, or a `foreach` loop variable over one or over literal flag options, also the `ZIP_LISTS` variable that takes such a list): one set from them, from `helios_isa_avx2_flags()` or from a function's output argument, `PARENT_SCOPE`, `return(PROPAGATE)` or macro, or read from a caller's scope, or, in any file, a level set that `cmake/HeliosIsa.cmake` defines (a variable it sets from them, or fills by calling a function that returns them, outside a function, into the parent scope or the cache, such as 02 §1.1's `HELIOS_ISA_AVX2` or `helios_isa_avx2_flags(HELIOS_ISA_AVX2)`) and the output of a function there that returns them; the same flags in `target_compile_options`, `add_compile_options`, `add_definitions`, `set_target_properties`/`set_property(TARGET …)` `COMPILE_OPTIONS` or `INTERFACE_COMPILE_OPTIONS`, `set_property(DIRECTORY …)`/`set_directory_properties` `COMPILE_OPTIONS`, any `CMAKE_*` variable (`CMAKE_<LANG>_FLAGS*`, `CMAKE_<LANG>_COMPILE_OBJECT`, …; not `CMAKE_REQUIRED_*`, which only feed try-compile probes) or `ENV{…}` (`ENV{CXXFLAGS}` seeds `CMAKE_CXX_FLAGS`), or as option arguments of a call to a function or macro that the scanned CMake files define (a wrapper); any other command that carries them (`cmake_language(CALL|EVAL …)`, a function defined elsewhere; fails closed, see the limits), a `$ENV{…}` read in a grant (fails closed), and a `set()` of them into a name built at run time other than an output parameter (`${ARG_OUT}`, `${prefix}_FLAGS`, `${ARGV0}`; fails closed), anywhere but inside `helios_apply_isa_level` in `cmake/HeliosIsa.cmake`, the function that applies an image's level (exempt by that exact name, which WP-0.2r uses or renames here). The `levels` fixture seeds the regressions WP-0.2r's names make natural: `${HELIOS_ISA_AVX2}` on a file or a target, a function's output, and a per-target loop outside the level function; `levels_fn` fills the level set with today's `helios_isa_avx2_flags()` and caches a copy through a chain of functions. A command that never closes is a `conformance` finding (`unclosed`). The bad fixture is a verbatim copy of today's two lists, `helios_isa_avx2_flags()`, `helios_avx2_sources()` and `tp_jolt`'s options | CMake command scan | **known failing, owned by WP-0.2r** (11 pinned findings in 5 files; the ISA audit's own disassembly fixture in `tools/lint/lint_tests.cmake` carries a `conformance:allow`, as §5.10.3 prescribes) |
+| CONF-12 | 02 §1.1 (gate placement and gate-TU rules); reconciliation #25 | in the gate objects (`engine/core/src/cpugate/**`, `engine/core/src/platform/*/cpu_gate_hook.c`): a `.CRT$X*` section other than `.CRT$XLA0`, or `#pragma init_seg`; `ExitProcess`; no `/INCLUDE:_tls_used` or `/INCLUDE:helios_cpu_gate_tls_entry` in the Windows hook, `cmake/**` or `engine/**/CMakeLists.txt`; an `#include` other than `cpu_gate.h`, `<stdint.h>`, `<intrin.h>`, `<cpuid.h>`, `<windows.h>`, `<signal.h>`, `<unistd.h>`; a file-scope definition without `static` other than `helios_cpu_gate_run`, `helios_cpu_gate_verdict` and `helios_cpu_gate_tls_entry`. Elsewhere in scope (vendored patches too): a `.CRT$XLA*` contribution, a `.preinit_array` entry, `constructor(n)`/`init_priority(n)` with n < 101, `ifunc` or `target_clones` | C token scan | **known failing, owned by WP-0.5r** (8 pinned findings in the Windows hook, the external `helios_cpu_gate_crt_entry` among them) |
 
 ## The net schema (CONF-06, CONF-07)
 
@@ -90,13 +94,19 @@ finding.
 - **Suppression** (§5.10.3): a `conformance:allow CONF-nn <reason>` comment on the finding's line. The reviewer
   must approve it. Every suppression is printed on each run, so the round audit lists them. One without a rule
   ID or a reason is malformed, and one on a line where its rule reports nothing is unused: both fail.
-- **Known failing** (`known_failing.jsonc`): findings of a rule under the record's paths are reported as
-  "known failing, owned by `<WP>`" and do not fail the run. Each record names its rework WP, its §5.10.4 row
-  and a reason, and the scorecard carries the same clause as a gap (`EXIT-0.conformance`): the run fails on a
+- **Known failing** (`known_failing.jsonc`): each record names its rule, its rework WP (`owner`), its §5.10.4 row
+  (`anchor`), a reason, and the findings it pins, one `{"path", "fingerprint"}` entry per finding. A fingerprint
+  hashes the rule, the file, the message and the finding's source line with its surrounding whitespace trimmed,
+  so it survives edits elsewhere in the file but not an edit of the line itself; `-fingerprints` prints them,
+  and SARIF carries them as `partialFingerprints`. Pinned findings print as "known failing, owned by `<WP>`"
+  and do not fail the run. Every other finding fails it, even of the same rule in the same file: a new grant
+  next to an old one, a third copy of a line pinned twice, or a pinned line that gains a flag. An entry that
+  matches no finding fails the run too, so the WP that closes a gap removes its entries and the record (and the
+  gap). The scorecard carries each record's clause as a gap of `EXIT-0.conformance`, and the run fails on a
   record whose rule and owner no gap of that item names (when `scorecard.jsonc` exists, as it does in the
-  repository). A record covers its own paths only, so the same rule's finding anywhere else still fails. A
-  record that matches no finding fails the run, so the WP that closes it must remove it. `-strict` ignores the
-  file.
+  repository). `-strict` ignores the file: `go run ./cmd/helios-conformance -root ../.. -strict -rules CONF-11`
+  is how WP-0.2r shows CONF-11 clean. Today's records: CONF-11 (WP-0.2r) and CONF-12 (WP-0.5r), the open rows
+  of 09 §5.10.4 (b). Adding a record is a Director decision (D3).
 - **Map** (`map.jsonc`): anchors to paths, rules and required tests. The run fails on a key that is not an
   anchor, an unknown rule, a bad glob, an entry with neither rules nor `why` (D5), and a rule in no entry.
 
@@ -203,3 +213,51 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   (`SDL_Create##Renderer`), a renderer created from Luau or Go, and an SDL renderer reached through a symbol
   lookup whose name is computed at run time. Only `#if 0` (or `false`) groups and the branches after `#if 1`
   are known dead; every other conditional group is read as compiled, which can over-report and never hides.
+- **CONF-11** reads CMake commands as CMake's lexer does: `#` and `#[[…]]` comments are dropped, and a quoted
+  argument, a bracket argument or an escaped `\(` does not close or open a command; a command still open at the end
+  of a file fails the run as a `conformance` finding. A variable is followed by scope: one set at file scope stays
+  tracked across function and macro definitions, and a function or macro body sees every variable its file sets
+  (also one set after the definition, since a body runs when it is called) and every flag variable in scope where it
+  is called (CMake's dynamic scope: a callee reads its caller's locals). A body hands flags back to its caller
+  through an output argument (`set(${out} … PARENT_SCOPE)`, or `set(${out} …)` in a macro, also forwarded to another
+  such function), `PARENT_SCOPE` or `CACHE`, `return(PROPAGATE v)`, or any `set()` in a macro (a macro writes its
+  caller's scope); a call receives them, and the scope around the definition counts too, so a function never called
+  still does. Any other `set()` in a body stays local. CMake functions are global, so the scan reads every file in
+  scope until it learns nothing new about them before it reports. `string()`, `list()` and `separate_arguments()`
+  write the argument CMake writes (`string(REPLACE <match> <replace> <out> …)`, `string(REGEX REPLACE …)`,
+  `string(JOIN <glue> <out> …)`, every `<out>` of `list(POP_FRONT|POP_BACK <list> <out>…)`, …), a `list()`
+  sub-command reads its list by name (`list(GET l 0 out)` reads `${l}`), and a `REPLACE` or `REGEX` pattern does not
+  carry a flag into the output. A `foreach` loop variable holds flags inside its loop, when it runs over a flag
+  variable or over literal items that are options (`foreach(f -mavx2 -mfma)`; a quoted sentence that names a flag is
+  not one, and a quoted list, `"sse4.2;-mavx2"`, is read item by item), and is restored when the loop ends
+  (CMP0124); with `IN ZIP_LISTS` the variable that takes a flag list holds them (the i-th of several loop variables,
+  or `<v>_<i>` for a single one). A `set()` of flags into a name built at run time (`${ARG_OUT}` from
+  `cmake_parse_arguments`, `${prefix}_FLAGS`, `${ARGV0}`), other than an output parameter of the enclosing
+  definition, fails closed where it is written, since no reference can be matched to it; so does a producer called
+  with such a name. Across files a variable is followed for `cmake/HeliosIsa.cmake`'s level sets and flag functions
+  (names matched in any letter case; a macro called at file scope and a file-scope `foreach` over a level set, or
+  over literal flags, define level sets too), for the variables the root `CMakeLists.txt` and the `cmake/*.cmake`
+  modules end their file scope with (seen in every directory, as they run first), for those an ancestor directory's
+  `CMakeLists.txt` ends its file scope with (seen in its subdirectories' `CMakeLists.txt`; one set after the
+  `add_subdirectory()` counts too, an over-report), and through function calls as above; any other variable set from
+  AVX flags in one file and read at file scope in another (an `include()`d file outside `cmake/`) is not. A wrapper
+  is recognised only when the scanned CMake files define it, and only its option arguments count (an unquoted
+  argument, or a quoted one made of options and variables), so a message that names a flag is not a grant. Any other
+  command that carries an AVX-class flag fails closed (`cmake_language(CALL …)`, `cmake_language(EVAL CODE …)`, a
+  function defined outside the scanned files), except `message()`, conditions (`if`, `elseif`, `while`),
+  compiler-flag probes (`check_*_compiler_flag`) and `cmake_parse_arguments()`; so does a nested reference
+  (`${${name}}`) in a grant, whose value the scan cannot tell. `block()` scopes are not modelled: a variable set
+  inside one counts after it too (an over-report). A `$ENV{…}` read in a grant fails closed; one copied into a
+  variable first (`set(f $ENV{X})`) is not followed. Inside `helios_apply_isa_level` nothing is reported or tracked,
+  so a computed name it writes (`set(${tgt}_FLAGS … PARENT_SCOPE)`) does not carry flags to its callers: the
+  exemption covers what that function hands back. A list of targets or sources is flagged by name only when the name
+  says `avx`; one with another name is caught where it grants the flags. Generator expressions are read as text, so
+  a flag inside one counts. Not in §5.10.3's scope at all: `CMakePresets.json` `cacheVariables` (a `CMAKE_CXX_FLAGS`
+  there), toolchain files outside `cmake/` and command-line `-D` options. Whether the presets belong in CONF-11's
+  scope is a question for the Director.
+- **CONF-12** recognises an external symbol in a gate TU by a file-scope definition without `static` (an `extern`
+  one with a body or an initializer too, every declarator of a statement, a variable of `struct`, `enum` or
+  `union` type, named or anonymous, and an array whose bound or `_Alignas` has parentheses), with macros not
+  expanded; audit check 2 (the objects' symbol lists) is the
+  object-level backstop. A pre-gate hook elsewhere is found by its section name or attribute, not by what a macro
+  expands to.

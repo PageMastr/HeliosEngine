@@ -61,13 +61,29 @@ func (p *Pass) Report(file string, line int, format string, args ...any) {
 	*p.out = append(*p.out, Finding{Rule: p.Rule.ID, Path: file, Line: line, Message: msg})
 }
 
+// ReportTool records a ToolRule finding from inside a rule: a source file the rule cannot read as it
+// must, so that what it could not read fails the run instead of passing unseen.
+func (p *Pass) ReportTool(file string, line int, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	key := fmt.Sprintf("%s|%s:%d:%s", ToolRule, file, line, msg)
+	if p.seen == nil {
+		p.seen = map[string]bool{}
+	}
+	if p.seen[key] {
+		return
+	}
+	p.seen[key] = true
+	*p.out = append(*p.out, Finding{Rule: ToolRule, Path: file, Line: line, Message: msg})
+}
+
 // Finding is one diagnostic. Suppressed and Known are set by Run.
 type Finding struct {
-	Rule, Path string
-	Line       int
-	Message    string
-	Suppressed string // the reason of the `conformance:allow` comment on its line
-	Known      *Known // the known-failing record that covers it
+	Rule, Path  string
+	Line        int
+	Message     string
+	Suppressed  string // the reason of the `conformance:allow` comment on its line
+	Known       *Known // the known-failing record that covers it
+	Fingerprint string // rule, file, message and trimmed source line, hashed (known-failing records pin it)
 }
 
 func (f Finding) where() string {
@@ -92,6 +108,9 @@ type Result struct {
 	Rules    []*Rule
 	Files    int
 	Findings []Finding // sorted by path, line and rule
+	// ShowFingerprints makes WriteText end each finding's line with its fingerprint, which a
+	// known-failing record pins (the CLI's -fingerprints flag).
+	ShowFingerprints bool
 }
 
 // Failed reports whether any finding fails the run.
@@ -207,16 +226,28 @@ func Run(opts Options) (*Result, error) {
 	}
 	for i := range findings {
 		f := &findings[i]
+		source := ""
+		if lines := tree.Lines(f.Path); f.Line > 0 && f.Line <= len(lines) {
+			source = lines[f.Line-1]
+		}
+		f.Fingerprint = fingerprint(f.Rule, f.Path, f.Message, source)
 		if reason, ok := allows[loc{f.Rule, f.Path, f.Line}]; ok {
 			f.Suppressed = reason
 			used[loc{f.Rule, f.Path, f.Line}] = true
 			continue
 		}
+	match:
 		for _, k := range known {
-			if k.Rule == f.Rule && MatchAny(k.Paths, f.Path) {
-				f.Known = k
-				k.hits++
-				break
+			if k.Rule != f.Rule {
+				continue
+			}
+			for _, e := range k.Findings {
+				if !e.used && e.Path == f.Path && e.Fingerprint == f.Fingerprint {
+					e.used = true
+					k.hits++
+					f.Known = k
+					break match
+				}
 			}
 		}
 	}
@@ -227,10 +258,21 @@ func Run(opts Options) (*Result, error) {
 		}
 	}
 	for _, k := range known {
-		if selected[k.Rule] != nil && k.hits == 0 {
+		if selected[k.Rule] == nil {
+			continue
+		}
+		if k.hits == 0 {
 			findings = append(findings, Finding{Rule: ToolRule, Path: "tools/conformance/known_failing.jsonc",
 				Line: k.line, Message: fmt.Sprintf("stale record: %s (owner %s) matches no finding; remove it "+
 					"and the scorecard gap", k.Rule, k.Owner)})
+			continue
+		}
+		for _, e := range k.Findings {
+			if !e.used {
+				findings = append(findings, Finding{Rule: ToolRule, Path: "tools/conformance/known_failing.jsonc",
+					Line: e.line, Message: fmt.Sprintf("stale finding: %s (owner %s) no longer reports %s in %s; "+
+						"remove the entry", k.Rule, k.Owner, e.Fingerprint, e.Path)})
+			}
 		}
 	}
 	sort.SliceStable(findings, func(i, j int) bool {
@@ -288,18 +330,18 @@ func (r *Result) WriteText(w io.Writer) {
 		switch {
 		case f.Suppressed != "":
 			suppressed++
-			fmt.Fprintf(w, "%s: %s: suppressed (%s): %s\n", f.where(), f.Rule, f.Suppressed, f.Message)
+			fmt.Fprintf(w, "%s: %s: suppressed (%s): %s%s\n", f.where(), f.Rule, f.Suppressed, f.Message, r.fp(f))
 		case f.Known != nil:
 			key := f.Rule + " (" + f.Known.Owner + ")"
 			if known[key] == 0 {
 				owners = append(owners, key)
 			}
 			known[key]++
-			fmt.Fprintf(w, "%s: %s: known failing, owned by %s (%s): %s\n", f.where(), f.Rule, f.Known.Owner,
-				f.Known.Anchor, f.Message)
+			fmt.Fprintf(w, "%s: %s: known failing, owned by %s (%s): %s%s\n", f.where(), f.Rule, f.Known.Owner,
+				f.Known.Anchor, f.Message, r.fp(f))
 		default:
 			failing++
-			fmt.Fprintf(w, "%s: %s: %s\n", f.where(), f.Rule, f.Message)
+			fmt.Fprintf(w, "%s: %s: %s%s\n", f.where(), f.Rule, f.Message, r.fp(f))
 		}
 	}
 	sort.Strings(owners)
@@ -313,4 +355,11 @@ func (r *Result) WriteText(w io.Writer) {
 	}
 	fmt.Fprintf(w, "helios-conformance: %d rules over %d files: %d failing, %d suppressed; known failing: %s\n",
 		len(r.Rules), r.Files, failing, suppressed, kt)
+}
+
+func (r *Result) fp(f Finding) string {
+	if !r.ShowFingerprints {
+		return ""
+	}
+	return " [fingerprint " + f.Fingerprint + "]"
 }

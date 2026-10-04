@@ -1,0 +1,62 @@
+#! -rules CONF-11 -strict
+# Today's lists, helios_avx2_sources() and tp_jolt's PUBLIC options (verbatim), and other per-file,
+# per-target and global AVX grants: INTERFACE_COMPILE_OPTIONS, directory properties, -arch:AVX2 and a
+# wrapper function; and in tools/lint/quoted.cmake, grants after a quoted or bracketed "(" and a \(.
+# engine/unknown fails closed: cmake_language() and a command defined outside the scanned files that
+# carry flags, a property CONF-11 does not read (LINK_OPTIONS, 12), separate_arguments() output, and a
+# nested ${${n}} reference in a grant; a message and a condition that name a flag pass. engine/loops:
+# literal flags as foreach() items (3, 8), list(POP_FRONT) and list(GET) outputs (13, 15), set() into a
+# name built at run time (18, 21, 24) and a producer called with one (28), and flags written to the
+# environment or another CMAKE_ variable that reaches the compiler (30, 31). Round 6 (engine/loops): the
+# ZIP_LISTS loop variable that takes the flags list (38) and <v>_1 of a single one (41); an ISA level after
+# -march=, /arch: or -m that is a variable or a generator expression (44-48); a quoted list with an option
+# (50); and $ENV{} in a grant (52).
+cmake/HeliosIsa.cmake:15: CONF-11
+cmake/HeliosIsa.cmake:24: CONF-11
+cmake/isa_allowlist.cmake:12: CONF-11
+cmake/isa_allowlist.cmake:16: CONF-11
+engine/demo/CMakeLists.txt:2: CONF-11
+engine/demo/CMakeLists.txt:4: CONF-11
+engine/demo/CMakeLists.txt:5: CONF-11
+engine/demo/CMakeLists.txt:6: CONF-11
+engine/demo/CMakeLists.txt:7: CONF-11
+engine/demo/CMakeLists.txt:8: CONF-11
+engine/demo/CMakeLists.txt:9: CONF-11
+engine/demo/CMakeLists.txt:10: CONF-11
+engine/demo/CMakeLists.txt:11: CONF-11
+engine/demo/CMakeLists.txt:12: CONF-11
+engine/demo/CMakeLists.txt:13: CONF-11
+engine/demo/CMakeLists.txt:14: CONF-11
+engine/demo/CMakeLists.txt:18: CONF-11
+engine/loops/CMakeLists.txt:3: CONF-11
+engine/loops/CMakeLists.txt:8: CONF-11
+engine/loops/CMakeLists.txt:13: CONF-11
+engine/loops/CMakeLists.txt:15: CONF-11
+engine/loops/CMakeLists.txt:18: CONF-11
+engine/loops/CMakeLists.txt:21: CONF-11
+engine/loops/CMakeLists.txt:24: CONF-11
+engine/loops/CMakeLists.txt:28: CONF-11
+engine/loops/CMakeLists.txt:30: CONF-11
+engine/loops/CMakeLists.txt:31: CONF-11
+engine/loops/CMakeLists.txt:38: CONF-11
+engine/loops/CMakeLists.txt:41: CONF-11
+engine/loops/CMakeLists.txt:44: CONF-11
+engine/loops/CMakeLists.txt:45: CONF-11
+engine/loops/CMakeLists.txt:46: CONF-11
+engine/loops/CMakeLists.txt:47: CONF-11
+engine/loops/CMakeLists.txt:48: CONF-11
+engine/loops/CMakeLists.txt:50: CONF-11
+engine/loops/CMakeLists.txt:52: CONF-11
+engine/unknown/CMakeLists.txt:1: CONF-11
+engine/unknown/CMakeLists.txt:2: CONF-11
+engine/unknown/CMakeLists.txt:4: CONF-11
+engine/unknown/CMakeLists.txt:7: CONF-11
+engine/unknown/CMakeLists.txt:8: CONF-11
+engine/unknown/CMakeLists.txt:12: CONF-11
+third_party/CMakeLists.txt:6: CONF-11
+third_party/CMakeLists.txt:8: CONF-11
+third_party/CMakeLists.txt:10: CONF-11
+tools/lint/quoted.cmake:3: CONF-11
+tools/lint/quoted.cmake:4: CONF-11
+tools/lint/quoted.cmake:8: CONF-11
+tools/lint/quoted.cmake:10: CONF-11

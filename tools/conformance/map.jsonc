@@ -45,6 +45,16 @@
     "paths": ["services/**", "services/deploy/**", "engine/net/**", "engine/server/**", "apps/gateway/**"],
     "rules": ["CONF-08"]
   },
+  // Whole-image ISA levels and the CPU gate (ADR-011 amendment; 02 §1.1). Their open rows are 09
+  // §5.10.4 (b), recorded in known_failing.jsonc for WP-0.2r and WP-0.5r.
+  "ADR-011": {
+    "paths": ["cmake/HeliosIsa.cmake", "cmake/isa_allowlist.cmake", "third_party/CMakeLists.txt"],
+    "rules": ["CONF-11"]
+  },
+  "02 §1.1 (ISA levels)": {
+    "paths": ["cmake/**", "tools/lint/isa_audit.cmake", "engine/core/src/cpugate/**", "engine/core/src/platform/*/cpu_gate_hook.c"],
+    "rules": ["CONF-11", "CONF-12"]
+  },
   "ADR-014": {
     "paths": ["services/go.mod", "tools/conformance/go.mod", ".github/**"],
     "rules": ["CONF-09"]

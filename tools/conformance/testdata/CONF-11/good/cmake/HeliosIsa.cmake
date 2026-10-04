@@ -1,0 +1,15 @@
+# The whole-image model (02 §1.1): level sets, applied to an image and every library it links.
+set(HELIOS_ISA_AVX2 -mavx2 -mbmi -mbmi2 -mlzcnt -mpopcnt -mf16c -mno-fma -mfpmath=sse -ffp-contract=off)
+set(HELIOS_ISA_BASE -march=x86-64 -mtune=generic)
+function(helios_apply_isa_level target level)
+  if(level STREQUAL "avx2")
+    target_compile_options(${target} PRIVATE ${HELIOS_ISA_AVX2})
+  else()
+    target_compile_options(${target} PRIVATE ${HELIOS_ISA_BASE})
+  endif()
+endfunction()
+# The gate TUs are pinned to the baseline: -mno-avx2 and -march=x86-64 grant nothing.
+function(helios_cpu_gate_sources)
+  set(flags -march=x86-64 -mno-avx -mno-avx2 -mno-bmi2 -mno-fma -fno-stack-protector)
+  set_source_files_properties(${ARGN} PROPERTIES COMPILE_OPTIONS "${flags}")
+endfunction()

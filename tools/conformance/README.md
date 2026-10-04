@@ -146,10 +146,10 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   buckets. A range variable or element copy (`c := cfgs[i]`) is a config of its own that takes the buckets of
   every collection its name ranges over or copies from, never the collection itself. One over a KV collection on
   which the file sets no bucket, and a KV parameter or struct field (or a collection of them) whose name's buckets
-  come only from literals, add a bucket the lint cannot resolve, so they fail closed in NATS code. Not seen: a KV
-  parameter, range variable or element copy named like a config that a `.Bucket = …` assignment sets elsewhere in
-  the file takes that bucket, since the assignment is not tracked to one of them. A `$KV.` subject is read only as one
-  literal.
+  come only from literals, add a bucket the lint cannot resolve (a range variable over such a collection, or a copy
+  of one of its elements, takes it too), so they fail closed in NATS code. Not seen: a KV parameter, range variable
+  or element copy named like a config that a `.Bucket = …` assignment sets elsewhere in the file takes that bucket,
+  since the assignment is not tracked to one of them. A `$KV.` subject is read only as one literal.
 - **CONF-01 and CONF-02, C and C++**, resolve buckets and keys through the scope's string constants by bare name (a
   name with several values matches if any value does). A string constant is a `#define` or the declaration of a
   constant initialized with literals, at namespace or block scope or as a `static` class member: `constexpr`, or a
@@ -169,7 +169,10 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   `MaxAge` is a `jsStreamConfig` field: it counts in a file that sets a stream `Name` resolving to a lease-named
   stream (`KV_leases`). With a stream name the lint cannot resolve, or none set in the file, it is ordinary
   retention, as on the Go side, except in a file that uses JetStream KV (any `js_…KeyValue` call, `js_DeleteKeyValue`
-  included, or a `kvStore_*` call) or spells a `"KV_…"` name, where it fails closed.
+  included, or a `kvStore_*` call) or spells a `"KV_…"` name, where it fails closed. Like a `TTL`, a `MaxAge` is
+  not tied to its config: any `.Name = …` or `->Name = …` in the file counts as a stream name, so an unrelated
+  struct's `p->Name = "peer";` makes the name resolve and a `MaxAge` in a KV file pass (there is no nats.c code in
+  the tree yet).
 - **CONF-03** checks that the required tests exist and are not switched off. It cannot tell a test that passes
   vacuously, and it leaves a conditional skip (`if testing.Short()`) to CI, which runs the Go jobs without
   `-short`. An off-decorator is read by its constructor call, so `skip()` under `using namespace doctest` and

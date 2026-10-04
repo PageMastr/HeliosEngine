@@ -720,21 +720,25 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 		locs := re.FindAllStringIndex(text, -1)
 		return src.callsAt(locs), locs // every match ends in '(', so callsAt keeps them all, in order
 	}
-	// The option calls' argument spans: a default on a continuation line is the call's, reported on its line,
-	// and a literal in a read option's span is left to the option (so it is reported once).
+	// The defaults of the option calls the option loop below checks (read ones, with two arguments or more):
+	// from the start of the last argument to the closing parenthesis. A literal there is left to the option
+	// (so it is reported once, on the call's line); every other argument is read like any literal. A call
+	// that does not close (parentheses unbalanced by #if branches) has no default the lint can find: it
+	// fails closed below, and hides nothing.
 	options, optionLocs := calls(cOptionCallRE, src.text)
-	type span struct {
-		from, to int
-		read     bool
-	}
-	var spans []span
+	type span struct{ from, to int }
+	var defaults []span
+	unclosed := make([]bool, len(options))
 	for k, m := range optionLocs {
 		open := m[0] + strings.IndexByte(src.blank[m[0]:m[1]], '(') + 1
-		spans = append(spans, span{open, closingParen(src.blank, open), stmtReads(m[0]) && len(options[k].args) >= 2})
+		to := closingParen(src.blank, open)
+		unclosed[k] = to == len(src.blank)
+		if stmtReads(m[0]) && len(options[k].args) >= 2 && !unclosed[k] {
+			defaults = append(defaults, span{lastArgument(src.blank, open, to), to})
+		}
 	}
-	// inOption: off is in an option call's arguments (in a read one's, with onlyRead).
-	inOption := func(off int, onlyRead bool) bool {
-		return slices.ContainsFunc(spans, func(s span) bool { return s.from <= off && off < s.to && (s.read || !onlyRead) })
+	inDefault := func(off int) bool {
+		return slices.ContainsFunc(defaults, func(s span) bool { return s.from <= off && off < s.to })
 	}
 	strs := cStrTable(p)
 	// String literals on the read lines, and on the continuation lines of a statement that a read line
@@ -747,10 +751,9 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 			func(m []string) bool { return gatewayPortName(m[1]) }) {
 			continue
 		}
-		// Read: on a read line, or in a statement that one starts, outside an option call that is read
-		// itself; on a continuation line, outside any option call (its default is the call's).
+		// Read: on a read line, or in a statement that one starts, outside the default of a read option call.
 		readsAt := func(off int) bool {
-			return (read || stmtReads(off)) && !inOption(off, true) && (read || !inOption(off, false))
+			return (read || stmtReads(off)) && !inDefault(off)
 		}
 		bl := src.blankLines[i]
 		for _, m := range cIdentRE.FindAllStringIndex(bl, -1) {
@@ -800,7 +803,14 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 		}
 	}
 	for k, c := range options {
-		if !stmtReads(optionLocs[k][0]) || len(c.args) < 2 {
+		if !stmtReads(optionLocs[k][0]) {
+			continue
+		}
+		if unclosed[k] {
+			p.Report(f, c.line, unresolvedPort, "option "+c.args[0]+" whose call does not close")
+			continue
+		}
+		if len(c.args) < 2 {
 			continue
 		}
 		def := c.args[len(c.args)-1]
@@ -822,6 +832,25 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 			}
 		}
 	}
+}
+
+// lastArgument returns the offset where the last argument of the call whose arguments are blank[open:to]
+// starts: after its last top-level comma, or open.
+func lastArgument(blank string, open, to int) int {
+	from, depth := open, 0
+	for i := open; i < to; i++ {
+		switch blank[i] {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth = max(depth-1, 0)
+		case ',':
+			if depth == 0 {
+				from = i + 1
+			}
+		}
+	}
+	return from
 }
 
 // cStmtBounds marks the statement boundaries in src.blank: a `;` (one inside parentheses only in a block

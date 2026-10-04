@@ -27,6 +27,9 @@
 # split declaration of a gateway-named constant; a `;` inside a for statement's parentheses does not end it.
 # Go: a parenthesised host + ":" prefix (concat.go), a nested collection's elided elements and an
 # unexported port field of a gateway-named type (gateway_values.go).
+# Round 8: a literal in a read option call's other arguments is read (gateway_forms.cpp:34; only the default
+# is left to the option), and an option call that #if branches leave unclosed fails closed and hides
+# nothing after it (gateway_unbalanced.cpp).
 deploy/compose.yml:3: CONF-08
 deploy/compose.yml:6: CONF-08
 deploy/compose.yml:7: CONF-08
@@ -83,6 +86,9 @@ engine/server/src/gateway_forms.cpp:27: CONF-08
 engine/server/src/gateway_forms.cpp:29: CONF-08
 engine/server/src/gateway_forms.cpp:31: CONF-08
 engine/server/src/gateway_forms.cpp:33: CONF-08
+engine/server/src/gateway_forms.cpp:34: CONF-08
+engine/server/src/gateway_unbalanced.cpp:3: CONF-08
+engine/server/src/gateway_unbalanced.cpp:11: CONF-08
 services/cmd/tool/main.go:5: CONF-08
 services/internal/platform/concat.go:13: CONF-08
 services/internal/platform/concat.go:14: CONF-08

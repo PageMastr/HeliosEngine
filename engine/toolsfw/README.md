@@ -110,6 +110,9 @@ rewrites and deletes only `.hrec` files inside the open project. Inside the proj
 applied by design (that is what a replay is), each behind its op's precondition and the replay
 base's hash. Replayed transactions skip the pre-commit hooks, as undo and redo do: read a journal
 you did not write first (`helios-tool journal show`) and run `helios-tool validate` after replaying it.
+The journal also names the record type an open record is read as, as `Framework::open(file, type)`
+lets a caller; that gives it nothing it lacks already, since it can rewrite or delete any record
+of the project.
 
 - **One rule, `Workspace::confine()`**, for every path a journal, a raw op or a caller names. A path
   must name a `.hrec` file below the project root: relative (a caller may also pass an absolute
@@ -128,7 +131,9 @@ you did not write first (`helios-tool journal show`) and run `helios-tool valida
   save records, Create and Destroy ops), on disk, before it reads a record file or applies
   anything; one bad entry refuses the whole recovery (InvalidArgument naming the journal, the
   record's index, offset, kind and document, and the path), so a hostile journal never
-  half-applies. Every applied op gets the rule too (`TxBuilder::apply`, which replay,
+  half-applies. That includes a Create or Destroy op that names another file than its document's
+  (a legitimate journal never holds one: `TxBuilder::destroy` names the document's own file, and
+  an undo restores it there). Every applied op gets the rule too (`TxBuilder::apply`, which replay,
   collaboration and patches use): a Create's file, on disk for a new file, and a Destroy, which
   must also name its document's own file, the file a save deletes. `Framework::open` /
   `doc.open` and `TxBuilder::createRecord` / `doc.create` take a caller's path through it. At
@@ -144,8 +149,17 @@ you did not write first (`helios-tool journal show`) and run `helios-tool valida
   without it that journal could not be recovered at all short of editing its binary header. It
   relaxes nothing else. `listJournalSessions()` skips journals whose header names another project,
   so `auto` and `latest`, the editor's recovery offer and the CLI undo stack never pick one up.
-- **Output.** Refusals and `helios-tool journal list`/`show` print journal strings with control
-  characters escaped (`tf::printable`), so a crafted journal cannot drive the terminal.
+- **Output.** No string from a journal reaches a terminal or a log with its control characters.
+  `tf::printable` escapes C0, DEL, the C1 controls (U+0080-U+009F; U+009B is CSI) and any byte
+  that is not UTF-8. It is applied to `recover()`'s refusals (the transaction id, the header's
+  project), to every `RecoveredDocument::message` (they quote a transaction's user and an op's
+  path or type name), to `listJournalSessions()`'s warnings, and in helios-tool to every error and
+  report line and to `journal list`, `show` and `verify`; `journal show --json` writes DEL and C1
+  as `\u00NN` (JSON itself escapes only C0). A journal's strings are well-formed UTF-8 (the JSON
+  reader refuses a record that is not), and `RecoveredDocument::file` is a confined path, which
+  holds no control characters. This is for a UTF-8 terminal: one set to an 8-bit encoding such as
+  Latin-1 also reads the bytes 0x80-0x9F inside multi-byte UTF-8 characters as C1 controls, which
+  only ASCII-only output would avoid.
 
 What the platform layer (`src/platform`) can and cannot tell:
 - Detected: symbolic links on POSIX (`lstat`, resolved with `realpath`); on Windows every reparse
@@ -171,16 +185,17 @@ checked against the project's records).
 
 ## Tests
 
-`toolsfw_tests` (doctest, 82 cases, plus 1 `perf:` case in `toolsfw_tests_perf`): transactions and
+`toolsfw_tests` (doctest, 85 cases, plus 1 `perf:` case in `toolsfw_tests_perf`): transactions and
 inverses, history and merging, nested groups, commands and arguments, documents and 3-way reload,
 the journal (torn tails at every cut point, group commit, recovery, recovery after a reload,
 cross-session reverts, and saves and reloads refused inside a group or an uncommitted builder,
 with recovery checked after each), hostile journals (`test_confine.cpp`: the spelling rule,
 another project's record and a `../outside/evil.sh` Create, absolute, drive-letter, UNC, device and
-`..\` paths, a Destroy outside the project, a non-`.hrec` Create, a project mismatch, and symbolic
-links out of the project at recovery, open, create and save, skipped with a message where links
-cannot be created), one writer per document and builders that outlive their
-`Framework`, RPC over the real socket or pipe (including a client that never reads, one that
+`..\` paths, a Destroy outside the project or of another file than its document's, a non-`.hrec`
+Create, a project mismatch, symbolic links out of the project at recovery, open, create and save,
+skipped with a message where links cannot be created, a FIFO, made with `mkfifo` where it exists,
+and control characters from a journal in refusals, the replay report and warnings), one writer
+per document and builders that outlive their `Framework`, RPC over the real socket or pipe (including a client that never reads, one that
 half-closes, and the connection, request and output bounds), and **ED-1** (`test_ed1.cpp`):
 
 - 10,000 random transactions (Set, Insert, Remove and Move over the Frigate, with rejected edits

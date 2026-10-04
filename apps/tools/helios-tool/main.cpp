@@ -432,7 +432,9 @@ int cmdJournal(const Context& c) {
                             tf::printable(s.header.session), tf::printable(s.header.user), tf::printable(s.header.host), s.header.pid,
                             s.txCount, s.clean ? "clean" : "UNCLEAN", s.tornBytes ? std::format(" torn={}B", s.tornBytes) : std::string()));
         }
-        if (sessions.empty()) out(std::format("no {}journals for project '{}'\n", c.cl->has("all") ? "" : "unclean ", c.project));
+        if (sessions.empty()) {
+            out(std::format("no {}journals for project '{}'\n", c.cl->has("all") ? "" : "unclean ", tf::printable(c.project)));
+        }
         return kOk;
     }
     if (c.args.size() < 2) return fail(kUsageError, std::format("journal {}: expected a journal file", sub));
@@ -443,8 +445,8 @@ int cmdJournal(const Context& c) {
         if (!scan) return fail(kFailed, std::format("{}", scan.error()));
         if (sub == "verify") {
             out(std::format("{}: {} record(s), {} valid byte(s), {} torn byte(s), {}\n", tf::printable(fs::pathToUtf8(*path)),
-                            scan->records.size(),
-                            scan->validBytes, scan->tornBytes, scan->clean ? "clean end" : "no end record (crashed or running)"));
+                            scan->records.size(), scan->validBytes, scan->tornBytes,
+                            scan->clean ? "clean end" : "no end record (crashed or running)"));
             return scan->tornBytes == 0 ? kOk : kCheckFailed;
         }
         const bool json = c.cl->has("json");

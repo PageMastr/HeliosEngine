@@ -349,10 +349,11 @@ ACL allows it, and the entries (with `?`, that folder's ACL could not be read). 
 
 - **A `PATH` line**: until it is gone, any program that you start by name may be one that `helios-ci` put there, so
   deal with it before anything else in an elevated window. A tool's folder (the Vulkan SDK's `Bin` is in
-  `C:\VulkanSDK`): close the tool's folder as below. Your own folder: move it into your profile, or close it as
-  below. A folder you do not need, a missing one, or one that is not a full path: take its entry off the `PATH`
-  (Start → "Edit the system environment variables" → Environment Variables → `Path` or `PSModulePath` → Edit → select
-  it → Delete → OK → OK). Then open a new elevated window, which reads the `PATH` again.
+  `C:\VulkanSDK`): close the tool's folder as below. Your own folder: move it into your profile and change the entry,
+  or close the folder as below. A folder you do not need, a missing one, or one that is not a full path: take its
+  entry off the `PATH` (Start → "Edit the system environment variables" → Environment Variables → `Path` or
+  `PSModulePath` → Edit → select it → Delete → OK → OK). Then open a new elevated window, which reads the `PATH`
+  again.
 
 - **Your files, or a clone of a repository**: move it into your profile, or close it. A file at a drive root: move it
   into your profile or into a folder you close. To close a folder, give yourself access first: with User Account

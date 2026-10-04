@@ -1,7 +1,8 @@
 // The journal is untrusted input: every path it names stays inside the project (Workspace::confine),
 // and a journal of another project is refused. These are the regression cases of the round-5
 // review of PR #40 (a crafted journal made `helios-tool journal replay --save` write, rewrite and
-// delete files outside the project) plus the spelling and link rules behind them.
+// delete files outside the project) plus the spelling and link rules behind them, and the output
+// rule: no string from a journal reaches an error or a report with its control characters.
 
 #include <doctest/doctest.h>
 
@@ -9,12 +10,17 @@
 #include <format>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
 
+#include "helios/core/log.h"
 #include "helios/core/platform.h"
+#include "helios/core/process.h"
+#include "helios/core/utf.h"
+#include "platform/tf_os.h"
 #include "test_util.h"
 
 using namespace helios;
@@ -119,6 +125,25 @@ bool makeFileLink(const fs::Path& target, const fs::Path& link) {
     if (ec) MESSAGE("skipped: cannot create a symbolic link here: " << ec.message());
     return !ec;
 }
+
+/// True if a terminal could take part of `text` as a control: a C0 or C1 control, DEL, or bytes
+/// that are not UTF-8 (a lone 0x9B is the 8-bit CSI).
+bool hasControl(std::string_view text) {
+    for (usize i = 0; i < text.size();) {
+        const usize start = i;
+        const char32_t cp = decodeUtf8(text, i);
+        if (cp == kReplacementChar && text.substr(start, i - start) != "\xEF\xBF\xBD") return true;
+        if (cp < 0x20 || (cp >= 0x7F && cp <= 0x9F)) return true;
+    }
+    return false;
+}
+
+/// A transaction author that sets the window title (OSC ... BEL) and the colour (CSI), then DEL
+/// and the C1 CSI (U+009B). A journal's strings are well-formed UTF-8 (yyjson refuses a record
+/// that is not), so a lone 0x9B byte is tested on printable() alone.
+const std::string kEvil = "\x1b]0;pwned\x07\x1b[31m\x7f\xC2\x9B" "1m";
+/// kEvil through printable().
+constexpr std::string_view kEvilShown = R"(\x1b]0;pwned\x07\x1b[31m\x7f\u009b1m)";
 
 TEST_CASE("confine: the spelling rule keeps every path inside the project") {
     Fixture f("confine_spelling");
@@ -351,32 +376,31 @@ TEST_CASE("journal: a replayed Destroy never deletes a file outside the project"
     checkRefused(*s.restart(), s.root / "destroy_only.hjl", "../other/records/hull/frigate.hrec");
     s.checkUntouched();
 
-    // A Destroy that names another file of the project than its document's: that document's
-    // replay stops at a conflict, and a save deletes nothing.
+    // A Destroy that names another file of the project than its document's. A legitimate journal
+    // never holds one (TxBuilder::destroy names the document's own file), so the whole journal is
+    // refused: before, only the frigate's replay stopped at a conflict, and the probe's Create
+    // still replayed and was saved.
     REQUIRE(fs::writeTextFile(s.project / "records" / "hull" / "spare.hrec", s.original));
     craftJournal(s.journal, s.root / "other_file.hjl", [](JournalRecord& r) {
         for (Op& op : r.tx.ops) {
             if (op.kind == OpKind::Destroy) op.file = "records/hull/spare.hrec";
         }
     });
-    {
-        auto fw = s.restart();
-        auto report = fw->recover(s.root / "other_file.hjl");
-        REQUIRE_MESSAGE(report, (report ? std::string() : report.error().message));
-        bool conflict = false;
-        for (const RecoveredDocument& d : report->documents) {
-            if (d.file == "records/hull/frigate.hrec") conflict = d.status == DocRecovery::Conflict;
+    checkRefused(*s.restart(), s.root / "other_file.hjl", "the destroy op names 'records/hull/spare.hrec', but document");
+    // The same for a Create that names a known document with another file (an undone Destroy
+    // restores the document at its own file).
+    DocId frigate;
+    craftJournal(s.journal, s.root / "create_known.hjl", [&frigate](JournalRecord& r) {
+        if (r.kind == JournalRecordKind::Open && r.file == "records/hull/frigate.hrec") frigate = r.doc;
+        for (Op& op : r.tx.ops) {
+            if (op.kind == OpKind::Create) op.doc = frigate;
         }
-        CHECK(conflict);
-        REQUIRE(fw->saveAll());
-    }
+    });
+    checkRefused(*s.restart(), s.root / "create_known.hjl", "the create op names 'records/hull/probe.hrec', but document");
     CHECK(fs::exists(s.project / "records" / "hull" / "spare.hrec"));
-    CHECK(fs::exists(s.frigate));
-    CHECK(fs::readTextFile(s.otherFrigate).value() == s.original);
+    s.checkUntouched();
 
     // Control: the journal as written destroys the project's own frigate.
-    REQUIRE(fs::writeTextFile(s.frigate, s.original));
-    REQUIRE(fs::remove(s.project / "records" / "hull" / "probe.hrec"));
     craftJournal(s.journal, s.root / "plain.hjl", [](JournalRecord&) {});
     auto fw = s.restart();
     auto report = fw->recover(s.root / "plain.hjl");
@@ -493,6 +517,152 @@ TEST_CASE("journal: a link out of the project is refused at recovery, open, crea
         CHECK(fw2->invoker(Origin::Ui).invoke("doc.reload", R"({"doc": "hull/frigate"})").errorCode() == ErrorCode::InvalidArgument);
     }
     CHECK(fs::readTextFile(s.otherFrigate).value() == s.original);
+}
+
+TEST_CASE("printable: escapes every control character a terminal could act on") {
+    CHECK(printable("records/hull/frigate.hrec") == "records/hull/frigate.hrec");
+    CHECK(printable("caf\xC3\xA9 \xE2\x82\xAC \xF0\x9F\x9A\x80 \xEF\xBF\xBD") == "caf\xC3\xA9 \xE2\x82\xAC \xF0\x9F\x9A\x80 \xEF\xBF\xBD");
+    CHECK(printable(std::string("a\0b\tc\nd", 7)) == R"(a\x00b\x09c\x0ad)");
+    CHECK(printable(kEvil) == kEvilShown);
+    CHECK(printable("\xC2\x80\xC2\x9F\xC2\xA0") == "\\u0080\\u009f\xC2\xA0");  // C1 escaped, NBSP kept
+    // Not UTF-8: a truncated sequence, an overlong '/', a UTF-16 surrogate, a stray continuation byte.
+    CHECK(printable("\xE2\x82") == R"(\xe2\x82)");
+    CHECK(printable("\xC0\xAF") == R"(\xc0\xaf)");
+    CHECK(printable("\xED\xA0\x80") == R"(\xed\xa0\x80)");
+    CHECK(printable("\x85x") == R"(\x85x)");
+    CHECK(printable("\x9B" "2m") == R"(\x9b2m)");  // the 8-bit CSI
+    CHECK(printable("abcdef", 3) == "abc...");
+    for (const std::string& text : {kEvil, std::string("\xE2\x82\xC0\xAF\xFF\x80"), std::string(kEvilShown)}) {
+        INFO(printable(text));
+        CHECK_FALSE(hasControl(printable(text)));
+        CHECK(printable(printable(text)) == printable(text));
+    }
+}
+
+TEST_CASE("journal: a refusal and the replay report escape the journal's control characters") {
+    // Round-1 review of PR #50: the refusal named a transaction by its raw id, json::quote let DEL
+    // and C1 through in the project name, and the report quoted the journal's strings as they were.
+    const Scenario s("confine_escapes");
+    craftJournal(s.journal, s.root / "esc.hjl", [](JournalRecord& r) {
+        if (r.kind == JournalRecordKind::Tx) r.tx.id.user = kEvil;
+        for (Op& op : r.tx.ops) {
+            if (op.kind == OpKind::Create) op.file = "../outside/evil.hrec";
+        }
+    });
+    {
+        auto refused = s.restart()->recover(s.root / "esc.hjl");
+        REQUIRE_FALSE(refused);
+        INFO(printable(refused.error().message));
+        CHECK_FALSE(hasControl(refused.error().message));
+        CHECK(refused.error().message.find(std::format("(transaction {}:", kEvilShown)) != std::string::npos);
+    }
+    s.checkUntouched();
+
+    // The header's project, in the mismatch refusal and in listJournalSessions' warning.
+    craftJournal(s.journal, s.root / "esc_project.hjl", [](JournalRecord&) {}, [](JournalHeader& h) { h.project = kEvil; });
+    {
+        auto refused = s.restart()->recover(s.root / "esc_project.hjl");
+        REQUIRE_FALSE(refused);
+        INFO(printable(refused.error().message));
+        CHECK_FALSE(hasControl(refused.error().message));
+        CHECK(refused.error().message.find(std::format("belongs to project \"{}\"", kEvilShown)) != std::string::npos);
+    }
+    const fs::Path journals = s.root / "journals";
+    craftJournal(s.journal, journalDirectory(journals, "test-project") / "planted.hjl", [](JournalRecord&) {},
+                 [](JournalHeader& h) { h.project = kEvil; });
+    {
+        std::mutex mutex;
+        std::vector<std::string> warnings;
+        // Only this sink, at Warn, for the call (test_main.cpp keeps the log at Error).
+        const std::vector<std::shared_ptr<log::Sink>> savedSinks = log::sinks();
+        const log::Level savedLevel = log::level();
+        log::clearSinks();
+        log::addSink(std::make_shared<log::CallbackSink>([&](const log::Record& r) {
+            const std::lock_guard lock(mutex);
+            warnings.emplace_back(r.message);
+        }));
+        log::setLevel(log::Level::Warn);
+        const auto sessions = listJournalSessions(journals, "test-project", false);
+        log::setLevel(savedLevel);
+        log::clearSinks();
+        for (const auto& saved : savedSinks) log::addSink(saved);
+        CHECK(sessions.empty());
+        const std::lock_guard lock(mutex);
+        bool warned = false;
+        for (const std::string& w : warnings) {
+            INFO(printable(w));
+            CHECK_FALSE(hasControl(w));
+            warned = warned || w.find(std::format("belongs to project \"{}\"", kEvilShown)) != std::string::npos;
+        }
+        CHECK(warned);
+    }
+
+    // The report: the transaction's user and an op's property path, both from the journal.
+    craftJournal(s.journal, s.root / "esc_path.hjl", [](JournalRecord& r) {
+        if (r.kind == JournalRecordKind::Tx) r.tx.id.user = kEvil;
+        for (Op& op : r.tx.ops) {
+            if (op.kind == OpKind::Set) op.path = "\x1b[31mmass";
+        }
+    });
+    auto report = s.restart()->recover(s.root / "esc_path.hjl");
+    REQUIRE_MESSAGE(report, (report ? std::string() : printable(report.error().message)));
+    bool conflict = false;
+    for (const RecoveredDocument& d : report->documents) {
+        INFO(printable(d.message));
+        CHECK_FALSE(hasControl(d.message));
+        if (d.status != DocRecovery::Conflict) continue;
+        conflict = true;
+        CHECK(d.message.find(std::format("transaction {}:", kEvilShown)) != std::string::npos);
+        CHECK(d.message.find(R"(\x1b[31mmass)") != std::string::npos);
+    }
+    CHECK(conflict);
+}
+
+TEST_CASE("journal: a FIFO in the project is refused at recovery and open, without blocking") {
+    const Scenario s("confine_fifo");
+    // A named pipe, made with the mkfifo tool rather than a POSIX call; Windows has no FIFO files.
+    const fs::Path fifo = s.project / "records" / "hull" / "fifo.hrec";
+    ProcessDesc mkfifo;
+    mkfifo.executable = "mkfifo";
+    mkfifo.searchPath = true;
+    mkfifo.args = {fs::pathToUtf8(fifo)};
+    mkfifo.stdinMode = StdioMode::Null;
+    mkfifo.stdoutMode = StdioMode::Null;
+    mkfifo.stderrMode = StdioMode::Null;
+    auto made = runProcess(mkfifo);
+    if (!made || made->exitCode != 0 || !fs::exists(fifo)) {
+        MESSAGE("skipped: cannot create a FIFO here (no mkfifo)");
+        return;
+    }
+    auto kind = os::entryKind(fifo);
+    REQUIRE(kind);
+    CHECK(*kind == os::EntryKind::Other);
+
+    // Reading a FIFO blocks until a writer opens it: each of these would hang if it got that far.
+    auto fw = s.restart();
+    auto confined = fw->documents().confine("records/hull/fifo.hrec", PathOrigin::Untrusted);
+    REQUIRE_FALSE(confined);
+    CHECK(confined.error().message.find("'records/hull/fifo.hrec' is not a regular file or directory") != std::string::npos);
+    const refl::TypeInfo* type = fw->types().find("sample.ship.ShipHullDef");
+    CHECK(fw->open("records/hull/fifo.hrec", type).errorCode() == ErrorCode::InvalidArgument);
+    if (makeFileLink(fifo, s.project / "records" / "hull" / "fifo_link.hrec")) {
+        auto linked = fw->open("records/hull/fifo_link.hrec", type);
+        REQUIRE_FALSE(linked);
+        CHECK(linked.error().message.find("'records/hull/fifo_link.hrec' is not a regular file or directory") != std::string::npos);
+    }
+    CHECK(fw->documents().size() == 0);
+
+    craftJournal(s.journal, s.root / "open_fifo.hjl", [](JournalRecord& r) {
+        if (r.kind == JournalRecordKind::Open && r.file == "records/hull/frigate.hrec") r.file = "records/hull/fifo.hrec";
+    });
+    checkRefused(*s.restart(), s.root / "open_fifo.hjl", "'records/hull/fifo.hrec' is not a regular file or directory");
+    craftJournal(s.journal, s.root / "create_fifo.hjl", [](JournalRecord& r) {
+        for (Op& op : r.tx.ops) {
+            if (op.kind == OpKind::Create) op.file = "records/hull/fifo.hrec";
+        }
+    });
+    checkRefused(*s.restart(), s.root / "create_fifo.hjl", "'records/hull/fifo.hrec' is not a regular file or directory");
+    s.checkUntouched();
 }
 
 } // namespace

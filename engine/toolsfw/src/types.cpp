@@ -1,9 +1,12 @@
 #include "helios/toolsfw/types.h"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <format>
 #include <string>
+
+#include "helios/core/utf.h"
 
 namespace helios::tf {
 
@@ -50,16 +53,19 @@ std::string printable(std::string_view text, usize maxBytes) {
     std::string out;
     out.reserve(std::min(text.size(), maxBytes));
     usize i = 0;
-    for (; i < text.size() && i < maxBytes; ++i) {
-        const auto c = static_cast<unsigned char>(text[i]);
-        const auto next = i + 1 < text.size() ? static_cast<unsigned char>(text[i + 1]) : 0;
-        if (c < 0x20 || c == 0x7F) {
-            out += std::format("\\x{:02x}", c);
-        } else if (c == 0xC2 && next >= 0x80 && next <= 0x9F) {
-            out += std::format("\\u{:04x}", next);
-            ++i;
+    while (i < text.size() && i < maxBytes) {
+        const usize start = i;
+        const char32_t cp = decodeUtf8(text, i);
+        const std::string_view bytes = text.substr(start, i - start);
+        if (cp == kReplacementChar && bytes != "\xEF\xBF\xBD") {
+            // Not UTF-8: every byte escaped, so a lone 0x9B (the 8-bit CSI) never reaches a terminal.
+            for (const char b : bytes) out += std::format("\\x{:02x}", static_cast<unsigned char>(b));
+        } else if (cp < 0x20 || cp == 0x7F) {
+            out += std::format("\\x{:02x}", static_cast<u32>(cp));
+        } else if (cp >= 0x80 && cp <= 0x9F) {
+            out += std::format("\\u{:04x}", static_cast<u32>(cp));  // C1 (U+009B is CSI)
         } else {
-            out += static_cast<char>(c);
+            out += bytes;
         }
     }
     if (i < text.size()) out += "...";

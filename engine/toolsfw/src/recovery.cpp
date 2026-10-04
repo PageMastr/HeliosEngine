@@ -12,6 +12,8 @@
 // The journal is untrusted input (a file the user was handed, or one planted in the journal
 // directory): every path in it goes through Workspace::confine before anything is read or
 // applied, and a journal of another project is refused. One bad entry refuses the whole replay.
+// Every string from the journal that reaches an error or a report message goes through
+// printable(), so a crafted journal cannot write terminal escape sequences through either.
 
 #include <algorithm>
 #include <format>
@@ -53,10 +55,11 @@ struct DocState {
     DocId localId;         ///< Id in this framework (differs when the file was already open).
 };
 
-/// "record 3 (open of <doc>) at offset 812" for refusals.
+/// "record 3 (open of <doc>) at offset 812" for refusals. A transaction id's user is any string
+/// the journal holds.
 std::string describe(const JournalRecord& r, usize index) {
     if (r.kind == JournalRecordKind::Tx) {
-        return std::format("record {} (transaction {}) at offset {}", index, r.tx.id.toString(), r.offset);
+        return std::format("record {} (transaction {}) at offset {}", index, printable(r.tx.id.toString(), 200), r.offset);
     }
     return std::format("record {} ({} of document {}) at offset {}", index, journalRecordKindName(r.kind), r.doc, r.offset);
 }
@@ -83,13 +86,16 @@ Result<void> detail::FwAccess::restoreSnapshot(Framework& fw, Document& d, std::
 
 Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const RecoveryOptions& options) {
     if (m_group) return Error{ErrorCode::InvalidState, "cannot recover inside a transaction group"};
-    HELIOS_TRY_ASSIGN(const JournalScan scan, readJournal(journalFile));
-    const std::string journalName = fs::pathToGenericUtf8(journalFile);
+    const std::string journalName = printable(fs::pathToGenericUtf8(journalFile));
+    auto scanned = readJournal(journalFile);
+    if (!scanned) return Error{scanned.error().code, printable(scanned.error().message)};
+    const JournalScan scan = std::move(*scanned);
     if (scan.header.project != m_config.project && !options.allowOtherProject) {
+        // json::quote escapes only C0, so the names go through printable() instead.
         return Error{ErrorCode::InvalidArgument,
-                     std::format("{}: the journal belongs to project {}, not {}; nothing was replayed (a renamed project "
-                                 "needs RecoveryOptions::allowOtherProject, helios-tool --allow-other-project)",
-                                 journalName, json::quote(scan.header.project), json::quote(m_config.project))};
+                     std::format("{}: the journal belongs to project \"{}\", not \"{}\"; nothing was replayed (a renamed "
+                                 "project needs RecoveryOptions::allowOtherProject, helios-tool --allow-other-project)",
+                                 journalName, printable(scan.header.project, 200), printable(m_config.project, 200))};
     }
     RecoveryReport report;
     report.tornBytes = scan.tornBytes;
@@ -102,7 +108,7 @@ Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const Rec
         auto checked = m_workspace->confine(file, PathOrigin::Untrusted, PathCheck::OnDisk);
         if (!checked) {
             return Error{checked.error().code, std::format("{}: {}: {}; nothing was replayed", journalName, describe(r, index),
-                                                           checked.error().message)};
+                                                           printable(checked.error().message))};
         }
         return checked;
     };
@@ -137,13 +143,27 @@ Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const Rec
             for (const Op& op : r.tx.ops) {
                 if (op.kind != OpKind::Create && op.kind != OpKind::Destroy) continue;
                 HELIOS_TRY_ASSIGN(ProjectFile file, confined(op.file, r, i));
-                if (op.kind == OpKind::Create && !docs.contains(op.doc)) {
-                    // Created in the session: no file yet; the Create op itself is the base.
-                    DocState& s = docs[op.doc];
-                    s.file = std::move(file);
-                    s.typeName = op.typeName;
-                    s.hash = 0;
-                    s.baseRecord = ~usize{0};  // replay from the start: the Create op recreates it
+                const auto known = docs.find(op.doc);
+                if (known == docs.end()) {
+                    if (op.kind == OpKind::Create) {
+                        // Created in the session: no file yet; the Create op itself is the base.
+                        DocState& s = docs[op.doc];
+                        s.file = std::move(file);
+                        s.typeName = op.typeName;
+                        s.hash = 0;
+                        s.baseRecord = ~usize{0};  // replay from the start: the Create op recreates it
+                    }
+                    continue;
+                }
+                // A document keeps its file: TxBuilder::destroy names the document's own file, and
+                // undoing it restores the document there. Another file is a crafted entry, and the
+                // whole journal is refused (applyOp would refuse only this document's replay, and
+                // the others would still replay and be saved).
+                const std::string& own = known->second.file.relative;
+                if (!own.empty() && !sameRelativePath(file.relative, own)) {
+                    return Error{ErrorCode::InvalidArgument,
+                                 std::format("{}: {}: the {} op names '{}', but document {} is '{}'; nothing was replayed",
+                                             journalName, describe(r, i), opKindName(op.kind), file.relative, op.doc, own)};
                 }
             }
             break;
@@ -280,6 +300,9 @@ Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const Rec
         }
     }
     detail::FwAccess::setLamportAtLeast(*this, maxLamport);
+    // The messages quote the journal (a transaction's user, an op's property path or type name)
+    // and the record files: escaped once here for every caller (helios-tool, the editor's log).
+    for (RecoveredDocument& d : report.documents) d.message = printable(d.message);
     return report;
 }
 

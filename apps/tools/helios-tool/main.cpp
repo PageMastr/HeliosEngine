@@ -16,6 +16,7 @@
 #include "helios/core/fs.h"
 #include "helios/core/log.h"
 #include "helios/core/platform.h"
+#include "helios/core/utf.h"
 #include "helios/core/version.h"
 #include "helios/toolsfw/toolsfw.h"
 #include "helios/toolsfw/samples.h"
@@ -69,13 +70,47 @@ constexpr int kCheckFailed = 1;
 constexpr int kUsageError = 2;
 constexpr int kFailed = 3;
 
-int fail(int code, const std::string& message) {
-    std::fprintf(stderr, "helios-tool: %s\n", message.c_str());
+/// Errors can quote a journal (untrusted input: a transaction's user, an op's path) or a record
+/// file, so every line is printed with control characters escaped (tf::printable); the line
+/// breaks of a multi-line error (openAll lists one failing file per line) are kept.
+int fail(int code, std::string_view message) {
+    std::string text = "helios-tool: ";
+    for (usize start = 0;;) {
+        const usize nl = message.find('\n', start);
+        text += tf::printable(message.substr(start, nl == std::string_view::npos ? std::string_view::npos : nl - start));
+        if (nl == std::string_view::npos) break;
+        text += '\n';
+        start = nl + 1;
+    }
+    text += '\n';
+    std::fwrite(text.data(), 1, text.size(), stderr);
     return code;
 }
 
 void out(const std::string& text) {
     std::fwrite(text.data(), 1, text.size(), stdout);
+}
+
+/// `journal show --json`: the JSON writer escapes only C0, so DEL and the C1 controls become
+/// `\u00NN` and bytes that are not UTF-8 `\ufffd`. JSON's structure is ASCII, so they occur only
+/// inside strings, where the escape is the same character: the output stays valid, equivalent
+/// JSON, and a crafted journal cannot write terminal escape sequences through it.
+std::string jsonForTerminal(std::string_view json) {
+    std::string text;
+    text.reserve(json.size());
+    for (usize i = 0; i < json.size();) {
+        const usize start = i;
+        const char32_t cp = decodeUtf8(json, i);
+        const std::string_view bytes = json.substr(start, i - start);
+        if (cp == kReplacementChar && bytes != "\xEF\xBF\xBD") {
+            text += "\\ufffd";
+        } else if (cp == 0x7F || (cp >= 0x80 && cp <= 0x9F)) {
+            text += std::format("\\u{:04x}", static_cast<u32>(cp));
+        } else {
+            text += bytes;
+        }
+    }
+    return text;
 }
 
 struct Context {
@@ -374,7 +409,7 @@ int cmdUndoRedo(const Context& c, bool undo) {
         from.pop_back();
         auto r = revert(fw, entry, undo);
         if (!r) return fail(kFailed, std::format("{}", r.error()));
-        out(std::format("{} {} -> {}\n", undo ? "undid" : "redid", entry.tx.id.toString(), r->toString()));
+        out(std::format("{} {} -> {}\n", undo ? "undid" : "redid", tf::printable(entry.tx.id.toString()), r->toString()));
     }
     return kOk;
 }
@@ -393,9 +428,9 @@ int cmdJournal(const Context& c) {
     if (sub == "list") {
         const auto sessions = tf::listJournalSessions(journalRootOf(c), c.project, !c.cl->has("all"));
         for (const tf::JournalSessionInfo& s : sessions) {
-            out(std::format("{}  session={} user={} host={} pid={} tx={} {}{}\n", fs::pathToUtf8(s.path), tf::printable(s.header.session),
-                            tf::printable(s.header.user), tf::printable(s.header.host), s.header.pid, s.txCount, s.clean ? "clean" : "UNCLEAN",
-                            s.tornBytes ? std::format(" torn={}B", s.tornBytes) : std::string()));
+            out(std::format("{}  session={} user={} host={} pid={} tx={} {}{}\n", tf::printable(fs::pathToUtf8(s.path)),
+                            tf::printable(s.header.session), tf::printable(s.header.user), tf::printable(s.header.host), s.header.pid,
+                            s.txCount, s.clean ? "clean" : "UNCLEAN", s.tornBytes ? std::format(" torn={}B", s.tornBytes) : std::string()));
         }
         if (sessions.empty()) out(std::format("no {}journals for project '{}'\n", c.cl->has("all") ? "" : "unclean ", c.project));
         return kOk;
@@ -407,7 +442,8 @@ int cmdJournal(const Context& c) {
         auto scan = tf::readJournal(*path);
         if (!scan) return fail(kFailed, std::format("{}", scan.error()));
         if (sub == "verify") {
-            out(std::format("{}: {} record(s), {} valid byte(s), {} torn byte(s), {}\n", fs::pathToUtf8(*path), scan->records.size(),
+            out(std::format("{}: {} record(s), {} valid byte(s), {} torn byte(s), {}\n", tf::printable(fs::pathToUtf8(*path)),
+                            scan->records.size(),
                             scan->validBytes, scan->tornBytes, scan->clean ? "clean end" : "no end record (crashed or running)"));
             return scan->tornBytes == 0 ? kOk : kCheckFailed;
         }
@@ -416,7 +452,7 @@ int cmdJournal(const Context& c) {
                         tf::printable(scan->header.session), tf::printable(scan->header.user), tf::printable(scan->header.host), scan->header.pid));
         for (const tf::JournalRecord& r : scan->records) {
             if (json) {
-                out(r.toJson() + "\n");
+                out(jsonForTerminal(r.toJson()) + "\n");
             } else if (r.kind == tf::JournalRecordKind::Tx) {
                 out(std::format("@{} tx {} {} {} \"{}\" ({} op(s))\n", r.offset, tf::printable(r.tx.id.toString()), tf::txKindName(r.tx.kind),
                                 tf::originName(r.tx.origin), tf::printable(r.tx.label), r.tx.ops.size()));
@@ -438,7 +474,8 @@ int cmdJournal(const Context& c) {
                         report->clean ? " (the session had ended cleanly)" : ""));
         bool conflicts = false;
         for (const tf::RecoveredDocument& d : report->documents) {
-            out(std::format("  {}: {} {}\n", d.file, tf::docRecoveryName(d.status), d.message));
+            // recover() escapes the message; the file is a confined path. Both printed escaped anyway.
+            out(std::format("  {}: {} {}\n", tf::printable(d.file), tf::docRecoveryName(d.status), tf::printable(d.message)));
             conflicts = conflicts || d.status == tf::DocRecovery::Conflict || d.status == tf::DocRecovery::SourceChanged;
         }
         if (c.cl->has("save")) {

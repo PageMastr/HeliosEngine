@@ -190,12 +190,6 @@ std::string Workspace::relativeTo(const fs::Path& path) const {
     return underRoot(m_root, abs).value_or(std::string());
 }
 
-fs::Path Workspace::absolute(std::string_view relative) const {
-    fs::Path p = fs::pathFromUtf8(relative);
-    if (p.is_absolute()) return p.lexically_normal();
-    return (m_root / p).lexically_normal();
-}
-
 Result<ProjectFile> Workspace::confine(std::string_view path, PathOrigin origin, PathCheck check) const {
     const auto refuse = [&](std::string_view why) {
         return Error{ErrorCode::InvalidArgument, std::format("{}: {}", shown(path), why)};

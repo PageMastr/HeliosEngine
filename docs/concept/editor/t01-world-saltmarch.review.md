@@ -6,10 +6,10 @@
 - **Not committed.** Neither v01 nor v02 is in the repository: their provenance is not recorded yet
   (01 §5.2; [README](../README.md#where-images-may-come-from)). v03 comes with its sidecar.
 - **Decided 2026-10-04 by the owner ("Option A"):** Saltmarch is an object container in the single
-  Phase 1 zone `tallis` (02 §5.5–5.6, 07 §2.1 MVP). Its files are `content/zones/tallis/saltmarch.hcont`
-  and `content/zones/tallis/saltmarch.entities/<guid>.hent`, and a shared editing session on it is
-  `zone-tallis` (07 §1.8.2). 07 §1.7.1's example `content/zones/saltmarch/` is wrong; the Director's
-  PR #51 (open) corrects it.
+  Phase 1 zone `tallis` (07 §2.1 MVP). Its files are `content/zones/tallis/saltmarch.hcont` and
+  `content/zones/tallis/saltmarch.entities/<guid>.hent`, and a shared editing session on it is
+  `zone-tallis` (07 §1.8.2). The plan records the decision in 02 §5.5–5.6 and 07 §1.7.1 (PLAN-REV 13,
+  PR #51; [decision record](../../evidence/saltmarch-container-owner-decision-2026-10-04.md)).
 
 Section numbers are plan sections (`docs/plan/`). Tick items off as v03 covers them.
 
@@ -122,5 +122,5 @@ its UI font. The viewport is still empty.
 | Edit instances, multi-cell PIE | WP-3.7 |
 | Saltmarch content | WP-1.22 |
 | Vegetation and weather in the painted look (Phase 1 has only a 2D cloud shell, AAA-REN-6) | Ph3, WP-3.5 |
-| Volumetric clouds | Ph4, WP-4.1 |
+| Volumetric clouds | WP-3.5 (fast mode); Ph4 REN-6, WP-4.1 |
 | Roboto Mono for paths and GUIDs | With the code pane (T10, T19), per the editorui README |

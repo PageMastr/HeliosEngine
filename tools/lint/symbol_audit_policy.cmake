@@ -39,12 +39,10 @@ set(HELIOS_SYMBOL_LINKER_DEFINED _init _fini __bss_start _edata _end __end__ __d
 # names the work package that must remove it; never add one to make a new finding pass without that
 # owner's agreement.
 #   engine/reflect builds container and RecordRef TypeInfos (TypeOf<std::vector<E>>, std::optional,
-#   std::map, ...) and their TypeOps (makeOps<T>) in function-local statics of header templates, so each
-#   image that instantiates one has its own copy: two TypeInfo addresses for one type, and a TypeInfo
-#   that lives in a game module dies with it on unload. 02 §1.4 requires them to come from the registry
-#   (one image); WP-0.6c part 2 moves them there before the Probe module registers reflected types.
+#   std::map, ...) in function-local statics of header templates, so each image that instantiates one has
+#   its own copy: two TypeInfo addresses for one type, and a TypeInfo that lives in a game module dies with
+#   it on unload. 02 §1.4 requires them to come from the registry (one image); WP-0.6c part 2 moves them
+#   there before the Probe module registers reflected types.
 set(HELIOS_SYMBOL_KNOWN_FINDINGS
   "R3|WP-0.6c part 2|^_ZZN6helios4refl6TypeOfI.*E3getEvE[0-9]+(info|name)(B[0-9]+[A-Za-z0-9_]+)?$"
-  "R3|WP-0.6c part 2|^_ZZN6helios4refl7makeOpsI.*EERKNS0_7TypeOpsEvE3ops$"
-  "R5|WP-0.6c part 2|^_ZZN6helios4refl6TypeOfI.*E3getEvE[0-9]+(info|name)(B[0-9]+[A-Za-z0-9_]+)?$"
-  "R5|WP-0.6c part 2|^_ZZN6helios4refl7makeOpsI.*EERKNS0_7TypeOpsEvE3ops$")
+  "R5|WP-0.6c part 2|^_ZZN6helios4refl6TypeOfI.*E3getEvE[0-9]+(info|name)(B[0-9]+[A-Za-z0-9_]+)?$")

@@ -755,14 +755,14 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 		bl := src.blankLines[i]
 		for _, m := range cIdentRE.FindAllStringIndex(bl, -1) {
 			name := bl[m[0]:m[1]]
-			if vals, ok := strs[name]; !ok || !readsAt(src.starts[i]+m[0]) || cDeclaredRE.MatchString(bl[m[1]:]) {
+			vals, ok := strs[name]
+			if !ok || !readsAt(src.starts[i]+m[0]) || cDeclaredRE.MatchString(bl[m[1]:]) {
 				continue
-			} else {
-				for _, v := range vals {
-					if port, ok := portOf(v); ok {
-						reportAt(src.origin[i]+1, int64(port), "gateway address %q (%s): the default gateway port is "+
-							"UDP 7777 (04 §2)", v, name)
-					}
+			}
+			for _, v := range vals {
+				if port, ok := portOf(v); ok {
+					reportAt(src.origin[i]+1, int64(port), "gateway address %q (%s): the default gateway port is "+
+						"UDP 7777 (04 §2)", v, name)
 				}
 			}
 		}

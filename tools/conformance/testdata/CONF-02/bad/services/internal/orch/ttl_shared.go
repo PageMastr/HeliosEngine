@@ -47,3 +47,14 @@ func sharedTTL(shared []jetstream.KeyValueConfig) {
 	one := shared[1]
 	one.TTL = time.Second
 }
+
+// A parameter named like a range variable over a DIRECTORY collection does not take that bucket either.
+func directoryEach() {
+	for _, dc := range []jetstream.KeyValueConfig{{Bucket: "DIRECTORY"}} {
+		_ = dc
+	}
+}
+
+func oneDirTTL(dc jetstream.KeyValueConfig) {
+	dc.TTL = time.Second
+}

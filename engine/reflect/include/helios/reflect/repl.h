@@ -139,7 +139,10 @@ private:
 
 // --- quantizers (the generated codecs call these) -----------------------------------------------
 
-/// `v` clamped to [min, max] on 2^bits - 1 steps (NaN -> min).
+/// `v` clamped to [min, max] on 2^bits - 1 steps (NaN -> min). A caller that stores the decoded value
+/// as f32 passes bounds that are f32 values (helios-schemac does), so the ends decode to the bounds
+/// after the cast; with a bound that is not an f32 value (0.7), a saturated value decodes to the
+/// rounded bound, which can lie inside the range and re-quantize to another step. Pure; any thread.
 u64 quantizeRange(f64 v, f64 min, f64 max, u32 bits) noexcept;
 f64 dequantizeRange(u64 q, f64 min, f64 max, u32 bits) noexcept;
 

@@ -4,12 +4,17 @@
 // precision, feed truncated and random input to the readers, and cover the rpc and event tables, the
 // protocol hash and the emitter's diagnostics.
 
+#include <cfloat>
 #include <cmath>
 #include <cstddef>
+#include <format>
+#include <limits>
+#include <type_traits>
 
 #include "golden.repl.gen.h"
 #include "helios/core/random.h"
 #include "helios/reflect/reflect.h"
+#include "repl_edges.repl.gen.h"
 #include "sample/common.repl.gen.h"
 #include "sample/ship.repl.gen.h"
 #include "test_util.h"
@@ -300,6 +305,7 @@ TEST_CASE("repl: invalid @quant and fields the full-state codec cannot carry are
         {"v: vec3f @quant(range=±8)", "needs range=±x and bits=n"},
         {"v: vec3f @quant(range=-8, bits=10)", "range= needs a positive bound"},
         {"v: vec3f @quant(range=±1e39, bits=8)", "range=±1e+39 does not fit an f32 component"},
+        {"v: f32 @quant(range=±1e-50, bits=8)", "range=±1e-50 rounds to 0 as an f32"},
         {"v: f64 @quant(range=±1e308, bits=8)", "the range's width is not a finite f64"},
         {"p: WorldPos @quant(frame_cell, cell=4km, res=1m)", "cell=4km: unit 'km' is not supported"},
         {"v: vec3f @quant(range=±8ft, bits=10)", "unit 'ft' is not supported"},
@@ -394,6 +400,142 @@ TEST_CASE("repl: a schema file name that is not an identifier is an error, not c
     twoPackages.files = {"schemas/t/ship_motion.hschema", "schemas/u/shipMotion.hschema"};
     auto apart = compileFiles({{"schemas/t/ship_motion.hschema", body}, {"schemas/u/shipMotion.hschema", "package u;\n"}}, twoPackages);
     CHECK_MESSAGE(apart->ok(), apart->messages);
+}
+
+TEST_CASE("repl: a declaration named like a generated function is an error") {
+    // Round 6, nit 2: `component shipReplication` in ship.hschema made RepOf<::t::shipReplication> name
+    // the function <stem>Replication(), so the generated code did not compile (register<Stem>Types() alike).
+    CompileOptions options;
+    options.emitCpp = true;
+    options.emitRepl = true;
+    options.namingLints = false;
+    for (const char* decl : {"component shipReplication replicate(all) { v: f32 }", "struct registerShipTypes { v: f32 }",
+                             "enum shipReplication : u8 { A }", "const registerShipTypes: u32 = 1;"}) {
+        INFO(decl);
+        auto c = compileFiles({{"schemas/t/ship.hschema", std::string("package t;\n") + decl + "\n"}}, options);
+        CHECK_FALSE(c->ok());
+        CHECK(c->result.outputs.empty());
+        CHECK_MESSAGE(c->messages.find("that generated C++ for 'schemas/t/ship.hschema' declares in package 't'") != std::string::npos,
+                      c->messages);
+    }
+    // Another file of the package, imported, declares the same namespace's names.
+    auto viaImport = compileFiles({{"schemas/t/other.hschema", "package t;\nimport \"ship.hschema\";\nstruct shipReplication { v: f32 }\n"},
+                                   {"schemas/t/ship.hschema", "package t;\n"}},
+                                  [&] {
+                                      CompileOptions o = options;
+                                      o.files = {"schemas/t/other.hschema"};
+                                      return o;
+                                  }());
+    CHECK_FALSE(viaImport->ok());
+    CHECK_MESSAGE(viaImport->messages.find("'t.shipReplication' has the name of the function shipReplication()") != std::string::npos,
+                  viaImport->messages);
+    // Another package, a nested type and a field are other scopes; a different case is another name.
+    for (const char* text : {"package u;\nstruct shipReplication { v: f32 }\n", "package t;\nstruct Outer { struct shipReplication { v: f32 } }\n",
+                             "package t;\nstruct S { shipReplication: f32 }\n", "package t;\nstruct ShipReplication { v: f32 }\n"}) {
+        INFO(text);
+        auto c = compileFiles({{"schemas/t/ship.hschema", text}}, options);
+        CHECK_MESSAGE(c->ok(), c->messages);
+    }
+}
+
+TEST_CASE("repl: two outputs at one path are an error") {
+    // Round 6, nit 1: t/ship.hschema's --emit repl header is t/ship.repl.gen.h, which is also --emit cpp's
+    // header of t/ship.repl.hschema; in two packages no stem check caught it, and one overwrote the other.
+    CompileOptions options;
+    options.emitCpp = true;
+    options.emitRepl = true;
+    options.cppOut = "cpp";
+    options.files = {"schemas/t/ship.hschema", "schemas/t/ship.repl.hschema"};
+    auto c = compileFiles({{"schemas/t/ship.hschema", "package a;\n"}, {"schemas/t/ship.repl.hschema", "package b;\n"}}, options);
+    CHECK_FALSE(c->ok());
+    CHECK_MESSAGE(c->messages.find("two outputs would be written to 'cpp/t/ship.repl.gen.h'") != std::string::npos, c->messages);
+    // --emit luau's glue likewise, and names that differ only in case (one file on Windows and macOS).
+    CompileOptions luau = options;
+    luau.emitRepl = false;
+    luau.emitLuau = true;
+    luau.luauOut = "luau";
+    luau.files = {"schemas/t/ship.hschema", "schemas/t/ship.luau.hschema"};
+    auto l = compileFiles({{"schemas/t/ship.hschema", "package a;\n"}, {"schemas/t/ship.luau.hschema", "package b;\n"}}, luau);
+    CHECK_FALSE(l->ok());
+    CHECK_MESSAGE(l->messages.find("two outputs would be written to 'cpp/t/ship.luau.gen.h'") != std::string::npos, l->messages);
+    options.files = {"schemas/t/ship.hschema", "schemas/t/Ship.hschema"};
+    auto cased = compileFiles({{"schemas/t/ship.hschema", "package a;\n"}, {"schemas/t/Ship.hschema", "package b;\n"}}, options);
+    CHECK_FALSE(cased->ok());
+    CHECK_MESSAGE(cased->messages.find("two outputs would be written to 'cpp/t/") != std::string::npos, cased->messages);
+    // Distinct names compile.
+    options.files = {"schemas/t/ship.hschema", "schemas/t/hull.hschema"};
+    auto apart = compileFiles({{"schemas/t/ship.hschema", "package a;\n"}, {"schemas/t/hull.hschema", "package b;\n"}}, options);
+    CHECK_MESSAGE(apart->ok(), apart->messages);
+}
+
+TEST_CASE("repl: a package's types named like the runtime's do not break <stem>Replication()") {
+    // Round 6, blocking 2: the function is in the package's namespace and used the runtime's names
+    // unqualified, so repl_edges.hschema's FileRepTables, RpcDirection, ... hid them and its generated
+    // code did not compile (this binary did not build).
+    static_assert(!std::is_same_v<repl_edges::RpcDirection, rp::RpcDirection>);
+    static_assert(!std::is_same_v<repl_edges::FileRepTables, rp::FileRepTables>);
+    const rp::FileRepTables& t = repl_edges::replEdgesReplication();
+    REQUIRE(t.components.size() == 1);
+    CHECK(t.components[0] == &rp::RepOf<repl_edges::Saturating>::desc());
+    REQUIRE(t.rpcs.size() == 1);
+    CHECK(t.rpcs[0].name == "repl_edges.Hit");
+    CHECK(t.rpcs[0].direction == rp::RpcDirection::ServerToClient);
+    REQUIRE(t.events.size() == 1);
+    CHECK(t.events[0].name == "repl_edges.Boom");
+    CHECK(t.events[0].audience == rp::EventAudience::Owner);
+    CHECK(t.protocolHash != 0);
+}
+
+TEST_CASE("repl: a saturated f32 range value re-encodes to the same bits") {
+    // Round 6, blocking 1: an f32 reader stores static_cast<f32>(dequantizeRange(...)), so with the bound
+    // as written (0.7, 0.9, 3.3) a saturated value or NaN decoded to the bound rounded to f32, inside the
+    // range, and re-encoded to another step at 26 bits or more. f32 fields now quantize against the f32
+    // bound; f64 fields keep the bound as written.
+    using repl_edges::Saturating;
+    const rp::ComponentRepDesc& d = rp::RepOf<Saturating>::desc();
+    REQUIRE(d.fields.size() == 4);
+    CHECK(d.fields[0].quant.max == static_cast<f64>(0.7f));
+    CHECK(d.fields[0].quant.min == -static_cast<f64>(0.7f));
+    CHECK(d.fields[1].quant.max == static_cast<f64>(0.9f));
+    CHECK(d.fields[2].quant.max == static_cast<f64>(3.3f));
+    CHECK(d.fields[3].quant.max == 0.7);
+    constexpr f32 kInf = std::numeric_limits<f32>::infinity();
+    std::vector<f32> values = {-1e9f, 1e9f, std::numeric_limits<f32>::quiet_NaN(), kInf, -kInf, 0.7f, -0.7f, 0.9f, -0.9f, 3.3f, -3.3f,
+                               std::nextafter(0.7f, 0.0f), std::nextafter(3.3f, 0.0f), 0.0f, -0.0f, 0.25f, FLT_MAX};
+    helios::SplitMix64 rng(0x5a70);
+    for (int i = 0; i < 20000; ++i) values.push_back(static_cast<f32>((static_cast<f64>(rng.next() >> 11) / 9007199254740992.0 * 2 - 1) * 8));
+    u32 differ = 0;
+    std::string first; // the first few values that re-encoded to other bits
+    for (const f32 v : values) {
+        Saturating s;
+        s.a = v;
+        s.b = helios::Vec3(v, -v, v * 0.5f);
+        s.c = v;
+        s.d = v;
+        usize bits = 0;
+        const std::vector<u8> bytes = fullState(s, &bits);
+        Saturating back;
+        REQUIRE(readState(bytes, bits, back));
+        usize again = 0;
+        if ((fullState(back, &again) != bytes || again != bits) && differ++ < 4)
+            first += std::format("v={} decoded a={} b.x={} c={}; ", v, back.a, back.b.x, back.c);
+    }
+    INFO(first);
+    CHECK(differ == 0);
+
+    // The emitted bound is the f32 value; an f64 field keeps 0.7.
+    CompileOptions options;
+    options.emitRepl = true;
+    options.cppOut = "cpp";
+    auto c = compileText("package test;\ncomponent C replicate(all) { v: f32 @quant(range=±0.7, bits=32); w: f64 @quant(range=±0.7, bits=32) }\n",
+                         options);
+    REQUIRE_MESSAGE(c->ok(), c->messages);
+    const std::string* src = c->output("cpp/test/t.repl.gen.cpp");
+    REQUIRE(src);
+    CHECK(src->find("quantizeRange(c.v, -0.699999988079071, 0.699999988079071, 32)") != std::string::npos);
+    CHECK(src->find("dequantizeRange(*x, -0.699999988079071, 0.699999988079071, 32)") != std::string::npos);
+    CHECK(src->find("Quantizer{Quant::Range, 32, -0.699999988079071, 0.699999988079071,") != std::string::npos);
+    CHECK(src->find("quantizeRange(c.w, -0.7, 0.7, 32)") != std::string::npos);
 }
 
 } // namespace

@@ -51,15 +51,17 @@ var (
 	renameSchemaRE = regexp.MustCompile(`(?is)^alter\s+schema\s+` + identRE + `\s+rename\s+to\s+` + identRE)
 	createTableRE  = regexp.MustCompile(`(?is)^create\s+(?:(?:global\s+|local\s+)?(?:temp|temporary|unlogged)\s+)?table\s+(if\s+not\s+exists\s+)?` + identRE + `(?:\s*\.\s*` + identRE + `)?\s*\(`)
 	// ALTER TABLE [IF EXISTS] [ONLY] name [*] actions: `*` names the descendants too (the default).
-	alterTableRE  = regexp.MustCompile(`(?is)^alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?` + identRE + `(?:\s*\.\s*` + identRE + `)?(?:\s*\*)?\s+(.*)$`)
-	dropTableRE   = regexp.MustCompile(`(?is)^drop\s+table\s+(?:if\s+exists\s+)?(.*?)(?:\s+(?:cascade|restrict))?$`)
-	addColumnRE   = regexp.MustCompile(`(?is)^add\s+(?:column\s+)?(?:if\s+not\s+exists\s+)?` + identRE + `\s*(.*)$`)
-	dropColumnRE  = regexp.MustCompile(`(?is)^drop\s+(?:column\s+)?(?:if\s+exists\s+)?` + identRE + `(?:\s+(?:cascade|restrict))?$`)
-	renameColRE   = regexp.MustCompile(`(?is)^rename\s+(?:column\s+)?` + identRE + `\s+to\s+` + identRE + `$`)
-	renameTableRE = regexp.MustCompile(`(?is)^rename\s+to\s+` + identRE + `$`)
-	setSchemaRE   = regexp.MustCompile(`(?is)^set\s+schema\s+` + identRE + `$`)
-	constraintRE  = regexp.MustCompile(`(?i)^(constraint|primary|unique|check|foreign|exclude)\b`)
-	alterTypeRE   = regexp.MustCompile(`(?is)^alter\s+(?:column\s+)?` + identRE + `\s+(?:set\s+data\s+)?type\s+(.*)$`)
+	alterTableRE = regexp.MustCompile(`(?is)^alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?` + identRE + `(?:\s*\.\s*` + identRE + `)?(?:\s*\*)?\s+(.*)$`)
+	dropTableRE  = regexp.MustCompile(`(?is)^drop\s+table\s+(?:if\s+exists\s+)?(.*?)(?:\s+(?:cascade|restrict))?$`)
+	addColumnRE  = regexp.MustCompile(`(?is)^add\s+(?:column\s+)?(?:if\s+not\s+exists\s+)?` + identRE + `\s*(.*)$`)
+	// ADD COLUMN IF NOT EXISTS: PostgreSQL skips the action when the column exists, which keeps its type.
+	addIfNotExistsRE = regexp.MustCompile(`(?is)^add\s+(?:column\s+)?if\s+not\s+exists\b`)
+	dropColumnRE     = regexp.MustCompile(`(?is)^drop\s+(?:column\s+)?(?:if\s+exists\s+)?` + identRE + `(?:\s+(?:cascade|restrict))?$`)
+	renameColRE      = regexp.MustCompile(`(?is)^rename\s+(?:column\s+)?` + identRE + `\s+to\s+` + identRE + `$`)
+	renameTableRE    = regexp.MustCompile(`(?is)^rename\s+to\s+` + identRE + `$`)
+	setSchemaRE      = regexp.MustCompile(`(?is)^set\s+schema\s+` + identRE + `$`)
+	constraintRE     = regexp.MustCompile(`(?i)^(constraint|primary|unique|check|foreign|exclude)\b`)
+	alterTypeRE      = regexp.MustCompile(`(?is)^alter\s+(?:column\s+)?` + identRE + `\s+(?:set\s+data\s+)?type\s+(.*)$`)
 	// ALTER TABLE actions that change no column: constraints, column defaults, statistics and identity,
 	// ownership, triggers and row security, replica identity, clustering, storage parameters, the table's
 	// persistence, access method and tablespace, and partitions attached or detached.
@@ -332,6 +334,9 @@ func (ns *netSchema) apply(f string, st sqlStmt, own string, netName func(string
 			case a == "":
 			case addColumnRE.MatchString(a) && !constraintRE.MatchString(strings.TrimSpace(a[3:])):
 				c := addColumnRE.FindStringSubmatch(a)
+				if t.cols[unquote(c[1])] != nil && addIfNotExistsRE.MatchString(a) {
+					continue
+				}
 				t.cols[unquote(c[1])] = &column{unquote(c[1]), c[2], f, st.lineOf(c[1])}
 			case dropColumnRE.MatchString(a) && !dropNotColRE.MatchString(a):
 				delete(t.cols, unquote(dropColumnRE.FindStringSubmatch(a)[1]))

@@ -61,8 +61,8 @@ var (
 	// An address without its port, which code completes by concatenation: "127.0.0.1:", "[::1]:", ":".
 	addrPrefixRE = regexp.MustCompile(`^(?:\[[0-9A-Fa-f:.]*\]|[A-Za-z0-9.-]*):$`)
 	// C++: what follows such a string when it is concatenated (`"host:" + p`, `std::string("host:") + p`,
-	// `os << "host:" << p`), and the port operand's std::to_string wrapper.
-	cConcatRE   = regexp.MustCompile(`^\s*\)*\s*(?:\+|<<)\s*`)
+	// `std::string{"host:"} + p`, `os << "host:" << p`), and the port operand's std::to_string wrapper.
+	cConcatRE   = regexp.MustCompile(`^[\s)}]*(?:\+|<<)\s*`)
 	cToStringRE = regexp.MustCompile(`^(?:std\s*::\s*)?to_string\s*\(`)
 )
 
@@ -164,21 +164,55 @@ func tomlCode(l string) string {
 
 // checkGatewayPortTOML reads the keys and tables named for the gateway: address strings anywhere in
 // them, and the integer (or array, or quoted integer) values of keys named for a port, which must be
-// 7777; an inline table's keys are read the same way. A port value the lint cannot read fails closed.
+// 7777; an inline table's keys are read the same way. A value whose brackets open across lines (a
+// multi-line array) is joined to where they close and reported on its key's line. A port value the lint
+// cannot read fails closed.
 func checkGatewayPortTOML(p *Pass, f string) {
 	table := ""
-	for i, l := range p.Tree.Lines(f) {
-		l = tomlCode(l)
+	lines := p.Tree.Lines(f)
+	for i := 0; i < len(lines); i++ {
+		l := tomlCode(lines[i])
 		if m := tomlTableRE.FindStringSubmatch(l); m != nil {
 			table = m[1]
 			continue
 		}
 		m := tomlKeyRE.FindStringSubmatch(l)
-		if m == nil || !(gatewayNameRE.MatchString(m[1]) || gatewayNameRE.MatchString(table)) {
+		if m == nil {
 			continue
 		}
-		tomlGatewayValue(p, f, i+1, strings.Trim(m[1], `"'`), strings.TrimSpace(m[2]), 0)
+		line, val := i+1, strings.TrimSpace(m[2])
+		// Joined for every key, so that an element line is never read as a key or a table header.
+		for tomlOpen(val) > 0 && i+1 < len(lines) {
+			i++
+			val += " " + strings.TrimSpace(tomlCode(lines[i]))
+		}
+		if gatewayNameRE.MatchString(m[1]) || gatewayNameRE.MatchString(table) {
+			tomlGatewayValue(p, f, line, strings.Trim(m[1], `"'`), val, 0)
+		}
 	}
+}
+
+// tomlOpen returns how many arrays and inline tables a TOML value leaves open: brackets and braces outside
+// strings.
+func tomlOpen(s string) int {
+	depth, quote := 0, byte(0)
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case quote == '"' && c == '\\':
+			i++
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '[' || c == '{':
+			depth++
+		case c == ']' || c == '}':
+			depth--
+		}
+	}
+	return depth
 }
 
 // tomlGatewayValue checks one value of a key in a gateway context: address strings anywhere in it, the
@@ -329,9 +363,15 @@ func checkGatewayPortGo(p *Pass, f string) {
 					addr(e, name, s)
 					return false
 				}
-				// "host:" + port: the port operand evaluated, or the address fails closed.
+				// "host:" + port: the port operand evaluated, or the address fails closed. With a host that
+				// does not evaluate, `host + ":" + port` parses as (host + ":") + port: the prefix is then the
+				// left operand's last string.
 				if b, ok := e.(*ast.BinaryExpr); ok && b.Op == token.ADD {
-					if host, ok := g.String(gf, b.X); ok && addrPrefixRE.MatchString(host) {
+					host, ok := g.String(gf, b.X)
+					if bx, add := b.X.(*ast.BinaryExpr); !ok && add && bx.Op == token.ADD {
+						host, ok = g.String(gf, bx.Y)
+					}
+					if ok && addrPrefixRE.MatchString(host) {
 						if port, ok := goPort(b.Y); ok {
 							addr(b, name, host+port)
 						} else {
@@ -557,18 +597,60 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 		l := src.logical[i]
 		return gatewayFile && cGatewayLineRE.MatchString(l) || gatewayNameRE.MatchString(l)
 	}
+	// A value is read when its statement starts on, or reaches, a read line: its own line, or the earlier
+	// lines of an initializer split across lines (`net::Address listen =` then `Address::ipv4(…);`). A
+	// statement starts after `;`, `{` or `}`, or after a preprocessor line. carry[i] says whether the
+	// statement still open where line i starts has reached a read line (one pass, so no line is rescanned).
+	carry := make([]bool, len(src.logical))
+	open := false
+	for i, bl := range src.blankLines {
+		carry[i] = open
+		if strings.HasPrefix(strings.TrimSpace(bl), "#") {
+			open = false
+			continue
+		}
+		from := strings.LastIndexAny(bl, ";{}") + 1
+		part := src.logical[i][from:]
+		reached := gatewayFile && cGatewayLineRE.MatchString(part) || gatewayNameRE.MatchString(part)
+		open = reached || open && from == 0
+	}
+	stmtReads := func(off int) bool {
+		i := src.index(off)
+		return reads(i) || carry[i] && !strings.ContainsAny(src.blank[src.starts[i]:off], ";{}")
+	}
+	// The calls a regexp matches, with their offsets.
+	calls := func(re *regexp.Regexp, text string) ([]cCall, [][]int) {
+		locs := re.FindAllStringIndex(text, -1)
+		return src.callsAt(locs), locs // every match ends in '(', so callsAt keeps them all, in order
+	}
+	// The option calls' argument spans: a default on a continuation line is the call's, reported on its line.
+	options, optionLocs := calls(cOptionCallRE, src.text)
+	var spans [][2]int
+	for _, m := range optionLocs {
+		open := m[0] + strings.IndexByte(src.blank[m[0]:m[1]], '(') + 1
+		spans = append(spans, [2]int{open, closingParen(src.blank, open)})
+	}
+	inOption := func(off int) bool {
+		return slices.ContainsFunc(spans, func(s [2]int) bool { return s[0] <= off && off < s[1] })
+	}
+	// String literals on the read lines, and on the continuation lines of a statement that a read line
+	// starts (`std::string listen =` then `"127.0.0.1:7000";`).
 	for i, l := range src.logical {
-		if !reads(i) || slices.ContainsFunc(cPortDeclRE.FindAllStringSubmatch(src.blankLines[i], -1),
+		read := reads(i)
+		if !read && !carry[i] || slices.ContainsFunc(cPortDeclRE.FindAllStringSubmatch(src.blankLines[i], -1),
 			func(m []string) bool { return gatewayPortName(m[1]) }) {
 			continue
 		}
 		for _, s := range cStringRE.FindAllStringSubmatchIndex(l, -1) {
+			if off := src.starts[i] + s[0]; !read && (!stmtReads(off) || inOption(off)) {
+				continue
+			}
 			lit := l[s[2]:s[3]]
 			if port, ok := portOf(lit); ok {
 				report(src.origin[i]+1, int64(port))
 			} else if c := cConcatRE.FindString(l[s[1]:]); c != "" && addrPrefixRE.MatchString(lit) {
 				// "host:" + port: evaluate the port operand, or fail closed.
-				vs := cPortValues(cPortOperand(l[s[1]+len(c):]), ints, 0)
+				vs := cPortValues(cPortOperand(l[s[1]+len(c):], strings.Contains(c, "<<")), ints, 0)
 				if vs == nil {
 					p.Report(f, src.origin[i]+1, unresolvedPort, "address "+strconv.Quote(lit)+" + port")
 				}
@@ -580,19 +662,21 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 	}
 	// Calls on those lines, with their arguments read across lines: the port argument of ipv4(…) and
 	// loopbackV4(…), and the default (last argument) of a listen, connect or gateway option.
-	for _, c := range src.callsAt(cIPv4CallRE.FindAllStringIndex(src.blank, -1)) {
-		if reads(c.index) && len(c.args) >= 2 {
+	ipv4s, locs := calls(cIPv4CallRE, src.blank)
+	for k, c := range ipv4s {
+		if stmtReads(locs[k][0]) && len(c.args) >= 2 {
 			portArg(p, f, c, c.args[len(c.args)-1], ints)
 		}
 	}
-	for _, c := range src.callsAt(cV4CallRE.FindAllStringIndex(src.blank, -1)) {
-		if reads(c.index) && len(c.args) == 1 {
+	v4s, locs := calls(cV4CallRE, src.blank)
+	for k, c := range v4s {
+		if stmtReads(locs[k][0]) && len(c.args) == 1 {
 			portArg(p, f, c, c.args[0], ints)
 		}
 	}
 	strs := cStrTable(p)
-	for _, c := range src.callsAt(cOptionCallRE.FindAllStringIndex(src.text, -1)) {
-		if !reads(c.index) || len(c.args) < 2 {
+	for k, c := range options {
+		if !stmtReads(optionLocs[k][0]) || len(c.args) < 2 {
 			continue
 		}
 		def := c.args[len(c.args)-1]
@@ -617,8 +701,9 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 }
 
 // cPortOperand is the port operand at the start of s, after `"host:" +`: the argument of std::to_string(…),
-// or the expression up to the first top-level `)`, `,`, `;`, `+` or `<<`.
-func cPortOperand(s string) string {
+// or the expression up to the first top-level `)`, `,`, `;`, `+` or `<<`. After `<<` (stream), a `+` is
+// part of the operand: `os << "host:" << kBase + 1` writes kBase + 1, since + binds tighter than <<.
+func cPortOperand(s string, stream bool) string {
 	s = strings.TrimSpace(s)
 	if m := cToStringRE.FindString(s); m != "" {
 		s = s[len(m)-1:]
@@ -637,8 +722,12 @@ func cPortOperand(s string) string {
 				return s[:i]
 			}
 			depth--
-		case ',', ';', '+':
+		case ',', ';':
 			if depth == 0 {
+				return s[:i]
+			}
+		case '+':
+			if depth == 0 && !stream {
 				return s[:i]
 			}
 		case '<':

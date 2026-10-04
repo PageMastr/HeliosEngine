@@ -12,3 +12,17 @@ transport = "udp"
 report_interval = 5
 listen = { host = "0.0.0.0", port = 7777 }
 "public_port" = 7777
+
+[cluster]
+gateways = [
+  "127.0.0.1:7777",
+  "127.0.0.2:7777", # one address per line
+]
+gateway_ports = [
+  7777,
+]
+# An array of arrays: its element lines are not table headers, so port below is not in a gateway table.
+roles = [
+  ["gateway", "cell"],
+]
+port = 9000

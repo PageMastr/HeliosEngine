@@ -275,6 +275,8 @@ line:
 
 - **Something you do not need** (for example a driver installer's leftover `C:\AMD` or `C:\NVIDIA`): delete it. An
   item whose `Who` says `owner: helios-ci` was created by the runner account: find out why before you delete it.
+- **`D:\helios-ci.old-<time>`**, the old tree that "Rotate" sets aside: leave it until Rotate's step 5 deletes it,
+  and never run anything in it.
 - **A FAT32 or exFAT drive**: unplug it while the runner is enabled, or keep nothing on it that is private or that you
   run.
 
@@ -293,9 +295,10 @@ to it and every line could be read. Closing or moving a folder keeps whatever wa
 - **Anything else you run** from a `write` folder, from `C:\Users\Public` or from a FAT32 or exFAT drive that was
   plugged in: restore it from a backup made before the runner came online (2026-10-03), or install it again.
 
-Run the audit again until its `write` lines are at most such drives and its `read` lines are only tools the job uses. It reads the top
-level only: a folder you closed stays closed below, unless something below it grants access itself. A folder you
-create at a drive root later starts open again: run the audit after creating one (the checklist repeats it).
+Run the audit again until its `write` lines are at most such drives and set-aside trees, and its `read` lines are only
+tools the job uses. It reads the top level only: a folder you closed stays closed below, unless something below it
+grants access itself. A folder you create at a drive root later starts open again: run the audit after creating one
+(the checklist repeats it).
 
 ### 5. Register the runner
 
@@ -471,8 +474,8 @@ Do this after the setup and after any change to the PC, the hook or the firewall
 - [ ] `icacls D:\helios-ci` lists Administrators, SYSTEM and `BUILTIN\Users:(RX)` only, and `icacls
       D:\helios-ci\runner` names no account but Administrators, SYSTEM and `config.cmd`'s `GITHUB_ActionsRunner_G...`
       group (step 3).
-- [ ] Step 4b's audit lists no `write` line but FAT32 or exFAT drives you accepted, and its `read` lines are only tools
-      the job uses.
+- [ ] Step 4b's audit lists no `write` line but FAT32 or exFAT drives you accepted and `D:\helios-ci.old-<time>` trees
+      that you have not deleted yet, and its `read` lines are only tools the job uses.
 - [ ] `Get-NetFirewallRule -Group 'Helios CI runner: LAN block for helios-ci'` lists 3 rules (2 with `-AllowAddress`),
       Enabled, Outbound, Block; `... | Get-NetFirewallAddressFilter` shows the ranges of step 7;
       `Get-NetFirewallProfile | Select-Object Name, Enabled` shows every profile enabled.
@@ -529,20 +532,18 @@ Do this after the setup and after any change to the PC, the hook or the firewall
 - **`refused:` at "Set up runner"**: the hook ended a job that is not an allowed run of `main`, for example a push
   to another branch whose workflow asks for this runner. It stops the job's worker process, so the run fails there,
   possibly with a message about the runner's worker; the runner stays online. Look at which branch or fork started it.
-- **"could not end the job"** at "Set up runner": the hook refused a job but found no worker process to stop, or
-  could not stop it, so that job's `if: always()` and `pre:` steps may have run. Stop the service (step 5), report
-  it, and follow "Rotate" (and step 4b's "After unreviewed code") before the runner runs again: that code was not
-  reviewed. A
-  line saying that the parent process is not the runner's `Runner.Worker.exe`, or that its lookup failed,
-  followed by "ending the job: stopping every Runner.Worker.exe", means the hook found the worker by name instead;
-  the job was ended, but report it too.
-- **`File doesn't exist`** at "Set up runner", after "A job started hook has been configured by the self-hosted
-  runner administrator": the runner could not see the hook. The file is missing, `.env` names another path, or
-  `helios-ci` cannot read it (for example because the account was created again without "Rotate"). The hook did not
-  run, so it did not end the job: the job's `if: always()` and `pre:` steps may have run. Stop the service (step 5)
-  and report it with the run's branch or fork. If the job was not a run of `main`, its code was not reviewed: follow
-  "Rotate" (and step 4b's "After unreviewed code"). Otherwise fix steps 3 and 6 and start the service again with step
-  9's block.
+- **"could not end the job"** at "Set up runner": the hook refused a job but found no worker process to stop, or could
+  not stop it, so that job's `if: always()` and `pre:` steps may have run. Stop the service (step 5), report it, and
+  follow "Rotate" (and step 4b's "After unreviewed code") before the runner runs again: that code was not reviewed. A
+  line saying that the parent process is not the runner's `Runner.Worker.exe`, or that its lookup failed, followed by
+  "ending the job: stopping every Runner.Worker.exe", means the hook found the worker by name instead; the job was
+  ended, but report it too.
+- **`File doesn't exist`** at "Set up runner", after "A job started hook has been configured by the self-hosted runner
+  administrator": the runner could not see the hook. The file is missing, `.env` names another path, or `helios-ci`
+  cannot read it (for example because the account was created again without "Rotate"). The hook did not run, so it did
+  not end the job: the job's `if: always()` and `pre:` steps may have run. Stop the service (step 5) and report it
+  with the run's branch or fork. If the job was not a run of `main`, its code was not reviewed: follow "Rotate" (and
+  step 4b's "After unreviewed code"). Otherwise fix steps 3 and 6 and start the service again with step 9's block.
 - **"entries survived the wipe"** at "Set up runner": a leftover process holds files in `D:\helios-ci\work`. Reboot
   (or end `helios-ci`'s processes); the next job wipes again.
 - **`rhi_triangle_smoke`** opens a window. A service runs without a desktop, so it may fail on this runner; that is a
@@ -657,8 +658,8 @@ with your rights. Its `remove` also stops and deletes whatever service the `.ser
    the new account: a new `runner` that only Administrators and SYSTEM can change until `config.cmd` has run, and a
    new `hooks`, which the old account cannot have touched (the setup of 2026-10-03 gave it full control of `hooks`).
    Renaming `D:\helios-ci` changes no permissions on anything inside it. If `Rename-Item` says that the folder is in
-   use, close what has it open (an Explorer window, or a window whose current folder is inside it) or restart the
-   PC, then run the block again. The old tree keeps the evidence for your report: `D:\helios-ci.old-<time>\runner\_diag`
+   use, close what has it open (an Explorer window, or a window whose current folder is inside it) or restart the PC,
+   then run the block again. The old tree keeps the evidence for your report: `D:\helios-ci.old-<time>\runner\_diag`
    holds the runner's log and one `Worker_*.log` per job, beside the old `.env` and the runner's files. Nothing in it
    is run again, and step 5 deletes it.
 

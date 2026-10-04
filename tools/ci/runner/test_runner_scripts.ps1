@@ -9,10 +9,13 @@
 # entries it would delete; every PowerShell block of docs/runbooks/win-gpu-runner.md parses, and its step 4b audit
 # (what helios-ci can open at the root of each local drive), step 9's check before the service starts (the hook is
 # set in .env, readable by helios-ci and not marked as downloaded, and the execution policy lets it run) and the
-# rotate blocks (what helios-ci owns; deleting its processes, profile and account; new folders and the hook's ACL for
-# a new account; the hook, .env and firewall rules before the runner is registered again) run against stand-ins for
-# WMI, the account, process, file, ACL, registry, git and service cmdlets; the "Already done" path and the
-# checklist name the steps that matter for a runner that already ran without the hook. The
+# rotate blocks (the runner's service and config.cmd's group deleted with Windows' tools; what helios-ci owns;
+# deleting its processes, profile and account; a new D:\helios-ci with step 3's folders for a new account; the hook,
+# .env and firewall rules before the runner is registered again) run against stand-ins for WMI, the account, group,
+# process, file, ACL, registry, git and service cmdlets; no runbook step runs anything from D:\helios-ci (config.cmd
+# remove included) or changes into it, and every registration is in a new runner folder that helios-ci could not
+# change; the "Already done" path, step 4b and the checklist name the steps that matter for a runner that already ran
+# without the hook. The
 # scripts have no test switch: their functions and constants are loaded from the parsed files, so their last block
 # (the run) never runs here. On Windows also the wipe itself on a scratch tree under -WorkDir: a junction to a
 # directory outside, a directory symbolic link where creating one is allowed, read-only files and a deep tree; the
@@ -467,31 +470,35 @@ if ($step9.Count -eq 1) {
     }
 }
 
-# Rotating after suspected misuse (the runbook's Rotate step 3, blocks a to d) lists what helios-ci owns outside its
-# profile before the account goes (afterwards the owner is a bare SID); ends the account's processes and deletes its
-# profile (folder and registry entry) and the account; sets the old runner and work folders aside and gives the new
-# account step 3's folders and hook access (the hooks ACL names the old SID, and config.cmd re-grants only runner and
-# work); and installs the hook, .env and the firewall rules BEFORE the runner is registered again: config.cmd starts
-# the service at once, and a job queued for the runner since its removal would otherwise run all of its steps, with
-# the LAN open. Each block runs here against stand-ins; $script:rotateLog records what it did, in order.
+# Every rotation (the runbook's Rotate steps 2 and 3) first deletes the runner's service and config.cmd's group with
+# Windows' own tools: config.cmd remove would run, elevated, files that helios-ci can change (config.cmd itself, a
+# batch file, and bin\), and a group left behind would hand the next account the folders set aside. It then lists what
+# helios-ci owns outside its profile before the account goes (afterwards the owner is a bare SID); ends the account's
+# processes and deletes its profile (folder and registry entry) and the account; sets the old D:\helios-ci aside and
+# makes step 3's folders again for the new account (a runner folder that helios-ci cannot change before config.cmd
+# runs, and a new hooks folder); and installs the hook, .env and the firewall rules BEFORE the runner is registered
+# again: config.cmd starts the service at once, and a job queued for the runner since its removal would otherwise run
+# all of its steps, with the LAN open. Each block runs here against stand-ins; $script:rotateLog records what it did,
+# in order.
 $rotateStart = $runbook.IndexOf('## Rotate or remove')
 $rotateEnd = $runbook.IndexOf('## Not covered yet')
 $rotateSection = if ($rotateStart -ge 0 -and $rotateEnd -gt $rotateStart) { $runbook.Substring($rotateStart, $rotateEnd - $rotateStart) } else { '' }
-$rotateHeaders = @('# Rotate: what helios-ci owns', '# Rotate: end helios-ci''s processes',
-    '# Rotate: set the old runner and work folders aside', '# Rotate: before registering')
-$rotateList, $rotateRemove, $rotateFolders, $rotateInstall = @($rotateHeaders | ForEach-Object {
+$rotateHeaders = @('# Rotate: delete the runner''s service and config.cmd''s group', '# Rotate: what helios-ci owns',
+    '# Rotate: end helios-ci''s processes', '# Rotate: set the old D:\helios-ci aside', '# Rotate: before registering')
+$rotateService, $rotateList, $rotateRemove, $rotateFolders, $rotateInstall = @($rotateHeaders | ForEach-Object {
         $header = $_
         , @($blocks | Where-Object { $_ -match ('(?m)^[ \t]*' + [regex]::Escape($header)) })
     })
-Assert-Equal '1 1 1 1' "$($rotateList.Count) $($rotateRemove.Count) $($rotateFolders.Count) $($rotateInstall.Count)" `
-    'the runbook has the four rotate blocks'
+Assert-Equal '1 1 1 1 1' "$($rotateService.Count) $($rotateList.Count) $($rotateRemove.Count) $($rotateFolders.Count) $($rotateInstall.Count)" `
+    'the runbook has the five rotate blocks'
 # Where each block and the step that registers the runner again stand in the Rotate section, in the order the owner
-# meets them: the hook, .env and the firewall rules come before the registration.
+# meets them: the runner is removed first, and the hook, .env and the firewall rules come before the registration.
 $rotateOrder = @(($rotateHeaders + @('Then create the account again (step 2)')) | ForEach-Object { $rotateSection.IndexOf($_) })
 $registerAt = ([regex]::Match($rotateSection, '(?m)^\d+\. Register again \(step 5')).Index
-Assert-Equal $true ($rotateOrder[0] -ge 0 -and $rotateOrder[0] -lt $rotateOrder[1] -and $rotateOrder[1] -lt $rotateOrder[4] -and
-    $rotateOrder[4] -lt $rotateOrder[2] -and $rotateOrder[2] -lt $rotateOrder[3] -and $rotateOrder[3] -lt $registerAt) `
-    'Rotate: list, delete the account, create it again, new folders, then the hook, .env and firewall, then register'
+Assert-Equal $true ($rotateOrder[0] -ge 0 -and $rotateOrder[0] -lt $rotateOrder[1] -and $rotateOrder[1] -lt $rotateOrder[2] -and
+    $rotateOrder[2] -lt $rotateOrder[5] -and $rotateOrder[5] -lt $rotateOrder[3] -and $rotateOrder[3] -lt $rotateOrder[4] -and
+    $rotateOrder[4] -lt $registerAt) `
+    'Rotate: remove the runner, list, delete the account, create it again, new folders, the hook, .env and firewall, register'
 
 # Each icacls grant on $Folder, as its command elements.
 function Get-HeliosCiFolderGrant([string]$Block, [string]$Folder) {
@@ -506,12 +513,84 @@ function Get-HeliosCiFolderGrant([string]$Block, [string]$Folder) {
         }, $true)
     return @($grants | ForEach-Object { @($_.CommandElements | ForEach-Object { $_.Extent.Text }) -join ' ' })
 }
-foreach ($folder in 'D:\helios-ci\runner', 'D:\helios-ci\work', 'D:\helios-ci\hooks') {
+foreach ($folder in 'D:\helios-ci', 'D:\helios-ci\runner', 'D:\helios-ci\work', 'D:\helios-ci\hooks') {
     $step3Grant = @($blocks | Where-Object { $_ -notmatch '(?m)^[ \t]*# Rotate:' } | ForEach-Object { Get-HeliosCiFolderGrant $_ $folder })
     Assert-Equal 1 $step3Grant.Count "step 3 has one icacls grant on $folder"
     if ($rotateFolders.Count -eq 1) {
         Assert-Equal $step3Grant (Get-HeliosCiFolderGrant $rotateFolders[0] $folder) "rotating with a new account repeats step 3's grant on $folder"
     }
+}
+# The owner runs config.cmd elevated in the runner folder, so until config.cmd grants the account its group, only
+# Administrators and SYSTEM may change it; D:\helios-ci itself must not inherit D:\'s Modify for Authenticated Users,
+# with which the account could rename it and put its own tree (hooks included) in its place.
+Assert-Equal @('icacls D:\helios-ci\runner /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F"') `
+    @($blocks | Where-Object { $_ -notmatch '(?m)^[ \t]*# Rotate:' } | ForEach-Object { Get-HeliosCiFolderGrant $_ 'D:\helios-ci\runner' }) `
+    'step 3 gives the runner folder to Administrators and SYSTEM only'
+Assert-Equal @('icacls D:\helios-ci /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-545:(RX)"') `
+    @($blocks | Where-Object { $_ -notmatch '(?m)^[ \t]*# Rotate:' } | ForEach-Object { Get-HeliosCiFolderGrant $_ 'D:\helios-ci' }) `
+    'step 3 closes D:\helios-ci itself: Administrators and SYSTEM, and Users may only list it'
+
+if ($rotateService.Count -eq 1) {
+    # $Services: the runner services there are; $Groups: config.cmd's groups; $FailOn: the logged action (its start)
+    # that fails. Get-Service and Get-LocalGroup show what is left, so the block's last listing must come out empty.
+    function Invoke-HeliosCiRotateService([string[]]$Services = @(), [string[]]$Groups = @(), [string]$FailOn = '') {
+        $script:serviceLeft = New-Object System.Collections.Generic.List[string]
+        foreach ($name in $Services) { $script:serviceLeft.Add($name) }
+        $script:groupLeft = New-Object System.Collections.Generic.List[string]
+        foreach ($name in $Groups) { $script:groupLeft.Add($name) }
+        function Get-Service {
+            [CmdletBinding()] param([string]$Name)
+            if ($Name -cne 'actions.runner.*') { throw "unexpected Get-Service $Name" }
+            foreach ($left in @($script:serviceLeft)) { [pscustomobject]@{ Name = $left; Status = 'Running' } }
+        }
+        function Stop-Service {
+            [CmdletBinding()] param([string]$Name, [switch]$Force)
+            if ($FailOn -and "stop $Name" -like "$FailOn*") { throw "Service '$Name' cannot be stopped." }
+            $script:rotateLog.Add("stop $Name force=$Force")
+        }
+        function sc.exe {
+            $line = "sc.exe $($args -join ' ')"
+            $script:rotateLog.Add($line)
+            if ($FailOn -and $line -like "$FailOn*") { $global:LASTEXITCODE = 1072; return '[SC] DeleteService FAILED 1072:' }
+            if ($args.Count -ne 2 -or $args[0] -cne 'delete') { throw "unexpected $line" }
+            [void]$script:serviceLeft.Remove([string]$args[1])
+            $global:LASTEXITCODE = 0
+            '[SC] DeleteService SUCCESS'
+        }
+        function Get-LocalGroup {
+            [CmdletBinding()] param([string]$Name)
+            if ($Name -cne 'GITHUB_ActionsRunner_G*') { throw "unexpected Get-LocalGroup $Name" }
+            foreach ($left in @($script:groupLeft)) { [pscustomobject]@{ Name = $left } }
+        }
+        function Remove-LocalGroup {
+            [CmdletBinding()] param([Parameter(ValueFromPipeline = $true)] $InputObject)
+            process {
+                $script:rotateLog.Add("remove group $($InputObject.Name)")
+                [void]$script:groupLeft.Remove([string]$InputObject.Name)
+            }
+        }
+        $script:rotateLog = New-Object System.Collections.Generic.List[string]
+        $script:rotateOutput = @()
+        $script:rotateOutput = @(& { . ([scriptblock]::Create($rotateService[0])) } | ForEach-Object { "$_" })
+    }
+    $runnerService = 'actions.runner.PageMastr-HeliosEngine.helios-win-gpu'
+    try { Invoke-HeliosCiRotateService @($runnerService) @('GITHUB_ActionsRunner_G1a2b3') } catch { $script:rotateLog.Add("error: $($_.Exception.Message)") }
+    Assert-Equal @("stop $runnerService force=True", "sc.exe delete $runnerService", 'remove group GITHUB_ActionsRunner_G1a2b3') `
+        $script:rotateLog.ToArray() 'rotating stops and deletes the runner''s service, then deletes config.cmd''s group'
+    Assert-Equal 'What is left (nothing below this line):' $script:rotateOutput[-1] 'and nothing is left of either'
+    try { Invoke-HeliosCiRotateService @("$runnerService", 'actions.runner.PageMastr-scifi-test.helios-win-gpu') @('GITHUB_ActionsRunner_G1a2b3', 'GITHUB_ActionsRunner_G4c5d6') } `
+    catch { $script:rotateLog.Add("error: $($_.Exception.Message)") }
+    Assert-Equal @("stop $runnerService force=True", "sc.exe delete $runnerService", 'stop actions.runner.PageMastr-scifi-test.helios-win-gpu force=True',
+        'sc.exe delete actions.runner.PageMastr-scifi-test.helios-win-gpu', 'remove group GITHUB_ActionsRunner_G1a2b3',
+        'remove group GITHUB_ActionsRunner_G4c5d6') $script:rotateLog.ToArray() 'every runner service and group goes (one from before the rename too)'
+    try { Invoke-HeliosCiRotateService } catch { $script:rotateLog.Add("error: $($_.Exception.Message)") }
+    Assert-Equal 0 $script:rotateLog.Count 'with neither left, deleting the runner does nothing and does not fail'
+    Assert-Throws { Invoke-HeliosCiRotateService @($runnerService) @('GITHUB_ActionsRunner_G1a2b3') "sc.exe delete $runnerService" } `
+        'could not delete the service' 'rotating stops when sc.exe cannot delete the service'
+    Assert-Equal @("stop $runnerService force=True", "sc.exe delete $runnerService") $script:rotateLog.ToArray() 'and keeps the group'
+    Assert-Throws { Invoke-HeliosCiRotateService @($runnerService) @('GITHUB_ActionsRunner_G1a2b3') "stop $runnerService" } `
+        'cannot be stopped' 'rotating stops when the service cannot be stopped'
+    Assert-Equal 0 $script:rotateLog.Count 'and deletes nothing'
 }
 
 if ($rotateList.Count -eq 1) {
@@ -614,12 +693,24 @@ if ($rotateRemove.Count -eq 1) {
 }
 
 if ($rotateFolders.Count -eq 1) {
-    # $FailOn: the logged action (its start) that fails.
-    function Invoke-HeliosCiRotateFolders([string]$Old, [string]$Current, [string]$FailOn = '') {
+    # $FailOn: the logged action (its start) that fails; $Services and $Groups: the runner services and config.cmd
+    # groups still there.
+    function Invoke-HeliosCiRotateFolders([string]$Old, [string]$Current, [string]$FailOn = '', [string[]]$Services = @(),
+        [string[]]$Groups = @()) {
         function Get-LocalUser {
             [CmdletBinding()] param([string]$Name)
             if ($Name -cne 'helios-ci') { throw "unexpected Get-LocalUser $Name" }
             [pscustomobject]@{ SID = [pscustomobject]@{ Value = $Current } }
+        }
+        function Get-Service {
+            [CmdletBinding()] param([string]$Name)
+            if ($Name -cne 'actions.runner.*') { throw "unexpected Get-Service $Name" }
+            foreach ($left in $Services) { [pscustomobject]@{ Name = $left } }
+        }
+        function Get-LocalGroup {
+            [CmdletBinding()] param([string]$Name)
+            if ($Name -cne 'GITHUB_ActionsRunner_G*') { throw "unexpected Get-LocalGroup $Name" }
+            foreach ($left in $Groups) { [pscustomobject]@{ Name = $left } }
         }
         function Get-Date {
             [CmdletBinding()] param([string]$Format)
@@ -646,25 +737,35 @@ if ($rotateFolders.Count -eq 1) {
         & { . ([scriptblock]::Create($rotateFolders[0])) } | Out-Null
     }
     $grants = '/inheritance:r /grant:r *S-1-5-32-544:(OI)(CI)F *S-1-5-18:(OI)(CI)F'
-    $foldersDone = @('rename D:\helios-ci\runner -> runner.old-20261004-120000', 'rename D:\helios-ci\work -> work.old-20261004-120000',
-        'mkdir Directory D:\helios-ci\runner D:\helios-ci\work', "icacls D:\helios-ci\runner $grants helios-ci:(OI)(CI)F",
-        "icacls D:\helios-ci\work $grants helios-ci:(OI)(CI)F", "icacls D:\helios-ci\hooks $grants helios-ci:(OI)(CI)RX",
-        "icacls D:\helios-ci\hooks /remove:g *$oldSid", 'icacls D:\helios-ci\hooks\job-started.ps1')
+    # The whole tree goes aside (runner, work and hooks: the old account had full control of hooks in the setup of
+    # 2026-10-03), and the new runner folder names no account but Administrators and SYSTEM.
+    $foldersDone = @('rename D:\helios-ci -> helios-ci.old-20261004-120000',
+        'mkdir Directory D:\helios-ci\runner D:\helios-ci\work D:\helios-ci\hooks', "icacls D:\helios-ci $grants *S-1-5-32-545:(RX)",
+        "icacls D:\helios-ci\runner $grants", "icacls D:\helios-ci\work $grants helios-ci:(OI)(CI)F",
+        "icacls D:\helios-ci\hooks $grants helios-ci:(OI)(CI)RX")
     try { Invoke-HeliosCiRotateFolders $oldSid $newSid } catch { $script:rotateLog.Add("error: $($_.Exception.Message)") }
     Assert-Equal $foldersDone $script:rotateLog.ToArray() `
-        'rotating sets the old folders aside, makes new ones for the new account and moves the hook''s entry to it'
+        'rotating sets the old D:\helios-ci aside and makes step 3''s folders again for the new account'
     $foldersRefused = @(
         @{ What = 'without block a''s $old'; Old = ''; Current = $newSid; Error = 'run block a first'; Done = 0 },
         @{ What = 'before the account was created again'; Old = $oldSid; Current = $oldSid; Error = 'old account'; Done = 0 },
-        @{ What = 'when the runner folder cannot be set aside (a file in use): nothing is granted on the old one'
-            Old = $oldSid; Current = $newSid; FailOn = 'rename D:\helios-ci\runner'; Error = 'being used'; Done = 0 },
+        @{ What = 'while the runner''s service is still there (step 2 not done)'; Old = $oldSid; Current = $newSid
+            Services = @('actions.runner.PageMastr-HeliosEngine.helios-win-gpu'); Error = 'do Rotate''s step 2 first'; Done = 0 },
+        @{ What = 'while config.cmd''s group is still there (the new account would join it)'; Old = $oldSid; Current = $newSid
+            Groups = @('GITHUB_ActionsRunner_G1a2b3'); Error = 'do Rotate''s step 2 first'; Done = 0 },
+        @{ What = 'when D:\helios-ci cannot be set aside (a file in use): nothing is made or granted'
+            Old = $oldSid; Current = $newSid; FailOn = 'rename D:\helios-ci'; Error = 'being used'; Done = 0 },
+        @{ What = 'when icacls fails on the new D:\helios-ci'; Old = $oldSid; Current = $newSid
+            FailOn = 'icacls D:\helios-ci /inheritance'; Error = 'icacls failed on D:\\helios-ci$'; Done = 3 },
         @{ What = 'when icacls fails on the new runner folder'; Old = $oldSid; Current = $newSid
             FailOn = 'icacls D:\helios-ci\runner'; Error = 'icacls failed on D:\\helios-ci\\runner'; Done = 4 },
-        @{ What = 'when icacls cannot drop the old SID from the hooks folder'; Old = $oldSid; Current = $newSid
-            FailOn = 'icacls D:\helios-ci\hooks /remove'; Error = 'could not drop'; Done = 7 }
+        @{ What = 'when icacls fails on the new hooks folder'; Old = $oldSid; Current = $newSid
+            FailOn = 'icacls D:\helios-ci\hooks'; Error = 'icacls failed on D:\\helios-ci\\hooks'; Done = 6 }
     )
     foreach ($case in $foldersRefused) {
-        Assert-Throws { Invoke-HeliosCiRotateFolders $case.Old $case.Current ([string]$case['FailOn']) } $case.Error `
+        $services = if ($case.ContainsKey('Services')) { $case.Services } else { @() }
+        $groups = if ($case.ContainsKey('Groups')) { $case.Groups } else { @() }
+        Assert-Throws { Invoke-HeliosCiRotateFolders $case.Old $case.Current ([string]$case['FailOn']) $services $groups } $case.Error `
             "the rotate folders block stops $($case.What)"
         Assert-Equal @($foldersDone | Select-Object -First $case.Done) $script:rotateLog.ToArray() "and does nothing after that: $($case.What)"
     }
@@ -700,6 +801,7 @@ if ($rotateInstall.Count -eq 1) {
             $script:rotateLog.Add("write $LiteralPath ($Encoding)")
             $script:rotateEnv = @($Value)
         }
+        function icacls { $script:rotateLog.Add("icacls $($args -join ' ')"); $global:LASTEXITCODE = 0 }
         $script:rotateLog = New-Object System.Collections.Generic.List[string]
         $global:HeliosCiRotateLog = $script:rotateLog
         $script:rotateEnv = $null
@@ -708,7 +810,8 @@ if ($rotateInstall.Count -eq 1) {
         try { & { . ([scriptblock]::Create($rotateInstall[0])) } | Out-Null } finally { $env:USERPROFILE = $savedProfile }
     }
     $installDone = @("git -C $rotateRepo switch main", "git -C $rotateRepo pull --ff-only",
-        "copy $rotateRepo\tools\ci\runner\job-started.ps1 -> $hookPath", 'write D:\helios-ci\runner\.env (Ascii)', 'firewall.ps1')
+        "copy $rotateRepo\tools\ci\runner\job-started.ps1 -> $hookPath", 'write D:\helios-ci\runner\.env (Ascii)', 'firewall.ps1',
+        "icacls $hookPath")
     try { Invoke-HeliosCiRotateInstall } catch { $script:rotateLog.Add("error: $($_.Exception.Message)") }
     Assert-Equal $installDone $script:rotateLog.ToArray() 'rotating installs the hook from main, writes .env and adds the firewall rules'
     Assert-Equal @("ACTIONS_RUNNER_HOOK_JOB_STARTED=$hookPath") $script:rotateEnv 'the .env it writes holds the hook line'
@@ -731,24 +834,96 @@ if ($rotateInstall.Count -eq 1) {
 }
 $global:LASTEXITCODE = 0   # the icacls and git stand-ins set it
 
+# Nothing in the runbook runs a program or script from D:\helios-ci, or changes into it, in the owner's elevated
+# window: helios-ci can change every file there (config.cmd, a plain batch file, and bin\, which the runner even
+# replaces itself when it updates), so the next elevated run would run the account's code with the owner's rights.
+# That rules out config.cmd remove, which the runbook names only to forbid it, and registering again in a folder the
+# service ran from: every registration is step 5's, in the new runner folder that step 3 or Rotate makes.
+$fromRunner = New-Object System.Collections.Generic.List[string]
+foreach ($block in $blocks) {
+    $tokens = $null
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($block, [ref]$tokens, [ref]$errors)
+    foreach ($command in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+        $name = $command.CommandElements[0].Extent.Text.Trim('"', "'")
+        $arguments = @($command.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text.Trim('"', "'") })
+        if ($name -match '(?i)^(\.[\\/])?(D:\\helios-ci\b|config\.cmd|run\.cmd|bin[\\/])|Runner\.(Listener|Worker)|RunnerService' -or
+            ($name -match '(?i)^(cd|chdir|sl|Set-Location|pushd|Push-Location)$' -and
+                @($arguments | Where-Object { $_ -match '(?i)^D:\\helios-ci\b' }).Count)) {
+            $fromRunner.Add($command.Extent.Text)
+        }
+    }
+}
+Assert-Equal '' ($fromRunner -join '; ') 'no runbook block runs anything from D:\helios-ci or changes into it'
+$prose = [regex]::Replace($runbook, '(?ms)^[ \t]*```.*?^[ \t]*```', '')
+$spans = @([regex]::Matches($prose, '`([^`]+)`') | ForEach-Object { $_.Groups[1].Value -replace '\s+', ' ' })
+Assert-Equal '' (@($spans | Where-Object {
+                $_ -match '(?i)^(cd|chdir|Set-Location|pushd) D:\\helios-ci|(^|[\s;&])\.[\\/](config|run)\.cmd|config\.cmd remove --token'
+            }) -join '; ') 'no command in the runbook''s text runs config.cmd or run.cmd, or changes into D:\helios-ci'
+Assert-Equal 1 ([regex]::Matches($runbook, 'config\.cmd remove')).Count 'the runbook names config.cmd remove once'
+Assert-Equal 1 ([regex]::Matches($runbook, '\*\*Never run `config\.cmd remove`\*\*')).Count 'and only to forbid it'
+$step5Start = $runbook.IndexOf('### 5. Register the runner')
+$step5End = $runbook.IndexOf('### 6. Install the job-started hook')
+$step5 = if ($step5Start -ge 0 -and $step5End -gt $step5Start) { $runbook.Substring($step5Start, $step5End - $step5Start) -replace '\s+', ' ' } else { '' }
+Assert-Equal $true ($step5.Contains('Register only from a fresh download into the new `runner` folder that step 3, or "Rotate", has just made') -and
+    $step5.Contains('including the line that checks the download''s SHA-256')) `
+    'step 5 registers only from a fresh, checked download into a new runner folder'
+$rotateText = $rotateSection -replace '\s+', ' '
+Assert-Equal $true ($rotateText.Contains('only then registers the runner again, from a fresh download in the new `runner` folder') -and
+    $rotateText.Contains('**Force remove this runner**, not the command that the dialog shows')) `
+    'every rotation removes the runner on GitHub without config.cmd and registers it in a new folder'
+$removeAt = $rotateText.IndexOf('Remove for good:')
+$remove = if ($removeAt -ge 0) { $rotateText.Substring($removeAt) } else { '' }
+Assert-Equal $true ($remove.Contains('do Rotate''s step 2') -and
+    $remove.Contains('`& "$env:USERPROFILE\src\HeliosEngine\tools\ci\runner\firewall.ps1" -Remove`') -and
+    $remove.Contains('`cmd /c rd /s /q "\\?\D:\helios-ci"`')) `
+    'removing for good uses Rotate''s step 2, runs firewall.ps1 from the clone by its full path and deletes with rd'
+# Administrator rights are out of the account's reach only while the owner never runs anything from D:\helios-ci
+# elevated; the residual risk says so instead of claiming it outright.
+$riskStart = $runbook.IndexOf('What stays possible (K33''s residual risk)')
+$riskEnd = $runbook.IndexOf('## Names (binding)')
+$risk = if ($riskStart -ge 0 -and $riskEnd -gt $riskStart) { $runbook.Substring($riskStart, $riskEnd - $riskStart) -replace '\s+', ' ' } else { '' }
+Assert-Equal $true ($risk.Contains('It cannot reach administrator rights either, **as long as you never run anything from `D:\helios-ci` in an elevated window once the service has run**') -and
+    -not $risk.Contains('administrator rights or the LAN')) 'the residual risk makes "no administrator rights" conditional on never running D:\helios-ci elevated'
+
 # The runner was online without the hook from 2026-10-03: the runbook's "Already done" path shows the jobs that ran
-# and sends the owner through Rotate's suspected-misuse path, whatever they show (a job can delete its own log).
+# and sends the owner through Rotate, whatever they show (a job can delete its own log); and since step 4b had not
+# closed anything yet, it sends the owner to step 4b's list for the folders that were open to that code (closing one
+# keeps what was planted in it).
 $alreadyStart = $runbook.IndexOf('**Already done on 2026-10-03?**')
 $alreadyEnd = $runbook.IndexOf('### 1. Prerequisites')
 $already = if ($alreadyStart -ge 0 -and $alreadyEnd -gt $alreadyStart) { $runbook.Substring($alreadyStart, $alreadyEnd - $alreadyStart) } else { '' }
 Assert-Equal $true ($already -match "Get-ChildItem D:\\helios-ci\\runner\\_diag -Filter 'Worker_\*\.log'") `
     '"Already done" lists the jobs that ran without the hook'
-Assert-Equal $true ($already -match '(?s)Start over either way.*"Rotate".*suspected-misuse path') `
-    '"Already done" replaces the account and the runner folders before the hook goes in'
+$alreadyText = $already -replace '\s+', ' '
+Assert-Equal $true ($alreadyText -match 'Start over either way.*follow "Rotate" below from its step 2\. It removes the runner with Windows'' own tools, never with `config\.cmd`') `
+    '"Already done" removes the runner without config.cmd, then replaces the account and D:\helios-ci'
 Assert-Equal $false ($already -match 'steps 6 to 10') '"Already done" no longer goes on with the same account and runner folder'
+Assert-Equal $true ($alreadyText.Contains('every folder that step 4b''s first audit lists as `write`, including `C:\VulkanSDK`') -and
+    $alreadyText.Contains('do step 4b''s "After unreviewed code" list for that first audit before you close anything')) `
+    '"Already done" sends the owner to step 4b''s list for the folders that were open to unreviewed code'
+$step4bStart = $runbook.IndexOf('### 4b. Close your own folders')
+$step4b = if ($step4bStart -ge 0 -and $step5Start -gt $step4bStart) { $runbook.Substring($step4bStart, $step5Start - $step4bStart) -replace '\s+', ' ' } else { '' }
+Assert-Equal $true ($step4b.Contains('**After unreviewed code.**') -and
+    $step4b.Contains('delete the folder without running anything in it, its uninstaller included') -and
+    $step4b.Contains('`cmd /c rd /s /q "\\?\C:\VulkanSDK"`') -and
+    $step4b.Contains('clone it again into your profile instead of moving the old one') -and
+    $step4b.Contains('**Secrets in any listed folder**, `read` lines included') -and
+    $step4b.Contains('restore it from a backup made before the runner came online (2026-10-03)')) `
+    'step 4b says what to do with folders that unreviewed code could change: reinstall, clone again, replace secrets, restore'
 # The checklist looks for helios-ci's PowerShell profiles, which the runner loads before the hook, from a window that
-# does not load them.
+# does not load them, and asks for the execution policy in effect for helios-ci in both shells (the runner starts the
+# hook with pwsh when PowerShell 7 is installed, which has policies of its own that step 9's block does not read).
 $checklistStart = $runbook.IndexOf('## Verification checklist')
 $checklistEnd = $runbook.IndexOf('## Day to day')
 $checklist = if ($checklistStart -ge 0 -and $checklistEnd -gt $checklistStart) { $runbook.Substring($checklistStart, $checklistEnd - $checklistStart) } else { '' }
 Assert-Equal $true ($checklist.Contains('runas /user:helios-ci "powershell -NoProfile"') -and
     $checklist.Contains('$PROFILE.CurrentUserAllHosts') -and $checklist.Contains('$PROFILE.CurrentUserCurrentHost')) `
     'the checklist looks for helios-ci''s PowerShell profiles from a window without them'
+$checklistText = $checklist -replace '\s+', ' '
+Assert-Equal $true ($checklistText.Contains('`Get-ExecutionPolicy` (the policy in effect for `helios-ci`) answers `RemoteSigned`, `Unrestricted` or `Bypass`') -and
+    $checklistText.Contains('`pwsh -NoProfile -c Get-ExecutionPolicy` and `pwsh -NoProfile -c Get-ExecutionPolicy -Scope CurrentUser`')) `
+    'the checklist asks for helios-ci''s execution policy in effect, in Windows PowerShell and in pwsh'
 
 # -- job-started.ps1: which jobs run -------------------------------------------------------------------------
 . (Get-HeliosCiScriptDefinitions (Join-Path $here 'job-started.ps1'))

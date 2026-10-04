@@ -1,0 +1,1 @@
+set(HELIOS_SIMD_MODULE -mfma)

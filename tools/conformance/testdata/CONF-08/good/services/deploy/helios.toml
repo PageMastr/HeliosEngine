@@ -1,0 +1,46 @@
+[bus]
+listen = "127.0.0.1:4222"  # embedded server port for nats.c cells/gateways
+
+[session]
+gateways = ["127.0.0.1:7777"]
+
+[gateway]
+port = 7777 # the only public game port
+fallback_port = 7_777#a comment without a space
+listen_port = "7777"
+transport = "udp"
+report_interval = 5
+listen = { host = "0.0.0.0", port = 7777 }
+"public_port" = 7777
+
+[cluster]
+gateways = [
+  "127.0.0.1:7777",
+  "127.0.0.2:7777", # one address per line
+]
+gateway_ports = [
+  7777,
+]
+# An array of arrays: its element lines are not table headers, so port below is not in a gateway table.
+roles = [
+  ["gateway", "cell"],
+]
+port = 9000
+
+# A supervised gateway's command line at 7777, and other processes' options with other ports.
+[[orchestrator.spawn]]
+name = "gateway"
+args = ["--name", "gw-1", "--listen", "127.0.0.1:7777", "--connect=127.0.0.1:7777", "--token-lifetime", "30"]
+
+[[orchestrator.spawn]]
+name = "cell-a"
+args = ["--name", "cell-a", "--zone", "dev-sandbox", "--metrics", "127.0.0.1:9100", "--listen"]
+
+[gateway.pool]
+motd = '''Don't [panic'''
+listeners = [{ host = "0.0.0.0", port = 7777 }]
+backups = [
+  { host = "0.0.0.0", port = 7777 },
+]
+nested = [[{ port = 7777 }]]
+args = ["--listen=127.0.0.1:7777", "--connect", "127.0.0.1:7777", "--gateway-port", "7777"]

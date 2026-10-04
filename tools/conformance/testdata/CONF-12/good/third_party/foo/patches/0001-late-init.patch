@@ -1,0 +1,7 @@
+--- a/src/init.c
++++ b/src/init.c
+@@ -1,3 +1,3 @@
+ #include "init.h"
+-__attribute__((constructor(10))) static void foo_init(void) {}
++__attribute__((constructor(200))) static void foo_init(void) {}
+ __attribute__((constructor(5))) static void foo_context(void) {}

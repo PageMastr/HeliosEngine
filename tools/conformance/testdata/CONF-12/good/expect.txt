@@ -1,0 +1,3 @@
+#! -rules CONF-12 -strict
+# A conforming gate: .CRT$XLA0, both /INCLUDE:s, TerminateProcess, the allowed includes and exports;
+# a patch whose removed and context lines (not its added ones) hold early constructors; a CMake comment.

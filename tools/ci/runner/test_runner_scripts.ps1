@@ -729,6 +729,7 @@ if ($rotateInstall.Count -eq 1) {
         Assert-Equal $case.Done $script:rotateLog.Count "and installs nothing after $($case.FailOn) failed"
     }
 }
+$global:LASTEXITCODE = 0   # the icacls and git stand-ins set it
 
 # The runner was online without the hook from 2026-10-03: the runbook's "Already done" path shows the jobs that ran
 # and sends the owner through Rotate's suspected-misuse path, whatever they show (a job can delete its own log).

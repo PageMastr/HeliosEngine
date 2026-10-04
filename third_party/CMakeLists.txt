@@ -73,6 +73,15 @@ if(HELIOS_BUILD_GRAPHICS)
   target_include_directories(tp_imgui SYSTEM PUBLIC ${TP}/imgui ${TP}/imgui/backends ${TP}/imgui/misc/cpp
                                                     ${TP}/imguizmo ${TP}/implot)
   target_compile_definitions(tp_imgui PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK IMGUI_DEFINE_MATH_OPERATORS)
+  # Item hooks for the editor UI test harness (helios-uitest, 07 §4.4). IMGUI_ENABLE_TEST_ENGINE makes
+  # imgui.cpp report every item to ImGuiTestEngineHook_*() while a context sets TestEngineHookItems
+  # (one branch per item otherwise; ImGuiContext's layout does not change). The hook functions are
+  # Helios code (engine/editorui/src/imgui_item_hooks.cpp, MIT) that forwards to a table edui installs
+  # and does nothing without one, so every image that links ImGui still links. Dear ImGui Test
+  # Engine itself is not vendored (docs/adr/ADR-0.18-imgui-test-engine-licence.md). PUBLIC: every TU
+  # that includes imgui_internal.h sees the same ImGuiItemStatusFlags.
+  target_compile_definitions(tp_imgui PUBLIC IMGUI_ENABLE_TEST_ENGINE)
+  target_sources(tp_imgui PRIVATE ${PROJECT_SOURCE_DIR}/engine/editorui/src/imgui_item_hooks.cpp)
   target_link_libraries(tp_imgui PUBLIC tp_volk SDL3-static)
   helios_tp_quiet(tp_imgui)
   add_library(helios::tp::imgui ALIAS tp_imgui)

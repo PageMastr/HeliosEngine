@@ -447,7 +447,7 @@ func checkGatewayPortGo(p *Pass, f string) {
 				check(t, x)
 			} else if el := configElem(x.Type); el != nil && gatewayNameRE.MatchString(typeName(el)) {
 				for _, e := range elementLits(x) {
-					if e.Type == nil && !checked[e] {
+					if e.Type == nil {
 						check(typeName(el), e)
 					}
 				}
@@ -661,7 +661,7 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 				report(src.origin[i]+1, int64(port))
 			} else if c := cConcatRE.FindString(l[s[1]:]); c != "" && addrPrefixRE.MatchString(lit) {
 				// "host:" + port: evaluate the port operand, or fail closed.
-				vs := cPortValues(cPortOperand(l[s[1]+len(c):], strings.Contains(c, "<<")), ints, 0)
+				vs := cPortValues(cPortOperand(l[s[1]+len(c):]), ints, 0)
 				if vs == nil {
 					p.Report(f, src.origin[i]+1, unresolvedPort, "address "+strconv.Quote(lit)+" + port")
 				}
@@ -711,10 +711,11 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 	}
 }
 
-// cPortOperand is the port operand at the start of s, after `"host:" +`: the argument of std::to_string(…),
-// or the expression up to the first top-level `)`, `,`, `;`, `+` or `<<`. After `<<` (stream), a `+` is
-// part of the operand: `os << "host:" << kBase + 1` writes kBase + 1, since + binds tighter than <<.
-func cPortOperand(s string, stream bool) string {
+// cPortOperand is the port operand at the start of s, after `"host:" +` or `<<`: the argument of
+// std::to_string(…), or the expression up to the first top-level `)`, `,`, `;` or `<<`. A `+` is part of
+// it: `os << "host:" << kBase + 1` writes kBase + 1, since + binds tighter than <<. (After a `+`
+// concatenation the operand is a string, which cPortValues cannot evaluate either way.)
+func cPortOperand(s string) string {
 	s = strings.TrimSpace(s)
 	if m := cToStringRE.FindString(s); m != "" {
 		s = s[len(m)-1:]
@@ -735,10 +736,6 @@ func cPortOperand(s string, stream bool) string {
 			depth--
 		case ',', ';':
 			if depth == 0 {
-				return s[:i]
-			}
-		case '+':
-			if depth == 0 && !stream {
 				return s[:i]
 			}
 		case '<':

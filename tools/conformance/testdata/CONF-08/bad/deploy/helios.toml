@@ -24,3 +24,5 @@ gateway_ports = [
   7777,
   7012,
 ]
+banner = "see [docs"
+gateway_port = 7013

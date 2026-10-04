@@ -8,13 +8,20 @@
 # resolve fail closed (kv.go:18 is both an unresolved KeyTTL key and CAS on it; elect.go, both APIs).
 # A TTL in a nats.c file that sets no Bucket fails closed (ttl_helper.cpp), also in a file that includes
 # <nats.h> and never names kvConfig (ttl_include.cpp). A nats.c MaxAge (a jsStreamConfig field) counts on
-# a lease bucket's KV_ stream, and kvStore_*WithTTL is CAS with a per-key TTL (stream.cpp).
+# a lease bucket's KV_ stream, and kvStore_*WithTTL is CAS with a per-key TTL (stream.cpp). A MaxAge on a
+# stream whose name does not resolve fails closed in a file that uses KV (kv_stream.cpp) or names a "KV_"
+# stream (kv_prefix.cpp).
 # TTL fields assigned after the literal count the same way (ttl_assign.go: a lease bucket, a parameter's
 # unresolved bucket, a field of the config type, a lease bucket's KV_ stream), also on configs reached
-# through new(T), an address, an index, a range variable or an element's copy, and in a collection
-# literal's elided elements (ttl_forms.go; cfgs is a parameter, so its bucket does not resolve).
+# through new(T), an address, an index, a range variable or an element's copy, and in a collection literal's
+# elided elements, and on an element of a make() collection (ttl_forms.go; cfgs is a parameter, so its
+# bucket does not resolve). Names are not scoped, so a range variable or parameter named like a DIRECTORY
+# config must not borrow its bucket (ttl_shared.go: a range over a collection holding LEASES, over a
+# parameter's, and a parameter).
 # (CONF-01 also fires on these buckets; this fixture runs CONF-02 alone.)
 apps/cell/config.cpp:6: CONF-02
+apps/cell/kv_prefix.cpp:8: CONF-02
+apps/cell/kv_stream.cpp:7: CONF-02
 apps/cell/leader.cpp:8: CONF-02
 apps/cell/leader.cpp:11: CONF-02
 apps/cell/lease.cpp:5: CONF-02
@@ -53,3 +60,7 @@ services/internal/orch/ttl_forms.go:29: CONF-02
 services/internal/orch/ttl_forms.go:31: CONF-02
 services/internal/orch/ttl_forms.go:33: CONF-02
 services/internal/orch/ttl_forms.go:35: CONF-02
+services/internal/orch/ttl_forms.go:42: CONF-02
+services/internal/orch/ttl_shared.go:21: CONF-02
+services/internal/orch/ttl_shared.go:27: CONF-02
+services/internal/orch/ttl_shared.go:32: CONF-02

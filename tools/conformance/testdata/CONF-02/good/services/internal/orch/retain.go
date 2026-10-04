@@ -29,3 +29,10 @@ func retainForms() {
 	_ = []jetstream.KeyValueConfig{{Bucket: "PRESENCE", TTL: time.Hour}}
 	_ = []jetstream.StreamConfig{{Name: "EVENTS", MaxAge: time.Hour}}
 }
+
+// A collection from make(…) whose element's bucket the file sets.
+func retainMade() {
+	all := make([]jetstream.KeyValueConfig, 1)
+	all[0].Bucket = "PRESENCE"
+	all[0].TTL = time.Hour
+}

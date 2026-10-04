@@ -1,0 +1,32 @@
+{
+  "$rid": 8721150164252052334,
+  "$name": "ship/skiff",
+  "$parent": "ship/base",
+  "$comment": "Inherits ship/base: overrides, struct merge, keyed merges, @merge(append), list replace; server-only notes in keyed overrides and appends (AAA-SEC-4).",
+  "name": "loc:ship.skiff.name",
+  "mass": 9000.5,
+  "handling": {"yaw": 60},
+  "mounts": [
+    {
+      "$key": "62617365-6d6f-756e-8000-000000000002",
+      "force": 45000,
+      "note": "SEC4-NESTED-skiff-mount-override",
+      "noteTags": ["Sec4Sentinel.Nested.SkiffOverride"]
+    },
+    {
+      "$key": "6b657374-6d6f-756e-8000-000000000003",
+      "bone": "thruster_right",
+      "dir": [1, 0, 0],
+      "note": "SEC4-NESTED-skiff-mount-append"
+    }
+  ],
+  "slots": [
+    {"slot": "dorsal", "weight": 5, "note": "SEC4-NESTED-skiff-slot-override"},
+    {"slot": "ventral", "grade": "High", "weight": 3, "note": "SEC4-NESTED-skiff-slot-append", "noteTags": ["Sec4Sentinel.Nested.SkiffAppend"]}
+  ],
+  "extras": ["skiff_extra"],
+  "nested": [[9]],
+  "attrs": {"Speed": 140},
+  "mode": "Idle",
+  "maybe": null
+}

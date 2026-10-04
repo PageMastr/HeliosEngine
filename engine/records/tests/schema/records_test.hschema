@@ -1,0 +1,149 @@
+/// engine/records test types: every cooked encoding, the client/server split (AAA-SEC-4) and the
+/// inheritance attributes (02 §3.3). Records of these types live in tests/data/project.
+package test.records;
+
+enum Grade : u8 { Low; Mid; High }
+
+flags Perm : u16 {
+  None = 0
+  Read
+  Write
+  Admin
+}
+
+/// A thruster on a ship; ship lists of mounts are keyed by GUID. Its server {} part plants AAA-SEC-4
+/// sentinels inside shared composites (keyed lists merged through $parent, optionals).
+struct Mount {
+  bone:  Name
+  force: f32 = 10
+  dir:   vec3f = [0, 0, -1]
+  server {
+    note:     string
+    noteTags: TagSet
+  }
+}
+
+/// A hardpoint; lists of slots are keyed by the slot name. Its server {} part plants AAA-SEC-4
+/// sentinels in @keyed(field) merges, map values and plain lists.
+struct Slot {
+  slot:   Name
+  grade:  Grade
+  weight: f32
+  server {
+    note:     string
+    noteTags: TagSet
+  }
+}
+
+/// Crew seats: a keyed list inside an optional (read whole, never merged).
+struct Roster {
+  seats: list<Mount> @keyed
+}
+
+/// A tree node (recursive through a list).
+struct TreeNode {
+  value: i32
+  kids:  list<TreeNode>
+}
+
+/// A dialogue node: recursive through a list of structs that hold the node by value (schemac accepts
+/// it; the cooked layout must too, whichever of the two types is laid out first).
+struct DlgNode {
+  text:    string
+  choices: list<DlgChoice>
+}
+
+/// One choice of a dialogue node.
+struct DlgChoice {
+  label: string
+  next:  DlgNode?
+}
+
+/// Server-only drop table: never part of a client cook.
+record LootDef @table("loot") @server_only {
+  entries: list<Name>
+  secret:  string
+  weight:  f64
+}
+
+/// Client-only presentation record: never part of a server cook.
+record SkinDef @table("skin") @client_only {
+  icon:    AssetRef<Texture>
+  palette: list<color>
+}
+
+/// A plain shared record that ships reference.
+record PartDef @table("part") {
+  name: LocString
+  mass: f32 = 1
+}
+
+/// A recursive record (nesting limits).
+record TreeDef @table("tree") {
+  root: TreeNode
+}
+
+/// A dialogue: recursion through a struct inside a list.
+record DlgDef @table("dlg") {
+  root: DlgNode
+}
+
+/// Every cooked encoding, plus client {} and server {} blocks.
+record ShipDef @table("ship") {
+  name:     LocString
+  grade:    Grade = Mid
+  perms:    Perm
+  mass:     f32
+  hp:       f64
+  i8v:      i8
+  i16v:     i16
+  i32v:     i32
+  i64v:     i64
+  u8v:      u8
+  u16v:     u16
+  u32v:     u32
+  u64v:     u64
+  flag:     bool
+  label:    string
+  ident:    Name
+  guid:     Guid
+  owner:    EntityId
+  net:      NetHandle
+  cooldown: Duration
+  at:       Tick
+  pos:      WorldPos
+  rot:      quatf
+  tint:     color
+  icon:     AssetRef<Texture>
+  tags:     TagSet
+  query:    TagQuery
+  formula:  HxlExpr
+  mounts:   list<Mount> @keyed
+  slots:    list<Slot> @keyed(slot)
+  extras:   list<Name> @merge(append)
+  parts:    list<PartRef>
+  attrs:    map<Name, f64>
+  labels:   set<string>
+  nums:     u16[3]
+  maybe:    f32?
+  handling: { pitch: f32; yaw: f32; roll: f32 }
+  mode:     variant { Idle; Cruise { speed: f32 = 100 }; Warp { target: Name; spool: Duration = 2s } }
+  nested:   list<list<i32>>
+  drop:     LootRef? @opaque
+  roster:   Roster?
+  primary:  Mount
+  bays:     map<Name, Slot>
+  spares:   list<Slot>
+  client {
+    skin:     SkinRef?
+    hudColor: color
+  }
+  server {
+    loot:       LootRef?
+    aiNotes:    string
+    aiHints:    map<Name, f32>
+    serverTags: TagSet
+    threat:     HxlExpr
+    secretCode: u64
+  }
+}

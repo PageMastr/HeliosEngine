@@ -14,8 +14,8 @@ namespace helios::assetpipe {
 namespace {
 
 constexpr u32 kKeyMagic = 0x4B444448u; // "HDDK" as little-endian bytes
-constexpr u32 kKeyFormat = 0;
-constexpr usize kKeyFixedBytes = 80;
+constexpr u32 kKeyFormat = 1; // 1: settingsType (hashSettingsType) replaced format 0's settingsLayout
+constexpr usize kKeyFixedBytes = 88;
 constexpr std::string_view kTempMarker = ".tmp-";
 
 void storeHash(u8* p, const Hash128& h) noexcept {
@@ -63,9 +63,9 @@ Hash128 makeDdcKey(const DdcKeyInputs& in) noexcept {
     storeLE<u32>(fixed + 16, static_cast<u32>(in.platform));
     storeHash(fixed + 24, in.sourceHash);
     storeHash(fixed + 40, hash128(in.settings));
-    storeLE<u64>(fixed + 56, in.settingsLayout);
-    storeLE<u64>(fixed + 64, static_cast<u64>(in.builder.size()));
-    storeLE<u64>(fixed + 72, static_cast<u64>(in.dependencies.size()));
+    storeHash(fixed + 56, in.settingsType);
+    storeLE<u64>(fixed + 72, static_cast<u64>(in.builder.size()));
+    storeLE<u64>(fixed + 80, static_cast<u64>(in.dependencies.size()));
     Hasher128 h;
     h.update(fixed, sizeof(fixed));
     h.update(in.builder);
@@ -214,16 +214,22 @@ fs::Path LocalDdc::entryPath(const Hash128& key) const {
 
 Result<std::vector<u8>> LocalDdc::get(const Hash128& key) {
     const fs::Path path = entryPath(key);
+    const auto bad = [&](Error e) {
+        m_bad.fetch_add(1, std::memory_order_relaxed);
+        return Error{e.code, std::format("{}: {}", fs::pathToGenericUtf8(path), e.message)};
+    };
+    // Only a regular file is opened: opening a FIFO named like an entry would block until a writer came.
+    if (!fs::isFile(path)) {
+        if (fs::exists(path)) return bad(Error{ErrorCode::Corrupt, "not a regular file"});
+        m_misses.fetch_add(1, std::memory_order_relaxed);
+        return makeError(ErrorCode::NotFound, "no DDC entry {}", key.toHex());
+    }
     auto file = fs::File::open(path, fs::OpenMode::Read);
     if (!file) {
         if (file.error().code == ErrorCode::NotFound) m_misses.fetch_add(1, std::memory_order_relaxed);
         return std::move(file).error();
     }
     // Header first: the payload is allocated only for a valid header whose size the file really has.
-    const auto bad = [&](Error e) {
-        m_bad.fetch_add(1, std::memory_order_relaxed);
-        return Error{e.code, std::format("{}: {}", fs::pathToGenericUtf8(path), e.message)};
-    };
     u8 header[ddc::kEntryHeaderBytes];
     HELIOS_TRY_ASSIGN(const usize got, file->readAt(0, header, sizeof(header)));
     auto h = ddc::readEntryHeader(std::span<const u8>(header, got), key);
@@ -271,27 +277,37 @@ Result<void> LocalDdc::put(const Hash128& key, std::span<const u8> payload) {
         if (!payload.empty()) HELIOS_TRY(file.write(payload.data(), payload.size()));
         return {};
     }();
-    if (written) written = fs::rename(temp, path);
+    if (written) written = fs::renameNoSync(temp, path); // a cache: atomic for readers, not persisted
     if (!written) {
         (void)fs::remove(temp);
         // Another writer of the same key may hold the name (Windows refuses to replace a file in some
-        // sharing states): its complete entry is as good as ours.
+        // sharing states): its complete entry is as good as ours. Never read anything but a regular file.
+        if (!fs::isFile(path)) return written;
         auto existing = fs::readFile(path);
         if (!existing || !ddc::readEntry(*existing, key)) return written;
     }
     m_puts.fetch_add(1, std::memory_order_relaxed);
     const u64 total = m_bytes.fetch_add(ddc::kEntryHeaderBytes + payload.size(), std::memory_order_relaxed) +
                       ddc::kEntryHeaderBytes + payload.size();
-    if (total > m_options.capBytes) {
-        if (auto trimmed = trim(); !trimmed)
-            HELIOS_LOG_WARN("DDC trim failed: {}", trimmed.error().toString());
-    }
+    if (total > m_trimAt.load(std::memory_order_relaxed)) trimIfOver();
     return {};
 }
 
 Result<TrimResult> LocalDdc::trim() {
     std::lock_guard lock(m_trimMutex);
     return trimLocked();
+}
+
+void LocalDdc::trimIfOver() {
+    std::lock_guard lock(m_trimMutex);
+    // Several puts can pass the threshold at once: the first one's trim serves them all.
+    const u64 bytes = m_bytes.load(std::memory_order_relaxed);
+    if (bytes <= m_trimAt.load(std::memory_order_relaxed)) return;
+    if (auto trimmed = trimLocked(); !trimmed) {
+        // The store could not be listed: retry after another 1 % of the cap, not on every put.
+        HELIOS_LOG_WARN("DDC trim failed: {}", trimmed.error().toString());
+        m_trimAt.store(bytes + std::max<u64>(m_options.capBytes / 100, 1), std::memory_order_relaxed);
+    }
 }
 
 Result<TrimResult> LocalDdc::trimLocked() {
@@ -302,6 +318,10 @@ Result<TrimResult> LocalDdc::trimLocked() {
     };
     TrimResult result;
     std::vector<Entry> entries;
+    m_trims.fetch_add(1, std::memory_order_relaxed);
+    // Only trims lower the running total, and they are serialized: puts that finish while this one lists
+    // the store are in the total by the end, whether or not the listing saw their files.
+    const u64 before = m_bytes.load(std::memory_order_relaxed);
     const auto now = std::filesystem::file_time_type::clock::now();
     HELIOS_TRY_ASSIGN(const auto dirs,
                       fs::listDirectory(m_options.root, fs::ListOptions{.includeFiles = false}));
@@ -342,7 +362,18 @@ Result<TrimResult> LocalDdc::trimLocked() {
     }
     result.entries = entries.size() - result.evicted;
     result.bytes = total;
-    m_bytes.store(total, std::memory_order_relaxed);
+    // The running total becomes the measured one plus what was put since `before` (a put whose file the
+    // listing saw counts twice until the next trim: an overcount, which only trims early).
+    if (total >= before) {
+        m_bytes.fetch_add(total - before, std::memory_order_relaxed);
+    } else {
+        m_bytes.fetch_sub(before - total, std::memory_order_relaxed);
+    }
+    // A trim that could not reach its target (undeletable entries) raises put()'s threshold by the trim
+    // headroom, so the store is not listed again on every put.
+    const u64 headroom = std::max(m_options.capBytes - target, m_options.capBytes / 100);
+    m_trimAt.store(total <= target ? m_options.capBytes : std::max(m_options.capBytes, total + headroom),
+                   std::memory_order_relaxed);
     m_evicted.fetch_add(result.evicted, std::memory_order_relaxed);
     m_evictedBytes.fetch_add(result.evictedBytes, std::memory_order_relaxed);
     return result;
@@ -356,6 +387,7 @@ DdcStats LocalDdc::stats() const noexcept {
     s.puts = m_puts.load(std::memory_order_relaxed);
     s.evicted = m_evicted.load(std::memory_order_relaxed);
     s.evictedBytes = m_evictedBytes.load(std::memory_order_relaxed);
+    s.trims = m_trims.load(std::memory_order_relaxed);
     return s;
 }
 

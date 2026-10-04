@@ -26,11 +26,13 @@
 // The GUID follows the file: a sidecar stores no path of its own, and moveAsset() moves both files.
 //
 // Paths (Windows first): sidecar functions take a project root and a '/'-separated path relative to it,
-// checked by checkProjectPath(): no '\', no "." or ".." or empty component, no component above 255 bytes,
-// no character Windows forbids in a name (<>:"|?* and control characters), and no component that engine/core's
-// fs::isNonPortableComponent rejects (device names such as CON or nul.png, names ending in '.' or ' ').
-// Two paths that differ only in ASCII case name one file on Windows: scanMetas() reports them, and
-// moveAsset() refuses a target that a different file already holds in another case.
+// checked by checkProjectPath(): valid UTF-8, no '\', no "." or ".." or empty component, no component above
+// 255 bytes, no character Windows forbids in a name (<>:"|?* and control characters), and no component that
+// engine/core's fs::isNonPortableComponent rejects (device names such as CON or nul.png, names ending in '.'
+// or ' '). A source's file name is at most kMaxSourceNameBytes, so that its sidecar's name fits. Two paths
+// that differ only in ASCII case name one file on Windows: scanMetas() reports them, moveAsset() refuses a
+// target that a different file (or directory spelling) already holds in another case, and ensureMeta()
+// refuses a path whose directories exist in another spelling.
 //
 // Threading: the free functions are stateless and may run concurrently, except that the sidecar writers
 // (ensureMeta, saveMeta, moveAsset) assume one writer per project (helios-assetd, 02 §6.1); two
@@ -57,6 +59,8 @@ inline constexpr std::string_view kMetaExtension = ".meta";
 inline constexpr u64 kMaxMetaBytes = 1 * kMiB;
 inline constexpr usize kMaxLabels = 64;
 inline constexpr usize kMaxLabelBytes = 64;
+/// A source's file name leaves room for its sidecar's ".meta" in a 255-byte component (NTFS and ext4).
+inline constexpr usize kMaxSourceNameBytes = 255 - kMetaExtension.size();
 
 /// Where an asset came from (01 §5.2; the same kinds as docs/concept's sidecars).
 enum class Origin : u8 {
@@ -118,7 +122,7 @@ Result<std::string> resolveSettings(const ImporterInfo& importer, std::string_vi
 /// Checks a sidecar's values against the rules above and the registry: a non-nil GUID, a registered
 /// importer, importerVersion in 1..the registered version (a higher one is VersionMismatch: the sidecar
 /// was written by a newer importer), settings already canonical, sorted unique labels, the source path,
-/// and the provenance rules. Errors name the field.
+/// the provenance rules, and valid UTF-8 in every string. Errors name the field.
 Result<void> validateMeta(const AssetMeta& meta, const ImporterRegistry& importers);
 
 /// Parses and validates sidecar text. Fails closed: an unknown or duplicate key, a missing required
@@ -135,7 +139,8 @@ Result<std::string> writeMeta(const AssetMeta& meta, const ImporterRegistry& imp
 /// `<path>.meta`.
 std::string metaPathFor(std::string_view sourcePath);
 
-/// Loads and validates the sidecar of `root`/`path` (NotFound when it has none).
+/// Loads and validates the sidecar of `root`/`path` (NotFound when it has none; InvalidArgument for a path
+/// failing the rules above, including a source name too long to have a sidecar).
 Result<AssetMeta> loadMeta(const fs::Path& root, std::string_view path, const ImporterRegistry& importers);
 
 /// Writes the sidecar of `root`/`path` atomically (temp file + rename), only when its bytes change.
@@ -159,16 +164,17 @@ struct EnsuredMeta {
 
 /// Create on first import: returns the existing sidecar of `root`/`path` (validated, unchanged), or mints
 /// a GUID and writes a new one from `init` (importerVersion = the registered version). Fails when the
-/// source is missing, no importer claims it, `init` is invalid, or a sidecar exists in another ASCII case
-/// (minting a second GUID for one file on Windows).
+/// path breaks the rules above, the source is missing, no importer claims it, `init` is invalid, or a
+/// sidecar or one of the path's directories exists in another ASCII case (InvalidState: minting a second
+/// GUID for one file on Windows, or splitting one Windows directory into two).
 Result<EnsuredMeta> ensureMeta(const fs::Path& root, std::string_view path, const NewMeta& init,
                                const ImporterRegistry& importers);
 
 /// GUID-stable move or rename: moves `root`/`from` and its sidecar to `to` (creating directories); the
 /// sidecar is moved, not rewritten, so the GUID follows the file. A case-only rename goes through a
-/// temporary name. Refused (nothing moved): a path failing checkProjectPath, a source without a valid
-/// sidecar, a target held by another file (or its sidecar) in any ASCII case (AlreadyExists), or a target
-/// extension its importer does not claim. If the sidecar cannot follow, the source is moved back; a crash
+/// temporary name. Refused (nothing moved): a path failing the rules above, a source without a valid
+/// sidecar, a target held by another file (or its sidecar) in any ASCII case or under a directory that
+/// exists in another spelling (AlreadyExists), or a target extension its importer does not claim. If the sidecar cannot follow, the source is moved back; a crash
 /// between the two renames leaves a source without a sidecar and an orphan sidecar, which scanMetas()
 /// reports.
 Result<void> moveAsset(const fs::Path& root, std::string_view from, std::string_view to,

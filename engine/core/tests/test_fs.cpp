@@ -240,6 +240,15 @@ TEST_CASE("fs: directory listing, rename and removal") {
     REQUIRE(fs::rename(tmp.path / "root.txt", tmp.path / "a" / "one.json")); // replaces the target
     CHECK(readTextFile(tmp.path / "a" / "one.json").value() == "r");
     CHECK(!fs::exists(tmp.path / "root.txt"));
+    // The cache variant: the same rename and replacement, without persisting the directory entry.
+    REQUIRE(writeTextFile(tmp.path / "cache.tmp", "c"));
+    REQUIRE(fs::renameNoSync(tmp.path / "cache.tmp", tmp.path / "a" / "one.json")); // replaces the target
+    CHECK(readTextFile(tmp.path / "a" / "one.json").value() == "c");
+    REQUIRE(fs::renameNoSync(tmp.path / "a" / "one.json", tmp.path / "a" / "moved.json")); // no target
+    CHECK(readTextFile(tmp.path / "a" / "moved.json").value() == "c");
+    CHECK(!fs::exists(tmp.path / "cache.tmp"));
+    CHECK(fs::renameNoSync(tmp.path / "missing", tmp.path / "x").error().code == ErrorCode::NotFound);
+    REQUIRE(fs::rename(tmp.path / "a" / "moved.json", tmp.path / "a" / "one.json"));
     CHECK(fs::remove(tmp.path / "a" / "one.json"));
     CHECK(fs::remove(tmp.path / "a" / "one.json").error().code == ErrorCode::NotFound);
     CHECK(removeAll(tmp.path / "a").value() == 4);

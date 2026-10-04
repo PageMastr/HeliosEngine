@@ -6,14 +6,15 @@
 #include <array>
 #include <format>
 #include <map>
-#include <new>
 #include <unordered_map>
 
 #include "helios/asset/asset_id.h"
 #include "helios/core/log.h"
+#include "helios/core/utf.h"
 #include "helios/core/vfs.h"
 #include "helios/reflect/json.h"
 #include "helios/reflect/serialize.h"
+#include "typed_object.h"
 
 namespace helios::assetpipe {
 
@@ -49,9 +50,10 @@ bool blank(std::string_view s) noexcept {
                        [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; });
 }
 
-/// A path or label for an error message: quoted, control characters escaped, at most 120 bytes.
+/// A path or label for an error message: quoted, control characters escaped, invalid UTF-8 replaced (so
+/// messages stay valid text), at most 120 bytes of the input.
 std::string shown(std::string_view s) {
-    std::string out = "'";
+    std::string out;
     for (const char ch : s.substr(0, 120)) {
         const auto c = static_cast<unsigned char>(ch);
         if (c < 0x20 || c == 0x7F) {
@@ -60,9 +62,7 @@ std::string shown(std::string_view s) {
             out += ch;
         }
     }
-    if (s.size() > 120) out += "...";
-    out += "'";
-    return out;
+    return "'" + sanitizeUtf8(out) + (s.size() > 120 ? "...'" : "'");
 }
 
 Error prefixed(std::string_view prefix, const Error& e) {
@@ -91,28 +91,6 @@ fs::Path absolute(const fs::Path& root, std::string_view rel) {
 // Settings through the importer's reflected type
 // ---------------------------------------------------------------------------------------------
 
-/// A default-constructed object of a reflected type, destroyed with it.
-class TypedObject {
-public:
-    explicit TypedObject(const refl::TypeInfo& type)
-        : m_type(type), m_align(std::max<usize>(type.align, alignof(std::max_align_t))),
-          m_ptr(::operator new(std::max<usize>(type.size, 1), std::align_val_t(m_align))) {
-        type.ops->construct(m_ptr);
-    }
-    ~TypedObject() {
-        m_type.ops->destruct(m_ptr);
-        ::operator delete(m_ptr, std::align_val_t(m_align));
-    }
-    TypedObject(const TypedObject&) = delete;
-    TypedObject& operator=(const TypedObject&) = delete;
-    void* get() const noexcept { return m_ptr; }
-
-private:
-    const refl::TypeInfo& m_type;
-    usize m_align;
-    void* m_ptr;
-};
-
 /// Reads a settings object through the importer's type (unknown fields are errors under `ctx`, which is
 /// strict) and writes it with `out`.
 Result<void> writeSettingsValue(const ImporterInfo& importer, JsonValue value, ReadCtx& ctx,
@@ -124,7 +102,7 @@ Result<void> writeSettingsValue(const ImporterInfo& importer, JsonValue value, R
         out.endObject();
         return {};
     }
-    TypedObject object(*importer.settings);
+    detail::TypedObject object(*importer.settings);
     HELIOS_TRY(refl::readJson(*importer.settings, object.get(), value, ctx));
     refl::writeJson(*importer.settings, object.get(), out);
     return {};
@@ -311,13 +289,24 @@ Result<AssetMeta> readMeta(JsonValue root, const ImporterRegistry& importers, Re
 // Rules
 // ---------------------------------------------------------------------------------------------
 
+/// Every string a sidecar holds is UTF-8: the JSON reader refuses anything else, so writing it would make
+/// a sidecar that cannot be loaded.
+Result<void> checkUtf8(std::string_view field, std::string_view value) {
+    if (!isValidUtf8(value)) return fieldError(ErrorCode::InvalidArgument, field, "is not valid UTF-8");
+    return {};
+}
+
 Result<void> checkText(std::string_view field, std::string_view value) {
+    HELIOS_TRY(checkUtf8(field, value));
     if (blank(value)) return fieldError(ErrorCode::InvalidArgument, field, "must not be empty");
     return {};
 }
 
 Result<void> checkProvenance(const Provenance& p, const ImporterInfo& importer) {
     HELIOS_TRY(checkText("provenance.author", p.author));
+    HELIOS_TRY(checkUtf8("provenance.url", p.url));
+    HELIOS_TRY(checkUtf8("provenance.rights", p.rights));
+    HELIOS_TRY(checkUtf8("provenance.notes", p.notes));
     if (auto ok = checkLicence(p.licence, importer.fonts); !ok)
         return prefixed("provenance.licence", ok.error());
     switch (p.origin) {
@@ -371,6 +360,7 @@ Result<void> checkLabels(const std::vector<std::string>& labels) {
     for (usize i = 0; i < labels.size(); ++i) {
         const std::string& l = labels[i];
         const std::string field = std::format("labels[{}]", i);
+        HELIOS_TRY(checkUtf8(field, l));
         if (l.empty() || l.size() > kMaxLabelBytes || blank(l)) {
             return fieldError(ErrorCode::InvalidArgument, field,
                               std::format("{}: a label is 1-{} bytes", shown(l), kMaxLabelBytes));
@@ -515,6 +505,35 @@ Result<void> renameRel(const fs::Path& root, std::string_view from, std::string_
     return {};
 }
 
+/// checkProjectPath() for a source file, whose sidecar name adds ".meta" to its own: the file name must
+/// leave room for it within a 255-byte component.
+Result<void> checkSourcePath(std::string_view path) {
+    HELIOS_TRY(checkProjectPath(path));
+    if (const std::string_view name = fileName(path); name.size() > kMaxSourceNameBytes) {
+        return makeError(ErrorCode::InvalidArgument,
+                         "{}: a {}-byte file name; a source's is at most {} bytes, so its '{}' sidecar fits "
+                         "in 255",
+                         shown(path), name.size(), kMaxSourceNameBytes, kMetaExtension);
+    }
+    return {};
+}
+
+/// The directories of `path` (a checked project path) are spelled as on disk in every ASCII case: no
+/// component's directory holds another spelling of it. Windows sees one directory where Linux sees two,
+/// so writing under another spelling would split one tree into two. The first spelling found otherwise.
+std::optional<std::string> otherCaseDirectory(const fs::Path& root, std::string_view path) {
+    usize start = 0;
+    for (usize slash = path.find('/'); slash != std::string_view::npos; slash = path.find('/', start)) {
+        const std::string_view dir = path.substr(0, start == 0 ? 0 : start - 1);
+        const std::string_view name = path.substr(start, slash - start);
+        for (const std::string& other : namesIgnoringCase(root, dir, name)) {
+            if (other != name) return joinRel(dir, other);
+        }
+        start = slash + 1;
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------------------------
@@ -563,6 +582,9 @@ Result<void> checkProjectPath(std::string_view path) {
         return Error{ErrorCode::InvalidArgument, std::format("{}: {}", shown(path), why)};
     };
     if (path.empty()) return refuse("empty path");
+    // Before anything converts it to a native path: Windows stores names as UTF-16, and converting invalid
+    // UTF-8 throws there (std::filesystem::path from a u8string).
+    if (!isValidUtf8(path)) return refuse("not valid UTF-8 (Windows stores names as UTF-16)");
     if (path.front() == '/')
         return refuse("an absolute path; project paths are relative to the project root");
     if (path.back() == '/') return refuse("ends in '/', so it names a directory");
@@ -651,7 +673,7 @@ std::string metaPathFor(std::string_view sourcePath) {
 }
 
 Result<AssetMeta> loadMeta(const fs::Path& root, std::string_view path, const ImporterRegistry& importers) {
-    HELIOS_TRY(checkProjectPath(path));
+    HELIOS_TRY(checkSourcePath(path));
     const std::string metaRel = metaPathFor(path);
     const fs::Path metaAbs = absolute(root, metaRel);
     if (!fs::isFile(metaAbs))
@@ -662,7 +684,7 @@ Result<AssetMeta> loadMeta(const fs::Path& root, std::string_view path, const Im
 
 Result<void> saveMeta(const fs::Path& root, std::string_view path, const AssetMeta& meta,
                       const ImporterRegistry& importers) {
-    HELIOS_TRY(checkProjectPath(path));
+    HELIOS_TRY(checkSourcePath(path));
     HELIOS_TRY_ASSIGN(const std::string text, writeMeta(meta, importers));
     const std::string metaRel = metaPathFor(path);
     const fs::Path metaAbs = absolute(root, metaRel);
@@ -686,9 +708,14 @@ Result<void> saveMeta(const fs::Path& root, std::string_view path, const AssetMe
 
 Result<EnsuredMeta> ensureMeta(const fs::Path& root, std::string_view path, const NewMeta& init,
                                const ImporterRegistry& importers) {
-    HELIOS_TRY(checkProjectPath(path));
+    HELIOS_TRY(checkSourcePath(path));
     if (!fs::isFile(absolute(root, path)))
         return makeError(ErrorCode::NotFound, "{}: no such source file", shown(path));
+    if (const auto other = otherCaseDirectory(root, path)) {
+        return makeError(ErrorCode::InvalidState,
+                         "{}: {} is the same directory on Windows; one tree must not hold both spellings",
+                         shown(path), shown(*other));
+    }
     const std::string metaRel = metaPathFor(path);
     if (fs::exists(absolute(root, metaRel))) {
         HELIOS_TRY_ASSIGN(AssetMeta meta, loadMeta(root, path, importers));
@@ -733,8 +760,8 @@ Result<EnsuredMeta> ensureMeta(const fs::Path& root, std::string_view path, cons
 
 Result<void> moveAsset(const fs::Path& root, std::string_view from, std::string_view to,
                        const ImporterRegistry& importers) {
-    HELIOS_TRY(checkProjectPath(from));
-    HELIOS_TRY(checkProjectPath(to));
+    HELIOS_TRY(checkSourcePath(from));
+    HELIOS_TRY(checkSourcePath(to));
     HELIOS_TRY_ASSIGN(const AssetMeta meta, loadMeta(root, from, importers));
     if (!fs::isFile(absolute(root, from)))
         return makeError(ErrorCode::NotFound, "{}: no such source file", shown(from));
@@ -749,6 +776,12 @@ Result<void> moveAsset(const fs::Path& root, std::string_view from, std::string_
     // Only a rename within one directory (spelled the same) counts as case-only; a change in a directory's
     // case is a move, so on Windows it finds the file itself in the target and is refused.
     const bool caseOnly = parentOf(from) == parentOf(to) && equalsIgnoringCase(fileName(from), fileName(to));
+    // The target's directories must be spelled as they are on disk: on Windows another spelling is the
+    // same directory, on Linux a second one.
+    if (const auto other = otherCaseDirectory(root, to)) {
+        return makeError(ErrorCode::AlreadyExists, "{}: {} is already there; Windows sees one directory",
+                         shown(to), shown(*other));
+    }
     // A target is taken when its directory holds the name in any ASCII case (Windows sees one file), except
     // for the file being renamed itself in a case-only rename.
     for (const std::string_view target : {std::string_view(to), std::string_view(toMeta)}) {
@@ -797,7 +830,8 @@ Result<MetaScan> scanMetas(const fs::Path& root, const ImporterRegistry& importe
                                kMetaExtension);
         if (!sidecar && !importers.forFile(rel)) continue; // not an asset (records, scripts, ...)
         files.emplace(rel, rel);
-        if (auto ok = checkProjectPath(rel); !ok) problem(rel, ok.error().code, ok.error().message);
+        if (auto ok = sidecar ? checkProjectPath(rel) : checkSourcePath(rel); !ok)
+            problem(rel, ok.error().code, ok.error().message);
         if (auto [it, fresh] = folded.emplace(foldCase(rel), rel); !fresh) {
             problem(rel, ErrorCode::AlreadyExists,
                     std::format("{} and {} differ only in case; Windows sees one file", shown(it->second),

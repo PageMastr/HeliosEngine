@@ -20,7 +20,7 @@ Result<CookResult> cookAsset(const CookRequest& request) {
     inputs.builderVersion = importer.version;
     inputs.sourceHash = hash128(source.data(), source.size());
     inputs.settings = result.meta.settings;
-    inputs.settingsLayout = importer.settings ? importer.settings->layoutHash : 0;
+    inputs.settingsType = request.importers->settingsTypeHash(importer.id);
     inputs.platform = request.platform;
     result.key = makeDdcKey(inputs);
 
@@ -36,7 +36,8 @@ Result<CookResult> cookAsset(const CookRequest& request) {
         return makeError(ErrorCode::Unsupported, "cook {}: importer '{}' has no build step", request.path,
                          importer.id);
     }
-    const BuildContext context{source, result.meta, result.meta.settings, request.platform};
+    // Only keyed inputs: the build step never sees the asset's identity (importer.h, BuildContext).
+    const BuildContext context{source, result.meta.settings, request.platform};
     HELIOS_TRY_ASSIGN(result.product, importer.build(context));
     if (auto stored = request.ddc->put(result.key, result.product); stored) {
         result.stored = true;

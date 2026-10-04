@@ -65,7 +65,7 @@ TEST_CASE("perf: DDC key compute") {
     in.builderVersion = 2;
     in.sourceHash = {0x1234, 0x5678};
     in.settings = R"({"mips":false,"maxSize":1024,"format":"bc5","lods":[0,1,2]})";
-    in.settingsLayout = 42;
+    in.settingsType = Hash128{42, 43};
     in.dependencies = deps;
     constexpr int kIters = 1'000'000;
     u64 sink = 0;

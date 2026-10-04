@@ -36,11 +36,13 @@ struct CookResult {
     bool stored = false; ///< A miss whose product was written to the DDC.
 };
 
-/// Cooks `request.path` for `request.platform`. The key uses the registered importer's version (not the
-/// sidecar's), the sidecar's canonical settings with the settings type's layout hash, the source bytes'
-/// hash and kCookerVersion. A damaged DDC entry is a miss. Errors: the sidecar's (loadMeta), the source
-/// read's, Unsupported for an importer without a build step, and the build step's own. A failed DDC put
-/// is logged and leaves `stored` false: the product is still returned.
+/// Cooks `request.path` for `request.platform`. The key uses the registered importer's id and version
+/// (not the sidecar's importerVersion), the sidecar's canonical settings with the settings type's
+/// fingerprint (ImporterRegistry::settingsTypeHash: fields, types and defaults), the source bytes' hash,
+/// the platform and kCookerVersion; the build step sees only those inputs (BuildContext), so assets with
+/// the same bytes and settings share one product. A damaged DDC entry is a miss. Errors: the sidecar's
+/// (loadMeta), the source read's, Unsupported for an importer without a build step, and the build step's
+/// own. A failed DDC put is logged and leaves `stored` false: the product is still returned.
 Result<CookResult> cookAsset(const CookRequest& request);
 
 } // namespace helios::assetpipe

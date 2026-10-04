@@ -73,8 +73,10 @@ Result<usize> fileWrite(NativeFile file, const void* data, usize size);
 Result<u64> fileSeek(NativeFile file, i64 offset, fs::SeekOrigin origin);
 Result<u64> fileSize(NativeFile file);
 Result<void> fileSync(NativeFile file);
-/// Atomically replaces `target` with `source` (same volume). Target may or may not exist.
-Result<void> atomicReplace(const std::filesystem::path& source, const std::filesystem::path& target);
+/// Atomically replaces `target` with `source` (same volume). Target may or may not exist. `durable`
+/// also persists the rename (POSIX: fsync of the target's directory; Win32: MOVEFILE_WRITE_THROUGH).
+Result<void> atomicReplace(const std::filesystem::path& source, const std::filesystem::path& target,
+                           bool durable = true);
 
 struct Mapping {
     const void* data = nullptr;

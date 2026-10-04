@@ -41,7 +41,7 @@ TEST_CASE("ddc key: every input changes it, and paths, times and settings spelli
     base.builderVersion = 2;
     base.sourceHash = hash128(std::string_view("source bytes"));
     base.settings = R"({"mips":false})";
-    base.settingsLayout = refl::typeOf<TextureSettings>().layoutHash;
+    base.settingsType = hashSettingsType(&refl::typeOf<TextureSettings>()).value();
     base.platform = asset::HpakPlatform::PcClient;
     base.dependencies = deps;
     const Hash128 k = makeDdcKey(base);
@@ -57,8 +57,9 @@ TEST_CASE("ddc key: every input changes it, and paths, times and settings spelli
     vary("builder version", [](DdcKeyInputs& v) { v.builderVersion = 3; });
     vary("source", [](DdcKeyInputs& v) { v.sourceHash = hash128(std::string_view("source bytes!")); });
     vary("settings", [](DdcKeyInputs& v) { v.settings = R"({"mips":true})"; });
-    vary("settings layout",
-         [](DdcKeyInputs& v) { v.settingsLayout = refl::typeOf<TextureSettingsV2>().layoutHash; });
+    vary("settings type",
+         [](DdcKeyInputs& v) { v.settingsType = hashSettingsType(&refl::typeOf<TextureSettingsV2>()).value(); });
+    vary("no settings type", [](DdcKeyInputs& v) { v.settingsType = Hash128{}; });
     vary("platform server", [](DdcKeyInputs& v) { v.platform = asset::HpakPlatform::Server; });
     vary("platform editor", [](DdcKeyInputs& v) { v.platform = asset::HpakPlatform::Editor; });
     vary("cooker version", [](DdcKeyInputs& v) { v.cookerVersion = kCookerVersion + 1; });
@@ -115,13 +116,13 @@ TEST_CASE("ddc key: the documented preimage layout") {
     in.builderVersion = 5;
     in.sourceHash = Hash128{0x0102030405060708ull, 0x1112131415161718ull};
     in.settings = R"({"a":1})";
-    in.settingsLayout = 0xAABBCCDDEEFF0011ull;
+    in.settingsType = Hash128{0xAABBCCDDEEFF0011ull, 0x2233445566778899ull};
     in.platform = asset::HpakPlatform::Server;
     in.cookerVersion = 9;
     in.dependencies = std::span<const Hash128>(&dep, 1);
-    std::vector<u8> pre(80, 0);
+    std::vector<u8> pre(88, 0);
     storeLE<u32>(pre.data() + 0, 0x4B444448u);
-    storeLE<u32>(pre.data() + 4, 0);
+    storeLE<u32>(pre.data() + 4, 1);
     storeLE<u32>(pre.data() + 8, 5);
     storeLE<u32>(pre.data() + 12, 9);
     storeLE<u32>(pre.data() + 16, 2);
@@ -130,9 +131,10 @@ TEST_CASE("ddc key: the documented preimage layout") {
     const Hash128 sh = hash128(in.settings);
     storeLE<u64>(pre.data() + 40, sh.low);
     storeLE<u64>(pre.data() + 48, sh.high);
-    storeLE<u64>(pre.data() + 56, in.settingsLayout);
-    storeLE<u64>(pre.data() + 64, 4);
-    storeLE<u64>(pre.data() + 72, 1);
+    storeLE<u64>(pre.data() + 56, in.settingsType.low);
+    storeLE<u64>(pre.data() + 64, in.settingsType.high);
+    storeLE<u64>(pre.data() + 72, 4);
+    storeLE<u64>(pre.data() + 80, 1);
     pre.insert(pre.end(), {'g', 'l', 't', 'f'});
     u8 d[16];
     storeLE<u64>(d, dep.low);

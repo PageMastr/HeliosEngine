@@ -20,7 +20,7 @@ and `src/platform/posix/` behind the internal interface `src/platform/os.h`.
 | `time.h` | Monotonic clock, `Stopwatch`, sleeps, `DilatableClock` (fixed-step game clock with time dilation) |
 | `thread.h` | `Thread` (named, pinnable), `SpinLock`, `Semaphore`, `ManualResetEvent`, lock aliases |
 | `jobs.h` | `JobSystem` (work stealing, priorities, helping waits), `Counter`, `parallelFor`, `TaskGraph`, `BackgroundPool` |
-| `fs.h` | Whole-file I/O (atomic replace), `File`, `MappedFile`, directory listing, last write time (get and set), `FileWatcher` |
+| `fs.h` | Whole-file I/O (atomic replace), `File`, `MappedFile`, directory listing, last write time (get and set), `rename` and the cache variant `renameNoSync`, `FileWatcher` |
 | `vfs.h` | `Vfs` mount table (`/content`, `/cache`, `/saved`), layered priorities, sandboxed paths, `IMountProvider`, `isNonPortableComponent` |
 | `dynlib.h` | `DynamicLibrary` (LoadLibraryExW / dlopen) |
 | `cvar.h` | Console variables (`HELIOS_CVAR`), commands, `execute("set r.vsync 0")`, flags, callbacks |

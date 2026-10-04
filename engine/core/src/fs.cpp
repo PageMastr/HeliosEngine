@@ -182,6 +182,8 @@ Result<u64> removeAll(const Path& path) {
 
 Result<void> rename(const Path& from, const Path& to) { return os::atomicReplace(from, to); }
 
+Result<void> renameNoSync(const Path& from, const Path& to) { return os::atomicReplace(from, to, false); }
+
 Result<Path> executablePath() { return os::executablePath(); }
 
 Result<Path> createUniqueTempDirectory(std::string_view prefix) {

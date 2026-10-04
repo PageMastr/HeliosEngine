@@ -5,15 +5,19 @@
 // dependency hashes)`, plus the cooker version. makeDdcKey() hashes this preimage (little-endian):
 //
 //   [0, 4)    magic 'HDDK'                 [24, 40)  sourceHash      XXH3-128 of the source bytes
-//   [4, 8)    key format 0                 [40, 56)  settingsHash    XXH3-128 of the canonical settings
-//   [8, 12)   builderVersion               [56, 64)  settingsLayout  the settings type's layoutHash
-//   [12, 16)  cookerVersion                [64, 72)  n, the builder id's length
-//   [16, 20)  platform (HpakPlatform)      [72, 80)  d, the dependency count
-//   [20, 24)  reserved, 0                  [80, 80+n) builder id, then d dependency keys (16 bytes each,
+//   [4, 8)    key format 1                 [40, 56)  settingsHash    XXH3-128 of the canonical settings
+//   [8, 12)   builderVersion               [56, 72)  settingsType    hashSettingsType() of their type
+//   [12, 16)  cookerVersion                [72, 80)  n, the builder id's length
+//   [16, 20)  platform (HpakPlatform)      [80, 88)  d, the dependency count
+//   [20, 24)  reserved, 0                  [88, 88+n) builder id, then d dependency keys (16 bytes each,
 //                                                     in the builder's order). Hash128s: low half first.
 //
-// Paths, file times and the order settings were written in are not inputs, so moving, touching or
-// re-saving a source with the same bytes and settings keeps its key (resolveSettings() canonicalizes).
+// The canonical settings omit values at their default, and settingsType records the defaults (and every
+// field's name, id and type), so the two together pin the settings a build step resolves. Format 0 hashed
+// the type's layoutHash instead, which has no defaults (and, for StructBuilder types, no field types).
+// Paths, file times, the order settings were written in, and the asset's identity (GUID, labels,
+// provenance) are not inputs, so moving, touching or re-saving a source with the same bytes and settings
+// keeps its key (resolveSettings() canonicalizes), and the build step sees none of them (BuildContext).
 //
 // **Entry.** One file per key, `<root>/<k0k1>/<32 hex digits>.hddc` (the key's toHex(); k0k1 its first
 // two digits), a 64-byte little-endian header and the payload:
@@ -57,7 +61,8 @@ struct DdcKeyInputs {
     u32 builderVersion = 0;
     Hash128 sourceHash;               ///< XXH3-128 of the source bytes (hashSourceFile()).
     std::string_view settings = "{}"; ///< Canonical settings (resolveSettings()).
-    u64 settingsLayout = 0;           ///< The settings type's layoutHash; 0 without settings.
+    /// hashSettingsType() of the settings' type (ImporterRegistry::settingsTypeHash); zero without settings.
+    Hash128 settingsType;
     asset::HpakPlatform platform = asset::HpakPlatform::PcClient; ///< The consumer (02 §6.5).
     u32 cookerVersion = kCookerVersion;
     std::span<const Hash128> dependencies; ///< Dependency keys, in the builder's order.
@@ -107,7 +112,7 @@ struct LocalDdcOptions {
     fs::Path
         root; ///< Required. The plan's default is `%LOCALAPPDATA%\Helios\DDC` (02 §6.2); the caller chooses.
     /// Size cap of the store (02 §6.2 / 07 §3.2: 200 GB default). When this process's running total passes
-    /// it, put() trims to trimTargetPercent of it.
+    /// it, put() trims to trimTargetPercent of it (see LocalDdc's eviction for the exception).
     u64 capBytes = 200ull * 1000 * 1000 * 1000;
     u32 trimTargetPercent = 90;
     /// LRU granularity: a hit refreshes the entry's last write time when it is older than this, so a hot
@@ -124,6 +129,7 @@ struct DdcStats {
     u64 puts = 0;
     u64 evicted = 0; ///< Entries removed by trim().
     u64 evictedBytes = 0;
+    u64 trims = 0; ///< Store listings by trim(), explicit or from put().
 };
 
 struct TrimResult {
@@ -137,19 +143,27 @@ struct TrimResult {
 /// The local DDC tier (07 §3.2): content addressed by key, LRU eviction under a size cap.
 ///
 /// - **Atomic put.** The entry is written to a uniquely named temp file next to its final name and renamed
-///   over it (fs::rename), so readers see the old entry, the new one or none, never a partial one. Writers
-///   of the same key race harmlessly: each renames a complete entry, the last one wins, and a writer whose
-///   rename fails succeeds anyway when a valid entry for the key is already in place. Entries are not
-///   flushed to disk before the rename (it is a cache): a crash can leave a truncated entry, which the
-///   verified read turns into a miss and the next put replaces.
-/// - **Verified get.** See the entry format: a damaged, truncated, renamed or foreign file is a miss.
+///   over it (fs::renameNoSync), so readers see the old entry, the new one or none, never a partial one.
+///   Writers of the same key race harmlessly: each renames a complete entry, the last one wins, and a
+///   writer whose rename fails succeeds anyway when a valid entry for the key is already in place. Neither
+///   the entry nor the rename is flushed to disk (it is a cache, and a put should not wait for the file
+///   system's journal): a crash can lose an entry or leave a truncated one, which the verified read turns
+///   into a miss and the next put replaces.
+/// - **Verified get.** See the entry format: a damaged, truncated, renamed or foreign file is a miss. A
+///   name that is not a regular file (a directory, a FIFO, a device) is a damaged entry and is never
+///   opened, so get() cannot block on it.
 /// - **Eviction.** LRU by the entry file's last write time: put() sets it, and a hit refreshes it when it
 ///   is older than touchInterval. trim() lists the store, removes stale temp files, and deletes the least
 ///   recently used entries until the total is at most trimTargetPercent of the cap. It only ever deletes
 ///   files named like entries (or their temps) inside the two-hex-digit directories, so a mistaken root
-///   loses nothing else. open() and trim() measure the store; put() adds to the running total and trims
-///   when it passes the cap. Several processes may share a root: each trims by its own running total,
-///   re-measured at every trim, so the store can pass the cap by what the others wrote since.
+///   loses nothing else. open() and trim() measure the store; put() adds to the running total, and trim()
+///   corrects it by what it measured and evicted (keeping the puts that finished while it listed). put()
+///   trims when the running total passes the cap, except after a trim that could not get down to its
+///   target (entries that could not be deleted, e.g. held open on Windows): then only once the total
+///   passes what that trim left plus the trim headroom (the cap minus the target, at least 1 % of the
+///   cap), so such a store is not re-listed on every put. Several processes may share a root: each trims
+///   by its own running total, re-measured at every trim, so the store can pass the cap by what the
+///   others wrote since.
 /// - **Thread safety.** Every member is thread-safe. Concurrent trims in one process are serialized; a
 ///   reader whose entry is evicted under it either finishes reading (the file stays readable while open)
 ///   or misses.
@@ -164,7 +178,7 @@ public:
     Result<std::vector<u8>> get(const Hash128& key);
     /// Stores `payload` under `key` (replacing any entry). LimitExceeded above ddc::kMaxPayload.
     Result<void> put(const Hash128& key, std::span<const u8> payload);
-    /// Evicts as described above; also run by put() when the running total passes the cap.
+    /// Evicts as described above; also run by put() when the running total passes the trim threshold.
     Result<TrimResult> trim();
 
     /// The entry's file (whether or not it exists).
@@ -175,13 +189,17 @@ public:
     const LocalDdcOptions& options() const noexcept { return m_options; }
 
 private:
-    explicit LocalDdc(LocalDdcOptions options) : m_options(std::move(options)) {}
+    explicit LocalDdc(LocalDdcOptions options)
+        : m_options(std::move(options)), m_trimAt(m_options.capBytes) {}
+    /// put()'s trim: skipped when another thread's trim already brought the total under the threshold.
+    void trimIfOver();
     Result<TrimResult> trimLocked();
 
     LocalDdcOptions m_options;
     std::mutex m_trimMutex;
     std::atomic<u64> m_bytes{0};
-    std::atomic<u64> m_hits{0}, m_misses{0}, m_bad{0}, m_puts{0}, m_evicted{0}, m_evictedBytes{0};
+    std::atomic<u64> m_trimAt; ///< put() trims when m_bytes passes it: the cap, or more after a short trim.
+    std::atomic<u64> m_hits{0}, m_misses{0}, m_bad{0}, m_puts{0}, m_evicted{0}, m_evictedBytes{0}, m_trims{0};
 };
 
 } // namespace helios::assetpipe

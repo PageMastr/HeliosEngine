@@ -203,6 +203,21 @@ public:
                 } else {
                     HELIOS_TRY(value(*l.element, e, depth + 1));
                 }
+                // Sets and maps hold strictly ascending keys (the canonical order), so decoding drops nothing.
+                if (i > 0 && (l.enc == Enc::Set || l.enc == Enc::Map) &&
+                    compareKeys(l.enc == Enc::Map ? *l.key : *l.element, m_db.at(e - stride), m_db.at(e)) >= 0) {
+                    return corrupt(std::format("{} at {} is not in strictly ascending key order", l.enc == Enc::Map ? "map" : "set", at));
+                }
+            }
+            if (l.enc == Enc::KeyedList) {
+                // Keys are non-nil and unique (what KeyedList and property paths rely on).
+                HELIOS_TRY_ASSIGN(const SpanRef keys, span(at + 8, 16));
+                std::vector<Guid> k(keys.count);
+                for (u32 i = 0; i < keys.count; ++i) k[i] = Guid(load<u64>(m_db.at(keys.at + i * 16u)), load<u64>(m_db.at(keys.at + i * 16u + 8)));
+                std::sort(k.begin(), k.end());
+                if ((!k.empty() && k.front().isNil()) || std::adjacent_find(k.begin(), k.end()) != k.end()) {
+                    return corrupt(std::format("keyed list at {} has a nil or repeated key", at));
+                }
             }
             return {};
         }
@@ -223,6 +238,32 @@ public:
     }
 
 private:
+    /// Canonical order of two validated keys (the cooked form of refl's keyLess): <0, 0 or >0.
+    int compareKeys(const CookedLayout& l, const u8* a, const u8* b) const noexcept {
+        auto cmp = [](auto x, auto y) { return x < y ? -1 : (y < x ? 1 : 0); };
+        switch (l.enc) {
+        case Enc::Int:
+            if (refl::isSignedKind(l.intKind)) return cmp(readInt(l.intKind, a), readInt(l.intKind, b));
+            return cmp(static_cast<u64>(readInt(l.intKind, a)), static_cast<u64>(readInt(l.intKind, b)));
+        case Enc::EntityId:
+        case Enc::RecordRef: return cmp(load<u64>(a), load<u64>(b));
+        case Enc::Duration: return cmp(load<i64>(a), load<i64>(b));
+        case Enc::NetHandle: return cmp(load<u32>(a), load<u32>(b));
+        case Enc::Guid: {
+            const int high = cmp(load<u64>(a), load<u64>(b));
+            return high != 0 ? high : cmp(load<u64>(a + 8), load<u64>(b + 8));
+        }
+        case Enc::Text: {
+            auto text = [](const u8* p) {
+                const u32 n = load<u32>(p + 4);
+                return n == 0 ? std::string_view() : std::string_view(reinterpret_cast<const char*>(p) + load<i32>(p), n);
+            };
+            return text(a).compare(text(b)) < 0 ? -1 : (text(b).compare(text(a)) < 0 ? 1 : 0);
+        }
+        default: return 0; // no other encoding can be a key (layouts require keyLess)
+        }
+    }
+
     const RecordDb::Impl& m_db;
     usize m_size;
     u64 m_walked = 0;
@@ -412,9 +453,9 @@ Result<RecordDb> RecordDb::finishOpen(std::unique_ptr<Impl> impl, const refl::Ty
 // Lookups
 // ---------------------------------------------------------------------------------------------
 
-CookAudience RecordDb::audience() const noexcept { return m->audience; }
-u64 RecordDb::layoutHash() const noexcept { return m->layoutHash; }
-std::span<const u8> RecordDb::bytes() const noexcept { return m->bytes; }
+CookAudience RecordDb::audience() const noexcept { return m ? m->audience : CookAudience::Client; }
+u64 RecordDb::layoutHash() const noexcept { return m ? m->layoutHash : 0; }
+std::span<const u8> RecordDb::bytes() const noexcept { return m ? m->bytes : std::span<const u8>(); }
 usize RecordDb::recordCount() const noexcept { return m ? m->records.count : 0; }
 
 RecordView RecordDb::record(usize index) const noexcept {

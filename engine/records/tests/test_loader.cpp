@@ -122,6 +122,15 @@ TEST_CASE("loader: crafted spans and values are rejected with Corrupt") {
         std::memcpy(m.data() + at, &bad, 2);
     }, "tag set");
     expectCorrupt("invalid UTF-8", [&](auto& m) { m[label + static_cast<usize>(getI32(label))] = 0xFF; }, "UTF-8");
+    // Canonical order and unique keys, which decoding into std::set / std::map / KeyedList relies on.
+    const usize labelText = offsetOf(db, reinterpret_cast<const u8*>(ship.field("labels")[0].asText().data()));
+    REQUIRE(ship.field("labels")[0].asText() == "alpha");
+    expectCorrupt("set out of order", [&](auto& m) { m[labelText] = 'z'; }, "strictly ascending key order");
+    const ValueView mounts = ship.field("mounts");
+    REQUIRE(mounts.size() == 2);
+    const usize key0 = offsetOf(db, mounts.data()) + 8 + static_cast<usize>(getI32(offsetOf(db, mounts.data()) + 8));
+    expectCorrupt("repeated keyed-list key", [&](auto& m) { std::memcpy(m.data() + key0 + 16, m.data() + key0, 16); }, "nil or repeated key");
+    expectCorrupt("nil keyed-list key", [&](auto& m) { std::memset(m.data() + key0, 0, 16); }, "nil or repeated key");
     // Header-level damage.
     expectCorrupt("bad magic", [&](auto& m) { m[0] ^= 1; }, "magic");
     expectCorrupt("size mismatch", [&](auto& m) { m[24] ^= 1; }, "bytes");

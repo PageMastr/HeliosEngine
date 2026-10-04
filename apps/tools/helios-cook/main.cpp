@@ -57,20 +57,21 @@ int cmdRecords(const CommandLine& cl) {
     std::vector<records::CookDiagnostic> diags;
     auto out = records::cook(*sources, {}, &diags);
     if (!out) {
-        for (const records::CookDiagnostic& d : diags) {
-            std::fprintf(stderr, "%s%s%s\n", d.path.c_str(), d.path.empty() ? "" : ": ", d.message.c_str());
-        }
+        std::string text;
+        for (const records::CookDiagnostic& d : diags) text += std::format("{}{}{}\n", d.path, d.path.empty() ? "" : ": ", d.message);
+        std::fputs(text.c_str(), stderr);
         return fail(kCookErrors, std::format("{} error(s); nothing written", diags.size()));
     }
     if (auto r = records::writeCookOutput(*out, outDir); !r) return fail(kFailed, std::format("{}", r.error()));
     if (!cl.has("quiet")) {
-        const records::CookStats& s = out->stats;
-        std::printf("cooked %zu records (%zu inherit), %zu tags (%zu withheld from the client), %zu formulas\n", s.records, s.inherited,
-                    s.tags, s.withheldTags, s.formulas);
-        std::printf("  %s: %zu records, %zu bytes\n", fs::pathToGenericUtf8(outDir / fs::pathFromUtf8(records::kClientDbFile)).c_str(),
-                    s.clientRecords, out->client.size());
-        std::printf("  %s: %zu records, %zu bytes\n", fs::pathToGenericUtf8(outDir / fs::pathFromUtf8(records::kServerDbFile)).c_str(),
-                    s.serverRecords, out->server.size());
+        const records::CookStats& st = out->stats;
+        std::string text = std::format("cooked {} records ({} inherit), {} tags ({} withheld from the client), {} formulas\n",
+                                       st.records, st.inherited, st.tags, st.withheldTags, st.formulas);
+        text += std::format("  {}: {} records, {} bytes\n", fs::pathToGenericUtf8(outDir / fs::pathFromUtf8(records::kClientDbFile)),
+                            st.clientRecords, out->client.size());
+        text += std::format("  {}: {} records, {} bytes\n", fs::pathToGenericUtf8(outDir / fs::pathFromUtf8(records::kServerDbFile)),
+                            st.serverRecords, out->server.size());
+        std::fputs(text.c_str(), stdout);
     }
     return kOk;
 }

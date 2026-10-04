@@ -6,6 +6,7 @@
 #include <format>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "helios/core/assert.h"
 #include "helios/hxl/compiler.h"
@@ -124,23 +125,24 @@ private:
             return {};
         }
         if (!in.isArray()) return m_ctx.typeError("array", in);
-        std::vector<Guid> seen;
+        std::unordered_map<Guid, usize> index; // inherited and new elements by key (linear, whatever the list size)
+        for (usize j = 0, n = ops.size(obj); j < n; ++j) index.emplace(ops.keyAt(obj, j), j);
+        std::unordered_set<Guid> seen;
         usize i = 0;
         for (const JsonValue e : in.elements()) {
             ReadCtx::Scope s(m_ctx, i++);
             // The readers mint a random key for an element without one; a cook must be deterministic.
             if (e.isObject() && !e.get("$key").isValid()) return m_ctx.error("element has no $key (keyed lists need stable keys)");
             HELIOS_TRY_ASSIGN(const Guid key, refl::detail::readKeyedListKey(e, m_ctx));
-            if (std::find(seen.begin(), seen.end(), key) != seen.end()) return m_ctx.error("duplicate $key " + key.toString());
-            seen.push_back(key);
+            if (!seen.insert(key).second) return m_ctx.error("duplicate $key " + key.toString());
             void* elem = nullptr;
-            for (usize j = 0, n = ops.size(obj); j < n && !elem; ++j) {
-                if (ops.keyAt(obj, j) == key) elem = ops.element(obj, j);
-            }
-            if (!elem) {
+            if (const auto it = index.find(key); it != index.end()) {
+                elem = ops.element(obj, it->second);
+            } else {
                 const usize n = ops.size(obj);
                 elem = ops.insertAt(obj, n);
                 ops.setKeyAt(obj, n, key);
+                index.emplace(key, n);
             }
             HELIOS_TRY(value(nullptr, t.element(), elem, e));
         }
@@ -157,7 +159,11 @@ private:
             return {};
         }
         if (!in.isArray()) return m_ctx.typeError("array", in);
-        std::vector<refl::Value> seen;
+        // Keys by their canonical JSON text, so any key type indexes in one map.
+        auto keyText = [&](const void* key) { return refl::toJson(kf->type(), key, refl::JsonStyle::Compact); };
+        std::unordered_map<std::string, usize> index;
+        for (usize j = 0, n = ops.size(obj); j < n; ++j) index.emplace(keyText(kf->ptr(ops.element(obj, j))), j);
+        std::unordered_set<std::string> seen;
         usize i = 0;
         for (const JsonValue e : in.elements()) {
             ReadCtx::Scope s(m_ctx, i++);
@@ -169,17 +175,17 @@ private:
                 ReadCtx::Scope ks(m_ctx, keyName);
                 HELIOS_TRY(refl::readJson(kf->type(), key.data(), kj, m_ctx));
             }
-            for (const refl::Value& k : seen) {
-                if (refl::equals(kf->type(), k.data(), key.data())) return m_ctx.error(std::format("duplicate {} in a @keyed({}) list", keyName, keyName));
-            }
+            std::string text = keyText(key.data());
+            if (!seen.insert(text).second) return m_ctx.error(std::format("duplicate {} in a @keyed({}) list", keyName, keyName));
             void* elem = nullptr;
-            for (usize j = 0, n = ops.size(obj); j < n && !elem; ++j) {
-                void* candidate = ops.element(obj, j);
-                if (refl::equals(kf->type(), kf->ptr(candidate), key.data())) elem = candidate;
+            if (const auto it = index.find(text); it != index.end()) {
+                elem = ops.element(obj, it->second);
+            } else {
+                const usize n = ops.size(obj);
+                elem = ops.insertAt(obj, n);
+                index.emplace(std::move(text), n);
             }
-            if (!elem) elem = ops.insertAt(obj, ops.size(obj));
             HELIOS_TRY(value(nullptr, et, elem, e));
-            seen.push_back(std::move(key));
         }
         return {};
     }
@@ -473,7 +479,7 @@ public:
         void* mut = const_cast<void*>(obj);
         u8* p = buf.data() + at;
         switch (l.enc) {
-        case Enc::Bool: store<u8>(p, *static_cast<const bool*>(obj) ? 1 : 0); return;
+        case Enc::Bool: store<u8>(p, *static_cast<const bool*>(obj) ? u8{1} : u8{0}); return;
         case Enc::Int: {
             const i64 v = refl::readIntegerBits(t, obj);
             std::memcpy(p, &v, l.size); // little-endian: the low bytes
@@ -902,7 +908,7 @@ Result<CookOutput> cook(std::span<const SourceRecord> sources, const CookOptions
             const std::string_view tag = static_cast<const Name*>(tf->ptr(r->value.data()))->view();
             const refl::EnumValue* ev = af->type().enumByValue(refl::readIntegerBits(af->type(), af->ptr(r->value.data())));
             const std::string_view an = ev ? ev->name : std::string_view();
-            const u8 audience = an == "Server" ? 0 : an == "Owner" ? 1 : an == "All" ? 2 : 0xFF;
+            const u8 audience = an == "Server" ? u8{0} : an == "Owner" ? u8{1} : an == "All" ? u8{2} : u8{0xFF};
             if (!isValidTagName(tag)) {
                 diags.add(r->src->path, std::format("{}: invalid tag name '{}'", d.tagField, tag));
             } else if (audience == 0xFF) {

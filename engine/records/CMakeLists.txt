@@ -36,28 +36,34 @@ if(TARGET records_tests)
 endif()
 
 # ---------------------------------------------------------------------------------------------
-# Fuzz target (02 §3.7: "loaders validate bounds and are fuzzed"): the `.hrdb` loader, built like
-# engine/asset's. With HELIOS_RECORDS_LIBFUZZER=ON and Clang it links libFuzzer's driver; give the build
-# coverage and sanitizers with -DCMAKE_C_FLAGS/-DCMAKE_CXX_FLAGS="-fsanitize=fuzzer-no-link,address,undefined".
-# Otherwise it uses engine/asset's standalone driver (corpus replay plus deterministic mutations),
-# registered as a CTest (label fuzz) that runs on every PR. Each input is also resealed (its checksums
-# recomputed), so mutations reach the validators behind the checksums.
+# Fuzz targets (02 §3.7: "loaders validate bounds and are fuzzed"), built like engine/asset's:
+#   records_fuzz_hrdb_loader  the `.hrdb` loader (each input also resealed, so mutations reach the
+#                             validators behind the checksums);
+#   records_fuzz_hrec_cook    the `.hrec` side of the cook (parsing, inheritance, checks, encoders), with
+#                             the property that every successful cook opens with the loader.
+# With HELIOS_RECORDS_LIBFUZZER=ON and Clang they link libFuzzer's driver; give the build coverage and
+# sanitizers with -DCMAKE_C_FLAGS/-DCMAKE_CXX_FLAGS="-fsanitize=fuzzer-no-link,address,undefined".
+# Otherwise they use engine/asset's standalone driver (corpus replay plus deterministic mutations),
+# registered as CTests (label fuzz) that run on every PR.
 # ---------------------------------------------------------------------------------------------
-option(HELIOS_RECORDS_LIBFUZZER "Build the engine/records fuzz target as a libFuzzer binary (Clang only)" OFF)
-set(_recordsFuzz records_fuzz_hrdb_loader)
-if(HELIOS_RECORDS_LIBFUZZER AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_executable(${_recordsFuzz} ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/fuzz_hrdb_loader.cpp)
-  target_compile_options(${_recordsFuzz} PRIVATE -fsanitize=fuzzer)
-  target_link_options(${_recordsFuzz} PRIVATE -fsanitize=fuzzer)
-else()
-  add_executable(${_recordsFuzz} ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/fuzz_hrdb_loader.cpp
-                                 ${PROJECT_SOURCE_DIR}/engine/asset/fuzz/fuzz_main.cpp)
-endif()
-target_link_libraries(${_recordsFuzz} PRIVATE helios::records helios_records_testtypes)
-set_target_properties(${_recordsFuzz} PROPERTIES FOLDER fuzz)
-helios_apply_warnings(${_recordsFuzz})
-if(HELIOS_BUILD_TESTS AND NOT (HELIOS_RECORDS_LIBFUZZER AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
-  add_test(NAME ${_recordsFuzz} COMMAND ${_recordsFuzz} --smoke 20000 ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/hrdb_loader)
-  set_tests_properties(${_recordsFuzz} PROPERTIES LABELS fuzz TIMEOUT 600)
-endif()
-unset(_recordsFuzz)
+option(HELIOS_RECORDS_LIBFUZZER "Build the engine/records fuzz targets as libFuzzer binaries (Clang only)" OFF)
+foreach(_target hrdb_loader hrec_cook)
+  set(_fuzz records_fuzz_${_target})
+  if(HELIOS_RECORDS_LIBFUZZER AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_executable(${_fuzz} ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/fuzz_${_target}.cpp)
+    target_compile_options(${_fuzz} PRIVATE -fsanitize=fuzzer)
+    target_link_options(${_fuzz} PRIVATE -fsanitize=fuzzer)
+  else()
+    add_executable(${_fuzz} ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/fuzz_${_target}.cpp
+                            ${PROJECT_SOURCE_DIR}/engine/asset/fuzz/fuzz_main.cpp)
+  endif()
+  target_link_libraries(${_fuzz} PRIVATE helios::records helios_records_testtypes)
+  set_target_properties(${_fuzz} PROPERTIES FOLDER fuzz)
+  helios_apply_warnings(${_fuzz})
+  if(HELIOS_BUILD_TESTS AND NOT (HELIOS_RECORDS_LIBFUZZER AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
+    add_test(NAME ${_fuzz} COMMAND ${_fuzz} --smoke 20000 ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/${_target})
+    set_tests_properties(${_fuzz} PROPERTIES LABELS fuzz TIMEOUT 600)
+  endif()
+endforeach()
+unset(_fuzz)
+unset(_target)

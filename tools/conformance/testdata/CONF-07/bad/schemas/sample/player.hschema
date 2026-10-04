@@ -1,0 +1,7 @@
+/// A player's card.
+package sample.player;
+
+struct Card {
+  handle: string
+  mail:   string @pii
+}

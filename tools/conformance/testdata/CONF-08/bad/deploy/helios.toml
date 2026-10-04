@@ -1,0 +1,49 @@
+[session]
+gateways = ["127.0.0.1:7777", "10.0.0.2:7001"]
+
+[gateway]
+port = 7002
+listen_port = 7_005#no space before the comment
+fallback_port = { env = "HELIOS_PORT" }
+
+[edge]
+gateway_port = 7006
+
+[gateway.extra]
+listen = { host = "0.0.0.0", port = 7007 }
+"public_port" = 7008
+
+[cluster]
+gateways = [
+  "127.0.0.1:7777",
+  "127.0.0.2:7010", # one address per line
+]
+backup_gateways = ["127.0.0.1:7777",
+                   "127.0.0.3:7011"]
+gateway_ports = [
+  7777,
+  7012,
+]
+banner = "see [docs"
+gateway_port = 7013
+
+# A supervised gateway's command line: its --listen and --connect addresses, and a port option.
+[[orchestrator.spawn]]
+name = "gw-1"
+args = ["--name", "gw-1", "--listen", "127.0.0.1:7040"]
+
+[[orchestrator.spawn]]
+name = "gw-2"
+args = [
+  "--connect=127.0.0.1:7041",
+  "--gateway-port", "7042",
+]
+
+[gateway.pool]
+motd = '''Don't [panic'''
+listeners = [{ host = "0.0.0.0", port = 7043 }]
+backups = [
+  { host = "0.0.0.0", port = 7044 },
+]
+nested = [[{ port = 7045 }]]
+args = ["--listen=127.0.0.1:7046", "--connect", "127.0.0.1:7047", "--gateway-port", "7048"]

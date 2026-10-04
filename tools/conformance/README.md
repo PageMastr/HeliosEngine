@@ -46,8 +46,44 @@ a `good/` tree for their exemptions; `go test` compares both exactly, and CTest 
 | CONF-03 | 05 §1.4.2 (holder rule) | the required test `conformance/holder_rule` (and any the map's `tests` add) missing from a language of the scope: Go needs `t.Run("holder_rule", …)` inside `func TestConformance`, C++ a `TEST_CASE("conformance/holder_rule…")` outside `#if 0`. It also fails a required test that is switched off: an unconditional `t.Skip` in `TestConformance` or the required case, a `//go:build` line on the file that defines `TestConformance`, or a C++ case marked `doctest::skip`, `may_fail`, `should_fail` or `expected_failures` anywhere in its decorator chain (the case's argument is read to its closing parenthesis, so decorators with nested calls, strings and character literals do not end it; a conditional `doctest::skip(cond)` fails too). CI runs the tests (Go `services` job, C++ `server_tests`) | test presence | passes |
 | CONF-04 | ADR-004, 05 §1.4.5 | in ID code (a file that names `idgen`, `AllocateIdBlocks`, a minter, `composeBlockId`, `BlockIdLayout` or Snowflake, or whose file name has `id`, `ids`, `idgen`, `entity_id`, `snowflake` or `minter` as a `_`-delimited word: `block_ids.cpp` is ID code, `grid.cpp` is not), an identifier or config key for a node, worker, machine or datacenter ID (camelCase split, so `workerID` counts and a task graph's `NodeId` elsewhere does not); anywhere in scope, the Snowflake 41/10/12 layout (`<< 22` with `<< 12`), the retired 41/5/8/9 layout (`<< 22`, `<< 17`, `<< 9`), and `<< 22` (the time prefix) outside `pkg/idgen` and `engine/ecs`'s `entity_id.*`/`registry.*`. Shift amounts, parenthesized ones too (`<< (kOffBits + kShBits)`), are evaluated through constants (Go across packages; C++ `constexpr` and `const` declarations, `#define`s and enumerators across the scope); a C++ left operand may be brace-initialized (`u64{prefix} << 22`, the codebase's widening idiom); a literal left operand (`1 << 12`, also converted or brace-initialized: `uint64(1) << 12`, `u64{1} << 12`) is a size, not a field, unless it scales a field (`ms * (1 << 22)`, also `ms * uint64(1 << 22)` and `ms * (u64{1} << 22)`; `4 * (1 << 22)` is a size). Node-ID keys in `services/**/*.toml` count too | Go syntax; C token scan | passes |
 | CONF-05 | 05 §1.4.5 (who mints) | an import of `…/pkg/idgen`, or a call of `AllocateIdBlocks`, outside `services/internal/{identity, character, ledger, market, industry, mail, worldstate, world, activity, lifecycle, orchestrator, backend}`, `pkg/idgen` itself, `_test.go` files and test-helper packages (`testkit`, `testdata`, `testutil`, and `<name>test` for the store, db, nats and pg helpers and the minter packages; a name that only ends in "test", such as `latest`, is not one) | Go imports and calls | passes |
+| CONF-06 | 05 §1.4, §3 | in the **net schema** (below), a schema not named `svc_<service>` (`CREATE SCHEMA`, `ALTER SCHEMA … RENAME TO`, or a `Name` in `migrations.Schemas`); a table created in, or moved (`SET SCHEMA`) to, a schema other than its service's, or created unqualified; a statement the evaluator cannot follow (fails closed, below) | SQL evaluation | passes |
+| CONF-07 | 05 §3, §6.6 (Phase 0 rule) | in the net schema, a column whose name's words are an e-mail, date of birth, IP address or real name (`email`, `email_norm`, `dob`, `date_of_birth`, `birthday`, `ip`, `ip_addr`, `client_ip`, `remote_addr`, `real_name`, `full_name`, `first_name`, `last_name`, `legal_name`, `given_name`, `family_name`, `surname`, …) or whose type is `INET`/`CIDR` (also `pg_catalog.inet` and quoted, or a domain over one, through domains of domains), unless it is `*_ct` or `*_bidx`; any such column outside `svc_identity`; a statement the evaluator cannot follow (fails closed, below); an `@pii` attribute in a `.hschema` package other than `identity` or `identity.*` | SQL evaluation; schema scan | passes |
+| CONF-08 | 04 §2; reconciliation #12 | a default gateway address or port other than 7777: Go values named for the gateway (keyed fields, var and const specs, assignments, calls with a `"gateway"` argument), with address strings, `net.JoinHostPort`, `fmt.Sprintf` and `fmt.Sprint` addresses and `"host:" + strconv.Itoa(port)` (also `host + ":" + port` with a host variable, parenthesised or not) evaluated, the `Port` field of such a value (`&net.UDPAddr{Port: …}`), a literal of a gateway-named type under any name (`GatewayConfig{Port: …, Addr: …}`, an unexported `port` field too, also as an elided slice or map element, nested ones included: `[]GatewayConfig{{Port: …}}`, `map[string][]GatewayConfig{"a": {{Port: …}}}`), and a value named for the gateway port (the words gateway and port: `…GatewayPort`, `"gateway-port"`) evaluated through constants; TOML keys (bare or quoted) or tables named for the gateway (address strings, and the integer of a key with the word port: `[gateway] port`, `listen_port`, `gateway_port`, not `transport`; an inline table's keys too: `listen = { host = …, port = … }`, also in an array of them, nested ones too: `listeners = [{ host = …, port = … }]`, `[[{ port = … }]]`; a multi-line array is read whole, on its key's line); in or outside such a table, a command line in a TOML array (a supervised process's `[[orchestrator.spawn]] args = ["--listen", "127.0.0.1:7777"]`): the value of `--listen`, `--connect` or an option named for the gateway, in the next element or after `=`, an address or, for an option named for a port, an integer (a value that is not `ip:port` is not reported: the gateway refuses to start with it, `parseAddress` in `engine/server/src/app_env.cpp`); a published `…/udp` (or `/UDP`) port in YAML (the host side of `[ip:]published:container/udp`, and the container side too); C++ `k…GatewayPort` constants (initialised with `=`, `{…}` or `(…)`) and `#define …GATEWAY_PORT`, and in files named for the gateway the lines that set its listen or connect address, found by the words of their names and strings (`listen`, `listenAddress`, `listen_address`, `clientListen`, `kListenAddr`, `"--connect"`; not `bind`, which the trunk sockets use too) (`"host:port"`, `"host:" + std::to_string(port)`, `std::string{"host:"} + …`, `os << "host:" << port`, `Address::ipv4(…, port)`, `ipv4(octets, port)`, `ipv6(groups, port)`, `ipv6Bytes(bytes, port)`, `loopbackV4(port)`, an option's default argument (its last argument, an address or an integer; an option call whose parentheses do not close fails closed: one that the file's end, an enclosing `}` or `]` (a block's or an initializer's brace, a subscript's bracket) or a `;` outside its brackets reaches first), and a string constant named there: `Address::parse(kDefaultListen)`; also on the continuation lines of a statement that such a line starts: `net::Address listen =` or `net::Address listen{` then `Address::ipv4(…);`, a statement ending at `;` or a block's brace, not an initializer's: one after a name, `=`, `,`, `(`, `{`, `return`, a template's `>` or an array bound such as `listen[1]{`), resolved through the scope's constants. A gateway port the rule reads but cannot resolve fails closed. Tests and fuzzers are skipped: they choose their own ports | Go syntax; TOML, YAML and C scans | passes |
 | CONF-09 | ADR-014 | a `go.mod` `go` directive other than 1.27.x, a `toolchain` other than go1.27.x, or no `go` directive; an `actions/setup-go` step (block or flow style) without `go-version-file: services/go.mod`, or with `go-version`; a `GOTOOLCHAIN` set in workflow YAML (an `env` key, `GOTOOLCHAIN=…` in a script or `$GITHUB_ENV`) to anything but `auto`, `local`, `path` or go1.27.x | go.mod and workflow YAML lines | passes |
 | CONF-10 | 08 §1.16; reconciliation #19 | `SDL_CreateRenderer` (and SDL3's other renderer constructors: `SDL_CreateRenderer*`, `SDL_CreateWindowAndRenderer`, `SDL_CreateSoftwareRenderer`, `SDL_CreateGPURenderer`) in C-family code (C++20 module units and `.tpp` too), including by name in a string or split by a backslash-newline splice, outside `apps/launcher/**` and engine/ui's SDL_Renderer backend (`engine/ui/**` paths containing `sdl_renderer`; WP-0.17 names the real files). `#if 0` groups are not read | comment-aware token scan | passes |
+
+## The net schema (CONF-06, CONF-07)
+
+The schema rules judge what a database holds after every migration, not each file alone (09 §5.10.4 (a)). Service
+directories `services/migrations/<dir>/` are applied in `migrations.Schemas` order, as `migrations.Up` applies them
+(a directory it does not list comes after, by name), and the `-- +goose Up` sections of each one's files in version
+order: `CREATE SCHEMA` (with an optional `AUTHORIZATION`), `ALTER SCHEMA … RENAME TO`, `CREATE TABLE` (a `LIKE`
+element or an `INHERITS` clause copies the columns its source has at that point; `IF NOT EXISTS` of a table that
+exists keeps it), `ALTER TABLE` (`ADD`, `DROP` and `RENAME` of columns, `ALTER COLUMN … TYPE`, `RENAME TO`, `SET
+SCHEMA`, also after `ONLY` or the descendants marker `*`; `ADD COLUMN IF NOT EXISTS` of a column that exists keeps
+it and its type), `DROP TABLE` and `CREATE DOMAIN` (a column of a domain over `INET` or `CIDR` has that type).
+`EXPLAIN ANALYZE` runs its statement, which is read as if it stood alone; `EXPLAIN` without `ANALYZE` runs nothing.
+ALTER TABLE actions that change no column are read and pass: constraints (`ADD
+CONSTRAINT`/`PRIMARY`/`UNIQUE`/`CHECK`/`FOREIGN`/`EXCLUDE`, `DROP`, `VALIDATE`, `ALTER` and `RENAME CONSTRAINT`),
+`ALTER [COLUMN] c SET/DROP/RESET/ADD …`, `OWNER TO`, `ENABLE`/`DISABLE`, `[NO] FORCE ROW LEVEL SECURITY`, `REPLICA
+IDENTITY`, `CLUSTER ON`, `SET WITHOUT CLUSTER`/`LOGGED`/`UNLOGGED`/`ACCESS METHOD`/`TABLESPACE`, `SET (…)`, `RESET
+(…)` and `ATTACH`/`DETACH PARTITION`. Comments, string literals, function bodies and `Down` sections are not
+statements of the net schema. A statement the evaluator cannot follow fails closed, under CONF-06 and CONF-07 both
+("the net schema cannot be evaluated"): `CREATE TABLE … AS` (also with a column list: `CREATE TABLE t (a, b) AS
+SELECT …`), `PARTITION OF` or `OF type`, `CREATE SCHEMA` with schema elements (`CREATE SCHEMA s CREATE TABLE t
+(…)`), `IMPORT FOREIGN SCHEMA`, a materialized view, `SELECT … INTO`, a `DO` block or a `CALL` in an `Up` section
+(the body runs with the migration and is not read), any other `ALTER TABLE` action (`OF type`, `NOT OF`, …), `LIKE`
+or `INHERITS` of a table no earlier statement creates, `ALTER TABLE` of such a table, `RENAME COLUMN` or `ALTER
+COLUMN … TYPE` of a column the table does not have, `ALTER TABLE … INHERIT`, and `-- +goose ENVSUB ON` with the
+`${…}` names it substitutes. Annotations are read as goose v3 reads them (`-- +goose down`, `--+goose Up`: any case
+and spacing), and statements are split as PostgreSQL lexes them: nested `/* */` comments, strings that span lines,
+`E'…'` backslash escapes, `"…"` identifiers, `$tag$` bodies whose tag has digits, and a `$` inside an identifier
+(`a$b$`). An annotation with leading whitespace, which goose rejects, still counts. A service's schema is the `Name`
+its `migrations.Schemas` entry gives (`services/migrations/migrations.go`), or `svc_<dir>`. The legacy rename that
+WP-0.15r declares there (`Legacy`, `LegacyVersion`) applies to the files up to `LegacyVersion`: their
+`identity.account` is `svc_identity.account`, since `migrations.Up` renames the schema after them, and a later file
+that still says `identity.` is misplaced. So `identity/00001`'s plain-text `email`, which `00004` drops, is not a
+finding.
 
 ## Suppressions, known-failing records and the map
 
@@ -153,6 +189,47 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   converted by a cast or a functional cast (`static_cast<u64>(1) << 22`, `u64(1) << 22`) is read as a field, not a
   size (write `u64{1}` or `1ull`).
 - **CONF-05** reads direct imports and calls; a package that re-exports `idgen` under another name is not followed.
+- **CONF-06 and CONF-07** evaluate the `-- +goose Up` SQL of each service. Not seen: DDL that a Go migration step
+  runs (`ExecContext` in `services/migrations/*.go`), statements built in Go strings, and DDL that a function the
+  migration calls runs (`SELECT f()`, or a trigger; `DO` blocks and `CALL` fail closed). `INHERITS` copies the
+  parent's columns once, so a column the parent drops later stays on the child (an over-report) and one it adds
+  later is judged on the parent only. CONF-07 matches whole words of a column name: a plural (`emails`,
+  `first_names`) and a quoted identifier in another case (`"Email"`) are not matched. Domains are matched by bare
+  name and never dropped or altered (`ALTER DOMAIN`, `DROP DOMAIN` are not read); a composite type with an address
+  field (`CREATE TYPE t AS (ip inet)`) used as a column type is not seen.
+- **CONF-08** reads the forms of a gateway default listed in its row. Constants resolve by bare name (C and C++:
+  `constexpr` and `const` declarations, `#define`s and enumerators across the scope, as CONF-04 reads them, with
+  integer literals, casts and `+`; Go: package constants), and a value in those forms that does not resolve fails
+  closed; so does an address prefix (`"127.0.0.1:"`) completed by `+` (C++ also `<<`) with a port the lint cannot
+  evaluate. A literal of a gateway-named Go type is read whole, so another address field in it
+  (`GatewayConfig{MetricsAddr: ":9100"}`) is read as the gateway's (an over-report). A multi-line TOML array is
+  reported on its key's line, where a suppression goes. A C++ port is reported once per line; a listen or connect
+  constant in a gateway file is reported where it is declared and again on each read line that names it. A C++ string
+  constant named on a read line is read as an address, so one that is not the gateway's (`bus.connect(kNatsAddr)` with
+  `"127.0.0.1:4222"`) is reported, and so is every value of a bare name declared more than once in scope
+  (over-reports). C++ braces are told apart by what precedes them, without a parser: a brace after a name opens an
+  initializer unless the statement declares a namespace, class, struct, union, enum or extern block or the name is
+  `else`, `do`, `try` (also before an attribute: `else [[likely]] {`) or a qualifier (`const`, `noexcept`,
+  `override`, `final`, `mutable`), so a function body after a
+  macro (`void f() HELIOS_NOEXCEPT {`) is read as part of its signature's statement (an over-report). Not seen: a Go
+  composite literal of a gateway-named type with a port field not named `Port` or for the gateway
+  (`GatewayConfig{ListenPort: 7003}`) or with positional fields; an address assembled another way
+  (`fmt::format("{}:{}", h, p)`, `absl::StrCat`, a Go `strings.Builder`); TOML multi-line strings (`"""…"""` over
+  several lines; a triple-quoted string on one line is skipped as text); in C and C++, a port or address in a
+  variable, or in a differently named constant that no `listen`/`connect`/gateway line (or a statement such a line
+  starts) names (an integer default of a `*port*` name that is not `…GatewayPort`); a client-side bind default under a
+  name without listen or connect (`net::Address bindAddr = …`); a name with listen or connect only inside a longer
+  word (`clientListenerAddr`, `listening`) or after an acronym (`UDPListen`, `HTTPListen`: a name splits only where a
+  lower-case letter or digit meets a capital, so `udplisten` is one word); a value that a block or a preprocessor line separates
+  from its read line: a multi-line immediately-invoked lambda initializer (`net::Address listen = [] {`, `return
+  ipv4(…, 7000);`, `}();`), an accessor's body (`net::Address listen() const {`, `return ipv4(…, 7000);`), the
+  lines of a multi-line option call after a lambda argument whose body holds a `;` (`args.get("listen",`,
+  `[&] { audit(); return true; }(),`, `"127.0.0.1:7000", …);`: the default, its last argument, is still checked) and
+  an initializer split by `#if`. A nested call that `#if` branches leave unbalanced inside an option call is closed
+  by the outer call's `)`, so the option's default is read from there (`parseAddress(args.get("listen", "",`, `#if`,
+  `pick("127.0.0.1:7000"`, `#else`, `pick("0.0.0.0:7777"`, `#endif`, `)), "--listen")` checks `"--listen"`): the
+  branch values are the `#if` limit, and nothing after the call is hidden. In YAML, not seen: compose's long syntax
+  (`target:`/`published:`) and a Helm or Kubernetes `port` with `protocol: UDP` (only the short `…/udp` form is read).
 - **CONF-09** reads YAML line by line, without a YAML parser. Not seen: a `uses:` written as a block scalar or
   pulled in through an anchor or alias (`<<: *setup`); a `GOTOOLCHAIN` set outside `.github/` (a script under
   `tools/ci/` that a workflow runs) or by a variable that a step assembles. A `GOTOOLCHAIN` whose value is an

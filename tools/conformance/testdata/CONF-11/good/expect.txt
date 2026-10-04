@@ -6,4 +6,6 @@
 # and every loop variable is restored when the loop ends (_pcg_a2); literal baseline levels.
 # $ENV{} in a CMAKE_ variable that holds no compiler flags, and in a command that grants nothing.
 # Round 8: $ENV{} in a probe's CMAKE_REQUIRED_FLAGS, the environment's CXXFLAGS appended to itself, a
-# string(REPLACE) whose match string names $ENV{}, $ENV{} inside the level function, and a target feature turned off.
+# string(REPLACE) whose match string names $ENV{}, $ENV{} inside the level function, a target feature turned
+# off, and a define value that only spells one (`=sse4+avx2`: a `+feature` counts only where no letter,
+# digit or underscore precedes the `+`).

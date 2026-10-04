@@ -1,0 +1,13 @@
+#! -rules CONF-03 -strict
+# The tests exist but CI would run nothing: a build constraint on the Go file, an unconditional t.Skip in
+# the holder_rule case (another case's skip is not CONF-03's business), and doctest::skip() on the C++ case,
+# also after another decorator (line 5), after one whose string argument has parentheses (line 6) and after
+# ones whose arguments nest calls (lines 8 and 9, a character literal ')' too). Line 11 names doctest::skip
+# only inside a string, so it is not switched off.
+engine/server/tests/test_holder.cpp:4: CONF-03
+engine/server/tests/test_holder.cpp:5: CONF-03
+engine/server/tests/test_holder.cpp:6: CONF-03
+engine/server/tests/test_holder.cpp:8: CONF-03
+engine/server/tests/test_holder.cpp:9: CONF-03
+services/internal/orchestrator/conformance_test.go:1: CONF-03
+services/internal/orchestrator/conformance_test.go:13: CONF-03

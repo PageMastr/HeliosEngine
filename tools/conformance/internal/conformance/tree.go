@@ -23,6 +23,7 @@ type Tree struct {
 	Root  string
 	Files []string // slash-separated paths relative to Root, sorted
 	cache map[string][]string
+	gidx  *goIndex
 }
 
 // ownFixtures are the lint's seeded violations: they fail by design, so a repository run skips them.

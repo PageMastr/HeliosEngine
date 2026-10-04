@@ -1,0 +1,2 @@
+#! -rules CONF-03 -strict
+# The Go case named through a constant, and the C++ case.

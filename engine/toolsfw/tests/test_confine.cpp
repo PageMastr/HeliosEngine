@@ -6,9 +6,12 @@
 #include <doctest/doctest.h>
 
 #include <filesystem>
+#include <format>
 #include <functional>
+#include <memory>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include "helios/core/platform.h"

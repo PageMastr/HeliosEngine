@@ -361,8 +361,7 @@ reports help just as much. See [Contributing](#contributing).
 
 ## Licence
 
-Helios MMO Engine is released under the [MIT License](LICENSE). Copyright © 2026 PageMastr and the Helios
-MMO Engine contributors.
+Helios MMO Engine is released under the [MIT License](LICENSE). Copyright © 2026 Kenneth White.
 
 Vendored third-party components keep their own (permissive) licences, recorded in
 [`third_party/MANIFEST.md`](third_party/MANIFEST.md). Some of them require attribution in shipped products,

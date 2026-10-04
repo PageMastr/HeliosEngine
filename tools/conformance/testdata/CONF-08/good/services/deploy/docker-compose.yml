@@ -1,0 +1,6 @@
+services:
+  gateway:
+    ports: ["7777:7777/udp", "0.0.0.0:7777:7777/udp", "127.0.0.1:8080:8080", "7777:7777/UDP"]
+    # ports: ["7000:7777/udp"]   a commented-out mapping is not read
+  gateway-flow:
+    ports: [7777:7777/udp]

@@ -1,119 +1,114 @@
 # T01 World Editor on the Saltmarch container: concept review
 
 - **Concept:** `t01-world-saltmarch` (index: [README](../README.md#index)).
-- **Reviewed:** the owner's v01, 2026-10-04 (four reviewers, merged).
-- **v01 is not committed.** Its provenance is not recorded yet (01 §5.2; [README](../README.md)), so the
-  image stays out of the repository. The owner is preparing v02, which this checklist is for.
+- **History:** v01 reviewed 2026-10-04; v02 reviewed 2026-10-04 (two frames: Outliner tab, Layers tab);
+  v03 pending from the owner.
+- **Not committed.** Neither v01 nor v02 is in the repository: their provenance is not recorded yet
+  (01 §5.2; [README](../README.md#where-images-may-come-from)). v03 comes with its sidecar.
 - **Decided 2026-10-04 by the owner ("Option A"):** Saltmarch is an object container in the single
   Phase 1 zone `tallis` (02 §5.5–5.6, 07 §2.1 MVP). Its files are `content/zones/tallis/saltmarch.hcont`
   and `content/zones/tallis/saltmarch.entities/<guid>.hent`, and a shared editing session on it is
-  `zone-tallis` (07 §1.8.2). 07 §1.7.1's example `content/zones/saltmarch/` is wrong; a separate Director
-  PR (branch `agent/claude/director-saltmarch-container`) corrects it.
+  `zone-tallis` (07 §1.8.2). 07 §1.7.1's example `content/zones/saltmarch/` is wrong; the Director's
+  PR #51 (open) corrects it.
 
-Tick items off as v02 covers them. Section numbers are plan sections (`docs/plan/`).
+Section numbers are plan sections (`docs/plan/`). Tick items off as v03 covers them.
 
-## Verdict
+## Verdict on v02
 
-A good north star. The layout, theme and property grid grow straight out of today's editor shell (PR #41)
-and match 07 §2's T01 row. The problem is that it shows an ordinary single-level editor rather than
-Helios's MMO world: a "world" root with its own sun and sky, made-up `.ent`/`.mesh`/`.mtl` files, and no
-Play-in-Editor. About a dozen labels change and four or five tabs are added; the viewport painting stays.
+Close. All but one of v01's musts are fixed, and most of its shoulds. Two text errors are still musts.
+After the musts and shoulds below, v03 can be committed as the **directional** T01 reference with the
+viewport painting **mood-only**. Its phase target is **Ph2**: data layers, Scatter/Splines/Blockout and
+the git chip all arrive in Ph2 (07 §5.1).
 
-**Keep:** the docks (07 §2 T01); today's menu bar, Property/Value grid and `LOCAL` accent (07 §1.3); the
-viewport toolbar (projection, Lit, W/E/R, space, FOV), selection outline and gizmo (07 §1.5); one
-selection shown in every panel (07 §1.2); readable asset paths rather than raw `guid:…`; Saltmarch on
-Harrow, the plan's own setting (01 §4.2), with no third-party IP, inside the container's 1,800 m radius
-(02 §5.6).
+## Fixed in v02
 
-## Must
+Outliner breadcrumb `Tallis › Harrow › saltmarch`, root `saltmarch  container`, `Atmosphere: harrow ↗`
+instead of sun and sky, a `terrain stamp` row, `group` rows; the PIE strip (07 §1.6; ED-2); Inspector
+`Entity: rock_03` with Frame and Source prefab rows, transform units, a `client` badge and a GUID-named
+`.hent` with a copy button; real formats (`.glb`, `.hmati`, `.hprefab`) and a `content/` tree; a Layers
+tab with Editor and Data layers (07 §2.1); the viewport frame chip, planet readout and mode switch; the
+bottom dock `Asset Browser | Output | Issues | History`; `cinder-reach`, branch and stale-data chips in
+the status bar; Roboto-style chrome with mono only for the path and GUID; ▼ on open sections, ↗ locate
+buttons, and the concept label moved out of the viewport.
 
-- [ ] **Outliner scope.** The outliner scopes to frames (07 §1.5) and the MVP hierarchy is
-  Tallis → Harrow → Saltmarch (07 §2.1); Saltmarch is a container on `body:harrow` in zone `tallis`
-  (02 §5.6). Add the breadcrumb `Tallis › Harrow › saltmarch` and make the root `saltmarch  container`
-  (not `Harrow_Saltmarch world`).
-- [ ] **No sun or sky rows.** The sun is the star (03 §5.3) and the sky is Harrow's `AtmosphereDef`
-  (03 §5.7). Delete `Lighting`, `sun` and `sky`; add a link `Atmosphere: harrow ↗`.
-- [ ] **Terrain row.** Rename `Terrain` to `saltmarch_stamp  terrain stamp` (ED-2). Type every grouping
-  row `group` (T01's "group" over `ChildOf`), not `folder`.
-- [ ] **Play-in-Editor strip** under the menu, the core loop (07 §1.6, §4.2; ED-2 needs "PIE with 2
-  clients and 4 bots"): `▶ Play · Simulate · ■ Stop · Possess │ Clients 2 ▾ Bots 4 ▾ NetSim: good ▾`,
-  plus a greyed `Cells 1 ▾ (Ph3)`. Keys: Play F5, Simulate Alt+F5, Stop Shift+F5, Possess F8.
-- [ ] **Inspector header and path.** Each entity is a GUID-named `.hent` in `saltmarch.entities/`
-  (02 §5.6). Header `rock_03 … Entity` (not `Static Mesh`); path
-  `content/zones/tallis/saltmarch.entities/7b2d4c1e-….hent` (not `…/rock_03.ent`).
-- [ ] **Asset fields.** Meshes are glTF with a `.meta` sidecar (07 T24) and materials are
-  `.hmat`/`.hmati` (07 T16; `.hmati` does exist): `mesh salt_rock_03.glb`, `material salt_rock.hmati`
-  (no `*.mesh`, `.mtl`).
-- [ ] **Asset Browser.** Sources live in `content/` and worlds are zones (07 §1.8.2): tree
-  `content › env, materials, prefabs, records, zones` (no `assets/`, `scenes/`); tiles show the name
-  plus a `Mesh` chip.
+## Open for v03
 
-## Should
+### Must
 
-- [ ] **Outliner layers.** A `Layers` tab with editor layers (eye and lock toggles) and data layers
-  (`base ✓`, `event.drone_raid ☐`); split the Details `layer` row into `editorLayer` and `dataLayers`;
-  title the tab `Outliner` (07 §2, §2.1).
-- [ ] **Outliner content for ED-2:** `landing_pad_a`, `hollow_drone_spawner  spawner`, `navmesh`, and
-  `42 entities` in the header (ED-2 needs a landing pad, a drone spawn region with navmesh and ≥ 40
-  entities).
-- [ ] **Viewport frame and position:** a frame chip `⌖ Harrow › saltmarch ▾` and a planet readout
-  `12.4° N 33.1° W · alt 2 m` (07 §1.5).
-- [ ] **Viewport modes:** `Select | Volumes | Terrain | Scatter | Splines | Blockout` and a
-  `Mode options` tab; T01 is "the hub hosting every mode" (07 §2.1).
-- [ ] **Inspector title.** 07 §2 calls this panel `Details`: retitle it, or ask for the plan row to change.
-- [ ] **Inspector badges and units:** the green `client` badge on Static Mesh and Rendering (07 §1.4;
-  today's grid has it); `-812.4 m 1.6 m 347.9 m` and `0.0° 26.0° 0.0°`; a read-only row
-  `frame  saltmarch (Harrow)`.
-- [ ] **Prefab state** (07 §1.4, 02 §4.5): a `prefab  salt_rock_03.hprefab ↗` row, inherited values
-  dimmed, an override bar with ↺ on rotation Y.
-- [ ] **Bottom dock tabs:** `Asset Browser | Output | Issues ▲1 | History` (Issues is in 07 §2's shared
-  bottom row; History exists today, 07 §4.2).
-- [ ] **Status bar:** `LOCAL | cinder-reach | saltmarch | 1 unsaved | rock_03 | dark | 100%`
-  (`utest-fixture` is a misspelt test-fixture name; the reference game is `cinder-reach`, 08 §2.10.1);
-  the unsaved count in the dirty colour and `rock_03 *`; a stale-data chip `⟳ Stale: nav 2 · HLOD 1`
-  (07 §4.1.1); `git main · 2 changes ▾` and a lock badge on one tile (07 §1.7).
-- [ ] **Collaboration, as a second frame (Ph2–3; 07 §1.8, T30):** the amber accent with
-  `SHARED · zone-tallis`; other users' outlines with name tags; `Participants` and `Locks / Notes` tabs;
-  `Behind main: 4 commits`.
-- [ ] **Fonts.** The monospace font copies the stopgap bitmap font the editor used before PR #42. The
-  plan's fonts are Roboto and Roboto Mono (07 §1.3), and the editor has drawn with Roboto 2.138 since
-  PR #42: Roboto at about 15 px for the chrome, Roboto Mono only for paths and GUIDs.
+- [ ] **Inspector › Source path.** `content/zones/saltmarch/…` breaks the 2026-10-04 decision and T28
+  `collab.scope` ("every spatial document sits under its zone's `content/zones/<zone>/` folder",
+  07 §1.8.2). Use `content/zones/tallis/saltmarch.entities/a7f3c9e4-2d1b-4e66-8ab7-3c9f1d2e8a6c.hent`,
+  wrapped only at `/` so the GUID is never split.
+- [ ] **Viewport readout.** `Lat 18.42° Lon -31.08° Alt 124 m` is about 166 km from Saltmarch's anchor
+  (`"lat": 12.4, "lon": -33.1`, radius 1,800 m, 02 §5.6; Harrow's radius is 1,500 km, 01 §4.2), beyond
+  even the 40 km `hlodRadius`. Use `Lat 12.41°  Lon -33.13°  Alt 4 m`.
 
-## Nice
+### Should
 
-- [ ] Inspector: `▼` on expanded sections and no arrow on `enabled`; in asset fields a type glyph, a `…`
-  picker and a ↗ locate button instead of the folder icon (07 §1.4).
-- [ ] Outliner: a mountain glyph for the terrain stamp (the current one reads as ⚠, and severities are
-  shapes, 07 §4.3); one name for the rock (`rock_03` or `salt_rock_03`); rows for the derrick and the
-  conveyor.
-- [ ] Toolbar: Move highlighted while the gizmo shows; `Space: Local` instead of `Local ▾`;
-  `Grid 1.00 m · Angle 15° · Scale 0.1`; label `XYZ ▾` or drop it (07 §1.5).
-- [ ] Viewport: a faint grid, a `spawn_player` icon, a view cube; a dark halo on the selection outline so
-  it reads against the white salt.
-- [ ] Asset Browser: separate tile and list icons; a labelled slider.
-- [ ] Chrome: move `FUTURE T01 CONCEPT` into a caption outside the viewport.
-- [ ] Content: optionally redraw the tan block ruins as derelict hull sections (the Hollow, 01 §4.2).
+- [ ] **Inspector › `Inherited (from prefab)` grid:** delete it. Transform is instance data, not an
+  override: instances "store only transforms and overrides" (02 §4.5) and the `.hent` keeps `Transform`
+  beside `$overrides` (02 §5.6). Show values inherited from the prefab dimmed at the normal 15 px size,
+  and mark one real override with a bar and a per-row ↺, e.g. `Cast Shadows ☐ Off ▌↺`.
+- [ ] **Inspector › Mesh:** `salt_rock.glb` does not match the highlighted tile. Use
+  `env/rocks/salt_rock_03.glb` and `salt_rock_03.hprefab`.
+- [ ] **Right dock:** add a `Mode options` tab (07 §2 T01 row: "Details, Mode options"). Then either
+  retitle the dock `Details`, or ask for the plan row to say Inspector, as today's shell does.
+- [ ] **Inspector › layer membership:** add `Editor layer  props ▾` and `Data layers  [base]`.
+- [ ] **Viewport toolbar:** projection, view mode and W/E/R are gone (07 §1.5 "View modes"; §4.2). Add
+  `Perspective ▾ · Lit ▾ · Q W E R · Space: Local ▾ · FOV 60° ▾`, with Move highlighted.
+- [ ] **Outliner selection:** expand `Rocks`, highlight `rock_03` (07 §1.2), and put `42 entities` in
+  the header (ED-2: ≥ 40 entities).
+- [ ] **Outliner types:** `prefab instance` for `landing_pad` and the rocks (02 §4.5 `$prefab`), and
+  `hollow_drone_spawner  spawn region` (07 T23: spawn regions are T01 entities).
+- [ ] **Outliner `navmesh` row:** drop it. Nav tiles are derived data baked into containers (07 T23,
+  §4.1.1), shown through the navmesh view mode. This corrects v01's own advice.
+- [ ] **Layers toggles:** editor layers get eye, padlock and swatch under a `Show · Lock` header; data
+  layers get an eye and a `PIE` checkbox under `Show · PIE`. Every toggle has a tooltip.
+- [ ] **Layers › `drone raid`:** the container manifest uses IDs (02 §5.6): show `event.drone_raid` and
+  keep the `event` chip.
+- [ ] **PIE strip:** `NetSim: good ▾`, plus a greyed `Cells 1 ▾` with a Ph3 tooltip (07 §1.6).
+- [ ] **Status bar:** `▌LOCAL | cinder-reach | saltmarch | 1 unsaved | rock_03 * | … | dark | 100%`,
+  the dirty items in the dirty colour (07 §1.3 "neutral = local"; today's shell shows all three).
+- [ ] **Status bar stale chip:** `⟳ Stale: nav 2 ▾`, opening a list with Rebuild now, instead of
+  `⚠ Stale data (12m)`: the chip counts stale products per kind (07 §4.1.1) and ⚠ is a severity shape
+  (§4.3). Leave HLOD out; HLOD rebuilds are Ph3.
+- [ ] **Asset Browser:** an LFS lock badge `salt_rock_04.glb 🔒 MK` (07 §1.7) and a small `Mesh` chip
+  under each tile name.
+- [ ] **Shared-editing frame** (T30): still not drawn; requested as image 11 in the
+  [index](../README.md#requested).
 
-Where the reviewers disagreed: PIE stays a must because ED-2 depends on it; fonts and badges are should,
-being omissions rather than data-model errors; the focus-ring, axis-letter and check-box requests were
-dropped because the plan does not require the art to show them.
+### Nice
 
-## For v02's sidecar
+- [ ] **Phases:** label Scatter, Splines, Blockout and Data layers `Ph2`, or state the phase in the
+  sidecar.
+- [ ] **Glyphs:** a mountain glyph for terrain (it still reads as ⚠, 07 §4.3), from one permissive icon
+  font, for example Lucide (ISC).
+- [ ] **Viewport overlays:** a faint grid, a view cube, a spawner icon and a dark halo around the
+  selection outline (07 §1.5).
+- [ ] **Snapping:** `Grid 1.00 m · Angle 15° · Scale 0.1`; label `Axis: XYZ ▾` or drop it.
+- [ ] **Names:** `›` in the Inspector Frame row; rename the editor layer `base`, which clashes with the
+  data layer `base`; `main · 4 changes ▾` instead of `+3 ~1` (its red reads as a conflict).
+- [ ] **PIE buttons:** Stop and Possess greyed while idle; F5, Alt+F5, Shift+F5 and F8 in tooltips.
 
-- [ ] Record its provenance in `t01-world-saltmarch-v02.<ext>.concept.jsonc` from the template, before
-  it is committed (README "Adding an image").
-- [ ] Suggested statuses, for the owner to set: the image `directional`; the viewport painting
-  `mood-only` ("Ph3–4 look": Phase 1 has only a 2D cloud shell, AAA-REN-6).
-- [ ] A high-contrast variant (07 §1.3, §4.4); later, dusk and night-rain variants that match the
-  03 §4.6 and §5.8a golden images.
+**How the reviewers' disagreements were settled:** the readout stays a must because it contradicts
+02 §5.6; transform is not marked as an override because the plan stores it as instance data; the terrain
+glyph stays nice, as v01 rated it.
+
+## For v03's sidecar
+
+- [ ] Fill `t01-world-saltmarch-v03.<ext>.concept.jsonc` from the template before committing the image:
+  who made it, the tools, the AI model, exact prompt and every input image if used (none may be a
+  screenshot of a commercial game or editor), and the licence (MIT or CC0-1.0).
+- [ ] Suggested, for the owner to set: status `directional`; element `viewport painting` `mood-only`
+  ("Ph3–4 look": Phase 1 has only a 2D cloud shell, AAA-REN-6); phase `Ph2`.
 - [ ] Keep Harrow and Saltmarch out of engine and app golden images: the IP lint allows those names only
   under `content/` and `docs/concept/`.
 
 ## Today against the concept
 
-Today's editor (PRs #41 and #42) has docking, a property grid with units, enums, groups and client/server
-badges, History and Output, the status bar, dark and high-contrast themes, and Roboto as its UI font. The
-viewport is still empty.
+Today's editor (PRs #41 and #42) has docking, a property grid with units, enums, groups and
+client/server badges, History and Output, the status bar, dark and high-contrast themes, and Roboto as
+its UI font. The viewport is still empty.
 
 | Missing | Delivered by |
 |---|---|

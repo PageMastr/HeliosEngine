@@ -40,14 +40,14 @@ The rules of this folder (the owner's, 2026-10-04), which apply the plan's rules
 
 - An image is **made by the owner**, **commissioned** with the rights assigned to the owner, **CC0**
   (with the address it came from), or **AI-assisted** (below).
-- **Never** a screenshot or capture of a commercial game, or of another engine's or editor's UI. Never use
-  such an image as an input to an AI generator or as a base to paint over either.
+- **Never** a screenshot or capture of a commercial game, or of another engine's or editor's UI, in whole
+  or in part, and never such an image as an input to an AI generator.
 - **AI-assisted** images are allowed only when the sidecar records the tool, the model, the full prompt
   and every input image (each one made by the owner, commissioned, CC0, or an earlier AI-assisted image
   in this folder). This is how this folder records the "01 §5.2 provenance" that 09 §4.2 asks for.
 
 A recommendation, not a plan rule: do not name another game, studio or living artist in a prompt. The IP
-lint (below) rejects other franchises' names and titles anywhere in this folder, prompts included.
+lint (below) rejects the franchise names and titles on its list anywhere in this folder, prompts included.
 
 **Licence.** Images are committed under the repository's MIT licence ([`LICENSE`](../../LICENSE)): the
 owner's own work and commissioned work whose rights were assigned to the owner. A CC0 image keeps
@@ -95,12 +95,41 @@ does.
 1. Export it within the limits and name it as above.
 2. Copy `TEMPLATE.concept.jsonc` to `<image>.concept.jsonc` next to it and fill in every field. The
    sha256 comes from `cmake -E sha256sum <image>`.
-3. Add or update the concept's row in the index.
+3. Add the concept's row to the index (moving it out of Requested if it is there), or update its latest
+   version, status and phase.
 4. Run `cmake -DSOURCE_DIR=. -P tools/lint/concept_refs.cmake` and the IP lint (or all of
    `cmake -P tools/ci/run_lints.cmake`).
 
 ## Index
 
-| Concept | Area | Latest version | Status | Phase | Review |
+The lint finds a committed image's concept here, in this section, by its concept name or a versioned file
+name.
+
+### Concepts
+
+| Concept | Area | Latest committed | Status | Phase | Review |
 |---|---|---|---|---|---|
-| `t01-world-saltmarch`: T01 World Editor on the Saltmarch container | editor | none (v01 is not committed: its provenance is not recorded) | v02 pending from the owner | Ph1 layout | [review](editor/t01-world-saltmarch.review.md) |
+| `t01-world-saltmarch`: T01 World Editor on the Saltmarch container | editor | none: v01 and v02 were reviewed, not committed (provenance not recorded) | v03 pending from the owner; proposed `directional`, viewport `mood-only` | Ph2 | [review](editor/t01-world-saltmarch.review.md) |
+
+### Requested
+
+Images the reviews ask for, in priority order (from the [T01 review](editor/t01-world-saltmarch.review.md)
+of v02). None exists yet. When one arrives, it moves to the table above.
+
+| # | File | Title | Phase | What it shows | Must show |
+|---|---|---|---|---|---|
+| 1 | `editor/t01-pie-saltmarch-2clients-v01.png` | T01 PIE running | Ph1 | The v03 layout after F5 | Stop and Possess enabled, client 1 possessed, client 2 in its own window, 4 bots, NetSim per client (lan/good/mobile/awful), drop client / kill cell / TiDi, a process list, `PIE ready 11.8 s` (≤ 15 s cold) |
+| 2 | `editor/t02-prefab-landing-pad-v01.png` | T02 Prefabs | Ph1 | `landing_pad` edited in context, which settles the override style | Prefab hierarchy with a nested prefab, breadcrumb, dimmed inherited values, bar + ↺ on `Light/intensity = 1200`, a variant, Where used |
+| 3 | `editor/t01-volumes-harrow-high-hangar-v01.png` | T01 Volumes mode | Ph1 (ED-16) | Hangar cells and portals | Mode options, Generate cells at 0.25 m, tinted cells, portals, an airlock with bound doors, cell flags, GridVolume shells 0.5 m inside / 1.0 m outside, transfer probe, Partition: Whole |
+| 4 | `editor/t08-records-kestrel-variant-v01.png` | T08 Data | Ph1 (ED-2) | A Kestrel variant record | Tables and Template tree, Grid ⇄ Inspector, fill-down, an HXL formula, CSV, override ↺, client/server_only/service badges, Where used |
+| 5 | `editor/t01-simulate-saltmarch-navmesh-v01.png` | Simulate with the navmesh view | Ph1 (ED-3) | A moved wall becomes a nav obstacle | 64 m tiles, hatched stale tiles, `⟳ Stale: nav 2`, a drone's read-only live state, Keep simulation changes, the spawn region |
+| 6 | `editor/t01-world-saltmarch-high-contrast-v01.png` | High-contrast theme | Ph1 (ED-15) | v03 redrawn with an unchanged layout | Text at ≥ 7:1, a focus ring, severities and badges told apart by shape |
+| 7 | `editor/t28-issues-portal-leak-v01.png` | T28 Validation | Ph1 | The Issues panel on a portal leak | A Rule list (≥ 20 rules), severity by shape and colour, Fix preview and Apply, a leak polyline in the viewport, Suppress… with a written justification |
+| 8 | `editor/t24-import-salt-rock-v01.png` | T24 import | Ph1 | A glTF dropped from Explorer | The thumbnail, `.meta` fields (GUID, provenance, licence), LODs, BCn/KTX2, a collision profile (decomposition greyed, Ph2), an import log |
+| 9 | `editor/t04-terrain-harrow-saltmarch-v01.png` | T04 Terrain | Ph1 | Harrow's terrain around Saltmarch | The layer stack (Graph greyed, Ph3), four boundary types feathered in metres, a 2D map at 12.4° N 33.1° W, Brush, dirty tiles, the Saltmarch stamp |
+| 10 | `editor/t16-material-instance-salt-rock-v01.png` | T16 Material | Ph1 (instances) | The salt-rock material instance | A link to the parent `.hmat`, parameter overrides with ↺, EV/Kelvin colour, a preview rig, PSO stats, the Graph pane greyed (Ph2) |
+| 11 | `editor/t30-saltmarch-shared-session-v01.png` | T30 shared editing | Ph2 presence and locks, Ph3 edit instance | Saltmarch in a shared session | Amber accent `SHARED · zone-tallis`, other users' outlines with name tags, lock badges, Participants / Locks / Notes, `Behind main: 4 commits` |
+
+Later, not specified yet: `editor/t07-system-tallis-v01.png`, `launcher/launcher-login-dev-v01.png`,
+`client/hud-saltmarch-firefight-v01.webp` and `world/harrow-descent-sunset-v01.webp` (all Ph1); after
+those, the cockpit, the concourse, character select, Saltmarch at dusk and Saltmarch in night rain (Ph3).

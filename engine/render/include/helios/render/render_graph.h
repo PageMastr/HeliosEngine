@@ -50,8 +50,9 @@
 // only touch their own data and the RgContext they are given. RgResourcePool is single-threaded
 // (used by the thread that calls execute()).
 //
-// Budget: compile of a 200-pass graph ≤ 2 ms on REF (graph cache of Phase 2 brings the unchanged
-// case to ≤ 0.3 ms, 03 §2.2); measured by render_tests ("graph: compile budget").
+// Budget: a full compile of 200 passes (a topology change) ≤ 0.3 ms on REF at 60 fps (03 §2.2 item 7,
+// §8.1.5; a Phase 2 topology-cache hit ≤ 0.05 ms); render_tests_perf asserts it. compile() reuses the
+// plan's storage and its own scratch from the previous compile (also across reset()).
 
 #include <array>
 #include <functional>
@@ -447,6 +448,11 @@ public:
 
     std::string_view name() const noexcept;
 
+    /// Empties the graph as if it were newly constructed with `name` (no passes, resources, errors or
+    /// plans) but keeps the storage compile() reuses, so a renderer that rebuilds one RenderGraph
+    /// every frame compiles without reallocating its plan. Not during execute().
+    void reset(std::string_view name);
+
     /// External resources (histories, GPU scene, swapchain images). `desc` supplies the format,
     /// extent and usage (Device::textureDesc / bufferDesc of the handle).
     RgTexture importTexture(std::string_view name, rhi::TextureH texture, const rhi::TextureDesc& desc,
@@ -467,7 +473,8 @@ public:
                  std::function<void(RgContext&)> execute);
 
     /// Plans the frame (see the header comment). Fails with InvalidArgument listing every setup
-    /// error. May be called again with other options.
+    /// error. May be called again with other options; each call rebuilds the plan in the storage of
+    /// the previous one, so references into plan() see the new plan.
     Result<void> compile(const RgCompileOptions& options = {});
     bool isCompiled() const noexcept;
     /// The compiled plan (valid after a successful compile()).

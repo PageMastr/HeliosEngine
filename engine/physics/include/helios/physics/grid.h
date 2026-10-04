@@ -9,9 +9,10 @@
 //     turns real time into whole steps with an accumulator;
 //   * bodies are added in (layer, key) order within every createBodies() batch;
 //   * every order-dependent result (stateHash(), query tie-breaks, bodies()) is ordered by
-//     (layer, key), never by Jolt's BodyID. Each body's user data holds its key, which is what the
-//     `stable-order` Jolt patch (02 §7.1; not vendored yet, see engine/physics/README.md) needs to
-//     take the BodyID out of the solver's own ordering as well;
+//     (layer, key), never by Jolt's BodyID. Each body's user data holds its key, which the vendored
+//     `stable-order` Jolt patch (02 §7.1) uses to take the BodyID out of the solver's own ordering;
+//   * ShipHull and Vehicle bodies keep no contact cache from one step() to the next (the patch's
+//     NoCrossUpdateCache), so their step is a function of the bodies' states (client prediction);
 //   * the result does not depend on the number of job-system workers.
 //
 // Threading: a grid is not thread-safe; one thread drives it (step() fans out onto the job system
@@ -171,7 +172,8 @@ public:
     /// non-finite or negative mass, friction, restitution, damping or speed cap. The initial
     /// velocities of dynamic and kinematic bodies are clamped to their caps (maxLinearVelocity,
     /// Jolt's angular cap), as setVelocity() clamps them; with discrete motion quality (every Helios
-    /// body), Jolt never clamps a kinematic body later.
+    /// body), Jolt never clamps a kinematic body later. ShipHull and Vehicle bodies keep no contact
+    /// cache across step() (02 §7.1).
     Result<BodyHandle> createBody(const BodyDesc& desc);
     /// Adds a batch in (layer, key) order, whatever the order of `descs`; handles are returned in
     /// the order of `descs`. All-or-nothing: on error no body of the batch exists.

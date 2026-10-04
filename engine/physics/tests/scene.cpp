@@ -121,6 +121,45 @@ std::vector<BodyDesc> sceneBodies(bool independentOnly) {
     return out;
 }
 
+std::vector<BodyDesc> tileSceneBodies() {
+    std::vector<BodyDesc> out;
+    // 6 x 6 Terrain tiles of 4 m, top face at y = 0, seams at multiples of 4 m; keys stand in for packed
+    // TileKeys. Every moving body below starts over a tile corner, so it rests on four tiles.
+    const ShapeRef tile = must(createBox(Vec3(2.0f, 0.5f, 2.0f)));
+    for (u32 ix = 0; ix < 6; ++ix) {
+        for (u32 iz = 0; iz < 6; ++iz) {
+            out.push_back(body(0x7100'0000 + (ix << 8) + iz, ObjectLayer::Terrain, MotionType::Static, tile,
+                               DVec3(-10.0 + 4.0 * ix, -0.5, -10.0 + 4.0 * iz)));
+        }
+    }
+    // A ship hull sliding slowly across the seams around the corner (-4, -4).
+    BodyDesc hull = body(0x9000, ObjectLayer::ShipHull, MotionType::Dynamic,
+                         must(createBox(Vec3(3.0f, 0.6f, 1.6f))), DVec3(-4.0, 0.62, -4.0),
+                         Quat::fromAxisAngle(Vec3(0.0f, 1.0f, 0.0f), 0.3f));
+    hull.mass = 5000.0f;
+    hull.linearVelocity = Vec3(0.5f, 0.0f, 0.3f);
+    out.push_back(hull);
+    // A vehicle chassis rolling off the corner (-4, 8).
+    BodyDesc chassis = body(0xB000, ObjectLayer::Vehicle, MotionType::Dynamic,
+                            must(createBox(Vec3(2.0f, 0.5f, 1.0f))), DVec3(-4.0, 0.52, 8.0),
+                            Quat::fromAxisAngle(Vec3(0.0f, 1.0f, 0.0f), -0.2f));
+    chassis.mass = 1500.0f;
+    chassis.linearVelocity = Vec3(0.0f, 0.0f, -0.8f);
+    out.push_back(chassis);
+    // A stack of three boxes on the corner (8, -8), with spheres dropped onto it: multi-contact islands.
+    const ShapeRef box = must(createBox(Vec3(0.5f, 0.5f, 0.5f)));
+    for (u32 i = 0; i < 3; ++i) {
+        out.push_back(body(0x2000 + i, ObjectLayer::Dynamic, MotionType::Dynamic, box,
+                           DVec3(8.0 + 0.05 * i, 0.5 + 1.0 * i, -8.0 - 0.04 * i)));
+    }
+    const ShapeRef sphere = must(createSphere(0.4f));
+    for (u32 i = 0; i < 4; ++i) {
+        out.push_back(body(0x3000 + i, ObjectLayer::Dynamic, MotionType::Dynamic, sphere,
+                           DVec3(7.6 + 0.3 * i, 4.0 + 1.1 * i, -8.2 + 0.2 * i)));
+    }
+    return out;
+}
+
 Scene::Scene(const SceneOptions& options) : m_options(options) {
     GridDesc gd;
     gd.name = "rt03";
@@ -129,11 +168,17 @@ Scene::Scene(const SceneOptions& options) : m_options(options) {
     auto grid = PhysicsGrid::create(gd);
     REQUIRE_MESSAGE(grid.ok(), (grid.ok() ? std::string() : grid.error().toString()));
     m_grid = std::move(grid).value();
-    std::vector<BodyDesc> descs = sceneBodies(options.independentOnly);
+    std::vector<BodyDesc> descs = options.tiles ? tileSceneBodies() : sceneBodies(options.independentOnly);
     if (!options.permuteBodyIds) {
         REQUIRE(m_grid->createBodies(descs).ok());
     } else {
-        // Burn and free body slots so every BodyID differs from the plain build's.
+        // Every BodyID must differ from the plain build's, and so must their order. 1,000 add/remove
+        // cycles leave the 334 kept dummies in slots 0..333; every slot was used by a dummy first, so a
+        // body admitted into it gets a new sequence number. Jolt's free list is LIFO, so freeing the
+        // dummies in descending slot order hands the slots back in ascending order: admitting the bodies
+        // in reverse (layer, key) order then gives every pair of bodies the opposite BodyID order of the
+        // plain build, which flips each BodyID comparison stock Jolt makes. A seed admits them in a
+        // shuffled order instead.
         const ShapeRef dummy = must(createSphere(0.1f));
         for (u32 cycle = 0; cycle < 1000; ++cycle) {
             BodyDesc d = body(0xD000'0000 + cycle, ObjectLayer::Debris, MotionType::Dynamic, dummy, DVec3(0.0, 100.0, 0.0));
@@ -141,17 +186,32 @@ Scene::Scene(const SceneOptions& options) : m_options(options) {
             REQUIRE(h.ok());
             if (cycle % 3 != 0) m_grid->destroyBody(*h);
         }
-        for (BodyHandle h : m_grid->bodies()) m_grid->destroyBody(h);
+        const std::vector<BodyHandle> dummies = m_grid->bodies(); // key order, which is slot order
+        REQUIRE(descs.size() <= dummies.size());                 // every body takes a freed slot
+        for (auto it = dummies.rbegin(); it != dummies.rend(); ++it) m_grid->destroyBody(*it);
         std::sort(descs.begin(), descs.end(), [](const BodyDesc& a, const BodyDesc& b) {
             return std::pair(a.layer, a.key) > std::pair(b.layer, b.key);
         });
+        if (options.shuffleSeed != 0) {
+            // Fisher-Yates with splitmix64: std::shuffle's algorithm differs between standard libraries.
+            u64 state = options.shuffleSeed;
+            for (usize i = descs.size(); i > 1; --i) {
+                state += 0x9e3779b97f4a7c15ull;
+                u64 z = state;
+                z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+                z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+                z ^= z >> 31;
+                std::swap(descs[i - 1], descs[static_cast<usize>(z % i)]);
+            }
+        }
         for (const BodyDesc& d : descs) REQUIRE(m_grid->createBody(d).ok());
     }
     m_platform = m_grid->findBody(ObjectLayer::Kinematic, 0x6000);
-    if (!options.independentOnly) {
+    if (options.tiles || !options.independentOnly) {
         CharacterDesc cd;
         cd.key = 0xA000;
-        cd.position = DVec3(20.0, 0.0, -20.0);
+        // In the tile scene the character starts on the corner (4, 4) and its square walk crosses seams.
+        cd.position = options.tiles ? DVec3(4.0, 0.0, 4.0) : DVec3(20.0, 0.0, -20.0);
         auto c = m_grid->createCharacter(cd);
         REQUIRE(c.ok());
         m_character = *c;

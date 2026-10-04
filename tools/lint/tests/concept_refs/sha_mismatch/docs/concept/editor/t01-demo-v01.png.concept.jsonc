@@ -1,0 +1,23 @@
+// Fixture sidecar.
+{
+  "image": "t01-demo-v01.png",
+  "sha256": "35a35b4d5174847ef1349a835ef902c3ac66ef429784a4eada867ff615851dcd",
+  "title": "Demo concept",
+  "author": "Fixture author",
+  "created": "2026-10-04",
+  "source": {
+    "kind": "owner",
+    "url": "",
+    "rights": ""
+  },
+  "tools": ["Krita 5.2"],
+  "ai": null,
+  "licence": "MIT",
+  "ipReview": "Fixture: original shapes only.",
+  "status": "directional",
+  "elements": [],
+  "phase": "Ph1",
+  "planRefs": ["07 §2.1 T01"],
+  "deviations": [],
+  "review": ""
+}

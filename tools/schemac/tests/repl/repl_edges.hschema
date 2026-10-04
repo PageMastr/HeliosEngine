@@ -1,0 +1,29 @@
+// Replication edge cases that must compile and run, built into schemac_tests by helios_schema(REPL)
+// (test_repl.cpp). PR #33's round-6 review:
+// - blocking 2: types named like helios::refl::repl's. replEdgesReplication() used the runtime's names
+//   unqualified, so these hid them and the generated .repl.gen.cpp did not compile;
+// - blocking 1: f32 range bounds that are not f32 values (0.7, 0.9, 3.3). A saturated value decoded to
+//   the bound rounded to f32, inside the range, and re-encoded to other bits.
+package repl_edges;
+
+struct ComponentRepDesc { x: u8 }
+struct RepOf { x: u8 }
+struct RpcRep { x: u8 }
+struct EventRep { x: u8 }
+struct FileRepTables { x: u8 }
+struct FieldRep { x: u8 }
+struct BitWriter { x: u8 }
+struct BitReader { x: u8 }
+enum RpcDirection : u8 { ClientToServer; ServerToClient; ServerToServer }
+enum EventAudience : u8 { Owner; Relevant; Party }
+enum Audience : u8 { All; Owner }
+
+component Saturating replicate(all) {
+  a: f32   @quant(range=±0.7, bits=32)
+  b: vec3f @quant(range=±0.9, bits=26)
+  c: f32   @quant(range=±3.3, bits=28)
+  d: f64   @quant(range=±0.7, bits=32)
+}
+
+rpc Hit(x: u8) server->client reliable;
+event Boom @audience(owner) { a: u8 }

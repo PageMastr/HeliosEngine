@@ -108,7 +108,8 @@ formatting (shortest round trip, f32 exactness, non-finite), every codec (vocabu
 containers, variants, keyed lists, widening reads, corrupt input), builder types vs. the walker,
 the registry (including concurrent readers during registration), property paths, diff/patch
 (including a randomized property test), record files, `Mut<C>`, and the replication primitives
-(bit streams at every width, hostile varints, range quantization within half a step, smallest-three
+(bit streams at every width, hostile varints, range quantization within half a step and a saturated
+`f32` value re-encoding to the same bits when the bound is an `f32` value (not with 0.7), smallest-three
 quaternions (hostile ones that cannot be a unit quaternion rejected, while whatever the writer sends,
 NaN, zero and unnormalised input included, decodes at every width from 2 bits; a decoded rotation
 re-encodes within one step; the `bits` range asserted), frame-cell positions exact to half the

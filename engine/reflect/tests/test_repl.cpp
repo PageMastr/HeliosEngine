@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <limits>
 
 #include "helios/core/assert.h"
 #include "helios/core/random.h"
@@ -73,6 +74,28 @@ TEST_CASE("repl: range quantization clamps, maps NaN to min and stays within hal
     for (int i = 0; i < 10000; ++i) {
         const f64 v = -64.0 + 128.0 * static_cast<f64>(rng.next() >> 11) / 9007199254740992.0;
         CHECK(std::fabs(dequantizeRange(quantizeRange(v, -64, 64, 12), -64, 64, 12) - v) <= step / 2 + 1e-12);
+    }
+}
+
+TEST_CASE("repl: a saturated f32 range value re-encodes to the same bits") {
+    // Generated f32 readers store static_cast<f32>(dequantizeRange(...)), so helios-schemac emits an f32
+    // field's bound rounded to f32 (PR #33's round-6 review). With the bound as written (0.7), a saturated
+    // value decodes to 0.7f, which lies inside [-0.7, 0.7] and re-quantizes to another step.
+    {
+        const u64 q = quantizeRange(1e9, -0.7, 0.7, 32);
+        CHECK(quantizeRange(static_cast<f32>(dequantizeRange(q, -0.7, 0.7, 32)), -0.7, 0.7, 32) != q);
+    }
+    for (const f64 r0 : {0.7, 0.9, 3.3, 8.0, 0.1, 1e-40}) {
+        const f64 r = static_cast<f64>(static_cast<f32>(r0)); // the bound schemac emits for an f32 field
+        for (const u32 bits : {1u, 12u, 24u, 25u, 26u, 32u}) {
+            for (const f32 v : {-1e9f, 1e9f, std::numeric_limits<f32>::quiet_NaN(), std::numeric_limits<f32>::infinity(),
+                                static_cast<f32>(r), -static_cast<f32>(r)}) {
+                const u64 q = quantizeRange(v, -r, r, bits);
+                const f32 back = static_cast<f32>(dequantizeRange(q, -r, r, bits));
+                INFO("range=" << r0 << " bits=" << bits << " v=" << v);
+                CHECK(quantizeRange(back, -r, r, bits) == q);
+            }
+        }
     }
 }
 
@@ -158,7 +181,8 @@ TEST_CASE("repl: readSmallest3 accepts whatever writeSmallest3 writes") {
 }
 
 TEST_CASE("repl: re-encoding a decoded smallest-three rotation stays within one step") {
-    // Range, frame-cell and raw fields re-encode to identical bits (schemac's test_repl.cpp). Smallest
+    // Range and raw fields re-encode to identical bits (schemac's test_repl.cpp; an f32 field's range
+    // bound is an f32 value), frame-cell fields at a power-of-two res or below 2^50 steps (below). Smallest
     // three does not always (round-4 review: 26 of 20,000 at 10 bits): when two components are within
     // a step, the decoded largest (sqrt(1 - sum)) can come out below a quantized one and the index
     // flips, and above 24 bits the f32 result is coarser than a step. The rotation it decodes to

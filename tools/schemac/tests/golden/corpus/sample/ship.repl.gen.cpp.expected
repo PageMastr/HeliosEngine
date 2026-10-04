@@ -79,17 +79,16 @@ Result<void> RepOf<::sample::ship::ShipMotion>::readFullState(BitReader& r, ::sa
 namespace sample::ship {
 
 const ::helios::refl::repl::FileRepTables& shipReplication() noexcept {
-    using namespace ::helios::refl::repl;
-    static const ComponentRepDesc* const components[] = {
-        &RepOf<::sample::ship::ShipMotion>::desc(),
+    static const ::helios::refl::repl::ComponentRepDesc* const components[] = {
+        &::helios::refl::repl::RepOf<::sample::ship::ShipMotion>::desc(),
     };
-    static const RpcRep rpcs[] = {
-        {"sample.ship.RequestDock", 0x2961a27du, RpcDirection::ClientToServer, true, 2.0, "interact"},
+    static const ::helios::refl::repl::RpcRep rpcs[] = {
+        {"sample.ship.RequestDock", 0x2961a27du, ::helios::refl::repl::RpcDirection::ClientToServer, true, 2.0, "interact"},
     };
-    static const EventRep events[] = {
-        {"sample.ship.ShipDestroyed", 0x49a24256u, EventAudience::Relevant, true},
+    static const ::helios::refl::repl::EventRep events[] = {
+        {"sample.ship.ShipDestroyed", 0x49a24256u, ::helios::refl::repl::EventAudience::Relevant, true},
     };
-    static const FileRepTables tables{components, rpcs, events, 0x8fbafc7402fdd399ull};
+    static const ::helios::refl::repl::FileRepTables tables{components, rpcs, events, 0x8fbafc7402fdd399ull};
     return tables;
 }
 

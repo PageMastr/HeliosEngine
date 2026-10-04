@@ -272,9 +272,19 @@ private:
         // bounds must fit f32 for f32 fields, and max - min must be finite.
         if (!isF64 && *range > static_cast<f64>(FLT_MAX)) return fail(std::format("range=±{} does not fit an f32 component", formatF64(*range)));
         if (!std::isfinite(2 * *range)) return fail(std::format("range=±{}: the range's width is not a finite f64", formatF64(*range)));
+        // An f32 reader stores static_cast<f32>(dequantizeRange(...)). With a bound that is not an f32
+        // value (0.7), a saturated value (and NaN) decodes to the bound rounded to f32, which can lie
+        // inside the range and re-quantize to another step (PR #33's round-6 review: every saturated
+        // value at range=±0.7, bits=26 to 32). With the f32 bound itself, the ends decode to the bound
+        // after the cast, so both sides quantize to the same bits.
+        f64 bound = *range;
+        if (!isF64) {
+            bound = static_cast<f64>(static_cast<f32>(*range));
+            if (bound == 0) return fail(std::format("range=±{} rounds to 0 as an f32", formatF64(*range)));
+        }
         q.kind = Quant::Range;
-        q.min = -*range;
-        q.max = *range;
+        q.min = -bound;
+        q.max = bound;
         q.bits = static_cast<u32>(*bits);
         return q;
     }
@@ -784,29 +794,32 @@ private:
         w.line();
         w.line(std::format("namespace {} {{", cppNs(f->ast.package)));
         w.line();
-        w.open(std::format("const ::helios::refl::repl::FileRepTables& {}Replication() noexcept {{", camelCase(f->stem)));
-        w.line("using namespace ::helios::refl::repl;");
+        // This function is in the package's namespace, where a package type named like a runtime type
+        // (RpcDirection, FileRepTables) hides it from unqualified lookup, using-directive or not (PR #33's
+        // round-6 review): every runtime name is qualified, as gen_cpp qualifies its own.
+        const std::string rt = "::helios::refl::repl::";
+        w.open(std::format("const {}FileRepTables& {}Replication() noexcept {{", rt, camelCase(f->stem)));
         if (!comps.empty()) {
-            w.open("static const ComponentRepDesc* const components[] = {");
-            for (const auto& [d, fs] : comps) w.line(std::format("&RepOf<{}>::desc(),", declName(d)));
+            w.open(std::format("static const {}ComponentRepDesc* const components[] = {{", rt));
+            for (const auto& [d, fs] : comps) w.line(std::format("&{}RepOf<{}>::desc(),", rt, declName(d)));
             w.close("};");
         }
         if (!rs.empty()) {
-            w.open("static const RpcRep rpcs[] = {");
+            w.open(std::format("static const {}RpcRep rpcs[] = {{", rt));
             for (const Rpc& r : rs)
-                w.line(std::format("{{{}, {:#010x}u, RpcDirection::{}, {}, {}, {}}},", cppQuote(r.decl->qualifiedName), r.decl->typeId, r.direction,
-                                   r.reliable ? "true" : "false", f64Literal(r.rate), cppQuote(r.intent)));
+                w.line(std::format("{{{}, {:#010x}u, {}RpcDirection::{}, {}, {}, {}}},", cppQuote(r.decl->qualifiedName), r.decl->typeId, rt,
+                                   r.direction, r.reliable ? "true" : "false", f64Literal(r.rate), cppQuote(r.intent)));
             w.close("};");
         }
         if (!es.empty()) {
-            w.open("static const EventRep events[] = {");
+            w.open(std::format("static const {}EventRep events[] = {{", rt));
             for (const Event& e : es)
-                w.line(std::format("{{{}, {:#010x}u, EventAudience::{}, {}}},", cppQuote(e.decl->qualifiedName), e.decl->typeId, e.audience,
+                w.line(std::format("{{{}, {:#010x}u, {}EventAudience::{}, {}}},", cppQuote(e.decl->qualifiedName), e.decl->typeId, rt, e.audience,
                                    e.reliable ? "true" : "false"));
             w.close("};");
         }
-        w.line(std::format("static const FileRepTables tables{{{}, {}, {}, {:#018x}ull}};", comps.empty() ? "{}" : "components", rs.empty() ? "{}" : "rpcs",
-                           es.empty() ? "{}" : "events", fileHash(comps, rs, es)));
+        w.line(std::format("static const {}FileRepTables tables{{{}, {}, {}, {:#018x}ull}};", rt, comps.empty() ? "{}" : "components",
+                           rs.empty() ? "{}" : "rpcs", es.empty() ? "{}" : "events", fileHash(comps, rs, es)));
         w.line("return tables;");
         w.close();
         w.line();

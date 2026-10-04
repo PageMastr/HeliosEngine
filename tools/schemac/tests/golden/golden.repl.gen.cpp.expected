@@ -250,18 +250,17 @@ Result<void> RepOf<::golden::all::Status>::readFullState(BitReader& r, ::golden:
 namespace golden::all {
 
 const ::helios::refl::repl::FileRepTables& goldenReplication() noexcept {
-    using namespace ::helios::refl::repl;
-    static const ComponentRepDesc* const components[] = {
-        &RepOf<::golden::all::Motion>::desc(),
-        &RepOf<::golden::all::Status>::desc(),
+    static const ::helios::refl::repl::ComponentRepDesc* const components[] = {
+        &::helios::refl::repl::RepOf<::golden::all::Motion>::desc(),
+        &::helios::refl::repl::RepOf<::golden::all::Status>::desc(),
     };
-    static const RpcRep rpcs[] = {
-        {"golden.all.Fire", 0x765256edu, RpcDirection::ClientToServer, false, 20.0, "combat"},
+    static const ::helios::refl::repl::RpcRep rpcs[] = {
+        {"golden.all.Fire", 0x765256edu, ::helios::refl::repl::RpcDirection::ClientToServer, false, 20.0, "combat"},
     };
-    static const EventRep events[] = {
-        {"golden.all.Exploded", 0xc8e093cau, EventAudience::Relevant, true},
+    static const ::helios::refl::repl::EventRep events[] = {
+        {"golden.all.Exploded", 0xc8e093cau, ::helios::refl::repl::EventAudience::Relevant, true},
     };
-    static const FileRepTables tables{components, rpcs, events, 0xf50b36ad1481202cull};
+    static const ::helios::refl::repl::FileRepTables tables{components, rpcs, events, 0xf50b36ad1481202cull};
     return tables;
 }
 

@@ -9,7 +9,7 @@
 // (screenshots and helios-uitest captures) and the "Present" pass onto the swapchain image.
 //
 // Test mode (helios-uitest, 07 §4.4) makes runs deterministic: a fixed 1/60 s clock, the embedded
-// vector font only, no cursor blink, no OS input (only ui.* events injected through the SDL3
+// editor font only, no cursor blink, no OS input (only ui.* events injected through the SDL3
 // backend seam), no layout file, a hidden window unless `present` is set, and frames rendered only
 // when a capture asks for one. Its edits carry Origin::UiScripted.
 //

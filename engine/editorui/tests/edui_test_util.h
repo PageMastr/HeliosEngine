@@ -39,7 +39,7 @@ inline fs::Path fixtureCopy(std::string_view name) {
     return dir;
 }
 
-/// A headless ImGui context: fixed display size and time step, the embedded vector font, and a
+/// A headless ImGui context: fixed display size and time step, the embedded editor font, and a
 /// pretend renderer that acknowledges texture requests.
 class HeadlessImGui {
 public:
@@ -53,7 +53,7 @@ public:
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NavEnableKeyboard;
         io.ConfigInputTextCursorBlink = false;
         io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset;
-        io.Fonts->AddFontDefaultVector();
+        addEditorFont(io);
     }
     ~HeadlessImGui() {
         ImGui::SetCurrentContext(m_ctx);

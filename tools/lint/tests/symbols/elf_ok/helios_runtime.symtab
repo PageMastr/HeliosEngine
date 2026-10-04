@@ -1,8 +1,8 @@
-0000000000002000 t mi_malloc
-0000000000002100 t ecs_init
-0000000000002200 t _ZN3JPH7Factory9sInstanceE
-0000000000004000 T helios_runtime_link_group_modules
-0000000000004500 u _ZZN6helios4core8registryEvE8instance
-0000000000004508 u _ZGVZN6helios4core8registryEvE8instance
-0000000000004600 B _ZN6helios3log8g_levelE
-0000000000004610 b _ZN6helios3log12_GLOBAL__N_16g_sinkE
+mi_malloc|0000000000002000|   t  |              FUNC|0000000000000008|     |.text
+ecs_init|0000000000002100|   t  |              FUNC|0000000000000008|     |.text
+_ZN3JPH7Factory9sInstanceE|0000000000002200|   t  |              FUNC|0000000000000008|     |.text
+helios_runtime_link_group_modules|0000000000004000|   T  |              FUNC|0000000000000008|     |.text
+_ZZN6helios4core8registryEvE8instance|0000000000004500|   u  |            OBJECT|0000000000000008|     |.bss
+_ZGVZN6helios4core8registryEvE8instance|0000000000004508|   u  |            OBJECT|0000000000000008|     |.bss
+_ZN6helios3log8g_levelE|0000000000004600|   B  |            OBJECT|0000000000000008|     |.bss
+_ZN6helios3log12_GLOBAL__N_16g_sinkE|0000000000004610|   b  |            OBJECT|0000000000000008|     |.bss

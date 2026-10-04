@@ -128,10 +128,16 @@ foreach(fixture elf_ok pe_ok)
   helios_lint_test(lint_symbol_audit_fixture_${fixture} COMMAND ${CMAKE_COMMAND}
     -DFIXTURE=${LINT_TESTS}/symbols/${fixture} ${symLint})
 endforeach()
+# A known finding (policy HELIOS_SYMBOL_KNOWN_FINDINGS) is reported and passes; constants and typeinfo in
+# .data.rel.ro are not state.
+helios_lint_test(lint_symbol_audit_fixture_elf_known COMMAND ${CMAKE_COMMAND}
+  -DFIXTURE=${LINT_TESTS}/symbols/elf_known ${symLint})
+set_tests_properties(lint_symbol_audit_fixture_elf_known PROPERTIES
+  PASS_REGULAR_EXPRESSION "1 known finding.*TypeOf.*owner WP-0.6c part 2.*2 image.s. passed")
 foreach(case
     "elf_group_export|failed .3 finding.*R1 helios_runtime exports 'mi_malloc' .T.*R1 helios_runtime exports 'ZSTD_compress' .T.*R1 helios_runtime exports '_ZN3JPH7Factory9sInstanceE' .D."
     "elf_singleton|R2 SDL3 is in two images, helios_client and rhi_tests .'SDL_Init'."
-    "elf_duplicate_state|failed .1 finding.*R3 ecs_tests has its own copy of '_ZZN6helios3ecs11componentIdINS0_8PositionEEEjvE2id' .b., which helios_runtime defines"
+    "elf_duplicate_state|failed .1 finding.*R3 ecs_tests has its own copy of '_ZZN6helios3ecs11componentIdINS0_8PositionEEEjvE2id' .b, .bss., which helios_runtime defines"
     "elf_game|failed .4 finding.*R6 game image game_bad has its own strong definition of '_ZN6helios3log5write.*R4 game image game_bad defines 'mi_malloc' from mimalloc.*R5 game image game_bad defines Helios data '_ZN6helios5probe8g_countsE' .B..*R4 game image game_bad defines '_Z12lua_pushnilP9lua_State' from Luau"
     "elf_client_luau|failed .1 finding.*R1 helios_client exports '_Z12lua_pushnilP9lua_State' .T."
     "pe_c_export|failed .2 finding.*P1 helios_runtime exports 'mi_malloc', a C name that is not helios_.*P1 helios_runtime exports 'yyjson_read_opts'"
@@ -153,6 +159,18 @@ if(HELIOS_MODULAR)
   foreach(t IN LISTS symGroups)
     string(APPEND symLines "group ${t} $<TARGET_FILE:${t}>\n")
   endforeach()
+  # Third-party libraries a group exports by design (cmake/HeliosModular.cmake): R1 accepts what their
+  # archives define.
+  set(symThirdParty "")
+  foreach(entry IN LISTS HELIOS_GROUP_EXPORTED_THIRD_PARTY)
+    string(REPLACE "|" ";" parts "${entry}")
+    list(GET parts 0 group)
+    list(GET parts 1 lib)
+    if(TARGET helios_${group} AND TARGET ${lib})
+      string(APPEND symThirdParty "thirdparty helios_${group} ${lib} $<TARGET_FILE:${lib}>\n")
+    endif()
+  endforeach()
+  string(APPEND symLines "${symThirdParty}")
   set(symTool -DFORMAT=elf)
   if(MSVC)
     # PE images have no symbol table: the export tables of the groups (P1). The consumer and game rules
@@ -198,7 +216,7 @@ if(HELIOS_MODULAR)
     foreach(t IN LISTS symGroups)
       string(APPEND symBad "group ${t} $<TARGET_FILE:${t}>\n")
     endforeach()
-    string(APPEND symBad "game link_model_bad_game $<TARGET_FILE:link_model_bad_game>\n")
+    string(APPEND symBad "${symThirdParty}game link_model_bad_game $<TARGET_FILE:link_model_bad_game>\n")
     set(symBadImages ${CMAKE_BINARY_DIR}/helios_generated/symbol_images_bad_game_$<CONFIG>.txt)
     file(GENERATE OUTPUT ${symBadImages} CONTENT "${symBad}")
     foreach(case

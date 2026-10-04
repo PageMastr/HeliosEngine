@@ -24,19 +24,27 @@ set(HELIOS_SYMBOL_GAME_FORBIDDEN
   "mimalloc|^_?mi_"
   "Tracy|^(___tracy|_Z(T[VISTHW]|GV|ZN?)?N[rVKRO]*5tracy)")
 
-# A mangled name owned by Helios: an entity of namespace helios (including its vtables, typeinfo, guard
-# variables, TLS wrappers, thunks and function-local statics), or a C symbol named helios_*.
+# A mangled name owned by Helios: an entity of namespace helios or of a helios_* namespace (generated code
+# such as the shader tables helios_render_shaders), including its vtables, typeinfo, guard variables, TLS
+# wrappers, thunks and function-local statics, or a C symbol named helios_*.
 set(HELIOS_SYMBOL_OWNED_REGEX
-  "^(helios_|_Z(T[VISTTHW]|GV|GR|Th[n0-9]+_|Tv[n0-9]+_[n0-9]+_)?(GV)?Z?N[rVK]*[RO]?6helios)")
+  "^(helios_|_Z(T[VISTTHW]|GV|GR|Th[n0-9]+_|Tv[n0-9]+_[n0-9]+_)?(GV)?Z?N[rVK]*[RO]?(6helios|[0-9]+helios_))")
 
 # Symbols the ELF linker defines in every shared object.
 set(HELIOS_SYMBOL_LINKER_DEFINED _init _fini __bss_start _edata _end __end__ __data_start data_start
   _GLOBAL_OFFSET_TABLE_ _DYNAMIC __dso_handle __TMC_END__)
 
-# Third-party code a group exports by design (R1): <group>|<library>|<regex on the raw (mangled) name>.
-# Keep in step with HELIOS_GROUP_EXPORTED_THIRD_PARTY in cmake/HeliosModular.cmake.
-#   Luau's C API (lua.h, lualib.h: lua_*, luaL_*, luau_*; C++ linkage): engine/script's public API is
-#   built on it, so the other groups and generated binding glue call the one VM in helios_runtime. Luau's
-#   internal functions are hidden (LUAI_FUNC) and never exported.
-set(HELIOS_SYMBOL_GROUP_THIRD_PARTY
-  "helios_runtime|Luau VM|^_Z[0-9]+lua[uL]?_")
+# Known findings: <rule>|<owner>|<regex on the raw (mangled) symbol> (the regex is last and may contain
+# '|'). A matching finding is reported as known and does not fail the audit; anything else fails. Each entry
+# names the work package that must remove it; never add one to make a new finding pass without that
+# owner's agreement.
+#   engine/reflect builds container and RecordRef TypeInfos (TypeOf<std::vector<E>>, std::optional,
+#   std::map, ...) and their TypeOps (makeOps<T>) in function-local statics of header templates, so each
+#   image that instantiates one has its own copy: two TypeInfo addresses for one type, and a TypeInfo
+#   that lives in a game module dies with it on unload. 02 §1.4 requires them to come from the registry
+#   (one image); WP-0.6c part 2 moves them there before the Probe module registers reflected types.
+set(HELIOS_SYMBOL_KNOWN_FINDINGS
+  "R3|WP-0.6c part 2|^_ZZN6helios4refl6TypeOfI.*E3getEvE[0-9]+(info|name)(B[0-9]+[A-Za-z0-9_]+)?$"
+  "R3|WP-0.6c part 2|^_ZZN6helios4refl7makeOpsI.*EERKNS0_7TypeOpsEvE3ops$"
+  "R5|WP-0.6c part 2|^_ZZN6helios4refl6TypeOfI.*E3getEvE[0-9]+(info|name)(B[0-9]+[A-Za-z0-9_]+)?$"
+  "R5|WP-0.6c part 2|^_ZZN6helios4refl7makeOpsI.*EERKNS0_7TypeOpsEvE3ops$")

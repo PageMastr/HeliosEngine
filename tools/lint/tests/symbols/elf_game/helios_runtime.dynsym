@@ -1,2 +1,2 @@
-0000000000004000 T helios_runtime_link_group_modules
-0000000000004100 T _ZN6helios3log5writeENS0_5LevelESt17basic_string_viewIcSt11char_traitsIcEE
+helios_runtime_link_group_modules|0000000000004000|   T  |              FUNC|0000000000000008|     |.text
+_ZN6helios3log5writeENS0_5LevelESt17basic_string_viewIcSt11char_traitsIcEE|0000000000004100|   T  |              FUNC|0000000000000008|     |.text

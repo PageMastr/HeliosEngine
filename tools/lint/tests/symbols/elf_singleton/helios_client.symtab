@@ -1,2 +1,2 @@
-0000000000002000 t SDL_Init
-0000000000004000 T helios_client_link_group_modules
+SDL_Init|0000000000002000|   t  |              FUNC|0000000000000008|     |.text
+helios_client_link_group_modules|0000000000004000|   T  |              FUNC|0000000000000008|     |.text

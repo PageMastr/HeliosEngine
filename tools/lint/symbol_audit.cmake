@@ -6,20 +6,27 @@
 #   cmake -DFIXTURE=<dir> [-DPOLICY=<file>] -P symbol_audit.cmake
 #
 # IMAGES_FILE lists one image per line: "<role> <name> <path>". Roles:
-#   group     a link-group library (helios_runtime, helios_client, helios_editor);
-#   consumer  an executable or library that links group libraries (tools, tests, apps);
-#   game      a game module image (02 §1.4: game_<gem>[_client|_edcore|_edui]). WP-0.6c part 2 adds the
-#             Probe module; part 1 audits fixture images.
-# A FIXTURE directory holds recorded tool output instead: images.txt ("format elf|pe", then
-# "<role> <name>" lines) and, per image, <name>.symtab and <name>.dynsym (`nm -p --defined-only`, without
-# and with -D; game images need no .dynsym) or <name>.exports (`dumpbin /exports`).
+#   group       a link-group library (helios_runtime, helios_client, helios_editor);
+#   consumer    an executable or library that links group libraries (tools, tests, apps);
+#   game        a game module image (02 §1.4: game_<gem>[_client|_edcore|_edui]). WP-0.6c part 2 adds the
+#               Probe module; part 1 audits fixture images;
+#   thirdparty  "thirdparty <group> <library> <archive>": a third-party library whose objects the group
+#               exports by design (HELIOS_GROUP_EXPORTED_THIRD_PARTY in cmake/HeliosModular.cmake); R1
+#               accepts exactly the global symbols that the library's archive defines.
+# A FIXTURE directory holds recorded tool output instead: images.txt ("format elf|pe", then "<role> <name>"
+# lines, "thirdparty <group> <library>") and, per image, <name>.symtab and <name>.dynsym (`nm -f sysv -p
+# --defined-only`, without and with -D; game images need no .dynsym), <library>.archive (the same listing of
+# the archive) or <name>.exports (`dumpbin /exports`).
+#
+# "Mutable data" below is an object symbol (nm class b B d D v V u) in a writable section: .data*, .bss*,
+# .tdata*, .tbss*, but not .data.rel.ro* (vtables, typeinfo and constants that hold pointers live there).
 #
 # ELF images (nm):
-#   R1  a group exports only Helios code: every strong exported definition is in namespace helios or is a
-#       C symbol named helios_*. Third-party archives are linked in hidden (--exclude-libs), so anything
-#       else means third-party or global-namespace code was compiled into the group's own objects. The
-#       policy's HELIOS_SYMBOL_GROUP_THIRD_PARTY lists the third-party API a group exports by design
-#       (helios_runtime: Luau's C API, which engine/script's public API is built on).
+#   R1  a group exports only Helios code: every strong exported definition is in namespace helios (or a
+#       helios_* namespace, such as generated shader tables) or is a C symbol named helios_*, or comes from
+#       a third-party library the group exports by design (role thirdparty). Other third-party archives are
+#       linked in hidden (--exclude-libs), so anything else means third-party or global-namespace code was
+#       compiled into the group's own objects.
 #   R2  each third-party library with process state (the policy's singleton markers) is defined in at most
 #       one image: two copies of mimalloc, flecs, Jolt, Luau, Tracy, SDL3, ImGui, volk or netcode split
 #       their state (02 §1.4 "Singletons").
@@ -31,8 +38,9 @@
 #   R5  a game image defines no mutable data in namespace helios (it imports engine state, never owns it);
 #   R6  a game image has no strong definition of a function that a group exports (it imports engine code).
 # PE images (dumpbin /exports; a linked image has no symbol table, so R2-R6 run on the ELF build):
-#   P1  every undecorated (C) name a group exports is helios_*.
-# Exits non-zero with one line per finding.
+#   P1  every undecorated (C) name a group exports is helios_*, and a group exports something.
+# A finding that matches the policy's HELIOS_SYMBOL_KNOWN_FINDINGS (rule, owner, regex) is printed as known
+# and does not fail the audit; every other finding does. Exits non-zero with one line per finding.
 
 cmake_minimum_required(VERSION 3.28)
 if(NOT POLICY)
@@ -41,13 +49,31 @@ endif()
 include("${POLICY}")
 
 set(findings "")
-function(_fail msg)
+set(known "")
+# Records a finding of <rule> about symbol <sym>; a known finding (policy) is kept apart.
+function(_fail rule sym msg)
+  foreach(entry IN LISTS HELIOS_SYMBOL_KNOWN_FINDINGS)
+    # <rule>|<owner>|<regex>: the regex is last because it may contain '|'.
+    string(FIND "${entry}" "|" bar1)
+    string(SUBSTRING "${entry}" 0 ${bar1} knownRule)
+    math(EXPR start "${bar1} + 1")
+    string(SUBSTRING "${entry}" ${start} -1 rest)
+    string(FIND "${rest}" "|" bar2)
+    string(SUBSTRING "${rest}" 0 ${bar2} owner)
+    math(EXPR start "${bar2} + 1")
+    string(SUBSTRING "${rest}" ${start} -1 knownRegex)
+    if(rule STREQUAL knownRule AND NOT sym STREQUAL "" AND sym MATCHES "${knownRegex}")
+      list(APPEND known "${msg} [known, owner ${owner}]")
+      set(known "${known}" PARENT_SCOPE)
+      return()
+    endif()
+  endforeach()
   list(APPEND findings "${msg}")
   set(findings "${findings}" PARENT_SCOPE)
 endfunction()
 
-# Sets <out> to the lines of an image listing that match <regex>. <kind> is symtab, dynsym or exports.
-# The tool output goes through a file so that file(STRINGS ... REGEX) filters the (large) symbol tables.
+# Sets <out> to the lines of an image listing that match <regex>. <kind> is symtab, dynsym, archive or
+# exports. The tool output goes through a file so that file(STRINGS ... REGEX) filters the (large) tables.
 function(_listing name path kind regex out)
   if(FIXTURE)
     set(file "${FIXTURE}/${name}.${kind}")
@@ -65,9 +91,9 @@ function(_listing name path kind regex out)
       if(NOT NM)
         message(FATAL_ERROR "symbol audit: pass -DNM=<nm> for ELF images")
       endif()
-      set(cmd "${NM}" -p --defined-only "${path}")
+      set(cmd "${NM}" -f sysv -p --defined-only "${path}")
       if(kind STREQUAL "dynsym")
-        set(cmd "${NM}" -p -D --defined-only "${path}")
+        set(cmd "${NM}" -f sysv -p -D --defined-only "${path}")
       endif()
     endif()
     execute_process(COMMAND ${cmd} RESULT_VARIABLE rc OUTPUT_FILE "${file}" ERROR_VARIABLE err)
@@ -79,19 +105,31 @@ function(_listing name path kind regex out)
   set(${out} "${lines}" PARENT_SCOPE)
 endfunction()
 
-# One `nm -p --defined-only` line: sets <type> and <name> (a version suffix such as @@VER dropped), or
-# leaves <name> empty for a line that is not a symbol.
-macro(_nm_line line type name)
+# One `nm -f sysv` line ("name|value|class|type|size|line|section"): sets <class>, <name> (a version
+# suffix such as @@VER dropped) and <section>, or leaves <name> empty for a line that is not a symbol.
+macro(_sym_line line class name section)
   set(${name} "")
-  if("${line}" MATCHES "^[0-9a-fA-F]* ([A-Za-z?]) ([^ ]+)$")
-    set(${type} "${CMAKE_MATCH_1}")
-    string(REGEX REPLACE "@.*$" "" ${name} "${CMAKE_MATCH_2}")
+  if("${line}" MATCHES "^([^|]+)\\|[^|]*\\| *([A-Za-z?]) *\\|[^|]*\\|[^|]*\\|[^|]*\\|(.*)$")
+    string(STRIP "${CMAKE_MATCH_1}" _symName)
+    set(${class} "${CMAKE_MATCH_2}")
+    string(STRIP "${CMAKE_MATCH_3}" ${section})
+    string(REGEX REPLACE "@.*$" "" ${name} "${_symName}")
+  endif()
+endmacro()
+
+# True when <class> and <section> describe mutable data (see the header).
+macro(_is_mutable_data class section out)
+  set(${out} OFF)
+  if("${class}" MATCHES "^[bBdDvVu]$" AND "${section}" MATCHES "^\\.(data|bss|tdata|tbss)"
+     AND NOT "${section}" MATCHES "^\\.data\\.rel\\.ro")
+    set(${out} ON)
   endif()
 endmacro()
 
 # --- Images -------------------------------------------------------------------------------------
 set(format "")
 set(entries "")
+set(thirdParty "")
 if(FIXTURE)
   file(STRINGS "${FIXTURE}/images.txt" lines)
   foreach(e IN LISTS lines)
@@ -99,6 +137,8 @@ if(FIXTURE)
       set(format "${CMAKE_MATCH_1}")
     elseif(e MATCHES "^(group|consumer|game) ([^ ]+)$")
       list(APPEND entries "${CMAKE_MATCH_1}|${CMAKE_MATCH_2}|-")
+    elseif(e MATCHES "^thirdparty ([^ ]+) ([^ ]+)$")
+      list(APPEND thirdParty "${CMAKE_MATCH_1}|${CMAKE_MATCH_2}|-")
     endif()
   endforeach()
 elseif(IMAGES_FILE)
@@ -113,6 +153,11 @@ elseif(IMAGES_FILE)
         message(FATAL_ERROR "symbol audit: ${CMAKE_MATCH_2} (${CMAKE_MATCH_3}) does not exist; build first")
       endif()
       list(APPEND entries "${CMAKE_MATCH_1}|${CMAKE_MATCH_2}|${CMAKE_MATCH_3}")
+    elseif(e MATCHES "^thirdparty ([^ ]+) ([^ ]+) (.+)$")
+      if(NOT EXISTS "${CMAKE_MATCH_3}")
+        message(FATAL_ERROR "symbol audit: ${CMAKE_MATCH_2} (${CMAKE_MATCH_3}) does not exist; build first")
+      endif()
+      list(APPEND thirdParty "${CMAKE_MATCH_1}|${CMAKE_MATCH_2}|${CMAKE_MATCH_3}")
     endif()
   endforeach()
   set(format "${FORMAT}")
@@ -159,12 +204,12 @@ if(format STREQUAL "pe")
         set(sym "${CMAKE_MATCH_1}")
         math(EXPR n "${n} + 1")
         if(NOT sym MATCHES "^\\?" AND NOT sym MATCHES "${HELIOS_SYMBOL_OWNED_REGEX}")
-          _fail("P1 ${name} exports '${sym}', a C name that is not helios_*: a group exports only Helios objects, never a third-party library (02 §1.4)")
+          _fail(P1 "${sym}" "P1 ${name} exports '${sym}', a C name that is not helios_*: a group exports only Helios objects, never a third-party library (02 §1.4)")
         endif()
       endif()
     endforeach()
     if(n EQUAL 0)
-      _fail("P1 ${name}: no exports found (is this a DLL, and did dumpbin's table format change?)")
+      _fail(P1 "" "P1 ${name}: no exports found (is this a DLL, and did dumpbin's table format change?)")
     endif()
     message(STATUS "symbol audit: ${name} exports ${n} symbols")
   endforeach()
@@ -199,50 +244,60 @@ if(format STREQUAL "elf")
   endforeach()
   list(LENGTH forbiddenLibs nForbidden)
   math(EXPR lastForbidden "${nForbidden} - 1")
-  # Lines of interest: mutable data (b B d D v V u) named like Helios code, and the singleton markers.
-  set(dataOrMarker " ([bBdDvVu] _Z|[bBdDvVu] helios_|[A-Za-z] (${markerRegex})$)")
+  set(anySymbol "\\| *[A-Za-z?] *\\|")
+  # Lines of interest outside game images: data named like Helios code, and the singleton markers.
+  set(dataOrMarker "^((_Z|helios_)[^|]*\\| *[^|]*\\| *[bBdDvVu] *\\||(${markerRegex}) *\\|)")
 
-  # Groups: R1 over the dynamic symbol table. Exported Helios functions (for R6) and mutable Helios data
-  # (for R3) go into hash sets: MD5-keyed variables.
+  # Third-party libraries a group exports by design: their archives' global definitions (for R1).
+  foreach(e IN LISTS thirdParty)
+    string(REPLACE "|" ";" e "${e}")
+    list(GET e 0 group)
+    list(GET e 1 lib)
+    list(GET e 2 path)
+    _listing("${lib}" "${path}" archive "${anySymbol}" lines)
+    foreach(line IN LISTS lines)
+      _sym_line("${line}" c s sec)
+      if(NOT s STREQUAL "" AND c MATCHES "^[A-Z]$")
+        string(MD5 k "${s}")
+        set(TP_${group}_${k} "${lib}")
+      endif()
+    endforeach()
+  endforeach()
+
+  # Groups: R1 over the dynamic symbol table. Exported Helios functions (for R6) and exported mutable Helios
+  # data (for R3's copy relocations) go into hash sets: MD5-keyed variables.
   foreach(e IN LISTS groups)
     string(REPLACE "|" ";" e "${e}")
     list(GET e 1 name)
     list(GET e 2 path)
-    _listing("${name}" "${path}" dynsym "^[0-9a-fA-F]* [A-Za-z] " lines)
+    _listing("${name}" "${path}" dynsym "${anySymbol}" lines)
     set(exported 0)
+    set(exportedThirdParty 0)
     foreach(line IN LISTS lines)
-      _nm_line("${line}" t s)
+      _sym_line("${line}" c s sec)
       if(s STREQUAL "")
         continue()
       endif()
       math(EXPR exported "${exported} + 1")
+      string(MD5 k "${s}")
       if(s MATCHES "${HELIOS_SYMBOL_OWNED_REGEX}")
-        string(MD5 k "${s}")
-        if(t STREQUAL "T")
+        if(c STREQUAL "T")
           set(EXPORT_${k} "${name}")
-        elseif(t MATCHES "^[bBdDvVu]$")
-          set(EXPORTED_DATA_${k} "${name}") # for R3: what a consumer may import by copy relocation
         endif()
-      elseif(t MATCHES "^[BDGRST]$" AND NOT s IN_LIST HELIOS_SYMBOL_LINKER_DEFINED)
-        set(allowed OFF)
-        foreach(entry IN LISTS HELIOS_SYMBOL_GROUP_THIRD_PARTY)
-          string(REPLACE "|" ";" parts "${entry}")
-          list(GET parts 0 allowedGroup)
-          list(GET parts 2 allowedRegex)
-          if(name STREQUAL allowedGroup AND s MATCHES "${allowedRegex}")
-            set(allowed ON)
-            break()
-          endif()
-        endforeach()
-        if(NOT allowed)
-          _fail("R1 ${name} exports '${s}' (${t}), which is not Helios code: a group exports only Helios objects, and third-party archives stay hidden (02 §1.4)")
+        _is_mutable_data("${c}" "${sec}" mutable)
+        if(mutable)
+          set(EXPORTED_DATA_${k} "${name}")
         endif()
+      elseif(DEFINED TP_${name}_${k})
+        math(EXPR exportedThirdParty "${exportedThirdParty} + 1")
+      elseif(c MATCHES "^[BDGRST]$" AND NOT s IN_LIST HELIOS_SYMBOL_LINKER_DEFINED)
+        _fail(R1 "${s}" "R1 ${name} exports '${s}' (${c}), which is not Helios code: a group exports only Helios objects, and third-party archives stay hidden (02 §1.4)")
       endif()
     endforeach()
     if(exported EQUAL 0)
-      _fail("R1 ${name} exports nothing (is it a shared library?)")
+      _fail(R1 "" "R1 ${name} exports nothing (is it a shared library?)")
     endif()
-    message(STATUS "symbol audit: ${name} exports ${exported} symbols")
+    message(STATUS "symbol audit: ${name} exports ${exported} symbols (${exportedThirdParty} from third-party libraries it exports by design)")
   endforeach()
 
   # Every image: R2, R3, R5 (and R4, R6 for game images, which read the whole table).
@@ -252,7 +307,7 @@ if(format STREQUAL "elf")
     list(GET e 1 name)
     list(GET e 2 path)
     if(role STREQUAL "game")
-      _listing("${name}" "${path}" symtab "^[0-9a-fA-F]* [A-Za-z] " lines)
+      _listing("${name}" "${path}" symtab "${anySymbol}" lines)
     else()
       _listing("${name}" "${path}" symtab "${dataOrMarker}" lines)
     endif()
@@ -263,9 +318,9 @@ if(format STREQUAL "elf")
     # never appears there.
     set(imported "")
     if(role STREQUAL "consumer")
-      _listing("${name}" "${path}" dynsym " [bBdDvVu] _Z" dynLines)
+      _listing("${name}" "${path}" dynsym "^_Z" dynLines)
       foreach(line IN LISTS dynLines)
-        _nm_line("${line}" dt ds)
+        _sym_line("${line}" dc ds dsec)
         if(NOT ds STREQUAL "")
           string(MD5 k "${ds}")
           if(DEFINED EXPORTED_DATA_${k})
@@ -276,7 +331,7 @@ if(format STREQUAL "elf")
     endif()
     set(forbiddenSeen "")
     foreach(line IN LISTS lines)
-      _nm_line("${line}" t s)
+      _sym_line("${line}" c s sec)
       if(s STREQUAL "")
         continue()
       endif()
@@ -285,13 +340,14 @@ if(format STREQUAL "elf")
         set(lib "${MARKER_${k}}")
         string(MD5 lk "${lib}")
         if(DEFINED SINGLETON_${lk} AND NOT SINGLETON_${lk} STREQUAL name)
-          _fail("R2 ${lib} is in two images, ${SINGLETON_${lk}} and ${name} ('${s}'): its process state splits (02 §1.4, singletons)")
+          _fail(R2 "${s}" "R2 ${lib} is in two images, ${SINGLETON_${lk}} and ${name} ('${s}'): its process state splits (02 §1.4, singletons)")
         else()
           set(SINGLETON_${lk} "${name}")
         endif()
       endif()
       # Guard variables follow their variable; unnamed-namespace names repeat in every TU.
-      if(t MATCHES "^[bBdDvVu]$" AND s MATCHES "${HELIOS_SYMBOL_OWNED_REGEX}" AND NOT s MATCHES "^_ZGV"
+      _is_mutable_data("${c}" "${sec}" mutable)
+      if(mutable AND s MATCHES "${HELIOS_SYMBOL_OWNED_REGEX}" AND NOT s MATCHES "^_ZGV"
          AND NOT s MATCHES "_GLOBAL__N_")
         string(MD5 k "${s}")
         if(role STREQUAL "group")
@@ -299,9 +355,9 @@ if(format STREQUAL "elf")
         elseif(k IN_LIST imported)
           # Imported through a copy relocation (see above): one instance per process.
         elseif(DEFINED DATA_${k})
-          _fail("R3 ${name} has its own copy of '${s}' (${t}), which ${DATA_${k}} defines: header-defined state is per image on Windows (02 §1.4, no per-image caches of global state)")
+          _fail(R3 "${s}" "R3 ${name} has its own copy of '${s}' (${c}, ${sec}), which ${DATA_${k}} defines: header-defined state is per image on Windows (02 §1.4, no per-image caches of global state)")
         elseif(role STREQUAL "game")
-          _fail("R5 game image ${name} defines Helios data '${s}' (${t}): a game image imports engine state, it never owns any (02 §1.4)")
+          _fail(R5 "${s}" "R5 game image ${name} defines Helios data '${s}' (${c}, ${sec}): a game image imports engine state, it never owns any (02 §1.4)")
         endif()
       endif()
       if(role STREQUAL "game")
@@ -311,14 +367,14 @@ if(format STREQUAL "elf")
             list(GET forbiddenLibs ${f} lib)
             if(NOT lib IN_LIST forbiddenSeen)
               list(APPEND forbiddenSeen "${lib}")
-              _fail("R4 game image ${name} defines '${s}' from ${lib}: a game image defines nothing from flecs, Jolt, Luau, mimalloc or Tracy (02 §1.4)")
+              _fail(R4 "${s}" "R4 game image ${name} defines '${s}' from ${lib}: a game image defines nothing from flecs, Jolt, Luau, mimalloc or Tracy (02 §1.4)")
             endif()
           endif()
         endforeach()
-        if(t STREQUAL "T")
+        if(c STREQUAL "T")
           string(MD5 k "${s}")
           if(DEFINED EXPORT_${k})
-            _fail("R6 game image ${name} has its own strong definition of '${s}', which ${EXPORT_${k}} exports: a game image imports engine functions (02 §1.4)")
+            _fail(R6 "${s}" "R6 game image ${name} has its own strong definition of '${s}', which ${EXPORT_${k}} exports: a game image imports engine functions (02 §1.4)")
           endif()
         endif()
       endif()
@@ -326,6 +382,13 @@ if(format STREQUAL "elf")
   endforeach()
 endif()
 
+list(LENGTH known nk)
+if(nk GREATER 0)
+  list(REMOVE_DUPLICATES known)
+  list(LENGTH known nk)
+  string(REPLACE ";" "\n  " text "${known}")
+  message(STATUS "symbol audit: ${nk} known finding(s), each owned by a work package (policy HELIOS_SYMBOL_KNOWN_FINDINGS):\n  ${text}")
+endif()
 list(LENGTH findings nf)
 if(nf GREATER 0)
   string(REPLACE ";" "\n  " text "${findings}")

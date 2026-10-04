@@ -134,7 +134,19 @@ TEST_CASE("loader: crafted spans and values are rejected with Corrupt") {
     // Header-level damage.
     expectCorrupt("bad magic", [&](auto& m) { m[0] ^= 1; }, "magic");
     expectCorrupt("size mismatch", [&](auto& m) { m[24] ^= 1; }, "bytes");
-    expectCorrupt("reserved field", [&](auto& m) { m[40] = 1; }, "reserved");
+    expectCorrupt("reserved field", [&](auto& m) { m[48] = 1; }, "reserved");
+    expectCorrupt("tag-table hash", [&](auto& m) { m[40] ^= 1; }, "tag-table hash");
+    // The server cook's client-withheld marks are part of the client's view the hash covers.
+    usize serverOnlyTag = kNoTag; // the root of a withheld subtree: dropping its mark breaks only the hash
+    for (usize i = 0; i < db.tagCount() && serverOnlyTag == kNoTag; ++i) {
+        const TagView t = db.tag(static_cast<TagIndex>(i));
+        if (t.clientWithheld && (t.parent == kNoTag || !db.tag(t.parent).clientWithheld)) serverOnlyTag = i;
+    }
+    REQUIRE(serverOnlyTag != kNoTag);
+    const usize tagsAt = hrdb::kRootOffset + hrdb::kRootTags;
+    const usize flagsAt = tagsAt + static_cast<usize>(getI32(tagsAt)) + serverOnlyTag * hrdb::kTagEntryBytes + 14;
+    expectCorrupt("client-withheld mark dropped", [&](auto& m) { m[flagsAt] &= static_cast<u8>(~hrdb::kTagClientWithheld); },
+                  "tag-table hash");
     expectCorrupt("unknown audience", [&](auto& m) { m[6] = 3; }, "audience");
 }
 

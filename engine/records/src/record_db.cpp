@@ -52,6 +52,7 @@ struct RecordDb::Impl {
     std::span<const u8> bytes;
     CookAudience audience = CookAudience::Client;
     u64 layoutHash = 0;
+    u64 tagTableHash = 0;
     std::unique_ptr<LayoutCache> layouts;
     struct TypeSlot {
         const refl::TypeInfo* type = nullptr;
@@ -317,7 +318,7 @@ Result<RecordDb> RecordDb::finishOpen(std::unique_ptr<Impl> impl, const refl::Ty
     if (hrdb::computeHeaderHash(headerBytes) != h.headerHash) return corrupt("header checksum mismatch");
     if (h.size != size) return corrupt(std::format("header says {} bytes, the file has {}", h.size, size));
     if (h.rootTypeId != hrdb::kRootTypeId) return corrupt("unknown root type");
-    if (h.flags != 0 || h.reserved0 != 0 || h.reserved1 != 0 || h.reserved2 != 0) return corrupt("reserved header fields are set");
+    if (h.flags != 0 || h.reserved0 != 0 || h.reserved2 != 0) return corrupt("reserved header fields are set");
     if (h.audience != static_cast<u8>(CookAudience::Client) && h.audience != static_cast<u8>(CookAudience::Server)) {
         return corrupt(std::format("unknown audience {}", h.audience));
     }
@@ -328,6 +329,7 @@ Result<RecordDb> RecordDb::finishOpen(std::unique_ptr<Impl> impl, const refl::Ty
     }
     if (hrdb::computeContentHash(d.bytes) != h.contentHash) return corrupt("content checksum mismatch");
     d.layoutHash = h.layoutHash;
+    d.tagTableHash = h.tagTableHash;
     for (usize i = hrdb::kRootOffset + 40; i < hrdb::kTablesOffset; ++i) {
         if (d.bytes[i] != 0) return corrupt("reserved root fields are set");
     }
@@ -377,6 +379,7 @@ Result<RecordDb> RecordDb::finishOpen(std::unique_ptr<Impl> impl, const refl::Ty
     // Tags: a well-formed forest in index order; the names this cook carries are valid and sorted.
     if (d.tags.count > hrdb::kMaxTags) return corrupt("too many tags");
     u32 visible = 0;
+    hrdb::TagTableHasher tagHash(d.tags.count);
     for (u32 i = 0; i < d.tags.count; ++i) {
         const usize e = d.tagEntry(i);
         HELIOS_TRY_ASSIGN(const std::string_view name, v.text(e));
@@ -385,11 +388,16 @@ Result<RecordDb> RecordDb::finishOpen(std::unique_ptr<Impl> impl, const refl::Ty
         const u8 depth = load<u8>(d.at(e + 12));
         const u8 audience = load<u8>(d.at(e + 13));
         const u8 flags = load<u8>(d.at(e + 14));
-        if (load<u8>(d.at(e + 15)) != 0 || audience > 2 || (flags & ~(hrdb::kTagDeclared | hrdb::kTagWithheld)) != 0) {
+        if (load<u8>(d.at(e + 15)) != 0 || audience > 2 ||
+            (flags & ~(hrdb::kTagDeclared | hrdb::kTagWithheld | hrdb::kTagClientWithheld)) != 0) {
             return corrupt(std::format("tag {} has invalid fields", i));
         }
         const bool withheld = (flags & hrdb::kTagWithheld) != 0;
+        const bool clientWithheld = (flags & hrdb::kTagClientWithheld) != 0;
         if (withheld && (d.audience == CookAudience::Server || !name.empty())) return corrupt(std::format("tag {} is withheld wrongly", i));
+        if (clientWithheld && d.audience == CookAudience::Client) return corrupt(std::format("tag {} is marked client-withheld in a client cook", i));
+        const bool hidden = withheld || clientWithheld; // from the client
+        tagHash.add(hidden ? std::string_view() : name, parent, end, depth, audience, (flags & hrdb::kTagDeclared) != 0);
         if (!withheld && !isValidTagName(name)) return corrupt(std::format("tag {} has an invalid name", i));
         if (end <= i || end > d.tags.count) return corrupt(std::format("tag {} has a bad subtree range", i));
         if (parent == kNoTag) {
@@ -400,8 +408,10 @@ Result<RecordDb> RecordDb::finishOpen(std::unique_ptr<Impl> impl, const refl::Ty
                 depth != load<u8>(d.at(pe + 12)) + 1) {
                 return corrupt(std::format("tag {} is not inside its parent {}", i, parent));
             }
+            if (!hidden && (load<u8>(d.at(pe + 14)) & (hrdb::kTagWithheld | hrdb::kTagClientWithheld))) {
+                return corrupt(std::format("tag {} has a withheld parent", i));
+            }
             if (!withheld) {
-                if (load<u8>(d.at(pe + 14)) & hrdb::kTagWithheld) return corrupt(std::format("tag {} has a withheld parent", i));
                 if (parentTagName(name) != d.text(pe)) return corrupt(std::format("tag {} does not extend its parent's name", i));
             }
         }
@@ -411,6 +421,7 @@ Result<RecordDb> RecordDb::finishOpen(std::unique_ptr<Impl> impl, const refl::Ty
         if (!withheld) ++visible;
     }
     if (d.visibleTags.count != visible) return corrupt("the visible tag list does not match the tag table");
+    if (tagHash.digest() != h.tagTableHash) return corrupt("the header's tag-table hash does not match the tag table");
     for (u32 i = 0; i < d.visibleTags.count; ++i) {
         const u16 t = load<u16>(d.at(d.visibleTags.at + i * 2u));
         if (t >= d.tags.count || (load<u8>(d.at(d.tagEntry(t) + 14)) & hrdb::kTagWithheld)) return corrupt("visible tag list names a withheld tag");
@@ -455,6 +466,7 @@ Result<RecordDb> RecordDb::finishOpen(std::unique_ptr<Impl> impl, const refl::Ty
 
 CookAudience RecordDb::audience() const noexcept { return m ? m->audience : CookAudience::Client; }
 u64 RecordDb::layoutHash() const noexcept { return m ? m->layoutHash : 0; }
+u64 RecordDb::tagTableHash() const noexcept { return m ? m->tagTableHash : 0; }
 std::span<const u8> RecordDb::bytes() const noexcept { return m ? m->bytes : std::span<const u8>(); }
 usize RecordDb::recordCount() const noexcept { return m ? m->records.count : 0; }
 
@@ -512,7 +524,8 @@ TagView RecordDb::tag(TagIndex index) const noexcept {
                    load<u8>(m->at(e + 12)),
                    load<u8>(m->at(e + 13)),
                    (flags & hrdb::kTagDeclared) != 0,
-                   (flags & hrdb::kTagWithheld) != 0};
+                   (flags & hrdb::kTagWithheld) != 0,
+                   (flags & hrdb::kTagClientWithheld) != 0};
 }
 
 TagIndex RecordDb::findTag(std::string_view name) const noexcept {

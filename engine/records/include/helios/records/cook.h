@@ -11,7 +11,8 @@
 //    element with a parent's key merges into that element, a new key appends. Every other value
 //    (sets, maps, optionals, arrays, variants, scalars) replaces. Unknown `$parent`, cycles, a parent of
 //    another type, duplicate `$rid` (T28: reused ids are rejected) and duplicate `$name` are errors.
-// 3. Check. Every RecordRef resolves to a record of its declared type; tags are valid; every HxlExpr
+// 3. Check. Every RecordRef resolves to a record of its declared type; tags are valid; every TagQuery
+//    parses with gameplay's grammar (06 §1.1); every HxlExpr
 //    compiles (engine/hxl) with the parameters CookOptions::hxlParams, or those of its own `formula
 //    Name(a, b) = …` form; and the AAA-SEC-4 layout rules hold (layout.h).
 // 4. Cook. The tag table holds every tag that a TagSet value uses or a tag-declaration record declares,
@@ -94,7 +95,9 @@ Result<CookOutput> cook(std::span<const SourceRecord> sources, const CookOptions
 /// record type of `registry` whose @table is <table>. Paths in the result are project-relative.
 Result<std::vector<SourceRecord>> collectSources(const fs::Path& projectRoot, const refl::TypeRegistry& registry);
 
-/// Writes kClientDbFile and kServerDbFile into `outDir` (created if missing), atomically.
+/// Writes kClientDbFile and kServerDbFile into `outDir` (created if missing). Each file is replaced
+/// atomically (fs::writeFile); the pair is not: a reader that opens between the two writes sees a new
+/// client cook beside an old server cook, which their differing tagTableHash() reveals.
 Result<void> writeCookOutput(const CookOutput& output, const fs::Path& outDir);
 
 /// Valid tag name: dotted segments of [A-Za-z_][A-Za-z0-9_]*, at most 256 bytes (gameplay's rule).

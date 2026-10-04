@@ -18,14 +18,20 @@
 //
 // Header (byte offsets): 0 magic 'HRDB' u32 · 4 formatVersion u16 · 6 audience u8 · 7 reserved u8 ·
 //   8 rootTypeId u32 · 12 flags u32 (0) · 16 layoutHash u64 · 24 size u64 · 32 contentHash u64 (XXH3-64
-//   of [64, size)) · 40 reserved u64[2] · 56 headerHash u64 (XXH3-64 of [0, 56)).
+//   of [64, size)) · 40 tagTableHash u64 · 48 reserved u64 · 56 headerHash u64 (XXH3-64 of [0, 56)).
+// tagTableHash identifies the tag numbering: the cook hashes the client's view of its tag table (each
+// entry's parent, subtree end, depth, audience and declared flag, and its name unless the client cook
+// withholds it) and writes the same value into both cooks of a run, so a client and a server whose
+// TagIndex values disagree can tell (06 §1.1: the registry hash is part of the content version). It
+// carries no withheld name, so it cannot confirm a guess of one. The server cook marks the tags whose
+// names the client cook withholds (kTagClientWithheld), so both loaders recompute and check it.
 // TypeEntry (32 bytes): 0 typeId u32 · 4 fixedSize u32 · 8 layoutHash u64 · 16 name RelSpan<char> ·
 //   24 reserved u64.
 // RecordEntry (24 bytes): 0 rid u64 · 8 typeIndex u32 · 12 data RelPtr (the record's fixed part) ·
 //   16 name RelSpan<char>.
 // TagEntry (16 bytes): 0 name RelSpan<char> (empty when the name is withheld from this cook) ·
 //   8 parent u16 (0xFFFF for a root tag) · 10 subtreeEnd u16 · 12 depth u8 · 13 audience u8 ·
-//   14 flags u8 (kTagDeclared, kTagWithheld) · 15 reserved u8.
+//   14 flags u8 (kTagDeclared, kTagWithheld, kTagClientWithheld) · 15 reserved u8.
 //
 // Values are encoded by their cooked layout (layout.h). The header's layoutHash covers the format
 // version, the audience and every record type's cooked layout, so a database cooked against another
@@ -92,6 +98,27 @@ inline constexpr usize kRootVisibleTags = 32;
 
 inline constexpr u8 kTagDeclared = 1; ///< Declared by a tag record or used in a TagSet (not only implied).
 inline constexpr u8 kTagWithheld = 2; ///< Name withheld: only server-only data uses it (client cook).
+inline constexpr u8 kTagClientWithheld = 4; ///< The client cook withholds this name (server cook).
+
+/// The header's tagTableHash: feed every tag entry in index order, with its name as the client cook
+/// carries it (empty when withheld). The cooker and the loader both use it.
+class TagTableHasher {
+public:
+    explicit TagTableHasher(u32 count) noexcept : m_hash(kRootTypeId) { m_hash.updateValue(count); }
+    void add(std::string_view clientName, u16 parent, u16 subtreeEnd, u8 depth, u8 audience, bool declared) noexcept {
+        m_hash.updateValue(static_cast<u32>(clientName.size()));
+        m_hash.update(clientName);
+        m_hash.updateValue(parent);
+        m_hash.updateValue(subtreeEnd);
+        m_hash.updateValue(depth);
+        m_hash.updateValue(audience);
+        m_hash.updateValue(static_cast<u8>(declared ? 1 : 0));
+    }
+    u64 digest() const noexcept { return m_hash.digest(); }
+
+private:
+    Hasher64 m_hash;
+};
 
 /// Decoded header fields, without validation.
 struct Header {
@@ -104,7 +131,7 @@ struct Header {
     u64 layoutHash = 0;
     u64 size = 0;
     u64 contentHash = 0;
-    u64 reserved1 = 0;
+    u64 tagTableHash = 0;
     u64 reserved2 = 0;
     u64 headerHash = 0;
 };

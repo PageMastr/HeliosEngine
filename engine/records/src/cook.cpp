@@ -115,7 +115,10 @@ class Overlay {
 public:
     explicit Overlay(ReadCtx& ctx) : m_ctx(ctx) {}
 
-    Result<void> fields(const TypeInfo& t, void* obj, JsonValue in, bool root) {
+    /// Overlays the members of `in` onto the struct `obj`. `inherited`: `obj` holds a parent's value, so
+    /// keyed lists and @merge(append) lists merge into it; otherwise it holds defaults, and they replace
+    /// them as refl::readRecord does (a record without $parent, or an element the child adds).
+    Result<void> fields(const TypeInfo& t, void* obj, JsonValue in, bool root, bool inherited) {
         if (!in.isObject()) return m_ctx.typeError("object", in);
         // `@was` aliases first, then current names, so the current name wins (as the readers do).
         for (int pass = 0; pass < 2; ++pass) {
@@ -139,19 +142,19 @@ public:
                 }
                 if (alias != (pass == 0)) continue;
                 ReadCtx::Scope s(m_ctx, m.key);
-                HELIOS_TRY(value(f, f->type(), f->ptr(obj), m.value));
+                HELIOS_TRY(value(f, f->type(), f->ptr(obj), m.value, inherited));
             }
         }
         return {};
     }
 
 private:
-    Result<void> value(const FieldInfo* f, const TypeInfo& t, void* obj, JsonValue in) {
-        if (t.kind == Kind::Struct && in.isObject()) return fields(t, obj, in, false);
-        if (t.kind == Kind::KeyedList) return keyedByGuid(t, obj, in);
+    Result<void> value(const FieldInfo* f, const TypeInfo& t, void* obj, JsonValue in, bool inherited) {
+        if (t.kind == Kind::Struct && in.isObject()) return fields(t, obj, in, false, inherited);
+        if (t.kind == Kind::KeyedList) return keyedByGuid(t, obj, in, inherited);
         if (t.kind == Kind::List && f) {
-            if (const auto* k = f->attr<refl::attrs::Keyed>(); k && !k->field.empty()) return keyedByField(t, k->field, obj, in);
-            if (const refl::Attr* mg = f->attr("merge"); mg && mg->arg(0) == "append") return append(t, obj, in);
+            if (const auto* k = f->attr<refl::attrs::Keyed>(); k && !k->field.empty()) return keyedByField(t, k->field, obj, in, inherited);
+            if (const refl::Attr* mg = f->attr("merge"); mg && mg->arg(0) == "append") return append(t, obj, in, inherited);
         }
         return replace(f, t, obj, in);
     }
@@ -165,15 +168,17 @@ private:
         return {};
     }
 
-    Result<void> keyedByGuid(const TypeInfo& t, void* obj, JsonValue in) {
+    Result<void> keyedByGuid(const TypeInfo& t, void* obj, JsonValue in, bool inherited) {
         const refl::TypeOps& ops = *t.ops;
         if (in.isNull()) {
             ops.resize(obj, 0);
             return {};
         }
         if (!in.isArray()) return m_ctx.typeError("array", in);
+        if (!inherited) ops.resize(obj, 0); // a default is replaced, not merged into
         std::unordered_map<Guid, usize> index; // inherited and new elements by key (linear, whatever the list size)
-        for (usize j = 0, n = ops.size(obj); j < n; ++j) index.emplace(ops.keyAt(obj, j), j);
+        const usize inheritedCount = ops.size(obj);
+        for (usize j = 0; j < inheritedCount; ++j) index.emplace(ops.keyAt(obj, j), j);
         std::unordered_set<Guid> seen;
         usize i = 0;
         for (const JsonValue e : in.elements()) {
@@ -183,20 +188,22 @@ private:
             HELIOS_TRY_ASSIGN(const Guid key, refl::detail::readKeyedListKey(e, m_ctx));
             if (!seen.insert(key).second) return m_ctx.error("duplicate $key " + key.toString());
             void* elem = nullptr;
+            bool merged = false;
             if (const auto it = index.find(key); it != index.end()) {
                 elem = ops.element(obj, it->second);
+                merged = it->second < inheritedCount;
             } else {
                 const usize n = ops.size(obj);
                 elem = ops.insertAt(obj, n);
                 ops.setKeyAt(obj, n, key);
                 index.emplace(key, n);
             }
-            HELIOS_TRY(value(nullptr, t.element(), elem, e));
+            HELIOS_TRY(value(nullptr, t.element(), elem, e, merged));
         }
         return {};
     }
 
-    Result<void> keyedByField(const TypeInfo& t, std::string_view keyName, void* obj, JsonValue in) {
+    Result<void> keyedByField(const TypeInfo& t, std::string_view keyName, void* obj, JsonValue in, bool inherited) {
         const refl::TypeOps& ops = *t.ops;
         const TypeInfo& et = t.element();
         const FieldInfo* kf = et.field(keyName);
@@ -206,10 +213,12 @@ private:
             return {};
         }
         if (!in.isArray()) return m_ctx.typeError("array", in);
+        if (!inherited) ops.resize(obj, 0); // a default is replaced, not merged into
         // Keys by their canonical JSON text, so any key type indexes in one map.
         auto keyText = [&](const void* key) { return refl::toJson(kf->type(), key, refl::JsonStyle::Compact); };
         std::unordered_map<std::string, usize> index;
-        for (usize j = 0, n = ops.size(obj); j < n; ++j) index.emplace(keyText(kf->ptr(ops.element(obj, j))), j);
+        const usize inheritedCount = ops.size(obj);
+        for (usize j = 0; j < inheritedCount; ++j) index.emplace(keyText(kf->ptr(ops.element(obj, j))), j);
         std::unordered_set<std::string> seen;
         usize i = 0;
         for (const JsonValue e : in.elements()) {
@@ -225,29 +234,32 @@ private:
             std::string text = keyText(key.data());
             if (!seen.insert(text).second) return m_ctx.error(std::format("duplicate {} in a @keyed({}) list", keyName, keyName));
             void* elem = nullptr;
+            bool merged = false;
             if (const auto it = index.find(text); it != index.end()) {
                 elem = ops.element(obj, it->second);
+                merged = it->second < inheritedCount;
             } else {
                 const usize n = ops.size(obj);
                 elem = ops.insertAt(obj, n);
                 index.emplace(std::move(text), n);
             }
-            HELIOS_TRY(value(nullptr, et, elem, e));
+            HELIOS_TRY(value(nullptr, et, elem, e, merged));
         }
         return {};
     }
 
-    Result<void> append(const TypeInfo& t, void* obj, JsonValue in) {
+    Result<void> append(const TypeInfo& t, void* obj, JsonValue in, bool inherited) {
         const refl::TypeOps& ops = *t.ops;
         if (in.isNull()) {
             ops.resize(obj, 0);
             return {};
         }
         if (!in.isArray()) return m_ctx.typeError("array", in);
+        if (!inherited) ops.resize(obj, 0); // a default is replaced, not appended to
         usize i = 0;
         for (const JsonValue e : in.elements()) {
             ReadCtx::Scope s(m_ctx, i++);
-            HELIOS_TRY(value(nullptr, t.element(), ops.insertAt(obj, ops.size(obj)), e));
+            HELIOS_TRY(value(nullptr, t.element(), ops.insertAt(obj, ops.size(obj)), e, false));
         }
         return {};
     }
@@ -643,7 +655,7 @@ private:
 
 /// One cook's file. Records must be sorted by RecordId; their types are not excluded by `audience`.
 Result<std::vector<u8>> encodeDb(CookAudience audience, std::span<const Rec* const> records, const std::vector<TagRow>& tags,
-                                 const std::unordered_map<std::string_view, u16>& tagIndex,
+                                 u64 tagTableHash, const std::unordered_map<std::string_view, u16>& tagIndex,
                                  const std::unordered_map<std::string, std::vector<u8>>& bytecode, Diagnostics& diags) {
     LayoutCache layouts(audience);
     std::map<refl::TypeId, const TypeInfo*> typeMap;
@@ -698,7 +710,9 @@ Result<std::vector<u8>> encodeDb(CookAudience audience, std::span<const Rec* con
     }
     for (usize i = 0; i < records.size(); ++i) {
         const Rec& r = *records[i];
-        const u32 ti = typeIndex.at(r.src->type);
+        const auto tit = typeIndex.find(r.src->type);
+        HELIOS_ASSERT(tit != typeIndex.end(), "cook() refuses record types that share a TypeId");
+        const u32 ti = tit->second;
         const CookedLayout& layout = *typeLayouts[ti];
         const usize e = recordsAt + i * hrdb::kRecordEntryBytes;
         store<u64>(enc.buf.data() + e, r.rid);
@@ -726,7 +740,9 @@ Result<std::vector<u8>> encodeDb(CookAudience audience, std::span<const Rec* con
         store<u16>(enc.buf.data() + e + 10, t.subtreeEnd);
         store<u8>(enc.buf.data() + e + 12, t.depth);
         store<u8>(enc.buf.data() + e + 13, t.audience);
-        store<u8>(enc.buf.data() + e + 14, static_cast<u8>((t.declared ? hrdb::kTagDeclared : 0) | (withheld ? hrdb::kTagWithheld : 0)));
+        const bool clientWithheld = audience == CookAudience::Server && !t.client;
+        store<u8>(enc.buf.data() + e + 14, static_cast<u8>((t.declared ? hrdb::kTagDeclared : 0) | (withheld ? hrdb::kTagWithheld : 0) |
+                                                           (clientWithheld ? hrdb::kTagClientWithheld : 0)));
     }
     for (usize i = 0; i < visible.size(); ++i) store<u16>(enc.buf.data() + visibleAt + i * 2, visible[i]);
     if (!ok) return Error{ErrorCode::InvalidArgument, "encoding errors"};
@@ -738,6 +754,7 @@ Result<std::vector<u8>> encodeDb(CookAudience audience, std::span<const Rec* con
     hrdb::Header h;
     h.audience = static_cast<u8>(audience);
     h.layoutHash = dbHash.digest();
+    h.tagTableHash = tagTableHash;
     h.size = enc.buf.size();
     hrdb::encodeHeader(h, std::span<u8, hrdb::kHeaderBytes>(enc.buf.data(), hrdb::kHeaderBytes));
     hrdb::seal(enc.buf);
@@ -825,11 +842,26 @@ Result<CookOutput> cook(std::span<const SourceRecord> sources, const CookOptions
     std::stable_sort(order.begin(), order.end(), [&](usize a, usize b) { return sources[a].path < sources[b].path; });
     std::unordered_map<refl::RecordId, const Rec*> byId;
     std::unordered_map<std::string_view, usize> byName;
-    for (const usize i : order) {
+    std::map<refl::TypeId, const TypeInfo*> typeIds;
+    for (usize k = 0; k < order.size(); ++k) {
+        const usize i = order[k];
         Rec& r = recs[i];
         r.src = &sources[i];
+        // Two sources with one path would make "first" depend on the caller's order (sorting is stable).
+        if ((k > 0 && sources[order[k - 1]].path == r.src->path) || (k + 1 < order.size() && sources[order[k + 1]].path == r.src->path)) {
+            diags.add(r.src->path, "another source has the same path");
+            r.state = State::Failed;
+            continue;
+        }
         if (!r.src->type) {
             diags.add(r.src->path, "no record type");
+            r.state = State::Failed;
+            continue;
+        }
+        // The cooked type table and the loader find types by TypeId.
+        if (auto [it, fresh] = typeIds.emplace(r.src->type->id, r.src->type); !fresh && it->second != r.src->type) {
+            diags.add(r.src->path, std::format("record type '{}' has TypeId {}, which record type '{}' also has", r.src->type->qualifiedName,
+                                               r.src->type->id, it->second->qualifiedName));
             r.state = State::Failed;
             continue;
         }
@@ -910,7 +942,7 @@ Result<CookOutput> cook(std::span<const SourceRecord> sources, const CookOptions
             }
             ReadCtx ctx(readOptions);
             Overlay overlay(ctx);
-            if (auto res = overlay.fields(*r.src->type, r.value.data(), r.doc.root(), true); !res) {
+            if (auto res = overlay.fields(*r.src->type, r.value.data(), r.doc.root(), true, parent != nullptr); !res) {
                 diags.add(r.src->path, res.error().message);
                 r.state = State::Failed;
                 continue;
@@ -1007,7 +1039,10 @@ Result<CookOutput> cook(std::span<const SourceRecord> sources, const CookOptions
     }
     if (!diags.empty()) return fail();
 
-    // 5. Both cooks.
+    // 5. Both cooks, with one tag-table hash: the client's view of the table (withheld names left out).
+    hrdb::TagTableHasher tagHash(static_cast<u32>(tags.size()));
+    for (const TagRow& t : tags) tagHash.add(t.client ? std::string_view(t.name) : std::string_view(), t.parent, t.subtreeEnd, t.depth, t.audience, t.declared);
+    const u64 tagTableHash = tagHash.digest();
     std::vector<const Rec*> sorted = done;
     std::sort(sorted.begin(), sorted.end(), [](const Rec* a, const Rec* b) { return a->rid < b->rid; });
     CookOutput out;
@@ -1016,7 +1051,7 @@ Result<CookOutput> cook(std::span<const SourceRecord> sources, const CookOptions
         for (const Rec* r : sorted) {
             if (!excludesType(*r->src->type, audience)) in.push_back(r);
         }
-        auto bytes = encodeDb(audience, in, tags, tagIndex, scanner.bytecode, diags);
+        auto bytes = encodeDb(audience, in, tags, tagTableHash, tagIndex, scanner.bytecode, diags);
         if (!bytes) continue;
         (audience == CookAudience::Client ? out.client : out.server) = std::move(*bytes);
         (audience == CookAudience::Client ? stats.clientRecords : stats.serverRecords) = in.size();

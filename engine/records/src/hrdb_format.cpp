@@ -24,7 +24,7 @@ void encodeHeader(const Header& h, std::span<u8, kHeaderBytes> out) noexcept {
     store<u64>(p + 16, h.layoutHash);
     store<u64>(p + 24, h.size);
     store<u64>(p + 32, h.contentHash);
-    store<u64>(p + 40, h.reserved1);
+    store<u64>(p + 40, h.tagTableHash);
     store<u64>(p + 48, h.reserved2);
     store<u64>(p + 56, h.headerHash);
 }
@@ -41,7 +41,7 @@ Header decodeHeader(std::span<const u8, kHeaderBytes> in) noexcept {
     h.layoutHash = load<u64>(p + 16);
     h.size = load<u64>(p + 24);
     h.contentHash = load<u64>(p + 32);
-    h.reserved1 = load<u64>(p + 40);
+    h.tagTableHash = load<u64>(p + 40);
     h.reserved2 = load<u64>(p + 48);
     h.headerHash = load<u64>(p + 56);
     return h;

@@ -165,6 +165,28 @@ const refl::TypeInfo& loopStruct(int wrapper) noexcept {
     return types[static_cast<usize>(wrapper)];
 }
 
+const refl::TypeInfo& emptyArray() noexcept {
+    static const refl::TypeInfo t = [] {
+        refl::TypeInfo i;
+        i.qualifiedName = "i32[0]";
+        i.kind = refl::Kind::Array;
+        i.elementFn = &refl::typeOf<i32>;
+        i.arraySize = 0;
+        return i;
+    }();
+    return t;
+}
+
+TEST_CASE("layout: a zero-length array is refused (its lists would have stride 0)") {
+    // schemac allows sizes 1..65536; a builder std::array<T, 0> would otherwise make a list whose count
+    // the loader cannot bound by the bytes it occupies.
+    LayoutCache cache(CookAudience::Server);
+    auto l = cache.get(emptyArray());
+    REQUIRE_FALSE(l.ok());
+    CHECK(l.error().code == ErrorCode::Unsupported);
+    CHECK(l.error().message == "array type 'i32[0]' has no elements");
+}
+
 TEST_CASE("layout: a type that contains itself by value is refused through an optional, array or variant, whichever comes first") {
     for (const refl::TypeInfo* wrapper : {&loopWrapper<0>(), &loopWrapper<1>(), &loopWrapper<2>()}) {
         INFO(wrapper->qualifiedName);

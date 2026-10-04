@@ -194,6 +194,9 @@ TEST_CASE("AAA-SEC-4: the client cook of the test records holds no server-only f
         const TagView st = s.tag(static_cast<TagIndex>(i));
         CHECK(ct.parent == st.parent);
         CHECK(ct.subtreeEnd == st.subtreeEnd);
+        CHECK(ct.withheld == st.clientWithheld);
+        CHECK_FALSE(st.withheld);
+        CHECK_FALSE(ct.clientWithheld);
         if (ct.withheld) {
             ++withheld;
             CHECK(ct.name.empty());

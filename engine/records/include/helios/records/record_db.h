@@ -108,7 +108,8 @@ struct TagView {
     u8 depth = 0;
     u8 audience = 0;         ///< gameplay::Audience value: 0 Server, 1 Owner, 2 All.
     bool declared = false;
-    bool withheld = false;
+    bool withheld = false;       ///< Client cook: this cook withholds the name.
+    bool clientWithheld = false; ///< Server cook: the client cook withholds the name.
 };
 
 struct RecordDbOptions {
@@ -133,6 +134,11 @@ public:
     CookAudience audience() const noexcept;
     /// The header's layout hash (part of the DDC key, 02 §3.4).
     u64 layoutHash() const noexcept;
+    /// The header's tag-table hash (hrdb_format.h): equal in the client and the server cook of one cook
+    /// run, different when their TagIndex numbering differs. Compare it to pair a client cook with its
+    /// server cook; the loader does not recompute it (a server cook does not say which names a client
+    /// cook withholds).
+    u64 tagTableHash() const noexcept;
     std::span<const u8> bytes() const noexcept;
 
     usize recordCount() const noexcept;

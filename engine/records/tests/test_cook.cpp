@@ -403,8 +403,8 @@ TEST_CASE("cook: identical inputs give byte-identical cooks, pinned by a golden 
     // come out of every toolchain (GCC and Clang locally, MSVC and clang-cl in CI).
     MESSAGE("client ", a.client.size(), " bytes, xxh3 ", std::format("{:#018x}", hash64(a.client.data(), a.client.size())));
     MESSAGE("server ", a.server.size(), " bytes, xxh3 ", std::format("{:#018x}", hash64(a.server.data(), a.server.size())));
-    CHECK(hash64(a.client.data(), a.client.size()) == 0x23f970e4eb86aac5ull);
-    CHECK(hash64(a.server.data(), a.server.size()) == 0xf81a6f0d881a05adull);
+    CHECK(hash64(a.client.data(), a.client.size()) == 0xd9e87b1fc83520d8ull);
+    CHECK(hash64(a.server.data(), a.server.size()) == 0x31d05076c736149full);
 }
 
 TEST_CASE("cook: lists nested deeper than hrdb::kMaxNesting are refused; the limit itself cooks and loads") {

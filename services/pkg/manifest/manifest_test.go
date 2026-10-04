@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
+
 	"github.com/PageMastr/scifi-test/services/pkg/cdc"
 	"github.com/PageMastr/scifi-test/services/pkg/cdc/cdctest"
 	"github.com/PageMastr/scifi-test/services/pkg/manifest"
@@ -714,8 +716,8 @@ func FuzzParse(f *testing.F) {
 	})
 }
 
-// reseal recomputes payloadSize, bodySize and bodyHash (codec none; zstd payloads keep their sizes)
-// and the header hash, so fuzzed bytes reach the field checks behind the hashes.
+// reseal recomputes payloadSize, bodySize and bodyHash (a zstd payload is decoded, up to 16 MiB, to learn
+// its body) and the header hash, so fuzzed bytes reach the field checks behind the hashes.
 func reseal(in []byte) []byte {
 	b := append([]byte(nil), in...)
 	if len(b) < manifest.HeaderSize {
@@ -723,12 +725,36 @@ func reseal(in []byte) []byte {
 	}
 	payload := b[manifest.HeaderSize:]
 	binary.LittleEndian.PutUint64(b[56:], uint64(len(payload)))
-	if b[12] == 0 {
-		binary.LittleEndian.PutUint64(b[48:], uint64(len(payload)))
-		h := cdc.Sum(payload)
-		copy(b[64:96], h[:])
+	body := payload
+	if b[12] == 1 {
+		dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(16<<20))
+		if err != nil {
+			return b
+		}
+		body, err = dec.DecodeAll(payload, nil)
+		dec.Close()
+		if err != nil {
+			return b
+		}
 	}
-	h := cdc.Sum(b[:manifest.SignedBytes])
+	binary.LittleEndian.PutUint64(b[48:], uint64(len(body)))
+	h := cdc.Sum(body)
+	copy(b[64:96], h[:])
+	h = cdc.Sum(b[:manifest.SignedBytes])
 	copy(b[256:288], h[:])
 	return b
+}
+
+// A skippable zstd frame before the payload's frames is allowed (RFC 8878), in both languages.
+func TestZstdSkippableFrame(t *testing.T) {
+	z := readGolden(t, "pipeline.cpp-zstd.hman")
+	skip := []byte{0x50, 0x2A, 0x4D, 0x18, 3, 0, 0, 0, 'h', 'm', 'n'}
+	b := append(append(append([]byte(nil), z[:manifest.HeaderSize]...), skip...), z[manifest.HeaderSize:]...)
+	binary.LittleEndian.PutUint64(b[56:], uint64(len(b)-manifest.HeaderSize))
+	h := cdc.Sum(b[:manifest.SignedBytes])
+	copy(b[256:288], h[:])
+	m, err := manifest.Parse(b, 0)
+	if err != nil || !equalManifests(m, pipeline(t)) {
+		t.Fatalf("a leading skippable frame: %v", err)
+	}
 }

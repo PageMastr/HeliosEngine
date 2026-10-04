@@ -538,7 +538,7 @@ func (m *Manifest) EncodeBody() ([]byte, error) {
 		e = e[patchEntrySize:]
 	}
 	if uint64(len(e)) != stringBytes {
-		panic("manifest: body layout") // unreachable: the sizes above are the layout
+		return nil, errorf(ErrInvalid, "internal error: the body layout is off by %d bytes", int64(len(e))-int64(stringBytes))
 	}
 	return b, nil
 }

@@ -368,3 +368,17 @@ TEST_CASE("manifest: an empty build and a round trip through both codecs") {
     }
     CHECK(readManifestFile(hmanDir() / "missing.hman").errorCode() == ErrorCode::NotFound);
 }
+
+TEST_CASE("manifest: a skippable zstd frame before the payload's frames is allowed, as in Go") {
+    const std::vector<u8> z = test::readBytes(hmanDir() / "pipeline.go-zstd.hman");
+    const u8 skip[] = {0x50, 0x2A, 0x4D, 0x18, 3, 0, 0, 0, 'h', 'm', 'n'};
+    std::vector<u8> b(z.begin(), z.begin() + hman::kHeaderSize);
+    b.insert(b.end(), std::begin(skip), std::end(skip));
+    b.insert(b.end(), z.begin() + hman::kHeaderSize, z.end());
+    storeLE<u64>(b.data() + 56, b.size() - hman::kHeaderSize);
+    const Hash256 h = blake2b256(std::span<const u8>(b).first(hman::kSignedBytes));
+    std::copy(h.bytes.begin(), h.bytes.end(), b.begin() + hman::kHeaderHashOffset);
+    const Result<Manifest> m = readManifest(b);
+    REQUIRE_MESSAGE(m.ok(), m.error().toString());
+    CHECK(*m == pipeline());
+}

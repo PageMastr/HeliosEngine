@@ -160,7 +160,8 @@ struct JournalSessionInfo {
 };
 
 /// The journals of a project, oldest first. `uncleanOnly` keeps sessions without an "end" record
-/// whose process is no longer running (the editor offers to replay those after a crash).
+/// whose process is no longer running (the editor offers to replay those after a crash). A journal
+/// whose header names another project is skipped (with a warning).
 std::vector<JournalSessionInfo> listJournalSessions(const fs::Path& root, std::string_view project, bool uncleanOnly);
 
 /// True when a process with this id is running on this machine (used to tell a crashed session

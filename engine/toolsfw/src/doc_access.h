@@ -9,6 +9,10 @@
 
 namespace helios::tf {
 
+/// Equality of two normalized project-relative paths as the platform's file system sees it
+/// (without ASCII case on Windows, like Workspace::findByPath).
+bool sameRelativePath(std::string_view a, std::string_view b) noexcept;
+
 struct DocAccess {
     static void* object(Document& d) noexcept { return d.m_value.data(); }
     static refl::RecordHeader& header(Document& d) noexcept { return d.m_header; }

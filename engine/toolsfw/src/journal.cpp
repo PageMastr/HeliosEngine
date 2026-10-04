@@ -193,7 +193,7 @@ Result<JournalScan> readJournal(const fs::Path& path) {
         if (recordCheck(payload) != check) break;
         auto rec = JournalRecord::fromJson(payload);
         if (!rec) {
-            scan.warnings.push_back(std::format("record at offset {}: {}", pos, rec.error().message));
+            scan.warnings.push_back(std::format("record at offset {}: {}", pos, printable(rec.error().message)));
             break;
         }
         rec->offset = pos;
@@ -400,7 +400,15 @@ std::vector<JournalSessionInfo> listJournalSessions(const fs::Path& root, std::s
     for (const fs::DirEntry& e : *entries) {
         auto scan = readJournal(e.path);
         if (!scan) {
-            HELIOS_LOG_WARN(LogTools, "skipping {}: {}", e.relativePath, scan.error());
+            HELIOS_LOG_WARN(LogTools, "skipping {}: {}", printable(e.relativePath), printable(scan.error().toString()));
+            continue;
+        }
+        if (scan->header.project != project) {
+            // Another project's journal (two names that sanitize to one directory, or a planted
+            // file): never offered for recovery or counted in this project's undo stack.
+            // printable(), not json::quote (which escapes only C0): the name is the journal's.
+            HELIOS_LOG_WARN(LogTools, "skipping {}: it belongs to project \"{}\"", printable(e.relativePath),
+                            printable(scan->header.project, 200));
             continue;
         }
         JournalSessionInfo info;

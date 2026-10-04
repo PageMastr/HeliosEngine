@@ -16,6 +16,7 @@
 #include "helios/core/fs.h"
 #include "helios/core/log.h"
 #include "helios/core/platform.h"
+#include "helios/core/utf.h"
 #include "helios/core/version.h"
 #include "helios/toolsfw/toolsfw.h"
 #include "helios/toolsfw/samples.h"
@@ -42,7 +43,13 @@ Verbs
   journal list [--all]              this project's journals (unclean sessions only without --all)
   journal show <file|latest> [--json]
   journal verify <file>             record integrity (torn tail, clean end)
-  journal replay <file|auto> [--save] [--ignore-source-changes]
+  journal replay <file|auto> [--save] [--ignore-source-changes] [--allow-other-project]
+                                    crash recovery. A journal is untrusted input: each file
+                                    it names must be a .hrec inside the project (no '..',
+                                    absolute, drive, UNC or device path, no link out of it)
+                                    and its header must name this project (--allow-other-
+                                    project: it was renamed). One bad entry refuses the whole
+                                    replay (exit 3); nothing is written
   run <script.luau>                 run an automation script (Editor.*, Record.*, Validate.*)
   commands [--json]                 list the command registry
 
@@ -63,13 +70,52 @@ constexpr int kCheckFailed = 1;
 constexpr int kUsageError = 2;
 constexpr int kFailed = 3;
 
-int fail(int code, const std::string& message) {
-    std::fprintf(stderr, "helios-tool: %s\n", message.c_str());
+/// Errors can quote a journal (untrusted input: a transaction's user, an op's path) or a record
+/// file, so every line is printed with control characters escaped (tf::printable); the line
+/// breaks of a multi-line error (openAll lists one failing file per line) are kept.
+int fail(int code, std::string_view message) {
+    std::string text = "helios-tool: ";
+    for (usize start = 0;;) {
+        const usize nl = message.find('\n', start);
+        text += tf::printable(message.substr(start, nl == std::string_view::npos ? std::string_view::npos : nl - start));
+        if (nl == std::string_view::npos) break;
+        text += '\n';
+        start = nl + 1;
+    }
+    text += '\n';
+    std::fwrite(text.data(), 1, text.size(), stderr);
     return code;
 }
 
 void out(const std::string& text) {
     std::fwrite(text.data(), 1, text.size(), stdout);
+}
+
+/// `journal show --json`: the JSON writer escapes only C0, so DEL and the C1 controls become
+/// `\u00NN`, format characters and line/paragraph separators (tf::isFormatOrSeparator; bidi
+/// overrides) `\uNNNN` (a surrogate pair above U+FFFF), and bytes that are not UTF-8 `\ufffd`.
+/// JSON's structure is ASCII, so they occur only inside strings, where the escape is the same
+/// character: the output stays valid, equivalent JSON, and a crafted journal cannot write terminal
+/// escape sequences through it or reorder how a line displays.
+std::string jsonForTerminal(std::string_view json) {
+    std::string text;
+    text.reserve(json.size());
+    for (usize i = 0; i < json.size();) {
+        const usize start = i;
+        const char32_t cp = decodeUtf8(json, i);
+        const std::string_view bytes = json.substr(start, i - start);
+        if (cp == kReplacementChar && bytes != "\xEF\xBF\xBD") {
+            text += "\\ufffd";
+        } else if (cp == 0x7F || (cp >= 0x80 && cp <= 0x9F) || (cp <= 0xFFFF && tf::isFormatOrSeparator(cp))) {
+            text += std::format("\\u{:04x}", static_cast<u32>(cp));
+        } else if (tf::isFormatOrSeparator(cp)) {
+            const u32 v = static_cast<u32>(cp) - 0x10000;
+            text += std::format("\\u{:04x}\\u{:04x}", 0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF));
+        } else {
+            text += bytes;
+        }
+    }
+    return text;
 }
 
 struct Context {
@@ -140,6 +186,10 @@ int cmdFmt(const Context& c) {
     const bool check = c.cl->has("check");
     usize changed = 0;
     for (const tf::Document* d : (*fw)->documents().documents()) {
+        // Read and write only inside the project, checked at the time of use like Framework::save.
+        if (auto file = (*fw)->documents().confine(d->relativePath(), tf::PathOrigin::Untrusted); !file) {
+            return fail(kFailed, std::format("{}", file.error()));
+        }
         // The document's text is canonical; compare it with the bytes on disk.
         auto bytes = fs::readTextFile(d->path());
         if (!bytes) return fail(kFailed, std::format("{}", bytes.error()));
@@ -211,7 +261,7 @@ int cmdApply(const Context& c) {
         return kOk;
     }
     const tf::Transaction& tx = fw.log().back();
-    out(std::format("{} {} ({} op(s))\n", tx.id.toString(), tx.label, tx.ops.size()));
+    out(std::format("{} {} ({} op(s))\n", tf::printable(tx.id.toString()), tf::printable(tx.label), tx.ops.size()));
     if (!c.cl->has("no-save")) {
         auto saved = fw.saveAll();
         if (!saved) return fail(kFailed, std::format("save: {}", saved.error()));
@@ -312,7 +362,10 @@ Result<tf::TxId> revert(tf::Framework& fw, const CliEntry& entry, bool undo) {
             if (f == entry.files.end()) return Error{ErrorCode::NotFound, "the journal does not name the document's file"};
             file = f->second;
         }
-        HELIOS_TRY_ASSIGN(tf::Document * d, fw.open(file));
+        // A journal names the file: project-relative only (Framework::open would also take an
+        // absolute path under the root, which a journal never needs).
+        HELIOS_TRY_ASSIGN(const tf::ProjectFile target, fw.documents().confine(file, tf::PathOrigin::Untrusted));
+        HELIOS_TRY_ASSIGN(tf::Document * d, fw.open(fs::pathFromUtf8(target.relative)));
         remap[op.doc] = d->id();
         return d->id();
     };
@@ -361,7 +414,7 @@ int cmdUndoRedo(const Context& c, bool undo) {
         from.pop_back();
         auto r = revert(fw, entry, undo);
         if (!r) return fail(kFailed, std::format("{}", r.error()));
-        out(std::format("{} {} -> {}\n", undo ? "undid" : "redid", entry.tx.id.toString(), r->toString()));
+        out(std::format("{} {} -> {}\n", undo ? "undid" : "redid", tf::printable(entry.tx.id.toString()), r->toString()));
     }
     return kOk;
 }
@@ -380,11 +433,13 @@ int cmdJournal(const Context& c) {
     if (sub == "list") {
         const auto sessions = tf::listJournalSessions(journalRootOf(c), c.project, !c.cl->has("all"));
         for (const tf::JournalSessionInfo& s : sessions) {
-            out(std::format("{}  session={} user={} host={} pid={} tx={} {}{}\n", fs::pathToUtf8(s.path), s.header.session, s.header.user,
-                            s.header.host, s.header.pid, s.txCount, s.clean ? "clean" : "UNCLEAN",
-                            s.tornBytes ? std::format(" torn={}B", s.tornBytes) : std::string()));
+            out(std::format("{}  session={} user={} host={} pid={} tx={} {}{}\n", tf::printable(fs::pathToUtf8(s.path)),
+                            tf::printable(s.header.session), tf::printable(s.header.user), tf::printable(s.header.host), s.header.pid,
+                            s.txCount, s.clean ? "clean" : "UNCLEAN", s.tornBytes ? std::format(" torn={}B", s.tornBytes) : std::string()));
         }
-        if (sessions.empty()) out(std::format("no {}journals for project '{}'\n", c.cl->has("all") ? "" : "unclean ", c.project));
+        if (sessions.empty()) {
+            out(std::format("no {}journals for project '{}'\n", c.cl->has("all") ? "" : "unclean ", tf::printable(c.project)));
+        }
         return kOk;
     }
     if (c.args.size() < 2) return fail(kUsageError, std::format("journal {}: expected a journal file", sub));
@@ -394,21 +449,22 @@ int cmdJournal(const Context& c) {
         auto scan = tf::readJournal(*path);
         if (!scan) return fail(kFailed, std::format("{}", scan.error()));
         if (sub == "verify") {
-            out(std::format("{}: {} record(s), {} valid byte(s), {} torn byte(s), {}\n", fs::pathToUtf8(*path), scan->records.size(),
-                            scan->validBytes, scan->tornBytes, scan->clean ? "clean end" : "no end record (crashed or running)"));
+            out(std::format("{}: {} record(s), {} valid byte(s), {} torn byte(s), {}\n", tf::printable(fs::pathToUtf8(*path)),
+                            scan->records.size(), scan->validBytes, scan->tornBytes,
+                            scan->clean ? "clean end" : "no end record (crashed or running)"));
             return scan->tornBytes == 0 ? kOk : kCheckFailed;
         }
         const bool json = c.cl->has("json");
-        out(std::format("# project={} session={} user={} host={} pid={}\n", scan->header.project, scan->header.session, scan->header.user,
-                        scan->header.host, scan->header.pid));
+        out(std::format("# project={} session={} user={} host={} pid={}\n", tf::printable(scan->header.project),
+                        tf::printable(scan->header.session), tf::printable(scan->header.user), tf::printable(scan->header.host), scan->header.pid));
         for (const tf::JournalRecord& r : scan->records) {
             if (json) {
-                out(r.toJson() + "\n");
+                out(jsonForTerminal(r.toJson()) + "\n");
             } else if (r.kind == tf::JournalRecordKind::Tx) {
-                out(std::format("@{} tx {} {} {} \"{}\" ({} op(s))\n", r.offset, r.tx.id.toString(), tf::txKindName(r.tx.kind),
-                                tf::originName(r.tx.origin), r.tx.label, r.tx.ops.size()));
+                out(std::format("@{} tx {} {} {} \"{}\" ({} op(s))\n", r.offset, tf::printable(r.tx.id.toString()), tf::txKindName(r.tx.kind),
+                                tf::originName(r.tx.origin), tf::printable(r.tx.label), r.tx.ops.size()));
             } else {
-                out(std::format("@{} {} {}\n", r.offset, tf::journalRecordKindName(r.kind), r.file));
+                out(std::format("@{} {} {}\n", r.offset, tf::journalRecordKindName(r.kind), tf::printable(r.file)));
             }
         }
         return kOk;
@@ -418,13 +474,15 @@ int cmdJournal(const Context& c) {
         if (!created) return fail(kFailed, std::format("{}", created.error()));
         tf::RecoveryOptions options;
         options.ignoreSourceChanges = c.cl->has("ignore-source-changes");
+        options.allowOtherProject = c.cl->has("allow-other-project");
         auto report = (*created)->recover(*path, options);
         if (!report) return fail(kFailed, std::format("{}", report.error()));
         out(std::format("replayed {} transaction(s), skipped {}{}\n", report->replayed, report->skipped,
                         report->clean ? " (the session had ended cleanly)" : ""));
         bool conflicts = false;
         for (const tf::RecoveredDocument& d : report->documents) {
-            out(std::format("  {}: {} {}\n", d.file, tf::docRecoveryName(d.status), d.message));
+            // recover() escapes the message; the file is a confined path. Both printed escaped anyway.
+            out(std::format("  {}: {} {}\n", tf::printable(d.file), tf::docRecoveryName(d.status), tf::printable(d.message)));
             conflicts = conflicts || d.status == tf::DocRecovery::Conflict || d.status == tf::DocRecovery::SourceChanged;
         }
         if (c.cl->has("save")) {

@@ -1,0 +1,16 @@
+# expect: trigger
+# The runner is reached through a matrix include entry, from a pull_request_target trigger.
+on: pull_request_target
+permissions:
+  contents: read
+jobs:
+  test:
+    if: github.ref == 'refs/heads/main' && vars.HELIOS_WIN_GPU == 'enabled'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04]
+        include:
+          - runner: [self-hosted, Windows, X64]
+    steps:
+      - run: echo test

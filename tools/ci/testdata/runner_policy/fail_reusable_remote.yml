@@ -1,0 +1,6 @@
+# expect: reusable
+# A reusable workflow from another repository runs its jobs on this repository's runners.
+on: pull_request
+jobs:
+  external:
+    uses: some-org/workflows/.github/workflows/build.yml@v1

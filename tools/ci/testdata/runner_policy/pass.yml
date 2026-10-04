@@ -1,0 +1,44 @@
+# expect: (none)
+# A workflow that keeps every rule of 09 §5.4a, with a hosted job beside the runner job: the hosted job's
+# secret and broader permissions do not reach the runner job, which does not need it.
+name: pass
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**"]
+  workflow_dispatch:
+    inputs:
+      note:
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  gpu:
+    if: ${{ github.ref == 'refs/heads/main' && vars.HELIOS_WIN_GPU == 'enabled' && !cancelled() }}
+    runs-on: [self-hosted, win-gpu]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/local
+      - run: echo "${{ github.sha }}" no secret here
+  hosted:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+      - run: echo done
+        env:
+          TOKEN: ${{ secrets.HOSTED_ONLY }}

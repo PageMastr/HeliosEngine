@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -194,6 +197,105 @@ func TestSpliceLines(t *testing.T) {
 	}
 }
 
+// TestCConstStrings pins which C and C++ declarations count as string constants for CONF-01 and CONF-02:
+// a name that is not one stays unresolved, so a bucket or key passed through it fails closed. Parameters
+// with defaults (after a braced or lambda default, or an #if in the list), non-static data members (also
+// of a class whose base clause or template parameters hold parentheses or `=`), a const inside template
+// arguments and `#if 0` groups are not constants; a local in a lambda or function body is.
+func TestCConstStrings(t *testing.T) {
+	src := newCSource(strings.Split(`#define kDef "def"
+namespace n { constexpr std::string_view kView{"view"}; }
+static const char kArr[] = "arr";
+const std::string kStr = "str";
+std::string const kParen("paren");
+const char* const kPtr = "ptr";
+char const* const kPtr2 = "ptr2";
+const char* const Foo::kQual = "qual";
+class C { public: static constexpr const char* kMember = "member"; };
+[[maybe_unused]] static constexpr const char* kAttr = "attr" "s";
+constexpr std::string_view kBraced = {"braced"};
+struct Desc { const char* name; };
+void init(Desc& d, Desc* p) { d.name = "Cell"; p->bucket = "B"; }
+void f(const char* const dflt = "x") { plain = "y"; HELIOS_LOG_INFO("z"); auto v = get("w"); }
+const char* mutablePtr = "m";
+static const char* kMutable = "km";
+std::string mutableStr = "s";
+const auto lookedUp = find("k");
+void logTo(LogOptions opts = {}, const std::string& pname = "cell", int depth = 0);
+void elect(kvStore* kv, std::function<void()> done = [] {}, const char* const pkey = "zone.1", int n = 2);
+kvStore* openBucket(jsCtx* js,
+#if defined(HELIOS_TRACE_KV)
+                    Tracer* tracer,
+#endif
+                    const std::string& pbucket = "DIRECTORY", int history = 1);
+void run() { go([&] { const std::string kLocal = "local"; }); }
+struct Binding { const std::string subject = "orders"; static const char* const kSubj; };
+struct alignas(8) [[nodiscard]] Holder { static constexpr const char* kHeld = "held"; const char* const inst = "i"; };
+std::optional<const std::string> opt = "o";
+std::span<const char> view = "v";
+std::unique_ptr<const char* const> held = "h";
+struct Wide : Base<(N > 1)> { const char* const wideInst = "wi"; };
+class Derived final : public Bar<decltype(x)>, Baz<N == 2> { const char* const derivedInst = "di"; };
+template <typename T = int> struct Tmpl { const char* const tmplInst = "ti"; static constexpr const char* kTmpl = "ts"; };
+void g(struct Desc* d) { const char* const kInFn = "fn"; }
+#if 0
+#define kDeadDef "dd"
+constexpr const char* kDead = "dead";
+#endif
+`, "\n"))
+	var got []string
+	for name, lits := range cConstStrings(src) {
+		got = append(got, name+"="+strings.Join(lits, "|"))
+	}
+	sort.Strings(got)
+	want := `kArr="arr" kAttr="attr" "s" kBraced="braced" kDef="def" kHeld="held" kInFn="fn" kLocal="local" ` +
+		`kMember="member" kParen="paren" kPtr2="ptr2" kPtr="ptr" kQual="qual" kStr="str" kTmpl="ts" kView="view"`
+	if strings.Join(got, " ") != want {
+		t.Errorf("got  %s\nwant %s", strings.Join(got, " "), want)
+	}
+	table := map[string][]string{"bucket": {"DIRECTORY"}, "kView": {"view"}}
+	for expr, want := range map[string]string{
+		`n::kView`: "view", `::n::kView`: "view", `std::string(kView).c_str()`: "view", `"a" "b"`: "ab",
+		`o.bucket`: "unresolved", `p->bucket`: "unresolved", `bucket`: "DIRECTORY", `name`: "unresolved",
+	} {
+		vals, ok := cStrValues(expr, table)
+		if got := map[bool]string{true: strings.Join(vals, "|"), false: "unresolved"}[ok]; got != want {
+			t.Errorf("cStrValues(%s) = %s, want %s", expr, got, want)
+		}
+	}
+}
+
+// TestCEval pins CONF-04's C++ constant evaluation: every definition of a reused name counts, and only
+// parentheses that enclose the whole expression are stripped.
+func TestCEval(t *testing.T) {
+	table := map[string][]string{"kA": {"17"}, "kB": {"5"}, "kPage": {"6", "12"}, "kSum": {"(kA) + (kB)"},
+		"kNested": {"(kA + (kB)) + 0u"}}
+	for expr, want := range map[string]string{
+		`kA + kB`: "[22]", `(kA) + (kB)`: "[22]", `kSum`: "[22]", `ns::kSum`: "[22]", `kNested`: "[22]",
+		`kPage`: "[6 12]", `kPage + kB`: "[11 17]", `((kA))`: "[17]", `kA) + (kB`: "[]", `kMissing + 1`: "[]",
+	} {
+		if got := fmt.Sprint(cEval(expr, table, 0)); got != want {
+			t.Errorf("cEval(%s) = %s, want %s", expr, got, want)
+		}
+	}
+	// Reused names multiply the combinations (here 21 x 14, nearly all distinct): a 22 that comes last
+	// must not be lost to a bound on how many values one expression keeps.
+	for i := 1; i <= 20; i++ {
+		table["kWide"] = append(table["kWide"], strconv.Itoa(1000*i))
+	}
+	table["kWide"] = append(table["kWide"], "0")
+	for i := 30; i <= 42; i++ {
+		table["kNarrow"] = append(table["kNarrow"], strconv.Itoa(i))
+	}
+	table["kNarrow"] = append(table["kNarrow"], "22")
+	if got := cEval("kWide + kNarrow", table, 0); !slices.Contains(got, 22) || len(got) != 14 {
+		t.Errorf("cEval(kWide + kNarrow) = %v, want the 14 values below 64, 22 among them", got)
+	}
+	if got := cEval("kWide", table, 0); fmt.Sprint(got) != "[0]" {
+		t.Errorf("cEval(kWide) = %v, want [0]: values of 64 and up are not shift amounts", got)
+	}
+}
+
 func TestInactiveLines(t *testing.T) {
 	code := []string{
 		`#if 0`, `dead`, `# elif X`, `live`, `#else`, `live`, `#endif`,
@@ -230,6 +332,41 @@ func TestYamlCode(t *testing.T) {
 	} {
 		if got := yamlCode(in); got != want {
 			t.Errorf("yamlCode(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestRepositoryMap pins the scopes 09 §5.10.4 (c) relies on: the C++ cell host and gateway
+// (engine/server, apps/cellserver, apps/gateway; WP-0.14) are checked by CONF-01, 02 and 04 through the
+// repository's map. CONF-01's scope covers CONF-02's: a nats.c TTL is attributed to the buckets its file
+// sets, and a lease or unresolved Bucket set where CONF-02 reads is left to CONF-01 (README, limits).
+func TestRepositoryMap(t *testing.T) {
+	m, bad := loadMap(filepath.Join("..", "..", "map.jsonc"), "tools/conformance/map.jsonc", All())
+	for _, b := range bad {
+		t.Errorf("map: %s:%d: %s", b.Path, b.Line, b.Message)
+	}
+	scopeOf := func(id string) []string {
+		scope := append([]string(nil), Lookup(id).Scope...)
+		for _, e := range m {
+			for _, rid := range e.Rules {
+				if rid == id {
+					scope = append(scope, e.Paths...)
+				}
+			}
+		}
+		return scope
+	}
+	for _, id := range []string{"CONF-01", "CONF-02", "CONF-04"} {
+		for _, f := range []string{"engine/server/src/ids.cpp", "apps/cellserver/main.cpp", "apps/gateway/main.cpp"} {
+			if !Lookup(id).covers(scopeOf(id), f) {
+				t.Errorf("%s does not read %s (09 §5.10.4 (c))", id, f)
+			}
+		}
+	}
+	for _, glob := range scopeOf("CONF-02") {
+		f := strings.Replace(glob, "**", "src/kv.cpp", 1)
+		if !Lookup("CONF-01").covers(scopeOf("CONF-01"), f) {
+			t.Errorf("CONF-02 reads %s and CONF-01 does not", f)
 		}
 	}
 }

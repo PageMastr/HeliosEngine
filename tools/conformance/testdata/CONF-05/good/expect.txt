@@ -1,0 +1,2 @@
+#! -rules CONF-05 -strict
+# Identity mints; test helpers (testkit, <pkg>test inside and outside the minters) and tests may import idgen.

@@ -1,0 +1,12 @@
+# expect: guard-var
+# Main alone: the job would queue on the runner before the owner has enabled it.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gpu:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, win-gpu]
+    steps:
+      - run: echo gpu

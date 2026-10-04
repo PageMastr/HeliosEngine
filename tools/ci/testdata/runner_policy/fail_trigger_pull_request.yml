@@ -1,0 +1,14 @@
+# expect: trigger
+# A pull_request trigger runs unreviewed code on the owner's PC.
+on:
+  pull_request:
+  schedule:
+    - cron: "0 4 * * *"
+permissions:
+  contents: read
+jobs:
+  gpu:
+    if: github.ref == 'refs/heads/main' && vars.HELIOS_WIN_GPU == 'enabled'
+    runs-on: [self-hosted, win-gpu]
+    steps:
+      - run: echo gpu

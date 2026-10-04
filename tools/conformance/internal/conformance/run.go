@@ -38,13 +38,27 @@ type Pass struct {
 	Rule  *Rule
 	Tree  *Tree
 	Files []string // the files in the rule's scope
+	Scope []string // the scope globs: the table's, then the map's
 	Tests []string // conformance tests the map requires for the rule's anchors
 	out   *[]Finding
+	seen  map[string]bool
+	cstr  map[string][]string // the scope's C string constants (cStrTable), built on first use
 }
 
-// Report records a finding. line 0 means the finding has no line (a missing file or test).
+// Report records a finding. line 0 means the finding has no line (a missing file or test). Distinct
+// messages on one line are distinct findings (a suppression on the line covers them all); the same
+// message twice on a line is one.
 func (p *Pass) Report(file string, line int, format string, args ...any) {
-	*p.out = append(*p.out, Finding{Rule: p.Rule.ID, Path: file, Line: line, Message: fmt.Sprintf(format, args...)})
+	msg := fmt.Sprintf(format, args...)
+	key := fmt.Sprintf("%s:%d:%s", file, line, msg)
+	if p.seen == nil {
+		p.seen = map[string]bool{}
+	}
+	if p.seen[key] {
+		return
+	}
+	p.seen[key] = true
+	*p.out = append(*p.out, Finding{Rule: p.Rule.ID, Path: file, Line: line, Message: msg})
 }
 
 // Finding is one diagnostic. Suppressed and Known are set by Run.
@@ -144,7 +158,7 @@ func Run(opts Options) (*Result, error) {
 			}
 		}
 		scopes[r.ID] = scope
-		p := &Pass{Rule: r, Tree: tree, Tests: dedupe(tests), out: &findings}
+		p := &Pass{Rule: r, Tree: tree, Scope: scope, Tests: dedupe(tests), out: &findings}
 		for _, f := range tree.Files {
 			if r.covers(scope, f) {
 				p.Files = append(p.Files, f)

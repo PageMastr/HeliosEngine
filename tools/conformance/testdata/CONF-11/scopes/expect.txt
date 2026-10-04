@@ -12,10 +12,12 @@
 # global: tools/z's return(PROPAGATE) (45) and output argument (47) reach engine/z, read first.
 # A level set built by a foreach over literal flags (engine/y 28). A producer chain learnt over two passes
 # (engine/a 2: tools/b's _outer reads tools/c's _inner). The root's and cmake/*.cmake's file-scope flag
-# variables reach every directory (engine/pcg 1, 2).
+# variables reach every directory (engine/pcg 1, 2); engine/CMakeLists.txt's reach its subdirectories
+# (engine/pcg 3) and not apps/q.
 engine/a/CMakeLists.txt:2: CONF-11
 engine/pcg/CMakeLists.txt:1: CONF-11
 engine/pcg/CMakeLists.txt:2: CONF-11
+engine/pcg/CMakeLists.txt:3: CONF-11
 engine/y/CMakeLists.txt:3: CONF-11
 engine/y/CMakeLists.txt:5: CONF-11
 engine/y/CMakeLists.txt:6: CONF-11

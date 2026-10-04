@@ -4,6 +4,7 @@ import (
 	"maps"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -28,6 +29,11 @@ var (
 	avxListVarRE = regexp.MustCompile(`(?i)^\w*avx\w*_(targets|sources|source_patterns|patterns|files|kernels|allowlist)$`)
 	avxFlagRE    = regexp.MustCompile(`(?i)([/-]arch:AVX\w*|-mavx\w*|-mbmi\w*|-mf16c|-mlzcnt|-mfma\b)`)
 	marchRE      = regexp.MustCompile(`-march=([A-Za-z0-9_.-]+)`)
+	// An ISA level CONF-11 cannot tell: a variable or generator expression in the value of -march=, /arch:
+	// or -m (-march=${level}, /arch:${v}, -march=$<IF:…>, -march=x86-64${suffix}, -m${ext}). It fails closed.
+	computedISARE = regexp.MustCompile(`(?i)(?:-march=|[/-]arch:)[A-Za-z0-9_.-]*\$[{<][^\s"]*|-m\$[{<][^\s"]*`)
+	// $ENV{X} in a grant: its value comes from outside the build files, so it fails closed.
+	envRefRE = regexp.MustCompile(`\$ENV\{[^}]*\}`)
 	// Variables that reach the compiler: CMake's own (CMAKE_<LANG>_FLAGS*, CMAKE_<LANG>_COMPILE_OBJECT, …)
 	// and the environment (ENV{CXXFLAGS} seeds CMAKE_CXX_FLAGS when a language is enabled).
 	compilerVarRE = regexp.MustCompile(`^(?:CMAKE_\w+|ENV\{\w+\})$`)
@@ -44,15 +50,15 @@ var (
 )
 
 // avxFlags returns the AVX-class flags literally in s (a -march above x86-64, which x86-64-v1 names
-// too, counts).
+// too, counts), and the ISA levels whose value it cannot tell (computedISARE).
 func avxFlags(s string) []string {
 	out := avxFlagRE.FindAllString(s, -1)
-	for _, m := range marchRE.FindAllStringSubmatch(s, -1) {
-		if m[1] != "x86-64" && m[1] != "x86-64-v1" {
-			out = append(out, m[0])
+	for _, m := range marchRE.FindAllStringSubmatchIndex(s, -1) {
+		if v := s[m[2]:m[3]]; v != "x86-64" && v != "x86-64-v1" && !strings.HasPrefix(s[m[1]:], "$") {
+			out = append(out, s[m[0]:m[1]])
 		}
 	}
-	return out
+	return append(out, computedISARE.FindAllString(s, -1)...)
 }
 
 type cmakeCmd struct {
@@ -217,8 +223,9 @@ func isaLevels(t *Tree) (vars map[string]bool, producers map[string]map[int]bool
 				fn, params, local, macro = "", nil, map[string]bool{}, false
 				continue
 			case "foreach": // foreach(v IN LISTS <level set>) or foreach(v -mavx2 …): v holds flags in the loop
-				if loopCarries(c.args, fields, func(v string) bool { return local[v] || vars[v] }) {
-					local[first] = true
+				_, carriers := loopVars(c.args, fields, func(v string) bool { return local[v] || vars[v] })
+				for _, v := range carriers {
+					local[v] = true
 				}
 				continue
 			case "set", "list", "string":
@@ -293,6 +300,53 @@ func loopCarries(args string, fields []string, carries func(string) bool) bool {
 		(len(optionFlags(strings.Join(items[1:], " "), nil)) > 0 || listsCarry(fields[1:], carries))
 }
 
+// loopVars returns the variables a foreach sets (all) and those of them that hold AVX-class flags
+// (carriers). The loop variable is the first field; with IN ZIP_LISTS, each list sets its own: the i-th of
+// several loop variables, or <v>_<i> for a single one (CMake leaves <v> itself unset), and it carries
+// flags when its list does.
+func loopVars(args string, fields []string, carries func(string) bool) (all, carriers []string) {
+	if len(fields) == 0 {
+		return nil, nil
+	}
+	in := slices.IndexFunc(fields, func(f string) bool { return strings.EqualFold(strings.Trim(f, `"`), "IN") })
+	if in < 1 || in+1 >= len(fields) || !strings.EqualFold(strings.Trim(fields[in+1], `"`), "ZIP_LISTS") {
+		first := strings.Trim(fields[0], `"`)
+		if loopCarries(args, fields, carries) {
+			carriers = []string{first}
+		}
+		return []string{first}, carriers
+	}
+	var names []string
+	for _, f := range fields[:in] {
+		names = append(names, strings.Trim(f, `"`))
+	}
+	lists := fields[in+2:]
+	for i, l := range lists {
+		v := ""
+		switch {
+		case len(names) == 1:
+			v = names[0] + "_" + strconv.Itoa(i)
+		case i < len(names):
+			v = names[i]
+		}
+		if v != "" {
+			all = append(all, v)
+		}
+		if listsCarry([]string{"LISTS", l}, carries) {
+			if v == "" || len(names) > 1 && len(names) != len(lists) {
+				// CMake rejects a count mismatch; which variable takes the list is unknown, so all do.
+				carriers = append(carriers, names...)
+			} else {
+				carriers = append(carriers, v)
+			}
+		}
+	}
+	if len(names) > 1 {
+		all = names
+	}
+	return all, carriers
+}
+
 // listsCarry reports whether a foreach's lists (the fields after its loop variable: `IN LISTS a b`,
 // `IN ITEMS ${a}` or plain items) include a variable for which carries is true.
 func listsCarry(fields []string, carries func(string) bool) bool {
@@ -364,16 +418,33 @@ func checkISAGrants(p *Pass) {
 	// every file collect these until nothing new is learnt (the sets only grow, so this ends); the last
 	// pass reports.
 	// The root CMakeLists.txt and the cmake/*.cmake modules it includes run before every subdirectory, so
-	// the flag variables their file scope ends with are seen everywhere, like the level sets.
+	// the flag variables their file scope ends with are seen everywhere, like the level sets. A
+	// subdirectory's CMakeLists.txt starts from its ancestors' variables too (add_subdirectory copies the
+	// parent's scope; the ancestors' file scope at its end stands in for the point of the call).
 	scans := map[string]*isaScan{}
 	fileVars := map[string]map[string]bool{}
 	globals := maps.Clone(levelVars)
+	start := func(f string) map[string]bool {
+		vars := maps.Clone(globals)
+		if path.Base(f) != "CMakeLists.txt" || f == "CMakeLists.txt" {
+			return vars
+		}
+		for d := path.Dir(path.Dir(f)); ; d = path.Dir(d) {
+			for v := range fileVars[path.Join(d, "CMakeLists.txt")] {
+				vars[v] = true
+			}
+			if d == "." {
+				return vars
+			}
+		}
+	}
 	for _, f := range p.Files {
-		scans[f] = &isaScan{p: p, f: f, cmds: cmds[f], levelVars: globals, funcs: funcs, wrappers: wrappers}
+		scans[f] = &isaScan{p: p, f: f, cmds: cmds[f], funcs: funcs, wrappers: wrappers}
 	}
 	for changed := true; changed; {
 		changed = false
 		for _, f := range p.Files {
+			scans[f].levelVars = start(f)
 			vars := scans[f].run(fileVars[f], false)
 			changed = scans[f].changed || len(vars) != len(fileVars[f]) || changed
 			fileVars[f] = vars
@@ -394,6 +465,7 @@ func checkISAGrants(p *Pass) {
 					"(ADR-011 amendment, 02 §1.1)", m)
 			}
 		}
+		scans[f].levelVars = start(f)
 		scans[f].run(fileVars[f], true)
 	}
 }
@@ -431,13 +503,13 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 	fs := s.funcs
 	cur := isaFrame{vars: maps.Clone(s.levelVars)}
 	var outer []isaFrame // the scopes around the definition being read, the file's first
-	// The open foreach loops: the loop variable, and whether it held flags before the loop (CMake restores
-	// its value when the loop ends, CMP0124).
+	// The open foreach loops: each loop's variables, and whether each held flags before the loop (CMake
+	// restores their values when the loop ends, CMP0124).
 	type loopVar struct {
 		name string
 		was  bool
 	}
-	var loops []loopVar
+	var loops [][]loopVar
 	// handBack records that the body being read gives its caller name: its callers then hold the flags
 	// there, and so does the scope around the definition, which stands in for them in this file.
 	handBack := func(name string) {
@@ -514,15 +586,22 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 				"(ADR-011 amendment, 02 §1.1)")
 			continue
 		case "foreach": // foreach(v IN LISTS <flags>) or foreach(v -mavx2 …): v holds them in the loop
-			loops = append(loops, loopVar{first, cur.vars[first]})
-			if loopCarries(c.args, fields, func(v string) bool { return cur.vars[v] }) {
-				cur.vars[first] = true
+			all, carriers := loopVars(c.args, fields, func(v string) bool { return cur.vars[v] })
+			var saved []loopVar
+			for _, v := range all {
+				saved = append(saved, loopVar{v, cur.vars[v]})
+			}
+			loops = append(loops, saved)
+			for _, v := range carriers {
+				cur.vars[v] = true
 			}
 			continue
 		case "endforeach":
 			if n := len(loops); n > 0 {
-				if lv := loops[n-1]; !lv.was {
-					delete(cur.vars, lv.name)
+				for _, lv := range loops[n-1] {
+					if !lv.was {
+						delete(cur.vars, lv.name)
+					}
 				}
 				loops = loops[:n-1]
 			}
@@ -573,6 +652,13 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 		}
 		if m := nestedRefRE.FindString(c.args); m != "" && !isaInertCmds[c.name] {
 			flags = append(flags, m) // ${${n}}: a value CONF-11 cannot tell, so it fails closed
+		}
+		// $ENV{X} in a grant: a value from outside the build files, which CONF-11 cannot tell.
+		if m := envRefRE.FindString(c.args); m != "" && (c.name == "target_compile_options" ||
+			c.name == "add_compile_options" || c.name == "add_definitions" || grantPropRE.MatchString(c.args) &&
+			(c.name == "set_property" || c.name == "set_target_properties" || c.name == "set_source_files_properties" ||
+				c.name == "set_directory_properties")) {
+			flags = append(flags, m)
 		}
 		if len(flags) == 0 {
 			continue
@@ -718,13 +804,16 @@ func optionFlags(args string, avxVars map[string]bool) []string {
 	var out []string
 	for _, a := range cmakeArgs(args) {
 		if strings.HasPrefix(a, `"`) {
-			a = strings.Trim(a, `"`)
-			for _, w := range strings.Fields(a) {
-				if !strings.HasPrefix(w, "-") && !strings.HasPrefix(w, "/") && !strings.HasPrefix(w, "$") {
-					a = ""
-					break
+			// A quoted list ("sse4.2;-mavx2") is several items: each is an option or a sentence on its own.
+			var kept []string
+			for _, item := range strings.Split(strings.Trim(a, `"`), ";") {
+				if !slices.ContainsFunc(strings.Fields(item), func(w string) bool {
+					return !strings.HasPrefix(w, "-") && !strings.HasPrefix(w, "/") && !strings.HasPrefix(w, "$")
+				}) {
+					kept = append(kept, item)
 				}
 			}
+			a = strings.Join(kept, " ")
 		}
 		out = append(out, avxFlags(a)...)
 		for _, v := range cmakeRefs(a) {

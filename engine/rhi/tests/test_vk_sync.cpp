@@ -159,8 +159,6 @@ constexpr ResourceState kStates[] = {
 };
 static_assert(std::size(kStates) == static_cast<usize>(ResourceState::Count));
 
-} // namespace
-
 TEST_CASE("vk sync: every state transition is valid on every queue family") {
     for (const Family& family : kFamilies) {
         for (ResourceState before : kStates) {
@@ -252,3 +250,5 @@ TEST_CASE("vk sync: a dedicated compute queue keeps the compute stage of shader 
     CHECK(ind.dst.stages == VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT);
     CHECK(ind.dst.access == VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
 }
+
+} // namespace

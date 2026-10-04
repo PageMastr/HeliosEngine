@@ -1,0 +1,7 @@
+{
+  "$rid": 499464797028555293,
+  "$name": "part/hull_plate",
+  "$comment": "Armour plating (records test fixture).",
+  "name": "loc:part.hull_plate.name",
+  "mass": 120.5
+}

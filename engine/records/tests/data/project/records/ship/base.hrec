@@ -1,0 +1,88 @@
+{
+  "$rid": 4390381077356775243,
+  "$name": "ship/base",
+  "$comment": "Template of the test ships: sets every field.",
+  "name": "loc:ship.base.name",
+  "grade": "High",
+  "perms": ["Read", "Write"],
+  "mass": 12000.25,
+  "hp": 1500.125,
+  "i8v": -8,
+  "i16v": -1600,
+  "i32v": -320000,
+  "i64v": -6400000000,
+  "u8v": 200,
+  "u16v": 60000,
+  "u32v": 4000000000,
+  "u64v": 18000000000000000000,
+  "flag": true,
+  "label": "Base hull",
+  "ident": "base_hull",
+  "guid": "guid:62617365-0000-4000-8000-000000000001",
+  "owner": "ent:42",
+  "net": 16777217,
+  "cooldown": "1500ms",
+  "at": 123456789,
+  "pos": [1.5, -2.25, 1000000.125],
+  "rot": [0, 0, 0.7071068, 0.7071068],
+  "tint": [0.25, 0.5, 0.75, 1],
+  "icon": "guid:62617365-0000-4000-8000-0000000000ff",
+  "tags": ["Ship.Class.Frigate", "Ship.Role.Escort"],
+  "query": "all(Ship.Class) none(State.Docked)",
+  "formula": "attr(self, Hull.Mass) * 2 + 1",
+  "mounts": [
+    {
+      "$key": "62617365-6d6f-756e-8000-000000000001",
+      "bone": "thruster_main",
+      "force": 250000,
+      "note": "SEC4-NESTED-base-mount-main",
+      "noteTags": ["Sec4Sentinel.Nested.BaseMount"]
+    },
+    {
+      "$key": "62617365-6d6f-756e-8000-000000000002",
+      "bone": "thruster_left",
+      "force": 40000,
+      "dir": [-1, 0, 0],
+      "note": "SEC4-NESTED-base-mount-left"
+    }
+  ],
+  "slots": [
+    {"slot": "nose", "grade": "Low", "weight": 1, "note": "SEC4-NESTED-base-slot-nose", "noteTags": ["Sec4Sentinel.Nested.BaseSlot"]},
+    {"slot": "dorsal", "grade": "Mid", "weight": 2, "note": "SEC4-NESTED-base-slot-dorsal"}
+  ],
+  "extras": ["base_extra"],
+  "parts": [499464797028555293, 2792622146083070695],
+  "attrs": {"Speed": 100, "Agility": 0.5},
+  "labels": ["beta", "alpha"],
+  "nums": [1, 2, 3],
+  "maybe": 0.5,
+  "handling": {"pitch": 45, "yaw": 30, "roll": 90},
+  "mode": {"Warp": {"target": "home", "spool": "3s"}},
+  "nested": [[1, 2], [], [3]],
+  "drop": 2531117344111056078,
+  "roster": {
+    "seats": [
+      {
+        "$key": "62617365-7365-6174-8000-000000000001",
+        "bone": "seat_pilot",
+        "note": "SEC4-NESTED-roster-seat",
+        "noteTags": ["Sec4Sentinel.Nested.Roster"]
+      }
+    ]
+  },
+  "primary": {"bone": "thruster_primary", "note": "SEC4-NESTED-primary", "noteTags": ["Sec4Sentinel.Nested.Primary"]},
+  "bays": {
+    "aft": {"slot": "aft", "grade": "Low", "weight": 4, "note": "SEC4-NESTED-bay-aft", "noteTags": ["Sec4Sentinel.Nested.Bay"]}
+  },
+  "spares": [
+    {"slot": "spare", "grade": "High", "weight": 0.5, "note": "SEC4-NESTED-spare", "noteTags": ["Sec4Sentinel.Nested.Spare"]}
+  ],
+  "skin": 1759060513237310278,
+  "hudColor": [0, 1, 0, 1],
+  "loot": 2531117344111056078,
+  "aiNotes": "SEC4-SENTINEL-ai-notes",
+  "aiHints": {"Sec4SentinelHint": 1.5},
+  "serverTags": ["Sec4Sentinel.Server.Tag", "Ship.Role.Escort"],
+  "threat": "attr(self, Sec4SentinelThreat) * 31337.25",
+  "secretCode": 6828687132497043140
+}

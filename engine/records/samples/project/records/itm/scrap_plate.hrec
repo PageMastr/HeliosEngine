@@ -1,0 +1,11 @@
+{
+  "$rid": 431174482425691808,
+  "$name": "itm/scrap_plate",
+  "name": "loc:item.scrap_plate.name",
+  "tags": ["Item.Material.Metal", "Item.Salvage"],
+  "stackMax": 50,
+  "volume": 0.25,
+  "mass": 12.5,
+  "baseAttrs": {"armor": 4},
+  "rarity": "Uncommon"
+}

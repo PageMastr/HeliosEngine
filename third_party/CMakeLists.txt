@@ -74,14 +74,28 @@ if(HELIOS_BUILD_GRAPHICS)
   endif()
 
   # --- Dear ImGui (docking) + backends + ImGuizmo suite + ImPlot ------------------------------
-  add_library(tp_imgui STATIC
+  set(TP_IMGUI_SOURCES
     ${TP}/imgui/imgui.cpp ${TP}/imgui/imgui_draw.cpp ${TP}/imgui/imgui_tables.cpp
     ${TP}/imgui/imgui_widgets.cpp ${TP}/imgui/imgui_demo.cpp
     ${TP}/imgui/misc/cpp/imgui_stdlib.cpp
-    ${TP}/imgui/backends/imgui_impl_sdl3.cpp ${TP}/imgui/backends/imgui_impl_vulkan.cpp
+    ${TP}/imgui/backends/imgui_impl_sdl3.cpp
     ${TP}/imguizmo/ImGuizmo.cpp ${TP}/imguizmo/ImSequencer.cpp ${TP}/imguizmo/ImCurveEdit.cpp
     ${TP}/imguizmo/ImGradient.cpp ${TP}/imguizmo/GraphEditor.cpp
     ${TP}/implot/implot.cpp ${TP}/implot/implot_items.cpp)
+  if(HELIOS_MODULAR)
+    # Modular dev builds (ADR-016): ImGui's context (GImGui) must exist once per process, and the editor
+    # group, its tests and tools all call ImGui, so it is a shared library of its own, exporting through
+    # ImGui's IMGUI_API. The Vulkan backend is left out: the editor draws ImGui through the Helios RHI
+    # (engine/editorui/src/imgui_renderer.cpp), and the backend would carry a second copy of volk
+    # (docs/adr/ADR-0.6c-link-model-spike.md).
+    add_library(tp_imgui SHARED ${TP_IMGUI_SOURCES})
+    if(WIN32)
+      target_compile_definitions(tp_imgui PRIVATE "IMGUI_API=__declspec(dllexport)"
+                                          INTERFACE "IMGUI_API=__declspec(dllimport)")
+    endif()
+  else()
+    add_library(tp_imgui STATIC ${TP_IMGUI_SOURCES} ${TP}/imgui/backends/imgui_impl_vulkan.cpp)
+  endif()
   target_include_directories(tp_imgui SYSTEM PUBLIC ${TP}/imgui ${TP}/imgui/backends ${TP}/imgui/misc/cpp
                                                     ${TP}/imguizmo ${TP}/implot)
   target_compile_definitions(tp_imgui PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK IMGUI_DEFINE_MATH_OPERATORS)
@@ -94,7 +108,11 @@ if(HELIOS_BUILD_GRAPHICS)
   # that includes imgui_internal.h sees the same ImGuiItemStatusFlags.
   target_compile_definitions(tp_imgui PUBLIC IMGUI_ENABLE_TEST_ENGINE)
   target_sources(tp_imgui PRIVATE ${PROJECT_SOURCE_DIR}/engine/editorui/src/imgui_item_hooks.cpp)
-  target_link_libraries(tp_imgui PUBLIC tp_volk helios::tp::sdl3)
+  if(HELIOS_MODULAR)
+    target_link_libraries(tp_imgui PUBLIC tp_vulkan_headers helios::tp::sdl3)
+  else()
+    target_link_libraries(tp_imgui PUBLIC tp_volk helios::tp::sdl3)
+  endif()
   helios_tp_quiet(tp_imgui)
   add_library(helios::tp::imgui ALIAS tp_imgui)
 endif()

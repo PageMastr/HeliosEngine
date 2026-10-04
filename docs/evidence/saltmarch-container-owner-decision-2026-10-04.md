@@ -65,8 +65,10 @@ quests, not a zone, and are unchanged. The pull request lists each of them.
 ## Code and content
 
 - No `content/` tree exists yet. WP-1.22 (Phase 1 content) creates Saltmarch's files at the paths above.
-- `helios-cell` and `helios-gateway` already call the zone `tallis` (`--zone tallis`, `--default-zone tallis`;
-  the READMEs of `engine/server`, `apps/cellserver` and `apps/gateway`), which matches the decision.
+- The development defaults and tests of `helios-cell` and `helios-gateway` already call the zone `tallis`
+  (`--zone tallis`, `--default-zone tallis`; the READMEs of `engine/server`, `apps/cellserver` and
+  `apps/gateway`), which matches the decision. Those names are waived IP-lint findings that their owner moves
+  to project configuration (`tools/lint/ip_names_policy.cmake`); the decision does not change that either.
 - No code implements object containers, the sparse-checkout set-up (`helios-tool new-project` and `doctor`) or
   T28's `collab.scope` yet. Searching the tree outside `docs/` and `third_party/` for `.hcont`, `.hent`,
   `sparse-checkout`, `new-project` and `content/zones` (`git grep`, 2026-10-04) finds only `engine/ecs`'s note

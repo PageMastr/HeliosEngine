@@ -16,12 +16,16 @@
 # registered again) run against stand-ins for WMI, the account, group, process, file, ACL, registry, git and service
 # cmdlets; no runbook step runs anything from D:\helios-ci (config.cmd remove included) or changes into it, every
 # registration is in a new runner folder that helios-ci could not change, and every rd runs in cmd.exe called by its
-# full path; the "Already done" path cleans the PATH before the owner runs any program by name, and it, step 4b and
-# the checklist name the steps that matter for a runner that already ran without the hook. The scripts have no test
-# switch: their functions and constants are loaded from the parsed files, so their last block (the run) never runs
-# here. On Windows also the wipe itself on a scratch tree under -WorkDir: a junction to a
-# directory outside, a directory symbolic link where creating one is allowed, read-only files and a deep tree; the
-# links go, their targets stay. The last line says whether the wipe ran, and CTest requires "(wipe: ran)" on Windows
+# full path; the "Already done" path cleans the PATH in a clean elevated window (cmd.exe from Win+R sets the PATH and
+# the PSModulePath to Windows' own folders, then starts Windows PowerShell by its full path without the profile), and
+# Rotate, step 4b and the checklist run the audit there; it, step 4b and the checklist name the steps that matter for
+# a runner that already ran without the hook. The scripts have no test switch: their functions and constants are
+# loaded from the parsed files, so their last block (the run) never runs here. On Windows also the wipe itself on a
+# scratch tree under -WorkDir: a junction to a directory outside, a directory symbolic link where creating one is
+# allowed, read-only files and a deep tree; the links go, their targets stay. And the clean window itself: its lines
+# run in cmd.exe with planted Get-CimInstance.cmd, Get-Acl.cmd and Disable-LocalUser.cmd first on the inherited PATH,
+# and Windows PowerShell 5.1 finds the cmdlets and runs none of them (without the PATH line it runs the planted one).
+# The last line says whether the wipe and the clean window ran, and CTest requires both on Windows
 # (tools/ci/CMakeLists.txt).
 param([string]$WorkDir = (Join-Path ([IO.Path]::GetTempPath()) ('helios-runner-scripts-' + [guid]::NewGuid().ToString('N'))))
 
@@ -52,6 +56,7 @@ function Assert-Throws([scriptblock]$Block, [string]$Pattern, [string]$What) {
 }
 
 $here = $PSScriptRoot
+$onWindows = [IO.Path]::DirectorySeparatorChar -eq '\'
 
 # -- Every script parses and is ASCII ------------------------------------------------------------------------
 # Windows PowerShell 5.1 reads a file without a BOM as ANSI: a non-ASCII character becomes mojibake, and some
@@ -1001,11 +1006,13 @@ $rotateText = $rotateSection -replace '\s+', ' '
 Assert-Equal $true ($rotateText.Contains('only then registers the runner again, from a fresh download in the new `runner` folder') -and
     $rotateText.Contains('**Force remove this runner**, not the command that the dialog shows')) `
     'every rotation removes the runner on GitHub without config.cmd and registers it in a new folder'
-# Every rotation starts with step 4b's audit: Rotate's steps 2 and 3 run sc.exe, icacls and git by name.
-$rotatePath = $rotateText.IndexOf('First, in an elevated window, run step 4b''s audit: this step and the next run `sc.exe`, ' +
-    '`icacls` and `git` by name, so if it shows a `PATH` line, do steps 1 to 4 of "Already done" before anything else.')
+# Every rotation starts with step 4b's audit, in a clean window: Rotate's steps 2 and 3 run sc.exe, icacls and git by
+# name, and in any other window the audit's own cmdlets are looked for on the PATH first.
+$rotatePath = $rotateText.IndexOf('First run step 4b''s audit in a clean elevated window (Setup): this step and the next run ' +
+    '`sc.exe`, `icacls` and `git` by name, and in any other window the audit''s own cmdlets may run what a `PATH` folder ' +
+    'holds. If it shows a `PATH` line, do steps 1 to 4 of "Already done" before anything else.')
 Assert-Equal $true ($rotatePath -ge 0 -and $rotatePath -lt $rotateText.IndexOf('# Rotate: delete the runner''s service')) `
-    'every rotation cleans the PATH before it runs sc.exe, icacls or git'
+    'every rotation runs the audit in a clean window and cleans the PATH before it runs sc.exe, icacls or git'
 $removeAt = $rotateText.IndexOf('Remove for good:')
 $remove = if ($removeAt -ge 0) { $rotateText.Substring($removeAt) } else { '' }
 Assert-Equal $true ($remove.Contains('do Rotate''s step 2') -and
@@ -1052,11 +1059,14 @@ Assert-Equal $true ($step4b.Contains('**After unreviewed code.**') -and
     'step 4b says what to do with folders that unreviewed code could change: reinstall, clone again, replace secrets, restore'
 
 # A folder on the PATH that helios-ci can change gives it every program the owner starts by name, elevated or not (the
-# Vulkan SDK puts its Bin first, ahead of System32). Step 4 says so, step 4b's audit lists such folders as PATH lines
-# and deals with them before anything else, and "Already done" cleans the PATH before the owner runs any program: it
-# disables helios-ci and ends its processes, runs the audit, deletes C:\VulkanSDK with cmd.exe called by its full
-# path, takes the other entries off the PATH and opens a new window, all before the Go line and Rotate (sc.exe,
-# icacls, git by name). Until then its blocks call cmdlets only, and cmd.exe by its full path.
+# Vulkan SDK puts its Bin first, ahead of System32), and every cmdlet whose module the window has not loaded yet:
+# PowerShell looks on the PATH before it loads the module, so a Get-Acl.exe or Disable-LocalUser.cmd there runs in its
+# place. Step 4 says so, step 4b's audit lists such folders as PATH lines and deals with them before anything else, and
+# "Already done" cleans the PATH in a clean elevated window (cmd.exe from Win+R by its full path, the PATH and the
+# PSModulePath set to Windows' own folders before it starts Windows PowerShell by its full path without the profile):
+# it disables helios-ci and ends its processes, runs the audit, deletes C:\VulkanSDK with cmd.exe called by its full
+# path, takes the other entries off the PATH with the editor started from that window, and runs the audit again, all
+# before an ordinary window, the Go line and Rotate (sc.exe, icacls, git by name).
 $step4Start = $runbook.IndexOf('### 4. Tools, machine-wide')
 $step4 = if ($step4Start -ge 0 -and $step4bStart -gt $step4Start) { $runbook.Substring($step4Start, $step4bStart - $step4Start) -replace '\s+', ' ' } else { '' }
 Assert-Equal $true ($step4.Contains('puts `C:\VulkanSDK\<version>\Bin` first on the machine `PATH`, ahead of `C:\Windows\System32`') -and
@@ -1076,31 +1086,115 @@ $bareIcacls = @([regex]::Matches($step4bRaw, '(?ms)^[ \t]*```powershell[ \t]*\r?
                 $node.GetCommandName() -match '^icacls(\.exe)?$' }, $true) | ForEach-Object { $_.Extent.Text }
     })
 Assert-Equal '' ($bareIcacls -join '; ') 'step 4b''s blocks call icacls by its full path'
-$alreadyAt = @(('# Already done: disable helios-ci and end its processes before you run any program.',
-        'Run step 4b''s audit (it reads ACLs and the `PATH` settings and starts no program)',
-        '# Already done: delete C:\VulkanSDK', 'Take every other `PATH` line''s entry off the `PATH`',
-        'Close this window and open a new elevated one', 'Run the audit again: it must show no `PATH` line', '`GoLang.Go`',
+$alreadyAt = @(('Open a clean elevated window (above) before anything else',
+        '# Already done: disable helios-ci and end its processes before you run any program.',
+        'Run step 4b''s audit (in the clean window it reads ACLs and the `PATH` settings and starts no program)',
+        '# Already done: delete C:\VulkanSDK', 'Take every other `PATH` line''s entry off the `PATH` in System Properties, started from the clean window',
+        '& "$env:SystemRoot\System32\SystemPropertiesAdvanced.exe"',
+        'Run the audit again in the clean window: it must show no `PATH` line. Then close the window.',
+        'Open an ordinary elevated window: it starts with the cleaned `PATH`', '`GoLang.Go`',
         'follow "Rotate" below from its step 2') | ForEach-Object { $alreadyText.IndexOf($_) })
 $inOrder = $alreadyAt[0] -ge 0
 for ($i = 1; $i -lt $alreadyAt.Count; $i++) { $inOrder = $inOrder -and $alreadyAt[$i] -gt $alreadyAt[$i - 1] }
-Assert-Equal $true $inOrder ('"Already done": disable helios-ci, audit, delete C:\VulkanSDK, take the PATH entries off, a ' +
-    'new window, no PATH line, and only then the Go line and Rotate')
+Assert-Equal $true $inOrder ('"Already done": a clean window first, then disable helios-ci, audit, delete C:\VulkanSDK, take ' +
+    'the PATH entries off with the editor started from that window, no PATH line, and only then an ordinary window, ' +
+    'the Go line and Rotate')
 $beforeGo = $already.Substring(0, [Math]::Max(0, $already.IndexOf('`GoLang.Go`')))
-$alreadyBlocks = @([regex]::Matches($beforeGo, '(?ms)^[ \t]*```powershell[ \t]*\r?\n(.*?)^[ \t]*```') | ForEach-Object { $_.Groups[1].Value })
-$byName = New-Object System.Collections.Generic.List[string]
-foreach ($block in $alreadyBlocks) {
-    $tokens = $null
-    $errors = $null
-    $ast = [System.Management.Automation.Language.Parser]::ParseInput($block, [ref]$tokens, [ref]$errors)
-    foreach ($command in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)) {
-        $first = $command.CommandElements[0]
-        $cmdlet = $first -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
-            $first.StringConstantType -eq 'BareWord' -and $first.Value -match '^[A-Za-z]+-[A-Za-z]+$'
-        if (-not $cmdlet -and $first.Extent.Text -cne '"$env:SystemRoot\System32\cmd.exe"') { $byName.Add($command.Extent.Text) }
-    }
+$alreadyBlocks = @([regex]::Matches($beforeGo, '(?ms)^[ \t]*```[A-Za-z]*[ \t]*\r?\n(.*?)^[ \t]*```') | ForEach-Object { $_.Groups[1].Value })
+Assert-Equal 5 $alreadyBlocks.Count '"Already done" has five blocks before the Go line'
+# Its first block comes after the instruction to open the clean window, and nothing comes before that instruction.
+$alreadyFirstFence = [regex]::Match($already, '(?m)^[ \t]*```')
+$alreadyIntro = if ($alreadyFirstFence.Success) { $already.Substring(0, $alreadyFirstFence.Index) -replace '\s+', ' ' } else { '' }
+Assert-Equal $true ($alreadyIntro.Contains('Open a clean elevated window (above) before anything else, and run nothing in it but ' +
+        'what this page shows')) '"Already done" opens the clean window before its first block'
+# The claims that the audit and the blocks are safe in any elevated window are gone: they hold in the clean window only.
+foreach ($claim in 'In this elevated window, and with only the commands shown here',
+    'Run step 4b''s audit (it reads ACLs and the `PATH` settings and starts no program)',
+    '(elevated; it reads ACLs and the `PATH` settings, starts no program and changes nothing)',
+    'Edit the system environment variables') {
+    Assert-Equal $false (($runbook -replace '\s+', ' ').Contains($claim)) "the runbook no longer says: $claim"
 }
-Assert-Equal 4 $alreadyBlocks.Count '"Already done" has four blocks before the Go line'
-Assert-Equal '' ($byName -join '; ') '"Already done" runs only cmdlets, and cmd.exe by its full path, until the PATH is clean'
+
+# The clean window (Setup, before "Already done"): its first block is cmd.exe's, whose first line sets the PATH to
+# Windows' own folders, the second the PSModulePath, and the third starts Windows PowerShell by its full path without
+# the profile; no block and no other line comes before them. cmd.exe sets both before PowerShell starts, which loads
+# PSReadLine from the PSModulePath as it opens.
+$setupStart = $runbook.IndexOf('## Setup')
+$setupAlready = $runbook.IndexOf('**Already done on 2026-10-03?**')
+$setup = if ($setupStart -ge 0 -and $setupAlready -gt $setupStart) { $runbook.Substring($setupStart, $setupAlready - $setupStart) } else { '' }
+$cleanFence = [regex]::Match($setup, '(?ms)^[ \t]*```([A-Za-z]*)[ \t]*\r?\n(.*?)^[ \t]*```')
+Assert-Equal 'bat' $cleanFence.Groups[1].Value 'the first block of the Setup is the clean window''s cmd.exe block, before "Already done"'
+$cleanLines = @($cleanFence.Groups[2].Value -split '\r?\n' | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() })
+# A list of folders is Windows' own when every entry is %SystemRoot% or a folder below it (no '..', no other variable).
+function Test-HeliosCiWindowsFolders([string]$List) {
+    $entries = @($List.Split(';'))
+    return $entries.Count -gt 0 -and @($entries | Where-Object { $_ -cnotmatch '^%SystemRoot%(\\[A-Za-z0-9][A-Za-z0-9.]*)*$' }).Count -eq 0
+}
+$cleanPath = if ($cleanLines.Count -ge 1 -and $cleanLines[0] -cmatch '^set "PATH=([^"]+)"$') { $Matches[1] } else { '' }
+Assert-Equal $true ((Test-HeliosCiWindowsFolders $cleanPath) -and @($cleanPath.Split(';')) -ccontains '%SystemRoot%\System32') `
+    'the clean window''s first line sets the PATH to Windows'' own folders only, System32 included'
+$cleanModules = if ($cleanLines.Count -ge 2 -and $cleanLines[1] -cmatch '^set "PSModulePath=([^"]+)"$') { $Matches[1] } else { '' }
+Assert-Equal $true (Test-HeliosCiWindowsFolders $cleanModules) 'its second line sets the PSModulePath to Windows'' own folders only'
+$cleanShell = '"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile'
+Assert-Equal @($cleanShell) @($cleanLines | Select-Object -Skip 2) `
+    'then it starts Windows PowerShell by its full path, without the profile, and runs nothing else'
+$setupText = $setup -replace '\s+', ' '
+Assert-Equal $true ($setupText.Contains('Press Win+R, type `%SystemRoot%\System32\cmd.exe /d`, press Ctrl+Shift+Enter (run as ' +
+        'administrator)') -and $cleanFence.Index -gt $setup.IndexOf('Press Win+R')) `
+    'the clean window is cmd.exe, started elevated from Win+R by its full path, without AutoRun commands'
+# Everything that may run while a PATH line exists runs in the clean window: step 4b's audit, its PATH line, its list
+# after unreviewed code, and the checklist's audit.
+Assert-Equal $true ($step4b.Contains('in a clean elevated window (Setup, above) and only there. In it, the audit reads ACLs and ' +
+        'the `PATH` settings, starts no program and changes nothing') -and
+    $step4b.Contains('so deal with it before anything else, in the clean window') -and
+    $step4b.Contains('Do steps 1 to 4 of "Already done" in a clean elevated window')) `
+    'step 4b runs the audit, deals with a PATH line and cleans the PATH after unreviewed code in a clean window'
+
+# On Windows: the clean window's lines as cmd.exe runs them, after a line that puts a folder first on the PATH (as the
+# Vulkan SDK's Bin is) with a planted Get-CimInstance.cmd, Get-Acl.cmd and Disable-LocalUser.cmd in it, each of which
+# leaves a file when it runs. Windows PowerShell 5.1 then finds the cmdlets and runs none of them. Without the clean
+# window's PATH line, it runs the planted Get-CimInstance.cmd: the lookup that the clean window is for.
+$cleanWindow = 'skipped, not Windows'
+if (-not $onWindows) {
+    Write-Host 'The clean window itself (cmd.exe, Windows PowerShell 5.1) runs on Windows only; skipped here.'
+} elseif ($cleanLines.Count -eq 3) {
+    $cleanWindow = 'ran'
+    $cleanDir = [IO.Path]::Combine([IO.Path]::GetFullPath($WorkDir), 'clean-window')
+    $planted = Join-Path $cleanDir 'planted'
+    New-Item -ItemType Directory -Force -Path $planted | Out-Null
+    foreach ($name in 'Get-CimInstance', 'Get-Acl', 'Disable-LocalUser') {
+        Set-Content -LiteralPath (Join-Path $planted "$name.cmd") -Encoding Ascii -Value "@echo planted>""%~dp0ran-$name.txt"""
+    }
+    # Runs $Lines in cmd.exe, after a line that puts the planted folder first on the PATH, with $Probe given to the last
+    # line (Windows PowerShell); returns what it printed. Not with the test's own PATH after the planted folder: a '"'
+    # in it would end the quoted set.
+    function Invoke-HeliosCiWindow([string[]]$Lines, [string]$Probe) {
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Probe))
+        $batch = Join-Path $cleanDir 'window.cmd'
+        $all = @('@echo off', "set ""PATH=$planted;%SystemRoot%\System32;%SystemRoot%""") + @($Lines[0..($Lines.Count - 2)]) +
+            @("$($Lines[-1]) -NonInteractive -EncodedCommand $encoded")
+        Set-Content -LiteralPath $batch -Encoding Ascii -Value $all
+        return @(& (Join-Path $env:SystemRoot 'System32\cmd.exe') /d /c $batch | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+    }
+    $cleanProbe = "foreach (`$name in 'Get-CimInstance', 'Get-Acl', 'Disable-LocalUser') { " +
+        "'{0} {1}' -f `$name, (Get-Command `$name).CommandType }; " +
+        "`$null = Get-CimInstance -ClassName Win32_OperatingSystem; `$null = Get-Acl -LiteralPath `$env:SystemRoot; 'probe done'"
+    Assert-Equal @('Get-CimInstance Cmdlet', 'Get-Acl Cmdlet', 'Disable-LocalUser Cmdlet', 'probe done') `
+        (Invoke-HeliosCiWindow $cleanLines $cleanProbe) 'in the clean window, Windows PowerShell finds the cmdlets, not the planted files'
+    Assert-Equal '' (@(Get-ChildItem -LiteralPath $planted -Filter 'ran-*' | ForEach-Object Name) -join ', ') `
+        'the clean window runs none of the planted files'
+    $dirtyProbe = "`$null = Get-CimInstance -ClassName Win32_OperatingSystem; 'probe done'"
+    Assert-Equal @('probe done') (Invoke-HeliosCiWindow @($cleanLines[1], $cleanLines[2]) $dirtyProbe) `
+        'without the clean window''s PATH, Windows PowerShell still answers'
+    Assert-Equal 'ran-Get-CimInstance.txt' (@(Get-ChildItem -LiteralPath $planted -Filter 'ran-*' | ForEach-Object Name) -join ', ') `
+        'without the clean window''s PATH, Windows PowerShell runs the planted Get-CimInstance.cmd (the lookup the window is for)'
+    Remove-Item -LiteralPath $cleanDir -Recurse -Force
+} else {
+    $script:checks++
+    $script:failures++
+    $cleanWindow = 'not run'
+    Write-Host 'FAIL: the clean window cannot run: its block does not have three lines'
+}
 $alreadyDisable = @($blocks | Where-Object { $_ -match '(?m)^[ \t]*# Already done: disable helios-ci' })
 Assert-Equal 1 $alreadyDisable.Count '"Already done" has one block that disables helios-ci'
 if ($alreadyDisable.Count -eq 1) {
@@ -1151,8 +1245,8 @@ Assert-Equal $true ($checklist.Contains('runas /user:helios-ci "powershell -NoPr
     $checklist.Contains('$PROFILE.CurrentUserAllHosts') -and $checklist.Contains('$PROFILE.CurrentUserCurrentHost')) `
     'the checklist looks for helios-ci''s PowerShell profiles from a window without them'
 $checklistText = $checklist -replace '\s+', ' '
-Assert-Equal $true ($checklistText.Contains('Step 4b''s audit lists no `PATH` line, no `write` line but')) `
-    'the checklist repeats the audit, PATH included'
+Assert-Equal $true ($checklistText.Contains('Step 4b''s audit, in a clean elevated window, lists no `PATH` line, no `write` line but')) `
+    'the checklist repeats the audit in a clean window, PATH included'
 Assert-Equal $true ($checklistText.Contains('`Get-ExecutionPolicy` (the policy in effect for `helios-ci`) answers `RemoteSigned`, `Unrestricted` or `Bypass`') -and
     $checklistText.Contains('`pwsh -NoProfile -c Get-ExecutionPolicy` and `pwsh -NoProfile -c Get-ExecutionPolicy -Scope CurrentUser`')) `
     'the checklist asks for helios-ci''s execution policy in effect, in Windows PowerShell and in pwsh'
@@ -1392,7 +1486,6 @@ Assert-Throws { Get-HeliosCiWipeTargets -Root $root -Workspace (Join-Path $outsi
     'is not <work>' 'workspace outside the work directory'
 Assert-Throws { Get-HeliosCiWipeTargets -Root (Join-Path $WorkDir 'missing') -Workspace $workspace } '' 'a missing work directory'
 
-$onWindows = [IO.Path]::DirectorySeparatorChar -eq '\'
 $wipe = 'skipped, not Windows'
 if (-not $onWindows) {
     Write-Host 'The wipe itself (cmd.exe rd, junctions) runs on Windows only; skipped here.'
@@ -1439,8 +1532,8 @@ if (-not $onWindows) {
 if (Test-Path -LiteralPath $WorkDir) { Remove-Item -LiteralPath $WorkDir -Recurse -Force }
 
 if ($script:failures -gt 0) {
-    Write-Host "runner scripts: $($script:failures) of $($script:checks) checks failed (wipe: $wipe)"
+    Write-Host "runner scripts: $($script:failures) of $($script:checks) checks failed (wipe: $wipe, clean window: $cleanWindow)"
     exit 1
 }
-Write-Host "runner scripts: all $($script:checks) checks passed (wipe: $wipe)"
+Write-Host "runner scripts: all $($script:checks) checks passed (wipe: $wipe, clean window: $cleanWindow)"
 exit 0

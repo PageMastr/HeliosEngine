@@ -10,8 +10,11 @@
 #                                 before the service starts (step 9) and the rotate blocks (the runner removed with
 #                                 Windows' tools, never config.cmd; a new account and D:\helios-ci get the hook and
 #                                 firewall before the runner registers in a new folder) hold against stand-ins, no
-#                                 step runs anything from D:\helios-ci, and the PATH is clean before the owner runs
-#                                 a program by name; with PowerShell 7.
+#                                 step runs anything from D:\helios-ci, and the PATH is cleaned and the audit run in
+#                                 a clean elevated window (cmd.exe sets the PATH and PSModulePath to Windows' own
+#                                 folders before Windows PowerShell starts without the profile; on Windows the test
+#                                 runs that window against planted files on the PATH and must say that it ran); with
+#                                 PowerShell 7.
 # Python 3.10+ is required in CI, as for tools/scorecard. pwsh is required on GitHub-hosted runners, which all
 # have it; elsewhere (the dev container, the owner's win-gpu PC) lint_runner_scripts is registered only if found.
 if(NOT HELIOS_BUILD_TESTS)
@@ -43,9 +46,11 @@ if(HELIOS_PWSH)
                    -WorkDir ${CMAKE_CURRENT_BINARY_DIR}/runner-scripts-test)
   set_tests_properties(lint_runner_scripts PROPERTIES LABELS lint TIMEOUT 300)
   if(CMAKE_HOST_WIN32)
-    # The wipe must have run, not been skipped. The script prints this only when every check passed (CTest ignores
-    # the exit code once PASS_REGULAR_EXPRESSION is set).
-    set_tests_properties(lint_runner_scripts PROPERTIES PASS_REGULAR_EXPRESSION "checks passed \\(wipe: ran\\)")
+    # The wipe and the clean window must have run, not been skipped. The script prints this only when every check
+    # passed (CTest ignores the exit code once PASS_REGULAR_EXPRESSION is set). No ';' in it: CMake would split the
+    # value into two expressions, either of which would pass the test.
+    set_tests_properties(lint_runner_scripts PROPERTIES PASS_REGULAR_EXPRESSION
+                         "checks passed \\(wipe: ran, clean window: ran\\)")
   endif()
 else()
   message(STATUS "tools/ci: pwsh not found; lint_runner_scripts is not registered")

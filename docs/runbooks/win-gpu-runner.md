@@ -46,20 +46,22 @@ folders elsewhere on the drives. It cannot reach administrator rights either, **
 and not from a folder that "Rotate" sets aside. The account can change every file there, `config.cmd` included, and
 what you run elevated runs with your rights ("Rotate or remove" below never does it). The same holds **as long as no
 folder on the `PATH` is open to it**: Windows and PowerShell look in the `PATH` folders, in order, for every program
-you start by name (`git`, `icacls`, `winget`, `cmd`), elevated or not, and the Vulkan SDK puts its own folder first,
-so a file of that name that the account put there would run with your rights (step 4b's audit checks the `PATH`, and
-the checklist repeats it). Like every local account, it can still read what Windows leaves open to all users (the
-machine-wide tools, which the build needs, `C:\ProgramData` and whatever step 4b's audit lists as `read`), create
-files and folders in `C:\ProgramData` and `C:\Windows\Temp` and folders at the root of a drive, read and change
-`C:\Users\Public` (Windows lets interactive and service logons write there, so keep nothing in it that you would mind
-losing or that you run), and read and write a FAT32 or exFAT drive (most USB sticks) while one is plugged in. It can
-reach programs on the PC itself that listen on the network, including on `localhost` (Windows Firewall does not filter
-loopback): keep such services (databases, dev servers, remote-control tools) behind a password, or stop them while the
-runner is enabled. The firewall blocks private addresses only, so the router's public (WAN) address stays reachable:
-many routers show their admin page there to clients on the LAN, and NAT loopback passes port-forwarded traffic on to
-the LAN device behind it (a NAS), often with the router's LAN address as the source. That depends on the router; the
-checklist tests it, and if the admin page or a forwarded service answers, turn off the router's remote administration
-or NAT loopback (or the port forward). If you suspect misuse, follow "Rotate" below.
+you start by name (`git`, `icacls`, `winget`, `cmd`), elevated or not, PowerShell also for a cmdlet whose module the
+window has not loaded yet (`Get-Acl`, `Disable-LocalUser`), and the Vulkan SDK puts its own folder first, so a file of
+that name that the account put there would run with your rights (step 4b's audit, run in a clean window that looks
+only in Windows' own folders, checks the `PATH`, and the checklist repeats it). Like every local account, it can still
+read what Windows leaves open to all users (the machine-wide tools, which the build needs, `C:\ProgramData` and
+whatever step 4b's audit lists as `read`), create files and folders in `C:\ProgramData` and `C:\Windows\Temp` and
+folders at the root of a drive, read and change `C:\Users\Public` (Windows lets interactive and service logons write
+there, so keep nothing in it that you would mind losing or that you run), and read and write a FAT32 or exFAT drive
+(most USB sticks) while one is plugged in. It can reach programs on the PC itself that listen on the network,
+including on `localhost` (Windows Firewall does not filter loopback): keep such services (databases, dev servers,
+remote-control tools) behind a password, or stop them while the runner is enabled. The firewall blocks private
+addresses only, so the router's public (WAN) address stays reachable: many routers show their admin page there to
+clients on the LAN, and NAT loopback passes port-forwarded traffic on to the LAN device behind it (a NAS), often with
+the router's LAN address as the source. That depends on the router; the checklist tests it, and if the admin page or a
+forwarded service answers, turn off the router's remote administration or NAT loopback (or the port forward). If you
+suspect misuse, follow "Rotate" below.
 
 Code that ran as `helios-ci` while the runner had no working hook was not reviewed at all, and it could have done all
 of the above: that is a runner online before step 9 ("Already done" below), and the jobs behind "`File doesn't exist`"
@@ -90,8 +92,30 @@ The checker counts every label of the runner: a job whose `runs-on` uses only `s
 Steps 1, 2, 3 and 5 are the owner's steps of 2026-10-03; they are repeated here so that this page is complete.
 Run the commands in an elevated PowerShell (Run as administrator) unless a step says otherwise.
 
-**Already done on 2026-10-03?** Then the runner `helios-win-gpu` is registered and Idle, without the hook, so a
-fork's pull request or a push to any branch can run code on this PC now. **First stop the service and keep it from
+**A clean elevated window.** A folder on the `PATH` that `helios-ci` can change (step 4b's audit lists it as a `PATH`
+line) gives it what you run by name in an ordinary elevated window. That window loads your PowerShell profile, which
+may run `git` or other programs by name (posh-git and oh-my-posh do), and PowerShell looks on the `PATH` for a cmdlet
+whose module it has not loaded yet before it loads the module: in a new window, `Disable-LocalUser`, `Get-CimInstance`
+or `Get-Acl` runs a `Get-Acl.exe` (or `.cmd`, `.bat`, `.ps1`) that it finds there first. A clean window loads no
+profile and looks only in Windows' own folders. Run step 4b's audit only in one, and whatever else this page says to
+run in one. Press Win+R, type `%SystemRoot%\System32\cmd.exe /d`, press Ctrl+Shift+Enter (run as administrator) and
+confirm, then paste these three lines into the window that opens:
+
+```bat
+set "PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem;%SystemRoot%\System32\WindowsPowerShell\v1.0"
+set "PSModulePath=%SystemRoot%\System32\WindowsPowerShell\v1.0\Modules"
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile
+```
+
+`cmd.exe` sets both lists before PowerShell starts: PowerShell loads its line editor (PSReadLine) from the
+`PSModulePath` folders as it opens, before you can type a line, and `powershell.exe`, like every program, looks on the
+`PATH` for a DLL that it does not find in its own folder or in System32. The clean window finds no `winget` or `git`.
+Once the audit shows no `PATH` line, an ordinary elevated window that you open after that is safe again: it gets its
+`PATH` from the settings that the audit read.
+
+**Already done on 2026-10-03?** Then the runner `helios-win-gpu` is registered and Idle, without the hook, so a fork's
+pull request or a push to any branch can run code on this PC now. Open a clean elevated window (above) before anything
+else, and run nothing in it but what this page shows, up to step 3 below. **First stop the service and keep it from
 starting** (it stays registered; GitHub shows it Offline, and jobs for it wait in the queue):
 
 ```powershell
@@ -113,12 +137,13 @@ Get-ChildItem D:\helios-ci\runner\_diag -Filter 'Worker_*.log' | Select-Object N
 
 A job can also delete its own log, so an empty list does not prove that none ran.
 
-**Then clean the `PATH`, before you run any program**: `winget`, `git`, `icacls`, `sc.exe`, `cmd`, an installer, or
-any step below. The Vulkan SDK's installer puts `C:\VulkanSDK\<version>\Bin` first on the machine `PATH`, ahead of
+**Then clean the `PATH`, before you open any other elevated window** or run `winget`, `git`, an installer or any step
+below. The Vulkan SDK's installer puts `C:\VulkanSDK\<version>\Bin` first on the machine `PATH`, ahead of
 `C:\Windows\System32`, and step 4 left `C:\VulkanSDK` open to `helios-ci`. Windows and PowerShell look for a program
-that you start by name in the `PATH` folders, in order, and a program looks there for a DLL that it does not find in
-its own folder or in System32, so a file that this code left in such a folder would run with your administrator
-rights. In this elevated window, and with only the commands shown here:
+that you start by name in the `PATH` folders, in order, PowerShell looks there for a cmdlet whose module it has not
+loaded yet, and a program looks there for a DLL that it does not find in its own folder or in System32, so a file that
+this code left in such a folder would run with your administrator rights in any window but a clean one. In the clean
+window:
 
 1. Disable `helios-ci` and end its processes, so that nothing of it runs from here on ("Rotate" deletes the account):
 
@@ -128,23 +153,31 @@ rights. In this elevated window, and with only the commands shown here:
    Get-Process -IncludeUserName | Where-Object { $_.UserName -eq "$env:COMPUTERNAME\helios-ci" } | Stop-Process -Force
    ```
 
-2. Run step 4b's audit (it reads ACLs and the `PATH` settings and starts no program) and keep its output: it is the
-   first audit, which step 4b's "After unreviewed code" list works through later. If it lists `C:\VulkanSDK` as
-   `write`, or a `PATH` line under it, delete that folder without running anything in it, its uninstaller included,
-   calling `cmd.exe` by its full path:
+2. Run step 4b's audit (in the clean window it reads ACLs and the `PATH` settings and starts no program) and keep its
+   output: it is the first audit, which step 4b's "After unreviewed code" list works through later. If it lists
+   `C:\VulkanSDK` as `write`, or a `PATH` line under it, delete that folder without running anything in it, its
+   uninstaller included, calling `cmd.exe` by its full path:
 
    ```powershell
    # Already done: delete C:\VulkanSDK, which was open to helios-ci, calling cmd.exe by its full path.
    & "$env:SystemRoot\System32\cmd.exe" /d /c rd /s /q "\\?\C:\VulkanSDK"
    ```
 
-   Take every other `PATH` line's entry off the `PATH` (Start → "Edit the system environment variables" →
+   Take every other `PATH` line's entry off the `PATH` in System Properties, started from the clean window by its full
+   path (started from Start, it would get Explorer's `PATH`):
+
+   ```powershell
+   # Already done: the PATH editor (System Properties), started from the clean window by its full path.
+   & "$env:SystemRoot\System32\SystemPropertiesAdvanced.exe"
+   ```
+
    Environment Variables → `Path` or `PSModulePath`, under System variables or under your own → Edit → select the
-   entry → Delete → OK → OK); step 4b's list deals with the folder itself later.
-3. Close this window and open a new elevated one (a window keeps the `PATH` it started with). If you deleted
-   `C:\VulkanSDK`, install the SDK again (step 4's line; if `winget` still finds the old installation, add `--force`)
-   and close its new folder at once with step 4b's block for a tool: nothing of `helios-ci` can run in between.
-4. Run the audit again: it must show no `PATH` line.
+   entry → Delete → OK → OK, and close System Properties. Step 4b's list deals with the folder itself later.
+3. Run the audit again in the clean window: it must show no `PATH` line. Then close the window.
+4. Open an ordinary elevated window: it starts with the cleaned `PATH` (a window keeps the `PATH` it started with),
+   which finds `winget` and `git` again. If you deleted `C:\VulkanSDK`, install the SDK again (step 4's line; if
+   `winget` still finds the old installation, add `--force`) and close its new folder at once with step 4b's block for
+   a tool: nothing of `helios-ci` can run in between.
 
 Then start over, whatever the list of jobs showed: install Go and set the execution policy (the `GoLang.Go` and
 `Set-ExecutionPolicy` lines of step 4), require approval for fork pull requests (step 8), then follow "Rotate" below
@@ -232,13 +265,17 @@ could change it, and the next time you build or validate from it (09 §5.9), tha
 of this repository inside your profile**, the one you validate from included (step 6 puts its clone there).
 
 The `PATH` matters even more. Windows and PowerShell look in its folders, in order, for every program that you start
-by name, elevated or not; a program looks there for a DLL that it does not find in its own folder or in System32; and
+by name, elevated or not; PowerShell looks there too for a cmdlet whose module the window has not loaded yet, before it
+loads the module; a program looks there for a DLL that it does not find in its own folder or in System32; and
 PowerShell looks for modules in the `PSModulePath` folders. The Vulkan SDK puts its `Bin` folder first, ahead of
 System32 (step 4). A file that `helios-ci` can put in such a folder runs as you the next time you run `git`, `icacls`,
-`winget` or anything else by name, and with your administrator rights in an elevated window.
+`winget`, a cmdlet such as `Get-Acl` or anything else by name, and with your administrator rights in an elevated
+window.
 
-List what `helios-ci` can open at the root of each local drive and what it can change on the `PATH` (elevated; it
-reads ACLs and the `PATH` settings, starts no program and changes nothing):
+List what `helios-ci` can open at the root of each local drive and what it can change on the `PATH`, in a clean
+elevated window (Setup, above) and only there. In it, the audit reads ACLs and the `PATH` settings, starts no program
+and changes nothing; in any other window, PowerShell may look for its `Get-CimInstance` and `Get-Acl` on the very
+`PATH` that it checks:
 
 ```powershell
 # Step 4b audit: what helios-ci can read or change at the root of each local drive, and on the PATH.
@@ -347,13 +384,13 @@ that `helios-ci` can change a folder on the `PATH` or the `PSModulePath`, or put
 folder or of one above it, or make the folder where it is missing (`missing`); `Who` names the list, the folder whose
 ACL allows it, and the entries (with `?`, that folder's ACL could not be read). For every line:
 
-- **A `PATH` line**: until it is gone, any program that you start by name may be one that `helios-ci` put there, so
-  deal with it before anything else in an elevated window. A tool's folder (the Vulkan SDK's `Bin` is in
-  `C:\VulkanSDK`): close the tool's folder as below. Your own folder: move it into your profile and change the entry,
-  or close the folder as below. A folder you do not need, a missing one, or one that is not a full path: take its
-  entry off the `PATH` (Start → "Edit the system environment variables" → Environment Variables → `Path` or
-  `PSModulePath` → Edit → select it → Delete → OK → OK). Then open a new elevated window, which reads the `PATH`
-  again.
+- **A `PATH` line**: until it is gone, any program that you start by name may be one that `helios-ci` put there, and
+  so may a cmdlet in any window but a clean one, so deal with it before anything else, in the clean window. A tool's
+  folder (the Vulkan SDK's `Bin` is in `C:\VulkanSDK`): close the tool's folder as below. Your own folder: move it
+  into your profile and change the entry, or close the folder as below. A folder you do not need, a missing one, or
+  one that is not a full path: take its entry off the `PATH` with the editor started from the clean window ("Already
+  done", step 2). Then run the audit again; an ordinary elevated window that you open after it shows no `PATH` line
+  gets the cleaned `PATH`.
 
 - **Your files, or a clone of a repository**: move it into your profile, or close it. A file at a drive root: move it
   into your profile or into a folder you close. To close a folder, give yourself access first: with User Account
@@ -397,10 +434,11 @@ online before step 9, as under "Already done", or a suspected misuse), every `wr
 was open to it and every line could be read. Closing or moving a folder keeps whatever was planted in it, so before
 you close or move anything:
 
-- **`PATH` lines first**: until they are gone, any program that you start by name, `cmd` and `icacls` included, may
-  be one that this code put there. Do steps 1 to 4 of "Already done" (disable `helios-ci`, delete `C:\VulkanSDK`,
-  take the other entries off the `PATH`, install the SDK again in a new window and close it) before the rest of this
-  list.
+- **`PATH` lines first**: until they are gone, any program that you start by name, `cmd` and `icacls` included, and
+  in any window but a clean one any cmdlet whose module the window has not loaded yet, may be one that this code put
+  there. Do steps 1 to 4 of "Already done" in a clean elevated window (disable `helios-ci`, delete `C:\VulkanSDK`,
+  take the other entries off the `PATH` with the editor started from that window, run the audit again; then install
+  the SDK again in an ordinary window and close it) before the rest of this list.
 - **A tool listed as `write`** (for example `C:\VulkanSDK`, whose validation layer the Vulkan loader loads into your
   own validated runs): delete the folder without running anything in it, its uninstaller included (that would run
   as you), calling `cmd.exe` by its full path:
@@ -594,8 +632,9 @@ Do this after the setup and after any change to the PC, the hook or the firewall
 - [ ] `icacls D:\helios-ci` lists Administrators, SYSTEM and `BUILTIN\Users:(RX)` only, and `icacls
       D:\helios-ci\runner` names no account but Administrators, SYSTEM and `config.cmd`'s `GITHUB_ActionsRunner_G...`
       group (step 3).
-- [ ] Step 4b's audit lists no `PATH` line, no `write` line but FAT32 or exFAT drives you accepted and
-      `D:\helios-ci.old-<time>` trees that you have not deleted yet, and its `read` lines are only tools the job uses.
+- [ ] Step 4b's audit, in a clean elevated window, lists no `PATH` line, no `write` line but FAT32 or exFAT drives you
+      accepted and `D:\helios-ci.old-<time>` trees that you have not deleted yet, and its `read` lines are only tools
+      the job uses.
 - [ ] `Get-NetFirewallRule -Group 'Helios CI runner: LAN block for helios-ci'` lists 3 rules (2 with `-AllowAddress`),
       Enabled, Outbound, Block; `... | Get-NetFirewallAddressFilter` shows the ranges of step 7;
       `Get-NetFirewallProfile | Select-Object Name, Enabled` shows every profile enabled.
@@ -692,12 +731,13 @@ runner itself replaces `bin` when it updates. `config.cmd` is a plain batch file
 with your rights. Its `remove` also stops and deletes whatever service the `.service` file there names.
 
 1. Set `HELIOS_WIN_GPU` to `disabled`.
-2. Remove the runner. First, in an elevated window, run step 4b's audit: this step and the next run `sc.exe`,
-   `icacls` and `git` by name, so if it shows a `PATH` line, do steps 1 to 4 of "Already done" before anything else.
-   Then stop and delete the runner's service and the local group through which `config.cmd` gave the account the
-   runner's folders. `config.cmd` reuses a group of the same name, so a group left behind would give the next account
-   the folders that this rotation sets aside. (Like the rest of this runbook, the block assumes that this PC runs no
-   other runner.)
+2. Remove the runner. First run step 4b's audit in a clean elevated window (Setup): this step and the next run
+   `sc.exe`, `icacls` and `git` by name, and in any other window the audit's own cmdlets may run what a `PATH` folder
+   holds. If it shows a `PATH` line, do steps 1 to 4 of "Already done" before anything else. Once it shows none, go on
+   in an ordinary elevated window opened after that (the clean window finds no `git`): stop and delete the runner's
+   service and the local group through which `config.cmd` gave the account the runner's folders. `config.cmd` reuses a
+   group of the same name, so a group left behind would give the next account the folders that this rotation sets
+   aside. (Like the rest of this runbook, the block assumes that this PC runs no other runner.)
 
    ```powershell
    # Rotate: delete the runner's service and config.cmd's group with Windows' own tools, not with config.cmd.
@@ -856,10 +896,10 @@ with your rights. Its `remove` also stops and deletes whatever service the `.ser
    Last, cancel the runs that still wait for this runner: Actions → filter `is:queued` → each run whose job waits for
    a runner with the `win-gpu` label → Cancel workflow. The hook would end them too, but this way nothing rests on it.
    Go on with step 4: the service that `config.cmd` starts runs the hook, and the firewall rules apply to its account.
-4. Register again (step 5: a fresh download into the new `runner` folder, then `config.cmd`; it ends with stopping
-   the service), run step 4b's audit (and its "After unreviewed code" list, if that is why you rotate), start the
-   service with step 9's block (it refuses while `.env` does not set the hook or `helios-ci` cannot read it), go
-   through the checklist, and set `HELIOS_WIN_GPU=enabled`.
+4. Register again (step 5: a fresh download into the new `runner` folder, then `config.cmd`; it ends with stopping the
+   service), run step 4b's audit in a clean window (and its "After unreviewed code" list, if that is why you rotate),
+   start the service with step 9's block (it refuses while `.env` does not set the hook or `helios-ci` cannot read
+   it), go through the checklist, and set `HELIOS_WIN_GPU=enabled`.
 5. Delete the set-aside tree once your report no longer needs it, without running anything in it, and with `cmd.exe`
    called by its full path: `& "$env:SystemRoot\System32\cmd.exe" /d /c rd /s /q "\\?\D:\helios-ci.old-<time>"`. Like
    the hook's wipe, `rd` removes a link inside without following it, whereas Windows PowerShell 5.1's

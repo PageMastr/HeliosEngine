@@ -178,7 +178,8 @@ macro(helios_modular_after_third_party)
       add_compile_options("$<$<AND:$<CONFIG:Debug,RelWithDebInfo>,$<COMPILE_LANG_AND_ID:C,Clang>>:-gsplit-dwarf>"
                           "$<$<AND:$<CONFIG:Debug,RelWithDebInfo>,$<COMPILE_LANG_AND_ID:CXX,Clang>>:-gsplit-dwarf>")
     endif()
-    message(STATUS "HELIOS_MODULAR: dev link model (link groups ${HELIOS_LINK_GROUPS}; ADR-016)")
+    string(REPLACE ";" ", " groupText "${HELIOS_LINK_GROUPS}")
+    message(STATUS "HELIOS_MODULAR: dev link model (link groups ${groupText}; ADR-016)")
   endif()
 endmacro()
 

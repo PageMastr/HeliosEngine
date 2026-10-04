@@ -27,15 +27,16 @@
 # split declaration of a gateway-named constant; a `;` inside a for statement's parentheses does not end it.
 # Go: a parenthesised host + ":" prefix (concat.go), a nested collection's elided elements and an
 # unexported port field of a gateway-named type (gateway_values.go).
-# Round 8: a literal in a read option call's other arguments is read (gateway_forms.cpp:34; only the default
-# is left to the option), and an option call that #if branches leave unclosed fails closed and hides
-# nothing after it (gateway_unbalanced.cpp). A read line is found by the words of its names (listenAddress,
-# listen_address, clientListen, kListenAddr: gateway_names.cpp), so a listen or connect constant in a gateway
-# file is reported where it is declared too (gateway_config.cpp:4, gateway_forms.cpp:25). Brace forms
-# (gateway_braces.cpp): initializer braces after =, a comma, a brace, return, a template's > and array
-# bounds keep the statement open, and `;` inside parentheses after lambdas still does not end it. TOML: a
-# nested array of inline tables (helios.toml:48) and a command line in a gateway table, --opt=value too
-# (:49; an address in its own element is reported once).
+# Round 8: a literal in a read option call's other arguments is read (gateway_forms.cpp:34, also after a
+# braced argument, :35; only the default, after the last top-level comma, is left to the option, so a default
+# whose call holds a comma is one finding, :36), and an option call that #if branches leave unclosed fails
+# closed and hides nothing after it (gateway_unbalanced.cpp). A read line is found by the words of its names
+# (listenAddress, listen_address, clientListen, kListenAddr: gateway_names.cpp), so a listen or connect
+# constant in a gateway file is reported where it is declared too (gateway_config.cpp:4,
+# gateway_forms.cpp:25). Brace forms (gateway_braces.cpp): initializer braces after =, a comma, a brace,
+# return, a template's > and array bounds keep the statement open, and `;` inside parentheses after lambdas
+# still does not end it. TOML: a nested array of inline tables (helios.toml:48) and a command line in a
+# gateway table, --opt=value too (:49; an address in its own element is reported once).
 deploy/compose.yml:3: CONF-08
 deploy/compose.yml:6: CONF-08
 deploy/compose.yml:7: CONF-08
@@ -108,6 +109,8 @@ engine/server/src/gateway_forms.cpp:29: CONF-08
 engine/server/src/gateway_forms.cpp:31: CONF-08
 engine/server/src/gateway_forms.cpp:33: CONF-08
 engine/server/src/gateway_forms.cpp:34: CONF-08
+engine/server/src/gateway_forms.cpp:35: CONF-08
+engine/server/src/gateway_forms.cpp:36: CONF-08
 engine/server/src/gateway_names.cpp:3: CONF-08
 engine/server/src/gateway_names.cpp:4: CONF-08
 engine/server/src/gateway_names.cpp:5: CONF-08

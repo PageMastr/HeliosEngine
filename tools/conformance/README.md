@@ -201,26 +201,24 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   evaluate. A literal of a gateway-named Go type is read whole, so another address field in it
   (`GatewayConfig{MetricsAddr: ":9100"}`) is read as the gateway's (an over-report). A multi-line TOML array is
   reported on its key's line, where a suppression goes. A C++ port is reported once per line; a listen or connect
-  constant in a gateway file is reported where it is declared and again on each read line that names it. A C++
-  string constant named on a read line is read as an address, so one that is not the gateway's
-  (`bus.connect(kNatsAddr)` with `"127.0.0.1:4222"`) is reported, and so is every value of a bare name declared
-  more than once in scope (over-reports). C++ braces are told
-  apart by what precedes them, without a parser: a brace after a name opens an initializer unless the statement
-  declares a namespace, class, struct, union, enum or extern block or the name is `else`, `do`, `try` or a qualifier
-  (`const`, `noexcept`, `override`, `final`, `mutable`), so a function body after a macro
-  (`void f() HELIOS_NOEXCEPT {`) is read as part of its signature's statement (an over-report). Not seen: a Go
+  constant in a gateway file is reported where it is declared and again on each read line that names it. A C++ string
+  constant named on a read line is read as an address, so one that is not the gateway's (`bus.connect(kNatsAddr)` with
+  `"127.0.0.1:4222"`) is reported, and so is every value of a bare name declared more than once in scope
+  (over-reports). C++ braces are told apart by what precedes them, without a parser: a brace after a name opens an
+  initializer unless the statement declares a namespace, class, struct, union, enum or extern block or the name is
+  `else`, `do`, `try` or a qualifier (`const`, `noexcept`, `override`, `final`, `mutable`), so a function body after a
+  macro (`void f() HELIOS_NOEXCEPT {`) is read as part of its signature's statement (an over-report). Not seen: a Go
   composite literal of a gateway-named type with a port field not named `Port` or for the gateway
   (`GatewayConfig{ListenPort: 7003}`) or with positional fields; an address assembled another way
   (`fmt::format("{}:{}", h, p)`, `absl::StrCat`, a Go `strings.Builder`); TOML multi-line strings (`"""…"""` over
   several lines; a triple-quoted string on one line is skipped as text); in C and C++, a port or address in a
   variable, or in a differently named constant that no `listen`/`connect`/gateway line (or a statement such a line
-  starts) names (an integer default of a `*port*` name that is not `…GatewayPort`); a client-side bind default under a name
-  without listen or connect (`net::Address bindAddr = …`); a value that a block or a preprocessor line separates
+  starts) names (an integer default of a `*port*` name that is not `…GatewayPort`); a client-side bind default under a
+  name without listen or connect (`net::Address bindAddr = …`); a value that a block or a preprocessor line separates
   from its read line: a multi-line immediately-invoked lambda initializer (`net::Address listen = [] {`, `return
   ipv4(…, 7000);`, `}();`), an accessor's body (`net::Address listen() const {`, `return ipv4(…, 7000);`) and an
-  initializer split by `#if`; in YAML, compose's long syntax
-  (`target:`/`published:`) and a Helm or Kubernetes `port` with `protocol: UDP` (only the short `…/udp` form is
-  read).
+  initializer split by `#if`; in YAML, compose's long syntax (`target:`/`published:`) and a Helm or Kubernetes `port`
+  with `protocol: UDP` (only the short `…/udp` form is read).
 - **CONF-09** reads YAML line by line, without a YAML parser. Not seen: a `uses:` written as a block scalar or
   pulled in through an anchor or alias (`<<: *setup`); a `GOTOOLCHAIN` set outside `.github/` (a script under
   `tools/ci/` that a workflow runs) or by a variable that a step assembles. A `GOTOOLCHAIN` whose value is an

@@ -180,7 +180,8 @@ TEST_CASE("meta: sidecar operations refuse paths that are not UTF-8 or leave no 
               ErrorCode::InvalidArgument);
         CHECK(moveAsset(dir.path, "a.png", bad, r).error().code == ErrorCode::InvalidArgument);
         auto ddc = LocalDdc::open(LocalDdcOptions{.root = dir.path / "ddc"}).value();
-        CHECK(cookAsset(CookRequest{&r, ddc.get(), dir.path, bad}).error().code == ErrorCode::InvalidArgument);
+        CHECK(cookAsset(CookRequest{&r, ddc.get(), dir.path, bad}).error().code ==
+              ErrorCode::InvalidArgument);
     }
     CHECK(fileExists(dir.path, "a.png"));
 
@@ -237,7 +238,8 @@ TEST_CASE("meta: every string a sidecar holds is UTF-8, so a written sidecar alw
     CHECK(ensureMeta(dir.path, "a.png", init, r).error().message.find("labels[0]") != std::string::npos);
     init = newMeta();
     init.provenance.notes = "\xC0\x80";
-    CHECK(ensureMeta(dir.path, "a.png", init, r).error().message.find("provenance.notes") != std::string::npos);
+    CHECK(ensureMeta(dir.path, "a.png", init, r).error().message.find("provenance.notes") !=
+          std::string::npos);
     CHECK(!fileExists(dir.path, "a.png.meta"));
     init = newMeta();
     init.provenance.notes = "caf\xC3\xA9 \xE2\x9C\x93"; // valid UTF-8 round-trips
@@ -534,10 +536,12 @@ TEST_CASE("meta: create on first import mints the GUID once") {
         CHECK(split.error().message.find("'Ships'") != std::string::npos);
         CHECK(!fileExists(dir.path, "ships/scout/deck.png.meta"));
         // The first spelling is refused too while both exist: the tree itself is wrong.
-        CHECK(ensureMeta(dir.path, "Ships/Scout/hull.png", newMeta(), r).error().code == ErrorCode::InvalidState);
+        CHECK(ensureMeta(dir.path, "Ships/Scout/hull.png", newMeta(), r).error().code ==
+              ErrorCode::InvalidState);
         REQUIRE(fs::removeAll(dir.path / "ships"));
     } else {
-        const auto respelled = ensureMeta(dir.path, "ships/scout/hull.png", newMeta(), r); // Windows: one tree
+        // Windows: one tree, spelled differently.
+        const auto respelled = ensureMeta(dir.path, "ships/scout/hull.png", newMeta(), r);
         REQUIRE(!respelled);
         CHECK(respelled.error().code == ErrorCode::InvalidState);
     }

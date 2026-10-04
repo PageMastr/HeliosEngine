@@ -228,7 +228,8 @@ BuildFn mipsBuild(const TypeInfo* type) {
         HELIOS_TRY(fromJson(*type, settings.data(), c.settings, ctx));
         const FieldInfo* mips = type->field("mips");
         if (!mips) return Error{ErrorCode::InvalidArgument, "no 'mips' setting"};
-        return std::vector<u8>{static_cast<u8>(*static_cast<const bool*>(mips->ptr(settings.data())) ? 1 : 0)};
+        const bool value = *static_cast<const bool*>(mips->ptr(settings.data()));
+        return std::vector<u8>{static_cast<u8>(value ? 1 : 0)};
     };
 }
 

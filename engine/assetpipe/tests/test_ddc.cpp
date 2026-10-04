@@ -57,8 +57,9 @@ TEST_CASE("ddc key: every input changes it, and paths, times and settings spelli
     vary("builder version", [](DdcKeyInputs& v) { v.builderVersion = 3; });
     vary("source", [](DdcKeyInputs& v) { v.sourceHash = hash128(std::string_view("source bytes!")); });
     vary("settings", [](DdcKeyInputs& v) { v.settings = R"({"mips":true})"; });
-    vary("settings type",
-         [](DdcKeyInputs& v) { v.settingsType = hashSettingsType(&refl::typeOf<TextureSettingsV2>()).value(); });
+    vary("settings type", [](DdcKeyInputs& v) {
+        v.settingsType = hashSettingsType(&refl::typeOf<TextureSettingsV2>()).value();
+    });
     vary("no settings type", [](DdcKeyInputs& v) { v.settingsType = Hash128{}; });
     vary("platform server", [](DdcKeyInputs& v) { v.platform = asset::HpakPlatform::Server; });
     vary("platform editor", [](DdcKeyInputs& v) { v.platform = asset::HpakPlatform::Editor; });

@@ -20,8 +20,8 @@ AssetMeta sampleMeta() {
     m.importer = "png";
     m.importerVersion = 2;
     m.settings = R"({"mips":false,"lods":[0,1]})";
-    m.labels = {"hull", "kestrel"};
-    m.source = "art/src/kestrel/hull.blend";
+    m.labels = {"hull", "scout"};
+    m.source = "art/src/scout/hull.blend";
     m.provenance = original();
     m.provenance.notes = "Blocked out for the Phase 1 slice.";
     return m;
@@ -37,8 +37,8 @@ constexpr std::string_view kSampleText = R"({
     "mips": false,
     "lods": [0, 1]
   },
-  "labels": ["hull", "kestrel"],
-  "source": "art/src/kestrel/hull.blend",
+  "labels": ["hull", "scout"],
+  "source": "art/src/scout/hull.blend",
   "provenance": {
     "origin": "original",
     "author": "Owner",
@@ -118,7 +118,7 @@ TEST_CASE("meta: licences fail closed on anything off 01 §5.2's list (OFL-1.1 f
 }
 
 TEST_CASE("meta: project paths follow the Windows-first rule") {
-    for (const char* ok : {"a.png", "art/ships/Kestrel Hull.png", "a/b/c.d.e", "con10.png", "nullable/x.png",
+    for (const char* ok : {"a.png", "art/ships/Scout Hull.png", "a/b/c.d.e", "con10.png", "nullable/x.png",
                            "\xC3\xA9t\xC3\xA9/caf\xC3\xA9.png"}) {
         CAPTURE(ok);
         CHECK(checkProjectPath(ok));
@@ -198,9 +198,9 @@ TEST_CASE("meta: canonical text, and a rewrite of it is byte-identical") {
 {
   "provenance": {"licence": "MIT", "notes": "Blocked out for the Phase 1 slice.",
                  "author": "Owner", "origin": "original"},
-  "labels": ["kestrel", "hull", "kestrel"],
+  "labels": ["scout", "hull", "scout"],
   "settings": {"lods": [0, 1], "mips": false, "maxSize": 2048},
-  "source": "art/src/kestrel/hull.blend",
+  "source": "art/src/scout/hull.blend",
   "importerVersion": 2, "importer": "png",
   "guid": "8c0f4d1e-2b7a-4c39-9e51-0d6a3f2b7c18", "$meta": 0,
 })";
@@ -280,17 +280,17 @@ TEST_CASE("meta: parse errors name the file, the field and the problem") {
         {replaced(t, R"("mips": false)", R"("mips": "no")"), ErrorCode::ParseError, "settings.mips"},
         {replaced(t, R"("mips": false)", R"("mipz": false)"), ErrorCode::ParseError,
          "settings.mipz: unknown field"},
-        {replaced(t, R"("labels": ["hull", "kestrel"])", R"("labels": "hull")"), ErrorCode::ParseError,
+        {replaced(t, R"("labels": ["hull", "scout"])", R"("labels": "hull")"), ErrorCode::ParseError,
          "labels: expected array of strings"},
-        {replaced(t, R"("labels": ["hull", "kestrel"])", R"("labels": ["hull", 3])"), ErrorCode::ParseError,
+        {replaced(t, R"("labels": ["hull", "scout"])", R"("labels": ["hull", 3])"), ErrorCode::ParseError,
          "labels[1]: expected string"},
-        {replaced(t, R"("labels": ["hull", "kestrel"])", R"("labels": [""])"), ErrorCode::InvalidArgument,
+        {replaced(t, R"("labels": ["hull", "scout"])", R"("labels": [""])"), ErrorCode::InvalidArgument,
          "labels[0]"},
-        {replaced(t, "art/src/kestrel/hull.blend", "art\\\\src\\\\hull.blend"), ErrorCode::InvalidArgument,
+        {replaced(t, "art/src/scout/hull.blend", "art\\\\src\\\\hull.blend"), ErrorCode::InvalidArgument,
          "source: 'art\\src\\hull.blend': '\\' is not a separator"},
-        {replaced(t, "art/src/kestrel/hull.blend", "C:/art/hull.blend"), ErrorCode::InvalidArgument,
+        {replaced(t, "art/src/scout/hull.blend", "C:/art/hull.blend"), ErrorCode::InvalidArgument,
          "source: 'C:/art/hull.blend'"},
-        {replaced(t, "art/src/kestrel/hull.blend", "art/aux.blend"), ErrorCode::InvalidArgument,
+        {replaced(t, "art/src/scout/hull.blend", "art/aux.blend"), ErrorCode::InvalidArgument,
          "Windows device name"},
         {replaced(t, R"("source")", R"("sources")"), ErrorCode::ParseError, "sources: unknown field"},
         {replaced(t, R"("labels")", R"("guid": "8c0f4d1e-2b7a-4c39-9e51-0d6a3f2b7c18", "labels")"),
@@ -368,16 +368,16 @@ TEST_CASE("meta: hostile sidecars fail cleanly") {
     CHECK(parseMeta(deep, r).error().code == ErrorCode::LimitExceeded);
     // Invalid UTF-8 and NULs inside strings.
     CHECK(!parseMeta(replaced(kSampleText, "Owner", "Ow\xFF\xFEner"), r));
-    const auto nul = parseMeta(replaced(kSampleText, "art/src/kestrel/hull.blend", "art/x\\u0000.blend"), r);
+    const auto nul = parseMeta(replaced(kSampleText, "art/src/scout/hull.blend", "art/x\\u0000.blend"), r);
     REQUIRE(!nul);
     CHECK(nul.error().message.find("control character") != std::string::npos);
-    CHECK(parseMeta(replaced(kSampleText, R"(["hull", "kestrel"])", "[\"" + std::string(65, 'x') + "\"]"), r)
+    CHECK(parseMeta(replaced(kSampleText, R"(["hull", "scout"])", "[\"" + std::string(65, 'x') + "\"]"), r)
               .error()
               .message.find("labels[0]") != std::string::npos);
     std::string many = "[";
     for (int i = 0; i < 65; ++i) many += (i ? ",\"l" : "\"l") + std::to_string(i) + "\"";
     many += "]";
-    CHECK(parseMeta(replaced(kSampleText, R"(["hull", "kestrel"])", many), r).error().code ==
+    CHECK(parseMeta(replaced(kSampleText, R"(["hull", "scout"])", many), r).error().code ==
           ErrorCode::LimitExceeded);
 }
 
@@ -481,42 +481,42 @@ TEST_CASE("meta: moves and renames keep the GUID (the GUID follows the file)") {
         ensureMeta(dir.path, "art/hull.png", newMeta(R"({"mips": false})"), r).value().meta;
     const std::string sidecar = readText(dir.path, "art/hull.png.meta");
 
-    REQUIRE(moveAsset(dir.path, "art/hull.png", "ships/kestrel/hull.tga", r));
+    REQUIRE(moveAsset(dir.path, "art/hull.png", "ships/scout/hull.tga", r));
     CHECK(!fileExists(dir.path, "art/hull.png"));
     CHECK(!fileExists(dir.path, "art/hull.png.meta"));
-    CHECK(readText(dir.path, "ships/kestrel/hull.tga") == "hull");
-    CHECK(readText(dir.path, "ships/kestrel/hull.tga.meta") == sidecar); // moved, not rewritten
-    CHECK(loadMeta(dir.path, "ships/kestrel/hull.tga", r).value() == meta);
+    CHECK(readText(dir.path, "ships/scout/hull.tga") == "hull");
+    CHECK(readText(dir.path, "ships/scout/hull.tga.meta") == sidecar); // moved, not rewritten
+    CHECK(loadMeta(dir.path, "ships/scout/hull.tga", r).value() == meta);
 
     // Case-only rename (one file on Windows): through a temporary name, GUID kept.
-    REQUIRE(moveAsset(dir.path, "ships/kestrel/hull.tga", "ships/kestrel/Hull.tga", r));
-    CHECK(loadMeta(dir.path, "ships/kestrel/Hull.tga", r).value().guid == meta.guid);
-    const auto listing = fs::listDirectory(dir.path / "ships" / "kestrel").value();
+    REQUIRE(moveAsset(dir.path, "ships/scout/hull.tga", "ships/scout/Hull.tga", r));
+    CHECK(loadMeta(dir.path, "ships/scout/Hull.tga", r).value().guid == meta.guid);
+    const auto listing = fs::listDirectory(dir.path / "ships" / "scout").value();
     REQUIRE(listing.size() == 2);
     CHECK(listing[0].relativePath == "Hull.tga");
     CHECK(listing[1].relativePath == "Hull.tga.meta");
-    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/kestrel/Hull.tga", r)); // no-op
+    CHECK(moveAsset(dir.path, "ships/scout/Hull.tga", "ships/scout/Hull.tga", r)); // no-op
 
     // Refusals move nothing.
     writeText(dir.path, "ships/deck.png", "deck");
     REQUIRE(ensureMeta(dir.path, "ships/deck.png", newMeta(), r));
-    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/deck.png", r).error().code ==
+    CHECK(moveAsset(dir.path, "ships/scout/Hull.tga", "ships/deck.png", r).error().code ==
           ErrorCode::AlreadyExists);
-    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/DECK.PNG", r).error().code ==
+    CHECK(moveAsset(dir.path, "ships/scout/Hull.tga", "ships/DECK.PNG", r).error().code ==
           ErrorCode::AlreadyExists);
     writeText(dir.path, "ships/orphan.png.meta", "{}");
-    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/Orphan.png", r).error().code ==
+    CHECK(moveAsset(dir.path, "ships/scout/Hull.tga", "ships/Orphan.png", r).error().code ==
           ErrorCode::AlreadyExists);
-    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/hull.ttf", r).error().code ==
+    CHECK(moveAsset(dir.path, "ships/scout/Hull.tga", "ships/hull.ttf", r).error().code ==
           ErrorCode::InvalidArgument);
-    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/con.png", r).error().code ==
+    CHECK(moveAsset(dir.path, "ships/scout/Hull.tga", "ships/con.png", r).error().code ==
           ErrorCode::InvalidArgument);
-    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "../out.png", r).error().code ==
+    CHECK(moveAsset(dir.path, "ships/scout/Hull.tga", "../out.png", r).error().code ==
           ErrorCode::InvalidArgument);
     writeText(dir.path, "loose.png", "no sidecar");
     CHECK(moveAsset(dir.path, "loose.png", "loose2.png", r).error().code == ErrorCode::NotFound);
     CHECK(fileExists(dir.path, "loose.png"));
-    CHECK(loadMeta(dir.path, "ships/kestrel/Hull.tga", r).value().guid == meta.guid);
+    CHECK(loadMeta(dir.path, "ships/scout/Hull.tga", r).value().guid == meta.guid);
     CHECK(readText(dir.path, "ships/deck.png") == "deck");
 }
 

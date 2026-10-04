@@ -44,7 +44,7 @@ const CookResult cooked =
     cookAsset({&importers, ddc.get(), project, "art/ships/hull.png", asset::HpakPlatform::PcClient}).value();
 // cooked.hit: served from the DDC; cooked.product: the bytes the pak writer takes.
 
-moveAsset(project, "art/ships/hull.png", "ships/kestrel/hull.png", importers).value(); // the GUID follows
+moveAsset(project, "art/ships/hull.png", "ships/scout/hull.png", importers).value(); // the GUID follows
 const MetaScan scan = scanMetas(project, importers).value();  // every problem in the tree, with its file
 ```
 
@@ -63,8 +63,8 @@ Every source a registered importer claims (by extension, ASCII case ignored) has
     "mips": false,
     "lods": [0, 1]
   },
-  "labels": ["hull", "kestrel"],
-  "source": "art/src/kestrel/hull.blend",
+  "labels": ["hull", "scout"],
+  "source": "art/src/scout/hull.blend",
   "provenance": {
     "origin": "original",
     "author": "Owner",

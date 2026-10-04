@@ -45,10 +45,10 @@ TEST_CASE("cook: the second cook is a DDC hit with byte-identical output") {
     CHECK(second.meta == first.meta);
 
     // Moving and touching the source (same bytes, same sidecar) keeps the key: still a hit.
-    REQUIRE(moveAsset(p.dir.path / "content", "ships/hull.png", "kestrel/Hull.png", p.importers));
-    REQUIRE(fs::setLastWriteTime(p.dir.path / "content" / "kestrel" / "Hull.png",
+    REQUIRE(moveAsset(p.dir.path / "content", "ships/hull.png", "scout/Hull.png", p.importers));
+    REQUIRE(fs::setLastWriteTime(p.dir.path / "content" / "scout" / "Hull.png",
                                  std::filesystem::file_time_type::clock::now() + std::chrono::hours(1)));
-    const CookResult moved = p.cook("kestrel/Hull.png").value();
+    const CookResult moved = p.cook("scout/Hull.png").value();
     CHECK(moved.hit);
     CHECK(moved.key == first.key);
     CHECK(moved.product == first.product);

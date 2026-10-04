@@ -8,8 +8,8 @@
 //     "importer": "png",
 //     "importerVersion": 2,                           // the importer version the settings were written for
 //     "settings": {"mips": false},                    // the importer's settings type, defaults omitted
-//     "labels": ["hull", "kestrel"],                  // sorted, unique
-//     "source": "art/src/kestrel/hull.blend",         // source-DCC path (project-relative), if any
+//     "labels": ["hull", "scout"],                  // sorted, unique
+//     "source": "art/src/scout/hull.blend",         // source-DCC path (project-relative), if any
 //     "provenance": {                                 // required (01 §5.2)
 //       "origin": "original",                         // original | commissioned | cc0 | ai-assisted
 //       "author": "Owner",

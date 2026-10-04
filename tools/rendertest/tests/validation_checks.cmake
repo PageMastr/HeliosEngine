@@ -44,8 +44,10 @@ file(REMOVE_RECURSE "${OUT}")
 set(ENV{HELIOS_SKIP_GPU_TESTS} 1)
 unset(ENV{HELIOS_RHI_VALIDATION})
 # Layers the caller's environment forces on would change every case; case 4 sets these itself.
+# VK_LOADER_LAYERS_ALLOW exempts the layers it matches from VK_LOADER_LAYERS_DISABLE (loader 1.3.262+).
 unset(ENV{VK_INSTANCE_LAYERS})
 unset(ENV{VK_LOADER_LAYERS_ENABLE})
+unset(ENV{VK_LOADER_LAYERS_ALLOW})
 
 # Is there a Vulkan device at all? (Without validation, so hidden or broken layers do not matter.)
 set(ENV{VK_LOADER_LAYERS_DISABLE} VK_LAYER_KHRONOS_validation)

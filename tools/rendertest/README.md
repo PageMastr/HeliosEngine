@@ -128,7 +128,8 @@ replaces the layer through the loader's environment first checks that the enviro
 Windows loader ignores `VK_LOADER_LAYERS_DISABLE`, `VK_LAYER_PATH` and `VK_ADD_LAYER_PATH` in a process of
 High integrity or above (elevated, or a service such as the `win-gpu` runner), and a loader settings file
 can force the layer on. Where the RHI still finds the layer in the call chain, the case cannot be set up:
-on Windows the check prints `NOTE: not checked` with the reason, on Linux it fails, so CI runs every case.
+on Windows the check prints `NOTE: not checked` with the reason (the `win-gpu` job turns each into a warning on
+the run), on Linux it fails, so CI runs every case.
 The first `win-gpu` run failed case 1 ("validated" despite `VK_LOADER_LAYERS_DISABLE`); the likely cause is
 that High-integrity rule, which the job's diagnostics step now shows (integrity level, loader settings). Without the layer at
 configure time, the scenes run with `--validation` (unvalidated), `rendertest.validation-layer`

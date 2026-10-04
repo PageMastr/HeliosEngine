@@ -200,10 +200,11 @@ jobs:
           "RENDERTEST_OUT=$out" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       # Diagnostics only; this step never fails the job. What the Vulkan loader sees in this process, so a GPU test
-      # failure explains itself from the log. The loader ignores VK_LOADER_LAYERS_DISABLE, VK_LAYER_PATH,
-      # VK_ADD_LAYER_PATH and VK_DRIVER_FILES in a process of High integrity or above, and a service's token is High
-      # (the SERVICE group grants SeImpersonatePrivilege); a loader settings file (Vulkan Configurator) can force
-      # layers on or off. rendertest.validation-required reports cases it cannot set up then as a NOTE.
+      # failure explains itself from the log. In a process of High integrity or above the loader ignores
+      # VK_LOADER_LAYERS_DISABLE, VK_LAYER_PATH, VK_ADD_LAYER_PATH and VK_DRIVER_FILES and reads no layers or loader
+      # settings from HKCU, and a service's token is High (the SERVICE group grants SeImpersonatePrivilege); a loader
+      # settings file or an override layer (Vulkan Configurator) can force layers on or off.
+      # rendertest.validation-required reports the cases it cannot set up then as a NOTE (next steps: a warning).
       - name: Vulkan loader, layers and adapters (diagnostics)
         run: |
           $ErrorActionPreference = 'Continue'
@@ -216,12 +217,37 @@ jobs:
               Write-Output "-- $path (missing)"
             }
           }
+          # The layers a manifest declares ("layer" or "layers"), with what switches an implicit one on or off.
+          function Show-Manifest([string] $path) {
+            if (-not (Test-Path -LiteralPath $path)) { Write-Output '      (the manifest does not exist)'; return }
+            try {
+              $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+              foreach ($l in @(@($json.layer) + @($json.layers) | Where-Object { $_ })) {
+                $what = if ($l.name -eq 'VK_LAYER_LUNARG_override') { ' <- an override layer (Vulkan Configurator)' } else { '' }
+                Write-Output "      layer $($l.name) api_version $($l.api_version)$what"
+                if ($l.enable_environment) { Write-Output "      enable_environment $($l.enable_environment | ConvertTo-Json -Compress)" }
+                if ($l.disable_environment) { Write-Output "      disable_environment $($l.disable_environment | ConvertTo-Json -Compress)" }
+              }
+            } catch {
+              Write-Output "      (unreadable manifest: $($_.Exception.Message))"
+            }
+          }
+          $high = $false
           try {
-            Show-Section 'Process token (the loader ignores layer and driver variables at High integrity and above)'
-            & "$env:SystemRoot\System32\whoami.exe" /groups /fo csv /nh | ConvertFrom-Csv -Header Name, Type, Sid, Attributes |
-              Where-Object { $_.Sid -like 'S-1-16-*' } | ForEach-Object { Write-Output "integrity: $($_.Name) ($($_.Sid))" }
+            Show-Section 'Process token (the loader ignores layer and driver variables and HKCU at High integrity and above)'
+            $levels = @(& "$env:SystemRoot\System32\whoami.exe" /groups /fo csv /nh |
+              ConvertFrom-Csv -Header Name, Type, Sid, Attributes | Where-Object { $_.Sid -like 'S-1-16-*' })
+            foreach ($level in $levels) { Write-Output "integrity: $($level.Name) ($($level.Sid))" }
+            # S-1-16-12288 is High, S-1-16-16384 System: the loader's is_high_integrity() (SECURITY_MANDATORY_HIGH_RID).
+            $high = @($levels | Where-Object { [int64]($_.Sid -replace '^S-1-16-', '') -ge 12288 }).Count -gt 0
             & "$env:SystemRoot\System32\whoami.exe" /priv /fo csv /nh | ConvertFrom-Csv -Header Name, Description, State |
               Where-Object { $_.Name -eq 'SeImpersonatePrivilege' } | ForEach-Object { Write-Output "$($_.Name): $($_.State)" }
+            if ($high) {
+              Write-Output ('So the loader ignores VK_LOADER_LAYERS_DISABLE, VK_LAYER_PATH, VK_ADD_LAYER_PATH and ' +
+                'VK_DRIVER_FILES here, and reads layers and loader settings from HKLM only')
+            } else {
+              Write-Output 'So the loader reads the VK_* variables and HKCU here'
+            }
 
             Show-Section 'Environment (VK_*, VULKAN_SDK)'
             Get-ChildItem env: | Where-Object { $_.Name -like 'VK_*' -or $_.Name -eq 'VULKAN_SDK' } |
@@ -247,17 +273,20 @@ jobs:
               Write-Output "no $manifest"
             }
 
-            Show-Section 'Registry: HKLM and HKCU \SOFTWARE\Khronos\Vulkan (value 0 = enabled)'
+            # Layer keys: value name = manifest path, data 0 = enabled. LoaderSettings: value name = the settings file.
+            Show-Section 'Registry: HKLM and HKCU \SOFTWARE\Khronos\Vulkan (layers, drivers, loader settings files)'
             foreach ($hive in 'HKLM', 'HKCU') {
+              $ignored = if ($hive -eq 'HKCU' -and $high) { ' (the loader does not read it in this process)' } else { '' }
               foreach ($key in 'ExplicitLayers', 'ImplicitLayers', 'Drivers', 'LoaderSettings') {
                 $path = "${hive}:\SOFTWARE\Khronos\Vulkan\$key"
                 $item = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
                 if (-not $item) { Write-Output "$path (none)"; continue }
-                Write-Output $path
+                Write-Output "$path$ignored"
                 foreach ($name in $item.Property) {
                   Write-Output "   $name = $($item.GetValue($name))"
                   # A loader settings file (Vulkan Configurator) overrides layer environment variables for "on" and "off" layers.
                   if ($key -eq 'LoaderSettings') { Show-File $name 60 }
+                  if ($key -like '*Layers') { Show-Manifest $name }
                 }
               }
             }
@@ -270,18 +299,21 @@ jobs:
               Write-Output 'vulkaninfo is not on PATH'
             }
 
-            Show-Section 'The RHI under rendertest.validation-required''s first case (VK_LOADER_LAYERS_DISABLE, loader log filtered)'
+            # The RHI's own verdict and the loader's log: its version, the settings file it uses, an override layer,
+            # the variables it ignores, and the layers it inserts into the instance (the call chain).
             $tool = Get-ChildItem -LiteralPath $env:BUILD -Recurse -Filter helios-rendertest.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($tool) {
+            $pattern = 'Loader Version|elevated|ignored|forced|settings|override|disabled|Insert instance layer|call chain|Khronos validation|device:'
+            foreach ($disable in '', 'VK_LAYER_KHRONOS_validation') {
+              $title = if ($disable) { "under rendertest.validation-required's first case (VK_LOADER_LAYERS_DISABLE=$disable)" } else { 'as the GPU tests run (HELIOS_RHI_VALIDATION=1)' }
+              Show-Section "The RHI $title; the loader's log, filtered"
+              if (-not $tool) { Write-Output "no helios-rendertest.exe under $env:BUILD"; break }
               $env:HELIOS_RHI_VALIDATION = '1'
-              $env:VK_LOADER_LAYERS_DISABLE = 'VK_LAYER_KHRONOS_validation'
               $env:VK_LOADER_DEBUG = 'all'
-              cmd /c "`"$($tool.FullName)`" --print-probe 2>&1" |
-                Select-String -Pattern 'elevated|ignored|forced|settings|disabled|Khronos validation|device:' |
-                Select-Object -First 60 | ForEach-Object { Write-Output "   $($_.Line)" }
-              Remove-Item env:HELIOS_RHI_VALIDATION, env:VK_LOADER_LAYERS_DISABLE, env:VK_LOADER_DEBUG
-            } else {
-              Write-Output "no helios-rendertest.exe under $env:BUILD"
+              if ($disable) { $env:VK_LOADER_LAYERS_DISABLE = $disable }
+              cmd /c "`"$($tool.FullName)`" --print-probe 2>&1" | Select-String -Pattern $pattern |
+                Select-Object -First 80 | ForEach-Object { Write-Output "   $($_.Line)" }
+              Remove-Item env:HELIOS_RHI_VALIDATION, env:VK_LOADER_DEBUG
+              if ($disable) { Remove-Item env:VK_LOADER_LAYERS_DISABLE }
             }
           } catch {
             Write-Output "diagnostics stopped early: $($_.Exception.Message)"
@@ -303,6 +335,19 @@ jobs:
           if (-not ($log -match '^\d+: validation layer: VK_LAYER_KHRONOS_validation \d+\.\d+')) {
             throw 'The validation layer did not report itself, so the goldens ran unvalidated'
           }
+      # rendertest.validation-required prints "NOTE: not checked" for each case this PC's loader does not let the
+      # environment set up (High integrity, a loader settings file: see the diagnostics step). A passing test's output
+      # is not in the log, so the cases it could not check become warnings on the run.
+      - name: Cases rendertest.validation-required could not set up
+        if: ${{ !cancelled() }}
+        run: |
+          $log = @(& ctest --test-dir $env:BUILD -C $env:CONFIG -R '^rendertest\.validation-required$' -V)
+          $status = $LASTEXITCODE
+          $log | Write-Output
+          foreach ($line in $log) {
+            if ($line -match 'NOTE: not checked (.*)$') { Write-Output "::warning::rendertest.validation-required did not check $($Matches[1])" }
+          }
+          if ($status -ne 0) { throw 'rendertest.validation-required failed' }
 
       # ADR-0.9c §6 step 1 (WP-0.9c, K5b): tiles per 0.8 ms on this GPU and CPU ms per tile. Exit code 2 means the
       # AVX2 kernel did not run, 3 that the GPU batch differs from the CPU; both fail the step.

@@ -14,9 +14,12 @@ you start it from the Actions tab ("Run workflow" on `main`). A queued job waits
    it cannot open a TCP connection to the LAN's default gateway;
 2. builds the `windows-vs2022` preset (MSBuild, RelWithDebInfo), prints what the Vulkan loader sees in the job's
    process (the token's integrity level, `VK_*` variables, the loader's and the validation layer's versions and
-   paths, the layer and loader-settings entries under `HKLM` and `HKCU\SOFTWARE\Khronos\Vulkan`, the adapters from
-   `vulkaninfo --summary`), and runs the `gpu`-labelled CTests on the real GPU: the Vulkan golden images
-   (`rendertest.vulkan.*`, Khronos-validated), `rhi_tests_gpu`, `pcg_gpu_tests` and `rhi_triangle_smoke`;
+   paths, the layer and loader-settings entries under `HKLM` and `HKCU\SOFTWARE\Khronos\Vulkan` with the layers
+   each manifest declares, an override layer from Vulkan Configurator included, the adapters from `vulkaninfo
+   --summary`, and the RHI's verdict with the loader's own log of the settings file and layers it used), and runs
+   the `gpu`-labelled CTests on the real GPU: the Vulkan golden images (`rendertest.vulkan.*`, Khronos-validated),
+   `rhi_tests_gpu`, `pcg_gpu_tests` and `rhi_triangle_smoke`; a case of `rendertest.validation-required` that this
+   PC's loader does not let the job set up shows as a warning on the run;
 3. runs ADR-0.9c's `pcg_hnoise_bench --hardware-gpu` and a strict `net_bench --gate` (NS-0.2's re-test on fixed
    hardware), then fails if the goldens or the bench ran on a software rasterizer or found no GPU;
 4. uploads the `results-win-gpu` artifact (30 days).
@@ -732,13 +735,16 @@ installer may have added a folder to the `PATH` since the last audit).
   log says `no Vulkan physical devices` or `GPU: unavailable`, the driver does not offer Vulkan to a service's
   session; that is a finding to report (the options are the GPU-P VM of 09 §5.4a or a different runner setup, the
   owner's decision), not a reason to run the runner from an interactive logon.
-- **`NOTE: not checked`** in `rendertest.validation-required`: the Vulkan loader ignores `VK_LOADER_LAYERS_DISABLE`,
+- **`NOTE: not checked`** in `rendertest.validation-required` (a warning on the run, from the step "Cases
+  rendertest.validation-required could not set up"): the Vulkan loader ignores `VK_LOADER_LAYERS_DISABLE`,
   `VK_LAYER_PATH` and `VK_ADD_LAYER_PATH` in a process of High integrity or above, and the runner service's
-  processes are High (a service's token carries `SeImpersonatePrivilege`; "Vulkan loader, layers and adapters"
-  prints the level), so the check cannot hide the layer from the job and says which cases it skipped. A loader
-  settings file written by Vulkan Configurator (listed in the same step) has the same effect for layers it switches
-  on. Validation itself is unaffected: the RHI reports it active only when the layer reported itself from the call
-  chain. Only a settings file registered under `HKLM` or under `helios-ci`'s own `HKCU` applies to the job.
+  processes are most likely High (a service's token carries `SeImpersonatePrivilege`; "Vulkan loader, layers and
+  adapters" prints the level), so the check cannot hide the layer from the job and says which cases it skipped. A
+  loader settings file or an override layer written by Vulkan Configurator (listed in the same step) has the same
+  effect for layers it switches on. Validation itself is unaffected: the RHI reports it active only when the layer
+  reported itself from the call chain. Only a settings file or layer registered under `HKLM`, or, in a process below
+  High integrity, under `helios-ci`'s own `HKCU`, applies to the job: the loader reads no `HKCU` entries at High
+  integrity. Nothing to change on the PC for this; it is recorded so the warning is not mistaken for a failure.
 
 ## Rotate or remove
 

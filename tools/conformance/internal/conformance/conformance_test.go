@@ -554,3 +554,26 @@ func TestCMakeCommands(t *testing.T) {
 		}
 	}
 }
+
+// TestISAEnvRefOnce: an ISA level computed from $ENV{} is named once in its finding, in a grant and when
+// passed to a wrapper (engine/clang/CMakeLists.txt:15-16 of the CONF-11 bad fixture).
+func TestISAEnvRefOnce(t *testing.T) {
+	res, err := Run(Options{Root: filepath.Join("..", "..", "testdata", "CONF-11", "bad"), Rules: []string{"CONF-11"},
+		Strict: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, f := range res.Findings {
+		if f.Path != "engine/clang/CMakeLists.txt" || f.Line < 15 || f.Line > 16 {
+			continue
+		}
+		seen++
+		if n := strings.Count(f.Message, "$ENV{HELIOS_ARCH}"); n != 1 {
+			t.Errorf("%s:%d names $ENV{HELIOS_ARCH} %d times: %s", f.Path, f.Line, n, f.Message)
+		}
+	}
+	if seen != 2 {
+		t.Errorf("want 2 findings on engine/clang/CMakeLists.txt:15-16, got %d", seen)
+	}
+}

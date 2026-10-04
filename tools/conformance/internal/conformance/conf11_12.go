@@ -27,9 +27,13 @@ var (
 	cmakeCmdRE   = regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
 	avxListRE    = regexp.MustCompile(`\bHELIOS_ISA_AVX2_(TARGETS|SOURCE_PATTERNS)\b`)
 	avxListVarRE = regexp.MustCompile(`(?i)^\w*avx\w*_(targets|sources|source_patterns|patterns|files|kernels|allowlist)$`)
-	// AVX-class flags; -mfma4 and -mxop (AMD's) imply AVX too.
-	avxFlagRE = regexp.MustCompile(`(?i)([/-]arch:AVX\w*|-mavx\w*|-mbmi\w*|-mf16c|-mlzcnt|-mfma4?\b|-mxop\b)`)
-	marchRE   = regexp.MustCompile(`-march=([A-Za-z0-9_.-]+)`)
+	// AVX-class flags; -mfma4 and -mxop (AMD's) imply AVX too, and under Clang so do -mvaes, -mvpclmulqdq and
+	// -msm3 (AVX) and -msha512 and -msm4 (AVX2). A target feature handed to the compiler's front end
+	// (`-Xclang -target-feature -Xclang +avx2`, `-mattr=+avx2`) is the same grant.
+	avxFlagRE = regexp.MustCompile(`(?i)([/-]arch:AVX\w*|-mavx\w*|-mbmi\w*|-mf16c|-mlzcnt|-mfma4?\b|-mxop\b|` +
+		`-mvaes\b|-mvpclmulqdq\b|-msm[34]\b|-msha512\b|` +
+		`\B\+(?:avx\w*|bmi\w*|f16c|lzcnt|fma4?|xop|vaes|vpclmulqdq|sm[34]|sha512)\b)`)
+	marchRE = regexp.MustCompile(`-march=([A-Za-z0-9_.-]+)`)
 	// An ISA level CONF-11 cannot tell: a variable (also $CACHE{v} and $ENV{v}) or generator expression in
 	// the value of -march=, /arch: or -m (-march=${level}, /arch:$CACHE{v}, -march=$<IF:…>,
 	// -march=x86-64${suffix}, -m${ext}). It fails closed.
@@ -37,8 +41,11 @@ var (
 	// $ENV{X} in a grant, passed to a wrapper or set into a compiler flags variable: its value comes from
 	// outside the build files, so it fails closed.
 	envRefRE = regexp.MustCompile(`\$ENV\{[^}]*\}`)
-	// The variables that hold compiler flags (CMAKE_CXX_FLAGS, CMAKE_C_FLAGS_RELEASE, CMAKE_CXX_COMPILE_OBJECT).
-	compilerFlagsVarRE = regexp.MustCompile(`^CMAKE_\w*(?:FLAGS|COMPILE_OBJECT|COMPILE_OPTIONS)\w*$`)
+	// The variables that hold compiler flags (CMAKE_CXX_FLAGS, CMAKE_C_FLAGS_RELEASE, CMAKE_CXX_COMPILE_OBJECT),
+	// and the environment's (ENV{CXXFLAGS} seeds CMAKE_CXX_FLAGS when a language is enabled).
+	compilerFlagsVarRE = regexp.MustCompile(`^(?:CMAKE_\w*(?:FLAGS|COMPILE_OBJECT|COMPILE_OPTIONS)\w*|ENV\{\w*FLAGS\w*\})$`)
+	// Link options: LTO compiles with them.
+	linkPropRE = regexp.MustCompile(`\b(?:INTERFACE_)?LINK_OPTIONS\b`)
 	// Variables that reach the compiler: CMake's own (CMAKE_<LANG>_FLAGS*, CMAKE_<LANG>_COMPILE_OBJECT, …)
 	// and the environment (ENV{CXXFLAGS} seeds CMAKE_CXX_FLAGS when a language is enabled).
 	compilerVarRE = regexp.MustCompile(`^(?:CMAKE_\w+|ENV\{\w+\})$`)
@@ -635,7 +642,7 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 				if compilerVarRE.MatchString(name) && !probeFlagsRE.MatchString(name) && len(flags) > 0 && !levelSets {
 					reportf(c.line, "%s carries %s: ISA flags come only from the image level (02 §1.1)", name,
 						strings.Join(flags, " "))
-				} else if m := envRefRE.FindString(c.args); m != "" && compilerFlagsVarRE.MatchString(name) &&
+				} else if m := outsideRef(read, name); m != "" && compilerFlagsVarRE.MatchString(name) &&
 					!probeFlagsRE.MatchString(name) && !levelSets {
 					reportf(c.line, "%s carries %s, a value from outside the build files that CONF-11 cannot tell: ISA "+
 						"flags come only from the image level (02 §1.1)", name, m)
@@ -665,10 +672,11 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 		}
 		// $ENV{X} in a grant: a value from outside the build files, which CONF-11 cannot tell.
 		if m := envRefRE.FindString(c.args); m != "" && (c.name == "target_compile_options" || s.wrappers[c.name] ||
-			c.name == "add_compile_options" || c.name == "add_definitions" || grantPropRE.MatchString(c.args) &&
+			c.name == "add_compile_options" || c.name == "add_definitions" || c.name == "target_link_options" ||
+			c.name == "add_link_options" || (grantPropRE.MatchString(c.args) || linkPropRE.MatchString(c.args)) &&
 			(c.name == "set_property" || c.name == "set_target_properties" || c.name == "set_source_files_properties" ||
 				c.name == "set_directory_properties")) {
-			flags = append(flags, m)
+			flags = withEnvRefs(flags, envRefRE.FindAllString(c.args, -1))
 		}
 		if len(flags) == 0 {
 			continue
@@ -696,7 +704,7 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 				"carry ISA flags (02 §1.1)", c.name, strings.Join(flags, " "), isaLevelSets)
 		case s.wrappers[c.name] && !levelSets:
 			// Only arguments that are options: a flag named in a message is not passed on.
-			if opts := append(optionFlags(c.args, cur.vars), envRefRE.FindAllString(c.args, -1)...); len(opts) > 0 {
+			if opts := withEnvRefs(optionFlags(c.args, cur.vars), envRefRE.FindAllString(c.args, -1)); len(opts) > 0 {
 				reportf(c.line, "%s() is passed %s: a wrapper can grant them below the image level, and only "+
 					"%s's level sets carry ISA flags (02 §1.1)", c.name, strings.Join(opts, " "), isaLevelSets)
 			}
@@ -713,6 +721,28 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 		return outer[0].vars
 	}
 	return cur.vars
+}
+
+// withEnvRefs appends to flags the $ENV{} references in refs that no flag already holds (-march=$ENV{X}).
+func withEnvRefs(flags, refs []string) []string {
+	for _, r := range refs {
+		if !slices.ContainsFunc(flags, func(f string) bool { return strings.Contains(f, r) }) {
+			flags = append(flags, r)
+		}
+	}
+	return flags
+}
+
+// outsideRef returns the first $ENV{} reference in read, the value a command writes to name, other than
+// name's own (`set(ENV{CXXFLAGS} "$ENV{CXXFLAGS} …")` appends to the environment's value, it does not
+// bring one in), or "".
+func outsideRef(read, name string) string {
+	for _, r := range envRefRE.FindAllString(read, -1) {
+		if r != "$"+name {
+			return r
+		}
+	}
+	return ""
 }
 
 // carriedFlags returns the AVX-class flags in args: literal, or through a variable in vars.

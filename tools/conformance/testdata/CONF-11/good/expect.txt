@@ -5,3 +5,5 @@
 # ZIP_LISTS: only the loop variable that takes the flags list holds them (_pcg_o and _pcg_z_1 do not),
 # and every loop variable is restored when the loop ends (_pcg_a2); literal baseline levels.
 # $ENV{} in a CMAKE_ variable that holds no compiler flags, and in a command that grants nothing.
+# Round 8: $ENV{} in a probe's CMAKE_REQUIRED_FLAGS, the environment's CXXFLAGS appended to itself, a
+# string(REPLACE) whose match string names $ENV{}, $ENV{} inside the level function, and a target feature turned off.

@@ -15,11 +15,26 @@
 # CMAKE_C_FLAGS (64) and in add_compile_options, add_definitions and set_property COMPILE_OPTIONS (65-67).
 # -m$CACHE{} (68), and AMD's -mfma4 and -mxop, which imply AVX (69, 70).
 # Round 8: options passed to a function or macro that both fills an output argument and grants its other
-# arguments (engine/producer: a literal, $ENV{} and the macro form).
+# arguments (engine/producer: a literal, $ENV{} and the macro form). engine/clang: Clang's AVX implications,
+# a front-end target feature (also in SHELL:), $ENV{} in ENV{CXXFLAGS} and in link options, and a level
+# from $ENV{} in a grant and passed to a wrapper (named once in the message: TestISAEnvRefOnce).
 cmake/HeliosIsa.cmake:15: CONF-11
 cmake/HeliosIsa.cmake:24: CONF-11
 cmake/isa_allowlist.cmake:12: CONF-11
 cmake/isa_allowlist.cmake:16: CONF-11
+engine/clang/CMakeLists.txt:4: CONF-11
+engine/clang/CMakeLists.txt:5: CONF-11
+engine/clang/CMakeLists.txt:6: CONF-11
+engine/clang/CMakeLists.txt:7: CONF-11
+engine/clang/CMakeLists.txt:8: CONF-11
+engine/clang/CMakeLists.txt:9: CONF-11
+engine/clang/CMakeLists.txt:10: CONF-11
+engine/clang/CMakeLists.txt:11: CONF-11
+engine/clang/CMakeLists.txt:12: CONF-11
+engine/clang/CMakeLists.txt:13: CONF-11
+engine/clang/CMakeLists.txt:14: CONF-11
+engine/clang/CMakeLists.txt:15: CONF-11
+engine/clang/CMakeLists.txt:16: CONF-11
 engine/demo/CMakeLists.txt:2: CONF-11
 engine/demo/CMakeLists.txt:4: CONF-11
 engine/demo/CMakeLists.txt:5: CONF-11

@@ -7,6 +7,7 @@ function(helios_apply_isa_level target level)
   else()
     target_compile_options(${target} PRIVATE ${HELIOS_ISA_BASE})
   endif()
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} $ENV{HELIOS_ISA_TUNE}" PARENT_SCOPE) # the level function is the image level
 endfunction()
 # The gate TUs are pinned to the baseline: -mno-avx2 and -march=x86-64 grant nothing.
 function(helios_cpu_gate_sources)

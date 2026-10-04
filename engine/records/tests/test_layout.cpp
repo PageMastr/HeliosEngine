@@ -141,7 +141,7 @@ const refl::TypeInfo& loopWrapper() noexcept {
         refl::TypeInfo i;
         i.qualifiedName = W == 0 ? "loop.S?" : W == 1 ? "loop.S[2]" : "loop.V";
         i.kind = W == 0 ? refl::Kind::Optional : W == 1 ? refl::Kind::Array : refl::Kind::Variant;
-        if (W == 2) {
+        if constexpr (W == 2) {
             i.alternatives = std::span<const refl::VariantAlt>(&alt, 1);
         } else {
             i.elementFn = &loopStructFn<W>;

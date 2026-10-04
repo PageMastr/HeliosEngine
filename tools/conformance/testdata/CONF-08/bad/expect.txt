@@ -29,7 +29,13 @@
 # unexported port field of a gateway-named type (gateway_values.go).
 # Round 8: a literal in a read option call's other arguments is read (gateway_forms.cpp:34; only the default
 # is left to the option), and an option call that #if branches leave unclosed fails closed and hides
-# nothing after it (gateway_unbalanced.cpp).
+# nothing after it (gateway_unbalanced.cpp). A read line is found by the words of its names (listenAddress,
+# listen_address, clientListen, kListenAddr: gateway_names.cpp), so a listen or connect constant in a gateway
+# file is reported where it is declared too (gateway_config.cpp:4, gateway_forms.cpp:25). Brace forms
+# (gateway_braces.cpp): initializer braces after =, a comma, a brace, return, a template's > and array
+# bounds keep the statement open, and `;` inside parentheses after lambdas still does not end it. TOML: a
+# nested array of inline tables (helios.toml:48) and a command line in a gateway table, --opt=value too
+# (:49; an address in its own element is reported once).
 deploy/compose.yml:3: CONF-08
 deploy/compose.yml:6: CONF-08
 deploy/compose.yml:7: CONF-08
@@ -53,14 +59,28 @@ deploy/helios.toml:37: CONF-08
 deploy/helios.toml:37: CONF-08
 deploy/helios.toml:44: CONF-08
 deploy/helios.toml:45: CONF-08
+deploy/helios.toml:48: CONF-08
+deploy/helios.toml:49: CONF-08
+deploy/helios.toml:49: CONF-08
+deploy/helios.toml:49: CONF-08
 engine/net/include/ports.h:2: CONF-08
 engine/net/include/ports.h:3: CONF-08
 engine/net/include/ports.h:4: CONF-08
 engine/net/include/ports.h:6: CONF-08
 engine/net/include/ports.h:7: CONF-08
 engine/net/include/ports.h:8: CONF-08
+engine/server/src/gateway_braces.cpp:4: CONF-08
+engine/server/src/gateway_braces.cpp:6: CONF-08
+engine/server/src/gateway_braces.cpp:8: CONF-08
+engine/server/src/gateway_braces.cpp:11: CONF-08
+engine/server/src/gateway_braces.cpp:15: CONF-08
+engine/server/src/gateway_braces.cpp:17: CONF-08
+engine/server/src/gateway_braces.cpp:19: CONF-08
+engine/server/src/gateway_braces.cpp:21: CONF-08
+engine/server/src/gateway_braces.cpp:26: CONF-08
 engine/server/src/gateway_config.cpp:1: CONF-08
 engine/server/src/gateway_config.cpp:2: CONF-08
+engine/server/src/gateway_config.cpp:4: CONF-08
 engine/server/src/gateway_config.cpp:5: CONF-08
 engine/server/src/gateway_config.cpp:7: CONF-08
 engine/server/src/gateway_config.cpp:8: CONF-08
@@ -81,12 +101,18 @@ engine/server/src/gateway_forms.cpp:16: CONF-08
 engine/server/src/gateway_forms.cpp:19: CONF-08
 engine/server/src/gateway_forms.cpp:21: CONF-08
 engine/server/src/gateway_forms.cpp:24: CONF-08
+engine/server/src/gateway_forms.cpp:25: CONF-08
 engine/server/src/gateway_forms.cpp:26: CONF-08
 engine/server/src/gateway_forms.cpp:27: CONF-08
 engine/server/src/gateway_forms.cpp:29: CONF-08
 engine/server/src/gateway_forms.cpp:31: CONF-08
 engine/server/src/gateway_forms.cpp:33: CONF-08
 engine/server/src/gateway_forms.cpp:34: CONF-08
+engine/server/src/gateway_names.cpp:3: CONF-08
+engine/server/src/gateway_names.cpp:4: CONF-08
+engine/server/src/gateway_names.cpp:5: CONF-08
+engine/server/src/gateway_names.cpp:6: CONF-08
+engine/server/src/gateway_names.cpp:7: CONF-08
 engine/server/src/gateway_unbalanced.cpp:3: CONF-08
 engine/server/src/gateway_unbalanced.cpp:11: CONF-08
 services/cmd/tool/main.go:5: CONF-08

@@ -1,0 +1,88 @@
+# engine/records — L2 record database (HEADLESS; 02 §1.1, §3.3, §3.7): the `.hrec` → `.hrdb` cook
+# (inheritance, reference/tag/formula checks, the client/server split and its AAA-SEC-4 rules, the tag
+# table, HXL bytecode) and the zero-copy, fully validated `.hrdb` loader. See README.md.
+
+helios_module(records HEADLESS
+  SOURCES
+    src/cook.cpp
+    src/hrdb_format.cpp
+    src/layout.cpp
+    src/record_db.cpp
+  DEPS helios::core helios::reflect helios::hxl)
+
+include(HeliosSchema)
+
+# Test record types (tests/schema/records_test.hschema): every cooked encoding, client {} / server {}
+# blocks, @server_only / @client_only records, @opaque, @keyed, @merge(append). The tests, the fuzz
+# target and its seeds use them; nothing shipped links them.
+add_library(helios_records_testtypes STATIC)
+helios_schema(helios_records_testtypes
+  FILES ${CMAKE_CURRENT_SOURCE_DIR}/tests/schema/records_test.hschema
+  INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/tests/schema
+  LOCK ${CMAKE_CURRENT_SOURCE_DIR}/tests/schema/schema.lock.jsonc)
+set_target_properties(helios_records_testtypes PROPERTIES FOLDER tests)
+helios_apply_warnings(helios_records_testtypes)
+
+# The tests also link engine/gameplay: its TagDef records declare tags (and their audiences), and the
+# cooked tag table is checked against gameplay::TagRegistry's numbering. A test binary is no shipped
+# image, so the upward link is allowed (as engine/asset's tests link engine/assetpipe).
+file(GLOB HELIOS_RECORDS_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp)
+helios_test(records_tests SOURCES ${HELIOS_RECORDS_TEST_SOURCES}
+  DEPS helios::records helios_records_testtypes helios::gameplay)
+if(TARGET records_tests)
+  target_compile_definitions(records_tests PRIVATE
+    HELIOS_RECORDS_TEST_PROJECT="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/project"
+    HELIOS_RECORDS_TEST_WORK_DIR="${CMAKE_CURRENT_BINARY_DIR}/records_test_work")
+endif()
+
+# AAA-SEC-4 over nested plantings (lint): the sample schemas helios-cook links put no server {} field
+# inside a shared struct, so a test-only copy of `helios-cook records` that registers the test types cooks
+# tests/data/project, and sec4_check.cmake searches the raw bytes. Each sentinel is a server {} value or
+# server-only tag of a struct nested in shared data: in keyed lists ($key and @keyed(slot)) set in the
+# template and merged into or appended to through $parent, in an optional, a struct field, a map value
+# and a plain list. Like the tests, it links engine/gameplay for the TagDef records.
+if(HELIOS_BUILD_TESTS)
+  add_executable(records_fixture_cook ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixture_cook/main.cpp)
+  target_link_libraries(records_fixture_cook PRIVATE helios::records helios_records_testtypes helios::gameplay)
+  set_target_properties(records_fixture_cook PROPERTIES FOLDER tests)
+  helios_apply_warnings(records_fixture_cook)
+  add_test(NAME lint_records_sec4_nested
+    COMMAND ${CMAKE_COMMAND} -DCOOK=$<TARGET_FILE:records_fixture_cook> -DPROJECT=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/project
+            -DWORK=${CMAKE_CURRENT_BINARY_DIR}/sec4_nested
+            "-DSENTINELS=SEC4-NESTED-base-mount-main;SEC4-NESTED-base-mount-left;SEC4-NESTED-base-slot-nose;SEC4-NESTED-base-slot-dorsal;SEC4-NESTED-skiff-mount-override;SEC4-NESTED-skiff-mount-append;SEC4-NESTED-skiff-slot-override;SEC4-NESTED-skiff-slot-append;SEC4-NESTED-roster-seat;SEC4-NESTED-primary;SEC4-NESTED-bay-aft;SEC4-NESTED-spare;Sec4Sentinel.Nested.BaseMount;Sec4Sentinel.Nested.BaseSlot;Sec4Sentinel.Nested.SkiffOverride;Sec4Sentinel.Nested.SkiffAppend;Sec4Sentinel.Nested.Roster;Sec4Sentinel.Nested.Primary;Sec4Sentinel.Nested.Bay;Sec4Sentinel.Nested.Spare"
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/sec4_check.cmake)
+  set_tests_properties(lint_records_sec4_nested PROPERTIES LABELS lint TIMEOUT 120)
+endif()
+
+# ---------------------------------------------------------------------------------------------
+# Fuzz targets (02 §3.7: "loaders validate bounds and are fuzzed"), built like engine/asset's:
+#   records_fuzz_hrdb_loader  the `.hrdb` loader (each input also resealed, so mutations reach the
+#                             validators behind the checksums);
+#   records_fuzz_hrec_cook    the `.hrec` side of the cook (parsing, inheritance, checks, encoders), with
+#                             the property that every successful cook opens with the loader.
+# With HELIOS_RECORDS_LIBFUZZER=ON and Clang they link libFuzzer's driver; give the build coverage and
+# sanitizers with -DCMAKE_C_FLAGS/-DCMAKE_CXX_FLAGS="-fsanitize=fuzzer-no-link,address,undefined".
+# Otherwise they use engine/asset's standalone driver (corpus replay plus deterministic mutations),
+# registered as CTests (label fuzz) that run on every PR.
+# ---------------------------------------------------------------------------------------------
+option(HELIOS_RECORDS_LIBFUZZER "Build the engine/records fuzz targets as libFuzzer binaries (Clang only)" OFF)
+foreach(_target hrdb_loader hrec_cook)
+  set(_fuzz records_fuzz_${_target})
+  if(HELIOS_RECORDS_LIBFUZZER AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_executable(${_fuzz} ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/fuzz_${_target}.cpp)
+    target_compile_options(${_fuzz} PRIVATE -fsanitize=fuzzer)
+    target_link_options(${_fuzz} PRIVATE -fsanitize=fuzzer)
+  else()
+    add_executable(${_fuzz} ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/fuzz_${_target}.cpp
+                            ${PROJECT_SOURCE_DIR}/engine/asset/fuzz/fuzz_main.cpp)
+  endif()
+  target_link_libraries(${_fuzz} PRIVATE helios::records helios_records_testtypes)
+  set_target_properties(${_fuzz} PROPERTIES FOLDER fuzz)
+  helios_apply_warnings(${_fuzz})
+  if(HELIOS_BUILD_TESTS AND NOT (HELIOS_RECORDS_LIBFUZZER AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
+    add_test(NAME ${_fuzz} COMMAND ${_fuzz} --smoke 20000 ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/${_target})
+    set_tests_properties(${_fuzz} PROPERTIES LABELS fuzz TIMEOUT 600)
+  endif()
+endforeach()
+unset(_fuzz)
+unset(_target)

@@ -1,0 +1,9 @@
+{
+  "$rid": 872142931993027468,
+  "$name": "ship/skiff_mk2",
+  "$parent": "ship/skiff",
+  "label": "Skiff Mk II",
+  "formula": "select(tag(self, Ship.Mod.Afterburner), 2, 1)",
+  "extras": ["mk2_extra"],
+  "mode": {"Cruise": {}}
+}

@@ -1,0 +1,21 @@
+{
+  "$rid": 2931352533823960198,
+  "$name": "hull/frigate",
+  "$parent": "hull/base_frigate",
+  "$comment": "Inherits the template; its server {} data carries AAA-SEC-4 sentinels (lint_records_sec4).",
+  "name": "loc:ship.frigate.name",
+  "thrusters": [
+    {
+      "$key": "66726967-6174-6500-8000-000000000003",
+      "bone": "thruster_right",
+      "dir": [1, 0, 0],
+      "maxForce": 40000
+    }
+  ],
+  "hardpoints": [
+    {"slot": "dorsal", "size": "Medium", "offset": [0, 1.5, 0]}
+  ],
+  "handling": {"yawRate": 35},
+  "lootTable": 4831896910335876406,
+  "aiHints": {"Sec4SentinelAiHint": 0.75, "retreatHealth": 0.25}
+}

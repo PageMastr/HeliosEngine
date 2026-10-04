@@ -1,0 +1,200 @@
+// helios-schemac schema lock (docs/plan/02-engine-runtime.md §3.4). Generated; append-only.
+// Commit this file. Never edit or delete entries: ids must never be reused. CI runs --check-lock.
+{
+  "format": 1,
+  "types": {
+    "test.records.Grade": {
+      "id": 1779770020,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Low", "value": 0},
+        {"name": "Mid", "value": 1},
+        {"name": "High", "value": 2}
+      ]
+    },
+    "test.records.LootDef": {
+      "id": 953783542,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "entries", "type": "list<Name>"},
+        {"id": 2, "name": "secret", "type": "string"},
+        {"id": 3, "name": "weight", "type": "f64"}
+      ]
+    },
+    "test.records.Mount": {
+      "id": 2210797322,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "bone", "type": "Name"},
+        {"id": 2, "name": "force", "type": "f32", "default": "10"},
+        {"id": 3, "name": "dir", "type": "vec3f", "default": "[0,0,-1]"}
+      ]
+    },
+    "test.records.PartDef": {
+      "id": 851345915,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "name", "type": "LocString"},
+        {"id": 2, "name": "mass", "type": "f32", "default": "1"}
+      ]
+    },
+    "test.records.Perm": {
+      "id": 4259860955,
+      "kind": "flags",
+      "base": "u16",
+      "values": [
+        {"name": "None", "value": 0},
+        {"name": "Read", "value": 1},
+        {"name": "Write", "value": 2},
+        {"name": "Admin", "value": 4}
+      ]
+    },
+    "test.records.Roster": {
+      "id": 3029970994,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "seats", "type": "keyed<test.records.Mount>"}
+      ]
+    },
+    "test.records.ShipDef": {
+      "id": 49886318,
+      "kind": "struct",
+      "nextField": 50,
+      "fields": [
+        {"id": 1, "name": "name", "type": "LocString"},
+        {"id": 2, "name": "grade", "type": "test.records.Grade", "default": "\"Mid\""},
+        {"id": 3, "name": "perms", "type": "test.records.Perm"},
+        {"id": 4, "name": "mass", "type": "f32"},
+        {"id": 5, "name": "hp", "type": "f64"},
+        {"id": 6, "name": "i8v", "type": "i8"},
+        {"id": 7, "name": "i16v", "type": "i16"},
+        {"id": 8, "name": "i32v", "type": "i32"},
+        {"id": 9, "name": "i64v", "type": "i64"},
+        {"id": 10, "name": "u8v", "type": "u8"},
+        {"id": 11, "name": "u16v", "type": "u16"},
+        {"id": 12, "name": "u32v", "type": "u32"},
+        {"id": 13, "name": "u64v", "type": "u64"},
+        {"id": 14, "name": "flag", "type": "bool"},
+        {"id": 15, "name": "label", "type": "string"},
+        {"id": 16, "name": "ident", "type": "Name"},
+        {"id": 17, "name": "guid", "type": "Guid"},
+        {"id": 18, "name": "owner", "type": "EntityId"},
+        {"id": 19, "name": "net", "type": "NetHandle"},
+        {"id": 20, "name": "cooldown", "type": "Duration"},
+        {"id": 21, "name": "at", "type": "Tick"},
+        {"id": 22, "name": "pos", "type": "WorldPos"},
+        {"id": 23, "name": "rot", "type": "quatf"},
+        {"id": 24, "name": "tint", "type": "color"},
+        {"id": 25, "name": "icon", "type": "AssetRef<Texture>"},
+        {"id": 26, "name": "tags", "type": "TagSet"},
+        {"id": 27, "name": "query", "type": "TagQuery"},
+        {"id": 28, "name": "formula", "type": "HxlExpr"},
+        {"id": 29, "name": "mounts", "type": "keyed<test.records.Mount>"},
+        {"id": 30, "name": "slots", "type": "list<test.records.Slot>"},
+        {"id": 31, "name": "extras", "type": "list<Name>"},
+        {"id": 32, "name": "parts", "type": "list<Ref<test.records.PartDef>>"},
+        {"id": 33, "name": "attrs", "type": "map<Name,f64>"},
+        {"id": 34, "name": "labels", "type": "set<string>"},
+        {"id": 35, "name": "nums", "type": "u16[3]"},
+        {"id": 36, "name": "maybe", "type": "f32?"},
+        {"id": 37, "name": "handling", "type": "test.records.ShipDef.Handling"},
+        {"id": 38, "name": "mode", "type": "test.records.ShipDef.Mode"},
+        {"id": 39, "name": "nested", "type": "list<list<i32>>"},
+        {"id": 40, "name": "drop", "type": "Ref<test.records.LootDef>?"},
+        {"id": 41, "name": "skin", "type": "Ref<test.records.SkinDef>?"},
+        {"id": 42, "name": "hudColor", "type": "color"},
+        {"id": 43, "name": "loot", "type": "Ref<test.records.LootDef>?"},
+        {"id": 44, "name": "aiNotes", "type": "string"},
+        {"id": 45, "name": "aiHints", "type": "map<Name,f32>"},
+        {"id": 46, "name": "serverTags", "type": "TagSet"},
+        {"id": 47, "name": "threat", "type": "HxlExpr"},
+        {"id": 48, "name": "secretCode", "type": "u64"},
+        {"id": 49, "name": "roster", "type": "test.records.Roster?"}
+      ]
+    },
+    "test.records.ShipDef.Handling": {
+      "id": 2917639569,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "pitch", "type": "f32"},
+        {"id": 2, "name": "yaw", "type": "f32"},
+        {"id": 3, "name": "roll", "type": "f32"}
+      ]
+    },
+    "test.records.ShipDef.Mode": {
+      "id": 1532877043,
+      "kind": "variant",
+      "nextField": 4,
+      "alternatives": [
+        {"id": 1, "name": "Idle"},
+        {"id": 2, "name": "Cruise"},
+        {"id": 3, "name": "Warp"}
+      ]
+    },
+    "test.records.ShipDef.Mode.Cruise": {
+      "id": 1110873992,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "speed", "type": "f32", "default": "100"}
+      ]
+    },
+    "test.records.ShipDef.Mode.Idle": {
+      "id": 518954581,
+      "kind": "struct",
+      "nextField": 1,
+      "fields": []
+    },
+    "test.records.ShipDef.Mode.Warp": {
+      "id": 3840511817,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "target", "type": "Name"},
+        {"id": 2, "name": "spool", "type": "Duration", "default": "\"2s\""}
+      ]
+    },
+    "test.records.SkinDef": {
+      "id": 235913711,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "icon", "type": "AssetRef<Texture>"},
+        {"id": 2, "name": "palette", "type": "list<color>"}
+      ]
+    },
+    "test.records.Slot": {
+      "id": 3072957025,
+      "kind": "struct",
+      "nextField": 4,
+      "fields": [
+        {"id": 1, "name": "slot", "type": "Name"},
+        {"id": 2, "name": "grade", "type": "test.records.Grade"},
+        {"id": 3, "name": "weight", "type": "f32"}
+      ]
+    },
+    "test.records.TreeDef": {
+      "id": 1690544748,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "root", "type": "test.records.TreeNode"}
+      ]
+    },
+    "test.records.TreeNode": {
+      "id": 3320104045,
+      "kind": "struct",
+      "nextField": 3,
+      "fields": [
+        {"id": 1, "name": "value", "type": "i32"},
+        {"id": 2, "name": "kids", "type": "list<test.records.TreeNode>"}
+      ]
+    }
+  }
+}

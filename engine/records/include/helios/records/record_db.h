@@ -155,8 +155,9 @@ public:
     /// become names again and HxlExpr values get their source text back.
     Result<void> decode(const RecordView& record, void* object) const;
 
+    struct Impl; ///< Implementation detail (record_db.cpp).
+
 private:
-    struct Impl;
     explicit RecordDb(std::unique_ptr<Impl> impl) noexcept;
     static Result<RecordDb> finishOpen(std::unique_ptr<Impl> impl, const refl::TypeRegistry& registry,
                                        const RecordDbOptions& options);

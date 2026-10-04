@@ -210,12 +210,13 @@ Result<CookedLayout*> LayoutCache::build(const refl::TypeInfo& type) {
         }
         break;
     }
-    case Kind::Map:
+    case Kind::Map: {
         if (!type.key().ops->keyLess) return makeError(ErrorCode::Unsupported, "map '{}' has no canonical key order", type.qualifiedName);
         HELIOS_TRY_ASSIGN(l.key, build(type.key()));
         HELIOS_TRY_ASSIGN(l.element, build(type.element()));
         span(Enc::Map, 8);
         break;
+    }
     case Kind::Optional: {
         HELIOS_TRY_ASSIGN(l.element, byValue(type.element(), type.qualifiedName));
         l.enc = Enc::Optional;

@@ -54,7 +54,7 @@ std::vector<SourceRecord> syntheticProject(usize ships) {
         if (i % 10 == 9) parent = std::format(R"("$parent": "ship/s{}", )", i - 1);
         out.push_back(source(
             std::format("records/ship/s{}.hrec", i), shipT,
-            std::format(R"({{"$rid": {}, "$name": "ship/s{}", {}"name": "loc:ship.s{}", "grade": "High", "perms": ["Read"], "mass": {},
+            std::format(R"j({{"$rid": {}, "$name": "ship/s{}", {}"name": "loc:ship.s{}", "grade": "High", "perms": ["Read"], "mass": {},
   "hp": {}, "i32v": {}, "u64v": {}, "flag": true, "label": "Ship number {}", "ident": "s{}",
   "guid": "guid:00000000-0000-4000-8000-{:012x}", "owner": "ent:{}", "cooldown": "{}ms", "pos": [{}, 2, 3],
   "rot": [0, 0, 0, 1], "tint": [1, 1, 1, 1], "tags": ["Ship.Class.C{}", "Ship.Role.R{}"],
@@ -64,7 +64,7 @@ std::vector<SourceRecord> syntheticProject(usize ships) {
   "parts": [{}, {}], "attrs": {{"Speed": {}, "Agility": 0.5}}, "labels": ["a", "b{}"], "nums": [1, 2, 3],
   "maybe": 1.5, "handling": {{"pitch": 1, "yaw": 2, "roll": 3}}, "mode": {{"Cruise": {{"speed": {}}}}},
   "nested": [[1, 2], [3]], "aiNotes": "notes {}", "aiHints": {{"Range": {}}}, "threat": "attr(self, Threat) + {}",
-  "secretCode": {}}})",
+  "secretCode": {}}})j",
                         rid, i, parent, i, 1000.0 + static_cast<f64>(i), 50.0 + static_cast<f64>(i), -static_cast<i64>(i), i * 7, i, i, i, i,
                         i % 5000, i % 50, i % 20, i % 100, i, i, i, i * 3, i, 1000 + i % kParts, 1000 + (i * 7) % kParts, i, i, i % 300, i,
                         i % 1000, i % 100, i * 13)));

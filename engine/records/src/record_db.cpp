@@ -9,6 +9,7 @@
 #include "helios/core/assert.h"
 #include "helios/core/utf.h"
 #include "helios/records/cook.h"
+#include "helios/reflect/record.h"
 #include "helios/reflect/serialize.h"
 
 namespace helios::records {

@@ -12,6 +12,7 @@
 #include "helios/records/layout.h"
 #include "helios/reflect/codec.h"
 #include "helios/reflect/json.h"
+#include "helios/reflect/record.h"
 #include "helios/reflect/serialize.h"
 
 namespace helios::records {
@@ -82,7 +83,10 @@ public:
                 const FieldInfo* f = t.field(m.key);
                 const bool alias = f == nullptr && (f = t.fieldOrAlias(m.key)) != nullptr;
                 if (!f) {
-                    if (pass == 1) HELIOS_TRY(m_ctx.unknownField(m.key));
+                    if (pass == 1) {
+                        ReadCtx::Scope s(m_ctx, m.key);
+                        HELIOS_TRY(m_ctx.unknownField(m.key));
+                    }
                     continue;
                 }
                 if (alias != (pass == 0)) continue;
@@ -124,6 +128,8 @@ private:
         usize i = 0;
         for (const JsonValue e : in.elements()) {
             ReadCtx::Scope s(m_ctx, i++);
+            // The readers mint a random key for an element without one; a cook must be deterministic.
+            if (e.isObject() && !e.get("$key").isValid()) return m_ctx.error("element has no $key (keyed lists need stable keys)");
             HELIOS_TRY_ASSIGN(const Guid key, refl::detail::readKeyedListKey(e, m_ctx));
             if (std::find(seen.begin(), seen.end(), key) != seen.end()) return m_ctx.error("duplicate $key " + key.toString());
             seen.push_back(key);
@@ -425,13 +431,14 @@ public:
         store<i32>(buf.data() + field, static_cast<i32>(target - field));
         store<u32>(buf.data() + field + 4, static_cast<u32>(count));
     }
-    void bytes(usize field, const void* data, usize n) {
-        if (n == 0) return;
-        const usize at = alloc(n);
-        std::memcpy(buf.data() + at, data, n);
-        span(field, at, n);
+    /// Copies `count` elements of `stride` bytes into a new block and points the span at `field` to it.
+    void block(usize field, const void* data, usize count, usize stride) {
+        if (count == 0) return;
+        const usize at = alloc(count * stride);
+        std::memcpy(buf.data() + at, data, count * stride);
+        span(field, at, count);
     }
-    void text(usize field, std::string_view s) { bytes(field, s.data(), s.size()); }
+    void text(usize field, std::string_view s) { block(field, s.data(), s.size(), 1); }
 
     void value(const CookedLayout& l, const void* obj, usize at, u32 depth) {
         const TypeInfo& t = *l.type;
@@ -467,7 +474,7 @@ public:
                 idx.push_back(it->second);
             }
             std::sort(idx.begin(), idx.end());
-            bytes(at, idx.data(), idx.size() * sizeof(u16));
+            block(at, idx.data(), idx.size(), sizeof(u16));
             return;
         }
         case Enc::Hxl: {
@@ -476,7 +483,7 @@ public:
             if (!src.empty()) {
                 const auto it = m_bytecode.find(src);
                 HELIOS_ASSERT(it != m_bytecode.end(), "the scan compiled every formula");
-                bytes(at + 8, it->second.data(), it->second.size());
+                block(at + 8, it->second.data(), it->second.size(), 1);
             }
             return;
         }
@@ -646,6 +653,7 @@ Result<std::vector<u8>> encodeDb(CookAudience audience, std::span<const Rec* con
     }
     for (usize i = 0; i < visible.size(); ++i) store<u16>(enc.buf.data() + visibleAt + i * 2, visible[i]);
     if (!ok) return Error{ErrorCode::InvalidArgument, "encoding errors"};
+    enc.alloc(0); // the file ends 16-byte aligned too
     if (enc.buf.size() > hrdb::kMaxFileSize) {
         diags.add("", std::format("{} cook: {} bytes exceeds the 2 GiB format limit", cookAudienceName(audience), enc.buf.size()));
         return Error{ErrorCode::LimitExceeded, "too large"};
@@ -827,6 +835,18 @@ Result<CookOutput> cook(std::span<const SourceRecord> sources, const CookOptions
             Overlay overlay(ctx);
             if (auto res = overlay.fields(*r.src->type, r.value.data(), r.doc.root(), true); !res) {
                 diags.add(r.src->path, res.error().message);
+                r.state = State::Failed;
+                continue;
+            }
+            // Reader warnings are errors, except ignored unknown fields when they are allowed: a keyed
+            // list read without `$key`s gets random keys, which would make the cook non-deterministic.
+            bool warned = false;
+            for (const std::string& w : ctx.warnings()) {
+                if (!options.strictUnknownFields && w.find("unknown field ignored") != std::string::npos) continue;
+                diags.add(r.src->path, w);
+                warned = true;
+            }
+            if (warned) {
                 r.state = State::Failed;
                 continue;
             }

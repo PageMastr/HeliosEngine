@@ -105,6 +105,20 @@ const TypeInfo& helios::refl::TypeOf<sec4t::RefVisible>::get() noexcept {
 
 namespace {
 
+/// The hand-built types, in a registry of their own (the loader looks record types up by id).
+const refl::TypeRegistry& sec4Registry() {
+    static refl::TypeRegistry* reg = [] {
+        auto* r = new refl::TypeRegistry();
+        for (const TypeInfo* t : {&refl::typeOf<sec4t::Secret>(), &refl::typeOf<sec4t::Visible>(), &refl::typeOf<sec4t::RefPlain>(),
+                                  &refl::typeOf<sec4t::RefOpaque>(), &refl::typeOf<sec4t::Embeds>(), &refl::typeOf<sec4t::UsesMood>(),
+                                  &refl::typeOf<sec4t::RefVisible>()}) {
+            REQUIRE(r->add(*t).ok());
+        }
+        return r;
+    }();
+    return *reg;
+}
+
 constexpr refl::RecordId kBase = 4390381077356775243ull;
 constexpr refl::RecordId kLoot = 2531117344111056078ull;
 constexpr refl::RecordId kSkin = 1759060513237310278ull;
@@ -194,8 +208,8 @@ TEST_CASE("AAA-SEC-4: an @opaque reference cooks as the bare RecordId; the recor
     };
     auto out = cook(s);
     REQUIRE_MESSAGE(out.ok(), (out.ok() ? "" : out.error().message));
-    const RecordDb c = open(out->client);
-    const RecordDb sv = open(out->server);
+    const RecordDb c = open(out->client, sec4Registry());
+    const RecordDb sv = open(out->server, sec4Registry());
     CHECK_FALSE(c.find(110));
     CHECK(sv.find(110));
     CHECK(c.find(111).value.field("secrets")[0].asRecordId() == 110);

@@ -179,6 +179,8 @@ TEST_CASE("cook: keyed-list merges reject duplicate and missing keys") {
                R"({"$rid": 40, "$name": "s/1", "mounts": [{"$key": "00000000-0000-4000-8000-000000000001"},
                                                           {"$key": "00000000-0000-4000-8000-000000000001"}]})"),
         source("no_key.hrec", shipT, R"({"$rid": 41, "$name": "s/2", "mounts": [{"bone": "x"}]})"),
+        // A keyed list inside a replaced value is read whole, and still needs its keys.
+        source("nested_no_key.hrec", shipT, R"({"$rid": 45, "$name": "s/6", "roster": {"seats": [{"bone": "x"}]}})"),
         source("dup_slot.hrec", shipT, R"({"$rid": 42, "$name": "s/3", "slots": [{"slot": "a"}, {"slot": "a"}]})"),
         source("no_slot.hrec", shipT, R"({"$rid": 43, "$name": "s/4", "slots": [{"weight": 1}]})"),
         source("bad_enum.hrec", shipT, R"({"$rid": 44, "$name": "s/5", "grade": 7, "perms": 64})"),
@@ -186,7 +188,8 @@ TEST_CASE("cook: keyed-list merges reject duplicate and missing keys") {
     const std::vector<CookDiagnostic> d = cookErrors(s);
     INFO(dump(d));
     CHECK(hasDiag(d, "dup_key.hrec", "duplicate $key"));
-    CHECK(hasDiag(d, "no_key.hrec", "mounts[0]"));
+    CHECK(hasDiag(d, "no_key.hrec", "mounts[0]: element has no $key"));
+    CHECK(hasDiag(d, "nested_no_key.hrec", "roster.seats[0]: element has no $key"));
     CHECK(hasDiag(d, "dup_slot.hrec", "duplicate slot"));
     CHECK(hasDiag(d, "no_slot.hrec", "element has no 'slot'"));
     CHECK(hasDiag(d, "bad_enum.hrec", "grade: 7 is not a declared value of test.records.Grade"));
@@ -239,7 +242,7 @@ TEST_CASE("cook: HxlExpr values compile to HXL bytecode (engine/hxl)") {
     const refl::TypeInfo& shipT = type("test.records.ShipDef");
     const std::vector<SourceRecord> bad = {
         source("bad.hrec", shipT, R"({"$rid": 60, "$name": "s/1", "formula": "attr(self, X) +"})"),
-        source("param.hrec", shipT, R"({"$rid": 61, "$name": "s/2", "formula": "attr(target, X)"})"),
+        source("param.hrec", shipT, R"j({"$rid": 61, "$name": "s/2", "formula": "attr(target, X)"})j"),
     };
     const std::vector<CookDiagnostic> d = cookErrors(bad);
     INFO(dump(d));
@@ -312,8 +315,8 @@ TEST_CASE("cook: identical inputs give byte-identical cooks, pinned by a golden 
     // come out of every toolchain (GCC and Clang locally, MSVC and clang-cl in CI).
     MESSAGE("client ", a.client.size(), " bytes, xxh3 ", std::format("{:#018x}", hash64(a.client.data(), a.client.size())));
     MESSAGE("server ", a.server.size(), " bytes, xxh3 ", std::format("{:#018x}", hash64(a.server.data(), a.server.size())));
-    CHECK(hash64(a.client.data(), a.client.size()) == 0x0ull);
-    CHECK(hash64(a.server.data(), a.server.size()) == 0x0ull);
+    CHECK(hash64(a.client.data(), a.client.size()) == 0x4a2357b89651340aull);
+    CHECK(hash64(a.server.data(), a.server.size()) == 0x2edda2c81d1f1a42ull);
 }
 
 TEST_CASE("cook: lists nested deeper than hrdb::kMaxNesting are refused; the limit itself cooks and loads") {

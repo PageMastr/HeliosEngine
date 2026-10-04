@@ -25,6 +25,11 @@ struct Slot {
   weight: f32
 }
 
+/// Crew seats: a keyed list inside an optional (read whole, never merged).
+struct Roster {
+  seats: list<Mount> @keyed
+}
+
 /// A tree node (recursive through a list).
 struct TreeNode {
   value: i32
@@ -97,6 +102,7 @@ record ShipDef @table("ship") {
   mode:     variant { Idle; Cruise { speed: f32 = 100 }; Warp { target: Name; spool: Duration = 2s } }
   nested:   list<list<i32>>
   drop:     LootRef? @opaque
+  roster:   Roster?
   client {
     skin:     SkinRef?
     hudColor: color

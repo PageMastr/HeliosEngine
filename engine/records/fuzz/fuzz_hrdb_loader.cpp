@@ -17,6 +17,7 @@
 #include "helios/core/log.h"
 #include "helios/hxl/program.h"
 #include "helios/records/records.h"
+#include "helios/reflect/serialize.h"
 #include "records_test.gen.h"
 
 void heliosFuzzSeeds(std::vector<std::vector<uint8_t>>& out);
@@ -129,7 +130,7 @@ void heliosFuzzSeeds(std::vector<std::vector<uint8_t>>& out) {
         src("skin.hrec", "test.records.SkinDef", R"({"$rid": 3, "$name": "k/1", "palette": [[1, 0, 0, 1]]})"),
         src("tree.hrec", "test.records.TreeDef",
             R"({"$rid": 4, "$name": "t/1", "root": {"value": 1, "kids": [{"value": 2, "kids": [{"value": 3}]}, {"value": 4}]}})"),
-        src("ship.hrec", "test.records.ShipDef", R"({
+        src("ship.hrec", "test.records.ShipDef", R"j({
   "$rid": 5, "$name": "s/1", "name": "loc:ship", "grade": "High", "perms": ["Read", "Admin"], "mass": 3.5, "hp": -1e300,
   "i8v": -1, "i16v": -2, "i32v": -3, "i64v": -4, "u8v": 5, "u16v": 6, "u32v": 7, "u64v": 8, "flag": true, "label": "label é",
   "ident": "ident", "guid": "guid:01020304-0506-4708-890a-0b0c0d0e0f10", "owner": "ent:9", "net": 10, "cooldown": "11ms",
@@ -140,7 +141,7 @@ void heliosFuzzSeeds(std::vector<std::vector<uint8_t>>& out) {
   "labels": ["z", "y"], "nums": [1, 2, 3], "maybe": 4, "handling": {"pitch": 1, "yaw": 2, "roll": 3},
   "mode": {"Warp": {"target": "t", "spool": "1s"}}, "nested": [[1], [], [2, 3]], "drop": 2, "skin": 3, "hudColor": [0, 1, 0, 1],
   "loot": 2, "aiNotes": "n", "aiHints": {"h": 1}, "serverTags": ["S.T"], "threat": "attr(self, T)", "secretCode": 13
-})"),
+})j"),
         src("child.hrec", "test.records.ShipDef",
             R"({"$rid": 6, "$name": "s/2", "$parent": "s/1", "mass": 1, "extras": ["f"], "mode": "Idle", "maybe": null})"),
     });

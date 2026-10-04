@@ -68,11 +68,16 @@ TEST_CASE("loader: every single-bit flip, resealed, is rejected or still safe to
             m[bit / 8] ^= static_cast<u8>(1u << (bit % 8));
             CHECK_FALSE(openAndRead(m)); // a flip without a reseal never passes the checksums
             hrdb::seal(m);
-            if (openAndRead(m)) ++opened;
+            if (!openAndRead(m)) continue;
+            ++opened;
+            // Every header field but the two checksums (which seal() rewrites) and every root-table
+            // bit is structural: such a flip never opens.
+            const usize byte = bit / 8;
+            const bool checksum = (byte >= 32 && byte < 40) || (byte >= 56 && byte < hrdb::kHeaderBytes);
+            if (byte < hrdb::kTablesOffset && !checksum) FAIL_CHECK("a flip of header or root byte " << byte << " opened");
         }
-        // Flips in padding, float bits and the like still open (and read safely); everything structural fails.
+        // Flips in text, numbers, ids, padding and the like still open, and read safely.
         MESSAGE(cookAudienceName(audience), ": ", opened, " of ", full.size() * 8, " resealed bit flips still open");
-        CHECK(opened < full.size() * 8 / 2);
     }
 }
 

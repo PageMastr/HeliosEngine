@@ -63,11 +63,22 @@ inline bool containsDoc(std::span<const DocId> ids, const DocId& id) noexcept {
 std::string hashHex(u64 hash);
 std::optional<u64> parseHashHex(std::string_view text) noexcept;
 
+/// True for a character of Unicode general category Cf (format: the bidi embeddings, overrides and
+/// isolates U+202A-U+202E and U+2066-U+2069, the marks U+200E/U+200F, zero-width characters, the
+/// BOM, tag characters), Zl (U+2028) or Zp (U+2029), per Unicode 15.1. Such a character is
+/// invisible, and a bidi control reorders how the rest of a line displays. Threading: pure.
+bool isFormatOrSeparator(char32_t cp) noexcept;
+
 /// `text` for a terminal, a log line or an error message: control characters escaped (C0 and DEL
 /// as `\xNN`, C1 U+0080-U+009F as `\u00NN`, and each byte that is not well-formed UTF-8 as `\xNN`,
 /// so a lone 0x9B is not the 8-bit CSI either), so a string from a journal (untrusted input) cannot
-/// carry terminal escape sequences; cut after `maxBytes` bytes with "...". The result is
-/// well-formed UTF-8, and printable(printable(x)) == printable(x). Threading: pure.
+/// carry terminal escape sequences; format characters and line/paragraph separators
+/// (isFormatOrSeparator) escaped as `\uNNNN` (`\UNNNNNNNN` above U+FFFF), so a bidi override cannot
+/// make a path or label display as something else; cut after `maxBytes` bytes with "...". The
+/// result is well-formed UTF-8, and printable(printable(x)) == printable(x). A backslash is kept as
+/// it is (escaping it would break that idempotence, which lets an escaped message be escaped again
+/// by its printer, and would double every Windows path separator), so the result is for reading,
+/// not for decoding: `\x1b` in it may be those four characters of the original. Threading: pure.
 std::string printable(std::string_view text, usize maxBytes = ~usize{0});
 
 } // namespace helios::tf

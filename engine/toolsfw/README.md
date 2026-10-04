@@ -133,7 +133,8 @@ of the project.
   record's index, offset, kind and document, and the path), so a hostile journal never
   half-applies. That includes a Create or Destroy op that names another file than its document's
   (a legitimate journal never holds one: `TxBuilder::destroy` names the document's own file, and
-  an undo restores it there). Every applied op gets the rule too (`TxBuilder::apply`, which replay,
+  an undo restores it there), and a close record of a document that no earlier record opened or
+  created (a session journals the open or the Create first). Every applied op gets the rule too (`TxBuilder::apply`, which replay,
   collaboration and patches use): a Create's file, on disk for a new file, and a Destroy, which
   must also name its document's own file, the file a save deletes. `Framework::open` /
   `doc.open` and `TxBuilder::createRecord` / `doc.create` take a caller's path through it. At
@@ -149,17 +150,26 @@ of the project.
   without it that journal could not be recovered at all short of editing its binary header. It
   relaxes nothing else. `listJournalSessions()` skips journals whose header names another project,
   so `auto` and `latest`, the editor's recovery offer and the CLI undo stack never pick one up.
-- **Output.** No string from a journal reaches a terminal or a log with its control characters.
-  `tf::printable` escapes C0, DEL, the C1 controls (U+0080-U+009F; U+009B is CSI) and any byte
-  that is not UTF-8. It is applied to `recover()`'s refusals (the transaction id, the header's
-  project), to every `RecoveredDocument::message` (they quote a transaction's user and an op's
-  path or type name), to `listJournalSessions()`'s warnings, and in helios-tool to every error and
-  report line and to `journal list`, `show` and `verify`; `journal show --json` writes DEL and C1
-  as `\u00NN` (JSON itself escapes only C0). A journal's strings are well-formed UTF-8 (the JSON
-  reader refuses a record that is not), and `RecoveredDocument::file` is a confined path, which
-  holds no control characters. This is for a UTF-8 terminal: one set to an 8-bit encoding such as
-  Latin-1 also reads the bytes 0x80-0x9F inside multi-byte UTF-8 characters as C1 controls, which
-  only ASCII-only output would avoid.
+- **Output.** No string from a journal reaches toolsfw's errors, reports or log lines, or
+  helios-tool's output, with its control characters. `tf::printable` escapes C0, DEL, the C1
+  controls (U+0080-U+009F; U+009B is CSI) and any byte that is not UTF-8, and also the invisible
+  format characters and line/paragraph separators (Unicode categories Cf, Zl, Zp:
+  `tf::isFormatOrSeparator`), so a bidi override or isolate cannot make a path or label display
+  as something else (Trojan Source-style). It is applied to `recover()`'s refusals (the
+  transaction id, the header's project), to every `RecoveredDocument::message` (they quote a
+  transaction's user and an op's path or type name), to `listJournalSessions()`'s warnings, and in
+  helios-tool to every error and report line and to `journal list`, `show` and `verify`; `journal
+  show --json` writes DEL, C1 and those format characters as `\uNNNN` (JSON itself escapes only
+  C0). A journal's strings are well-formed UTF-8 (the JSON reader refuses a record that is not),
+  and `RecoveredDocument::file` is a confined path, which holds no control characters. The escape
+  is for reading, not decoding: a backslash is kept as it is (escaping it would double every
+  Windows path separator, and an escaped message could no longer be escaped again unchanged), so
+  `\x1b` in the output may be those four characters of the journal. This is for a UTF-8 terminal:
+  one set to an 8-bit encoding such as Latin-1 also reads the bytes 0x80-0x9F inside multi-byte
+  UTF-8 characters as C1 controls, which only ASCII-only output would avoid. Outside this module:
+  the editor (`engine/editorui`) shows a recoverable session's name (`JournalHeader::session`)
+  unescaped in its recovery offer in the Output panel. That is ImGui text, not a terminal: ImGui
+  draws the characters and acts on none of them, so it is left to an editor change.
 
 What the platform layer (`src/platform`) can and cannot tell:
 - Detected: symbolic links on POSIX (`lstat`, resolved with `realpath`); on Windows every reparse

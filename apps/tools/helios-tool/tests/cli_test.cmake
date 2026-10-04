@@ -22,6 +22,7 @@ string(ASCII 27 ESC)
 string(ASCII 7 BEL)
 string(ASCII 127 DEL)
 string(ASCII 194 155 CSI1)  # U+009B in UTF-8
+string(ASCII 226 128 174 RLO)  # U+202E RIGHT-TO-LEFT OVERRIDE in UTF-8
 
 set(step 0)
 # tool(<expected exit code> <output var> args...)
@@ -34,7 +35,7 @@ function(tool expected outvar)
   string(REPLACE "\r\n" "\n" out "${out}")
   # This log shows the arguments without their control characters (the hostile-journal steps).
   set(args "${ARGN}")
-  foreach(c ESC BEL DEL CSI1)
+  foreach(c ESC BEL DEL CSI1 RLO)
     string(REPLACE "${${c}}" "<${c}>" args "${args}")
   endforeach()
   if(NOT "${rc}" STREQUAL "${expected}")
@@ -178,15 +179,16 @@ file(WRITE "${FRIGATE}" "${ORIGINAL}")
 # Journal strings are untrusted input, and the CLI never writes their control characters to the
 # terminal. --user and --project put them into real journals: ESC [ 31 m sets the colour, then
 # BEL, DEL, and U+009B 2 J (the C1 CSI, which JSON's escaping of C0 only lets through) clears the
-# screen. The closing ']' balances the '[' (CMake does not split a list inside brackets), and
+# screen; U+202E (a bidi override, no control but it reverses how the rest of the line displays)
+# follows. The closing ']' balances the '[' (CMake does not split a list inside brackets), and
 # there is no ';' (CMake's list separator), so no OSC sequence here; test_confine.cpp has those.
-set(EVIL "${ESC}[31m${BEL}${DEL}${CSI1}2J]")
-set(EVIL_SHOWN "\\x1b[31m\\x07\\x7f\\u009b2J]")
+set(EVIL "${ESC}[31m${BEL}${DEL}${CSI1}2J${RLO}]")
+set(EVIL_SHOWN "\\x1b[31m\\x07\\x7f\\u009b2J\\u202e]")
 function(expect_no_controls text what)
-  foreach(c "${ESC}" "${BEL}" "${DEL}" "${CSI1}")
+  foreach(c "${ESC}" "${BEL}" "${DEL}" "${CSI1}" "${RLO}")
     string(FIND "${text}" "${c}" pos)
     if(NOT pos EQUAL -1)
-      message(FATAL_ERROR "${what}: a raw control character reached the output")
+      message(FATAL_ERROR "${what}: a raw control or bidi character reached the output")
     endif()
   endforeach()
 endfunction()
@@ -201,7 +203,7 @@ endif()
 set(evil_journal "${JOURNALS}/cli-test/${CMAKE_MATCH_1}.hjl")
 tool(0 out journal show latest --json)
 expect_no_controls("${out}" "journal show --json")
-expect_contains("${out}" "\"user\":\"\\u001b[31m\\u0007\\u007f\\u009b2J]\"" "journal show --json escapes DEL and C1")
+expect_contains("${out}" "\"user\":\"\\u001b[31m\\u0007\\u007f\\u009b2J\\u202e]\"" "journal show --json escapes DEL, C1 and U+202E")
 # The replay report: an external edit makes the transaction conflict, and the report names it.
 string(REGEX REPLACE "\"mass\": [0-9]+," "\"mass\": 15000," t "${ORIGINAL}")
 file(WRITE "${FRIGATE}" "${t}")

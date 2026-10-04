@@ -137,7 +137,21 @@ Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const Rec
             s.snapshot.reset();
             break;
         }
-        case JournalRecordKind::Close: docs[r.doc].closed = true; break;
+        case JournalRecordKind::Close: {
+            // A session journals a document's open record or its Create before anything else of
+            // it (an edit or open that cannot be journaled is refused), so a Close of a document
+            // no earlier record names is a crafted entry: refused like the other ones below, so
+            // that every document in the report has a confined file.
+            const auto known = docs.find(r.doc);
+            if (known == docs.end()) {
+                return Error{ErrorCode::InvalidArgument,
+                             std::format("{}: {}: closes a document that no earlier record opened or created; nothing was "
+                                         "replayed",
+                                         journalName, describe(r, i))};
+            }
+            known->second.closed = true;
+            break;
+        }
         case JournalRecordKind::Tx:
             maxLamport = std::max(maxLamport, r.tx.id.lamport);
             for (const Op& op : r.tx.ops) {
@@ -160,10 +174,11 @@ Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const Rec
                 // whole journal is refused (applyOp would refuse only this document's replay, and
                 // the others would still replay and be saved).
                 const std::string& own = known->second.file.relative;
-                if (!own.empty() && !sameRelativePath(file.relative, own)) {
+                if (!sameRelativePath(file.relative, own)) {
                     return Error{ErrorCode::InvalidArgument,
                                  std::format("{}: {}: the {} op names '{}', but document {} is '{}'; nothing was replayed",
-                                             journalName, describe(r, i), opKindName(op.kind), file.relative, op.doc, own)};
+                                             journalName, describe(r, i), opKindName(op.kind), printable(file.relative, 200),
+                                             op.doc, printable(own, 200))};
                 }
             }
             break;

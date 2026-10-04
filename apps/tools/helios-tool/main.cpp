@@ -92,9 +92,11 @@ void out(const std::string& text) {
 }
 
 /// `journal show --json`: the JSON writer escapes only C0, so DEL and the C1 controls become
-/// `\u00NN` and bytes that are not UTF-8 `\ufffd`. JSON's structure is ASCII, so they occur only
-/// inside strings, where the escape is the same character: the output stays valid, equivalent
-/// JSON, and a crafted journal cannot write terminal escape sequences through it.
+/// `\u00NN`, format characters and line/paragraph separators (tf::isFormatOrSeparator; bidi
+/// overrides) `\uNNNN` (a surrogate pair above U+FFFF), and bytes that are not UTF-8 `\ufffd`.
+/// JSON's structure is ASCII, so they occur only inside strings, where the escape is the same
+/// character: the output stays valid, equivalent JSON, and a crafted journal cannot write terminal
+/// escape sequences through it or reorder how a line displays.
 std::string jsonForTerminal(std::string_view json) {
     std::string text;
     text.reserve(json.size());
@@ -104,8 +106,11 @@ std::string jsonForTerminal(std::string_view json) {
         const std::string_view bytes = json.substr(start, i - start);
         if (cp == kReplacementChar && bytes != "\xEF\xBF\xBD") {
             text += "\\ufffd";
-        } else if (cp == 0x7F || (cp >= 0x80 && cp <= 0x9F)) {
+        } else if (cp == 0x7F || (cp >= 0x80 && cp <= 0x9F) || (cp <= 0xFFFF && tf::isFormatOrSeparator(cp))) {
             text += std::format("\\u{:04x}", static_cast<u32>(cp));
+        } else if (tf::isFormatOrSeparator(cp)) {
+            const u32 v = static_cast<u32>(cp) - 0x10000;
+            text += std::format("\\u{:04x}\\u{:04x}", 0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF));
         } else {
             text += bytes;
         }

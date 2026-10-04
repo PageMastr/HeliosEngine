@@ -410,6 +410,72 @@ TEST_CASE("journal: a replayed Destroy never deletes a file outside the project"
     CHECK(fs::readTextFile(s.otherFrigate).value() == s.original);
 }
 
+TEST_CASE("journal: a Close of a document the journal never opened refuses the replay") {
+    // Round-2 review of PR #50 (nit 4): a Close record ahead of a document's Create made pass 1
+    // skip the Create's file check (the document had no file yet), and the report listed it with
+    // an empty file. A session journals a document's open record or Create before its Close.
+    const Scenario s("confine_close_first");
+    auto scan = readJournal(s.journal);
+    REQUIRE(scan);
+    DocId probe;
+    for (const JournalRecord& r : scan->records) {
+        for (const Op& op : r.tx.ops) {
+            if (op.kind == OpKind::Create) probe = op.doc;
+        }
+    }
+    REQUIRE_FALSE(probe.isNil());
+    for (const std::string& createFile : {std::string("records/hull/probe.hrec"), std::string("records/hull/other.hrec")}) {
+        INFO(createFile);
+        const fs::Path crafted = s.root / "close_first.hjl";
+        (void)fs::remove(crafted);
+        auto w = JournalWriter::create(crafted, scan->header, {.fsync = false});
+        REQUIRE(w);
+        JournalRecord close;
+        close.kind = JournalRecordKind::Close;
+        close.doc = probe;
+        REQUIRE((*w)->append(close));
+        for (JournalRecord r : scan->records) {
+            if (r.kind == JournalRecordKind::End) continue;
+            for (Op& op : r.tx.ops) {
+                if (op.kind == OpKind::Create) op.file = createFile;
+            }
+            REQUIRE((*w)->append(r));
+        }
+        REQUIRE((*w)->close(false));
+        checkRefused(*s.restart(), crafted, std::format("record 0 (close of document {})", probe.toString()));
+        CHECK_FALSE(fs::exists(s.project / "records" / "hull" / "other.hrec"));
+    }
+    s.checkUntouched();
+
+    // Control: a Close after the document's Create is what a session writes; the recovery reports
+    // the closed document with its file and replays the rest.
+    {
+        const fs::Path crafted = s.root / "close_after.hjl";
+        auto w = JournalWriter::create(crafted, scan->header, {.fsync = false});
+        REQUIRE(w);
+        for (const JournalRecord& r : scan->records) {
+            if (r.kind != JournalRecordKind::End) REQUIRE((*w)->append(r));
+        }
+        JournalRecord close;
+        close.kind = JournalRecordKind::Close;
+        close.doc = probe;
+        REQUIRE((*w)->append(close));
+        REQUIRE((*w)->close(false));
+        auto fw = s.restart();
+        auto report = fw->recover(crafted);
+        REQUIRE_MESSAGE(report, (report ? std::string() : report.error().message));
+        bool listed = false;
+        for (const RecoveredDocument& d : report->documents) {
+            if (d.doc != probe) continue;
+            listed = true;
+            CHECK(d.file == "records/hull/probe.hrec");
+            CHECK(d.status == DocRecovery::UpToDate);
+        }
+        CHECK(listed);
+        CHECK(report->replayed == 1);  // the frigate's edit; the closed probe is not recreated
+    }
+}
+
 TEST_CASE("journal: recovery refuses another project's journal unless allowed") {
     const Scenario s("confine_project");
     craftJournal(s.journal, s.root / "copy.hjl", [](JournalRecord&) {});
@@ -537,6 +603,36 @@ TEST_CASE("printable: escapes every control character a terminal could act on") 
         CHECK_FALSE(hasControl(printable(text)));
         CHECK(printable(printable(text)) == printable(text));
     }
+}
+
+TEST_CASE("printable: escapes format characters, so bidi controls cannot reorder a line") {
+    // Round-2 review of PR #50 (nit 1): general categories Cf, Zl and Zp are escaped.
+    CHECK(printable("evil\xE2\x80\xAE" "lmth.hrec") == R"(evil\u202elmth.hrec)");  // U+202E RLO
+    CHECK(printable("\xE2\x80\xAA\xE2\x80\xAB\xE2\x80\xAC\xE2\x80\xAD") == R"(\u202a\u202b\u202c\u202d)");
+    CHECK(printable("\xE2\x81\xA6\xE2\x81\xA7\xE2\x81\xA8\xE2\x81\xA9") == R"(\u2066\u2067\u2068\u2069)");  // isolates
+    CHECK(printable("\xE2\x80\x8E\xE2\x80\x8F\xD8\x9C") == R"(\u200e\u200f\u061c)");  // LRM, RLM, ALM
+    CHECK(printable("a\xE2\x80\xA8" "b\xE2\x80\xA9" "c") == R"(a\u2028b\u2029c)");  // Zl, Zp
+    CHECK(printable("\xE2\x80\x8B\xEF\xBB\xBF\xC2\xAD") == R"(\u200b\ufeff\u00ad)");  // ZWSP, BOM, soft hyphen
+    CHECK(printable("\xF3\xA0\x81\x81\xF3\xA0\x80\x81") == R"(\U000e0041\U000e0001)");  // tag characters
+    // Kept: letters of right-to-left scripts, spaces, symbols, and a backslash (see printable()).
+    CHECK(printable("\xD7\x90\xD8\xA8 \xE2\x80\xAF\xC2\xA0\xEF\xBF\xBC\xE2\x81\xB0") ==
+          "\xD7\x90\xD8\xA8 \xE2\x80\xAF\xC2\xA0\xEF\xBF\xBC\xE2\x81\xB0");
+    CHECK(printable(R"(records\hull\x1b.hrec)") == R"(records\hull\x1b.hrec)");
+    // The table's edges.
+    for (const auto& [cp, expected] : std::vector<std::pair<char32_t, bool>>{
+             {0x00AC, false},  {0x00AD, true},   {0x00AE, false},  {0x0600, true},   {0x0605, true},
+             {0x0606, false},  {0x200A, false},  {0x200B, true},   {0x200F, true},   {0x2010, false},
+             {0x2027, false},  {0x2028, true},   {0x202E, true},   {0x202F, false},  {0x205F, false},
+             {0x2060, true},   {0x2064, true},   {0x2065, false},  {0x2066, true},   {0x206F, true},
+             {0x2070, false},  {0xFEFE, false},  {0xFEFF, true},   {0xFF00, false},  {0xFFF8, false},
+             {0xFFF9, true},   {0xFFFB, true},   {0xFFFC, false},  {0x1342F, false}, {0x13430, true},
+             {0x1343F, true},  {0x13440, false}, {0xE0000, false}, {0xE0001, true},  {0xE0002, false},
+             {0xE001F, false}, {0xE0020, true},  {0xE007F, true},  {0xE0080, false}, {0x10FFFF, false}}) {
+        INFO(std::format("U+{:04X}", static_cast<u32>(cp)));
+        CHECK(isFormatOrSeparator(cp) == expected);
+    }
+    const std::string mixed = "\xE2\x80\xAE\x1b[1m\xF3\xA0\x81\x81\xC2\x9B";
+    CHECK(printable(printable(mixed)) == printable(mixed));
 }
 
 TEST_CASE("journal: a refusal and the replay report escape the journal's control characters") {

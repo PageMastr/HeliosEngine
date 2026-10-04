@@ -327,8 +327,11 @@ public:
     /// The journal is untrusted input. Before any file is read or anything is applied, its header
     /// must name this project (unless RecoveryOptions::allowOtherProject) and every file it names
     /// (open and save records, Create and Destroy ops) must pass Workspace::confine with
-    /// PathOrigin::Untrusted and PathCheck::OnDisk; otherwise the whole recovery is refused
-    /// (InvalidArgument naming the record) and nothing changes.
+    /// PathOrigin::Untrusted and PathCheck::OnDisk, a Create or Destroy op of a document the
+    /// journal already names must name that document's file, and a close record must close a
+    /// document an earlier record opened or created; otherwise the whole recovery is refused
+    /// (InvalidArgument naming the record) and nothing changes. Journal strings in the error and
+    /// in RecoveredDocument::message are escaped (printable()). Threading: owner thread.
     Result<RecoveryReport> recover(const fs::Path& journalFile, const RecoveryOptions& options = {});
 
     /// Current unix time from the configured clock.

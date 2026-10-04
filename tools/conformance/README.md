@@ -133,15 +133,15 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   `KeyValueConfig` literal with a `Bucket`, or a `.Bucket` assignment, matched by name); otherwise it fails closed.
   A `KeyTTL` key that does not resolve fails closed in any file. A TTL field assigned after the literal (`cfg.TTL =
   …`) is read on a config this file names by its type (a variable, a parameter or a struct field of `KeyValueConfig`
-  or `StreamConfig`, one set from `new(T)`, and the elements of a slice, array or map of them, declared, written as
-  a literal or made with `make`: `cfgs[i]`, a range variable, `c := cfgs[i]`; matched by name), with the buckets
-  the file sets on it (a collection's elements share theirs); in NATS code a KV config whose bucket does not
-  resolve, or is not set in the file, fails closed. Not seen: a TTL assigned to a config reached another way (a
-  call's result, a variable of another inferred type, a nested collection, a collection of a named type such as
-  `type Configs []jetstream.KeyValueConfig`, whose literals CONF-01 does not read either), and a KV call in a file
-  that reaches nats.go only through a wrapper package of its own, with a bucket or key the lint cannot resolve (a
-  resolved lease or leader name is still reported). Names are looked up without scopes, so a parameter or local
-  that shadows a package-level constant resolves to that constant; this matters only where an unresolved name
+  or `StreamConfig`, one set from `new(T)`, and the elements of a slice, array or map of them, declared (a variadic
+  parameter `cfgs ...T` too), written as a literal or made with `make`: `cfgs[i]`, a range variable, `c := cfgs[i]`;
+  matched by name), with the buckets the file sets on it (a collection's elements share theirs); in NATS code a KV
+  config whose bucket does not resolve, or is not set in the file, fails closed. Not seen: a TTL assigned to a config
+  reached another way (a call's result, a variable of another inferred type, a nested collection, a collection of a
+  named type such as `type Configs []jetstream.KeyValueConfig`, whose literals CONF-01 does not read either), and a KV
+  call in a file that reaches nats.go only through a wrapper package of its own, with a bucket or key the lint cannot
+  resolve (a resolved lease or leader name is still reported). Names are looked up without scopes, so a parameter or
+  local that shadows a package-level constant resolves to that constant; this matters only where an unresolved name
   would fail closed. Config names are matched without scopes too, so configs that share a name share their
   buckets. A range variable or element copy (`c := cfgs[i]`) is a config of its own that takes the buckets of
   every collection its name ranges over or copies from, never the collection itself. One over a KV collection on

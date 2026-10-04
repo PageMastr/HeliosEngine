@@ -9,7 +9,9 @@
 # A TTL in a nats.c file that sets no Bucket fails closed (ttl_helper.cpp), also in a file that includes
 # <nats.h> and never names kvConfig (ttl_include.cpp).
 # TTL fields assigned after the literal count the same way (ttl_assign.go: a lease bucket, a parameter's
-# unresolved bucket, a field of the config type, a lease bucket's KV_ stream).
+# unresolved bucket, a field of the config type, a lease bucket's KV_ stream), also on configs reached
+# through new(T), an address, an index or a range variable, and in a collection literal's elided elements
+# (ttl_forms.go; cfgs is a parameter, so its bucket does not resolve).
 # (CONF-01 also fires on these buckets; this fixture runs CONF-02 alone.)
 apps/cell/config.cpp:6: CONF-02
 apps/cell/leader.cpp:8: CONF-02
@@ -36,3 +38,11 @@ services/internal/orch/ttl_assign.go:16: CONF-02
 services/internal/orch/ttl_assign.go:17: CONF-02
 services/internal/orch/ttl_assign.go:18: CONF-02
 services/internal/orch/ttl_assign.go:20: CONF-02
+services/internal/orch/ttl_forms.go:14: CONF-02
+services/internal/orch/ttl_forms.go:16: CONF-02
+services/internal/orch/ttl_forms.go:17: CONF-02
+services/internal/orch/ttl_forms.go:19: CONF-02
+services/internal/orch/ttl_forms.go:23: CONF-02
+services/internal/orch/ttl_forms.go:26: CONF-02
+services/internal/orch/ttl_forms.go:28: CONF-02
+services/internal/orch/ttl_forms.go:29: CONF-02

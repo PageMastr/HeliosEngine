@@ -1,4 +1,5 @@
 #! -rules CONF-02 -strict
 # DIRECTORY with history, plain Puts, CAS on a zone key (and a reviewed CAS on a key the lint cannot
 # resolve), a store's own Create outside NATS code, and another struct's TTL outside nats.c code.
-# A TTL assigned after the literal to a projection's config, and MaxAge on an ordinary stream.
+# A TTL assigned after the literal to a projection's config, and MaxAge on an ordinary stream, also through
+# new(T), a range variable and elided collection elements.

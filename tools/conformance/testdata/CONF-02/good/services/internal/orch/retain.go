@@ -17,3 +17,15 @@ func retain(ctx context.Context, js jetstream.JetStream) {
 	_, _ = js.CreateKeyValue(ctx, presence)
 	_, _ = js.CreateStream(ctx, events)
 }
+
+// The same through new(T), a range variable and a collection literal's elided elements.
+func retainForms() {
+	q := new(jetstream.KeyValueConfig)
+	q.Bucket = "PRESENCE"
+	q.TTL = time.Hour
+	for _, c := range []jetstream.KeyValueConfig{{Bucket: "DIRECTORY"}, {Bucket: "PRESENCE"}} {
+		c.TTL = time.Hour
+	}
+	_ = []jetstream.KeyValueConfig{{Bucket: "PRESENCE", TTL: time.Hour}}
+	_ = []jetstream.StreamConfig{{Name: "EVENTS", MaxAge: time.Hour}}
+}

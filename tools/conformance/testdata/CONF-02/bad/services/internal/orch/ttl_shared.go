@@ -31,3 +31,13 @@ func eachTTL(cfgs []jetstream.KeyValueConfig) {
 func oneTTL(pc jetstream.KeyValueConfig) {
 	pc.TTL = time.Second
 }
+
+// A parameter collection named like a DIRECTORY collection does not take its bucket either.
+func directorySlice() []jetstream.KeyValueConfig {
+	shared := []jetstream.KeyValueConfig{{Bucket: "DIRECTORY"}}
+	return shared
+}
+
+func sharedTTL(shared []jetstream.KeyValueConfig) {
+	shared[0].TTL = time.Second
+}

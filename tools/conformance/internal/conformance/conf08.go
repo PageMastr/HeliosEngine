@@ -30,8 +30,6 @@ var (
 	gatewayNameRE = regexp.MustCompile(`(?i)gateway`)
 	// host:port, [v6]:port or :port.
 	addrRE = regexp.MustCompile(`^(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]*):(\d{1,5})$`)
-	// C++ in a gateway file: the lines that set its client-side address.
-	cGatewayLineRE = regexp.MustCompile(`(?i)\b(listen|connect|gateway\w*)\b`)
 	// Address::ipv4(a, b, c, d, port), ipv4(octets, port), ipv6(groups, port) and ipv6Bytes(bytes, port): the
 	// port is the last argument. And the one-argument loopbackV4(port) family.
 	cIPv4CallRE = regexp.MustCompile(`\b(?:Address\s*::\s*)?(?:ipv4|ipv6|ipv6Bytes)\s*\(`)
@@ -191,19 +189,22 @@ func checkGatewayPortTOML(p *Pass, f string) {
 			i++
 			val += " " + strings.TrimSpace(tomlCode(lines[i]))
 		}
-		if gatewayNameRE.MatchString(m[1]) || gatewayNameRE.MatchString(table) {
+		gateway := gatewayNameRE.MatchString(m[1]) || gatewayNameRE.MatchString(table)
+		if gateway {
 			tomlGatewayValue(p, f, line, strings.Trim(m[1], `"'`), val, 0)
-		} else if strings.HasPrefix(val, "[") {
-			tomlCommandLine(p, f, line, val)
+		}
+		if strings.HasPrefix(val, "[") {
+			tomlCommandLine(p, f, line, val, gateway)
 		}
 	}
 }
 
-// tomlCommandLine checks a command line held in a TOML array outside a gateway context, such as a
-// supervised process's `[[orchestrator.spawn]] args = ["--name", "gw-1", "--listen", "127.0.0.1:7777"]`
-// (engine/server/README.md): only the gateway takes --listen and --connect (apps/gateway), so their value
-// is its listen or connect address. An option named for a port may take a bare port.
-func tomlCommandLine(p *Pass, f string, line int, val string) {
+// tomlCommandLine checks a command line held in a TOML array, such as a supervised process's
+// `[[orchestrator.spawn]] args = ["--name", "gw-1", "--listen", "127.0.0.1:7777"]` (engine/server/README.md):
+// only the gateway takes --listen and --connect (apps/gateway), so their value is its listen or connect
+// address. An option named for a port may take a bare port. In a gateway context (gateway), an address in
+// its own element is already read as one (tomlGatewayValue), so only the --opt=value form and ports count.
+func tomlCommandLine(p *Pass, f string, line int, val string, gateway bool) {
 	elems := tomlStringRE.FindAllStringSubmatch(val, -1)
 	for k, e := range elems {
 		o := tomlOptRE.FindStringSubmatch(e[1] + e[2])
@@ -216,6 +217,9 @@ func tomlCommandLine(p *Pass, f string, line int, val string) {
 				continue
 			}
 			v = elems[k+1][1] + elems[k+1][2]
+			if _, ok := portOf(v); ok && gateway {
+				continue
+			}
 		}
 		if port, ok := portOf(v); ok && port != gatewayPort {
 			p.Report(f, line, "gateway address %q (%s on a command line): the default gateway port is UDP 7777 "+
@@ -278,9 +282,10 @@ func tomlGatewayValue(p *Pass, f string, line int, key, val string, depth int) {
 				}
 			}
 		case strings.HasPrefix(val, "[") && strings.HasSuffix(val, "]"):
-			// An array of inline tables (`listeners = [{ host = "0.0.0.0", port = 7777 }]`): each one's keys.
+			// An array of inline tables (`listeners = [{ host = "0.0.0.0", port = 7777 }]`): each one's keys,
+			// also in nested arrays (`[[{ port = 7777 }]]`).
 			for _, el := range tomlSplit(val[1 : len(val)-1]) {
-				if el = strings.TrimSpace(el); strings.HasPrefix(el, "{") {
+				if el = strings.TrimSpace(el); strings.HasPrefix(el, "{") || strings.HasPrefix(el, "[") {
 					tomlGatewayValue(p, f, line, key, el, depth+1)
 				}
 			}
@@ -680,10 +685,11 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 			}
 		}
 	}
-	reads := func(i int) bool {
-		l := src.logical[i]
-		return gatewayFile && cGatewayLineRE.MatchString(l) || gatewayNameRE.MatchString(l)
+	readLine := make([]bool, len(src.logical))
+	for i, l := range src.logical {
+		readLine[i] = gatewayFile && cAddressLine(l) || gatewayNameRE.MatchString(l)
 	}
+	reads := func(i int) bool { return readLine[i] }
 	// A value is read when its statement starts on, or reaches, a read line: its own line, or the earlier
 	// lines of an initializer split across lines (`net::Address listen =` then `Address::ipv4(…);`). A
 	// statement starts after a boundary (cStmtBounds: a `;`, or a block's brace) or a preprocessor line.
@@ -708,7 +714,7 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 		}
 		from := lastBound(i)
 		part := src.logical[i][from:]
-		reached := gatewayFile && cGatewayLineRE.MatchString(part) || gatewayNameRE.MatchString(part)
+		reached := gatewayFile && cAddressLine(part) || gatewayNameRE.MatchString(part)
 		open = reached || open && from == 0
 	}
 	stmtReads := func(off int) bool {
@@ -720,21 +726,25 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 		locs := re.FindAllStringIndex(text, -1)
 		return src.callsAt(locs), locs // every match ends in '(', so callsAt keeps them all, in order
 	}
-	// The option calls' argument spans: a default on a continuation line is the call's, reported on its line,
-	// and a literal in a read option's span is left to the option (so it is reported once).
+	// The defaults of the option calls the option loop below checks (read ones, with two arguments or more):
+	// from the start of the last argument to the closing parenthesis. A literal there is left to the option
+	// (so it is reported once, on the call's line); every other argument is read like any literal. A call
+	// that does not close (parentheses unbalanced by #if branches) has no default the lint can find: it
+	// fails closed below, and hides nothing.
 	options, optionLocs := calls(cOptionCallRE, src.text)
-	type span struct {
-		from, to int
-		read     bool
-	}
-	var spans []span
+	type span struct{ from, to int }
+	var defaults []span
+	unclosed := make([]bool, len(options))
 	for k, m := range optionLocs {
 		open := m[0] + strings.IndexByte(src.blank[m[0]:m[1]], '(') + 1
-		spans = append(spans, span{open, closingParen(src.blank, open), stmtReads(m[0]) && len(options[k].args) >= 2})
+		to := closingParen(src.blank, open)
+		unclosed[k] = to == len(src.blank)
+		if stmtReads(m[0]) && len(options[k].args) >= 2 && !unclosed[k] {
+			defaults = append(defaults, span{lastArgument(src.blank, open, to), to})
+		}
 	}
-	// inOption: off is in an option call's arguments (in a read one's, with onlyRead).
-	inOption := func(off int, onlyRead bool) bool {
-		return slices.ContainsFunc(spans, func(s span) bool { return s.from <= off && off < s.to && (s.read || !onlyRead) })
+	inDefault := func(off int) bool {
+		return slices.ContainsFunc(defaults, func(s span) bool { return s.from <= off && off < s.to })
 	}
 	strs := cStrTable(p)
 	// String literals on the read lines, and on the continuation lines of a statement that a read line
@@ -747,10 +757,9 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 			func(m []string) bool { return gatewayPortName(m[1]) }) {
 			continue
 		}
-		// Read: on a read line, or in a statement that one starts, outside an option call that is read
-		// itself; on a continuation line, outside any option call (its default is the call's).
+		// Read: on a read line, or in a statement that one starts, outside the default of a read option call.
 		readsAt := func(off int) bool {
-			return (read || stmtReads(off)) && !inOption(off, true) && (read || !inOption(off, false))
+			return (read || stmtReads(off)) && !inDefault(off)
 		}
 		bl := src.blankLines[i]
 		for _, m := range cIdentRE.FindAllStringIndex(bl, -1) {
@@ -800,7 +809,14 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 		}
 	}
 	for k, c := range options {
-		if !stmtReads(optionLocs[k][0]) || len(c.args) < 2 {
+		if !stmtReads(optionLocs[k][0]) {
+			continue
+		}
+		if unclosed[k] {
+			p.Report(f, c.line, unresolvedPort, "option "+c.args[0]+" whose call does not close")
+			continue
+		}
+		if len(c.args) < 2 {
 			continue
 		}
 		def := c.args[len(c.args)-1]
@@ -822,6 +838,37 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 			}
 		}
 	}
+}
+
+// cAddressLine reports whether a line of a gateway file sets its client-side address: a name or a string
+// with the word listen or connect (listen, listenAddress, listen_address, kListenAddr, clientListen,
+// "--connect"). Bind does not count: the gateway's trunk sockets bind too (GatewayConfig::trunkBind).
+func cAddressLine(l string) bool {
+	for _, id := range cIdentRE.FindAllString(l, -1) {
+		if slices.ContainsFunc(nameWords(id), func(w string) bool { return w == "listen" || w == "connect" }) {
+			return true
+		}
+	}
+	return false
+}
+
+// lastArgument returns the offset where the last argument of the call whose arguments are blank[open:to]
+// starts: after its last top-level comma, or open.
+func lastArgument(blank string, open, to int) int {
+	from, depth := open, 0
+	for i := open; i < to; i++ {
+		switch blank[i] {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth = max(depth-1, 0)
+		case ',':
+			if depth == 0 {
+				from = i + 1
+			}
+		}
+	}
+	return from
 }
 
 // cStmtBounds marks the statement boundaries in src.blank: a `;` (one inside parentheses only in a block
@@ -885,17 +932,20 @@ var (
 )
 
 // cBlockBrace reports whether a `{` after stmt (the statement's text so far, blanked) opens a block: after
-// `)` (a function, control statement or lambda), `]` (a lambda), `}` (a constructor's initializer list),
+// `)` (a function, control statement or lambda), a lambda's `]`, `}` (a constructor's initializer list),
 // `:` (a label), at a statement's start, after else, do, try or a function's qualifiers, after a trailing
 // return type (`) -> T`), and in a namespace, class, struct, union, enum or extern declaration. It opens an
-// initializer after a name (`listen{`), `=`, `,`, `(`, `{`, `return` or a template's `>`.
+// initializer after a name (`listen{`), an array declarator's `]` (`listen[1]{`, `new T[n]{`), `=`, `,`,
+// `(`, `{`, `return` or a template's `>`.
 func cBlockBrace(stmt string) bool {
 	t := strings.TrimRight(stmt, " \t\n\r")
 	if t == "" || cTrailingReturnRE.MatchString(t) {
 		return true
 	}
 	switch c := t[len(t)-1]; {
-	case c == ')' || c == ']' || c == '}' || c == ':' || c == ';':
+	case c == ']':
+		return !cArrayDeclarator(t)
+	case c == ')' || c == '}' || c == ':' || c == ';':
 		return true
 	case c == '=' || c == ',' || c == '(' || c == '{':
 		return false
@@ -912,6 +962,43 @@ func cBlockBrace(stmt string) bool {
 			return false
 		}
 		return cBlockWordRE.MatchString(t)
+	}
+	return true
+}
+
+// cArrayDeclarator reports whether t, which ends in `]`, ends in an array bound (`listen[1]`, `grid[2][3]`,
+// `new T[n]`) rather than a lambda's introducer (`[&]` after `(`, `=`, `,` or return) or an attribute.
+func cArrayDeclarator(t string) bool {
+	for strings.HasSuffix(t, "]") {
+		depth, open := 0, -1
+		for i := len(t) - 1; i >= 0 && open < 0; i-- {
+			switch t[i] {
+			case ']':
+				depth++
+			case '[':
+				if depth--; depth == 0 {
+					open = i
+				}
+			}
+		}
+		if open < 0 {
+			return false
+		}
+		t = strings.TrimRight(t[:open], " \t\n\r")
+	}
+	if t == "" {
+		return false
+	}
+	if c := t[len(t)-1]; c == '>' {
+		return true // new std::array<int, 2>[n]{
+	} else if !(c == '_' || c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z') {
+		return false
+	}
+	switch w := t[strings.LastIndexFunc(t, func(r rune) bool {
+		return !(r == '_' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z')
+	})+1:]; w {
+	case "return", "co_return", "co_yield", "throw":
+		return false
 	}
 	return true
 }

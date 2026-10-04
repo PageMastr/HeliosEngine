@@ -17,3 +17,4 @@ type GatewayConfig struct{ Port, AdminPort int }
 // The same with a host variable: host + ":" + port.
 var loopbackHost = "127.0.0.1"
 var gatewayHosted = loopbackHost + ":" + strconv.Itoa(gamePort)
+var gatewayParenAddr = "127.0.0.1:" + (strconv.FormatInt(gamePort, 10))

@@ -27,3 +27,6 @@ void probe() {
 auto listen = net::Address::ipv4(127, 0, 0, 1, 7777);
 auto trunk =
     net::Address::ipv4(127, 0, 0, 1, 7817);
+// Names whose words are not listen or connect: a trunk socket's bind address, a connected-peers scrape.
+net::Address trunkBind = net::Address::anyV4(7818);
+auto connectedPeers = scrape("10.0.0.9:9100");

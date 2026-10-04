@@ -31,3 +31,4 @@ constexpr const char* kFormsGateway =
     "0.0.0.0:7037";
 for (auto listen = first(); listen.retry();
      probe = net::Address::ipv4(127, 0, 0, 1, 7038)) {}
+auto connect = setup.option("--connect", "127.0.0.1:7039", "where the probe connects");

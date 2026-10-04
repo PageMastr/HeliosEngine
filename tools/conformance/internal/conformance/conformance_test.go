@@ -28,6 +28,11 @@ func loadFixture(t *testing.T, dir string) fixture {
 	}
 	fx := fixture{dir: dir, opts: Options{Root: dir}}
 	for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+		// CMake reads expect.txt as a list (CMakeLists.txt here), where a square bracket in any line, a
+		// comment too, stops the lines after it from splitting: the CTest would lose its expectations.
+		if strings.ContainsAny(line, "[]") {
+			t.Fatalf("%s/expect.txt: %q has a square bracket, which CMake's list reading cannot take", dir, line)
+		}
 		switch {
 		case strings.HasPrefix(line, "#!"):
 			args := strings.Fields(line[2:])

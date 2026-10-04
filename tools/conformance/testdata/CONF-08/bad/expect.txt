@@ -12,7 +12,7 @@
 # "host:" + port (one fails closed), fmt.Sprint, and a Port field of a gateway-named value or type; TOML
 # an inline table and a quoted key; YAML /UDP in upper case.
 # Round 6: Go host + ":" + port with a host variable (one fails closed); TOML multi-line arrays of
-# addresses and ports, reported on the key's line (a "[" inside a string opens nothing, 28); C++
+# addresses and ports, reported on the key's line (an open bracket inside a string opens nothing, 28); C++
 # std::string{"host:"} + port, `<< kBase + 1` (+ binds tighter than <<), and a call, a string and an
 # option default on the line after the one that names the listen address (the option's on the call's
 # line). Go: literals of gateway-named types under other

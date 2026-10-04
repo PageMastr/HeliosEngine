@@ -292,13 +292,17 @@ go test -run 'TestConformance/holder_rule' ./internal/orchestrator/   # CONF-03'
   requires the Agent to keep every region, then to drop exactly the region whose generation rose. A shorter
   outage would not be CONF-03 evidence, so `-short` skips it; CI's Go jobs run without `-short`.
 - **Patch vectors** (WP-0.16), shared with `engine/patch`'s doctest suite: `fastcdc.json` (the gear table and
-  every chunk of 15 generated inputs; `go test ./pkg/cdc -run TestUpdateVectors -update` rewrites it) and
-  `hman/` (a build description, `pipeline.hman` that both writers must reproduce byte for byte, a zstd copy
-  written by each language that both must read, 50 hostile edits with the error kind both readers return, and
-  name rules; `go test ./pkg/manifest -run TestUpdateGoldens -update` rewrites the Go-written files, and
-  `HELIOS_PATCH_UPDATE_VECTORS=1` makes `patch_tests` rewrite `pipeline.cpp-zstd.hman`).
-- Timing: `TestPerfChunking` (pkg/cdc) asserts a quarter of the chunking budgets in a normal run and the budgets
-  themselves with `HELIOS_PERF=1` (engine/patch/README.md "Performance").
+  every chunk of 18 generated inputs, three of them crafted around the mask switch; `go test ./pkg/cdc -run
+  TestUpdateVectors -update` rewrites it) and `hman/` (a build description, `pipeline.hman` that both writers
+  must reproduce byte for byte, a zstd copy written by each language that both must read, `deep-paths.hman`
+  (the deepest paths the limits allow), 53 hostile edits with the error kind both readers return and the check
+  each breaks, and name and path-collision rules; `go test ./pkg/manifest -run TestUpdateGoldens -update`
+  rewrites the Go-written files, and `HELIOS_PATCH_UPDATE_VECTORS=1` makes `patch_tests` rewrite
+  `pipeline.cpp-zstd.hman`).
+- Timing: `TestPerfChunking` (pkg/cdc) and `TestPerfManifest` and `TestPerfDeepPaths` (pkg/manifest) assert four
+  times each budget's time in a normal run and the budgets themselves with `HELIOS_PERF=1`; `TestPerfDeepPaths`
+  also holds the deep-paths read to twice a flat one of the same size (engine/patch/README.md "Performance").
+  `BenchmarkParse`, `BenchmarkMarshal` and `BenchmarkParseDeepPaths` measure the manifest paths.
 - Fuzzing: `go test -fuzz FuzzParse ./pkg/connecttoken/`, `go test -fuzz FuzzParse ./pkg/manifest/` and
   `go test -fuzz FuzzChunker ./pkg/cdc/` (every `go test` runs their seeds).
 

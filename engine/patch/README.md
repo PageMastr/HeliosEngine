@@ -44,7 +44,7 @@ for (const auto& [path, tier] : buildFiles) {
 builder.addPack(packHash, packSize);                           // optional: small chunks in packs (05 §7)
 builder.placeChunk(chunkId, packHash, offsetInPack, storedSize);
 Manifest m = builder.build().value();                          // sorted, deduplicated, validated
-std::vector<u8> file = writeManifest(m).value();               // zstd-19 payload by default
+std::vector<u8> file = writeManifest(m, {.codec = ManifestCodec::Zstd}).value(); // zstd level 19
 
 Result<Manifest> back = readManifest(file);                    // Corrupt / VersionMismatch / Unsupported /
                                                                // LimitExceeded on hostile input
@@ -128,10 +128,18 @@ then 8 reserved bytes), then the tables back to back, then the paths:
 **Validation** (the reader's and the writer's; `validateManifest` / `Manifest.Validate`):
 
 - **Sizes:** the counts give exactly `bodySize`; limits: 2^20 files, 2^24 chunks, 2^24 refs, 2^20 packs, 2^20
-  patches, 64 MiB of paths, paths of 1–1024 bytes (`LimitExceeded` beyond a limit).
+  patches and 64 MiB of paths (`LimitExceeded` beyond one). A path of 0 or more than 1024 bytes is not a
+  limit but an invalid path: `Corrupt` from the readers, `InvalidArgument` (Go: `ErrInvalid`) from
+  `validateManifest` and the writers.
 - **Files:** sorted by path (byte order) and unique, also ignoring ASCII case; no file is also a directory of
-  another file (`a` and `a/b`); `pathOffset` is the running sum of path lengths; `tier` ≤ 2; `flags` ⊆
-  {Optional 1, Vaulted 2, Executable 4}; `firstRef` is the running sum of `refCount`s.
+  another file, also ignoring case (`a` and `A/b`); `pathOffset` is the running sum of path lengths; `tier` ≤ 2;
+  `flags` ⊆ {Optional 1, Vaulted 2, Executable 4}; `firstRef` is the running sum of `refCount`s. The two
+  collision rules are checked together: each path's key is the path with ASCII letters lowered and `/` mapped
+  to 0x00, so byte order on keys puts a directory's contents directly after it; the keys are sorted (only if
+  they are not already) and neighbours compared. That costs O(P + n log n · ℓ) byte operations for P path
+  bytes, n files and common prefixes ℓ ≤ 1024, and hashes no attacker-chosen string. (Looking up every
+  `/`-prefix of every path in a set, as the first version did, costs about len²/4 per path: 5 s for
+  `deep-paths.hman`.)
 - **Refs:** a file's refs tile it: each `chunk` exists, each `offset` is the sum of the previous chunks' raw
   sizes, and the total is the file's `size` (so `refCount` is 0 exactly when `size` is 0).
 - **Chunks:** sorted by ID and unique; `rawSize` 1..256 KiB; `storedSize` ≤ 256 KiB + 4 KiB (0 = not recorded);
@@ -151,21 +159,25 @@ in `.` (Windows drops it), and is not a Windows device name (`CON`, `PRN`, `AUX`
 same tree on NTFS and ext4.
 
 **zstd payloads** may be one or more frames (skippable frames are skipped) whose output is exactly `bodySize`
-bytes, with a window of at most 32 MiB. The writer uses zstd levels 1–19 (19 by default), whose windows fit.
+bytes, with a window of at most 32 MiB. The writers use zstd levels 1–19, whose windows fit. Write options default alike in both
+languages (C++'s default `ManifestWriteOptions`, Go's zero `WriteOptions`): codec 0, and a zstd level of 0
+means 19.
 
 ## Shared vectors
 
 | File | Contents | Written by |
 |---|---|---|
-| `services/testdata/vectors/fastcdc.json` | Parameters, the gear table and its hash, and 15 inputs (empty, 1 byte, below/at/past the minimum, at and past the maximum, all-zero, random 1–8 MiB, a periodic input, an insertion) with every chunk's offset, size and ID | `go test ./pkg/cdc -run TestUpdateVectors -update` |
+| `services/testdata/vectors/fastcdc.json` | Parameters, the gear table and its hash, and 18 inputs (empty, 1 byte, below/at/past the minimum, at and past the maximum, all-zero, random 1–8 MiB, a periodic input, an insertion, and three crafted ones: the earliest possible `kMaskS` match, at byte 16386, and `kMaskL`-only matches at bytes 65535, where `kMaskS` still applies, and 65536, the first byte `kMaskL` covers) with every chunk's offset, size and ID | `go test ./pkg/cdc -run TestUpdateVectors -update` |
 | `hman/pipeline.json` | A build description: 8 files given by generator (shared chunks, an empty file, all-zero data, every tag), a pack with two placed chunks, a stored size, two patches, a key ID and signature | by hand |
 | `hman/pipeline.hman` | That description written with codec 0: both writers must produce it byte for byte, from files added in any order | `go test ./pkg/manifest -run TestUpdateGoldens -update` |
 | `hman/pipeline.go-zstd.hman`, `pipeline.cpp-zstd.hman` | The same manifest with a zstd-19 payload from each language's encoder; both readers must read both | Go: as above; C++: `HELIOS_PATCH_UPDATE_VECTORS=1 patch_tests` |
-| `hman/hostile.json` | 50 edits of `pipeline.hman` (header, every table, reserved bytes, sizes, truncation, trailing bytes), resealed or not, each with the error kind both readers must return | `go test ./pkg/manifest -run TestUpdateGoldens -update` |
-| `hman/names.json` | Valid and invalid paths, product IDs, platforms and build IDs | by hand |
+| `hman/hostile.json` | 53 edits of `pipeline.hman` (header, every table, reserved bytes, sizes, truncation, trailing bytes), resealed or not, each with the error kind both readers must return and the one check it breaks (`rule`, a substring of the error message both languages share); where one edit would break two checks, the case edits the dependent field too (a chunk's raw size with its file's size) | `go test ./pkg/manifest -run TestUpdateGoldens -update` |
+| `hman/deep-paths.hman` | The deepest paths the limits allow: 65,536 empty files whose 1024-byte paths sit 508 directories deep (64 MiB of paths, a 72 MB body, 187 KB with zstd-19). Both readers read it; the perf tests hold it to the read budget | `go test ./pkg/manifest -run TestUpdateGoldens -update` |
+| `hman/names.json` | Valid and invalid paths, product IDs, platforms and build IDs, and whole path lists that must pass or fail the collision rules (the invalid ones with the check they fail) | by hand |
 
 Inputs come from a seeded generator (`services/pkg/cdc/cdctest`, mirrored in `tests/patch_test_util.h`): `random`
-(SplitMix64 outputs as little-endian bytes), `zero`, `repeat` (a random unit repeated) and `insert`.
+(SplitMix64 outputs as little-endian bytes), `zero`, `repeat` (a random unit repeated) and `insert`, each
+optionally followed by `edits` (bytes written at offsets: the crafted inputs).
 
 ## Behaviour worth knowing
 
@@ -175,9 +187,14 @@ Inputs come from a seeded generator (`services/pkg/cdc/cdctest`, mirrored in `te
   body size, path offsets, reserved bytes) and validates the manifest. Every failure is a `Result` error
   (`Corrupt`, `VersionMismatch`, `Unsupported` or `LimitExceeded`), never UB. Go returns errors wrapping
   `ErrCorrupt`, `ErrVersion`, `ErrUnsupported` and `ErrLimit` and never panics. `hostile.json` pins the kind
-  for 50 cases in both languages.
+  and the failing check for 53 cases in both languages.
+- **CPU.** Every check is linear in the body's bytes except the path-collision sort (above), which costs at
+  most n log n key comparisons of ≤ 1 KiB each. `deep-paths.hman` (the case the first version's prefix check
+  took 5 s on) reads within the read budget; see [Performance](#performance).
 - **Memory.** A zstd payload decodes into a buffer that grows only as bytes decode (from 1 MiB, doubling) up to
-  `bodySize + 1`, so a small file that claims a 256 MiB body costs what it really decodes to. The tables cost
+  `bodySize + 1`, so a small file that claims a 256 MiB body costs what it really decodes to. C++ grows it with
+  `realloc`, which moves large blocks' pages instead of copying them (doubling a `std::vector` to 72 MB cost
+  140 ms of copies and page faults). The tables cost
   about the body's size again. `readManifestFile` refuses a file larger than the cap allows before reading it.
 - **Header first.** `readManifestHeader` validates only the header: enough to refuse another product's or
   platform's manifest, or (part 2) a stale sequence, before decompressing anything.
@@ -192,22 +209,31 @@ Inputs come from a seeded generator (`services/pkg/cdc/cdctest`, mirrored in `te
 
 05 §7 and 08 §2.5 give no chunking budget; R07 §7 cites FastCDC at "> 1 GB/s/core". v0's budgets, per core, the
 same for both languages (C++: `perf:` cases in `tests/test_perf.cpp`, label `perf`, nightly, asserted in
-optimized builds without sanitizers; Go: `TestPerfChunking` asserts them with `HELIOS_PERF=1` and a quarter of
-them otherwise, since `go test ./...` runs packages in parallel; `BenchmarkBoundaries`, `BenchmarkSplit` and
-`BenchmarkChunkReader` measure them). Measured on the shared, loaded 4-vCPU dev VM (load average 4–5), GCC 13
-RelWithDebInfo and Go 1.27.1, 2026-10-04, best of 3–5 runs per session, three to five sessions:
+optimized builds without sanitizers; Go: `TestPerfChunking` in pkg/cdc and `TestPerfManifest` and
+`TestPerfDeepPaths` in pkg/manifest assert them with `HELIOS_PERF=1` and four times the time (a quarter of the
+rate) otherwise, since `go test ./...` runs packages in parallel; `BenchmarkBoundaries`, `BenchmarkSplit`,
+`BenchmarkChunkReader`, `BenchmarkParse`, `BenchmarkMarshal` and `BenchmarkParseDeepPaths` measure them).
+Measured on the shared, loaded 4-vCPU dev VM (load average 3–5), GCC 13 RelWithDebInfo and Go 1.27.1,
+2026-10-04, best of 3–5 runs per session, three sessions:
 
 | Path | Budget | C++ | Go |
 |---|---|---|---|
-| FastCDC boundary detection | ≥ 1,000 MB/s | 2,292–2,358 MB/s | 1,708–1,793 MB/s |
-| Chunking with a BLAKE2b-256 ID per chunk and one for the whole input | ≥ 250 MB/s | 318–334 MB/s (`splitBuffer`), 307–329 MB/s (`StreamChunker`) | 333–343 MB/s (`ChunkReader`) |
-| Read a 50 GB install's manifest (20k files, 700k chunks, 52.6 MB body): BLAKE2b, decode, validate | ≤ 400 ms | 137–159 ms | — |
-| Write it (codec 0) | ≤ 400 ms | 172–207 ms | — |
+| FastCDC boundary detection | ≥ 1,000 MB/s | 1,583–2,358 MB/s | 1,708–1,793 MB/s |
+| Chunking with a BLAKE2b-256 ID per chunk and one for the whole input | ≥ 250 MB/s | 318–436 MB/s (`splitBuffer`), 307–353 MB/s (`StreamChunker`) | 333–343 MB/s (`ChunkReader`) |
+| Read a 50 GB install's manifest (20k files, 700k chunks, 52.6 MB body): BLAKE2b, decode, validate | ≤ 400 ms | 114–122 ms | 103–125 ms |
+| Write it (codec 0) | ≤ 400 ms | 153–171 ms | 130–154 ms |
+| Read `deep-paths.hman` (64 MiB of paths 508 directories deep, a 72 MB body, zstd) | ≤ 400 ms | 315–325 ms | 300–354 ms |
 
-Hashing dominates: each byte is hashed twice (its chunk's ID and the file hash). C++ uses Monocypher's portable
-BLAKE2b; Go's `x/crypto/blake2b` uses AVX2 but pays for the `io.Reader` copy. At 250 MB/s one core
-chunks a 50 GB build in 3.5 minutes; CL-10's full verify (50 GB in 3 minutes, about 280 MB/s) needs two cores at
-this rate, or the SSE4.1/AVX2 BLAKE2b that 08 §2.1.1 lists for the launcher's self-dispatch.
+The deep-paths read is also held to twice the read of as many bytes of paths without directories (the same
+body size): 0.9–1.2 times here, against 4.6 times (Go, 2.4 s) and 13 times (C++, 5.1 s) for the first
+version's prefix check, so the ratio fails a quadratic check on any machine while the budget needs a quiet one.
+In C++ that read is mostly hashing (about 85 ms), zstd (60 ms) and validation (140 ms, most of it the paths)
+of a body 1.4 times the large manifest's.
+
+Hashing dominates the chunking rows: each byte is hashed twice (its chunk's ID and the file hash). C++ uses
+Monocypher's portable BLAKE2b; Go's `x/crypto/blake2b` uses AVX2 but pays for the `io.Reader` copy. At 250
+MB/s one core chunks a 50 GB build in 3.5 minutes; CL-10's full verify (50 GB in 3 minutes, about 280 MB/s)
+needs two cores at this rate, or the SSE4.1/AVX2 BLAKE2b that 08 §2.1.1 lists for the launcher's self-dispatch.
 
 ## Fuzzing
 
@@ -217,11 +243,15 @@ this rate, or the SSE4.1/AVX2 BLAKE2b that 08 §2.1.1 lists for the launcher's s
   body it was read from and round-trips through the writer, and that its lookups agree with its tables. The body
   cap is 16 MiB, so `-malloc_limit_mb` catches a decoder that allocates ahead of its output. `fuzz/corpus/
   manifest_reader/` holds the seeds (`patch_fuzz_manifest_reader --make-seeds <dir>` rewrites the generated
-  ones; the two `seed_pipeline*` files are copies of the shared vectors). Without `HELIOS_PATCH_LIBFUZZER` the
-  target is a CTest (label `fuzz`, every PR) that replays the corpus plus 20,000 deterministic mutations.
-- **Go:** `FuzzParse` (pkg/manifest; the shared goldens and the 50 hostile cases are its seeds, which every
-  `go test` runs) checks the same properties, and `FuzzChunker` (pkg/cdc) checks that the streaming chunker
-  agrees with `Split` and the size bounds for any input and read pattern.
+  `seed_000`–`seed_005`; `seed_005` is a 64-file `deep-paths.hman`; `seed_pipeline*` and `seed_deep_paths.bin`
+  are copies of the shared vectors). `deep-paths.hman`'s 72 MB body is above the cap, so it stops at the
+  header check, and the reseal step skips a zstd frame that declares more than the cap instead of decoding it.
+  Without `HELIOS_PATCH_LIBFUZZER` the target is a CTest (label `fuzz`, every PR) that replays the corpus plus
+  20,000 deterministic mutations.
+- **Go:** `FuzzParse` (pkg/manifest; its seeds, which every `go test` runs, are the shared goldens with
+  `deep-paths.hman`, a 64-file deep-paths manifest and the 53 hostile cases) checks the same properties, and
+  `FuzzChunker` (pkg/cdc) checks that the streaming chunker agrees with `Split` and the size bounds for any input
+  and read pattern.
 
 A campaign:
 

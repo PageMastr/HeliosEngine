@@ -230,10 +230,10 @@ func lowerByte(c byte) byte {
 // windowsDeviceName reports CON, PRN, AUX, NUL, COM0-9 and LPT0-9, with any extension. It does not
 // allocate: ValidPath runs it on every segment of every path a reader sees.
 func windowsDeviceName(seg string) bool {
-	stem := seg
 	if len(seg) < 3 {
 		return false
 	}
+	stem := seg
 	if i := strings.IndexByte(seg, '.'); i >= 0 {
 		stem = seg[:i]
 	}
@@ -818,7 +818,6 @@ func decodeBody(b []byte, m *Manifest) error {
 	strs := e[len(patchesB):]
 
 	m.Files = make([]File, fileCount)
-	paths := string(strs) // one allocation; each file's Path is a substring of it
 	var pathAt uint64
 	for i := range m.Files {
 		x := filesB[i*fileEntrySize:]
@@ -830,7 +829,7 @@ func decodeBody(b []byte, m *Manifest) error {
 		if pathLength == 0 || pathLength > MaxPathBytes || uint64(pathLength) > uint64(stringBytes)-pathAt {
 			return errorf(ErrCorrupt, "file %d: path length %d is out of range", i, pathLength)
 		}
-		f.Path = paths[pathAt : pathAt+uint64(pathLength)]
+		f.Path = string(strs[pathAt : pathAt+uint64(pathLength)])
 		pathAt += uint64(pathLength)
 		f.Size = le.Uint64(x[8:])
 		copy(f.Hash[:], x[16:48])

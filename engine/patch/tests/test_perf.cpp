@@ -121,7 +121,7 @@ TEST_CASE("perf: a 50 GB install's manifest reads and writes within budget") {
 }
 
 // The path-collision check is linear in path bytes plus a sort. Looking up every '/'-prefix of every path in
-// a set (len²/4 per path) took 5.6 s on deep-paths.hman; the ratio to flat paths fails that on any machine.
+// a set (len²/4 per path) took 5.1-5.6 s on deep-paths.hman; the ratio to flat paths fails that anywhere.
 TEST_CASE("perf: the deepest paths the limits allow read within the 400 ms budget") {
     const auto readBest = [](const std::vector<u8>& file) {
         return bestSeconds(3, [&] { REQUIRE(readManifest(file).ok()); });
@@ -141,8 +141,8 @@ TEST_CASE("perf: the deepest paths the limits allow read within the 400 ms budge
 #if HELIOS_PATCH_ASSERT_BUDGETS
     CHECK(vectorS <= 0.400);
     CHECK(deepS <= 0.400);
-#endif
     CHECK(deepS <= 2 * flatS);
+#endif
 }
 
 } // namespace

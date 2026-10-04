@@ -205,7 +205,8 @@ TEST_CASE("manifest: the shared hostile cases fail the same check with the same 
         const Result<Manifest> m = readManifest(applyHostile(golden, c));
         REQUIRE(!m.ok());
         CHECK(test::errorKind(m.errorCode()) == test::getStr(c, "expect"));
-        CHECK_MESSAGE((!rule.empty() && m.error().message.find(rule) != std::string::npos), m.error().message);
+        const bool breaksItsRule = !rule.empty() && m.error().message.find(rule) != std::string::npos;
+        CHECK_MESSAGE(breaksItsRule, m.error().message);
     }
 }
 

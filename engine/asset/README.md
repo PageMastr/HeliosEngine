@@ -90,17 +90,23 @@ meshes.commitSwaps();                          // at the frame or tick boundary
   bytes decoded) and a garbage block fails before the claim costs memory; a zstd frame must state the block's
   decoded size before anything decodes. `readInto` decodes into the caller's buffer, and `read(entry, out)`
   reuses the caller's vector. `HpakOpenOptions::maxAssetSize` refuses larger assets (`LimitExceeded`), for
-  runtime consumers that want a hard cap; a pak whose blocks really decode to 2 GiB (about 115 KB of zstd
-  frames of zeros) still costs 2 GiB within it.
+  runtime consumers that want a hard cap; a pak whose blocks really decode to 2 GiB still costs 2 GiB within it
+  (8192 frames of zeros, each at least 17 bytes since a zstd block holds at most 128 KiB: about 139 KB of frames
+  in a 176 KB pak).
 - **First-read verification.** A read hashes each pak block it touches the first time (it reads the whole block
   for that), marks it `Verified` and never hashes it again. Decoded bytes are always checked against the cooked
   hash. XXH3 detects corruption, not tampering: distribution integrity is BLAKE2b's (05 §7, 08 §2.5).
 - **Bad blocks.** A mismatch calls `IBlockRefetcher::refetch` on the reading thread, under the pak's repair lock,
   **at most once per block** until `retryBlocks()` covers it. `Repaired`: the reader re-reads the block once and
-  verifies it (still bad: `Bad`). `Pending`: reads of the block fail with `Busy` until the installer calls
-  `retryBlocks()` after its re-fetch lands. `Failed` (or no hook): `Corrupt`. The hook must not read from the
-  same reader. A read hashes every block that was not `Verified` before it read the bytes, so a block another
-  reader repairs concurrently is re-read, not used stale.
+  verifies it (still bad: `Bad`). `Pending`: reads of the block fail with `Busy`, without reading it, until the
+  installer calls `retryBlocks()` after its re-fetch lands. `Failed` (or no hook): `Corrupt`. The hook must not
+  read from the same reader.
+- **Stale copies.** A read hashes every block that was not `Verified` before it read the bytes, and before the
+  hook runs the reader re-reads the block under the lock: a reader whose copy predates a repair, or a landed
+  re-fetch and its `retryBlocks()`, finds the good bytes instead of reporting the block again, and the hook's
+  `actual` is the hash of bytes that are bad when it runs. `Verified` is final: a hook's answer never overrides a
+  block another reader verified while it ran. An I/O error during these re-reads fails that read and leaves the
+  block `Unverified`.
 - **Overlay.** `PakMountTable::find` returns the most recently mounted pak's entry. A table holds paks of one
   platform: mounting another platform's cook fails with `Unsupported`. Unmounting rebuilds the index;
   a location already returned keeps its pak alive. A mount changes what later lookups resolve to; instances

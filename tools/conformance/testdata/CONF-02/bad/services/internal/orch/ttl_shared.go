@@ -32,7 +32,8 @@ func oneTTL(pc jetstream.KeyValueConfig) {
 	pc.TTL = time.Second
 }
 
-// A parameter collection named like a DIRECTORY collection does not take its bucket either.
+// A parameter collection named like a DIRECTORY collection does not take its bucket either, and neither do
+// a range variable over it or a copy of one of its elements.
 func directorySlice() []jetstream.KeyValueConfig {
 	shared := []jetstream.KeyValueConfig{{Bucket: "DIRECTORY"}}
 	return shared
@@ -40,4 +41,9 @@ func directorySlice() []jetstream.KeyValueConfig {
 
 func sharedTTL(shared []jetstream.KeyValueConfig) {
 	shared[0].TTL = time.Second
+	for _, sc := range shared {
+		sc.TTL = time.Second
+	}
+	one := shared[1]
+	one.TTL = time.Second
 }

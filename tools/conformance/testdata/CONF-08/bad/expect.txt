@@ -30,7 +30,9 @@
 # Round 8: a literal in a read option call's other arguments is read (gateway_forms.cpp:34, also after a
 # braced argument, :35; only the default, after the last top-level comma, is left to the option, so a default
 # whose call holds a comma is one finding, :36), and an option call that #if branches leave unclosed fails
-# closed and hides nothing after it (gateway_unbalanced.cpp). A read line is found by the words of its names
+# closed and hides nothing after it (gateway_unbalanced.cpp; inside a function and a namespace, whose
+# closing braces are not its closer, gateway_unbalanced_scoped.cpp; a `)` after a top-level `;` and a `}`
+# are not either, gateway_unbalanced_closers.cpp). A read line is found by the words of its names
 # (listenAddress, listen_address, clientListen, kListenAddr: gateway_names.cpp), so a listen or connect
 # constant in a gateway file is reported where it is declared too (gateway_config.cpp:4,
 # gateway_forms.cpp:25). Brace forms (gateway_braces.cpp): initializer braces after =, a comma, a brace,
@@ -118,6 +120,12 @@ engine/server/src/gateway_names.cpp:6: CONF-08
 engine/server/src/gateway_names.cpp:7: CONF-08
 engine/server/src/gateway_unbalanced.cpp:3: CONF-08
 engine/server/src/gateway_unbalanced.cpp:11: CONF-08
+engine/server/src/gateway_unbalanced_closers.cpp:5: CONF-08
+engine/server/src/gateway_unbalanced_closers.cpp:11: CONF-08
+engine/server/src/gateway_unbalanced_closers.cpp:17: CONF-08
+engine/server/src/gateway_unbalanced_closers.cpp:24: CONF-08
+engine/server/src/gateway_unbalanced_scoped.cpp:4: CONF-08
+engine/server/src/gateway_unbalanced_scoped.cpp:11: CONF-08
 services/cmd/tool/main.go:5: CONF-08
 services/internal/platform/concat.go:13: CONF-08
 services/internal/platform/concat.go:14: CONF-08

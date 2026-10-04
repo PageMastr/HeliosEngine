@@ -730,7 +730,9 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 	// from the start of the last argument to the closing parenthesis. A literal there is left to the option
 	// (so it is reported once, on the call's line); every other argument is read like any literal. A call
 	// that does not close (parentheses unbalanced by #if branches) has no default the lint can find: it
-	// fails closed below, and hides nothing.
+	// fails closed below, and hides nothing. It does not close when the file ends first, when what ends it
+	// is not a `)` (the `}` of the enclosing function or namespace), or when a `;` outside any bracket comes
+	// first (an argument list has none; one in a lambda's body is inside its braces).
 	options, optionLocs := calls(cOptionCallRE, src.text)
 	type span struct{ from, to int }
 	var defaults []span
@@ -738,7 +740,7 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 	for k, m := range optionLocs {
 		open := m[0] + strings.IndexByte(src.blank[m[0]:m[1]], '(') + 1
 		to := closingParen(src.blank, open)
-		unclosed[k] = to == len(src.blank)
+		unclosed[k] = to == len(src.blank) || src.blank[to] != ')' || topLevelSemicolon(src.blank, open, to)
 		if stmtReads(m[0]) && len(options[k].args) >= 2 && !unclosed[k] {
 			defaults = append(defaults, span{lastArgument(src.blank, open, to), to})
 		}
@@ -871,6 +873,25 @@ func lastArgument(blank string, open, to int) int {
 	return from
 }
 
+// topLevelSemicolon reports whether blank[open:to] holds a `;` outside any bracket, counted as
+// lastArgument counts them.
+func topLevelSemicolon(blank string, open, to int) bool {
+	depth := 0
+	for i := open; i < to; i++ {
+		switch blank[i] {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth = max(depth-1, 0)
+		case ';':
+			if depth == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // cStmtBounds marks the statement boundaries in src.blank: a `;` (one inside parentheses only in a block
 // opened there, such as a lambda's body), and the braces of a block. The braces of an initializer
 // (cBlockBrace) are not boundaries, so `net::Address listen{` and `f(` then `{127, 0, 0, 1}, …);` stay one
@@ -967,7 +988,8 @@ func cBlockBrace(stmt string) bool {
 }
 
 // cArrayDeclarator reports whether t, which ends in `]`, ends in an array bound (`listen[1]`, `grid[2][3]`,
-// `new T[n]`) rather than a lambda's introducer (`[&]` after `(`, `=`, `,` or return) or an attribute.
+// `new T[n]`) rather than a lambda's introducer (`[&]` after `(`, `=`, `,`, return or co_await) or an
+// attribute (`if (x) [[likely]]`, `else [[likely]]`): a keyword is never an array's name.
 func cArrayDeclarator(t string) bool {
 	for strings.HasSuffix(t, "]") {
 		depth, open := 0, -1
@@ -997,7 +1019,7 @@ func cArrayDeclarator(t string) bool {
 	switch w := t[strings.LastIndexFunc(t, func(r rune) bool {
 		return !(r == '_' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z')
 	})+1:]; w {
-	case "return", "co_return", "co_yield", "throw":
+	case "return", "co_return", "co_yield", "co_await", "throw", "else", "do", "try":
 		return false
 	}
 	return true

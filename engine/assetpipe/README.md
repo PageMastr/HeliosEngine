@@ -217,7 +217,7 @@ build/fuzz/bin/assetpipe_fuzz_ddc_entry -max_total_time=600 -rss_limit_mb=2048 -
 An 11-minute local campaign (Clang 18, ASan and UBSan, one process, `-malloc_limit_mb=64`, 2026-10-04) ran 2.29
 million inputs at about 3,500 per second (each one also writes, reads and removes a store file), reached 951
 coverage edges with 85 corpus units and found nothing. With the reader's trailing-bytes check removed, the
-corpus replay alone aborts on the re-encoding property, so the harness catches a lax reader.
+CTest replay (the corpus plus its mutations) aborts on the re-encoding property, so the harness catches a lax reader.
 
 ## Gaps
 

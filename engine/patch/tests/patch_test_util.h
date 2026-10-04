@@ -1,0 +1,112 @@
+#pragma once
+// Shared helpers for engine/patch's tests: the shared vector files (services/testdata/vectors) and the
+// generator of their inputs, which must match Go's services/pkg/cdc/cdctest byte for byte.
+
+#include <doctest/doctest.h>
+#include <yyjson.h>
+
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "helios/core/fs.h"
+#include "helios/core/random.h"
+#include "helios/patch/blake2b.h"
+#include "helios/patch/manifest.h"
+
+namespace helios::patch::test {
+
+inline fs::Path vectorsDir() { return fs::pathFromUtf8(HELIOS_PATCH_VECTORS_DIR); }
+
+/// A parsed JSON document that frees itself.
+struct Json {
+    std::unique_ptr<yyjson_doc, void (*)(yyjson_doc*)> doc{nullptr, yyjson_doc_free};
+    yyjson_val* root() const { return yyjson_doc_get_root(doc.get()); }
+};
+
+inline Json loadJson(const fs::Path& path) {
+    const Result<std::string> text = fs::readTextFile(path);
+    REQUIRE_MESSAGE(text.ok(), fs::pathToUtf8(path));
+    Json j;
+    j.doc.reset(yyjson_read(text->data(), text->size(), 0));
+    REQUIRE_MESSAGE(j.doc != nullptr, "invalid JSON: " << fs::pathToUtf8(path));
+    return j;
+}
+
+inline yyjson_val* get(yyjson_val* obj, const char* key) { return yyjson_obj_get(obj, key); }
+inline u64 getU64(yyjson_val* obj, const char* key, u64 fallback = 0) {
+    yyjson_val* v = yyjson_obj_get(obj, key);
+    return v ? yyjson_get_uint(v) : fallback;
+}
+inline std::string getStr(yyjson_val* obj, const char* key) {
+    yyjson_val* v = yyjson_obj_get(obj, key);
+    REQUIRE_MESSAGE(yyjson_is_str(v), key);
+    return std::string(yyjson_get_str(v), yyjson_get_len(v));
+}
+inline Hash256 getHash(yyjson_val* obj, const char* key) {
+    const std::optional<Hash256> h = Hash256::fromHex(getStr(obj, key));
+    REQUIRE_MESSAGE(h.has_value(), key);
+    return *h;
+}
+inline std::vector<u8> fromHex(std::string_view hex) {
+    REQUIRE(hex.size() % 2 == 0);
+    std::vector<u8> out(hex.size() / 2);
+    for (usize i = 0; i < out.size(); ++i) out[i] = static_cast<u8>(std::stoul(std::string(hex.substr(2 * i, 2)), nullptr, 16));
+    return out;
+}
+
+/// random: the SplitMix64(seed) outputs as 8 little-endian bytes each, truncated to size.
+inline std::vector<u8> randomBytes(u64 seed, usize size) {
+    std::vector<u8> out((size + 7) / 8 * 8);
+    SplitMix64 rng(seed);
+    for (usize i = 0; i < out.size(); i += 8) storeLE<u64>(out.data() + i, rng.next());
+    out.resize(size);
+    return out;
+}
+
+/// The bytes of a vector's "input" object (kinds as in services/pkg/cdc/cdctest).
+inline std::vector<u8> generateInput(yyjson_val* in) {
+    const std::string kind = getStr(in, "kind");
+    const u64 seed = getU64(in, "seed");
+    const usize size = static_cast<usize>(getU64(in, "size"));
+    if (kind == "random") return randomBytes(seed, size);
+    if (kind == "zero") return std::vector<u8>(size, 0);
+    if (kind == "repeat") {
+        const std::vector<u8> unit = randomBytes(seed, static_cast<usize>(getU64(in, "period")));
+        REQUIRE(!unit.empty());
+        std::vector<u8> out(size);
+        for (usize i = 0; i < size; ++i) out[i] = unit[i % unit.size()];
+        return out;
+    }
+    if (kind == "insert") {
+        const usize at = static_cast<usize>(getU64(in, "at"));
+        REQUIRE(at <= size);
+        std::vector<u8> out = randomBytes(seed, size);
+        const std::vector<u8> ins = randomBytes(getU64(in, "insertSeed"), static_cast<usize>(getU64(in, "insertSize")));
+        out.insert(out.begin() + static_cast<std::ptrdiff_t>(at), ins.begin(), ins.end());
+        return out;
+    }
+    FAIL("unknown input kind " << kind);
+    return {};
+}
+
+inline std::vector<u8> readBytes(const fs::Path& path) {
+    Result<std::vector<u8>> b = fs::readFile(path);
+    REQUIRE_MESSAGE(b.ok(), fs::pathToUtf8(path));
+    return std::move(*b);
+}
+
+/// The error kind names the shared hostile vectors use.
+inline std::string errorKind(ErrorCode code) {
+    switch (code) {
+    case ErrorCode::Ok: return "ok";
+    case ErrorCode::Corrupt: return "corrupt";
+    case ErrorCode::VersionMismatch: return "version";
+    case ErrorCode::Unsupported: return "unsupported";
+    case ErrorCode::LimitExceeded: return "limit";
+    default: return std::string("other: ") + std::string(errorCodeName(code));
+    }
+}
+
+} // namespace helios::patch::test

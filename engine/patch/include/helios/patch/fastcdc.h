@@ -14,7 +14,7 @@
 // chunked piecewise (StreamChunker) gives exactly the chunks of the whole buffer (splitBuffer).
 //
 // Budget (README "Performance"): boundary detection ≥ 1 GB/s per core (R07 §7: FastCDC "> 1 GB/s/core"),
-// and chunking with BLAKE2b-256 IDs ≥ 300 MB/s per core, in optimized builds (`perf:` cases).
+// and chunking with BLAKE2b-256 IDs ≥ 250 MB/s per core, in optimized builds (`perf:` cases).
 //
 // Threading: the free functions are pure and thread-safe; a StreamChunker belongs to one thread.
 

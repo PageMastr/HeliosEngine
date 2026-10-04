@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <format>
 
 #include "helios/reflect/json.h"
 #include "imgui.h"
 
+#include "embedded_font.h"
 #include "embedded_themes.h"
 
 namespace helios::edui {
@@ -132,6 +134,15 @@ Result<Theme> builtinTheme(std::string_view name) {
     if (name == "light") return Theme::parse(detail::kThemeLight, "themes/light.jsonc");
     if (name == "high-contrast") return Theme::parse(detail::kThemeHighContrast, "themes/high_contrast.jsonc");
     return Error{ErrorCode::NotFound, std::format("unknown theme '{}'", name)};
+}
+
+void addEditorFont(ImGuiIO& io) {
+    ImFontConfig cfg;
+    // The bytes live in the executable: ImGui must neither free nor copy-and-own them.
+    cfg.FontDataOwnedByAtlas = false;
+    std::snprintf(cfg.Name, sizeof(cfg.Name), "Roboto-Regular");
+    io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(detail::kRobotoRegular), static_cast<int>(detail::kRobotoRegularSize),
+                                   0.0f, &cfg);
 }
 
 void applyTheme(const Theme& theme, f32 scale, ImGuiStyle& style) {

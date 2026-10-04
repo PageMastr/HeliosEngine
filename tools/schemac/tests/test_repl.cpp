@@ -429,9 +429,14 @@ TEST_CASE("repl: a declaration named like a generated function is an error") {
     CHECK_FALSE(viaImport->ok());
     CHECK_MESSAGE(viaImport->messages.find("'t.shipReplication' has the name of the function shipReplication()") != std::string::npos,
                   viaImport->messages);
-    // Another package, a nested type and a field are other scopes; a different case is another name.
-    for (const char* text : {"package u;\nstruct shipReplication { v: f32 }\n", "package t;\nstruct Outer { struct shipReplication { v: f32 } }\n",
-                             "package t;\nstruct S { shipReplication: f32 }\n", "package t;\nstruct ShipReplication { v: f32 }\n"}) {
+    // Another package, a field and its inline (nested) type are other scopes; another case is another name.
+    CompileOptions two = options;
+    two.files = {"schemas/t/ship.hschema", "schemas/u/other.hschema"};
+    auto apart = compileFiles({{"schemas/t/ship.hschema", "package t;\n"}, {"schemas/u/other.hschema", "package u;\nstruct shipReplication { v: f32 }\n"}},
+                              two);
+    CHECK_MESSAGE(apart->ok(), apart->messages);
+    for (const char* text : {"package t;\nstruct Outer { shipReplication: { v: f32 } }\n", "package t;\nstruct ShipReplication { v: f32 }\n",
+                             "package t;\nstruct RegisterShipTypes { v: f32 }\n"}) {
         INFO(text);
         auto c = compileFiles({{"schemas/t/ship.hschema", text}}, options);
         CHECK_MESSAGE(c->ok(), c->messages);

@@ -407,8 +407,9 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
     // Two outputs at one path would overwrite each other: --emit repl's header of `t/ship.hschema` is
     // `t/ship.repl.gen.h`, which is also --emit cpp's header of `t/ship.repl.hschema` in another package
     // (PR #33's round-6 review; `.luau.gen.*` and `.samples.gen.h` likewise). Paths compare without ASCII
-    // case, as file names do on Windows and macOS.
-    {
+    // case, as file names do on Windows and macOS. (After another error nothing is written, and the Go
+    // stem check above already reports two `<stem>.go`.)
+    if (!diags.hasErrors()) {
         std::map<std::string, const OutputFile*> paths;
         for (const OutputFile& o : result.outputs) {
             std::string key = normalizePath(o.path);

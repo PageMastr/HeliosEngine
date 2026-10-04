@@ -48,11 +48,10 @@ Result<void> RepOf<::sample::common::Health>::readFullState(BitReader& r, ::samp
 namespace sample::common {
 
 const ::helios::refl::repl::FileRepTables& commonReplication() noexcept {
-    using namespace ::helios::refl::repl;
-    static const ComponentRepDesc* const components[] = {
-        &RepOf<::sample::common::Health>::desc(),
+    static const ::helios::refl::repl::ComponentRepDesc* const components[] = {
+        &::helios::refl::repl::RepOf<::sample::common::Health>::desc(),
     };
-    static const FileRepTables tables{components, {}, {}, 0x02b34f6bb91d55f5ull};
+    static const ::helios::refl::repl::FileRepTables tables{components, {}, {}, 0x02b34f6bb91d55f5ull};
     return tables;
 }
 

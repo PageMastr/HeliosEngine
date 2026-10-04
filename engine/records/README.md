@@ -171,8 +171,11 @@ types put `server {}` fields inside shared structs (the sample schemas have none
 `records_fuzz_hrdb_loader` (label `fuzz`): libFuzzer target for the loader, built like engine/asset's (with
 `-DHELIOS_RECORDS_LIBFUZZER=ON` and Clang it links libFuzzer; otherwise engine/asset's standalone driver replays
 `fuzz/corpus/hrdb_loader` plus 20,000 deterministic mutations on every PR). Each input also runs resealed
-(`hrdb::seal`), so mutations reach the validators behind the checksums. Regenerate the seeds after a format or
-test-schema change with `records_fuzz_hrdb_loader --make-seeds fuzz/corpus/hrdb_loader`.
+(`hrdb::seal`), so mutations reach the validators behind the checksums. `records_fuzz_hrec_cook` (label `fuzz`)
+does the same for the `.hrec` side: a selector byte types the input as a `ShipDef`, `TreeDef`, `PartDef`,
+`LootDef` or `DlgDef`, which is cooked beside fixed records, and every successful cook must open with the loader
+and decode. Regenerate the seeds after a format or test-schema change with
+`records_fuzz_<target> --make-seeds fuzz/corpus/<target>` (clear the directory first).
 
 ## Not in v0
 

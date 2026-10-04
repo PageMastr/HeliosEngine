@@ -19,8 +19,8 @@
 #       C symbol named helios_*. Third-party archives are linked in hidden (--exclude-libs), so anything
 #       else means third-party or global-namespace code was compiled into the group's own objects.
 #   R2  each third-party library with process state (the policy's singleton markers) is defined in at most
-#       one image: two copies of mimalloc, flecs, Jolt, Luau, Tracy, SDL3, ImGui or volk split their
-#       state (02 §1.4 "Singletons").
+#       one image: two copies of mimalloc, flecs, Jolt, Luau, Tracy, SDL3, ImGui, volk or netcode split
+#       their state (02 §1.4 "Singletons").
 #   R3  a consumer or game image has no copy of mutable Helios data that a group defines (a header-defined
 #       inline or template static, a function-local static of an inline function): on Windows every image
 #       has its own (02 §1.4 "No per-image caches of global state"). Data that an executable imports from

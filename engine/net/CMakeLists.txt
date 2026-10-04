@@ -33,6 +33,9 @@ if(TARGET net_tests)
     HELIOS_NET_TOKEN_VECTORS_DIR="${PROJECT_SOURCE_DIR}/services/testdata/vectors"
     HELIOS_NET_FUZZ_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus")
   set_tests_properties(net_tests PROPERTIES TIMEOUT 600)
+  # White-box tests call netcode directly, which helios_runtime never exports: in a modular build the image
+  # carries its own copy of the modules (ADR-016; cmake/HeliosModular.cmake).
+  helios_self_contained(net_tests)
 endif()
 
 # ---------------------------------------------------------------------------------------------
@@ -58,6 +61,7 @@ foreach(t ${HELIOS_NET_FUZZ_TARGETS})
   target_link_libraries(${exe} PRIVATE helios::net helios::tp::netcode)
   target_include_directories(${exe} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/fuzz)
   set_target_properties(${exe} PROPERTIES FOLDER fuzz)
+  helios_self_contained(${exe}) # calls netcode directly, like net_tests
   helios_apply_warnings(${exe})
   if(HELIOS_BUILD_TESTS AND NOT (HELIOS_NET_LIBFUZZER AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
     add_test(NAME ${exe} COMMAND ${exe} --smoke 20000 ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/${t})

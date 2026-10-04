@@ -11,7 +11,8 @@ set(HELIOS_SYMBOL_SINGLETONS
   "Tracy|___tracy_emit_zone_begin"
   "SDL3|SDL_Init"
   "Dear ImGui|_ZN5ImGui13CreateContextEP11ImFontAtlas"
-  "volk|volkInitialize")
+  "volk|volkInitialize"
+  "netcode|netcode_init")
 
 # Libraries a game image may define nothing from (02 §1.4 "Symbol audit"): <library>|<regex on the raw
 # (mangled) name>. A C++ name matches when its qualified name starts in that namespace.

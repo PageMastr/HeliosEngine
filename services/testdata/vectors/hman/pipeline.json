@@ -1,0 +1,139 @@
+{
+ "comment": "Shared .hman v0 pipeline vector (WP-0.16): Go pkg/manifest and C++ engine/patch generate each file's bytes (services/pkg/cdc/cdctest), chunk them with FastCDC, build the manifest with their Builder from this description, and must write exactly pipeline.hman (codec none). Both read pipeline.hman, pipeline.go-zstd.hman (written by Go) and pipeline.cpp-zstd.hman (written by C++) back to the same manifest. Files are listed out of order on purpose. Hashes of packs and patches are placeholders.",
+ "header": {
+  "productId": "cinder-reach",
+  "platform": "win64",
+  "buildId": "2026.10.04-r1",
+  "sequence": 42,
+  "createdAt": 1791072000,
+  "expiresAt": 1791676800,
+  "compatEpoch": 3,
+  "keyId": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+  "signature": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f"
+ },
+ "files": [
+  {
+   "path": "content/common.hpak",
+   "input": {
+    "kind": "random",
+    "seed": 21,
+    "size": 1500000
+   },
+   "tier": 1
+  },
+  {
+   "path": "bin/CinderReach.exe",
+   "input": {
+    "kind": "random",
+    "seed": 22,
+    "size": 600000
+   },
+   "tier": 0,
+   "flags": 4
+  },
+  {
+   "path": "content/zones/zone-0042.hpak",
+   "input": {
+    "kind": "insert",
+    "seed": 21,
+    "size": 1500000,
+    "at": 700000,
+    "insertSize": 333,
+    "insertSeed": 23
+   },
+   "tier": 2,
+   "group": 3026418949592973312
+  },
+  {
+   "path": "content/vo/de-DE.hpak",
+   "input": {
+    "kind": "repeat",
+    "seed": 24,
+    "size": 400000,
+    "period": 5003
+   },
+   "tier": 2,
+   "language": 3,
+   "flags": 1
+  },
+  {
+   "path": "launcher.json",
+   "input": {
+    "kind": "random",
+    "seed": 25,
+    "size": 300
+   },
+   "tier": 0
+  },
+  {
+   "path": "docs/empty.txt",
+   "input": {
+    "kind": "zero",
+    "size": 0
+   },
+   "tier": 1
+  },
+  {
+   "path": "content/legacy/old-zone.hpak",
+   "input": {
+    "kind": "zero",
+    "size": 300000
+   },
+   "tier": 2,
+   "flags": 2
+  },
+  {
+   "path": "bin/crashpad_handler",
+   "input": {
+    "kind": "random",
+    "seed": 26,
+    "size": 20000
+   },
+   "tier": 0,
+   "flags": 4
+  }
+ ],
+ "packs": [
+  {
+   "hash": "1111111111111111111111111111111111111111111111111111111111111111",
+   "size": 8388608
+  }
+ ],
+ "placements": [
+  {
+   "file": "launcher.json",
+   "chunk": 0,
+   "pack": "1111111111111111111111111111111111111111111111111111111111111111",
+   "offset": 4096,
+   "storedSize": 200
+  },
+  {
+   "file": "bin/crashpad_handler",
+   "chunk": 0,
+   "pack": "1111111111111111111111111111111111111111111111111111111111111111",
+   "offset": 4296,
+   "storedSize": 9000
+  }
+ ],
+ "storedSizes": [
+  {
+   "file": "bin/CinderReach.exe",
+   "chunk": 1,
+   "storedSize": 70000
+  }
+ ],
+ "patches": [
+  {
+   "path": "bin/CinderReach.exe",
+   "fromHash": "4444444444444444444444444444444444444444444444444444444444444444",
+   "patchHash": "5555555555555555555555555555555555555555555555555555555555555555",
+   "patchSize": 60000
+  },
+  {
+   "path": "bin/CinderReach.exe",
+   "fromHash": "2222222222222222222222222222222222222222222222222222222222222222",
+   "patchHash": "3333333333333333333333333333333333333333333333333333333333333333",
+   "patchSize": 51234
+  }
+ ]
+}

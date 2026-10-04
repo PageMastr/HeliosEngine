@@ -36,6 +36,7 @@ using namespace helios::asset;
 HpakOpenOptions options;
 options.platform = HpakPlatform::PcClient;     // refuse a server or editor cook
 options.refetcher = installerHook;             // optional IBlockRefetcher (08 §2.6)
+options.maxAssetSize = 256 * kMiB;             // optional: larger assets fail with LimitExceeded
 auto base = HpakReader::openFile(dir / "common.hpak", options).value();
 auto patch = HpakReader::openFile(dir / "patch-0042.hpak", options).value();
 
@@ -69,7 +70,8 @@ meshes.commitSwaps();                          // at the frame or tick boundary
 
 - **Asset blocks.** An asset is `ceil(rawSize / 256 KiB)` independently coded blocks (one for a small asset),
   so a large asset can be decoded block by block and a bad block costs one block. The codec is per asset: zstd
-  frames, or the raw bytes when zstd would not make the asset smaller.
+  frames, or the raw bytes when zstd would not make the asset smaller. A zstd block is exactly one frame whose
+  header states its decoded size (the writer always sets it).
 - **Pak blocks.** The blob region is checksummed in 64 KiB pak blocks (02 §6.3). The header and the TOC have
   their own checksums and are verified whole at open, since the reader reads them whole anyway.
 - **Limits.** A pak is at most 2 GiB (02 §6.3), an asset at most 2 GiB decoded (a v0 choice that keeps every
@@ -82,9 +84,14 @@ meshes.commitSwaps();                          // at the frame or tick boundary
 - **Hostile input.** `open()` fails with `Corrupt`, `VersionMismatch`, `Unsupported` (another platform),
   `LimitExceeded` (above 2 GiB), `EndOfFile` or `IoError`, and never reads outside the file: every offset, size
   and count is checked against the file and against each other in 64-bit arithmetic (the block table must be
-  consumed in entry order, so validation is linear in the TOC). The TOC allocation is bounded by the file size;
-  a read allocates the asset (`read`) or nothing (`readInto`, caller's buffer) plus one asset block of scratch.
-  `read()` allocates `rawSize` bytes, up to 2 GiB: use `readInto` where the caller wants to bound memory.
+  consumed in entry order, so validation is linear in the TOC). The TOC allocation is bounded by the file size.
+  A read allocates one asset block of scratch plus its output. `rawSize` is only the TOC's claim (a pak of a few
+  KB can claim 2 GiB), so `read()` grows its output as blocks decode (past a 1 MiB start, to at most twice the
+  bytes decoded) and a garbage block fails before the claim costs memory; a zstd frame must state the block's
+  decoded size before anything decodes. `readInto` decodes into the caller's buffer, and `read(entry, out)`
+  reuses the caller's vector. `HpakOpenOptions::maxAssetSize` refuses larger assets (`LimitExceeded`), for
+  runtime consumers that want a hard cap; a pak whose blocks really decode to 2 GiB (about 115 KB of zstd
+  frames of zeros) still costs 2 GiB within it.
 - **First-read verification.** A read hashes each pak block it touches the first time (it reads the whole block
   for that), marks it `Verified` and never hashes it again. Decoded bytes are always checked against the cooked
   hash. XXH3 detects corruption, not tampering: distribution integrity is BLAKE2b's (05 §7, 08 §2.5).
@@ -92,8 +99,10 @@ meshes.commitSwaps();                          // at the frame or tick boundary
   **at most once per block** until `retryBlocks()` covers it. `Repaired`: the reader re-reads the block once and
   verifies it (still bad: `Bad`). `Pending`: reads of the block fail with `Busy` until the installer calls
   `retryBlocks()` after its re-fetch lands. `Failed` (or no hook): `Corrupt`. The hook must not read from the
-  same reader.
-- **Overlay.** `PakMountTable::find` returns the most recently mounted pak's entry. Unmounting rebuilds the index;
+  same reader. A read hashes every block that was not `Verified` before it read the bytes, so a block another
+  reader repairs concurrently is re-read, not used stale.
+- **Overlay.** `PakMountTable::find` returns the most recently mounted pak's entry. A table holds paks of one
+  platform: mounting another platform's cook fails with `Unsupported`. Unmounting rebuilds the index;
   a location already returned keeps its pak alive. A mount changes what later lookups resolve to; instances
   already loaded keep their version until their `AssetStore` swaps at a frame or tick boundary.
 - **Threading.** Every function documents its rules. In short: `AssetId` is a value; `AssetIdSet` and the writer
@@ -103,7 +112,7 @@ meshes.commitSwaps();                          // at the frame or tick boundary
 
 No plan budget covers these paths, so v0 states its own (`perf:` cases in `tests/test_perf.cpp`, label `perf`,
 nightly; asserted in optimized builds without sanitizers). Measured on the shared, loaded 4-vCPU dev VM, GCC 13,
-RelWithDebInfo, 2026-10-03 (three runs):
+RelWithDebInfo, 2026-10-03 (three runs; the `read()` row 2026-10-04):
 
 | Path | Budget | Measured |
 |---|---|---|
@@ -112,6 +121,7 @@ RelWithDebInfo, 2026-10-03 (three runs):
 | `PakMountTable::find`, random ids, 100k-asset table | ≤ 250 ns mean | 69–90 ns |
 | First read: block verify + zstd decode + cooked hash, 35 MB of mixed assets, one thread | ≥ 300 MB/s (≤ 0.85 ms per 256 KiB block) | 768–798 MB/s |
 | Later reads (blocks already verified) | ≥ 400 MB/s | 807–851 MB/s |
+| Later reads through `read()`: into a reused vector / a new vector per asset (grown block by block) | ≥ 400 MB/s | 748–792 / 763–773 MB/s |
 
 The read budget is twice 02 §5.7's sustained I/O budget (150 MB/s), so one decode thread keeps up with the disk.
 
@@ -122,7 +132,8 @@ readers; AAA-SEC-7). Each input runs as given and again after `assetpipe::reseal
 checksums, so mutated fields reach the validators behind the header and TOC checksums. It checks that open and
 reads return Results, that opened entries are sorted, aligned and in bounds, that successful reads match the
 cooked hash and repeat identically, that the hook runs at most once per block, and that a second mount overlays
-the first. `fuzz/corpus/hpak_reader/` holds the seeds (`asset_fuzz_hpak_reader --make-seeds <dir>` rewrites
+the first. It reads every entry whatever `rawSize` it claims, so `-malloc_limit_mb` catches a read that
+allocates ahead of its blocks. `fuzz/corpus/hpak_reader/` holds the seeds (`asset_fuzz_hpak_reader --make-seeds <dir>` rewrites
 them). Without `HELIOS_ASSET_LIBFUZZER` the target is a CTest (label `fuzz`, every PR) that replays the corpus
 plus 20,000 deterministic mutations. A campaign:
 

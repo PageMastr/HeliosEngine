@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "assetpipe_test_util.h"
+#include "helios/core/platform.h"
 
 namespace {
 
@@ -423,10 +424,17 @@ TEST_CASE("meta: create on first import mints the GUID once") {
     CHECK(!fileExists(dir.path, "art/deck.png.meta"));
     CHECK(ensureMeta(dir.path, "art/../deck.png", newMeta(), r).error().code == ErrorCode::InvalidArgument);
 
-    // A sidecar spelled in another case is not a reason to mint a second GUID.
+    // A sidecar spelled in another case is not a reason to mint a second GUID: where names differ by case
+    // it is refused, and where they do not (Windows) it is the file's sidecar.
     writeText(dir.path, "art/cased.png", "png bytes");
     writeText(dir.path, "art/CASED.PNG.meta", writeMeta(sampleMeta(), r).value());
-    CHECK(ensureMeta(dir.path, "art/cased.png", newMeta(), r).error().code == ErrorCode::InvalidState);
+    const auto cased = ensureMeta(dir.path, "art/cased.png", newMeta(), r);
+    if (caseSensitive(dir.path)) {
+        CHECK(cased.error().code == ErrorCode::InvalidState);
+    } else {
+        CHECK(!cased.value().created);
+        CHECK(cased.value().meta.guid == kGuid);
+    }
 }
 
 TEST_CASE("meta: saveMeta never changes a GUID and skips identical rewrites") {
@@ -543,9 +551,13 @@ TEST_CASE("meta: the scan reports every missing, orphan, mis-cased, duplicate an
     fontMeta.importerVersion = 1;
     fontMeta.settings = "{}";
     writeText(dir.path, "c/wrong.tga.meta", writeMeta(fontMeta, r).value()); // font importer on a .tga
-    writeText(dir.path, "d/twin.png", "9");
-    writeText(dir.path, "d/TWIN.png", "10");
-    writeText(dir.path, "d/nul.png", "11");
+    // Names Windows cannot hold: two that differ only in case, and a device name.
+    const bool sensitive = caseSensitive(dir.path);
+    if (sensitive) {
+        writeText(dir.path, "d/twin.png", "9");
+        writeText(dir.path, "d/TWIN.png", "10");
+    }
+    if constexpr (!platform::kIsWindows) writeText(dir.path, "d/nul.png", "11");
 
     const MetaScan scan = scanMetas(dir.path, r).value();
     std::vector<std::string> assets;
@@ -569,8 +581,8 @@ TEST_CASE("meta: the scan reports every missing, orphan, mis-cased, duplicate an
     CHECK(has("c/copy.png.meta", "is also the GUID of 'a/good.png.meta'"));
     CHECK(has("c/broken.png.meta", "provenance.licence"));
     CHECK(has("c/wrong.tga.meta", "importer 'font' does not import 'c/wrong.tga'"));
-    CHECK(has("d/twin.png", "differ only in case"));
-    CHECK(has("d/nul.png", "Windows device name"));
+    if (sensitive) CHECK(has("d/twin.png", "differ only in case"));
+    if constexpr (!platform::kIsWindows) CHECK(has("d/nul.png", "Windows device name"));
     CHECK(std::is_sorted(scan.problems.begin(), scan.problems.end(),
                          [](const MetaProblem& a, const MetaProblem& b) { return a.path < b.path; }));
     for (const MetaProblem& p : scan.problems) CHECK(p.path.find(".git") == std::string::npos);

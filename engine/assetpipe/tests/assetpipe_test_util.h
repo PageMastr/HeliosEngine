@@ -71,6 +71,15 @@ inline bool fileExists(const fs::Path& root, std::string_view rel) {
     return fs::isFile(root / fs::pathFromUtf8(rel));
 }
 
+/// Whether `dir`'s file system tells names apart by case (Linux: yes; Windows and macOS: usually not).
+/// Tests that need two names differing only in case run only where they can exist.
+inline bool caseSensitive(const fs::Path& dir) {
+    REQUIRE(fs::writeTextFile(dir / "case-probe.txt", "x"));
+    const bool sensitive = !fs::exists(dir / "CASE-PROBE.TXT");
+    REQUIRE(fs::remove(dir / "case-probe.txt"));
+    return sensitive;
+}
+
 inline Provenance original(std::string licence = "MIT") {
     Provenance p;
     p.origin = Origin::Original;

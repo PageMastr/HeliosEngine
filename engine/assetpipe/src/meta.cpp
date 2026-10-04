@@ -829,10 +829,15 @@ Result<MetaScan> scanMetas(const fs::Path& root, const ImporterRegistry& importe
     std::map<Guid, std::string> byGuid;
     for (const std::string& m : sidecars) {
         const std::string s = m.substr(0, m.size() - kMetaExtension.size());
-        if (!files.contains(s) && !fs::isFile(absolute(root, s))) {
-            if (!otherCase(s))
+        if (!files.contains(s)) {
+            // A source spelled in another case was reported above (on Windows it is the same file, so the
+            // disk check below would find it: ask the listing first, so both platforms report the same).
+            if (otherCase(s)) continue;
+            // A source no importer claims is not in `files`; its sidecar is checked below.
+            if (!fs::isFile(absolute(root, s))) {
                 problem(m, ErrorCode::NotFound, std::format("orphan sidecar: no source {}", shown(s)));
-            continue;
+                continue;
+            }
         }
         auto text = readSidecar(absolute(root, m));
         if (!text) {

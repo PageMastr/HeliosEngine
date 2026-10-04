@@ -193,18 +193,19 @@ Inputs come from a seeded generator (`services/pkg/cdc/cdctest`, mirrored in `te
 05 §7 and 08 §2.5 give no chunking budget; R07 §7 cites FastCDC at "> 1 GB/s/core". v0's budgets, per core, the
 same for both languages (C++: `perf:` cases in `tests/test_perf.cpp`, label `perf`, nightly, asserted in
 optimized builds without sanitizers; Go: `TestPerfChunking` asserts them with `HELIOS_PERF=1` and a quarter of
-them otherwise, since `go test ./...` runs packages in parallel; `BenchmarkBoundaries`, `BenchmarkSplit`).
-Measured on the shared, loaded 4-vCPU dev VM, GCC 13 RelWithDebInfo and Go 1.27.1, 2026-10-04, best of 3–5 runs,
-two sessions:
+them otherwise, since `go test ./...` runs packages in parallel; `BenchmarkBoundaries`, `BenchmarkSplit` and
+`BenchmarkChunkReader` measure them). Measured on the shared, loaded 4-vCPU dev VM (load average 4–5), GCC 13
+RelWithDebInfo and Go 1.27.1, 2026-10-04, best of 3–5 runs per session, three to five sessions:
 
 | Path | Budget | C++ | Go |
 |---|---|---|---|
-| FastCDC boundary detection | ≥ 1,000 MB/s | 2,318–2,342 MB/s | 1,745–1,769 MB/s |
-| Chunking with a BLAKE2b-256 ID per chunk and for the file | ≥ 250 MB/s | 329–333 MB/s (`StreamChunker` 326–329) | 541–559 MB/s |
-| Read a 50 GB install's manifest (20k files, 700k chunks, 52.6 MB body): BLAKE2b, decode, validate | ≤ 400 ms | 137–140 ms | — |
-| Write it (codec 0) | ≤ 400 ms | 178–183 ms | — |
+| FastCDC boundary detection | ≥ 1,000 MB/s | 2,292–2,358 MB/s | 1,708–1,793 MB/s |
+| Chunking with a BLAKE2b-256 ID per chunk and one for the whole input | ≥ 250 MB/s | 318–334 MB/s (`splitBuffer`), 307–329 MB/s (`StreamChunker`) | 333–343 MB/s (`ChunkReader`) |
+| Read a 50 GB install's manifest (20k files, 700k chunks, 52.6 MB body): BLAKE2b, decode, validate | ≤ 400 ms | 137–159 ms | — |
+| Write it (codec 0) | ≤ 400 ms | 172–207 ms | — |
 
-The C++ hashing rate is Monocypher's portable BLAKE2b; Go's `x/crypto/blake2b` uses AVX2. At 250 MB/s one core
+Hashing dominates: each byte is hashed twice (its chunk's ID and the file hash). C++ uses Monocypher's portable
+BLAKE2b; Go's `x/crypto/blake2b` uses AVX2 but pays for the `io.Reader` copy. At 250 MB/s one core
 chunks a 50 GB build in 3.5 minutes; CL-10's full verify (50 GB in 3 minutes, about 280 MB/s) needs two cores at
 this rate, or the SSE4.1/AVX2 BLAKE2b that 08 §2.1.1 lists for the launcher's self-dispatch.
 

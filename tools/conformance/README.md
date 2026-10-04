@@ -133,14 +133,21 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   `KeyValueConfig` literal with a `Bucket`, or a `.Bucket` assignment, matched by name); otherwise it fails closed.
   A `KeyTTL` key that does not resolve fails closed in any file. A TTL field assigned after the literal (`cfg.TTL =
   …`) is read on a config this file names by its type (a variable, a parameter or a struct field of `KeyValueConfig`
-  or `StreamConfig`, one set from `new(T)`, and the elements of a slice, array or map of them: `cfgs[i]`, a range
-  variable, `c := cfgs[i]`; matched by name), with the buckets the file sets on it (a collection's elements share
-  theirs); in NATS code a KV config whose bucket does not resolve, or is not set in the file, fails closed. Not
-  seen: a TTL assigned to a config reached another way (a call's result, a variable of another inferred type, a
-  nested collection), and a KV call in a file that reaches nats.go only through a wrapper package of its own, with a
-  bucket or key the lint cannot resolve (a resolved lease or leader name is still reported). Names are looked up
-  without scopes, so a parameter or local that shadows a package-level constant resolves to that constant; this
-  matters only where an unresolved name would fail closed. A `$KV.` subject is read only as one literal.
+  or `StreamConfig`, one set from `new(T)`, and the elements of a slice, array or map of them, declared, written as
+  a literal or made with `make`: `cfgs[i]`, a range variable, `c := cfgs[i]`; matched by name), with the buckets
+  the file sets on it (a collection's elements share theirs); in NATS code a KV config whose bucket does not
+  resolve, or is not set in the file, fails closed. Not seen: a TTL assigned to a config reached another way (a
+  call's result, a variable of another inferred type, a nested collection, a collection of a named type such as
+  `type Configs []jetstream.KeyValueConfig`, whose literals CONF-01 does not read either), and a KV call in a file
+  that reaches nats.go only through a wrapper package of its own, with a bucket or key the lint cannot resolve (a
+  resolved lease or leader name is still reported). Names are looked up without scopes, so a parameter or local
+  that shadows a package-level constant resolves to that constant; this matters only where an unresolved name
+  would fail closed. Config names are matched without scopes too, so configs that share a name share their
+  buckets. A range variable over a KV collection on which the file sets no bucket, and a KV parameter or struct
+  field whose name's buckets come only from literals, add a bucket the lint cannot resolve, so they fail closed in
+  NATS code. Not seen: a KV parameter named like a config that a `.Bucket = …` assignment sets elsewhere in the
+  file takes that bucket, since the assignment is not tracked to one of them. A `$KV.` subject is read only as one
+  literal.
 - **CONF-01 and CONF-02, C and C++**, resolve buckets and keys through the scope's string constants by bare name (a
   name with several values matches if any value does). A string constant is a `#define` or the declaration of a
   constant initialized with literals, at namespace or block scope or as a `static` class member: `constexpr`, or a
@@ -156,12 +163,17 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   `Bucket` fails closed. A `TTL` or `LimitMarkerTTL` is attributed to every bucket its file sets, not to the
   config it is set on: a file whose one function sets `cfg->Bucket = "DIRECTORY"` and whose other sets
   `cfg->TTL` on a config its caller names passes (CONF-01 still reports a lease or unresolved `Bucket` wherever it
-  is set, and its scope covers CONF-02's). `MaxAge` is a `jsStreamConfig` field: it counts in a file that sets a
-  stream `Name` resolving to a lease-named stream (`KV_leases`); with a stream name the lint cannot resolve it
-  is ordinary retention, as on the Go side.
+  is set, and its scope covers CONF-02's, `engine/authority/**` included; `TestRepositoryMap` checks that).
+  `MaxAge` is a `jsStreamConfig` field: it counts in a file that sets a stream `Name` resolving to a lease-named
+  stream (`KV_leases`). With a stream name the lint cannot resolve it is ordinary retention, as on the Go side,
+  except in a file that uses JetStream KV (a `js_*KeyValue` or `kvStore_*` call) or spells a `"KV_…"` name, where
+  it fails closed.
 - **CONF-03** checks that the required tests exist and are not switched off. It cannot tell a test that passes
   vacuously, and it leaves a conditional skip (`if testing.Short()`) to CI, which runs the Go jobs without
-  `-short`. A decorator on the enclosing `TEST_SUITE` (`TEST_SUITE("x" * doctest::skip())`) is not read.
+  `-short`. An off-decorator is read by its constructor call, so `skip()` under `using namespace doctest` and
+  `dt::skip{}` through a namespace alias count. Not read: a decorator on the enclosing `TEST_SUITE`
+  (`TEST_SUITE("x" * doctest::skip())`), and one held in a variable (`constexpr auto kOff = doctest::skip();`, then
+  `TEST_CASE("conformance/holder_rule" * kOff)`).
 - **CONF-04** evaluates shift amounts through constants (Go across packages; C++ `constexpr` and `const`
   declarations, `#define`s and enumerators across the scope) and `+`. A C++ name defined more than once in scope
   counts with each of its values; values of 64 and up are not shift amounts and are dropped, so no bound on the

@@ -8,9 +8,11 @@
 {
   // --- Checked by CONF rules -----------------------------------------------------------------------
   // The backend's leases, leadership and IDs (ADR-004; 05 §1.4, §2.3). The C++ cell host and gateway
-  // (engine/server, apps/cellserver, apps/gateway; WP-0.14) talk to the control plane too.
+  // (engine/server, apps/cellserver, apps/gateway; WP-0.14) talk to the control plane too, and
+  // engine/authority keeps the lease the holder rule reads, so CONF-01 reads every path CONF-02 does.
   "05 §2.3": {
-    "paths": ["services/**", "engine/server/**", "apps/cellserver/**", "apps/gateway/**"],
+    "paths": ["services/**", "engine/server/**", "engine/authority/**", "apps/cellserver/**",
+              "apps/gateway/**"],
     "rules": ["CONF-01"]
   },
   "05 §1.4.1": {

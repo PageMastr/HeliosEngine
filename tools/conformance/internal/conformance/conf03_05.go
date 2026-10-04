@@ -33,8 +33,9 @@ var (
 	// A doctest decorator that turns the case off or lets it fail: CI would run nothing that can fail. It
 	// is searched for in the whole decorator chain with string and character literals blanked, so it is
 	// found after any decorator (`doctest::timeout(kOutage.count())`, `doctest::description("60 s (…)")`)
-	// and never inside a string.
-	cTestOffRE = regexp.MustCompile(`\bdoctest::(skip|may_fail|should_fail|expected_failures)\b`)
+	// and never inside a string. It is matched by its constructor call, however qualified: `doctest::skip()`,
+	// `skip()` under `using namespace doctest`, and `dt::skip{}` through a namespace alias.
+	cTestOffRE = regexp.MustCompile(`\b(skip|may_fail|should_fail|expected_failures)\s*[({]`)
 )
 
 // closingParen returns the offset of the ')' that closes the '(' just before open in blanked text, or

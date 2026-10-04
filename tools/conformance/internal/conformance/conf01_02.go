@@ -49,6 +49,9 @@ var (
 	cTTLRE        = regexp.MustCompile(`(?:\.|->)\s*(?:TTL|LimitMarkerTTL)\s*=`)
 	cMaxAgeRE     = regexp.MustCompile(`(?:\.|->)\s*MaxAge\s*=`)
 	cStreamNameRE = regexp.MustCompile(`(?:\.|->)\s*Name\s*=\s*([^;]+);`)
+	// A file that uses JetStream KV: a js_*KeyValue or kvStore_ call. A stream name it cannot resolve may be
+	// a KV bucket's.
+	cKVUseRE = regexp.MustCompile(`\b(?:js_(?:Create|Update)?KeyValue|kvStore_\w+)\s*\(`)
 	// nats.c code: a file that includes nats.h (`<nats.h>` or `<nats/nats.h>`) or names a kvConfig.
 	cNatsRE = regexp.MustCompile(`#\s*include\s*[<"](?:nats/)?nats\.h[>"]|\bkvConfig\b`)
 	// kvStore_Create, _Update and their String and WithTTL (per-key TTL) variants.
@@ -310,11 +313,15 @@ func configElem(typ ast.Expr) ast.Expr {
 
 // configVars returns the names this file gives a KeyValueConfig or a StreamConfig: a variable initialised
 // from a literal of the type, from new(T), or declared with it, a parameter or struct field of it, and a
-// range variable over a slice, array or map of them or a variable set from one of their elements. Each carries the buckets the file sets on it: the
-// literal's Bucket (a stream's Name) and every `.Bucket` (`.Name`) assignment; a collection's elements
-// share theirs. Names are matched without scopes, as kvConfigNames does.
+// range variable over a slice, array or map of them (a literal, make(…) or a declared one) or a variable
+// set from one of their elements. Each carries the buckets the file sets on it: the literal's Bucket (a
+// stream's Name) and every `.Bucket` (`.Name`) assignment; a collection's elements share theirs. Names are
+// matched without scopes, as kvConfigNames does.
 func configVars(g *goIndex, gf *goFile) cfgVars {
 	c := cfgVars{vars: map[string]*cfgVar{}, colls: map[string]*cfgVar{}}
+	// outside: names of parameters and struct fields, whose config comes from outside the literals this file
+	// names; results: the result fields, which the function itself fills.
+	outside, results := map[string]bool{}, map[*ast.Field]bool{}
 	declareIn := func(m map[string]*cfgVar, name string, typ ast.Expr) *cfgVar {
 		kv, ok := configKind(typ)
 		if !ok {
@@ -341,9 +348,13 @@ func configVars(g *goIndex, gf *goFile) cfgVars {
 		if u, ok := e.(*ast.UnaryExpr); ok && u.Op == token.AND {
 			e = u.X
 		}
-		if call, ok := e.(*ast.CallExpr); ok && len(call.Args) == 1 {
-			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "new" {
+		if call, ok := e.(*ast.CallExpr); ok && len(call.Args) >= 1 {
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "new" && len(call.Args) == 1 {
 				declareIn(c.vars, name, call.Args[0])
+			} else if ok && id.Name == "make" {
+				if el := configElem(call.Args[0]); el != nil {
+					declareIn(c.colls, name, el)
+				}
 			}
 		}
 		cl, ok := e.(*ast.CompositeLit)
@@ -375,9 +386,18 @@ func configVars(g *goIndex, gf *goFile) cfgVars {
 					fromLit(id.Name, x.Values[i])
 				}
 			}
+		case *ast.FuncType:
+			if x.Results != nil {
+				for _, f := range x.Results.List {
+					results[f] = true
+				}
+			}
 		case *ast.Field: // parameters, results and struct fields
 			for _, id := range x.Names {
 				declare(id.Name, x.Type)
+				if !results[x] {
+					outside[id.Name] = true
+				}
 			}
 		}
 		return true
@@ -432,6 +452,7 @@ func configVars(g *goIndex, gf *goFile) cfgVars {
 		}
 		return true
 	})
+	assigned := map[*cfgVar]bool{}
 	ast.Inspect(gf.File, func(n ast.Node) bool {
 		if as, ok := n.(*ast.AssignStmt); ok {
 			for i, lhs := range as.Lhs {
@@ -440,14 +461,28 @@ func configVars(g *goIndex, gf *goFile) cfgVars {
 					if v := c.of(sel.X); v != nil {
 						b, ok := g.String(gf, as.Rhs[i])
 						v.buckets = append(v.buckets, cfgBucket{b, ok})
+						assigned[v] = true
 					}
 				}
 			}
 		}
 		return true
 	})
+	// Names are not scoped, so a name can stand for several configs. One whose bucket the file never sets
+	// must not borrow another's: a range over a KV collection with no buckets (a parameter's), and a KV
+	// parameter or struct field named like a config whose buckets come only from literals, add a bucket the
+	// lint cannot resolve. (A `.Bucket = …` assignment on the name may be the parameter's; it is not
+	// tracked to one of them.)
 	for _, m := range merges {
 		m[0].buckets = append(m[0].buckets, m[1].buckets...)
+		if m[1].kv && len(m[1].buckets) == 0 {
+			m[0].buckets = append(m[0].buckets, cfgBucket{})
+		}
+	}
+	for name := range outside {
+		if v := c.vars[name]; v != nil && v.kv && len(v.buckets) > 0 && !assigned[v] {
+			v.buckets = append(v.buckets, cfgBucket{})
+		}
 	}
 	return c
 }
@@ -685,14 +720,18 @@ func checkKVC(p *Pass, f string, ttl bool) {
 		return
 	}
 	// A stream named for a lease bucket (`KV_leases`): its MaxAge is the bucket's expiry. A stream name the
-	// lint cannot resolve is ordinary retention, as on the Go side; CONF-01 reports the bucket wherever
-	// its kvConfig is set.
-	leaseStream := ""
+	// lint cannot resolve is ordinary retention, as on the Go side (CONF-01 reports the bucket wherever its
+	// kvConfig is set), except in a file that uses JetStream KV or spells a "KV_" name: there it may be a
+	// KV bucket's stream, so its MaxAge fails closed.
+	leaseStream, unresolvedStream := "", false
 	for _, m := range cStreamNameRE.FindAllStringSubmatchIndex(src.blank, -1) {
-		if vals, ok := cStrValues(src.text[m[2]:m[3]], consts); ok && leaseStream == "" {
+		vals, ok := cStrValues(src.text[m[2]:m[3]], consts)
+		if ok && leaseStream == "" {
 			leaseStream = firstMatch(vals, leaseRE)
 		}
+		unresolvedStream = unresolvedStream || !ok
 	}
+	kvStream := unresolvedStream && (cKVUseRE.MatchString(src.blank) || strings.Contains(src.text, `"KV_`))
 	for i, l := range src.blankLines {
 		switch {
 		case leaseBucket && cTTLRE.MatchString(l):
@@ -701,6 +740,10 @@ func checkKVC(p *Pass, f string, ttl bool) {
 		case leaseStream != "" && cMaxAgeRE.MatchString(l):
 			p.Report(f, src.origin[i]+1, "MaxAge in a file that configures stream %q: lease expiry in NATS "+
 				"(05 §1.4.1–1.4.2)", leaseStream)
+		case kvStream && cMaxAgeRE.MatchString(l):
+			p.Report(f, src.origin[i]+1, "MaxAge on a stream whose name the lint cannot resolve, in a file that uses "+
+				"JetStream KV (a KV call or a \"KV_\" name): it may be a lease bucket's expiry (05 §1.4.1–1.4.2); if "+
+				"it is not, say so in a conformance:allow")
 		}
 	}
 	for _, c := range src.calls(cCASRE) {

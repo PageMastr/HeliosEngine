@@ -16,7 +16,7 @@ func forms(cfgs []jetstream.KeyValueConfig) {
 	(&r).TTL = time.Second
 	cfgs[0].TTL = time.Second
 	for _, c := range cfgs {
-		c.MaxAge = time.Minute
+		c.TTL = time.Second
 	}
 	leases := []jetstream.KeyValueConfig{{Bucket: "LEASES"}}
 	for _, l := range leases {
@@ -34,4 +34,10 @@ func forms(cfgs []jetstream.KeyValueConfig) {
 	if v, ok := m["l"]; ok {
 		v.TTL = time.Second
 	}
+}
+
+// A collection from make(…): the file sets no bucket on its elements.
+func made(n int) {
+	all := make([]jetstream.KeyValueConfig, n)
+	all[0].TTL = time.Second
 }

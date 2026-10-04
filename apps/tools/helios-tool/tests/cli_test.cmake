@@ -17,6 +17,12 @@ set(JOURNALS "${WORK}/journal")
 set(FRIGATE "${PROJECT_DIR}/records/hull/frigate.hrec")
 file(READ "${FRIGATE}" ORIGINAL)
 
+# Control characters for the journal-escaping steps below.
+string(ASCII 27 ESC)
+string(ASCII 7 BEL)
+string(ASCII 127 DEL)
+string(ASCII 194 155 CSI1)  # U+009B in UTF-8
+
 set(step 0)
 # tool(<expected exit code> <output var> args...)
 function(tool expected outvar)
@@ -26,11 +32,17 @@ function(tool expected outvar)
                   RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
   # Child stdout is text mode on Windows (CRLF).
   string(REPLACE "\r\n" "\n" out "${out}")
+  # This log shows the arguments without their control characters (the hostile-journal steps).
+  set(args "${ARGN}")
+  foreach(c ESC BEL DEL CSI1)
+    string(REPLACE "${${c}}" "<${c}>" args "${args}")
+  endforeach()
   if(NOT "${rc}" STREQUAL "${expected}")
-    message(FATAL_ERROR "step ${n}: helios-tool ${ARGN}\n  exit ${rc}, expected ${expected}\n  stdout: ${out}\n  stderr: ${err}")
+    message(FATAL_ERROR "step ${n}: helios-tool ${args}\n  exit ${rc}, expected ${expected}\n  stdout: ${out}\n  stderr: ${err}")
   endif()
-  message(STATUS "step ${n}: helios-tool ${ARGN} -> ${rc}")
+  message(STATUS "step ${n}: helios-tool ${args} -> ${rc}")
   set(${outvar} "${out}" PARENT_SCOPE)
+  set(${outvar}_err "${err}" PARENT_SCOPE)
 endfunction()
 
 function(expect_contains text needle what)
@@ -150,6 +162,75 @@ file(READ "${FRIGATE}" t)
 expect_contains("${t}" "\"mass\": 12345," "the replayed journal-only edit reached the file")
 tool(0 out undo)
 expect_file_equals("${FRIGATE}" "${ORIGINAL}" "the replayed (and saved) edit is undoable")
+
+# The journal is untrusted input. A journal whose header names another project is refused and
+# nothing is written, unless --allow-other-project says the project was renamed. (Crafted paths
+# are covered by toolsfw_tests, test_confine.cpp; the CLI's replay is Framework::recover.)
+tool(3 out --project=renamed-cli-test journal replay ${nosave_journal} --save)
+expect_contains("${out_err}" "belongs to project \"cli-test\", not \"renamed-cli-test\"" "replay of another project's journal")
+expect_file_equals("${FRIGATE}" "${ORIGINAL}" "a refused replay writes nothing")
+tool(0 out --project=renamed-cli-test journal replay ${nosave_journal} --save --allow-other-project)
+expect_contains("${out}" "replayed 1 transaction(s)" "journal replay --allow-other-project")
+file(READ "${FRIGATE}" t)
+expect_contains("${t}" "\"mass\": 12345," "the allowed replay reached the file")
+file(WRITE "${FRIGATE}" "${ORIGINAL}")
+
+# Journal strings are untrusted input, and the CLI never writes their control characters to the
+# terminal. --user and --project put them into real journals: ESC [ 31 m sets the colour, then
+# BEL, DEL, and U+009B 2 J (the C1 CSI, which JSON's escaping of C0 only lets through) clears the
+# screen. The closing ']' balances the '[' (CMake does not split a list inside brackets), and
+# there is no ';' (CMake's list separator), so no OSC sequence here; test_confine.cpp has those.
+set(EVIL "${ESC}[31m${BEL}${DEL}${CSI1}2J]")
+set(EVIL_SHOWN "\\x1b[31m\\x07\\x7f\\u009b2J]")
+function(expect_no_controls text what)
+  foreach(c "${ESC}" "${BEL}" "${DEL}" "${CSI1}")
+    string(FIND "${text}" "${c}" pos)
+    if(NOT pos EQUAL -1)
+      message(FATAL_ERROR "${what}: a raw control character reached the output")
+    endif()
+  endforeach()
+endfunction()
+tool(0 out "--user=${EVIL}" apply hull/frigate mass 12346 --no-save)
+expect_no_controls("${out}" "apply with a hostile --user")
+tool(0 out journal show latest)
+expect_no_controls("${out}" "journal show")
+expect_contains("${out}" "user=${EVIL_SHOWN}" "journal show escapes the header")
+if(NOT out MATCHES "session=([^ \n]+)")
+  message(FATAL_ERROR "journal show: no session in ${out}")
+endif()
+set(evil_journal "${JOURNALS}/cli-test/${CMAKE_MATCH_1}.hjl")
+tool(0 out journal show latest --json)
+expect_no_controls("${out}" "journal show --json")
+expect_contains("${out}" "\"user\":\"\\u001b[31m\\u0007\\u007f\\u009b2J]\"" "journal show --json escapes DEL and C1")
+# The replay report: an external edit makes the transaction conflict, and the report names it.
+string(REGEX REPLACE "\"mass\": [0-9]+," "\"mass\": 15000," t "${ORIGINAL}")
+file(WRITE "${FRIGATE}" "${t}")
+tool(3 out journal replay ${evil_journal} --ignore-source-changes)
+expect_no_controls("${out}${out_err}" "journal replay report")
+expect_contains("${out}" "conflict transaction ${EVIL_SHOWN}:" "the replay report escapes the transaction id")
+file(WRITE "${FRIGATE}" "${ORIGINAL}")
+# A refusal: the header names a project with the same characters.
+tool(0 out "--project=${EVIL}" apply hull/frigate mass 12347 --no-save)
+tool(0 out "--project=${EVIL}" journal list --all)
+expect_no_controls("${out}" "journal list")
+if(NOT out MATCHES "([^\n]+\\.hjl)  session=")
+  message(FATAL_ERROR "journal list: no journal in ${out}")
+endif()
+set(evil_project_journal "${CMAKE_MATCH_1}")
+tool(3 out journal replay ${evil_project_journal} --save)
+expect_no_controls("${out}${out_err}" "a refused replay")
+expect_contains("${out_err}" "belongs to project \"${EVIL_SHOWN}\", not \"cli-test\"" "the refusal escapes the project")
+expect_file_equals("${FRIGATE}" "${ORIGINAL}" "a refused replay writes nothing")
+
+# A command may not create a record outside the project or of another file type.
+tool(3 out apply --command=doc.create
+     "--args={\"type\": \"sample.ship.ShipHullDef\", \"file\": \"../outside/evil.hrec\", \"name\": \"hull/evil\"}")
+expect_contains("${out_err}" "../outside/evil.hrec" "doc.create outside the project")
+tool(3 out apply --command=doc.create
+     "--args={\"type\": \"sample.ship.ShipHullDef\", \"file\": \"records/hull/evil.sh\", \"name\": \"hull/evil\"}")
+if(EXISTS "${WORK}/outside" OR EXISTS "${PROJECT_DIR}/records/hull/evil.sh")
+  message(FATAL_ERROR "a refused doc.create wrote a file")
+endif()
 file(GLOB journals "${JOURNALS}/*/*.hjl")
 list(LENGTH journals njournals)
 if(njournals LESS 10)

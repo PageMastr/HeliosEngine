@@ -126,13 +126,16 @@ public:
     /// Reflection-based property diff (ADR-009): `mutate` edits a copy of the document's object;
     /// the diff between the copy and the document becomes this transaction's ops.
     Result<void> edit(const DocId& doc, const std::function<void(void* object)>& mutate);
-    /// Creates a record document at the project-relative `file` (".hrec"). `json` is the initial
+    /// Creates a record document at the project-relative `file` (".hrec"; an absolute path under
+    /// the root is accepted too: Workspace::confine with PathOrigin::Caller). `json` is the initial
     /// field values (empty = the type's defaults). Returns the new document's id.
     Result<DocId> createRecord(const refl::TypeInfo& type, std::string_view file, const refl::RecordHeader& header,
                                std::string_view json = {});
     /// Removes a document (its file is deleted when the project is saved).
     Result<void> destroy(const DocId& doc);
-    /// Applies a raw op (replay, collaboration, patches).
+    /// Applies a raw op (replay, collaboration, patches). These are untrusted: a Create's or
+    /// Destroy's file must pass Workspace::confine with PathOrigin::Untrusted (on disk for a new
+    /// file), and a Destroy must name its document's own file (InvalidArgument otherwise).
     Result<void> apply(const Op& op);
 
     void setLabel(std::string label) { m_label = std::move(label); }
@@ -216,6 +219,11 @@ struct RecoveryOptions {
     /// Replay even when a document's file changed after the session's last save (the ops'
     /// preconditions still guard the replay).
     bool ignoreSourceChanges = false;
+    /// Replay a journal whose header names another project (FrameworkConfig::project), e.g. after
+    /// the project was renamed. A guard against replaying the wrong journal, not a security
+    /// boundary: whoever crafts a journal also writes its header. Every path stays confined to
+    /// this project either way.
+    bool allowOtherProject = false;
 };
 
 /// A change the UI and remote clients may want to react to.
@@ -246,13 +254,16 @@ public:
     JournalWriter* journal() const noexcept { return m_journal.get(); }
 
     // ---- documents ----------------------------------------------------------------------------
-    /// Opens a record file (absolute or project-relative). The type comes from `type` or from the
-    /// file's `records/<table>/` directory. Opening an open file returns the open document.
+    /// Opens a record file inside the project (Workspace::confine with PathOrigin::Caller:
+    /// project-relative, or absolute under the root; InvalidArgument otherwise, whatever `type`).
+    /// The type comes from `type` or from the file's `records/<table>/` directory. Opening an open
+    /// file returns the open document.
     Result<Document*> open(const fs::Path& file, const refl::TypeInfo* type = nullptr);
     /// Opens every `*.hrec` under `<root>/records`, sorted by path. Returns the number opened.
     Result<usize> openAll();
     /// Writes a dirty document's canonical text atomically (a destroyed one's file is removed) and
-    /// journals the save. Fails with InvalidState while an open transaction group or an
+    /// journals the save. The file's path goes through Workspace::confine again first, since a
+    /// link may have appeared inside the project after the open (InvalidArgument, nothing written). Fails with InvalidState while an open transaction group or an
     /// uncommitted TxBuilder holds edits of the document (see "Replay bases" above), and reports a
     /// failed journal write (the file is written; recovery then needs a later save).
     Result<void> save(const DocId& doc);
@@ -313,6 +324,11 @@ public:
     /// Replays an unclean journal of this project (07 §1.2): per document, verifies that its file
     /// still matches the session's last open/save hash and re-applies the transactions after it.
     /// Replayed transactions join this session's history (undoable) and journal.
+    /// The journal is untrusted input. Before any file is read or anything is applied, its header
+    /// must name this project (unless RecoveryOptions::allowOtherProject) and every file it names
+    /// (open and save records, Create and Destroy ops) must pass Workspace::confine with
+    /// PathOrigin::Untrusted and PathCheck::OnDisk; otherwise the whole recovery is refused
+    /// (InvalidArgument naming the record) and nothing changes.
     Result<RecoveryReport> recover(const fs::Path& journalFile, const RecoveryOptions& options = {});
 
     /// Current unix time from the configured clock.
@@ -339,7 +355,7 @@ private:
     void trimHistory();
     void emit(const FrameworkEvent& event);
     Result<void> journalRecord(const JournalRecord& record);
-    Result<Document*> openInternal(const fs::Path& absolute, const refl::TypeInfo* type, bool journal);
+    Result<Document*> openInternal(const ProjectFile& file, const refl::TypeInfo* type, bool journal);
     Guid newKey();
 
     FrameworkConfig m_config;

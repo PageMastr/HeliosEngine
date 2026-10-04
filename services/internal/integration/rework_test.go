@@ -481,8 +481,10 @@ func TestLegacyChainIsCheckedAgainstHead(t *testing.T) {
 	need(t)
 	for name, tamper := range map[string]string{
 		"newest row dropped": `DELETE FROM identity.audit_log WHERE seq = 2`,
-		"head hash differs":  `UPDATE identity.audit_head SET hash = '\x00'::bytea || substring(hash from 2) WHERE id = 1`,
-		"every row dropped":  `DELETE FROM identity.audit_log`,
+		// XOR with 0xFF so the first byte always changes (overwriting it with 0x00 left the head intact
+		// whenever that byte was already 0x00, about one run in 256).
+		"head hash differs": `UPDATE identity.audit_head SET hash = set_byte(hash, 0, get_byte(hash, 0) # 255) WHERE id = 1`,
+		"every row dropped": `DELETE FROM identity.audit_log`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()

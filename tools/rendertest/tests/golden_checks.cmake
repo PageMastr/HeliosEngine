@@ -7,7 +7,8 @@
 # Inputs: -DGOLDEN_DIR=<golden root> -DSCENES=<a,b,...> [-DSELF_TEST=<scratch dir>]
 #   SELF_TEST also checks this script and import_goldens.cmake on synthetic inputs first: a valid
 #   hardware result imports and passes; a changed or unrecorded PNG fails; results that were not
-#   validated, ran on a software adapter or rendered differently twice do not import.
+#   validated, ran on a software adapter, rendered differently twice or have no ꟻLIP scores do not
+#   import.
 
 cmake_minimum_required(VERSION 3.28)  # policies for -P (IN_LIST, string(JSON))
 if(NOT GOLDEN_DIR OR NOT SCENES)
@@ -123,7 +124,8 @@ if(SELF_TEST)
   foreach(bad "\"validation\": true|\"validation\": false|a result the layer did not validate"
               "Example GPU|llvmpipe (LLVM 19.1.7, 256 bits)|a result from a software adapter"
               "\"renderedTwiceIdentical\": true|\"renderedTwiceIdentical\": false|a result whose two renders differ"
-              "\"driverKey\": \"vulkan-example\"|\"driverKey\": \"vulkan-llvmpipe\"|a result filed under the lavapipe set")
+              "\"driverKey\": \"vulkan-example\"|\"driverKey\": \"vulkan-llvmpipe\"|a result filed under the lavapipe set"
+              "\"meanFlip\": 0.02, ||a result without its ꟻLIP scores")
     string(REPLACE "|" ";" parts "${bad}")
     list(GET parts 0 from)
     list(GET parts 1 to)
@@ -131,6 +133,9 @@ if(SELF_TEST)
     string(REPLACE "${from}" "${to}" broken "${result}")
     file(WRITE "${results}/vulkan/triangle.json" "${broken}")
     run_import(fail "${what}")
+    if(EXISTS "${golden}/vulkan-example")
+      message(FATAL_ERROR "self-test: refusing to import ${what} still wrote ${golden}/vulkan-example")
+    endif()
   endforeach()
   file(WRITE "${results}/vulkan/triangle.json" "${result}")
   run_import(pass "a validated hardware result")

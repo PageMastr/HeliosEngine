@@ -902,6 +902,7 @@ void PhysicsSystem::JobFindCollisions(PhysicsUpdateContext::Step *ioStep, int in
 
 	// Allocation context for allocating new contact points
 	ContactAllocator contact_allocator(mContactManager.GetContactAllocator());
+	contact_allocator.mFirstCollisionStep = ioStep->mIsFirst; // Helios patch stable-order: Body::EFlags::NoCrossUpdateCache applies to the first collision step of an Update
 
 	// Determine initial queue to read pairs from if no broadphase work can be done
 	// (always start looking at results from the next job)
@@ -1071,14 +1072,16 @@ void PhysicsSystem::ProcessBodyPair(ContactAllocator &ioContactAllocator, const 
 
 	// Ensure that body1 has the higher motion type (i.e. dynamic trumps kinematic), this ensures that we do the collision detection in the space of a moving body,
 	// which avoids accuracy problems when testing a very large static object against a small dynamic object
-	// Ensure that body1 id < body2 id when motion types are the same.
+	// Helios patch stable-order: when motion types are the same, body1 is the first in Body::sStableOrderLess (upstream: the lower BodyID).
 	if (body1->GetMotionType() < body2->GetMotionType()
-		|| (body1->GetMotionType() == body2->GetMotionType() && inBodyPair.mBodyB < inBodyPair.mBodyA))
+		|| (body1->GetMotionType() == body2->GetMotionType() && Body::sStableOrderLess(*body2, *body1)))
 		std::swap(body1, body2);
 
 	// Check if the contact points from the previous frame are reusable and if so copy them
+	// Helios patch stable-order: not on the first collision step of an Update when a body has NoCrossUpdateCache
 	bool pair_handled = false;
-	if (mPhysicsSettings.mUseBodyPairContactCache && !(body1->IsCollisionCacheInvalid() || body2->IsCollisionCacheInvalid()))
+	if (mPhysicsSettings.mUseBodyPairContactCache && !(body1->IsCollisionCacheInvalid() || body2->IsCollisionCacheInvalid())
+		&& !(ioContactAllocator.mFirstCollisionStep && (body1->GetNoCrossUpdateCache() || body2->GetNoCrossUpdateCache())))
 		mContactManager.GetContactsFromCache(ioContactAllocator, *body1, *body2, pair_handled);
 
 	// If the cache hasn't handled this body pair do actual collision detection

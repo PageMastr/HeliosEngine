@@ -1,0 +1,11 @@
+# expect: guard-ref
+# The owner's switch alone: a workflow_dispatch on another branch would run that branch's code.
+on: [workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  gpu:
+    if: vars.HELIOS_WIN_GPU == 'enabled'
+    runs-on: [self-hosted, win-gpu]
+    steps:
+      - run: echo gpu

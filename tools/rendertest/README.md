@@ -90,8 +90,10 @@ reports Skipped, and every Vulkan result records `"validation": false`, which th
 ("validated" column, and a count in the summary line). On Windows, `find_file` sees only
 `$VULKAN_SDK` (`Bin`, `share/vulkan/explicit_layer.d`), not layers the loader finds through the
 registry: on a machine without `VULKAN_SDK` the goldens then run unvalidated and
-`rendertest.validation-layer` reports Skipped, which is visible, not a silent pass. Follow-up for the
-`win-gpu` runner (WP-0.4): set `VULKAN_SDK`, or read the registry's layer list at configure time.
+`rendertest.validation-layer` reports Skipped, which is visible, not a silent pass. The `win-gpu` runner
+(WP-0.4) has the Vulkan SDK installed machine-wide, and `.github/workflows/win-gpu.yml` fails without `VULKAN_SDK`
+or when `rendertest.validation-layer` does not report the layer. Reading the registry's layer list at configure
+time stays a follow-up.
 
 ```
 helios-rendertest --list

@@ -307,6 +307,24 @@ std::string camelCase(std::string_view s) {
     return out;
 }
 
+std::string snakeCase(std::string_view s) {
+    auto upper = [](char c) { return c >= 'A' && c <= 'Z'; };
+    auto lowerOrDigit = [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'); };
+    std::string out;
+    for (usize i = 0; i < s.size(); ++i) {
+        const char c = s[i];
+        if (upper(c)) {
+            const bool afterWord = i > 0 && lowerOrDigit(s[i - 1]);
+            const bool acronymEnd = i > 0 && upper(s[i - 1]) && i + 1 < s.size() && lowerOrDigit(s[i + 1]) && !(s[i + 1] >= '0' && s[i + 1] <= '9');
+            if ((afterWord || acronymEnd) && !out.empty() && out.back() != '_') out += '_';
+            out += static_cast<char>(c - 'A' + 'a');
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
 bool isPascalCase(std::string_view s) noexcept {
     if (s.empty() || !(s[0] >= 'A' && s[0] <= 'Z')) return false;
     return s.find('_') == std::string_view::npos;

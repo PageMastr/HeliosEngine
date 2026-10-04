@@ -99,7 +99,7 @@ public:
 	///
 	/// Note that this callback is called when all bodies are locked, so don't use any locking functions! See detailed class description of ContactListener.
 	///
-	/// Body 1 and 2 will be sorted such that body 1 ID < body 2 ID, so body 1 may not be dynamic.
+	/// Body 1 and 2 will be sorted such that body 1 comes first in Body::sStableOrderLess (Helios patch stable-order; upstream: body 1 ID < body 2 ID), so body 1 may not be dynamic.
 	///
 	/// Note that only active bodies will report contacts, as soon as a body goes to sleep the contacts between that body and all other
 	/// bodies will receive an OnContactRemoved callback, if this is the case then Body::IsActive() will return false during the callback.
@@ -113,7 +113,7 @@ public:
 	///
 	/// Note that this callback is called when all bodies are locked, so don't use any locking functions! See detailed class description of ContactListener.
 	///
-	/// Body 1 and 2 will be sorted such that body 1 ID < body 2 ID, so body 1 may not be dynamic.
+	/// Body 1 and 2 will be sorted such that body 1 comes first in Body::sStableOrderLess (Helios patch stable-order; upstream: body 1 ID < body 2 ID), so body 1 may not be dynamic.
 	///
 	/// If the structure of the shape of a body changes between simulation steps (e.g. by adding/removing a child shape of a compound shape),
 	/// it is possible that the same sub shape ID used to identify the removed child shape is now reused for a different child shape. The physics
@@ -132,7 +132,7 @@ public:
 	/// Cache what you need in the OnContactAdded and OnContactPersisted callbacks and store it in a separate structure to use during this callback.
 	/// Alternatively, you could just record that the contact was removed and process it after PhysicsSystem::Update.
 	///
-	/// Body 1 and 2 will be sorted such that body 1 ID < body 2 ID, so body 1 may not be dynamic.
+	/// Body 1 and 2 will be sorted such that body 1 comes first in Body::sStableOrderLess (Helios patch stable-order; upstream: body 1 ID < body 2 ID), so body 1 may not be dynamic.
 	///
 	/// The sub shape IDs were created in the previous simulation step, so if the structure of a shape changes (e.g. by adding/removing a child shape of a compound shape),
 	/// the sub shape ID may not be valid / may not point to the same sub shape anymore.

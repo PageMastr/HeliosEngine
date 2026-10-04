@@ -77,6 +77,18 @@ std::vector<Token> tokenize(std::string_view text, u32 fileIndex, DiagnosticEngi
                 if (b < stop && text[b] == ' ') ++b;
                 usize e = stop;
                 if (e > b && text[e - 1] == '\r') --e;
+                // Doc text is copied into generated comments (C++ //, Luau --, SQL --). A lone CR ends
+                // such a comment in GCC, Clang and PostgreSQL, so the rest of the line would run as code;
+                // other control characters have no business in a comment either. Tab is fine.
+                for (usize k = b; k < e; ++k) {
+                    const auto ch = static_cast<unsigned char>(text[k]);
+                    if ((ch < 0x20 && ch != '\t') || ch == 0x7f) {
+                        diags.error(loc(k), std::format("control character U+{:04X} in a doc comment (a carriage return would end the "
+                                                        "comment in generated code); remove it",
+                                                        static_cast<unsigned>(ch)));
+                        break;
+                    }
+                }
                 push(Tok::Doc, i, stop, text.substr(b, e - b), loc(i));
             } else {
                 space = true;

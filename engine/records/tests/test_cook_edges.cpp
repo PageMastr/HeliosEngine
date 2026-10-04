@@ -114,8 +114,11 @@ TEST_CASE("cook: two sources with one path are refused, whatever their order") {
 
 TEST_CASE("cook: two record types with one TypeId are refused with a diagnostic") {
     // A copy of PartDef under another name keeps its TypeId (process lifetime, like every TypeInfo).
-    auto* twin = new refl::TypeInfo(type("test.records.PartDef"));
-    twin->qualifiedName = "test.records.PartTwin";
+    static const refl::TypeInfo* const twin = [] {
+        auto* t = new refl::TypeInfo(type("test.records.PartDef"));
+        t->qualifiedName = "test.records.PartTwin";
+        return t;
+    }();
     const std::vector<SourceRecord> s = {
         source("part.hrec", type("test.records.PartDef"), R"({"$rid": 230, "$name": "p/1"})"),
         source("twin.hrec", *twin, R"({"$rid": 231, "$name": "p/2"})"),

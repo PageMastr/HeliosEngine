@@ -144,7 +144,7 @@ endforeach()
 
 if(HELIOS_MODULAR)
   get_property(symGroups GLOBAL PROPERTY HELIOS_LINK_GROUP_TARGETS)
-  get_property(symStandalone GLOBAL PROPERTY HELIOS_STANDALONE_TOOLS)
+  get_property(symStandalone GLOBAL PROPERTY HELIOS_SELF_CONTAINED_IMAGES)
   # Game images: link_model_probe keeps the game rules; link_model_bad_game breaks them (fixture below).
   set(symGames link_model_probe)
   set(symFixtures link_model_bad_game)

@@ -21,6 +21,9 @@ if(TARGET ecs_tests)
   target_compile_definitions(ecs_tests PRIVATE
     HELIOS_ECS_BLOCK_ID_VECTORS="${PROJECT_SOURCE_DIR}/services/testdata/vectors/block_ids.json")
   set_tests_properties(ecs_tests PROPERTIES TIMEOUT 600)
+  # White-box tests call flecs and mimalloc directly, which helios_runtime never exports: in a modular
+  # build the image carries its own copy of the modules (ADR-016; cmake/HeliosModular.cmake).
+  helios_self_contained(ecs_tests)
 endif()
 
 # ---------------------------------------------------------------------------------------------
@@ -33,6 +36,7 @@ helios_executable(ecs_bench
   DEPS helios::ecs)
 target_include_directories(ecs_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/bench ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set_target_properties(ecs_bench PROPERTIES FOLDER bench)
+helios_self_contained(ecs_bench) # the spikes call flecs and mimalloc directly, like ecs_tests
 
 # The linux-bench preset (Release, asserts off) turns this on: the ADR-004a M1 build.
 option(HELIOS_ECS_BENCH_CTEST "Register ecs_bench (RT-01, --quick) as a CTest with label 'bench'" OFF)

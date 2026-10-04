@@ -37,11 +37,17 @@
 #     data that code outside the group references (MSVC cannot import data without dllimport) and on C
 #     entry points; functions are exported without it.
 #
-# helios_standalone_tool(<target> MODULES <module>...)
-#   For a build-time tool whose output feeds a module (helios-schemac generates gameplay's sources): it
-#   links the listed modules' objects into itself instead of their group libraries, which would otherwise
-#   depend on the tool's output (a target cycle). Every helios::<module> it reaches then gives only compile
-#   requirements. No-op in shipping builds.
+# helios_self_contained(<target>)
+#   In a modular build, <target> carries its own copy of every module it reaches (their objects and
+#   third-party libraries, as a shipping image does) instead of linking the group libraries. Two kinds
+#   of image need it:
+#     * a build-time tool whose output feeds a module (helios-schemac generates gameplay's sources), which
+#       would otherwise depend on its own output through helios_runtime (a target cycle);
+#     * a white-box test or bench that calls a module's third-party library directly (flecs, Luau,
+#       mimalloc, netcode): a group never exports third-party code (02 §1.4, symbol audit R1/P1).
+#   The module closure is computed at the end of configure (helios_modular_finalize). Such an image shares
+#   no state with the groups and is not audited. A static library marked self-contained only stops its
+#   helios::<module> links from naming the groups (its consumers decide). No-op in shipping builds.
 #
 # Toolchains: MSVC and clang-cl (windows-msvc-dev), GCC and Clang on Linux (linux-dev). MinGW builds only
 # the shipping flavour: the cross build is a portability check of what ships, and the dev flavour's
@@ -209,32 +215,66 @@ function(_helios_modular_module target name group)
   target_link_libraries(helios_${group} PRIVATE ${target})
 
   # The consumers' view of the module. The group library is linked unless the consumer is the group
-  # itself, a module of the same group, or a standalone tool (helios_standalone_tool).
+  # itself, a module of the same group, or a self-contained image (helios_self_contained).
   add_library(${target}_api INTERFACE)
-  set(skip "$<OR:$<STREQUAL:$<TARGET_PROPERTY:HELIOS_LINK_GROUP>,${group}>,$<BOOL:$<TARGET_PROPERTY:HELIOS_STANDALONE_TOOL>>>")
+  set(skip "$<OR:$<STREQUAL:$<TARGET_PROPERTY:HELIOS_LINK_GROUP>,${group}>,$<BOOL:$<TARGET_PROPERTY:HELIOS_SELF_CONTAINED>>>")
   target_link_libraries(${target}_api INTERFACE "$<COMPILE_ONLY:${target}>" "$<$<NOT:${skip}>:helios_${group}>")
   set_target_properties(${target}_api PROPERTIES HELIOS_API_OF ${target} HELIOS_LINK_GROUP_OF ${group})
   add_library(helios::${name} ALIAS ${target}_api)
   set_property(GLOBAL APPEND PROPERTY HELIOS_LINK_GROUP_${group}_MODULES ${name})
 endfunction()
 
-function(helios_standalone_tool target)
-  cmake_parse_arguments(S "" "" "MODULES" ${ARGN})
+function(helios_self_contained target)
   if(NOT HELIOS_MODULAR)
     return()
   endif()
-  set_target_properties(${target} PROPERTIES HELIOS_STANDALONE_TOOL ON)
+  set_target_properties(${target} PROPERTIES HELIOS_SELF_CONTAINED ON)
   get_target_property(type ${target} TYPE)
-  if(type STREQUAL "EXECUTABLE" OR type STREQUAL "SHARED_LIBRARY" OR type STREQUAL "MODULE_LIBRARY")
-    foreach(m IN LISTS S_MODULES)
-      if(NOT TARGET helios_${m})
-        message(FATAL_ERROR "helios_standalone_tool(${target}): no module '${m}' (configure it first)")
-      endif()
-      # Direct link of the OBJECT library: its objects and its own link dependencies.
-      target_link_libraries(${target} PRIVATE helios_${m})
-    endforeach()
-    set_property(GLOBAL APPEND PROPERTY HELIOS_STANDALONE_TOOLS ${target})
+  if(type MATCHES "^(EXECUTABLE|SHARED_LIBRARY|MODULE_LIBRARY)$")
+    set_property(GLOBAL APPEND PROPERTY HELIOS_SELF_CONTAINED_IMAGES ${target})
   endif()
+endfunction()
+
+# Links into a self-contained image the object libraries of every module it reaches (helios_finalize_build
+# runs after every target exists, so the closure is complete).
+function(_helios_modular_link_self_contained target)
+  set(queue "${target}")
+  set(seen "${target}")
+  set(modules "")
+  while(queue)
+    list(POP_FRONT queue cur)
+    _helios_direct_deps("${cur}" deps) # HeliosLayering.cmake: helios::<module> resolves to the module
+    foreach(d IN LISTS deps)
+      if(d IN_LIST seen)
+        continue()
+      endif()
+      list(APPEND seen "${d}")
+      get_target_property(m "${d}" HELIOS_MODULE_NAME)
+      if(m)
+        list(APPEND modules "${d}")
+      endif()
+      get_target_property(dtype "${d}" TYPE)
+      if(m OR dtype MATCHES "^(STATIC_LIBRARY|OBJECT_LIBRARY|INTERFACE_LIBRARY)$")
+        list(APPEND queue "${d}")
+      endif()
+    endforeach()
+  endwhile()
+  # The objects themselves, with their third-party libraries ($<LINK_ONLY:...> usage of each OBJECT library).
+  if(modules)
+    target_link_libraries(${target} PRIVATE ${modules})
+  endif()
+  # Its sources define what they declare: no dllimport of data the image itself carries.
+  foreach(group IN LISTS HELIOS_LINK_GROUPS)
+    string(TOUPPER "${group}" G)
+    target_compile_definitions(${target} PRIVATE HELIOS_${G}_BUILDING)
+  endforeach()
+  # A gated Windows image normally gets the CPU-gate hook from helios_runtime.dll (helios_cpu_gate); this
+  # one loads no group, so it links the hook itself, as a shipping image does.
+  get_target_property(gateInRuntime ${target} HELIOS_CPU_GATE_IN_RUNTIME)
+  if(gateInRuntime AND TARGET helios_core_cpugate_hook)
+    target_sources(${target} PRIVATE $<TARGET_OBJECTS:helios_core_cpugate_hook>)
+  endif()
+  set_property(TARGET ${target} PROPERTY HELIOS_SELF_CONTAINED_MODULES "${modules}")
 endfunction()
 
 # Run once at the end of configure (helios_finalize_build).
@@ -266,6 +306,11 @@ extern \"C\" const char* helios_${group}_link_group_modules(void) {
     endif()
   endforeach()
 
+  get_property(selfContained GLOBAL PROPERTY HELIOS_SELF_CONTAINED_IMAGES)
+  foreach(tgt IN LISTS selfContained)
+    _helios_modular_link_self_contained(${tgt})
+  endforeach()
+
   # The CPU gate (02 §1.1 "Which image"): on Windows the hook lives in helios_runtime.dll, the first
   # Helios image the loader initializes, and gated executables carry none (helios_cpu_gate imports the
   # DLL instead). ELF executables keep the hook: .preinit_array exists only there, and glibc runs it
@@ -289,9 +334,9 @@ function(_helios_all_targets out)
   set(${out} "${found}" PARENT_SCOPE)
 endfunction()
 
-# Modular rule for the layering check (HeliosLayering.cmake): only a group library or a standalone tool
-# may link a module's OBJECT library directly; anything else would carry a second copy of its code and
-# state. Appends "helios layering: ..." messages to <errorsVar>.
+# Modular rule for the layering check (HeliosLayering.cmake): only a group library or a self-contained
+# image may link a module's OBJECT library directly; anything else would carry a second copy of its code
+# and state beside the group's. Appends "helios layering: ..." messages to <errorsVar>.
 function(helios_modular_check_direct_objects errorsVar)
   if(NOT HELIOS_MODULAR)
     return()
@@ -299,7 +344,7 @@ function(helios_modular_check_direct_objects errorsVar)
   set(errors ${${errorsVar}})
   get_property(modules GLOBAL PROPERTY HELIOS_MODULE_TARGETS)
   get_property(groups GLOBAL PROPERTY HELIOS_LINK_GROUP_TARGETS)
-  get_property(standalone GLOBAL PROPERTY HELIOS_STANDALONE_TOOLS)
+  get_property(standalone GLOBAL PROPERTY HELIOS_SELF_CONTAINED_IMAGES)
   _helios_all_targets(candidates)
   foreach(tgt IN LISTS candidates)
     if(tgt IN_LIST groups OR tgt IN_LIST standalone)
@@ -320,7 +365,7 @@ function(helios_modular_check_direct_objects errorsVar)
           set(item "${aliased}")
         endif()
         if(item IN_LIST modules)
-          list(APPEND errors "helios layering: '${tgt}' links the module object library '${item}' directly; in a modular build that copies the module into a second image (link helios::<module>, or declare a build-time tool with helios_standalone_tool)")
+          list(APPEND errors "helios layering: '${tgt}' links the module object library '${item}' directly; in a modular build that copies the module into a second image (link helios::<module>, or declare the image with helios_self_contained)")
         endif()
       endif()
     endforeach()

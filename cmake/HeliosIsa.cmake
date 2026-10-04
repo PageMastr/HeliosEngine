@@ -103,8 +103,10 @@ function(helios_cpu_gate target)
                         "(target helios_core_cpugate_hook is missing)")
   endif()
   if(HELIOS_MODULAR AND MSVC)
-    # The linker drops a DLL whose symbols an image never references; /INCLUDE keeps the import.
+    # The linker drops a DLL whose symbols an image never references; /INCLUDE keeps the import. (A
+    # self-contained image links the hook itself: cmake/HeliosModular.cmake, helios_self_contained.)
     target_link_options(${target} PRIVATE /INCLUDE:helios_cpu_gate_run)
+    set_target_properties(${target} PROPERTIES HELIOS_CPU_GATE_IN_RUNTIME ON)
   else()
     # An object library links its object file unconditionally; an archive member holding only an
     # initializer would be dropped by the linker.

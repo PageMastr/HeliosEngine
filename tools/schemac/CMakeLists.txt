@@ -41,9 +41,10 @@ target_link_libraries(helios-schemac PRIVATE helios_schemac_lib)
 set_target_properties(helios-schemac PROPERTIES FOLDER tools)
 helios_apply_warnings(helios-schemac)
 # Modular dev builds (ADR-016): the generator runs during the build and its output feeds a module of
-# helios_runtime, so it links core's objects itself instead of that library (cmake/HeliosModular.cmake).
-helios_standalone_tool(helios_schemac_lib)
-helios_standalone_tool(helios-schemac MODULES core)
+# helios_runtime, so it carries its own copy of core instead of linking that library
+# (helios_self_contained, cmake/HeliosModular.cmake).
+helios_self_contained(helios_schemac_lib)
+helios_self_contained(helios-schemac)
 
 # ---------------------------------------------------------------------------------------------
 # Tests: parser/sema/lock/golden tests in-process, plus the sample schemas compiled through

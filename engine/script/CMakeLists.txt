@@ -21,4 +21,7 @@ if(TARGET script_tests)
   target_compile_definitions(script_tests PRIVATE
     HELIOS_SCRIPT_DEFS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/defs/helios.d.luau")
   set_tests_properties(script_tests PROPERTIES TIMEOUT 600)
+  # White-box tests call the Luau C API directly, which helios_runtime never exports: in a modular build
+  # the image carries its own copy of the modules (ADR-016; cmake/HeliosModular.cmake).
+  helios_self_contained(script_tests)
 endif()

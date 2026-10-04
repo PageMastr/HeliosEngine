@@ -523,7 +523,7 @@
       "status": "partial",
       "tests": [{"ci_job": "Conformance lint (tools/conformance)"}, {"evidence": "tools/conformance/known_failing.jsonc"}],
       "gaps": [
-        {"clause": "CONF-06…08, CONF-11 and CONF-12 are not implemented yet (the next PRs of WP-0.2's stack)", "state": "unmeasured", "owner": "WP-0.2"},
+        {"clause": "CONF-11 and CONF-12 are not implemented yet (the next PR of WP-0.2's stack)", "state": "unmeasured", "owner": "WP-0.2"},
         {"clause": "CONF-11 and CONF-12 are expected to fail on the tree until the ISA and gate rework (09 §5.10.4 (b))", "state": "unmeasured", "owner": "WP-0.2r, WP-0.5r"},
         {"clause": "WP-0.2 follow-up (Go module licence scan): the licence scanner (lint_licenses) sees third_party/ and MANIFEST.md, not the Go modules that services/go.sum pins, which 01 §5.2's 'dependencies' covers. Not blocking: a review sample of 51 of the 145 modules was all permissive", "state": "unmeasured", "owner": "WP-0.2"}
       ]

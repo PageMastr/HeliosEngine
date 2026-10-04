@@ -1,0 +1,13 @@
+#! -rules CONF-08 -strict
+# 7777 everywhere, reached through constants, a flag default, net.JoinHostPort and compose mappings with a
+# host IP; other ports are not the gateway's (NATS, a trunk, a test's, TCP 8080); a commented-out mapping
+# and a printf whose format names the gateway are not read, nor are names that only contain "port"
+# (transport, report_interval).
+# 7777 also through ipv4 with an octet array, ipv6, "host:" + port, fmt.Sprint, Port fields, a TOML inline
+# table and quoted key, and an upper-case /UDP mapping.
+# 7777 through host + ":" + port with a host variable and multi-line TOML arrays; an array of arrays whose
+# element line looks like a table header.
+# C++: the overloads' ports on read lines, std::string{"host:"} + port, `<< 7776 + 1`, and a split
+# initializer and option default; statements after a read statement or a gateway #include are not read.
+# YAML: an unquoted flow sequence.
+# Go: gateway-typed literals at 7777, elided and with an address field.

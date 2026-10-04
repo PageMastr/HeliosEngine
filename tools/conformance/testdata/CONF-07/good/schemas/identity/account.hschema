@@ -1,0 +1,5 @@
+package identity.account;
+
+struct Contact {
+  email: string @pii
+}

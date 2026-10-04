@@ -32,9 +32,13 @@ the scale of the display the window is on) goes into the style metrics and `Font
 forced scale it follows the window: `SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED` (moved to another
 monitor, or the display's scale changed) re-rasterizes glyphs at the new display's scale
 (`src/display_scale.h`). A scale the user picks under *View > UI Scale* stays put for the session,
-like a forced one. Test mode rebuilds the default layout at a new scale; a user's own dock
-layout is kept. Only the vector font embedded in
-Dear ImGui is used (a minimal ProggyForever, MIT), so every machine renders the same glyphs.
+like a forced one. Test mode rebuilds the default layout at a new scale; a user's own dock layout
+is kept.
+
+**Font** (07 §1.3). The UI font is Roboto 2.138 Regular (Apache-2.0, `third_party/roboto`), embedded
+as bytes at build time (`embed_font.cmake`), so every machine renders the same glyphs and the goldens
+pin them. 07 §1.3's other fonts come with their first users: Roboto Mono with the code pane (T10, T19),
+a CJK fallback with localization previews (T25), and an icon font.
 
 ## Test mode and the harness (07 §4.4)
 
@@ -68,14 +72,15 @@ Dear ImGui is used (a minimal ProggyForever, MIT), so every machine renders the 
 
 ## Tests
 
-- **`editorui_tests`** (doctest, 52 cases plus 1 `perf:` case; no GPU or display, so it runs on
+- **`editorui_tests`** (doctest, 53 cases plus 1 `perf:` case; no GPU or display, so it runs on
   Windows CI too):
   - themes and contrast (every text pair the shell draws, including disabled text and input hints
     on selected and hovered rows and frames, the badges also on a hovered or pressed name cell,
     selected text in a text field, the Viewport panel's note, and the dirty and error tokens, with
     the ratios also computed outside the lint), every ImGui color slot taken from the theme, the
     text caret and a checked box's check mark at 3:1 or more (WCAG 1.4.11) in every theme, theme
-    metric ranges, the embedded themes against the token files, pseudo-localization and chords;
+    metric ranges, the embedded themes against the token files, the embedded font against
+    `third_party/roboto`, pseudo-localization and chords;
   - the property grid's edits run after its rows are drawn: clearing an optional and removing a
     non-last element of an expanded list, which read a cleared value and past the shortened list
     while the edits ran inside the draw;
@@ -114,8 +119,8 @@ Written for plan revision 6 (07 §1.3, §1.4, §4.4; 09 §2.1 WP-0.18) on 2026-0
 plan revision 11 on 2026-10-03, when the work was ported onto it: revisions 7–11 changed 02 §7.4, 04
 §3.2 and §10.2, 06 §1.2, ADR-004a, and 09's WP-0.10r row, §5.2a, §5.10.4, §7 and §8, none of which maps
 to this module; 07 and 09's WP-0.18 row are unchanged since revision 6. The Phase 0
-deviations from 07 are listed in the WP-0.18 row of 09 §8.1. Multi-viewport tear-offs, Roboto
-fonts, the `schemac` editor emitter and localization (T25) come later.
+deviations from 07 are listed in the WP-0.18 row of 09 §8.1. Multi-viewport tear-offs, the fonts
+other than Roboto Regular, the `schemac` editor emitter and localization (T25) come later.
 
 Re-checked against plan revision 12 on 2026-10-03: it changed 09 §0, §5.6, §5.7, §5.10.4, §8.1,
 §8.2 and PLAN.md §11 (owner approvals, NS-0.2), none of which maps to this module.

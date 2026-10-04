@@ -87,11 +87,13 @@ struct Scenario {
 /// a save afterwards then writes nothing.
 void checkRefused(Framework& fw, const fs::Path& journal, std::string_view needle) {
     auto report = fw.recover(journal);
-    REQUIRE_FALSE(report);
-    CHECK(report.errorCode() == ErrorCode::InvalidArgument);
-    INFO(report.error().message);
-    CHECK(report.error().message.find(needle) != std::string::npos);
-    CHECK(report.error().message.find("nothing was replayed") != std::string::npos);
+    CHECK_FALSE(report);  // not REQUIRE: without the rule, the save below shows what escapes
+    if (!report) {
+        CHECK(report.errorCode() == ErrorCode::InvalidArgument);
+        INFO(report.error().message);
+        CHECK(report.error().message.find(needle) != std::string::npos);
+        CHECK(report.error().message.find("nothing was replayed") != std::string::npos);
+    }
     CHECK(fw.documents().size() == 0);
     CHECK(fw.log().empty());
     auto saved = fw.saveAll();

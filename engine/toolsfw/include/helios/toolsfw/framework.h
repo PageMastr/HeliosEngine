@@ -126,13 +126,16 @@ public:
     /// Reflection-based property diff (ADR-009): `mutate` edits a copy of the document's object;
     /// the diff between the copy and the document becomes this transaction's ops.
     Result<void> edit(const DocId& doc, const std::function<void(void* object)>& mutate);
-    /// Creates a record document at the project-relative `file` (".hrec"). `json` is the initial
+    /// Creates a record document at the project-relative `file` (".hrec"; an absolute path under
+    /// the root is accepted too: Workspace::confine with PathOrigin::Caller). `json` is the initial
     /// field values (empty = the type's defaults). Returns the new document's id.
     Result<DocId> createRecord(const refl::TypeInfo& type, std::string_view file, const refl::RecordHeader& header,
                                std::string_view json = {});
     /// Removes a document (its file is deleted when the project is saved).
     Result<void> destroy(const DocId& doc);
-    /// Applies a raw op (replay, collaboration, patches).
+    /// Applies a raw op (replay, collaboration, patches). These are untrusted: a Create's or
+    /// Destroy's file must pass Workspace::confine with PathOrigin::Untrusted (on disk for a new
+    /// file), and a Destroy must name its document's own file (InvalidArgument otherwise).
     Result<void> apply(const Op& op);
 
     void setLabel(std::string label) { m_label = std::move(label); }
@@ -251,13 +254,16 @@ public:
     JournalWriter* journal() const noexcept { return m_journal.get(); }
 
     // ---- documents ----------------------------------------------------------------------------
-    /// Opens a record file (absolute or project-relative). The type comes from `type` or from the
-    /// file's `records/<table>/` directory. Opening an open file returns the open document.
+    /// Opens a record file inside the project (Workspace::confine with PathOrigin::Caller:
+    /// project-relative, or absolute under the root; InvalidArgument otherwise, whatever `type`).
+    /// The type comes from `type` or from the file's `records/<table>/` directory. Opening an open
+    /// file returns the open document.
     Result<Document*> open(const fs::Path& file, const refl::TypeInfo* type = nullptr);
     /// Opens every `*.hrec` under `<root>/records`, sorted by path. Returns the number opened.
     Result<usize> openAll();
     /// Writes a dirty document's canonical text atomically (a destroyed one's file is removed) and
-    /// journals the save. Fails with InvalidState while an open transaction group or an
+    /// journals the save. The file's path goes through Workspace::confine again first, since a
+    /// link may have appeared inside the project after the open (InvalidArgument, nothing written). Fails with InvalidState while an open transaction group or an
     /// uncommitted TxBuilder holds edits of the document (see "Replay bases" above), and reports a
     /// failed journal write (the file is written; recovery then needs a later save).
     Result<void> save(const DocId& doc);

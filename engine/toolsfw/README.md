@@ -7,7 +7,7 @@ Its dependencies are `core` and `reflect`, plus `script` privately for the Luau 
 
 | Header | What it provides |
 |---|---|
-| `document.h` | `Document` (a record file over reflected data: `$rid`/`$name`/`$comment` header, canonical JSONC text, revision, content hash, dirty state) and `Workspace` (lookup by GUID, `$name`, relative path or path) |
+| `document.h` | `Document` (a record file over reflected data: `$rid`/`$name`/`$comment` header, canonical JSONC text, revision, content hash, dirty state) and `Workspace` (lookup by GUID, `$name`, relative path or path; `confine()`, the project-confinement rule) |
 | `transaction.h` | `Op` (Set, Insert, Remove, Move, Create, Destroy with before/after values and an exact inverse), `Transaction` (id = user + lamport, kind Do/Undo/Redo, target, origin, label, merge key) and JSON (de)serialization |
 | `framework.h` | `Framework`: open/save/close/reload (3-way merge), `TxBuilder` (property-path edits, reflection diffs, raw ops), commit pipeline, history with undo/redo, groups and gesture merging, events, recovery |
 | `command.h` | `CommandBus`, `CommandDesc` (id, label, shortcut, arguments, `headless`, `paletteOnly`), `CommandInvoker` per input path (07 command sources: `ui`, `ui-scripted`, `luau`, `rpc`, `cli`, plus `import` and `collab`) |
@@ -69,6 +69,8 @@ Its dependencies are `core` and `reflect`, plus `script` privately for the Luau 
   `<yyyymmdd-hhmmss>-<pid>`, with `-2`, `-3`, ... when that journal already exists. The journal root is
   `HELIOS_JOURNAL_DIR`, else `%LOCALAPPDATA%\Helios\journal` on Windows or
   `$XDG_STATE_HOME/helios/journal` (else `~/.local/state/helios/journal`) on Linux.
+- **The journal is untrusted input** (see the section below): every file it names stays inside
+  the project, and a journal of another project is refused.
 - **Cross-process undo** (`helios-tool undo`). `TxBuilder::markRevert(kind, target)` records a
   transaction as the Undo or Redo of a transaction from an earlier session. The CLI rebuilds its
   linear undo stack from the project's journals, counting only transactions whose documents were
@@ -93,6 +95,67 @@ Its dependencies are `core` and `reflect`, plus `script` privately for the Luau 
   disconnected. A client may half-close (`nc -N`, `socat`: shut its write side after the last
   request); the server answers every request it read before closing the connection.
 
+## The journal is untrusted input
+
+A journal is a file the tools parse and then act on: `Framework::recover()` (the editor's crash
+recovery), `helios-tool journal replay <file>` (any path) and `helios-tool undo`/`redo` (the
+project's journal directory). It can come from anywhere: a crash journal attached to a bug report
+("please replay this"), a file planted in the journal directory (`HELIOS_JOURNAL_DIR`,
+`--journal-dir`, a synced profile) or one edited by hand. Its record checks detect torn writes, not
+tampering, so whoever writes a journal controls every field: the header's project, every record's
+file, type and snapshot, every op's file and values.
+
+Whatever a journal says, recovering or replaying it, and saving afterwards, reads, creates,
+rewrites and deletes only `.hrec` files inside the open project. Inside the project its edits are
+applied by design (that is what a replay is), each behind its op's precondition and the replay
+base's hash. Replayed transactions skip the pre-commit hooks, as undo and redo do: read a journal
+you did not write first (`helios-tool journal show`) and run `helios-tool validate` after replaying it.
+
+- **One rule, `Workspace::confine()`**, for every path a journal, a raw op or a caller names. A path
+  must name a `.hrec` file below the project root: relative (a caller may also pass an absolute
+  path under the root; on Windows the root prefix compares without ASCII case), with `/` and `\`
+  both separators on every platform, so a journal means the same on Windows and Linux. Refused: `..`
+  components; leading or trailing separators (absolute, UNC `\\server`, device `\\?\` and `\\.\` paths);
+  `<>:"|?*` (drive letters such as `C:` or `c:`, NTFS streams) and control characters; components
+  ending in a dot or a space (Windows drops them, so `x.hrec.` would name `x.hrec`); Windows device
+  names (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9` and their superscript forms,
+  `CONIN$`, `CONOUT$`, in any case and with any extension). The spelling rule is the same on every
+  platform, since a journal written on Linux may be replayed on Windows. The on-disk check then
+  walks the existing components from the root without following them and resolves each link: it
+  must lead to a directory or regular file inside the root's resolved path.
+- **Where it applies.** `recover()` checks the header and every path the journal names (open and
+  save records, Create and Destroy ops), on disk, before it reads a record file or applies
+  anything; one bad entry refuses the whole recovery (InvalidArgument naming the journal, the
+  record's index, offset, kind and document, and the path), so a hostile journal never
+  half-applies. `Framework::applyOp` gives a raw Create (replay, collaboration, patches) the rule,
+  on disk for a new file, and a Destroy must name its document's own file, the file a save
+  deletes. `Framework::open` / `doc.open` and `TxBuilder::createRecord` / `doc.create` take a
+  caller's path through it. At the time of use, `save()` (write or delete) and `reloadFromDisk()`
+  check the document's path again, because a link may appear inside the project after the open;
+  `helios-tool fmt`, `undo` and `redo` do the same.
+- **The project.** The header must name `FrameworkConfig::project`, unless
+  `RecoveryOptions::allowOtherProject` (`helios-tool journal replay --allow-other-project`) says
+  otherwise. The header is not a security boundary (a crafted journal simply names the victim's
+  project; the confinement rule is what protects the files), so this check only stops the wrong
+  project's journal being replayed by mistake, where its Creates would add records to the wrong
+  project. The flag exists for the one legitimate mismatch, a project renamed after the crash:
+  without it that journal could not be recovered at all short of editing its binary header. It
+  relaxes nothing else. `listJournalSessions()` skips journals whose header names another project,
+  so `auto` and `latest`, the editor's recovery offer and the CLI undo stack never pick one up.
+- **Output.** Refusals and `helios-tool journal list`/`show` print journal strings with control
+  characters escaped (`tf::printable`), so a crafted journal cannot drive the terminal.
+
+What the platform layer (`src/platform`) can and cannot tell:
+- Detected: symbolic links on POSIX (`lstat`, resolved with `realpath`); on Windows every reparse
+  point (`GetFileAttributesW`), so symbolic links, junctions and mount points, resolved with
+  `GetFinalPathNameByHandleW` (MinGW builds use the same Win32 calls); dangling links; devices,
+  FIFOs and sockets on POSIX.
+- Not detected: hard links (a hard link to a file outside the project is that file, on NTFS and
+  POSIX alike); a link that another local process creates between the check and the read or
+  write (there is no handle-relative `openat`/`O_NOFOLLOW` walk, and such a process can already
+  write the project); links above the project root (the root is the user's choice); NTFS 8.3
+  short names, which pass the spelling rule but alias only entries of the same directory.
+
 Threading: a `Framework` and everything it owns are used from one owner thread. The journal
 flusher and the RPC reader and writer threads never touch documents.
 
@@ -106,11 +169,15 @@ checked against the project's records).
 
 ## Tests
 
-`toolsfw_tests` (doctest, 75 cases, plus 1 `perf:` case in `toolsfw_tests_perf`): transactions and
+`toolsfw_tests` (doctest, 82 cases, plus 1 `perf:` case in `toolsfw_tests_perf`): transactions and
 inverses, history and merging, nested groups, commands and arguments, documents and 3-way reload,
 the journal (torn tails at every cut point, group commit, recovery, recovery after a reload,
 cross-session reverts, and saves and reloads refused inside a group or an uncommitted builder,
-with recovery checked after each), one writer per document and builders that outlive their
+with recovery checked after each), hostile journals (`test_confine.cpp`: the spelling rule,
+another project's record and a `../outside/evil.sh` Create, absolute, drive-letter, UNC, device and
+`..\` paths, a Destroy outside the project, a non-`.hrec` Create, a project mismatch, and symbolic
+links out of the project at recovery, open, create and save, skipped with a message where links
+cannot be created), one writer per document and builders that outlive their
 `Framework`, RPC over the real socket or pipe (including a client that never reads, one that
 half-closes, and the connection, request and output bounds), and **ED-1** (`test_ed1.cpp`):
 

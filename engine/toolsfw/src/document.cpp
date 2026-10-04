@@ -261,7 +261,7 @@ Result<ProjectFile> Workspace::confine(std::string_view path, PathOrigin origin,
     const fs::Path base = m_root.empty() ? fs::Path(".") : m_root;
     fs::Path cur = base;
     std::string prefix;
-    std::optional<std::string> realRoot;
+    std::optional<fs::Path> realRoot;  // resolved once, when the first link needs comparing
     for (const std::string_view part : parts) {
         cur /= fs::pathFromUtf8(part);
         if (!prefix.empty()) prefix += '/';
@@ -275,10 +275,9 @@ Result<ProjectFile> Workspace::confine(std::string_view path, PathOrigin origin,
             if (!realRoot) {
                 auto r = os::finalPath(base);
                 if (!r) return Error{r.error().code, std::format("{}: the project root: {}", shown(path), r.error().message)};
-                realRoot = fs::pathToGenericUtf8(*r);
+                realRoot = std::move(*r);
             }
-            const fs::Path real = fs::pathFromUtf8(*realRoot);
-            if (!underRoot(real, *target)) {
+            if (!underRoot(*realRoot, *target)) {
                 return refuse(std::format("{} is a link to {}, outside the project", shown(prefix), shown(fs::pathToGenericUtf8(*target))));
             }
             // What the link leads to. A fully resolved path that still reports Link is a Windows

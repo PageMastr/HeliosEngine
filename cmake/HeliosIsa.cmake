@@ -24,7 +24,10 @@
 # helios_cpu_gate(<target>)
 #   Links the CPU-gate pre-initializer (engine/core/src/cpugate/cpu_gate_hook.c) into an executable:
 #   it runs before any C++ initializer (.preinit_array on ELF, .CRT$XIB on Windows), prints the
-#   "requires an AVX2 CPU" message and exits with code 78 on unsupported CPUs.
+#   "requires an AVX2 CPU" message and exits with code 78 on unsupported CPUs. In a modular Windows
+#   build (HELIOS_MODULAR=ON) the hook lives in helios_runtime.dll (02 §1.1 "Which image";
+#   helios_modular_finalize in cmake/HeliosModular.cmake), and the executable gets a forced import of
+#   the gate probe instead, so the loader always initializes that DLL before any code of the executable.
 
 include_guard(GLOBAL)
 
@@ -99,9 +102,14 @@ function(helios_cpu_gate target)
     message(FATAL_ERROR "helios_cpu_gate(${target}): engine/core must be configured first "
                         "(target helios_core_cpugate_hook is missing)")
   endif()
-  # An object library links its object file unconditionally; an archive member holding only an
-  # initializer would be dropped by the linker.
-  target_sources(${target} PRIVATE $<TARGET_OBJECTS:helios_core_cpugate_hook>)
+  if(HELIOS_MODULAR AND MSVC)
+    # The linker drops a DLL whose symbols an image never references; /INCLUDE keeps the import.
+    target_link_options(${target} PRIVATE /INCLUDE:helios_cpu_gate_run)
+  else()
+    # An object library links its object file unconditionally; an archive member holding only an
+    # initializer would be dropped by the linker.
+    target_sources(${target} PRIVATE $<TARGET_OBJECTS:helios_core_cpugate_hook>)
+  endif()
   target_link_libraries(${target} PRIVATE helios::core)
   set_target_properties(${target} PROPERTIES HELIOS_CPU_GATE ON)
   set_property(GLOBAL APPEND PROPERTY HELIOS_CPU_GATE_TARGETS ${target})

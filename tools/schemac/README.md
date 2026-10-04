@@ -578,31 +578,31 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
   | `frame_cell, cell=<m>, res=<m>` | `WorldPos` | the position rounded to `res`, per axis a zigzag varint cell index and the offset in ⌈log₂(cell/res)⌉ bits (04 §4.5: `cell=4096m, res=1/256m` is 20 bits per axis) |
   | none | fixed-size values | raw: `bool` 1 bit, integers and enums at their width, floats as IEEE bits, ids at 64 (`NetHandle` 32) |
 
-  `bits` is 1 to 32 (3 to 32 for `smallest3`: at 1 or 2 bits rounding pushes most quaternions past
-  unit length), and `cell` must be a whole multiple of `res` (2 to 2³² steps). An argument the form
-  does not use (`bits=` on `frame_cell`, `range=` on `smallest3`) is an error, not ignored. Lengths
-  are metres: `m` or no unit (`cell=4km` is an error, not a 4 m cell); fractions (`1/256m`), hex
-  (`0xA`) and `±` are accepted, and `range=x` is the same as `range=±x` (02 §3.1 writes `range=4096`, 04 §4.1
-  `range=±4096`). The bound must fit an `f32` component for `f32` fields, and the range's width must
-  be finite. For `f32` components the bound is rounded to `f32` (`range=±0.7` quantizes against
+  `bits` is 1 to 32 (3 to 32 for `smallest3`: at 1 or 2 bits rounding pushes most quaternions past unit
+  length), and `cell` must be a whole multiple of `res` (2 to 2³² steps). An argument the form does not
+  use (`bits=` on `frame_cell`, `range=` on `smallest3`) is an error, not ignored. Lengths are metres:
+  `m` or no unit (`cell=4km` is an error, not a 4 m cell); fractions (`1/256m`), hex (`0xA`) and `±` are
+  accepted, and `range=x` is the same as `range=±x` (02 §3.1 writes `range=4096`, 04 §4.1
+  `range=±4096`). The bound must fit an `f32` component for `f32` fields, and the range's width must be
+  finite. For `f32` components the bound is rounded to `f32` (`range=±0.7` quantizes against
   ±0.699999988079071, a bound that rounds to 0 is an error), so the ends decode to the bound (see
-  Determinism); `f64` and `vec3d` keep it as written. With 2ⁿ−1 steps, 0 is not exact in a symmetric range (`range=±4096, bits=16` sends a
-  stationary velocity as +0.0625 m/s per axis); 04 §4.5's at-rest bit (WP-1.10) is meant to cover
-  velocities. The Phase 0 codec carries no strings, `Name`s, containers, structs or variants: a
-  replicated field of those types is an error under `--emit repl`.
-- **Determinism.** Quantizers use f64 arithmetic with round-half-up, and frame cells use integer
-  steps, so a cell and a client produce the same bits (04 §4.5). Range and raw fields re-encode from
-  their decoded value to identical bits, saturated values and NaN included: an `f32` reader stores the
-  decoded value as `f32`, so with a bound that is not an `f32` value (0.7) a saturated value would decode
-  to the rounded bound, inside the range, and re-encode to another step at 26 bits or more (PR #33's
-  round-6 review); the bound is therefore an `f32` value. Frame-cell fields do at every position when `res` is a power
-  of two (04 §4.5's 1/256 m and 1/1024 m); with another `res` (`res=1/1000m`, say), only below 2⁵⁰
-  steps (about 10¹² m at 1 mm), since from about 2⁵¹ steps the f64 rounding of `steps · res` and of
-  `v / res` together reach half a step. Smallest-three need not: when two components
-  are within a step, the decoded largest (√(1 − sum)) can come out below a quantized one, so its
-  index flips (26 of 20,000 random rotations at 10 bits), and above 24 bits the `f32` result is
-  coarser than a step. The rotation it decodes to stays within one step per component (or `f32`
-  precision) of the first decode. WP-1.10's "both sides quantize" extrapolation (04 §4.5) must
+  Determinism); `f64` and `vec3d` keep it as written. With 2ⁿ−1 steps, 0 is not exact in a symmetric
+  range (`range=±4096, bits=16` sends a stationary velocity as +0.0625 m/s per axis); 04 §4.5's at-rest
+  bit (WP-1.10) is meant to cover velocities. The Phase 0 codec carries no strings, `Name`s, containers,
+  structs or variants: a replicated field of those types is an error under `--emit repl`.
+- **Determinism.** Quantizers use f64 arithmetic with round-half-up, and frame cells use integer steps,
+  so a cell and a client produce the same bits (04 §4.5). Range and raw fields re-encode from their
+  decoded value to identical bits, saturated values and NaN included: an `f32` reader stores the decoded
+  value as `f32`, so with a bound that is not an `f32` value (0.7) a saturated value would decode to the
+  rounded bound, inside the range, and re-encode to another step once a step is finer than the rounding
+  (from 26 bits at ±0.7; PR #33's round-6 review); the bound is therefore an `f32` value. Frame-cell
+  fields do at every position when `res` is a power of two (04 §4.5's 1/256 m and 1/1024 m); with
+  another `res` (`res=1/1000m`, say), only below 2⁵⁰ steps (about 10¹² m at 1 mm), since from about 2⁵¹
+  steps the f64 rounding of `steps · res` and of `v / res` together reach half a step. Smallest-three
+  need not: when two components are within a step, the decoded largest (√(1 − sum)) can come out below a
+  quantized one, so its index flips (26 of 20,000 random rotations at 10 bits), and above 24 bits the
+  `f32` result is coarser than a step. The rotation it decodes to stays within one step per component
+  (or `f32` precision) of the first decode. WP-1.10's "both sides quantize" extrapolation (04 §4.5) must
   compare decoded rotations, not their bits.
 - **Non-finite and out-of-range input** stays decodable: range maps NaN to its minimum, frame cells
   map a non-finite axis to 0 and saturate a finite one at ±4·10¹⁸ steps of `res` (the reader accepts
@@ -719,8 +719,8 @@ package that name the same functions. Round 6 added `tests/repl/repl_edges.hsche
 generated `replEdgesReplication()` must compile and return its tables, and `f32` fields at `range=±0.7`,
 `±0.9` and `±3.3` up to 32 bits, whose saturated, NaN, infinite and 20,000 random values re-encode to the
 same bits; plus the emitted `f32` bound, a bound that rounds to 0, a declaration named like a generated
-function (imports included), and two outputs at one path (`.repl.gen.h`, `.luau.gen.h`, case). `engine/reflect`'s `reflect_tests` cover the quantizers: every
-width of smallest-three accepted by its reader and within one step when re-encoded, saturated `f32`
+function (imports included), and two outputs at one path (`.repl.gen.h`, `.luau.gen.h`, case).
+`engine/reflect`'s `reflect_tests` cover the quantizers: every width of smallest-three accepted by its reader and within one step when re-encoded, saturated `f32`
 range values re-encoding to the same bits with an `f32` bound (and not with 0.7), frame cells read
 back at every cell size, up to the ±4·10¹⁸-step saturation, and re-encoded to the same bits (to the
 saturation at 1/256 m and 1/1024 m; below 2⁵⁰ steps at 1 mm, 1 cm, 0.1 m and 1/3 m), and the offset

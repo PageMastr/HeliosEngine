@@ -525,7 +525,7 @@ TEST_CASE("repl: a saturated f32 range value re-encodes to the same bits") {
         if ((fullState(back, &again) != bytes || again != bits) && differ++ < 4)
             first += std::format("v={} decoded a={} b.x={} c={}; ", v, back.a, back.b.x, back.c);
     }
-    INFO(first);
+    INFO(differ << " of " << values.size() << " values re-encoded to other bits; the first: " << first);
     CHECK(differ == 0);
 
     // The emitted bound is the f32 value; an f64 field keeps 0.7.

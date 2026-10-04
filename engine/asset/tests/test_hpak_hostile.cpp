@@ -5,8 +5,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <thread>
 
 #include "hpak_test_util.h"
@@ -317,7 +319,9 @@ TEST_CASE("hpak integrity: a bad block calls the hook once per block, whatever r
     d.flip(d.a);
     d.flip(d.b);
     CHECK(d.pak->read(*d.a).errorCode() == ErrorCode::Corrupt);
+    const u64 reads = d.source->reads();
     CHECK(d.pak->read(*d.a).errorCode() == ErrorCode::Corrupt);
+    CHECK(d.source->reads() == reads); // a block known Bad is not read again
     CHECK(d.hook->calls == std::map<u32, int>{{0, 1}});
     CHECK(d.hook->last.pak == d.pak.get());
     CHECK(d.hook->last.offset == hpak::kHeaderBlockSize);
@@ -362,7 +366,9 @@ TEST_CASE("hpak integrity: a pending re-fetch reads as Busy until retryBlocks") 
     d.flip(d.a);
     d.hook->status = RefetchStatus::Pending;
     CHECK(d.pak->read(*d.a).errorCode() == ErrorCode::Busy);
+    const u64 reads = d.source->reads();
     CHECK(d.pak->read(*d.a).errorCode() == ErrorCode::Busy);
+    CHECK(d.source->reads() == reads); // a polled Busy does not read the block again
     CHECK(d.pak->blockState(0) == HpakBlockState::Pending);
     CHECK(d.hook->calls == std::map<u32, int>{{0, 1}});
 
@@ -426,6 +432,154 @@ TEST_CASE("hpak integrity: a block repaired by another reader after our range re
     REQUIRE(gotMid.ok());
     CHECK(*gotMid == incompressible(130 * 1024, 3));
     CHECK(d.hook->calls == std::map<u32, int>{{0, 1}, {2, 1}});
+}
+
+/// Bytes a test can change; the read after arm() stalls after copying until release().
+class GatedSource final : public IHpakSource {
+public:
+    explicit GatedSource(std::vector<u8> b) : m_bytes(std::move(b)) {}
+    u64 size() const override { return m_bytes.size(); }
+    Result<void> readAt(u64 offset, std::span<u8> out) const override {
+        std::unique_lock lock(m_mutex);
+        if (offset > m_bytes.size() || out.size() > m_bytes.size() - offset)
+            return Error{ErrorCode::EndOfFile};
+        std::copy_n(m_bytes.begin() + static_cast<std::ptrdiff_t>(offset), out.size(), out.begin());
+        if (m_armed) {
+            m_armed = false;
+            m_blocked = true;
+            m_cv.notify_all();
+            m_cv.wait(lock, [&] { return !m_blocked; });
+        }
+        return {};
+    }
+    std::string describe() const override { return "gated"; }
+    void set(u64 o, u8 v) {
+        std::lock_guard l(m_mutex);
+        m_bytes[o] = v;
+    }
+    u8 get(u64 o) const {
+        std::lock_guard l(m_mutex);
+        return m_bytes[o];
+    }
+    void arm() {
+        std::lock_guard l(m_mutex);
+        m_armed = true;
+    }
+    void waitBlocked() {
+        std::unique_lock l(m_mutex);
+        m_cv.wait(l, [&] { return m_blocked; });
+    }
+    void release() {
+        std::lock_guard l(m_mutex);
+        m_blocked = false;
+        m_cv.notify_all();
+    }
+
+private:
+    mutable std::mutex m_mutex;
+    mutable std::condition_variable m_cv;
+    std::vector<u8> m_bytes;
+    mutable bool m_armed = false, m_blocked = false;
+};
+
+TEST_CASE("hpak integrity: a reader whose copy predates a landed re-fetch does not report the block again") {
+    // Reader C copies the bad block and stalls; meanwhile another reader reports it (Pending), the
+    // re-fetch lands and the installer calls retryBlocks(), as documented. C's stale copy must not reach
+    // the hook a second time: the installer could not tell it from a re-fetch that came back bad, and its
+    // answer (Failed here, a retry cap) would leave a good block Bad. A reader that starts while the block
+    // is Pending fails Busy without reading it ("a pending re-fetch reads as Busy until retryBlocks").
+    const std::vector<TestAsset> assets = {{guidOf(1), incompressible(1000, 1), {0, 0, 0, 0}},
+                                           {guidOf(2), incompressible(1000, 2), {0, 0, 0, 1}}};
+    auto owned = std::make_unique<GatedSource>(buildPak(assets));
+    GatedSource* src = owned.get();
+    auto hook = std::make_shared<CountingRefetcher>();
+    hook->status = RefetchStatus::Pending;
+    HpakOpenOptions options;
+    options.refetcher = hook;
+    auto pak = HpakReader::open(std::move(owned), options).value();
+    const HpakEntry* a = pak->find(AssetId::fromGuid(guidOf(1)));
+    const u64 at = a->offset + 5;
+    const u8 good = src->get(at);
+    src->set(at, static_cast<u8>(good ^ 0xFF));
+
+    src->arm(); // reader C copies the bad block and stalls
+    Result<std::vector<u8>> gotC(Error{});
+    std::thread c([&] { gotC = pak->read(*a); });
+    src->waitBlocked();
+    CHECK(pak->read(*a).errorCode() == ErrorCode::Busy); // another reader reports it: a re-fetch is queued
+    src->set(at, good);                                  // the re-fetch lands
+    pak->retryBlocks(a->offset, 1);                      // and the installer retries
+    hook->status = RefetchStatus::Failed;                // a block bad after its re-fetch: give up
+    src->release();
+    c.join();
+    CHECK(hook->calls == std::map<u32, int>{{0, 1}}); // d7761af: {{0, 2}}
+    CHECK(gotC.ok());                                 // d7761af: Corrupt
+    CHECK(pak->read(*a).ok());                        // d7761af: Corrupt until another retryBlocks()
+    CHECK(pak->blockState(0) == HpakBlockState::Verified);
+}
+
+TEST_CASE("hpak integrity: a block another reader verifies while the hook runs stays Verified") {
+    // The hook answers Pending or Failed, but its re-fetch lands before it returns, and reader B
+    // verifies the good bytes meanwhile (B does not need the repair lock). The answer must not
+    // overwrite Verified: fetch() trusts a Verified block's bytes unhashed.
+    for (const RefetchStatus status : {RefetchStatus::Pending, RefetchStatus::Failed}) {
+        INFO("hook answers " << static_cast<int>(status));
+        Damaged d;
+        const u64 at = d.a->offset + 5;
+        const u8 good = d.source->get(at);
+        d.flip(d.a);
+        d.hook->status = status;
+        std::atomic<bool> landed{false}, bDone{false};
+        d.hook->onRefetch = [&](const HpakBadBlock&) {
+            d.source->set(at, good);
+            landed = true;
+            const auto t0 = std::chrono::steady_clock::now(); // bounded, so a regression fails, not hangs
+            while (!bDone && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(10))
+                std::this_thread::yield();
+        };
+        Result<std::vector<u8>> gotB(Error{}), gotC(Error{});
+        std::thread c([&] { gotC = d.pak->read(*d.a); });
+        while (!landed) std::this_thread::yield();
+        std::thread b([&] {
+            gotB = d.pak->read(*d.a);
+            bDone = true;
+        });
+        b.join();
+        c.join();
+        CHECK(gotB.ok());
+        CHECK(bDone.load());
+        CHECK(gotC.ok()); // its copy was bad, but the block it reports is Verified now: re-read
+        CHECK(d.pak->blockState(0) == HpakBlockState::Verified);
+        CHECK(d.pak->read(*d.a).ok());
+        CHECK(d.hook->calls == std::map<u32, int>{{0, 1}});
+    }
+}
+
+TEST_CASE("hpak integrity: an I/O error while checking a bad block is returned and leaves it Unverified") {
+    Damaged d;
+    const u64 at = d.a->offset + 5;
+    const u8 good = d.source->get(at);
+    d.flip(d.a);
+    SUBCASE("the re-read after a Repaired answer") {
+        d.hook->status = RefetchStatus::Repaired;
+        d.hook->onRefetch = [&](const HpakBadBlock&) {
+            d.source->set(at, good);
+            d.source->failReadAfter(0);
+        };
+        CHECK(d.pak->read(*d.a).errorCode() == ErrorCode::IoError); // not "still fails its checksum"
+        CHECK(d.pak->blockState(0) == HpakBlockState::Unverified);
+        REQUIRE(d.pak->read(*d.a).ok()); // the repaired bytes verify without another hook call
+        CHECK(d.hook->calls == std::map<u32, int>{{0, 1}});
+    }
+    SUBCASE("the re-read before the hook") {
+        d.source->failReadAfter(1); // the range read succeeds, the locked re-read fails
+        CHECK(d.pak->read(*d.a).errorCode() == ErrorCode::IoError);
+        CHECK(d.pak->blockState(0) == HpakBlockState::Unverified);
+        CHECK(d.hook->calls.empty());
+        CHECK(d.pak->read(*d.a).errorCode() == ErrorCode::Corrupt); // the hook (Failed) hears of it now
+        CHECK(d.hook->calls == std::map<u32, int>{{0, 1}});
+    }
+    CHECK(d.pak->blockState(0) != HpakBlockState::Pending);
 }
 
 TEST_CASE("hpak integrity: concurrent readers of one bad block call the hook once") {

@@ -367,11 +367,16 @@ Result<std::span<const u8>> HpakReader::fetch(u64 start, u64 size, std::vector<u
     const u32 last = static_cast<u32>((start + size - 1 - kHeaderBlockSize) / kPakBlockSize);
     HELIOS_ASSERT(last - first < 64); // callers fetch one stored asset block (≤ kMaxStoredBlock)
     // Which blocks were Verified before our read: only those bytes may skip the hash. A block verified
-    // (or repaired) by another reader after this point may be stale in our copy.
+    // (or repaired) by another reader after this point may be stale in our copy. A Pending or Bad block
+    // fails the fetch before anything is read, so a reader polling Busy costs no I/O.
     u64 trusted = 0;
-    for (u32 b = first; b <= last; ++b)
-        if (m_blockStates[b].load(std::memory_order_acquire) == toUnderlying(HpakBlockState::Verified))
+    for (u32 b = first; b <= last; ++b) {
+        const u8 s = m_blockStates[b].load(std::memory_order_acquire);
+        if (s == toUnderlying(HpakBlockState::Verified))
             trusted |= u64(1) << (b - first);
+        else if (s != toUnderlying(HpakBlockState::Unverified))
+            return blockError(b, s);
+    }
     if (trusted == (u64(2) << (last - first)) - 1) {
         scratch.resize(static_cast<usize>(size));
         HELIOS_TRY(m_source->readAt(start, scratch));
@@ -391,6 +396,14 @@ Result<std::span<const u8>> HpakReader::fetch(u64 start, u64 size, std::vector<u
     return std::span<const u8>(scratch.data() + (start - rangeStart), static_cast<usize>(size));
 }
 
+Error HpakReader::blockError(u32 index, u8 state, std::string_view why) const {
+    if (state == toUnderlying(HpakBlockState::Pending))
+        return makeError(ErrorCode::Busy, "'{}': pak block {} (offset {}) is being re-fetched", m_name, index,
+                         blockOffset(index));
+    return makeError(ErrorCode::Corrupt, "'{}': pak block {} (offset {}) {}", m_name, index,
+                     blockOffset(index), why);
+}
+
 Result<void> HpakReader::verifyBlock(u32 index, std::span<u8> bytes, bool readAfterVerified) const {
     constexpr u8 kUnverified = toUnderlying(HpakBlockState::Unverified);
     constexpr u8 kVerified = toUnderlying(HpakBlockState::Verified);
@@ -399,63 +412,68 @@ Result<void> HpakReader::verifyBlock(u32 index, std::span<u8> bytes, bool readAf
     if (readAfterVerified) return {}; // Verified is final, and a verified block's bytes do not change
     std::atomic<u8>& state = m_blockStates[index];
     const u64 offset = blockOffset(index);
-    const auto pending = [&] {
-        return makeError(ErrorCode::Busy, "'{}': pak block {} (offset {}) is being re-fetched", m_name, index,
-                         offset);
-    };
-    const auto bad = [&](std::string_view why) {
-        return makeError(ErrorCode::Corrupt, "'{}': pak block {} (offset {}) {}", m_name, index, offset, why);
+    const u64 expected = m_blockHashes[index];
+    // Unverified -> Verified is the one transition made without the repair lock; Pending, Bad and the
+    // resets to Unverified are made under it, and nothing leaves Verified.
+    const auto markVerified = [&] {
+        u8 unverified = kUnverified;
+        state.compare_exchange_strong(unverified, kVerified, std::memory_order_acq_rel);
     };
 
     // A block that turned Verified since our read is hashed too: our copy may predate its repair.
     u8 s = state.load(std::memory_order_acquire);
-    if (s == kPending) return pending();
-    if (s == kBad) return bad("failed its checksum");
-    const u64 expected = m_blockHashes[index];
-    const u64 actual = hash64(bytes.data(), bytes.size());
-    if (actual == expected) {
-        u8 unverified = kUnverified;
-        state.compare_exchange_strong(unverified, kVerified, std::memory_order_acq_rel);
+    if (s == kPending || s == kBad) return blockError(index, s);
+    if (hash64(bytes.data(), bytes.size()) == expected) {
+        markVerified();
         return {};
     }
 
     // Slow path, serialized per pak so the hook runs at most once per block.
     std::lock_guard lock(m_repairMutex);
     s = state.load(std::memory_order_acquire);
-    if (s == kPending) return pending();
-    if (s == kBad) return bad("failed its checksum");
-    if (s == kVerified) {
-        // Repaired and verified by another reader after our read: our copy is stale.
-        HELIOS_TRY(m_source->readAt(offset, bytes));
-        if (hash64(bytes.data(), bytes.size()) == expected) return {};
-        return bad("changed after it was verified");
+    if (s == kPending || s == kBad) return blockError(index, s);
+    // Our copy may predate a repair, a landed re-fetch and its retryBlocks(), or another reader's
+    // verification: judge the bytes the source holds now, so the hook hears only of a block that is
+    // bad when it runs (and `actual` is their hash). An I/O error is not a verdict: the state stays.
+    HELIOS_TRY(m_source->readAt(offset, bytes));
+    const u64 actual = hash64(bytes.data(), bytes.size());
+    if (actual == expected) {
+        markVerified();
+        return {};
     }
+    if (s == kVerified) return blockError(index, kBad, "changed after it was verified");
     HELIOS_LOG_WARN(
         "hpak '{}': pak block {} (offset {}, {} bytes) failed its checksum ({:016x}, expected {:016x})",
         m_name, index, offset, bytes.size(), actual, expected);
     const HpakBadBlock info{this, index, offset, bytes.size(), expected, actual};
     const RefetchStatus status = m_refetcher ? m_refetcher->refetch(info) : RefetchStatus::Failed;
+    u8 outcome = status == RefetchStatus::Pending ? kPending : kBad;
+    std::string_view why = "failed its checksum";
     if (status == RefetchStatus::Repaired) {
-        if (m_source->readAt(offset, bytes) && hash64(bytes.data(), bytes.size()) == expected) {
-            state.store(kVerified, std::memory_order_release);
+        HELIOS_TRY(m_source->readAt(offset, bytes));
+        if (hash64(bytes.data(), bytes.size()) == expected) {
+            markVerified();
             return {};
         }
-        state.store(kBad, std::memory_order_release);
-        return bad("still fails its checksum after the re-fetch");
+        why = "still fails its checksum after the re-fetch";
     }
-    if (status == RefetchStatus::Pending) {
-        state.store(kPending, std::memory_order_release);
-        return pending();
-    }
-    state.store(kBad, std::memory_order_release);
-    return bad("failed its checksum");
+    // The answer applies only while the block is Unverified: a re-fetch that landed while the hook ran
+    // may have been verified by a reader that did not need the lock, and Verified stays final (fetch()
+    // trusts those bytes unhashed). Then our bytes are stale: re-read them.
+    u8 unverified = kUnverified;
+    if (state.compare_exchange_strong(unverified, outcome, std::memory_order_acq_rel))
+        return blockError(index, outcome, why);
+    HELIOS_TRY(m_source->readAt(offset, bytes));
+    if (hash64(bytes.data(), bytes.size()) == expected) return {};
+    return blockError(index, kBad, "changed after it was verified");
 }
 
 Result<void> HpakReader::verifyAll() const {
     std::vector<u8> scratch;
     for (u32 b = 0; b < m_info.pakBlockCount; ++b) {
-        if (m_blockStates[b].load(std::memory_order_acquire) == toUnderlying(HpakBlockState::Verified))
-            continue;
+        const u8 s = m_blockStates[b].load(std::memory_order_acquire);
+        if (s == toUnderlying(HpakBlockState::Verified)) continue;
+        if (s != toUnderlying(HpakBlockState::Unverified)) return blockError(b, s);
         const u64 offset = blockOffset(b);
         scratch.resize(static_cast<usize>(std::min(kPakBlockSize, m_info.dataEnd - offset)));
         HELIOS_TRY(m_source->readAt(offset, scratch));

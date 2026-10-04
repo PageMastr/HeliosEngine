@@ -66,6 +66,7 @@ public:
     u64 size() const override { return m_bytes.size(); }
     Result<void> readAt(u64 offset, std::span<u8> out) const override {
         std::lock_guard lock(m_mutex);
+        if (m_failAfter > 0 && --m_failAfter == 0) return Error{ErrorCode::IoError, "injected read failure"};
         if (offset > m_bytes.size() || out.size() > m_bytes.size() - offset)
             return Error{ErrorCode::EndOfFile};
         std::copy_n(m_bytes.begin() + static_cast<std::ptrdiff_t>(offset), out.size(), out.begin());
@@ -85,11 +86,17 @@ public:
         std::lock_guard lock(m_mutex);
         return m_reads;
     }
+    /// After `n` more reads, the next readAt() fails with IoError (0: the next one).
+    void failReadAfter(u64 n) {
+        std::lock_guard lock(m_mutex);
+        m_failAfter = n + 1;
+    }
 
 private:
     mutable std::mutex m_mutex;
     std::vector<u8> m_bytes;
     mutable u64 m_reads = 0;
+    mutable u64 m_failAfter = 0; ///< 1 + reads left before the injected failure; 0: none.
 };
 
 } // namespace helios::asset::test

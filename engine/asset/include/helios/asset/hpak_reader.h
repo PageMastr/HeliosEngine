@@ -14,7 +14,10 @@
 //
 // Bad blocks. A pak block that fails its checksum calls the IBlockRefetcher (08 §2.6: the
 // StreamingInstaller's `demand`; a later WP connects it), at most once per block until
-// retryBlocks() resets it, and then fails or re-reads according to what the hook returns.
+// retryBlocks() resets it, and then fails or re-reads according to what the hook returns. Before
+// the hook runs, the reader re-reads the block under the repair lock, so a reader whose copy
+// predates a repair or a landed re-fetch never reports it again. Verified is final: a hook's answer
+// never overrides a block another reader verified meanwhile.
 //
 // Threading: an open HpakReader is immutable except for its per-block verification state, which
 // is atomic. read(), readInto(), verifyAll(), find(), entries(), info() and blockState() are safe
@@ -28,6 +31,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "helios/asset/asset_id.h"
@@ -66,32 +70,38 @@ struct HpakBadBlock {
     u64 offset = 0;   ///< File offset of the block.
     u64 size = 0;     ///< Block size (the last block of the blob region may be short).
     u64 expected = 0; ///< XXH3-64 from the TOC.
-    u64 actual = 0;   ///< XXH3-64 of the bytes read.
+    u64 actual = 0;   ///< XXH3-64 of the bytes read under the repair lock just before the call.
 };
 
 /// What a refetch hook did about a bad block.
 enum class RefetchStatus : u8 {
     Repaired, ///< The bytes were replaced before returning: the reader re-reads and re-verifies once.
-    Pending,  ///< A re-fetch was queued: reads of the block fail with Busy until retryBlocks().
+    Pending,  ///< A re-fetch was queued: reads of the block fail with Busy, unread, until retryBlocks().
     Failed,   ///< Nothing can be done: reads of the block fail with Corrupt until retryBlocks().
 };
 
 /// Re-fetch hook for bad pak blocks (02 §6.3 "Integrity"; 08 §2.6). Called on the reading thread
-/// with the reader's repair lock held, at most once per block until retryBlocks() covers it.
+/// with the reader's repair lock held, at most once per block until retryBlocks() covers it, and only
+/// for bytes the source holds when the lock is taken: the reader re-reads the block under the lock
+/// first, so a reader's stale copy never reaches the hook. An I/O error during that re-read, or
+/// during the re-read after Repaired, fails that read with the error and leaves the block Unverified
+/// (its next read checks it again).
 class IBlockRefetcher {
 public:
     virtual ~IBlockRefetcher() = default;
     /// Handles `block`, which failed its checksum: replace its bytes in the pak's source and return
     /// Repaired, queue a re-fetch and return Pending, or return Failed. Runs on the reading thread
     /// under `block.pak`'s repair lock, so calls for one pak are serialized; it must not read from or
-    /// call retryBlocks() on that pak (other paks are fine).
+    /// call retryBlocks() on that pak (other paks are fine). The answer applies only while the block
+    /// is still Unverified: if the bytes become good and another reader verifies them before the hook
+    /// returns, the block stays Verified.
     virtual RefetchStatus refetch(const HpakBadBlock& block) = 0;
 };
 
 /// Verification state of one pak block.
 enum class HpakBlockState : u8 {
     Unverified = 0, ///< Not read yet (or reset by retryBlocks()).
-    Verified = 1,   ///< Matched its checksum; never re-hashed.
+    Verified = 1,   ///< Matched its checksum; never re-hashed, and final (nothing leaves Verified).
     Pending = 2,    ///< Failed; the hook queued a re-fetch.
     Bad = 3,        ///< Failed; no repair.
 };
@@ -174,11 +184,14 @@ private:
     /// Bytes [start, start + size) of the blob region with every pak block they touch verified.
     /// `scratch` holds the bytes; the returned span points into it.
     Result<std::span<const u8>> fetch(u64 start, u64 size, std::vector<u8>& scratch) const;
-    /// Verifies pak block `index`, whose bytes the caller just read into `bytes` (re-read in place
-    /// when the hook repairs the block). `readAfterVerified`: the block was already Verified when
-    /// the caller read it, so the bytes are trusted unhashed; otherwise they are hashed even if
-    /// another reader has verified the block since.
+    /// Verifies pak block `index`, whose bytes the caller just read into `bytes`. On a mismatch it
+    /// re-reads them in place under the repair lock (the caller's copy may be stale) before calling
+    /// the hook, and again after a Repaired answer. `readAfterVerified`: the block was already
+    /// Verified when the caller read it, so the bytes are trusted unhashed; otherwise they are hashed
+    /// even if another reader has verified the block since.
     Result<void> verifyBlock(u32 index, std::span<u8> bytes, bool readAfterVerified) const;
+    /// The error for pak block `index` in `state`: Busy when Pending, otherwise Corrupt with `why`.
+    Error blockError(u32 index, u8 state, std::string_view why = "failed its checksum") const;
     u64 blockOffset(u32 index) const noexcept {
         return hpak::kHeaderBlockSize + u64(index) * hpak::kPakBlockSize;
     }

@@ -1,9 +1,9 @@
 {
   "$rid": 8721150164252052334,
-  "$name": "ship/kestrel",
+  "$name": "ship/skiff",
   "$parent": "ship/base",
   "$comment": "Inherits ship/base: overrides, struct merge, keyed merges, @merge(append), list replace.",
-  "name": "loc:ship.kestrel.name",
+  "name": "loc:ship.skiff.name",
   "mass": 9000.5,
   "handling": {"yaw": 60},
   "mounts": [
@@ -21,7 +21,7 @@
     {"slot": "dorsal", "weight": 5},
     {"slot": "ventral", "grade": "High", "weight": 3}
   ],
-  "extras": ["kestrel_extra"],
+  "extras": ["skiff_extra"],
   "nested": [[9]],
   "attrs": {"Speed": 140},
   "mode": "Idle",

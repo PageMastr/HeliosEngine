@@ -471,7 +471,7 @@
         {"ctest": "lint_records_sec4_fixture_leak"}
       ],
       "gaps": [
-        {"clause": "The game's own records: CI cooks only sample records, because content/ (Cinder Reach) does not exist yet; its client cook must run the same checks", "state": "unmeasured", "owner": "WP-0.20"},
+        {"clause": "The game's own records: CI cooks only sample records, because the reference project's content/ does not exist yet; its client cook must run the same checks", "state": "unmeasured", "owner": "WP-0.20"},
         {"clause": "Client paks: only records are cooked so far; 02 §6.5's server-side asset data (collision, hitboxes, server{} records packed per zone) reaches paks with the zone cook, which must lint both directions too", "state": "unmeasured", "owner": "WP-2.1"}
       ]
     }

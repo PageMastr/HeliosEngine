@@ -43,7 +43,7 @@ inline constexpr std::string_view kServerDbFile = "records.server.hrdb";
 
 /// One `.hrec` source.
 struct SourceRecord {
-    std::string path;                    ///< For diagnostics ("records/hull/kestrel.hrec").
+    std::string path;                    ///< For diagnostics ("records/hull/frigate.hrec").
     const refl::TypeInfo* type = nullptr; ///< A record type (DeclKind::Record).
     std::string text;                    ///< The file's JSONC.
 };

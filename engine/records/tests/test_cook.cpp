@@ -15,8 +15,8 @@ using namespace ::test::records;
 namespace {
 
 constexpr refl::RecordId kBase = 4390381077356775243ull;
-constexpr refl::RecordId kKestrel = 8721150164252052334ull;
-constexpr refl::RecordId kKestrelMk2 = 872142931993027468ull;
+constexpr refl::RecordId kSkiff = 8721150164252052334ull;
+constexpr refl::RecordId kSkiffMk2 = 872142931993027468ull;
 constexpr refl::RecordId kWren = 5505769937651519472ull;
 constexpr refl::RecordId kLoot = 2531117344111056078ull;
 constexpr refl::RecordId kSkin = 1759060513237310278ull;
@@ -72,10 +72,10 @@ TEST_CASE("cook: $parent inheritance overrides fields, merges structs and keyed 
     const CookOutput out = cookProject();
     const RecordDb db = open(out.server);
     const refl::Value baseV = decoded(db, db.find(kBase));
-    const refl::Value kV = decoded(db, db.find(kKestrel));
+    const refl::Value kV = decoded(db, db.find(kSkiff));
     const ShipDef& base = ship(baseV);
     const ShipDef& k = ship(kV);
-    CHECK(k.name.key == "ship.kestrel.name");
+    CHECK(k.name.key == "ship.skiff.name");
     CHECK(k.mass == 9000.5f);                                  // override
     CHECK(k.label == base.label);                              // inherited
     CHECK(k.tags == base.tags);
@@ -101,18 +101,18 @@ TEST_CASE("cook: $parent inheritance overrides fields, merges structs and keyed 
     CHECK(k.slots[2].slot == Name("ventral"));
     CHECK(k.slots[2].grade == Grade::High);
     // @merge(append) appends; plain lists, maps, variants and optionals replace.
-    CHECK(k.extras == std::vector<Name>{Name("base_extra"), Name("kestrel_extra")});
+    CHECK(k.extras == std::vector<Name>{Name("base_extra"), Name("skiff_extra")});
     CHECK(k.nested == std::vector<std::vector<i32>>{{9}});
     CHECK(k.attrs == std::map<Name, f64>{{Name("Speed"), 140.0}});
     CHECK(k.mode.index() == 0);
     CHECK_FALSE(k.maybe.has_value());
     CHECK(k.aiNotes == base.aiNotes); // server fields inherit too
 
-    const refl::Value mk2V = decoded(db, db.find(kKestrelMk2));
+    const refl::Value mk2V = decoded(db, db.find(kSkiffMk2));
     const ShipDef& mk2 = ship(mk2V);
-    CHECK(mk2.extras == std::vector<Name>{Name("base_extra"), Name("kestrel_extra"), Name("mk2_extra")});
-    CHECK(mk2.label == "Kestrel Mk II");
-    CHECK(mk2.mass == 9000.5f); // from kestrel, two levels up the chain
+    CHECK(mk2.extras == std::vector<Name>{Name("base_extra"), Name("skiff_extra"), Name("mk2_extra")});
+    CHECK(mk2.label == "Skiff Mk II");
+    CHECK(mk2.mass == 9000.5f); // from skiff, two levels up the chain
     CHECK(mk2.handling.yaw == 60.0f);
     REQUIRE(mk2.mode.index() == 1);
     CHECK(std::get<1>(mk2.mode).speed == 100.0f);
@@ -237,7 +237,7 @@ TEST_CASE("cook: HxlExpr values compile to HXL bytecode (engine/hxl)") {
     CHECK(wren->params() == std::vector<std::string>{"pilot", "hull"});
     // An empty expression cooks as no program.
     CHECK(db.find(kHullPlate).type->qualifiedName == "test.records.PartDef");
-    CHECK(db.find(kKestrel).value.field("query").asText() == "all(Ship.Class) none(State.Docked)");
+    CHECK(db.find(kSkiff).value.field("query").asText() == "all(Ship.Class) none(State.Docked)");
 
     const refl::TypeInfo& shipT = type("test.records.ShipDef");
     const std::vector<SourceRecord> bad = {
@@ -321,8 +321,8 @@ TEST_CASE("cook: identical inputs give byte-identical cooks, pinned by a golden 
     // come out of every toolchain (GCC and Clang locally, MSVC and clang-cl in CI).
     MESSAGE("client ", a.client.size(), " bytes, xxh3 ", std::format("{:#018x}", hash64(a.client.data(), a.client.size())));
     MESSAGE("server ", a.server.size(), " bytes, xxh3 ", std::format("{:#018x}", hash64(a.server.data(), a.server.size())));
-    CHECK(hash64(a.client.data(), a.client.size()) == 0xad47303144c02b83ull);
-    CHECK(hash64(a.server.data(), a.server.size()) == 0x8c35681c8131c834ull);
+    CHECK(hash64(a.client.data(), a.client.size()) == 0x0174baa4ac0f45bfull);
+    CHECK(hash64(a.server.data(), a.server.size()) == 0xe66e0b6f3c9c3afdull);
 }
 
 TEST_CASE("cook: lists nested deeper than hrdb::kMaxNesting are refused; the limit itself cooks and loads") {

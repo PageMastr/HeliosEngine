@@ -10,6 +10,7 @@ using namespace helios;
 using namespace helios::records;
 using namespace helios::records::test;
 
+// helios-lint: outside-anon-namespace begin (hand-built sec4t types and their TypeOf<> specializations)
 namespace sec4t {
 /// Hand-built types: schemac already refuses these schemas, so the cooker's own check is what stops
 /// them (generated code is not the only source of TypeInfos: builder types, and dynamic packages later).
@@ -102,6 +103,7 @@ const TypeInfo& helios::refl::TypeOf<sec4t::RefVisible>::get() noexcept {
         StructBuilder<sec4t::RefVisible>("sec4.RefVisible", DeclKind::Record).field("visible", &sec4t::RefVisible::visible).build();
     return *info;
 }
+// helios-lint: outside-anon-namespace end
 
 namespace {
 

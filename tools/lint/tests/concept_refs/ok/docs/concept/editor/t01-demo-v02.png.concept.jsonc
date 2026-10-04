@@ -1,0 +1,21 @@
+// Fixture: comments and trailing commas are JSONC (02 §3.7).
+{
+  "image": "t01-demo-v02.png", // the file name
+  "sha256": "4953ed1644a47ada5145aca18c271ef6614540027f5ef50761eabe8ade6bbee0",
+  /* a block
+     comment */
+  "title": "Demo, 2560 px wide",
+  "author": "Fixture author",
+  "created": "2026-10-04",
+  "source": {"kind": "owner",},
+  "tools": ["Krita 5.2", "a; semicolon", "[brackets]",],
+  "ai": null,
+  "licence": "CC0-1.0",
+  "ipReview": "Fixture: original shapes only.",
+  "status": "binding",
+  "elements": [],
+  "phase": "Ph0",
+  "planRefs": ["07 §2.1 T01",],
+  "deviations": ["Text \"quoted\" and a\nnewline"],
+  "review": "",
+}

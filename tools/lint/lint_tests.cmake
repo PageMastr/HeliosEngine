@@ -191,7 +191,7 @@ endforeach()
 
 # ---------------------------------------------------------------------------------------------
 # IP-name grep (01 §4.1 rule 2, §5.2): reference-content names out of engine/Foundation code,
-# franchise names out of everything, franchise titles out of content/.
+# franchise names out of everything, franchise titles out of content/ and docs/concept/.
 # ---------------------------------------------------------------------------------------------
 helios_lint_test(lint_ip_names COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
   -DLINT_POLICY=${LINT}/ip_names_policy.cmake -P ${LINT}/ip_names.cmake)
@@ -199,6 +199,8 @@ foreach(case
     "reference_in_code|reference-content name 'Kestrel'"
     "franchise_in_content|franchise name 'Tatooine'"
     "title_in_content|franchise title 'Star Wars'"
+    "franchise_in_concept|vista-dusk-v01.webp.concept.jsonc:2: franchise name 'Coruscant'"
+    "title_in_concept|t01-world-v01.png.concept.jsonc:2: franchise title 'Star Citizen'"
     "identifier_in_code|IP-name lint failed .4 finding")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)
@@ -207,8 +209,88 @@ foreach(case
     COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_TESTS}/ip_names/${fixture} -DLINT_POLICY=${LINT}/ip_names_policy.cmake
             -P ${LINT}/ip_names.cmake)
 endforeach()
-helios_lint_test(lint_ip_names_fixture_clean COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_TESTS}/ip_names/clean
-  -DLINT_POLICY=${LINT}/ip_names_policy.cmake -P ${LINT}/ip_names.cmake)
+foreach(fixture clean concept_names)
+  helios_lint_test(lint_ip_names_fixture_${fixture} COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_DIR=${LINT_TESTS}/ip_names/${fixture} -DLINT_POLICY=${LINT}/ip_names_policy.cmake -P ${LINT}/ip_names.cmake)
+endforeach()
+
+# ---------------------------------------------------------------------------------------------
+# Concept-art references (01 §5.2 provenance, docs/concept/README.md): every image under docs/concept
+# has a sidecar with its sha256 and provenance, keeps to the size limits and the folder's names, and is
+# in the index. The ok fixture has every format, source kind and optional field, JSONC comments and
+# trailing commas, and the 2,560 px edge; each other fixture seeds the violations its expectation names.
+# ---------------------------------------------------------------------------------------------
+set(crLint -P ${LINT}/concept_refs.cmake)
+set(crSide "docs/concept/editor/t01-demo-v01.png.concept.jsonc")
+helios_lint_test(lint_concept_refs COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR} ${crLint})
+helios_lint_test(lint_concept_refs_fixture_ok COMMAND ${CMAKE_COMMAND}
+  -DSOURCE_DIR=${LINT_TESTS}/concept_refs/ok ${crLint})
+foreach(case
+    "no_sidecar|docs/concept/editor/t01-demo-v01.png: no sidecar"
+    "orphan|README.md: missing .the index.*orphan sidecar: docs/concept/editor/t01-demo-v01.png does not exist"
+    "sha_mismatch|${crSide}:4: sha256 [0-9a-f]+ does not match the image .ed26f33e"
+    "fields|failed .11 finding.*:23: unknown field 'license'.*:3: 'image' is 'other.png', not this sidecar's image.*:7: 'created' is '4 Oct 2026'.*:1: missing required field 'ipReview'.*:15: 'status' is 'final', not one of binding, directional, mood-only.*:19: 'phase' is 'Phase 1'.*:13: 'tools' must be an array.*:20: 'planRefs' needs at least 1.*:1: missing required field 'licence'.*:16: 'elements.0..status' is 'maybe'.*:22: 'review' names docs/concept/editor/missing.review.md, which does not exist"
+    "provenance|failed .9 finding.*t01-ai-v01.png.concept.jsonc:12: missing required field 'ai.prompt'.*:15: 'ai.inputs.0..source' is 'screenshot'.*:15: 'ai.inputs.1.' is ai-assisted, so it must be an image in docs/concept.*:15: 'ai.inputs.2..sha256' does not match docs/concept/editor/t01-cc0-v01.png.*t01-cc0-v01.png.concept.jsonc:9: source.kind 'cc0' needs 'source.url'.*:13: a CC0 image keeps licence 'CC0-1.0', not 'MIT'.*t01-owner-v01.png.concept.jsonc:14: 'ai' must be null unless.*t01-paid-v01.png.concept.jsonc:9: source.kind 'commissioned' needs 'source.rights'.*:13: 'licence' is 'CC-BY-4.0'"
+    "limits|failed .5 finding.*hud-tall-v01.jpg: 1 x 2600 px, over 2560 px.*t01-wide-v01.png: 2561 x 1 px.*vista-wide-v01.webp: 2600 x 1 px.*vista-wide-v02.webp: 1 x 2600 px.*vista-wide-v03.webp: 2600 x 1 px"
+    "files|failed .8 finding.*editor/source.psd: not allowed here.*t01-demo-v01.PNG: not allowed here.*t01-demo-v01.gif: not allowed here.*editor/T01_World.png: name is not.*t01-fake-v01.png: is not a readable PNG file.*editor/t01-world.png: name is not.*ships/x-y-v01.png: not directly in an area directory.*docs/concept/t01-root-v01.png: not directly in an area"
+    "headers|failed .4 finding.*hud-cut-v01.jpg: is a JPEG file without a readable frame header.*t01-cut-v01.png: is not a readable PNG.*vista-cut-v01.webp: is a truncated WebP.*vista-cut-v02.webp: is a WebP file whose size cannot be read"
+    "index|docs/concept/editor/t01-demo-v01.png: concept 't01-demo' is not in the index"
+    "jsonc|${crSide}:3: not valid JSONC: Missing.*t01-demo-v02.png.concept.jsonc:1: not a JSON object"
+    "template|docs/concept/TEMPLATE.concept.jsonc:1: missing required field 'ipReview'")
+  string(REPLACE "|" ";" parts "${case}")
+  list(GET parts 0 fixture)
+  list(GET parts 1 expect)
+  helios_lint_test(lint_concept_refs_fixture_${fixture} EXPECT_FAIL "${expect}"
+    COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_TESTS}/concept_refs/${fixture} ${crLint})
+endforeach()
+helios_lint_test(lint_concept_refs_fixture_no_dir EXPECT_FAIL "concept_refs/docs/concept does not exist"
+  COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_TESTS}/concept_refs ${crLint})
+# The 1 MB limit at its edge, written here rather than committed: the ok fixture's demo PNG padded after
+# IEND (which readers ignore) to exactly 1,048,576 bytes passes, and to one byte more fails.
+set(crOk ${LINT_TESTS}/concept_refs/ok/docs/concept)
+foreach(case "at_limit|1048576|" "over_limit|1048577|t01-demo-v01.png: 1048577 bytes, over the 1048576-byte .1 MB. limit")
+  string(REPLACE "|" ";" parts "${case}")
+  list(GET parts 0 fixture)
+  list(GET parts 1 target)
+  list(GET parts 2 expect)
+  set(crDir ${LINT_WORK}/concept_refs/bytes_${fixture}/docs/concept)
+  file(REMOVE_RECURSE ${LINT_WORK}/concept_refs/bytes_${fixture})
+  file(MAKE_DIRECTORY ${crDir}/editor)
+  file(COPY_FILE ${crOk}/README.md ${crDir}/README.md)
+  file(COPY_FILE ${crOk}/editor/t01-demo.review.md ${crDir}/editor/t01-demo.review.md)
+  file(COPY_FILE ${crOk}/editor/t01-demo-v01.png ${crDir}/editor/t01-demo-v01.png)
+  file(SIZE ${crDir}/editor/t01-demo-v01.png crSize)
+  math(EXPR crPad "${target} - ${crSize}")
+  string(REPEAT "x" ${crPad} crPadding)
+  file(APPEND ${crDir}/editor/t01-demo-v01.png "${crPadding}")
+  file(SHA256 ${crDir}/editor/t01-demo-v01.png crHash)
+  file(READ ${crOk}/editor/t01-demo-v01.png.concept.jsonc crSidecar)
+  string(REGEX REPLACE "\"sha256\": \"[0-9a-f]+\"" "\"sha256\": \"${crHash}\"" crSidecar "${crSidecar}")
+  file(WRITE ${crDir}/editor/t01-demo-v01.png.concept.jsonc "${crSidecar}")
+  helios_lint_test(lint_concept_refs_fixture_bytes_${fixture} EXPECT_FAIL "${expect}"
+    COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_WORK}/concept_refs/bytes_${fixture} ${crLint})
+endforeach()
+unset(crPadding)
+unset(crSidecar)
+# git mode, in a small repository written here: an ignored file (.DS_Store) is not looked at, an
+# untracked one that is not ignored (a working file about to be committed) is.
+find_program(HELIOS_LINT_GIT git)
+if(HELIOS_LINT_GIT)
+  foreach(repo ignored untracked)
+    set(crGit ${LINT_WORK}/concept_refs/git_${repo})
+    file(REMOVE_RECURSE ${crGit})
+    file(COPY ${LINT_TESTS}/concept_refs/ok/docs DESTINATION ${crGit})
+    file(WRITE ${crGit}/.gitignore ".DS_Store\n")
+    execute_process(COMMAND ${HELIOS_LINT_GIT} init -q WORKING_DIRECTORY ${crGit} OUTPUT_QUIET ERROR_QUIET)
+    execute_process(COMMAND ${HELIOS_LINT_GIT} add -A WORKING_DIRECTORY ${crGit} OUTPUT_QUIET ERROR_QUIET)
+  endforeach()
+  file(WRITE ${LINT_WORK}/concept_refs/git_ignored/docs/concept/editor/.DS_Store "junk")
+  file(WRITE ${LINT_WORK}/concept_refs/git_untracked/docs/concept/editor/t01-demo-v03.psd "8BPS")
+  helios_lint_test(lint_concept_refs_git_ignored COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_DIR=${LINT_WORK}/concept_refs/git_ignored ${crLint})
+  helios_lint_test(lint_concept_refs_git_untracked EXPECT_FAIL "editor/t01-demo-v03.psd: not allowed here"
+    COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_WORK}/concept_refs/git_untracked ${crLint})
+endif()
 
 # ---------------------------------------------------------------------------------------------
 # Test namespaces (AAA-PLT-1): in a tests/ source with a doctest test macro, every declaration sits in

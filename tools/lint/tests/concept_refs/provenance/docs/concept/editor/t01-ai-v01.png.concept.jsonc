@@ -1,0 +1,25 @@
+// Fixture sidecar.
+{
+  "image": "t01-ai-v01.png",
+  "sha256": "ed26f33ed8bc59627a3dc51f90235ec05c77efe52b87773cc75dc8a68820a588",
+  "title": "Demo concept",
+  "author": "Fixture author",
+  "created": "2026-10-04",
+  "source": {
+    "kind": "ai-assisted"
+  },
+  "tools": ["Krita 5.2"],
+  "ai": {
+    "tool": "Generator",
+    "model": "model-x",
+    "inputs": [{"file": "Capture of a commercial game", "sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "source": "screenshot"}, {"file": "editor/t01-gone-v01.png", "sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef", "source": "ai-assisted"}, {"file": "editor/t01-cc0-v01.png", "sha256": "1212121212121212121212121212121212121212121212121212121212121212", "source": "cc0"}]
+  },
+  "licence": "MIT",
+  "ipReview": "Fixture: original shapes only.",
+  "status": "directional",
+  "elements": [],
+  "phase": "Ph1",
+  "planRefs": ["07 §2.1 T01"],
+  "deviations": [],
+  "review": ""
+}

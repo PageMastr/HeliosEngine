@@ -184,6 +184,110 @@ jobs:
       - name: Build
         run: cmake --build --preset $env:PRESET --parallel
 
+      # Where helios-rendertest writes its results: CTest's own record of rendertest.report's --out argument
+      # (the tool builds under engine/render/ until tools/CMakeLists.txt lists it), not a guessed path.
+      - name: Locate the rendertest output (from CTest)
+        run: |
+          $listing = & ctest --test-dir $env:BUILD -C $env:CONFIG -N -R '^rendertest\.report$' --show-only=json-v1
+          if ($LASTEXITCODE -ne 0) { throw 'ctest could not list rendertest.report' }
+          $report = @(($listing | Out-String | ConvertFrom-Json).tests | Where-Object { $_.name -eq 'rendertest.report' })
+          if ($report.Count -ne 1) { throw 'CTest lists no rendertest.report test, so the rendertest output is unknown' }
+          $command = @($report[0].command)
+          $at = [Array]::IndexOf($command, '--out')
+          if ($at -lt 0 -or $at + 1 -ge $command.Count) { throw "rendertest.report has no --out argument: $($command -join ' ')" }
+          $out = [IO.Path]::GetFullPath($command[$at + 1])
+          Write-Output "rendertest output: $out"
+          "RENDERTEST_OUT=$out" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # Diagnostics only; this step never fails the job. What the Vulkan loader sees in this process, so a GPU test
+      # failure explains itself from the log. The loader ignores VK_LOADER_LAYERS_DISABLE, VK_LAYER_PATH,
+      # VK_ADD_LAYER_PATH and VK_DRIVER_FILES in a process of High integrity or above, and a service's token is High
+      # (the SERVICE group grants SeImpersonatePrivilege); a loader settings file (Vulkan Configurator) can force
+      # layers on or off. rendertest.validation-required reports cases it cannot set up then as a NOTE.
+      - name: Vulkan loader, layers and adapters (diagnostics)
+        run: |
+          $ErrorActionPreference = 'Continue'
+          function Show-Section([string] $title) { Write-Output ''; Write-Output "== $title" }
+          function Show-File([string] $path, [int] $lines) {
+            if (Test-Path -LiteralPath $path) {
+              Write-Output "-- $path"
+              Get-Content -LiteralPath $path -TotalCount $lines | ForEach-Object { Write-Output "   $_" }
+            } else {
+              Write-Output "-- $path (missing)"
+            }
+          }
+          try {
+            Show-Section 'Process token (the loader ignores layer and driver variables at High integrity and above)'
+            & "$env:SystemRoot\System32\whoami.exe" /groups /fo csv /nh | ConvertFrom-Csv -Header Name, Type, Sid, Attributes |
+              Where-Object { $_.Sid -like 'S-1-16-*' } | ForEach-Object { Write-Output "integrity: $($_.Name) ($($_.Sid))" }
+            & "$env:SystemRoot\System32\whoami.exe" /priv /fo csv /nh | ConvertFrom-Csv -Header Name, Description, State |
+              Where-Object { $_.Name -eq 'SeImpersonatePrivilege' } | ForEach-Object { Write-Output "$($_.Name): $($_.State)" }
+
+            Show-Section 'Environment (VK_*, VULKAN_SDK)'
+            Get-ChildItem env: | Where-Object { $_.Name -like 'VK_*' -or $_.Name -eq 'VULKAN_SDK' } |
+              Sort-Object Name | ForEach-Object { Write-Output "$($_.Name)=$($_.Value)" }
+
+            Show-Section 'Vulkan loader'
+            $loader = Join-Path $env:SystemRoot 'System32\vulkan-1.dll'
+            if (Test-Path -LiteralPath $loader) {
+              $info = (Get-Item -LiteralPath $loader).VersionInfo
+              Write-Output "$loader file version $($info.FileVersion), product version $($info.ProductVersion)"
+            } else {
+              Write-Output "no $loader"
+            }
+
+            Show-Section 'Khronos validation layer (the manifest configure found under VULKAN_SDK)'
+            $manifest = Join-Path $env:VULKAN_SDK 'Bin\VkLayer_khronos_validation.json'
+            if (Test-Path -LiteralPath $manifest) {
+              $layer = (Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json).layer
+              Write-Output "$manifest`: $($layer.name) api_version $($layer.api_version), implementation_version $($layer.implementation_version), library_path $($layer.library_path)"
+              $library = Join-Path (Split-Path -Parent $manifest) $layer.library_path
+              if (Test-Path -LiteralPath $library) { Write-Output "$library file version $((Get-Item -LiteralPath $library).VersionInfo.FileVersion)" }
+            } else {
+              Write-Output "no $manifest"
+            }
+
+            Show-Section 'Registry: HKLM and HKCU \SOFTWARE\Khronos\Vulkan (value 0 = enabled)'
+            foreach ($hive in 'HKLM', 'HKCU') {
+              foreach ($key in 'ExplicitLayers', 'ImplicitLayers', 'Drivers', 'LoaderSettings') {
+                $path = "${hive}:\SOFTWARE\Khronos\Vulkan\$key"
+                $item = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
+                if (-not $item) { Write-Output "$path (none)"; continue }
+                Write-Output $path
+                foreach ($name in $item.Property) {
+                  Write-Output "   $name = $($item.GetValue($name))"
+                  # A loader settings file (Vulkan Configurator) overrides layer environment variables for "on" and "off" layers.
+                  if ($key -eq 'LoaderSettings') { Show-File $name 60 }
+                }
+              }
+            }
+
+            Show-Section 'Adapters (vulkaninfo --summary)'
+            $vulkaninfo = Get-Command vulkaninfo -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($vulkaninfo) {
+              cmd /c "`"$($vulkaninfo.Path)`" --summary 2>&1" | Select-Object -First 120 | ForEach-Object { Write-Output "   $_" }
+            } else {
+              Write-Output 'vulkaninfo is not on PATH'
+            }
+
+            Show-Section 'The RHI under rendertest.validation-required''s first case (VK_LOADER_LAYERS_DISABLE, loader log filtered)'
+            $tool = Get-ChildItem -LiteralPath $env:BUILD -Recurse -Filter helios-rendertest.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($tool) {
+              $env:HELIOS_RHI_VALIDATION = '1'
+              $env:VK_LOADER_LAYERS_DISABLE = 'VK_LAYER_KHRONOS_validation'
+              $env:VK_LOADER_DEBUG = 'all'
+              cmd /c "`"$($tool.FullName)`" --print-probe 2>&1" |
+                Select-String -Pattern 'elevated|ignored|forced|settings|disabled|Khronos validation|device:' |
+                Select-Object -First 60 | ForEach-Object { Write-Output "   $($_.Line)" }
+              Remove-Item env:HELIOS_RHI_VALIDATION, env:VK_LOADER_LAYERS_DISABLE, env:VK_LOADER_DEBUG
+            } else {
+              Write-Output "no helios-rendertest.exe under $env:BUILD"
+            }
+          } catch {
+            Write-Output "diagnostics stopped early: $($_.Exception.Message)"
+          }
+          exit 0  # the runner would otherwise return the last native command's exit code
+
       # Label gpu: rendertest.vulkan.* (the goldens; RC-1), rendertest.validation-*, rhi_tests_gpu, pcg_gpu_tests
       # (the Slang twin, bit for bit; RT-04) and rhi_triangle_smoke, on the hardware adapter.
       - name: GPU tests (label gpu, on the hardware GPU)
@@ -222,33 +326,56 @@ jobs:
         run: |
           $software = 'llvmpipe|lavapipe|swiftshader|software|basic render'
           $adapter = '"adapter": "((?:[^"\\]|\\.)*)"'
-          $problems = @()
-          $dir = Join-Path $env:BUILD 'tools\rendertest\rendertest-output\vulkan'
+          $missing = @()     # no result, or a result without an adapter: the work did not run (see the steps above)
+          $onSoftware = @()  # a result from a software rasterizer: the wrong adapter was picked
+          if (-not $env:RENDERTEST_OUT) { throw 'The rendertest output directory is unknown (see "Locate the rendertest output")' }
+          $dir = Join-Path $env:RENDERTEST_OUT 'vulkan'
           $results = @(Get-ChildItem -LiteralPath $dir -Filter *.json -ErrorAction SilentlyContinue)
-          if ($results.Count -eq 0) { $problems += "no rendertest results in $dir" }
+          if ($results.Count -eq 0) { $missing += "no rendertest results in $dir" }
           foreach ($file in $results) {
-            $m = [regex]::Match((Get-Content -LiteralPath $file.FullName -Raw), $adapter)
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            $m = [regex]::Match($text, $adapter)
             $name = if ($m.Success) { $m.Groups[1].Value } else { '' }
-            Write-Output "rendertest $($file.BaseName): $name"
-            if (-not $name -or $name -match $software) { $problems += "rendertest $($file.BaseName) ran on '$name'" }
+            $status = [regex]::Match($text, '"status": "([a-z]*)"').Groups[1].Value
+            Write-Output "rendertest $($file.BaseName) ($status): $name"
+            if (-not $name) {
+              $missing += "rendertest $($file.BaseName) recorded no adapter (status '$status'; see its message in $($file.FullName))"
+            } elseif ($name -match $software) {
+              $onSoftware += "rendertest $($file.BaseName) ran on '$name'"
+            }
           }
           $bench = "$env:RESULTS\hnoise-win-gpu.json"
           $text = if (Test-Path -LiteralPath $bench) { Get-Content -LiteralPath $bench -Raw } else { '' }
           $m = [regex]::Match($text, '"gpu": \{\s*' + $adapter)
           $name = if ($m.Success) { $m.Groups[1].Value } else { '' }
           Write-Output "pcg_hnoise_bench: $name"
-          if (-not $name -or $name -match $software) { $problems += "pcg_hnoise_bench measured no hardware GPU ('$name')" }
-          if ($problems.Count -gt 0) {
-            $problems | ForEach-Object { Write-Output "::error::$_" }
-            throw 'The GPU work did not run on a hardware GPU (set HELIOS_WIN_GPU_ADAPTER; docs/runbooks/win-gpu-runner.md)'
+          if (-not $text) {
+            $missing += "no pcg_hnoise_bench result at $bench"
+          } elseif (-not $name) {
+            $missing += 'pcg_hnoise_bench found no GPU ("GPU: unavailable")'
+          } elseif ($name -match $software) {
+            $onSoftware += "pcg_hnoise_bench measured '$name'"
+          }
+          ($missing + $onSoftware) | ForEach-Object { Write-Output "::error::$_" }
+          if ($missing.Count -gt 0) {
+            throw ('No GPU results were found: ' + ($missing -join '; ') + ' (the GPU tests or the bench did not ' +
+              'run or failed first: see their steps above)')
+          }
+          if ($onSoftware.Count -gt 0) {
+            throw ('The GPU work ran on a software adapter: ' + ($onSoftware -join '; ') + ' (with two adapters, set ' +
+              'HELIOS_WIN_GPU_ADAPTER to part of the GPU''s name; docs/runbooks/win-gpu-runner.md)')
           }
       - name: Test inventory and the rendertest output
         if: ${{ !cancelled() }}
         run: |
           python tools/scorecard/scorecard.py inventory --build-dir $env:BUILD --config $env:CONFIG --out "$env:RESULTS\inventory.json"
           if ($LASTEXITCODE -ne 0) { throw 'scorecard.py inventory failed' }
-          $output = Get-ChildItem -LiteralPath $env:BUILD -Directory -Recurse -Filter rendertest-output | Select-Object -First 1
-          if ($output) { Copy-Item -LiteralPath $output.FullName -Destination "$env:RESULTS\rendertest" -Recurse }
+          # import_goldens.cmake files hardware goldens from this copy (tools/rendertest/README.md).
+          if ($env:RENDERTEST_OUT -and (Test-Path -LiteralPath $env:RENDERTEST_OUT)) {
+            Copy-Item -LiteralPath $env:RENDERTEST_OUT -Destination "$env:RESULTS\rendertest" -Recurse
+          } else {
+            Write-Output "::warning::no rendertest output at '$env:RENDERTEST_OUT' to upload"
+          }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ !cancelled() }}
         with:

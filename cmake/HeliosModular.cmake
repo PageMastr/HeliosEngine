@@ -146,7 +146,8 @@ macro(helios_modular_after_third_party)
       # Dev link (02 §1.4): incremental, no folding or stripping, full PDBs.
       add_link_options(/INCREMENTAL /OPT:NOREF /OPT:NOICF /DEBUG:FULL)
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-      # lld when the toolchain has it (02 §1.4: lld or mold); split DWARF keeps the links small.
+      # lld when the toolchain has it (02 §1.4: lld or mold); split DWARF keeps the links small. Clang only:
+      # GCC splits with an objcopy pass after compiling, which failed intermittently under ccache here.
       include(CheckLinkerFlag)
       check_linker_flag(CXX "-fuse-ld=lld" HELIOS_MODULAR_HAVE_LLD)
       if(HELIOS_MODULAR_HAVE_LLD)
@@ -154,7 +155,8 @@ macro(helios_modular_after_third_party)
       else()
         message(STATUS "HELIOS_MODULAR: lld not found; linking with the default linker")
       endif()
-      add_compile_options($<$<CONFIG:Debug,RelWithDebInfo>:-gsplit-dwarf>)
+      add_compile_options("$<$<AND:$<CONFIG:Debug,RelWithDebInfo>,$<COMPILE_LANG_AND_ID:C,Clang>>:-gsplit-dwarf>"
+                          "$<$<AND:$<CONFIG:Debug,RelWithDebInfo>,$<COMPILE_LANG_AND_ID:CXX,Clang>>:-gsplit-dwarf>")
     endif()
     message(STATUS "HELIOS_MODULAR: dev link model (link groups ${HELIOS_LINK_GROUPS}; ADR-016)")
   endif()

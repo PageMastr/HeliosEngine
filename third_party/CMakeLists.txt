@@ -36,8 +36,16 @@ add_library(helios::tp::vma ALIAS tp_vma)
 
 # --- SDL3 (windowing, input incl. IME text, gamepads w/ rumble, raw mouse) ----------------------
 if(HELIOS_BUILD_GRAPHICS)
-  set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-  set(SDL_STATIC ON CACHE BOOL "" FORCE)
+  # Modular dev builds (HELIOS_MODULAR, ADR-016) use SDL's own shared library: SDL's state (video, windows,
+  # events) must exist once per process, and the client group (rhi), the editor group (the editor host and
+  # ImGui's SDL backend), apps and tests all call it (docs/adr/ADR-0.6c-link-model-spike.md).
+  if(HELIOS_MODULAR)
+    set(SDL_SHARED ON CACHE BOOL "" FORCE)
+    set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+  else()
+    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+    set(SDL_STATIC ON CACHE BOOL "" FORCE)
+  endif()
   set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
   set(SDL_TESTS OFF CACHE BOOL "" FORCE)
   set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -59,7 +67,11 @@ if(HELIOS_BUILD_GRAPHICS)
     set(SDL_X11_SHARED OFF CACHE BOOL "" FORCE)
   endif()
   add_subdirectory(${TP}/sdl3 ${CMAKE_CURRENT_BINARY_DIR}/sdl3 EXCLUDE_FROM_ALL)
-  add_library(helios::tp::sdl3 ALIAS SDL3-static)
+  if(HELIOS_MODULAR)
+    add_library(helios::tp::sdl3 ALIAS SDL3-shared)
+  else()
+    add_library(helios::tp::sdl3 ALIAS SDL3-static)
+  endif()
 
   # --- Dear ImGui (docking) + backends + ImGuizmo suite + ImPlot ------------------------------
   add_library(tp_imgui STATIC
@@ -82,7 +94,7 @@ if(HELIOS_BUILD_GRAPHICS)
   # that includes imgui_internal.h sees the same ImGuiItemStatusFlags.
   target_compile_definitions(tp_imgui PUBLIC IMGUI_ENABLE_TEST_ENGINE)
   target_sources(tp_imgui PRIVATE ${PROJECT_SOURCE_DIR}/engine/editorui/src/imgui_item_hooks.cpp)
-  target_link_libraries(tp_imgui PUBLIC tp_volk SDL3-static)
+  target_link_libraries(tp_imgui PUBLIC tp_volk helios::tp::sdl3)
   helios_tp_quiet(tp_imgui)
   add_library(helios::tp::imgui ALIAS tp_imgui)
 endif()

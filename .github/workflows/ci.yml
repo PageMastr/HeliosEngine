@@ -40,6 +40,26 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  # Modular dev build on the primary toolchain (ADR-001a, ADR-016, 02 §1.4): engine modules in the three
+  # link-group DLLs, /MD for every image, the dev link flags, all tests and the symbol audit.
+  # TODO(WP-0.6c part 2): the 20-reload smoke test of the sample game module (02 §8.3, ADR-001a).
+  windows-msvc-dev:
+    name: Windows (MSVC, modular dev)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Configure
+        run: cmake --preset windows-msvc-dev
+      - name: Build
+        run: cmake --build --preset windows-msvc-dev
+      - name: Symbol audit (link groups' export tables)
+        run: ctest --preset windows-msvc-dev -R "^lint_symbol_audit"
+      - name: Test (no GPU on hosted runners)
+        run: ctest --preset windows-msvc-dev -LE "gpu|perf"
+
   # Supported floor: VS 2022 17.14 / MSVC 14.44 on the pinned windows-2022 image (ADR-001).
   windows-msvc-floor:
     name: Windows (MSVC 14.44 floor)

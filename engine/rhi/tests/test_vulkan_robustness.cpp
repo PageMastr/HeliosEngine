@@ -423,6 +423,38 @@ TEST_CASE("gpu: validation-layer reports are identified by their fields, not the
     CHECK(m.idNumber != 0);
 }
 
+TEST_CASE("gpu: required validation fails when the layer's reports cannot reach the RHI") {
+    // With VK_EXT_debug_utils masked off (capsMask, HELIOS_RHI_CAPS_MASK) the layer still runs in the
+    // chain, but no messenger hands its reports to validationErrorCount/onMessage: a device that says it
+    // is validated would pass whatever the layer finds.
+    {
+        auto probe = rhitest::createGpuDevice({});
+        if (!probe) return;
+        if (!probe->caps().has(CapBit::ValidationLayer)) {
+            MESSAGE("skipping: Khronos validation is not active (" << probe->caps().validationLayer << ")");
+            return;
+        }
+    }
+    DeviceDesc desc;
+    desc.backend = Backend::Vulkan;
+    desc.appName = "rhi_tests";
+    desc.adapterPreference = AdapterPreference::Software;
+    desc.validationFromEnvironment = false;
+    desc.capsMask = static_cast<CapBit>(~static_cast<u64>(CapBit::DebugUtils));
+    desc.requireValidation = true;
+    rhitest::QuietRhiLog quiet;
+    auto refused = Device::create(desc);
+    REQUIRE_FALSE(refused.ok());
+    CHECK_MESSAGE(refused.error().message.find("reports cannot reach the RHI") != std::string::npos,
+                  refused.error().toString());
+    desc.requireValidation = false;
+    desc.validation = true;
+    auto unchecked = Device::create(desc);
+    REQUIRE(unchecked.ok());
+    CHECK_FALSE(unchecked.value()->caps().has(CapBit::ValidationLayer));
+    CHECK(unchecked.value()->caps().validationLayer.empty());
+}
+
 } // TEST_SUITE("gpu")
 
 } // namespace

@@ -410,7 +410,10 @@ Result<void> VulkanDevice::selectPhysicalDevice() {
 // VK_LOADER_LAYERS_ENABLE, a settings file's "on"). Only the layer itself can answer: it reports itself
 // through vkGetPhysicalDeviceToolProperties (core in 1.3, VK_EXT_tooling_info) when, and only when, it
 // is in the chain. The loader's own list of active layers (vkEnumerateDeviceLayerProperties) is named
-// in the error for diagnosis.
+// in the error for diagnosis. A layer in the chain validates only if its reports reach this device
+// (validationErrorCount, onMessage): without the debug-utils messenger (VK_EXT_debug_utils masked off
+// or unavailable, or a layer the loader added while this device asked for no messenger) it prints them
+// where nobody counts them.
 Result<void> VulkanDevice::verifyValidationLayer() {
     std::string tool;
     if (m_vki.vkGetPhysicalDeviceToolProperties) {
@@ -430,7 +433,7 @@ Result<void> VulkanDevice::verifyValidationLayer() {
             }
         }
     }
-    if (!tool.empty()) {
+    if (!tool.empty() && m_messenger != VK_NULL_HANDLE) {
         m_validationLayer = true;
         const std::string listing =
             m_validationListing.empty() ? std::string(kValidationLayerName) : m_validationListing;
@@ -443,6 +446,21 @@ Result<void> VulkanDevice::verifyValidationLayer() {
         return {};
     }
     m_validationLayer = false;
+    if (!tool.empty()) {
+        if (!m_validationRequested) {
+            HELIOS_LOG_INFO(LogRhi, "the loader enabled {} without a request; this device installed no messenger, "
+                                    "so it does not count the layer's reports", kValidationLayerName);
+            return {};
+        }
+        const std::string why = std::format(
+            "{} is in the call chain as {}, but its reports cannot reach the RHI: {}", kValidationLayerName, tool,
+            m_debugUtils ? "vkCreateDebugUtilsMessengerEXT failed"
+                         : "VK_EXT_debug_utils is unavailable or masked off (DeviceDesc::capsMask, "
+                           "HELIOS_RHI_CAPS_MASK)");
+        if (m_desc.requireValidation) return Error{ErrorCode::Unsupported, why};
+        HELIOS_LOG_WARN(LogRhi, "{}; running without validation", why);
+        return {};
+    }
     if (!m_validationRequested) return {};
     std::string active;
     u32 count = 0;

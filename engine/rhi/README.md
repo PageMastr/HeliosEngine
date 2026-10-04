@@ -89,6 +89,9 @@ rhi::TimelinePoint done = device->submit(rhi::Queue::Graphics, {&cmd, 1}).value(
   lists and accepts but leaves out (`VK_LOADER_LAYERS_DISABLE`, a loader settings file from Vulkan
   Configurator) or a library posing under its name does not count, and `requireValidation` then fails
   creation; a layer the loader adds unasked (`VK_INSTANCE_LAYERS`, a settings file) is reported as such.
+  The layer's reports must also reach the device: without the `VK_EXT_debug_utils` messenger (the
+  extension unavailable or masked off with `capsMask`/`HELIOS_RHI_CAPS_MASK`) nothing would count them,
+  so validation does not count as active then either.
   `Caps::validationLayer` names the layer, its versions and the tool that answered, so tests can log
   what checked them (WP-0.12's `helios-rendertest --validation-self-test`).
 * `ValidationMessage` says where a message came from (`Source::Rhi` for the RHI's own checks,
@@ -149,7 +152,7 @@ universal queue family, so only this catches a transfer-queue mask error before 
 the Null backend (API behavior, validation, a
 trace golden re-rendered for determinism, state tracking, timelines, memory emulation, copy-region
 rules, list lifetimes, parallel recording on the job system, swapchain flow, device-loss
-injection). The `gpu*` suites (22 cases) need Vulkan and run as the CTest entry `rhi_tests_gpu`
+injection). The `gpu*` suites (23 cases) need Vulkan and run as the CTest entry `rhi_tests_gpu`
 (label `gpu`): clears, a triangle and a bindless textured quad against golden PNGs in
 `tests/golden/` (per-pixel tolerance, each rendered twice and required to be bit-identical), compute
 through device addresses, bindless buffers and storage images, the matrix and winding conventions,

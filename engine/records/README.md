@@ -134,12 +134,12 @@ out of every toolchain (GCC and Clang locally; MSVC and clang-cl run the same te
 
 | What | Budget | Source | Measured (GCC 13, RelWithDebInfo, shared 4-vCPU dev VM) |
 |---|---|---|---|
-| Cook | ≤ 600 ms per 1,000 records | AAA-CNT-5: 100k records compile in ≤ 60 s | 35.6 ms per 1,000 (20,100 records with every encoding, 10 % inheriting) |
-| Open (map + full validation) | ≤ 20 µs per record | AAA-CNT-5: 100k records load in ≤ 2 s (02 §5.7) | 1.24 µs per record |
-| `find()` by `RecordId` | ≤ 1 µs mean | this module's own (the plan sets none) | 111 ns |
+| Cook | ≤ 600 ms per 1,000 records | AAA-CNT-5: 100k records compile in ≤ 60 s | 41.4 ms per 1,000 (20,100 records with every encoding, 10 % inheriting) |
+| Open (map + full validation) | ≤ 20 µs per record | AAA-CNT-5: 100k records load in ≤ 2 s (02 §5.7) | 2.00 µs per record |
+| `find()` by `RecordId` | ≤ 1 µs mean | this module's own (the plan sets none) | 115 ns |
 
 Timings are asserted only in optimized builds without sanitizers. 02 §6.4 also budgets the hot-reload step
-"Build: records ≤ 300 ms"; v0 always cooks every record (20,100 records take about 0.7–1 s here), so meeting
+"Build: records ≤ 300 ms"; v0 always cooks every record (the 20,100 records above take about 0.8 s), so meeting
 it for large projects needs the incremental cook of the asset processor (WP-2.x), which is not built.
 
 ## Tests

@@ -247,7 +247,8 @@ no failure; on the loaded VM the Go fuzzer ran in bursts of about 20,000 inputs 
   `sequence` and `expiresAt`, the local CDN layout, `helios-patch publish` and CL-14's tampered, expired and
   rolled-back subset.
 - **Packing policy.** The format holds the pack index (05 §7: chunks under 32 KiB in ~8 MiB packs), and the
-  builder places chunks it is told about; choosing packs is publish's job (part 2).
+  builder places chunks it is told about; choosing packs is publish's job (part 2). Validation checks that each
+  packed chunk fits inside its pack, not that two chunks' stored bytes in one pack do not overlap.
 - **SIMD BLAKE2b.** The self-dispatching SSE4.1/AVX2 compression functions of 08 §2.1.1 are not written; the
   C++ hashing rate is the portable one above.
 - **`@base` builds** of this module for the launcher come with WP-0.2r; the module has no ISA-specific code.

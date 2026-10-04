@@ -721,18 +721,26 @@ func checkGatewayPortC(p *Pass, f string, ints map[string][]string) {
 		i := src.index(off)
 		return reads(i) || carry[i] && !slices.Contains(bound[src.starts[i]:off], true)
 	}
-	// The calls a regexp matches, with their offsets.
+	// The calls a regexp matches, with their offsets. A match whose `(` is blanked lies in a string (an
+	// option call quoted in a raw-string usage text matches cOptionCallRE, which runs on src.text): it is
+	// not a call, and callsAt would skip it, so it is dropped here to keep the calls and offsets aligned.
 	calls := func(re *regexp.Regexp, text string) ([]cCall, [][]int) {
-		locs := re.FindAllStringIndex(text, -1)
-		return src.callsAt(locs), locs // every match ends in '(', so callsAt keeps them all, in order
+		var locs [][]int
+		for _, m := range re.FindAllStringIndex(text, -1) {
+			if strings.IndexByte(src.blank[m[0]:m[1]], '(') >= 0 {
+				locs = append(locs, m)
+			}
+		}
+		return src.callsAt(locs), locs
 	}
 	// The defaults of the option calls the option loop below checks (read ones, with two arguments or more):
 	// from the start of the last argument to the closing parenthesis. A literal there is left to the option
 	// (so it is reported once, on the call's line); every other argument is read like any literal. A call
 	// that does not close (parentheses unbalanced by #if branches) has no default the lint can find: it
 	// fails closed below, and hides nothing. It does not close when the file ends first, when what ends it
-	// is not a `)` (the `}` of the enclosing function or namespace), or when a `;` outside any bracket comes
-	// first (an argument list has none; one in a lambda's body is inside its braces).
+	// is not a `)` (the `}` of the enclosing function, namespace or initializer, or the `]` of a subscript),
+	// or when a `;` outside any bracket comes first (an argument list has none; one in a lambda's body is
+	// inside its braces).
 	options, optionLocs := calls(cOptionCallRE, src.text)
 	type span struct{ from, to int }
 	var defaults []span

@@ -39,6 +39,8 @@
 # return, a template's > and array bounds keep the statement open, and `;` inside parentheses after lambdas
 # still does not end it. TOML: a nested array of inline tables (helios.toml:48) and a command line in a
 # gateway table, --opt=value too (:49; an address in its own element is reported once).
+# Round 10: an option call quoted in a raw string (usage text) is not a call, so the option call after it
+# keeps its own default (gateway_usage.cpp:4, once).
 deploy/compose.yml:3: CONF-08
 deploy/compose.yml:6: CONF-08
 deploy/compose.yml:7: CONF-08
@@ -126,6 +128,7 @@ engine/server/src/gateway_unbalanced_closers.cpp:17: CONF-08
 engine/server/src/gateway_unbalanced_closers.cpp:24: CONF-08
 engine/server/src/gateway_unbalanced_scoped.cpp:4: CONF-08
 engine/server/src/gateway_unbalanced_scoped.cpp:11: CONF-08
+engine/server/src/gateway_usage.cpp:4: CONF-08
 services/cmd/tool/main.go:5: CONF-08
 services/internal/platform/concat.go:13: CONF-08
 services/internal/platform/concat.go:14: CONF-08

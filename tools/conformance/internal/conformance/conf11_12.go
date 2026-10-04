@@ -844,11 +844,13 @@ func optionFlags(args string, avxVars map[string]bool) []string {
 	var out []string
 	for _, a := range cmakeArgs(args) {
 		if strings.HasPrefix(a, `"`) {
-			// A quoted list ("sse4.2;-mavx2") is several items: each is an option or a sentence on its own.
+			// A quoted list ("sse4.2;-mavx2") is several items: each is an option or a sentence on its own. A
+			// SHELL: group ("SHELL:-Xclang -target-feature -Xclang +avx2") is options, its feature word too.
 			var kept []string
 			for _, item := range strings.Split(strings.Trim(a, `"`), ";") {
-				if !slices.ContainsFunc(strings.Fields(item), func(w string) bool {
-					return !strings.HasPrefix(w, "-") && !strings.HasPrefix(w, "/") && !strings.HasPrefix(w, "$")
+				if !slices.ContainsFunc(strings.Fields(strings.TrimPrefix(item, "SHELL:")), func(w string) bool {
+					return !strings.HasPrefix(w, "-") && !strings.HasPrefix(w, "/") && !strings.HasPrefix(w, "$") &&
+						!strings.HasPrefix(w, "+")
 				}) {
 					kept = append(kept, item)
 				}

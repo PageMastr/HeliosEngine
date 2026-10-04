@@ -395,7 +395,9 @@ Result<RecordDb> RecordDb::finishOpen(std::unique_ptr<Impl> impl, const refl::Ty
         const bool withheld = (flags & hrdb::kTagWithheld) != 0;
         const bool clientWithheld = (flags & hrdb::kTagClientWithheld) != 0;
         if (withheld && (d.audience == CookAudience::Server || !name.empty())) return corrupt(std::format("tag {} is withheld wrongly", i));
-        if (clientWithheld && d.audience == CookAudience::Client) return corrupt(std::format("tag {} is marked client-withheld in a client cook", i));
+        if (clientWithheld && d.audience == CookAudience::Client) {
+            return corrupt(std::format("tag {} is marked client-withheld in a client cook", i));
+        }
         const bool hidden = withheld || clientWithheld; // from the client
         tagHash.add(hidden ? std::string_view() : name, parent, end, depth, audience, (flags & hrdb::kTagDeclared) != 0);
         if (!withheld && !isValidTagName(name)) return corrupt(std::format("tag {} has an invalid name", i));

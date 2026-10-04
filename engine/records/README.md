@@ -23,7 +23,7 @@ so it is not linked). File IO goes through core's platform layer (`fs::MappedFil
 | `cook.h` | `SourceRecord`, `CookOptions` (strict unknown fields, HXL parameters, tag-declaration types), `cook()`, `CookOutput`/`CookStats`/`CookDiagnostic`, `collectSources()` (`records/<table>/**/*.hrec` typed by `@table`), `writeCookOutput()`, `isValidTagName()` |
 | `layout.h` | `Enc`, `CookedLayout`, `LayoutCache` (per audience), `keepsField()`, `excludesType()` |
 | `hrdb_format.h` | `CookAudience`, `TagIndex`, `hrdb::` constants, the header and its checksums, `hrdb::seal()` |
-| `record_db.h` | `RecordDb` (`openFile`, `openBytes`, `find`, `findByName`, `record`, `tag`, `findTag`, `decode`), `RecordView`, `ValueView`, `TagView` |
+| `record_db.h` | `RecordDb` (`openFile`, `openBytes`, `find`, `findByName`, `record`, `tag`, `findTag`, `decode`, `tagTableHash`), `RecordView`, `ValueView`, `TagView` |
 | `records.h` | Umbrella |
 
 ## Usage

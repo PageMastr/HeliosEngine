@@ -848,7 +848,9 @@ Result<CookOutput> cook(std::span<const SourceRecord> sources, const CookOptions
         Rec& r = recs[i];
         r.src = &sources[i];
         // Two sources with one path would make "first" depend on the caller's order (sorting is stable).
-        if ((k > 0 && sources[order[k - 1]].path == r.src->path) || (k + 1 < order.size() && sources[order[k + 1]].path == r.src->path)) {
+        const bool samePathBefore = k > 0 && sources[order[k - 1]].path == r.src->path;
+        const bool samePathAfter = k + 1 < order.size() && sources[order[k + 1]].path == r.src->path;
+        if (samePathBefore || samePathAfter) {
             diags.add(r.src->path, "another source has the same path");
             r.state = State::Failed;
             continue;
@@ -1041,7 +1043,9 @@ Result<CookOutput> cook(std::span<const SourceRecord> sources, const CookOptions
 
     // 5. Both cooks, with one tag-table hash: the client's view of the table (withheld names left out).
     hrdb::TagTableHasher tagHash(static_cast<u32>(tags.size()));
-    for (const TagRow& t : tags) tagHash.add(t.client ? std::string_view(t.name) : std::string_view(), t.parent, t.subtreeEnd, t.depth, t.audience, t.declared);
+    for (const TagRow& t : tags) {
+        tagHash.add(t.client ? std::string_view(t.name) : std::string_view(), t.parent, t.subtreeEnd, t.depth, t.audience, t.declared);
+    }
     const u64 tagTableHash = tagHash.digest();
     std::vector<const Rec*> sorted = done;
     std::sort(sorted.begin(), sorted.end(), [](const Rec* a, const Rec* b) { return a->rid < b->rid; });

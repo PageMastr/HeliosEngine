@@ -26,3 +26,12 @@ roles = [
   ["gateway", "cell"],
 ]
 port = 9000
+
+# A supervised gateway's command line at 7777, and other processes' options with other ports.
+[[orchestrator.spawn]]
+name = "gateway"
+args = ["--name", "gw-1", "--listen", "127.0.0.1:7777", "--connect=127.0.0.1:7777", "--token-lifetime", "30"]
+
+[[orchestrator.spawn]]
+name = "cell-a"
+args = ["--name", "cell-a", "--zone", "tallis", "--metrics", "127.0.0.1:9100", "--listen"]

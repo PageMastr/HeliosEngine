@@ -17,6 +17,8 @@
 # option default on the line after the one that names the listen address (the option's on the call's
 # line). Go: literals of gateway-named types under other
 # names, as elided slice and map elements and with an address field, and under a gateway name (read once).
+# Round 7: TOML command lines outside a gateway table (an orchestrator.spawn args array): --listen with its
+# value in the next element, --connect=value, and a port option, also in a multi-line array.
 deploy/compose.yml:3: CONF-08
 deploy/compose.yml:6: CONF-08
 deploy/compose.yml:7: CONF-08
@@ -35,6 +37,9 @@ deploy/helios.toml:17: CONF-08
 deploy/helios.toml:21: CONF-08
 deploy/helios.toml:23: CONF-08
 deploy/helios.toml:28: CONF-08
+deploy/helios.toml:33: CONF-08
+deploy/helios.toml:37: CONF-08
+deploy/helios.toml:37: CONF-08
 engine/net/include/ports.h:2: CONF-08
 engine/net/include/ports.h:3: CONF-08
 engine/net/include/ports.h:4: CONF-08

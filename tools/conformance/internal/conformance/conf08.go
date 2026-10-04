@@ -56,6 +56,9 @@ var (
 	ipv6BracketRE  = regexp.MustCompile(`^\[[0-9A-Fa-f:]+\]:`)
 	testCodeRE     = regexp.MustCompile(`_test\.go$|(^|/)(tests?|fuzz|testdata)/`)
 	tomlStringRE   = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"|'([^']*)'`)
+	// A gateway option on a command line held in a TOML array (`args = ["--listen", "127.0.0.1:7777"]`):
+	// --listen, --connect or one named for the gateway, with its value after '=' or in the next element.
+	tomlOptRE = regexp.MustCompile(`(?i)^(-{1,2}(?:listen|connect|[\w.-]*gateway[\w.-]*))(?:=(.*))?$`)
 	// A Go address format: something, a colon, then a verb ("127.0.0.1:%d", "%s:%d", ":%d").
 	goAddrFormatRE = regexp.MustCompile(`:%[-+# 0-9]*[dsvq]$`)
 	// An address without its port, which code completes by concatenation: "127.0.0.1:", "[::1]:", ":".
@@ -188,6 +191,38 @@ func checkGatewayPortTOML(p *Pass, f string) {
 		}
 		if gatewayNameRE.MatchString(m[1]) || gatewayNameRE.MatchString(table) {
 			tomlGatewayValue(p, f, line, strings.Trim(m[1], `"'`), val, 0)
+		} else if strings.HasPrefix(val, "[") {
+			tomlCommandLine(p, f, line, val)
+		}
+	}
+}
+
+// tomlCommandLine checks a command line held in a TOML array outside a gateway context, such as a
+// supervised process's `[[orchestrator.spawn]] args = ["--name", "gw-1", "--listen", "127.0.0.1:7777"]`
+// (engine/server/README.md): only the gateway takes --listen and --connect (apps/gateway), so their value
+// is its listen or connect address. An option named for a port may take a bare port.
+func tomlCommandLine(p *Pass, f string, line int, val string) {
+	elems := tomlStringRE.FindAllStringSubmatch(val, -1)
+	for k, e := range elems {
+		o := tomlOptRE.FindStringSubmatch(e[1] + e[2])
+		if o == nil {
+			continue
+		}
+		v := o[2]
+		if !strings.Contains(e[1]+e[2], "=") {
+			if k+1 == len(elems) {
+				continue
+			}
+			v = elems[k+1][1] + elems[k+1][2]
+		}
+		if port, ok := portOf(v); ok && port != gatewayPort {
+			p.Report(f, line, "gateway address %q (%s on a command line): the default gateway port is UDP 7777 "+
+				"(04 §2)", v, o[1])
+		} else if !ok && portName(o[1]) && tomlIntRE.MatchString(v) {
+			if n, _ := strconv.Atoi(strings.ReplaceAll(strings.TrimPrefix(v, "+"), "_", "")); n != gatewayPort {
+				p.Report(f, line, "gateway port %d (%s on a command line): the default gateway port is UDP 7777 "+
+					"(04 §2)", n, o[1])
+			}
 		}
 	}
 }

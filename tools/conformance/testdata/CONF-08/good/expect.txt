@@ -11,3 +11,5 @@
 # initializer and option default; statements after a read statement or a gateway #include are not read.
 # YAML: an unquoted flow sequence.
 # Go: gateway-typed literals at 7777, elided and with an address field.
+# TOML: a supervised gateway's command line at 7777; another process's options with other ports, and a
+# trailing --listen with no value.

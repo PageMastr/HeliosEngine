@@ -267,8 +267,9 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   sub-command reads its list by name (`list(GET l 0 out)` reads `${l}`), and a `REPLACE` or `REGEX` pattern does not
   carry a flag into the output. A `foreach` loop variable holds flags inside its loop, when it runs over a flag
   variable or over literal items that are options (`foreach(f -mavx2 -mfma)`; a quoted sentence that names a flag is
-  not one, and a quoted list, `"sse4.2;-mavx2"`, is read item by item; a quoted `SHELL:` group,
-  `"SHELL:-Xclang -target-feature -Xclang +avx2"`, is options), and is restored when the loop ends
+  not one, and a quoted list, `"sse4.2;-mavx2"`, is read item by item; a quoted item that holds a `SHELL:` group is
+  options whatever its words, since CMake passes each of them: `"SHELL:-Xclang -target-feature -Xclang +avx2"`,
+  `"SHELL:-mavx2 -include simd.h"`, also inside a generator expression), and is restored when the loop ends
   (CMP0124); with `IN ZIP_LISTS` the variable that takes a flag list holds them (the i-th of several loop variables,
   or `<v>_<i>` for a single one). A `set()` of flags into a name built at run time (`${ARG_OUT}` from
   `cmake_parse_arguments`, `${prefix}_FLAGS`, `${ARGV0}`), other than an output parameter of the enclosing
@@ -283,9 +284,9 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
   the adding directory's), and through function calls as above; any other variable set from AVX flags in one file
   and read at file scope in another (an `include()`d file outside `cmake/`) is not. A wrapper is recognised only
   when the scanned CMake files define it, and only its option arguments count (an unquoted argument, or a quoted one
-  made of options and variables; a quoted `SHELL:` group is options, its `+feature` word too), so a message that
-  names a flag is not a grant. Any other command that carries an
-  AVX-class flag fails closed (`cmake_language(CALL …)`, `cmake_language(EVAL CODE …)`, a function defined outside
+  made of options, `+feature` words and variables, or one that holds a `SHELL:` group, whose words are all options
+  whatever they look like: `"SHELL:-x c++ -mavx2"`), so a message that names a flag is not a grant. Any other
+  command that carries an AVX-class flag fails closed (`cmake_language(CALL …)`, `cmake_language(EVAL CODE …)`, a function defined outside
   the scanned files), except `message()`, conditions (`if`, `elseif`, `while`), compiler-flag probes
   (`check_*_compiler_flag`) and `cmake_parse_arguments()`; so does a nested reference (`${${name}}`) in a grant,
   whose value the scan cannot tell. `block()` scopes are not modelled: a variable set inside one counts after it too

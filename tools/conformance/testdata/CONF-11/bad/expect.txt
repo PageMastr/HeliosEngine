@@ -20,6 +20,8 @@
 # from $ENV{} in a grant and passed to a wrapper (named once in the message: TestISAEnvRefOnce).
 # Round 9 (engine/clang): a quoted SHELL: group passed to a wrapper (18, 19) or given as a foreach item
 # (21), and target features other than avx (+fma, +sha512: 23, 24).
+# Round 10 (engine/clang): a SHELL: group whose options take a separate argument (-include simd.h, also in a
+# generator expression) passed to a wrapper (26, 27) or given as a foreach item (29); +bmi2 and +vaes (31, 32).
 cmake/HeliosIsa.cmake:15: CONF-11
 cmake/HeliosIsa.cmake:24: CONF-11
 cmake/isa_allowlist.cmake:12: CONF-11
@@ -42,6 +44,11 @@ engine/clang/CMakeLists.txt:19: CONF-11
 engine/clang/CMakeLists.txt:21: CONF-11
 engine/clang/CMakeLists.txt:23: CONF-11
 engine/clang/CMakeLists.txt:24: CONF-11
+engine/clang/CMakeLists.txt:26: CONF-11
+engine/clang/CMakeLists.txt:27: CONF-11
+engine/clang/CMakeLists.txt:29: CONF-11
+engine/clang/CMakeLists.txt:31: CONF-11
+engine/clang/CMakeLists.txt:32: CONF-11
 engine/demo/CMakeLists.txt:2: CONF-11
 engine/demo/CMakeLists.txt:4: CONF-11
 engine/demo/CMakeLists.txt:5: CONF-11

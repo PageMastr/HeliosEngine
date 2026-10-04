@@ -838,17 +838,21 @@ func writtenVar1(cmd string, args []string) (name, read string) {
 }
 
 // optionFlags returns the AVX-class flags, literal or through a variable in avxVars, among a command's
-// arguments that are options: an unquoted argument, or a quoted one whose every word is an option
-// (-x, /x), a variable or a generator expression. A quoted sentence that names a flag is not one.
+// arguments that are options: an unquoted argument, or a quoted one whose every word is an option (-x, /x,
+// a +feature), a variable or a generator expression, or that holds a SHELL: group. A quoted sentence that
+// names a flag is not one.
 func optionFlags(args string, avxVars map[string]bool) []string {
 	var out []string
 	for _, a := range cmakeArgs(args) {
 		if strings.HasPrefix(a, `"`) {
 			// A quoted list ("sse4.2;-mavx2") is several items: each is an option or a sentence on its own. A
-			// SHELL: group ("SHELL:-Xclang -target-feature -Xclang +avx2") is options, its feature word too.
+			// SHELL: group is options whatever its words: CMake splits it shell-style and passes every word,
+			// and it exists to keep an option with its separate argument, a bare word ("SHELL:-include simd.h",
+			// "SHELL:-x c++", "SHELL:-Xclang -target-cpu -Xclang haswell"), also inside a generator expression
+			// ("$<$<CONFIG:Release>:SHELL:…>").
 			var kept []string
 			for _, item := range strings.Split(strings.Trim(a, `"`), ";") {
-				if !slices.ContainsFunc(strings.Fields(strings.TrimPrefix(item, "SHELL:")), func(w string) bool {
+				if strings.Contains(item, "SHELL:") || !slices.ContainsFunc(strings.Fields(item), func(w string) bool {
 					return !strings.HasPrefix(w, "-") && !strings.HasPrefix(w, "/") && !strings.HasPrefix(w, "$") &&
 						!strings.HasPrefix(w, "+")
 				}) {

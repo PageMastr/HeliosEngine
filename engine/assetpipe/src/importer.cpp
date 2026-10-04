@@ -8,14 +8,17 @@ namespace helios::assetpipe {
 
 namespace {
 
-char lowerAscii(char c) noexcept { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
+char lowerAscii(char c) noexcept {
+    return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+}
 
 bool idChar(char c) noexcept {
     return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
 }
 
 bool validId(std::string_view id) noexcept {
-    if (id.empty() || id.size() > 64 || id.front() == '.' || id.front() == '_' || id.front() == '-') return false;
+    if (id.empty() || id.size() > 64 || id.front() == '.' || id.front() == '_' || id.front() == '-')
+        return false;
     for (const char c : id) {
         if (!idChar(c)) return false;
     }
@@ -58,28 +61,34 @@ bool importsFile(const ImporterInfo& importer, std::string_view fileName) noexce
 
 Result<void> ImporterRegistry::add(ImporterInfo info) {
     if (!validId(info.id)) {
-        return makeError(ErrorCode::InvalidArgument,
-                         "importer id '{}' must be 1-64 characters of [a-z0-9._-] starting with a letter or digit",
-                         info.id);
+        return makeError(
+            ErrorCode::InvalidArgument,
+            "importer id '{}' must be 1-64 characters of [a-z0-9._-] starting with a letter or digit",
+            info.id);
     }
-    if (info.version == 0) return makeError(ErrorCode::InvalidArgument, "importer '{}': version 0 (versions start at 1)", info.id);
+    if (info.version == 0)
+        return makeError(ErrorCode::InvalidArgument, "importer '{}': version 0 (versions start at 1)",
+                         info.id);
     if (info.settings && (info.settings->kind != refl::Kind::Struct || !info.settings->ops ||
                           !info.settings->ops->construct || !info.settings->ops->destruct)) {
-        return makeError(ErrorCode::InvalidArgument, "importer '{}': settings type '{}' is not a struct", info.id,
-                         info.settings->qualifiedName);
+        return makeError(ErrorCode::InvalidArgument, "importer '{}': settings type '{}' is not a struct",
+                         info.id, info.settings->qualifiedName);
     }
-    if (find(info.id)) return makeError(ErrorCode::AlreadyExists, "importer '{}' is already registered", info.id);
+    if (find(info.id))
+        return makeError(ErrorCode::AlreadyExists, "importer '{}' is already registered", info.id);
     for (const std::string& ext : info.extensions) {
         if (!validExtension(ext)) {
-            return makeError(ErrorCode::InvalidArgument,
-                             "importer '{}': extension '{}' must be a dot and 1-16 lower-case letters or digits", info.id,
-                             ext);
+            return makeError(
+                ErrorCode::InvalidArgument,
+                "importer '{}': extension '{}' must be a dot and 1-16 lower-case letters or digits", info.id,
+                ext);
         }
         for (const auto& other : m_importers) {
             for (const std::string& taken : other->extensions) {
                 if (taken == ext) {
-                    return makeError(ErrorCode::AlreadyExists, "importer '{}': extension '{}' is already imported by '{}'",
-                                     info.id, ext, other->id);
+                    return makeError(ErrorCode::AlreadyExists,
+                                     "importer '{}': extension '{}' is already imported by '{}'", info.id,
+                                     ext, other->id);
                 }
             }
         }

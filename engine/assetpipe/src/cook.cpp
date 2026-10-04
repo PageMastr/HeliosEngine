@@ -7,11 +7,13 @@
 namespace helios::assetpipe {
 
 Result<CookResult> cookAsset(const CookRequest& request) {
-    if (!request.importers || !request.ddc) return Error{ErrorCode::InvalidArgument, "cookAsset: no registry or DDC"};
+    if (!request.importers || !request.ddc)
+        return Error{ErrorCode::InvalidArgument, "cookAsset: no registry or DDC"};
     CookResult result;
     HELIOS_TRY_ASSIGN(result.meta, loadMeta(request.root, request.path, *request.importers));
     const ImporterInfo& importer = *request.importers->find(result.meta.importer); // loadMeta validated it
-    HELIOS_TRY_ASSIGN(const std::vector<u8> source, fs::readFile(request.root / fs::pathFromUtf8(request.path)));
+    HELIOS_TRY_ASSIGN(const std::vector<u8> source,
+                      fs::readFile(request.root / fs::pathFromUtf8(request.path)));
 
     DdcKeyInputs inputs;
     inputs.builder = importer.id;
@@ -31,7 +33,8 @@ Result<CookResult> cookAsset(const CookRequest& request) {
                         cached.error().toString());
     }
     if (!importer.build) {
-        return makeError(ErrorCode::Unsupported, "cook {}: importer '{}' has no build step", request.path, importer.id);
+        return makeError(ErrorCode::Unsupported, "cook {}: importer '{}' has no build step", request.path,
+                         importer.id);
     }
     const BuildContext context{source, result.meta, result.meta.settings, request.platform};
     HELIOS_TRY_ASSIGN(result.product, importer.build(context));

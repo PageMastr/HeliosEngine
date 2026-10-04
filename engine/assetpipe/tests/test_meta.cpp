@@ -70,7 +70,8 @@ TEST_CASE("meta: the importer registry checks ids, versions, extensions and sett
     ImporterInfo bad = textureImporter();
     bad.id = "png";
     CHECK(r.add(bad).error().code == ErrorCode::AlreadyExists);
-    for (const char* id : {"", "Png", "-x", ".x", "a b", "a/b", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}) {
+    for (const char* id : {"", "Png", "-x", ".x", "a b", "a/b",
+                           "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}) {
         CAPTURE(id);
         bad.id = id;
         CHECK(r.add(bad).error().code == ErrorCode::InvalidArgument);
@@ -105,8 +106,9 @@ TEST_CASE("meta: licences fail closed on anything off 01 §5.2's list (OFL-1.1 f
     CHECK(checkLicence("OFL-1.1", false).error().message.find("font assets only") != std::string::npos);
     CHECK(checkLicence("mit", false).error().message.find("write the SPDX id 'MIT'") != std::string::npos);
     CHECK(checkLicence("cc0-1.0", false).error().message.find("'CC0-1.0'") != std::string::npos);
-    for (const char* bad : {"", "CC-BY-4.0", "CC-BY-NC-4.0", "GPL-3.0-only", "AGPL-3.0", "LGPL-2.1", "MPL-2.0",
-                            "public domain", "Unlicense", "proprietary", "MIT OR GPL-3.0", " MIT"}) {
+    for (const char* bad :
+         {"", "CC-BY-4.0", "CC-BY-NC-4.0", "GPL-3.0-only", "AGPL-3.0", "LGPL-2.1", "MPL-2.0", "public domain",
+          "Unlicense", "proprietary", "MIT OR GPL-3.0", " MIT"}) {
         CAPTURE(bad);
         const auto r = checkLicence(bad, true);
         REQUIRE(!r);
@@ -120,15 +122,39 @@ TEST_CASE("meta: project paths follow the Windows-first rule") {
         CAPTURE(ok);
         CHECK(checkProjectPath(ok));
     }
-    for (const char* bad : {"", "/abs.png", "dir/", "a//b.png", "./a.png", "a/../b.png", "..", "a\\b.png", "C:/x.png",
-                            "c:x.png", "a?.png", "a*.png", "a<b.png", "a|b.png", "a\"b.png", "con.png", "art/NUL",
-                            "Com1.tga", "lpt9.png", "conout$.png", "trailing./x.png", "space /x.png", "x.png ",
-                            "tab\t.png", "nl\n.png", "c1\xC2\x85.png"}) {
+    for (const char* bad : {"",
+                            "/abs.png",
+                            "dir/",
+                            "a//b.png",
+                            "./a.png",
+                            "a/../b.png",
+                            "..",
+                            "a\\b.png",
+                            "C:/x.png",
+                            "c:x.png",
+                            "a?.png",
+                            "a*.png",
+                            "a<b.png",
+                            "a|b.png",
+                            "a\"b.png",
+                            "con.png",
+                            "art/NUL",
+                            "Com1.tga",
+                            "lpt9.png",
+                            "conout$.png",
+                            "trailing./x.png",
+                            "space /x.png",
+                            "x.png ",
+                            "tab\t.png",
+                            "nl\n.png",
+                            "c1\xC2\x85.png"}) {
         CAPTURE(bad);
         const auto r = checkProjectPath(bad);
         REQUIRE(!r);
         CHECK(r.error().code == ErrorCode::InvalidArgument);
     }
+    CHECK(checkProjectPath("a/" + std::string(255, 'n') + "/b.png"));
+    CHECK(!checkProjectPath("a/" + std::string(256, 'n') + "/b.png"));
 }
 
 TEST_CASE("meta: settings resolve through the importer's reflected type, canonical and strict") {
@@ -153,7 +179,8 @@ TEST_CASE("meta: settings resolve through the importer's reflected type, canonic
 
     const ImporterInfo& font = *r.find("font");
     CHECK(resolveSettings(font, "{}").value() == "{}");
-    CHECK(resolveSettings(font, R"({"x": 1})").error().message.find("takes no settings") != std::string::npos);
+    CHECK(resolveSettings(font, R"({"x": 1})").error().message.find("takes no settings") !=
+          std::string::npos);
 }
 
 TEST_CASE("meta: canonical text, and a rewrite of it is byte-identical") {
@@ -168,7 +195,8 @@ TEST_CASE("meta: canonical text, and a rewrite of it is byte-identical") {
     // Any spelling of the same sidecar parses to the same value and rewrites to the canonical text.
     const std::string messy = R"(// hand-edited
 {
-  "provenance": {"licence": "MIT", "notes": "Blocked out for the Phase 1 slice.", "author": "Owner", "origin": "original"},
+  "provenance": {"licence": "MIT", "notes": "Blocked out for the Phase 1 slice.",
+                 "author": "Owner", "origin": "original"},
   "labels": ["kestrel", "hull", "kestrel"],
   "settings": {"lods": [0, 1], "mips": false, "maxSize": 2048},
   "source": "art/src/kestrel/hull.blend",
@@ -219,52 +247,94 @@ TEST_CASE("meta: parse errors name the file, the field and the problem") {
     const std::string t(kSampleText);
     const std::vector<Case> cases = {
         {replaced(t, R"(  "guid": "8c0f4d1e-2b7a-4c39-9e51-0d6a3f2b7c18",
-)", ""), ErrorCode::ParseError, "a.png.meta: missing required field 'guid'"},
-        {replaced(t, "8c0f4d1e", "8C0F4D1E"), ErrorCode::ParseError, "guid: '8C0F4D1E-2b7a-4c39-9e51-0d6a3f2b7c18' is not in canonical form"},
-        {replaced(t, "8c0f4d1e-2b7a-4c39-9e51-0d6a3f2b7c18", "{8c0f4d1e-2b7a-4c39-9e51-0d6a3f2b7c18}"), ErrorCode::ParseError, "not in canonical form"},
-        {replaced(t, "8c0f4d1e-2b7a-4c39-9e51-0d6a3f2b7c18", "not-a-guid"), ErrorCode::ParseError, "guid: 'not-a-guid' is not a GUID"},
-        {replaced(t, "8c0f4d1e-2b7a-4c39-9e51-0d6a3f2b7c18", "00000000-0000-0000-0000-000000000000"), ErrorCode::InvalidArgument, "guid: the nil GUID"},
-        {replaced(t, R"("guid": "8c0f4d1e-2b7a-4c39-9e51-0d6a3f2b7c18")", R"("guid": 7)"), ErrorCode::ParseError, "guid: expected string"},
-        {replaced(t, R"("importer": "png")", R"("importer": "gltf")"), ErrorCode::NotFound, "importer: 'gltf' is not a registered importer"},
-        {replaced(t, R"("importerVersion": 2)", R"("importerVersion": 3)"), ErrorCode::VersionMismatch, "written for 'png' version 3, but this build has version 2"},
-        {replaced(t, R"("importerVersion": 2)", R"("importerVersion": 0)"), ErrorCode::InvalidArgument, "importerVersion: versions start at 1"},
-        {replaced(t, R"("importerVersion": 2)", R"("importerVersion": -1)"), ErrorCode::ParseError, "importerVersion: expected non-negative integer"},
-        {replaced(t, R"("importerVersion": 2)", R"("importerVersion": 4294967296)"), ErrorCode::ParseError, "importerVersion: above 4294967295"},
-        {replaced(t, R"("$meta": 0)", R"("$meta": 1)"), ErrorCode::VersionMismatch, "$meta: sidecar format 1"},
+)",
+                  ""),
+         ErrorCode::ParseError, "a.png.meta: missing required field 'guid'"},
+        {replaced(t, "8c0f4d1e", "8C0F4D1E"), ErrorCode::ParseError,
+         "guid: '8C0F4D1E-2b7a-4c39-9e51-0d6a3f2b7c18' is not in canonical form"},
+        {replaced(t, "8c0f4d1e-2b7a-4c39-9e51-0d6a3f2b7c18", "{8c0f4d1e-2b7a-4c39-9e51-0d6a3f2b7c18}"),
+         ErrorCode::ParseError, "not in canonical form"},
+        {replaced(t, "8c0f4d1e-2b7a-4c39-9e51-0d6a3f2b7c18", "not-a-guid"), ErrorCode::ParseError,
+         "guid: 'not-a-guid' is not a GUID"},
+        {replaced(t, "8c0f4d1e-2b7a-4c39-9e51-0d6a3f2b7c18", "00000000-0000-0000-0000-000000000000"),
+         ErrorCode::InvalidArgument, "guid: the nil GUID"},
+        {replaced(t, R"("guid": "8c0f4d1e-2b7a-4c39-9e51-0d6a3f2b7c18")", R"("guid": 7)"),
+         ErrorCode::ParseError, "guid: expected string"},
+        {replaced(t, R"("importer": "png")", R"("importer": "gltf")"), ErrorCode::NotFound,
+         "importer: 'gltf' is not a registered importer"},
+        {replaced(t, R"("importerVersion": 2)", R"("importerVersion": 3)"), ErrorCode::VersionMismatch,
+         "written for 'png' version 3, but this build has version 2"},
+        {replaced(t, R"("importerVersion": 2)", R"("importerVersion": 0)"), ErrorCode::InvalidArgument,
+         "importerVersion: versions start at 1"},
+        {replaced(t, R"("importerVersion": 2)", R"("importerVersion": -1)"), ErrorCode::ParseError,
+         "importerVersion: expected non-negative integer"},
+        {replaced(t, R"("importerVersion": 2)", R"("importerVersion": 4294967296)"), ErrorCode::ParseError,
+         "importerVersion: above 4294967295"},
+        {replaced(t, R"("$meta": 0)", R"("$meta": 1)"), ErrorCode::VersionMismatch,
+         "$meta: sidecar format 1"},
         {replaced(t, R"(  "$meta": 0,
-)", ""), ErrorCode::ParseError, "missing required field '$meta'"},
+)",
+                  ""),
+         ErrorCode::ParseError, "missing required field '$meta'"},
         {replaced(t, R"("mips": false)", R"("mips": "no")"), ErrorCode::ParseError, "settings.mips"},
-        {replaced(t, R"("mips": false)", R"("mipz": false)"), ErrorCode::ParseError, "settings.mipz: unknown field"},
-        {replaced(t, R"("labels": ["hull", "kestrel"])", R"("labels": "hull")"), ErrorCode::ParseError, "labels: expected array of strings"},
-        {replaced(t, R"("labels": ["hull", "kestrel"])", R"("labels": ["hull", 3])"), ErrorCode::ParseError, "labels[1]: expected string"},
-        {replaced(t, R"("labels": ["hull", "kestrel"])", R"("labels": [""])"), ErrorCode::InvalidArgument, "labels[0]"},
-        {replaced(t, "art/src/kestrel/hull.blend", "art\\\\src\\\\hull.blend"), ErrorCode::InvalidArgument, "source: 'art\\src\\hull.blend': '\\' is not a separator"},
-        {replaced(t, "art/src/kestrel/hull.blend", "C:/art/hull.blend"), ErrorCode::InvalidArgument, "source: 'C:/art/hull.blend'"},
-        {replaced(t, "art/src/kestrel/hull.blend", "art/aux.blend"), ErrorCode::InvalidArgument, "Windows device name"},
+        {replaced(t, R"("mips": false)", R"("mipz": false)"), ErrorCode::ParseError,
+         "settings.mipz: unknown field"},
+        {replaced(t, R"("labels": ["hull", "kestrel"])", R"("labels": "hull")"), ErrorCode::ParseError,
+         "labels: expected array of strings"},
+        {replaced(t, R"("labels": ["hull", "kestrel"])", R"("labels": ["hull", 3])"), ErrorCode::ParseError,
+         "labels[1]: expected string"},
+        {replaced(t, R"("labels": ["hull", "kestrel"])", R"("labels": [""])"), ErrorCode::InvalidArgument,
+         "labels[0]"},
+        {replaced(t, "art/src/kestrel/hull.blend", "art\\\\src\\\\hull.blend"), ErrorCode::InvalidArgument,
+         "source: 'art\\src\\hull.blend': '\\' is not a separator"},
+        {replaced(t, "art/src/kestrel/hull.blend", "C:/art/hull.blend"), ErrorCode::InvalidArgument,
+         "source: 'C:/art/hull.blend'"},
+        {replaced(t, "art/src/kestrel/hull.blend", "art/aux.blend"), ErrorCode::InvalidArgument,
+         "Windows device name"},
         {replaced(t, R"("source")", R"("sources")"), ErrorCode::ParseError, "sources: unknown field"},
-        {replaced(t, R"("labels")", R"("guid": "8c0f4d1e-2b7a-4c39-9e51-0d6a3f2b7c18", "labels")"), ErrorCode::ParseError, "duplicate key 'guid'"},
+        {replaced(t, R"("labels")", R"("guid": "8c0f4d1e-2b7a-4c39-9e51-0d6a3f2b7c18", "labels")"),
+         ErrorCode::ParseError, "duplicate key 'guid'"},
         {replaced(t, R"(    "origin": "original",
-)", ""), ErrorCode::ParseError, "provenance: missing required field 'origin'"},
-        {replaced(t, R"("origin": "original")", R"("origin": "found-online")"), ErrorCode::ParseError, "provenance.origin: 'found-online' is not an origin"},
-        {replaced(t, R"("author": "Owner")", R"("author": "  ")"), ErrorCode::InvalidArgument, "provenance.author: must not be empty"},
-        {replaced(t, R"("licence": "MIT")", R"("licence": "CC-BY-4.0")"), ErrorCode::InvalidArgument, "provenance.licence: 'CC-BY-4.0' is not an allowed licence"},
-        {replaced(t, R"("licence": "MIT")", R"("licence": "OFL-1.1")"), ErrorCode::InvalidArgument, "font assets only"},
-        {replaced(t, R"("licence": "MIT",)", R"("license": "MIT",)"), ErrorCode::ParseError, "provenance.license: unknown field"},
-        {replaced(t, R"("origin": "original")", R"("origin": "cc0")"), ErrorCode::InvalidArgument, "provenance.url: a cc0 asset records where it was obtained"},
-        {replaced(t, R"("origin": "original")", R"("origin": "cc0", "url": "https://example.org/hull")"), ErrorCode::InvalidArgument, "a cc0 asset keeps licence 'CC0-1.0'"},
-        {replaced(t, R"("origin": "original")", R"("origin": "commissioned")"), ErrorCode::InvalidArgument, "provenance.rights"},
-        {replaced(t, R"("origin": "original")", R"("origin": "ai-assisted")"), ErrorCode::InvalidArgument, "provenance.ai: an ai-assisted asset records"},
-        {replaced(t, R"("origin": "original",)", R"("origin": "original", "ai": {"tool": "t", "model": "m", "prompt": "p"},)"), ErrorCode::InvalidArgument, "only an ai-assisted asset has 'ai'"},
-        {replaced(t, R"("origin": "original",)", R"("origin": "ai-assisted", "ai": {"tool": "t", "model": "m"},)"), ErrorCode::ParseError, "provenance.ai: missing required field 'prompt'"},
-        {replaced(t, R"("origin": "original",)", R"("origin": "ai-assisted", "ai": {"tool": "t", "model": "m", "prompt": "p", "seed": 1},)"), ErrorCode::ParseError, "provenance.ai.seed: unknown field"},
+)",
+                  ""),
+         ErrorCode::ParseError, "provenance: missing required field 'origin'"},
+        {replaced(t, R"("origin": "original")", R"("origin": "found-online")"), ErrorCode::ParseError,
+         "provenance.origin: 'found-online' is not an origin"},
+        {replaced(t, R"("author": "Owner")", R"("author": "  ")"), ErrorCode::InvalidArgument,
+         "provenance.author: must not be empty"},
+        {replaced(t, R"("licence": "MIT")", R"("licence": "CC-BY-4.0")"), ErrorCode::InvalidArgument,
+         "provenance.licence: 'CC-BY-4.0' is not an allowed licence"},
+        {replaced(t, R"("licence": "MIT")", R"("licence": "OFL-1.1")"), ErrorCode::InvalidArgument,
+         "font assets only"},
+        {replaced(t, R"("licence": "MIT",)", R"("license": "MIT",)"), ErrorCode::ParseError,
+         "provenance.license: unknown field"},
+        {replaced(t, R"("origin": "original")", R"("origin": "cc0")"), ErrorCode::InvalidArgument,
+         "provenance.url: a cc0 asset records where it was obtained"},
+        {replaced(t, R"("origin": "original")", R"("origin": "cc0", "url": "https://example.org/hull")"),
+         ErrorCode::InvalidArgument, "a cc0 asset keeps licence 'CC0-1.0'"},
+        {replaced(t, R"("origin": "original")", R"("origin": "commissioned")"), ErrorCode::InvalidArgument,
+         "provenance.rights"},
+        {replaced(t, R"("origin": "original")", R"("origin": "ai-assisted")"), ErrorCode::InvalidArgument,
+         "provenance.ai: an ai-assisted asset records"},
+        {replaced(t, R"("origin": "original",)",
+                  R"("origin": "original", "ai": {"tool": "t", "model": "m", "prompt": "p"},)"),
+         ErrorCode::InvalidArgument, "only an ai-assisted asset has 'ai'"},
+        {replaced(t, R"("origin": "original",)",
+                  R"("origin": "ai-assisted", "ai": {"tool": "t", "model": "m"},)"),
+         ErrorCode::ParseError, "provenance.ai: missing required field 'prompt'"},
+        {replaced(t, R"("origin": "original",)",
+                  R"("origin": "ai-assisted", "ai": {"tool": "t", "model": "m", "prompt": "p", "seed": 1},)"),
+         ErrorCode::ParseError, "provenance.ai.seed: unknown field"},
         {replaced(t, R"(  "provenance": {
     "origin": "original",
     "author": "Owner",
     "licence": "MIT",
     "notes": "Blocked out for the Phase 1 slice."
   }
-)", R"(  "provenance": null
-)"), ErrorCode::ParseError, "provenance: expected object"},
+)",
+                  R"(  "provenance": null
+)"),
+         ErrorCode::ParseError, "provenance: expected object"},
         {"[]", ErrorCode::ParseError, "expected object"},
         {"{", ErrorCode::ParseError, "a.png.meta:"},
         {"", ErrorCode::ParseError, "a.png.meta"},
@@ -282,7 +352,8 @@ TEST_CASE("meta: parse errors name the file, the field and the problem") {
     const usize at = t.find(R"(,
   "provenance")");
     const std::string noProvenance = t.substr(0, at) + "\n}\n";
-    CHECK(parseMeta(noProvenance, r).error().message.find("missing required field 'provenance'") != std::string::npos);
+    CHECK(parseMeta(noProvenance, r).error().message.find("missing required field 'provenance'") !=
+          std::string::npos);
 }
 
 TEST_CASE("meta: hostile sidecars fail cleanly") {
@@ -299,11 +370,14 @@ TEST_CASE("meta: hostile sidecars fail cleanly") {
     const auto nul = parseMeta(replaced(kSampleText, "art/src/kestrel/hull.blend", "art/x\\u0000.blend"), r);
     REQUIRE(!nul);
     CHECK(nul.error().message.find("control character") != std::string::npos);
-    CHECK(parseMeta(replaced(kSampleText, R"(["hull", "kestrel"])", "[\"" + std::string(65, 'x') + "\"]"), r).error().message.find("labels[0]") != std::string::npos);
+    CHECK(parseMeta(replaced(kSampleText, R"(["hull", "kestrel"])", "[\"" + std::string(65, 'x') + "\"]"), r)
+              .error()
+              .message.find("labels[0]") != std::string::npos);
     std::string many = "[";
     for (int i = 0; i < 65; ++i) many += (i ? ",\"l" : "\"l") + std::to_string(i) + "\"";
     many += "]";
-    CHECK(parseMeta(replaced(kSampleText, R"(["hull", "kestrel"])", many), r).error().code == ErrorCode::LimitExceeded);
+    CHECK(parseMeta(replaced(kSampleText, R"(["hull", "kestrel"])", many), r).error().code ==
+          ErrorCode::LimitExceeded);
 }
 
 TEST_CASE("meta: create on first import mints the GUID once") {
@@ -342,7 +416,8 @@ TEST_CASE("meta: create on first import mints the GUID once") {
     CHECK(ensureMeta(dir.path, "art/deck.png", wrongImporter, r).error().code == ErrorCode::InvalidArgument);
     NewMeta badLicence = newMeta();
     badLicence.provenance.licence = "CC-BY-4.0";
-    CHECK(ensureMeta(dir.path, "art/deck.png", badLicence, r).error().message.find("provenance.licence") != std::string::npos);
+    CHECK(ensureMeta(dir.path, "art/deck.png", badLicence, r).error().message.find("provenance.licence") !=
+          std::string::npos);
     NewMeta badSettings = newMeta(R"({"nope": 1})");
     CHECK(!ensureMeta(dir.path, "art/deck.png", badSettings, r));
     CHECK(!fileExists(dir.path, "art/deck.png.meta"));
@@ -394,7 +469,8 @@ TEST_CASE("meta: moves and renames keep the GUID (the GUID follows the file)") {
     TempDir dir;
     const ImporterRegistry r = makeRegistry();
     writeText(dir.path, "art/hull.png", "hull");
-    const AssetMeta meta = ensureMeta(dir.path, "art/hull.png", newMeta(R"({"mips": false})"), r).value().meta;
+    const AssetMeta meta =
+        ensureMeta(dir.path, "art/hull.png", newMeta(R"({"mips": false})"), r).value().meta;
     const std::string sidecar = readText(dir.path, "art/hull.png.meta");
 
     REQUIRE(moveAsset(dir.path, "art/hull.png", "ships/kestrel/hull.tga", r));
@@ -416,13 +492,19 @@ TEST_CASE("meta: moves and renames keep the GUID (the GUID follows the file)") {
     // Refusals move nothing.
     writeText(dir.path, "ships/deck.png", "deck");
     REQUIRE(ensureMeta(dir.path, "ships/deck.png", newMeta(), r));
-    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/deck.png", r).error().code == ErrorCode::AlreadyExists);
-    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/DECK.PNG", r).error().code == ErrorCode::AlreadyExists);
+    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/deck.png", r).error().code ==
+          ErrorCode::AlreadyExists);
+    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/DECK.PNG", r).error().code ==
+          ErrorCode::AlreadyExists);
     writeText(dir.path, "ships/orphan.png.meta", "{}");
-    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/Orphan.png", r).error().code == ErrorCode::AlreadyExists);
-    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/hull.ttf", r).error().code == ErrorCode::InvalidArgument);
-    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/con.png", r).error().code == ErrorCode::InvalidArgument);
-    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "../out.png", r).error().code == ErrorCode::InvalidArgument);
+    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/Orphan.png", r).error().code ==
+          ErrorCode::AlreadyExists);
+    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/hull.ttf", r).error().code ==
+          ErrorCode::InvalidArgument);
+    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "ships/con.png", r).error().code ==
+          ErrorCode::InvalidArgument);
+    CHECK(moveAsset(dir.path, "ships/kestrel/Hull.tga", "../out.png", r).error().code ==
+          ErrorCode::InvalidArgument);
     writeText(dir.path, "loose.png", "no sidecar");
     CHECK(moveAsset(dir.path, "loose.png", "loose2.png", r).error().code == ErrorCode::NotFound);
     CHECK(fileExists(dir.path, "loose.png"));
@@ -452,7 +534,8 @@ TEST_CASE("meta: the scan reports every missing, orphan, mis-cased, duplicate an
     writeText(dir.path, "c/copy.png", "6");
     writeText(dir.path, "c/copy.png.meta", readText(dir.path, "a/good.png.meta")); // a copied sidecar
     writeText(dir.path, "c/broken.png", "7");
-    writeText(dir.path, "c/broken.png.meta", replaced(readText(dir.path, "a/good.png.meta"), "\"MIT\"", "\"CC-BY-4.0\""));
+    writeText(dir.path, "c/broken.png.meta",
+              replaced(readText(dir.path, "a/good.png.meta"), "\"MIT\"", "\"CC-BY-4.0\""));
     writeText(dir.path, "c/wrong.tga", "8");
     AssetMeta fontMeta = sampleMeta();
     fontMeta.guid = Guid::generate();

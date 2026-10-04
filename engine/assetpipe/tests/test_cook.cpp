@@ -17,7 +17,8 @@ struct Project {
         o.root = dir.path / "ddc";
         ddc = LocalDdc::open(o).value();
     }
-    Result<CookResult> cook(std::string_view path, asset::HpakPlatform platform = asset::HpakPlatform::PcClient) {
+    Result<CookResult> cook(std::string_view path,
+                            asset::HpakPlatform platform = asset::HpakPlatform::PcClient) {
         return cookAsset(CookRequest{&importers, ddc.get(), dir.path / "content", path, platform});
     }
 };
@@ -137,7 +138,8 @@ TEST_CASE("cook: a damaged DDC entry is rebuilt, and cook errors are clean") {
     REQUIRE(noBuild.add(info));
     writeText(content, "b.png", "other bytes");
     REQUIRE(ensureMeta(content, "b.png", newMeta(), noBuild));
-    CHECK(cookAsset(CookRequest{&noBuild, p.ddc.get(), content, "b.png"}).error().code == ErrorCode::Unsupported);
+    CHECK(cookAsset(CookRequest{&noBuild, p.ddc.get(), content, "b.png"}).error().code ==
+          ErrorCode::Unsupported);
 }
 
 } // namespace

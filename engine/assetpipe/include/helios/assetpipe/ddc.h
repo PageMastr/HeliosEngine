@@ -53,14 +53,14 @@ namespace helios::assetpipe {
 inline constexpr u32 kCookerVersion = 1;
 
 struct DdcKeyInputs {
-    std::string_view builder;                 ///< Importer or builder id.
+    std::string_view builder; ///< Importer or builder id.
     u32 builderVersion = 0;
-    Hash128 sourceHash;                       ///< XXH3-128 of the source bytes (hashSourceFile()).
-    std::string_view settings = "{}";         ///< Canonical settings (resolveSettings()).
-    u64 settingsLayout = 0;                   ///< The settings type's layoutHash; 0 without settings.
+    Hash128 sourceHash;               ///< XXH3-128 of the source bytes (hashSourceFile()).
+    std::string_view settings = "{}"; ///< Canonical settings (resolveSettings()).
+    u64 settingsLayout = 0;           ///< The settings type's layoutHash; 0 without settings.
     asset::HpakPlatform platform = asset::HpakPlatform::PcClient; ///< The consumer (02 §6.5).
     u32 cookerVersion = kCookerVersion;
-    std::span<const Hash128> dependencies;    ///< Dependency keys, in the builder's order.
+    std::span<const Hash128> dependencies; ///< Dependency keys, in the builder's order.
 };
 
 /// The key of the layout above. Pure.
@@ -87,7 +87,8 @@ struct EntryHeader {
 /// The entry for `payload` under `key` (header + payload). LimitExceeded above kMaxPayload.
 Result<std::vector<u8>> encodeEntry(const Hash128& key, std::span<const u8> payload);
 /// The 64 header bytes for this key and payload.
-void encodeEntryHeader(const Hash128& key, std::span<const u8> payload, std::span<u8, kEntryHeaderBytes> out) noexcept;
+void encodeEntryHeader(const Hash128& key, std::span<const u8> payload,
+                       std::span<u8, kEntryHeaderBytes> out) noexcept;
 
 /// Validates the first kEntryHeaderBytes of `bytes` (bounds checked: fewer bytes is EndOfFile): magic
 /// and header size (Corrupt), version (VersionMismatch), header hash, flags and reserved bytes (Corrupt),
@@ -103,7 +104,8 @@ Result<std::span<const u8>> readEntry(std::span<const u8> entry, const Hash128& 
 } // namespace ddc
 
 struct LocalDdcOptions {
-    fs::Path root; ///< Required. The plan's default is `%LOCALAPPDATA%\Helios\DDC` (02 §6.2); the caller chooses.
+    fs::Path
+        root; ///< Required. The plan's default is `%LOCALAPPDATA%\Helios\DDC` (02 §6.2); the caller chooses.
     /// Size cap of the store (02 §6.2 / 07 §3.2: 200 GB default). When this process's running total passes
     /// it, put() trims to trimTargetPercent of it.
     u64 capBytes = 200ull * 1000 * 1000 * 1000;
@@ -117,19 +119,19 @@ struct LocalDdcOptions {
 
 struct DdcStats {
     u64 hits = 0;
-    u64 misses = 0;   ///< No entry.
-    u64 bad = 0;      ///< Entries that failed verification (also misses for the caller).
+    u64 misses = 0; ///< No entry.
+    u64 bad = 0;    ///< Entries that failed verification (also misses for the caller).
     u64 puts = 0;
-    u64 evicted = 0;  ///< Entries removed by trim().
+    u64 evicted = 0; ///< Entries removed by trim().
     u64 evictedBytes = 0;
 };
 
 struct TrimResult {
-    u64 entries = 0;      ///< Entries left.
-    u64 bytes = 0;        ///< Their size on disk.
+    u64 entries = 0; ///< Entries left.
+    u64 bytes = 0;   ///< Their size on disk.
     u64 evicted = 0;
     u64 evictedBytes = 0;
-    u64 staleTemps = 0;   ///< Crashed writers' temp files removed.
+    u64 staleTemps = 0; ///< Crashed writers' temp files removed.
 };
 
 /// The local DDC tier (07 §3.2): content addressed by key, LRU eviction under a size cap.

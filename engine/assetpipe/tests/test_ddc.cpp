@@ -12,7 +12,9 @@ namespace {
 
 using namespace assetpipe_test;
 
-std::vector<u8> bytesOf(std::string_view text) { return std::vector<u8>(text.begin(), text.end()); }
+std::vector<u8> bytesOf(std::string_view text) {
+    return std::vector<u8>(text.begin(), text.end());
+}
 
 std::vector<u8> noise(usize size, u64 seed) {
     std::vector<u8> out(size);
@@ -21,7 +23,9 @@ std::vector<u8> noise(usize size, u64 seed) {
     return out;
 }
 
-Hash128 keyOf(u64 n) { return Hash128{0x9E3779B97F4A7C15ull * n, n}; }
+Hash128 keyOf(u64 n) {
+    return Hash128{0x9E3779B97F4A7C15ull * n, n};
+}
 
 std::unique_ptr<LocalDdc> openStore(const fs::Path& root, u64 cap = 1ull << 40) {
     LocalDdcOptions o;
@@ -53,7 +57,8 @@ TEST_CASE("ddc key: every input changes it, and paths, times and settings spelli
     vary("builder version", [](DdcKeyInputs& v) { v.builderVersion = 3; });
     vary("source", [](DdcKeyInputs& v) { v.sourceHash = hash128(std::string_view("source bytes!")); });
     vary("settings", [](DdcKeyInputs& v) { v.settings = R"({"mips":true})"; });
-    vary("settings layout", [](DdcKeyInputs& v) { v.settingsLayout = refl::typeOf<TextureSettingsV2>().layoutHash; });
+    vary("settings layout",
+         [](DdcKeyInputs& v) { v.settingsLayout = refl::typeOf<TextureSettingsV2>().layoutHash; });
     vary("platform server", [](DdcKeyInputs& v) { v.platform = asset::HpakPlatform::Server; });
     vary("platform editor", [](DdcKeyInputs& v) { v.platform = asset::HpakPlatform::Editor; });
     vary("cooker version", [](DdcKeyInputs& v) { v.cookerVersion = kCookerVersion + 1; });
@@ -154,7 +159,8 @@ TEST_CASE("ddc entry: encode and read back; every damaged field is an error, nev
     CHECK(ddc::readEntry(entry, keyOf(12)).error().code == ErrorCode::Corrupt); // another key's entry
     for (usize n : {usize(0), usize(1), usize(63)}) {
         CAPTURE(n);
-        CHECK(code(std::vector<u8>(entry.begin(), entry.begin() + static_cast<isize>(n))) == ErrorCode::EndOfFile);
+        CHECK(code(std::vector<u8>(entry.begin(), entry.begin() + static_cast<isize>(n))) ==
+              ErrorCode::EndOfFile);
     }
     CHECK(code(std::vector<u8>(entry.begin(), entry.end() - 1)) == ErrorCode::EndOfFile); // truncated payload
     std::vector<u8> e = entry;
@@ -225,8 +231,10 @@ TEST_CASE("local ddc: put and get, misses, damaged entries are misses, foreign f
         ErrorCode code;
     };
     std::vector<Damage> damages;
-    damages.push_back({"truncated payload", std::vector<u8>(raw.begin(), raw.end() - 100), ErrorCode::EndOfFile});
-    damages.push_back({"truncated header", std::vector<u8>(raw.begin(), raw.begin() + 30), ErrorCode::EndOfFile});
+    damages.push_back(
+        {"truncated payload", std::vector<u8>(raw.begin(), raw.end() - 100), ErrorCode::EndOfFile});
+    damages.push_back(
+        {"truncated header", std::vector<u8>(raw.begin(), raw.begin() + 30), ErrorCode::EndOfFile});
     damages.push_back({"empty file", {}, ErrorCode::EndOfFile});
     std::vector<u8> flipped = raw;
     flipped[64 + 50'000] ^= 4;
@@ -234,7 +242,8 @@ TEST_CASE("local ddc: put and get, misses, damaged entries are misses, foreign f
     std::vector<u8> longer = raw;
     longer.push_back(7);
     damages.push_back({"trailing byte", longer, ErrorCode::Corrupt});
-    damages.push_back({"another key's entry", ddc::encodeEntry(keyOf(99), payload).value(), ErrorCode::Corrupt});
+    damages.push_back(
+        {"another key's entry", ddc::encodeEntry(keyOf(99), payload).value(), ErrorCode::Corrupt});
     for (const Damage& d : damages) {
         CAPTURE(d.what);
         REQUIRE(fs::writeFile(path, d.bytes));
@@ -305,8 +314,8 @@ TEST_CASE("local ddc: LRU eviction under the cap, hits refresh recency, stale te
     const fs::Path root = dir.path / "ddc";
     LocalDdcOptions o;
     o.root = root;
-    o.capBytes = 10 * (1000 + 64);  // ten 1000-byte entries
-    o.trimTargetPercent = 50;       // trim to five
+    o.capBytes = 10 * (1000 + 64); // ten 1000-byte entries
+    o.trimTargetPercent = 50;      // trim to five
     o.touchInterval = std::chrono::seconds(0);
     auto ddc = LocalDdc::open(o).value();
     const auto now = std::filesystem::file_time_type::clock::now();
@@ -326,7 +335,8 @@ TEST_CASE("local ddc: LRU eviction under the cap, hits refresh recency, stale te
     const std::string freshTemp = keyOf(51).toHex() + ".hddc.tmp-" + Guid::generate().toString();
     writeText(root, keyOf(50).toHex().substr(0, 2) + "/" + tempName, "partial");
     writeText(root, keyOf(51).toHex().substr(0, 2) + "/" + freshTemp, "in flight");
-    REQUIRE(fs::setLastWriteTime(root / keyOf(50).toHex().substr(0, 2) / tempName, now - std::chrono::hours(2)));
+    REQUIRE(
+        fs::setLastWriteTime(root / keyOf(50).toHex().substr(0, 2) / tempName, now - std::chrono::hours(2)));
 
     // The eleventh put passes the cap: least recently used first, down to half the cap.
     REQUIRE(ddc->put(keyOf(10), noise(1000, 10)));

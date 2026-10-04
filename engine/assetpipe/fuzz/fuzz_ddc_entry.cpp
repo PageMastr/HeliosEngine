@@ -33,7 +33,9 @@ using namespace helios::assetpipe;
 
 constexpr usize kMaxInput = 4 * kMiB;
 
-[[noreturn]] void fail() { std::abort(); }
+[[noreturn]] void fail() {
+    std::abort();
+}
 
 // A damaged entry logs nothing, but keep the target quiet like the others.
 const bool g_quietLogs = (log::setLevel(log::Level::Error), true);
@@ -67,7 +69,9 @@ void exercise(const u8* data, usize size) {
     const Result<std::span<const u8>> read = ddc::readEntry(input, key);
     if (read) {
         const std::span<const u8> payload = *read;
-        if (payload.data() != data + ddc::kEntryHeaderBytes || payload.size() != size - ddc::kEntryHeaderBytes) fail();
+        if (payload.data() != data + ddc::kEntryHeaderBytes ||
+            payload.size() != size - ddc::kEntryHeaderBytes)
+            fail();
         const Result<std::vector<u8>> again = ddc::encodeEntry(key, payload);
         if (!again || again->size() != size || !std::equal(again->begin(), again->end(), data)) fail();
         const Hash128 other{key.low ^ 1, key.high};
@@ -76,7 +80,8 @@ void exercise(const u8* data, usize size) {
     // The store's file path must agree with the in-memory reader.
     LocalDdc& ddc = *store().ddc;
     const fs::Path path = ddc.entryPath(key);
-    if (!fs::createDirectories(path.parent_path()) || !fs::writeFile(path, input, fs::WriteMode::Direct)) fail();
+    if (!fs::createDirectories(path.parent_path()) || !fs::writeFile(path, input, fs::WriteMode::Direct))
+        fail();
     const Result<std::vector<u8>> got = ddc.get(key);
     if (got.ok() != read.ok()) fail();
     if (got && !std::equal(got->begin(), got->end(), read->begin(), read->end())) fail();
@@ -103,31 +108,33 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 void heliosFuzzSeeds(std::vector<std::vector<uint8_t>>& out) {
     const Hash128 key{0x1111222233334444ull, 0x5555666677778888ull};
     const auto entry = [&](std::span<const u8> payload) { return ddc::encodeEntry(key, payload).value(); };
-    const auto reseal = [](std::vector<u8>& e) { storeLE<u64>(e.data() + 56, hash64(e.data(), ddc::kEntryHeaderHashedBytes)); };
+    const auto reseal = [](std::vector<u8>& e) {
+        storeLE<u64>(e.data() + 56, hash64(e.data(), ddc::kEntryHeaderHashedBytes));
+    };
     std::vector<u8> text(40);
     for (usize i = 0; i < text.size(); ++i) text[i] = static_cast<u8>("cooked product bytes "[i % 21]);
     std::vector<u8> noise(70 * 1024);
     Xoshiro256 rng(7);
     for (u8& b : noise) b = static_cast<u8>(rng.next() >> 56);
 
-    out.push_back(entry(text));                        // 0: a valid entry
-    out.push_back(entry({}));                          // 1: a valid empty entry
-    out.push_back(entry(noise));                       // 2: a 70 KB entry
+    out.push_back(entry(text));  // 0: a valid entry
+    out.push_back(entry({}));    // 1: a valid empty entry
+    out.push_back(entry(noise)); // 2: a 70 KB entry
     std::vector<u8> e = out[0];
     e.resize(ddc::kEntryHeaderBytes + 10);
-    out.push_back(e);                                  // 3: truncated payload
+    out.push_back(e); // 3: truncated payload
     e = out[0];
     e.push_back(0);
-    out.push_back(e);                                  // 4: a byte after the payload
+    out.push_back(e); // 4: a byte after the payload
     e = out[0];
     storeLE<u16>(e.data() + 4, 1);
     reseal(e);
-    out.push_back(e);                                  // 5: a newer entry version
+    out.push_back(e); // 5: a newer entry version
     e = out[1];
     storeLE<u64>(e.data() + 24, ddc::kMaxPayload);
     reseal(e);
-    out.push_back(e);                                  // 6: header only, claiming 2 GiB
+    out.push_back(e); // 6: header only, claiming 2 GiB
     e = out[0];
     e[ddc::kEntryHeaderBytes + 3] ^= 0x20;
-    out.push_back(e);                                  // 7: payload checksum mismatch
+    out.push_back(e); // 7: payload checksum mismatch
 }

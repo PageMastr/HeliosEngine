@@ -30,10 +30,10 @@ struct CookRequest {
 
 struct CookResult {
     AssetMeta meta;
-    Hash128 key;                ///< The DDC key the product is stored under.
+    Hash128 key; ///< The DDC key the product is stored under.
     std::vector<u8> product;
-    bool hit = false;           ///< Served by the DDC (the importer did not run).
-    bool stored = false;        ///< A miss whose product was written to the DDC.
+    bool hit = false;    ///< Served by the DDC (the importer did not run).
+    bool stored = false; ///< A miss whose product was written to the DDC.
 };
 
 /// Cooks `request.path` for `request.platform`. The key uses the registered importer's version (not the

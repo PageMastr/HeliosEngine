@@ -26,8 +26,8 @@
 // The GUID follows the file: a sidecar stores no path of its own, and moveAsset() moves both files.
 //
 // Paths (Windows first): sidecar functions take a project root and a '/'-separated path relative to it,
-// checked by checkProjectPath(): no '\', no "." or ".." or empty component, no character Windows forbids
-// in a name (<>:"|?* and control characters), and no component that engine/core's
+// checked by checkProjectPath(): no '\', no "." or ".." or empty component, no component above 255 bytes,
+// no character Windows forbids in a name (<>:"|?* and control characters), and no component that engine/core's
 // fs::isNonPortableComponent rejects (device names such as CON or nul.png, names ending in '.' or ' ').
 // Two paths that differ only in ASCII case name one file on Windows: scanMetas() reports them, and
 // moveAsset() refuses a target that a different file already holds in another case.
@@ -79,11 +79,11 @@ struct AiProvenance {
 
 struct Provenance {
     Origin origin = Origin::Original;
-    std::string author;              ///< Required.
-    std::string licence;             ///< Required: an SPDX id, see checkLicence().
-    std::string url;                 ///< Required for Cc0.
-    std::string rights;              ///< Required for Commissioned.
-    std::optional<AiProvenance> ai;  ///< Required for AiAssisted, absent otherwise.
+    std::string author;             ///< Required.
+    std::string licence;            ///< Required: an SPDX id, see checkLicence().
+    std::string url;                ///< Required for Cc0.
+    std::string rights;             ///< Required for Commissioned.
+    std::optional<AiProvenance> ai; ///< Required for AiAssisted, absent otherwise.
     std::string notes;
     friend bool operator==(const Provenance&, const Provenance&) = default;
 };

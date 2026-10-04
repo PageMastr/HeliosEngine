@@ -25,7 +25,7 @@
 #undef HELIOS_ASSETPIPE_SANITIZED
 #define HELIOS_ASSETPIPE_SANITIZED 1
 #elif defined(__has_feature)
-#if __has_feature(address_sanitizer) || __has_feature(undefined_behavior_sanitizer) || \
+#if __has_feature(address_sanitizer) || __has_feature(undefined_behavior_sanitizer) ||                       \
     __has_feature(thread_sanitizer) || __has_feature(memory_sanitizer)
 #undef HELIOS_ASSETPIPE_SANITIZED
 #define HELIOS_ASSETPIPE_SANITIZED 1
@@ -42,7 +42,9 @@ namespace {
 using namespace assetpipe_test;
 using Clock = std::chrono::steady_clock;
 
-f64 usSince(Clock::time_point t0) { return std::chrono::duration<f64, std::micro>(Clock::now() - t0).count(); }
+f64 usSince(Clock::time_point t0) {
+    return std::chrono::duration<f64, std::micro>(Clock::now() - t0).count();
+}
 
 f64 percentile(std::vector<f64> v, f64 p) {
     std::sort(v.begin(), v.end());

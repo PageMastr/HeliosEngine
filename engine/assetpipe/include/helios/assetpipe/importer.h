@@ -26,9 +26,9 @@ struct AssetMeta;
 
 /// What a build step gets: the source bytes, its sidecar, the resolved settings and the consumer.
 struct BuildContext {
-    std::span<const u8> source;             ///< The source file's bytes.
-    const AssetMeta& meta;                  ///< Its validated `.meta`.
-    std::string_view settings;              ///< Canonical compact JSON of the resolved settings.
+    std::span<const u8> source; ///< The source file's bytes.
+    const AssetMeta& meta;      ///< Its validated `.meta`.
+    std::string_view settings;  ///< Canonical compact JSON of the resolved settings.
     asset::HpakPlatform platform = asset::HpakPlatform::PcClient; ///< The consumer (02 §6.5).
 };
 

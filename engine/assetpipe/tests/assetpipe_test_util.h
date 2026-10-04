@@ -67,7 +67,9 @@ inline std::string readText(const fs::Path& root, std::string_view rel) {
     return fs::readTextFile(root / fs::pathFromUtf8(rel)).value();
 }
 
-inline bool fileExists(const fs::Path& root, std::string_view rel) { return fs::isFile(root / fs::pathFromUtf8(rel)); }
+inline bool fileExists(const fs::Path& root, std::string_view rel) {
+    return fs::isFile(root / fs::pathFromUtf8(rel));
+}
 
 inline Provenance original(std::string licence = "MIT") {
     Provenance p;
@@ -87,8 +89,8 @@ inline std::atomic<int>& buildRuns() {
 inline BuildFn reversingBuild(std::string id) {
     return [id](const BuildContext& c) -> Result<std::vector<u8>> {
         buildRuns().fetch_add(1);
-        const std::string head = id + "|" + std::string(asset::hpakPlatformName(c.platform)) + "|" +
-                                 std::string(c.settings) + "|";
+        const std::string head =
+            id + "|" + std::string(asset::hpakPlatformName(c.platform)) + "|" + std::string(c.settings) + "|";
         std::vector<u8> out(head.begin(), head.end());
         out.insert(out.end(), c.source.rbegin(), c.source.rend());
         return out;

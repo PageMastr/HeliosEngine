@@ -23,9 +23,13 @@ void storeHash(u8* p, const Hash128& h) noexcept {
     storeLE<u64>(p + 8, h.high);
 }
 
-Hash128 loadHash(const u8* p) noexcept { return Hash128{loadLE<u64>(p), loadLE<u64>(p + 8)}; }
+Hash128 loadHash(const u8* p) noexcept {
+    return Hash128{loadLE<u64>(p), loadLE<u64>(p + 8)};
+}
 
-bool hexDigit(char c) noexcept { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }
+bool hexDigit(char c) noexcept {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+}
 
 /// "<32 lower-case hex digits>.hddc": the only file names the store reads as entries or deletes.
 bool isEntryName(std::string_view name) noexcept {
@@ -40,7 +44,9 @@ bool isTempName(std::string_view name) noexcept {
            Guid::parse(name.substr(at + kTempMarker.size())).ok();
 }
 
-bool isFanoutDir(std::string_view name) noexcept { return name.size() == 2 && hexDigit(name[0]) && hexDigit(name[1]); }
+bool isFanoutDir(std::string_view name) noexcept {
+    return name.size() == 2 && hexDigit(name[0]) && hexDigit(name[1]);
+}
 
 } // namespace
 
@@ -89,7 +95,8 @@ Result<Hash128> hashSourceFile(const fs::Path& path) {
 
 namespace ddc {
 
-void encodeEntryHeader(const Hash128& key, std::span<const u8> payload, std::span<u8, kEntryHeaderBytes> out) noexcept {
+void encodeEntryHeader(const Hash128& key, std::span<const u8> payload,
+                       std::span<u8, kEntryHeaderBytes> out) noexcept {
     u8* p = out.data();
     std::memset(p, 0, kEntryHeaderBytes);
     storeLE<u32>(p + 0, kEntryMagic);
@@ -103,7 +110,8 @@ void encodeEntryHeader(const Hash128& key, std::span<const u8> payload, std::spa
 
 Result<std::vector<u8>> encodeEntry(const Hash128& key, std::span<const u8> payload) {
     if (payload.size() > kMaxPayload) {
-        return makeError(ErrorCode::LimitExceeded, "DDC payload of {} bytes (at most {})", payload.size(), kMaxPayload);
+        return makeError(ErrorCode::LimitExceeded, "DDC payload of {} bytes (at most {})", payload.size(),
+                         kMaxPayload);
     }
     std::vector<u8> out(kEntryHeaderBytes + payload.size());
     encodeEntryHeader(key, payload, std::span<u8, kEntryHeaderBytes>(out.data(), kEntryHeaderBytes));
@@ -113,15 +121,17 @@ Result<std::vector<u8>> encodeEntry(const Hash128& key, std::span<const u8> payl
 
 Result<EntryHeader> readEntryHeader(std::span<const u8> bytes, const Hash128& expectedKey) {
     if (bytes.size() < kEntryHeaderBytes) {
-        return makeError(ErrorCode::EndOfFile, "DDC entry of {} bytes is shorter than its {}-byte header", bytes.size(),
-                         kEntryHeaderBytes);
+        return makeError(ErrorCode::EndOfFile, "DDC entry of {} bytes is shorter than its {}-byte header",
+                         bytes.size(), kEntryHeaderBytes);
     }
     const u8* p = bytes.data();
     if (loadLE<u32>(p) != kEntryMagic) return Error{ErrorCode::Corrupt, "not a DDC entry (bad magic)"};
     if (const u16 version = loadLE<u16>(p + 4); version != kEntryVersion) {
-        return makeError(ErrorCode::VersionMismatch, "DDC entry version {} (this build reads {})", version, kEntryVersion);
+        return makeError(ErrorCode::VersionMismatch, "DDC entry version {} (this build reads {})", version,
+                         kEntryVersion);
     }
-    if (loadLE<u16>(p + 6) != kEntryHeaderBytes) return Error{ErrorCode::Corrupt, "DDC entry header size is not 64"};
+    if (loadLE<u16>(p + 6) != kEntryHeaderBytes)
+        return Error{ErrorCode::Corrupt, "DDC entry header size is not 64"};
     if (loadLE<u64>(p + 56) != hash64(p, kEntryHeaderHashedBytes)) {
         return Error{ErrorCode::Corrupt, "DDC entry header checksum mismatch"};
     }
@@ -133,17 +143,20 @@ Result<EntryHeader> readEntryHeader(std::span<const u8> bytes, const Hash128& ex
     h.payloadSize = loadLE<u64>(p + 24);
     h.payloadHash = loadHash(p + 32);
     if (h.payloadSize > kMaxPayload) {
-        return makeError(ErrorCode::LimitExceeded, "DDC entry claims {} payload bytes (at most {})", h.payloadSize, kMaxPayload);
+        return makeError(ErrorCode::LimitExceeded, "DDC entry claims {} payload bytes (at most {})",
+                         h.payloadSize, kMaxPayload);
     }
     if (h.key != expectedKey) {
-        return makeError(ErrorCode::Corrupt, "DDC entry holds key {}, not {}", h.key.toHex(), expectedKey.toHex());
+        return makeError(ErrorCode::Corrupt, "DDC entry holds key {}, not {}", h.key.toHex(),
+                         expectedKey.toHex());
     }
     return h;
 }
 
 Result<void> checkEntryPayload(const EntryHeader& header, std::span<const u8> payload) {
     if (payload.size() < header.payloadSize) {
-        return makeError(ErrorCode::EndOfFile, "DDC entry truncated: {} of {} payload bytes", payload.size(), header.payloadSize);
+        return makeError(ErrorCode::EndOfFile, "DDC entry truncated: {} of {} payload bytes", payload.size(),
+                         header.payloadSize);
     }
     if (payload.size() > header.payloadSize) {
         return makeError(ErrorCode::Corrupt, "DDC entry has {} bytes after its {}-byte payload",
@@ -172,13 +185,15 @@ Result<std::unique_ptr<LocalDdc>> LocalDdc::open(const LocalDdcOptions& options)
     if (options.root.empty()) return Error{ErrorCode::InvalidArgument, "LocalDdc: empty root"};
     if (options.capBytes == 0) return Error{ErrorCode::InvalidArgument, "LocalDdc: a cap of 0 bytes"};
     if (options.trimTargetPercent == 0 || options.trimTargetPercent > 100) {
-        return makeError(ErrorCode::InvalidArgument, "LocalDdc: trim target {}% is outside 1..100", options.trimTargetPercent);
+        return makeError(ErrorCode::InvalidArgument, "LocalDdc: trim target {}% is outside 1..100",
+                         options.trimTargetPercent);
     }
     HELIOS_TRY(fs::createDirectories(options.root));
     std::unique_ptr<LocalDdc> ddc(new LocalDdc(options));
     // Measure without evicting: open() never deletes; the first put past the cap trims.
     u64 bytes = 0;
-    HELIOS_TRY_ASSIGN(const auto dirs, fs::listDirectory(options.root, fs::ListOptions{.includeFiles = false}));
+    HELIOS_TRY_ASSIGN(const auto dirs,
+                      fs::listDirectory(options.root, fs::ListOptions{.includeFiles = false}));
     for (const fs::DirEntry& d : dirs) {
         if (!isFanoutDir(d.relativePath)) continue;
         auto files = fs::listDirectory(d.path, fs::ListOptions{.includeDirectories = false});
@@ -193,7 +208,8 @@ Result<std::unique_ptr<LocalDdc>> LocalDdc::open(const LocalDdcOptions& options)
 
 fs::Path LocalDdc::entryPath(const Hash128& key) const {
     const std::string hex = key.toHex();
-    return m_options.root / fs::pathFromUtf8(hex.substr(0, 2)) / fs::pathFromUtf8(hex + std::string(ddc::kEntryExtension));
+    return m_options.root / fs::pathFromUtf8(hex.substr(0, 2)) /
+           fs::pathFromUtf8(hex + std::string(ddc::kEntryExtension));
 }
 
 Result<std::vector<u8>> LocalDdc::get(const Hash128& key) {
@@ -214,13 +230,16 @@ Result<std::vector<u8>> LocalDdc::get(const Hash128& key) {
     if (!h) return bad(h.error());
     HELIOS_TRY_ASSIGN(const u64 size, file->size());
     if (size != ddc::kEntryHeaderBytes + h->payloadSize) {
-        return bad(Error{size < ddc::kEntryHeaderBytes + h->payloadSize ? ErrorCode::EndOfFile : ErrorCode::Corrupt,
-                         std::format("file is {} bytes, the header says {}", size, ddc::kEntryHeaderBytes + h->payloadSize)});
+        return bad(
+            Error{size < ddc::kEntryHeaderBytes + h->payloadSize ? ErrorCode::EndOfFile : ErrorCode::Corrupt,
+                  std::format("file is {} bytes, the header says {}", size,
+                              ddc::kEntryHeaderBytes + h->payloadSize)});
     }
     std::vector<u8> payload(static_cast<usize>(h->payloadSize));
     usize done = 0;
     while (done < payload.size()) {
-        HELIOS_TRY_ASSIGN(const usize n, file->readAt(ddc::kEntryHeaderBytes + done, payload.data() + done, payload.size() - done));
+        HELIOS_TRY_ASSIGN(const usize n, file->readAt(ddc::kEntryHeaderBytes + done, payload.data() + done,
+                                                      payload.size() - done));
         if (n == 0) break;
         done += n;
     }
@@ -230,13 +249,15 @@ Result<std::vector<u8>> LocalDdc::get(const Hash128& key) {
     m_hits.fetch_add(1, std::memory_order_relaxed);
     // LRU: refresh the entry's time at most once per touchInterval. A failure costs only recency.
     const auto now = std::filesystem::file_time_type::clock::now();
-    if (auto t = fs::lastWriteTime(path); t && now - *t >= m_options.touchInterval) (void)fs::setLastWriteTime(path, now);
+    if (auto t = fs::lastWriteTime(path); t && now - *t >= m_options.touchInterval)
+        (void)fs::setLastWriteTime(path, now);
     return payload;
 }
 
 Result<void> LocalDdc::put(const Hash128& key, std::span<const u8> payload) {
     if (payload.size() > ddc::kMaxPayload) {
-        return makeError(ErrorCode::LimitExceeded, "DDC payload of {} bytes (at most {})", payload.size(), ddc::kMaxPayload);
+        return makeError(ErrorCode::LimitExceeded, "DDC payload of {} bytes (at most {})", payload.size(),
+                         ddc::kMaxPayload);
     }
     const fs::Path path = entryPath(key);
     HELIOS_TRY(fs::createDirectories(path.parent_path()));
@@ -262,7 +283,8 @@ Result<void> LocalDdc::put(const Hash128& key, std::span<const u8> payload) {
     const u64 total = m_bytes.fetch_add(ddc::kEntryHeaderBytes + payload.size(), std::memory_order_relaxed) +
                       ddc::kEntryHeaderBytes + payload.size();
     if (total > m_options.capBytes) {
-        if (auto trimmed = trim(); !trimmed) HELIOS_LOG_WARN("DDC trim failed: {}", trimmed.error().toString());
+        if (auto trimmed = trim(); !trimmed)
+            HELIOS_LOG_WARN("DDC trim failed: {}", trimmed.error().toString());
     }
     return {};
 }
@@ -281,7 +303,8 @@ Result<TrimResult> LocalDdc::trimLocked() {
     TrimResult result;
     std::vector<Entry> entries;
     const auto now = std::filesystem::file_time_type::clock::now();
-    HELIOS_TRY_ASSIGN(const auto dirs, fs::listDirectory(m_options.root, fs::ListOptions{.includeFiles = false}));
+    HELIOS_TRY_ASSIGN(const auto dirs,
+                      fs::listDirectory(m_options.root, fs::ListOptions{.includeFiles = false}));
     for (const fs::DirEntry& d : dirs) {
         if (!isFanoutDir(d.relativePath)) continue;
         auto files = fs::listDirectory(d.path, fs::ListOptions{.includeDirectories = false});

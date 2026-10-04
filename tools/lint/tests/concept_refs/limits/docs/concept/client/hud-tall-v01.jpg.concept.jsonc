@@ -1,0 +1,23 @@
+// Fixture sidecar.
+{
+  "image": "hud-tall-v01.jpg",
+  "sha256": "b77252d30420fbbe380e2f215ef3fbd865a069a4bfe50ce7c82953207b4541fd",
+  "title": "Demo concept",
+  "author": "Fixture author",
+  "created": "2026-10-04",
+  "source": {
+    "kind": "owner",
+    "url": "",
+    "rights": ""
+  },
+  "tools": ["Krita 5.2"],
+  "ai": null,
+  "licence": "MIT",
+  "ipReview": "Fixture: original shapes only.",
+  "status": "directional",
+  "elements": [],
+  "phase": "Ph1",
+  "planRefs": ["07 §2.1 T01"],
+  "deviations": [],
+  "review": ""
+}

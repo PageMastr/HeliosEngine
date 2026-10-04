@@ -1397,13 +1397,18 @@ public:
   in the zone's frame. The orchestrator creates one region lease per region (05 §1.4.2), and `regionAt(FramePos)`
   is the one geometric test shared by cells, the handoff trigger and multi-cell PIE.
 - **Transitions.** During a zone transition the client keeps a second view that prefetches the destination.
-- **Phase 1 layout.** Tallis space and the Harrow surface form one zone, and the station interior is a
-  container. BENCH-2 is therefore seamless without a handoff.
+- **Phase 1 layout.** Tallis space and the Harrow surface form one zone, `tallis`, and the station interior is
+  a container. BENCH-2 is therefore seamless without a handoff. The Saltmarch outpost is an object container in
+  that zone too, not a zone of its own: the repository owner's decision of 2026-10-04 ("Option A"; record in
+  `docs/evidence/saltmarch-container-owner-decision-2026-10-04.md`). Its files are
+  `content/zones/tallis/saltmarch.hcont` and `content/zones/tallis/saltmarch.entities/<guid>.hent` (§5.6), and
+  designers edit it in the zone's session, `zone-tallis` (07 §1.8.2).
 
 ### 5.6 Object containers (R04-P0-5, R06-ENG-20, W03)
 
 A container is the unit of editing, streaming, persistence overlay and hot reload. Its source files follow
-OFPA: `saltmarch.hcont` plus one `saltmarch.entities/<guid>.hent` per entity.
+OFPA: `saltmarch.hcont` plus one `saltmarch.entities/<guid>.hent` per entity, in the folder of the container's
+zone, here `content/zones/tallis/` (§5.5; T28's `collab.scope` rule, 07 §1.8.2).
 
 ```jsonc
 // saltmarch.hcont

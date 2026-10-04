@@ -23,7 +23,7 @@
     "linux-clang": {"os": "linux", "default": true,
                     "description": "Linux Clang RelWithDebInfo: every CTest except perf (lavapipe under Xvfb)"},
     "linux-asan": {"os": "linux", "default": false,
-                   "description": "Linux Clang Debug with ASan and UBSan"},
+                   "description": "Linux Clang Debug with ASan and UBSan: every CTest except perf"},
     "linux-fuzz": {"os": "linux", "default": true,
                    "description": "libFuzzer (Clang, -fsanitize=fuzzer with ASan and UBSan), 1 h per engine/net target"},
     "windows-vs2026": {"os": "windows", "default": true,
@@ -43,9 +43,26 @@
   },
 
   // Commands the nightly workflow runs outside CTest; each writes one JUnit result named after the gate.
+  // A gate that measures several criteria declares `cases`: runners.py gate adds one JUnit case per clause,
+  // read from the command's output (`result`: the line that reports the measurement; `failure`: the line it
+  // prints when the clause fails; a non-zero exit that no failure line explains, i.e. any code but 1 or 1 with
+  // no failure line, fails every clause), and each criterion cites only its own cases, so one criterion's
+  // failure line cannot fail another's (#43's review, N4). Every clause case carries the command's wall time,
+  // so a run that ends before min_seconds fails every clause (a trunk that never connects ends it ~18 s in).
   "gates": {
     "net_bench_gate": {"runs": ["linux-gcc", "windows-vs2026"], "min_seconds": 600,
-                       "description": "net_bench --gate: NS-0.2 raw and encrypted-stack pps per core, NS-0.7 600 s trunk run"},
+                       "description": "net_bench --gate: NS-0.2 raw and encrypted-stack pps per core, NS-0.7 600 s trunk run",
+                       "cases": {
+                         "NS-0.2 socket": {"criterion": "NS-0.2",
+                                           "result": "NS-0\\.2 socket: \\d+/\\d+ datagrams, \\d+ pps per core",
+                                           "failure": "NS-0\\.2 FAILED: needs 100k pps per core"},
+                         "NS-0.2 HTP stack": {"criterion": "NS-0.2",
+                                              "result": "NS-0\\.2 HTP stack: \\d+/\\d+ encrypted packets delivered, \\d+ packets per core",
+                                              "failure": "NS-0\\.2 FAILED: the HTP stack"},
+                         "NS-0.7 trunk": {"criterion": "NS-0.7",
+                                          "result": "NS-0\\.7 trunk: [\\d.]+ s, sent \\d+, delivered \\d+ \\(\\d+ pps",
+                                          "failure": "NS-0\\.7(?: FAILED|: trunk did not connect)"}
+                       }},
     "libfuzzer_packet_parser": {"runs": ["linux-fuzz"], "min_seconds": 3600,
                                 "description": "net_fuzz_packet_parser under libFuzzer for 1 h"},
     "libfuzzer_connection_receive": {"runs": ["linux-fuzz"], "min_seconds": 3600,
@@ -59,8 +76,10 @@
   },
 
   // Numbers the perf gates print, tracked night by night by tools/scorecard/perf.py against the 09 §5.8
-  // budgets of their category (render and runtime ±5 %, backend, editor and iteration ±10 %). `pattern`
-  // captures the number from a doctest case's MESSAGE lines or a gate's output.
+  // budgets of their category (render and runtime ±5 %, backend, editor and iteration ±10 %), per run and
+  // host class. `pattern` captures the number from a doctest case's MESSAGE lines or a gate's output. A
+  // `bound` (a number in `unit`) gates the value against the limit of the plan criterion it quotes instead
+  // of against its anchor: for ratios whose night-to-night noise dwarfs a relative budget.
   "perf_metrics": [
     {"id": "net.ns02.socket_pps_per_core", "criterion": "NS-0.2", "gate": "net_bench_gate",
      "pattern": "NS-0\\.2 socket: \\d+/\\d+ datagrams, (\\d+) pps per core", "unit": "pps/core", "better": "higher", "category": "runtime"},
@@ -75,13 +94,23 @@
      "pattern": "-> (\\d+) pps per core", "unit": "pps/core", "better": "higher", "category": "runtime"},
     {"id": "script.fuel_metering_overhead_pct", "criterion": "RT-13", "doctest": "script_tests",
      "case": "perf: fuel metering overhead and ns per fuel", "run": "linux-gcc",
-     "pattern": "metering overhead ([\\d.]+) %", "unit": "%", "better": "lower", "category": "runtime"},
+     "pattern": "metering overhead (-?\\d+(?:\\.\\d+)?(?:e[-+]?\\d+)?) %", "unit": "%", "better": "lower", "category": "runtime",
+     "bound": 10,
+     "note": "RT-13's ≤ 10 % metering overhead (04 §10.2, 02 §8.3, 09 WP-0.10r; script_tests_perf asserts it too), gated as that bound in percentage points: the overhead is a difference of two timings of a few percent, so a 5 % relative budget (a fraction of a point) is far inside its noise (12 local runs at load 8: 11 between 0.15 and 5.3 %, CV ≈ 55 %, and one at -38.1 %, a disturbed raw run), and a night where the metered run beats the raw one prints a negative value. script.ns_per_fuel carries the relative 5 % budget for the same case"},
+    {"id": "script.ns_per_fuel", "criterion": "RT-13", "doctest": "script_tests",
+     "case": "perf: fuel metering overhead and ns per fuel", "run": "linux-gcc",
+     "pattern": "ns/fuel (\\d+(?:\\.\\d+)?(?:e[-+]?\\d+)?)", "unit": "ns", "better": "lower", "category": "runtime",
+     "note": "The metered Helios host's wall time per fuel on the RT-13 perf workload (best of 9): the timing behind the overhead, with CV ≈ 1.1 % (the same 12 local runs at load 8)"},
     {"id": "script.trivial_resume_ns", "doctest": "script_tests",
      "case": "perf: host cost of a trivial resume versus FuelBudget::resumeCost", "run": "linux-gcc",
      "pattern": "trivial resume: ([\\d.]+) ns", "unit": "ns", "better": "lower", "category": "runtime"},
     {"id": "pcg.cpu_vm_avx2_ms_per_tile", "doctest": "pcg_tests",
      "case": "perf: CPU VM ms per 65x65 tile per core on the dispatched AVX2 kernel (03 §5.5a budget 0.5 ms)", "run": "linux-gcc",
      "pattern": "avx2 ([\\d.]+) ms", "unit": "ms", "better": "lower", "category": "runtime"},
+    {"id": "render.graph_compile_200_passes_ms", "doctest": "render_tests",
+     "case": "perf: render graph compile of 200 passes <= 0.3 ms (no topology cache)", "run": "linux-gcc",
+     "pattern": "graph compile: \\d+ passes in ([\\d.]+) ms \\(best of 10 batches", "unit": "ms", "better": "lower", "category": "render",
+     "note": "The best of 10 batches of 5 full compiles (no topology cache) that render_tests_perf gates at 03 §8.1.5's REF 60 fps 0.3 ms: the gate fails only above 0.3 ms, and this tracks drift below it per host class"},
     {"id": "schemac.regenerate_2000_types_s", "doctest": "schemac_tests",
      "case": "perf: 2,000 types regenerate within the 02 §3.5 budget", "run": "linux-gcc",
      "pattern": "types, \\d+ outputs \\(\\d+ KiB\\) in ([\\d.]+) s", "unit": "s", "better": "lower", "category": "iteration"}
@@ -192,17 +221,20 @@
       "title": "Physics hash (Phase 0 scope): the scripted scene's golden on every determinism toolchain and worker count, and the permuted-BodyID variant",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Phase 0 scope (02 §8.1): small hash; `stable-order` patch and stable body keys (RT-03 permuted variant). From RT-03: identical on every determinism toolchain (both MSVC toolsets, clang-cl, GCC, Clang and MinGW), at 1/4/16 workers; the permuted variant is rebuilt so that every `BodyID` differs and must give the identical hash; a CI build without the `stable-order` patch must fail it",
-      "notes": "The 1,000-body, 50-character, 10-vehicle scene, the AMD and Intel runs, the FBW hash and the slope-creep clause are RT-03's Phase 1 scope",
+      "notes": "The 1,000-body, 50-character, 10-vehicle scene, the AMD and Intel runs, the FBW hash and the slope-creep clause are RT-03's Phase 1 scope. The negative control (a build without third_party/jolt/patches/0001-stable-order.patch fails both permuted cases) is run by reverting the patch locally, not by a CI job; engine/physics/README.md records the result",
       "status": "partial",
       "tests": [
         {"doctest": "physics_tests", "case": "determinism: the scripted scene matches its golden hash (RT-03 Phase 0)"},
         {"doctest": "physics_tests", "case": "determinism: the golden holds at 1, 2, 4 and 16 workers"},
         {"doctest": "physics_tests", "case": "determinism: repeated runs in one process are identical"},
-        {"doctest": "physics_tests", "case": "determinism: permuted BodyIDs give the same result when no island has two contacts"}
+        {"doctest": "physics_tests", "case": "determinism: permuted BodyIDs give the same result when no island has two contacts"},
+        {"doctest": "physics_tests", "case": "determinism: permuted BodyIDs give the identical hash, multi-contact islands included (RT-03 permuted variant)"},
+        {"doctest": "physics_tests", "case": "determinism: permuted BodyIDs give the identical hash with a hull, a chassis and a character on four tiles each"},
+        {"doctest": "physics_tests", "case": "stable-order: ShipHull and Vehicle bodies keep no contact cache across steps (NoCrossUpdateCache)"},
+        {"doctest": "physics_tests", "case": "stable-order: NoCrossUpdateCache keeps the warm start between the collision steps of one step()"},
+        {"doctest": "physics_tests", "case": "stable-order: control: a Dynamic-layer body warm-starts from contacts cached by earlier steps"}
       ],
       "gaps": [
-        {"clause": "Permuted variant: multi-contact islands diverge until third_party/jolt/patches/stable-order is vendored; when it lands, a CI build without the patch must also fail the variant (the negative control)", "state": "failing", "owner": "WP-0.9",
-         "pinned_by": {"doctest": "physics_tests", "case": "determinism: KNOWN DIVERGENCE: permuted BodyIDs change multi-contact islands (stable-order patch pending)"}},
         {"clause": "MinGW: the cross-built binaries are never executed, so the hash is not checked on MinGW", "state": "unmeasured", "owner": "WP-0.1"}
       ]
     },
@@ -250,10 +282,13 @@
       "title": "Headless ToolsFramework round-trips 10k random transactions; kill -9 loses at most one",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Headless ToolsFramework round-trips 10k random transactions (apply, undo, redo) to byte-identical JSONC on MSVC, GCC and Clang; `kill -9` mid-burst loses ≤ 1 transaction",
-      "status": "unmeasured",
-      "tests": [],
-      "gaps": [
-        {"clause": "No ToolsFramework or editor exists yet", "state": "unmeasured", "owner": "WP-0.18"}
+      "notes": "toolsfw_tests runs in every native C++ job (MSVC, clang-cl, GCC, Clang). Byte-identical: after every undo and redo of 10,000 committed random transactions the canonical JSONC hashes to the text recorded at that step, and a golden workload's final text has one pinned XXH3 hash on every compiler. kill -9: toolsfw_burst_child is killed mid-burst at three points (TerminateProcess on Windows), and the journal recovers the acknowledged prefix plus at most the one transaction in flight, byte for byte",
+      "status": "measured",
+      "tests": [
+        {"doctest": "toolsfw_tests", "case": "ED-1: 10k random transactions round-trip through undo and redo byte-identically"},
+        {"doctest": "toolsfw_tests", "case": "ED-1: interleaved undo/redo, gestures and rejected edits stay byte-exact, and the journal replays them"},
+        {"doctest": "toolsfw_tests", "case": "ED-1: the golden workload hashes identically on every compiler"},
+        {"doctest": "toolsfw_tests", "case": "ED-1: kill -9 mid-burst loses at most the transaction in flight"}
       ]
     },
     {
@@ -272,10 +307,11 @@
       "title": "Loopback 100k pps per core without loss",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Loopback 100k pps/core without loss",
-      "notes": "net_bench --gate measures raw datagrams and encrypted HTP packets through the full stack. Passed on the hosted Linux nightly on the repository owner's approval of 2026-09-30 (09 §5.6; the record quotes it): hosted Linux measured the encrypted stack at 88k to 132k packets per core with no code change, so linux-gcc runs `net_bench --gate --advisory ns02-stack`, which reports that one rate instead of failing on it. Raw datagrams (100k per core), loss at either level (none allowed), the stack's connection and NS-0.7 in the same run still fail the gate. Hosted Windows is not covered: its stack measured 85,399 and 84,970 on 2026-09-27 and 125,611 on 2026-10-03 (a strict pass), the owner has not confirmed the approval for it, and windows-vs2026 gates everything, as does any run without --advisory",
+      "notes": "net_bench --gate measures raw datagrams and encrypted HTP packets through the full stack; NS-0.2 reads that run's `NS-0.2 socket` and `NS-0.2 HTP stack` cases, so the NS-0.7 trunk run of the same command gates NS-0.7 and not NS-0.2, except a trunk that never connects: that ends the run at its 3 s connect deadline, long before the gate's min_seconds, so NS-0.2's cases fail too. Passed on the hosted Linux nightly on the repository owner's approval of 2026-09-30 (09 §5.6; the record quotes it): hosted Linux measured the encrypted stack at 88k to 132k packets per core with no code change, so linux-gcc runs `net_bench --gate --advisory ns02-stack`, which reports that one rate instead of failing on it. Raw datagrams (100k per core), loss at either level (none allowed) and a stack that never sent still fail their case, and NS-0.7 still gates NS-0.7. Hosted Windows is not covered: its stack measured 85,399 and 84,970 on 2026-09-27 and 125,611 on 2026-10-03 (a strict pass), the owner has not confirmed the approval for it, and windows-vs2026 gates everything, as does any run without --advisory",
       "status": "approved",
       "tests": [
-        {"gate": "net_bench_gate"},
+        {"gate": "net_bench_gate", "case": "NS-0.2 socket"},
+        {"gate": "net_bench_gate", "case": "NS-0.2 HTP stack"},
         {"doctest": "net_tests", "case": "perf: NS-0.2: loopback 100k pps per core without loss", "platforms": ["linux"]},
         {"evidence": "docs/evidence/ns-0.2-owner-approval-2026-09-30.md", "owner_approval": "2026-09-30",
          "advisory": ["net.ns02.stack_packets_per_core"], "advisory_runs": ["linux-gcc"]}
@@ -356,10 +392,10 @@
       "title": "Trunk throughput: 20k pps of 1,200 B payloads for 10 min",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Trunk throughput: one trunk connection sustains 20k pps of 1,200 B payloads (≈ 200 Mbit/s) for 10 min with < 0.1 % drops on ≤ 1 core, on loopback on Windows and Linux CI; otherwise the §2.6 fallback starts",
-      "notes": "net_bench --gate reads ≤ 1 core as ≤ 1 core for each side (the cell and gateway threads)",
+      "notes": "net_bench --gate reads ≤ 1 core as ≤ 1 core for each side (the cell and gateway threads). NS-0.7 reads that run's `NS-0.7 trunk` case, so an NS-0.2 failure of the same command (the strict Windows step's stack rate) does not fail NS-0.7",
       "status": "measured",
       "tests": [
-        {"gate": "net_bench_gate"},
+        {"gate": "net_bench_gate", "case": "NS-0.7 trunk"},
         {"doctest": "net_tests", "case": "perf: NS-0.7 (short run): trunk throughput over UDP loopback", "platforms": ["linux"]}
       ]
     },

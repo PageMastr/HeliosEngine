@@ -26,6 +26,7 @@ helios_test(physics_tests
     tests/test_character.cpp
     tests/test_jobs.cpp
     tests/test_determinism.cpp
+    tests/test_stable_order.cpp
   DEPS helios::physics)
 if(TARGET physics_tests)
   set_tests_properties(physics_tests PROPERTIES TIMEOUT 900)

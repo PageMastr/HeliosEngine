@@ -1,0 +1,10 @@
+# Fixture images are compared by sha256: never convert them. Sidecars are LF text.
+*.png binary
+*.PNG binary
+*.webp binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.psd binary
+*.jsonc text eol=lf
+*.md text eol=lf

@@ -226,6 +226,9 @@ struct Decl {
     std::vector<std::string> formulaParams;
     std::string formulaBody;
 
+    // Persistence
+    std::string sqlTable; ///< "svc_<service>.<table>" of a struct marked @sql (--emit sql), else ""
+
     // Identity
     u32 typeId = 0;
     u64 layoutHash = 0;

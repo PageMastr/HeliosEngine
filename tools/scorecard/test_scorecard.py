@@ -665,6 +665,77 @@ class PerfMetricTests(Fixture):
         self.assertFinding(self.run_check(local), "run 'windows-local': 'nightly'")
 
 
+CASES = {"socket": {"criterion": "NS-0.2", "result": r"socket: \d+", "failure": r"socket FAILED"},
+         "trunk": {"criterion": "NS-0.1", "result": r"trunk: \d+", "failure": r"trunk FAILED"}}
+
+
+class GateCaseTests(Fixture):
+    """A gate that measures several criteria reports one JUnit case per clause (`cases`), and each criterion
+    cites only its own (#43's review, N4: NS-0.2's strict Windows stack rate failed NS-0.7's Windows cell)."""
+
+    def split(self, cases=None, ns01=None, ns02=None):
+        """VALID with net_bench_gate's clauses declared; NS-0.1 and NS-0.2 cite theirs unless given tests."""
+        data = copy.deepcopy(VALID)
+        data["gates"]["net_bench_gate"]["cases"] = copy.deepcopy(CASES if cases is None else cases)
+        for e in data["criteria"]:
+            if e["id"] == "NS-0.1":
+                e["tests"] = ns01 if ns01 is not None else e["tests"] + [{"gate": "net_bench_gate", "case": "trunk"}]
+            if e["id"] == "NS-0.2":
+                e["tests"] = ns02 if ns02 is not None else [{"gate": "net_bench_gate", "case": "socket"},
+                                                            {"gate": "fuzz_linux", "platforms": ["linux"]}]
+        return data
+
+    def test_each_criterion_cites_its_own_clause(self):
+        self.assertEqual(self.run_check(self.split()), [])
+
+    def test_a_gate_with_cases_is_never_cited_whole(self):
+        # The coupling #43's review found: a reference to the whole command reads every clause's failure.
+        errors = self.run_check(self.split(ns02=[{"gate": "net_bench_gate"}, {"gate": "net_bench_gate", "case": "socket"}]))
+        self.assertFinding(errors, "gate 'net_bench_gate' reports one case per clause, so a reference names its "
+                                   "clause with 'case' (socket, trunk)")
+
+    def test_a_criterion_cannot_cite_another_criterions_clause(self):
+        errors = self.run_check(self.split(ns02=[{"gate": "net_bench_gate", "case": "socket"},
+                                                 {"gate": "net_bench_gate", "case": "trunk"}]))
+        self.assertFinding(errors, "gate net_bench_gate / trunk: the case is NS-0.1's clause, so only NS-0.1 cites it")
+
+    def test_a_case_must_be_declared_and_cited(self):
+        errors = self.run_check(self.split(ns02=[{"gate": "net_bench_gate", "case": "sock*"}]))
+        self.assertFinding(errors, "'sock*' is not a case of gate 'net_bench_gate' (socket, trunk)")
+        # Every declared clause is read by its criterion, or a clause would be measured and never count.
+        self.assertFinding(errors, "gate 'net_bench_gate' case 'socket': no NS-0.2 entry cites it")
+        self.assertFinding(self.run_check(self.split(ns01=[{"ctest": "net_tests"}])),
+                           "gate 'net_bench_gate' case 'trunk': no NS-0.1 entry cites it")
+        # `case` is only for a gate that declares cases.
+        errors = self.run_check(self.mutate("NS-0.2", tests=[{"gate": "net_bench_gate", "case": "socket"}]))
+        self.assertFinding(errors, "gate 'net_bench_gate' declares no 'cases'")
+        for case in ("", 7):
+            errors = self.run_check(self.split(ns02=[{"gate": "net_bench_gate", "case": case},
+                                                     {"gate": "net_bench_gate", "case": "socket"}]))
+            self.assertFinding(errors, "needs a non-empty string 'case'")
+
+    def test_cases_are_well_formed(self):
+        bad = {
+            "not an object": [],
+            "empty": {},
+        }
+        for why, cases in bad.items():
+            self.assertFinding(self.run_check(self.split(cases=cases, ns01=[{"ctest": "net_tests"}],
+                                                         ns02=[{"ctest": "net_tests"}])),
+                               "gate 'net_bench_gate': 'cases' must be a non-empty object")
+        for change, finding in (
+                ({"result": "socket: (\\d+"}, "'result' is not a valid regex"),
+                ({"failure": ""}, "needs a non-empty string 'failure'"),
+                ({"criterion": None}, "needs a non-empty string 'criterion'"),
+                ({"pattern": "x"}, "unknown field 'pattern'")):
+            cases = copy.deepcopy(CASES)
+            cases["socket"].update(change)
+            self.assertFinding(self.run_check(self.split(cases=cases)), f"case 'socket': {finding}")
+        cases = copy.deepcopy(CASES)
+        cases["net_bench_gate"] = cases.pop("socket")
+        self.assertFinding(self.run_check(self.split(cases=cases)), "a non-empty name other than its gate's")
+
+
 APPROVAL = {"evidence": "docs/evidence/ns02-approval.md", "owner_approval": "2026-09-30", "advisory": ["net.stack"],
             "advisory_runs": ["linux-gcc"]}
 FOLLOW_UPS = [{"clause": "re-test on fixed hardware", "owner": "WP-0.4, WP-0.13"}]

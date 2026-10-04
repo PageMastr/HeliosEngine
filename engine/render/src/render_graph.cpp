@@ -145,68 +145,87 @@ std::string rgBufferUsageName(rhi::BufferUsage usage) {
 
 std::vector<RgBarrier> rgMergeBarriers(std::span<const RgSubBarrier> subs, std::span<const RgPhysicalInfo> physicals) {
     std::vector<RgBarrier> out;
-    // Group by (physical, before, after) in order of first appearance.
-    struct Group {
-        u32 physical;
-        rhi::ResourceState before, after;
-        std::vector<u8> mask;  // per subresource
-    };
-    std::vector<Group> groups;
+    RgMergeScratch scratch;
+    rgMergeBarriers(subs, physicals, out, scratch);
+    return out;
+}
+
+void rgMergeBarriers(std::span<const RgSubBarrier> subs, std::span<const RgPhysicalInfo> physicals,
+                     std::vector<RgBarrier>& out, RgMergeScratch& scratch) {
+    if (subs.empty()) return;
+    // Group by (physical, before, after) in order of first appearance, with a mask of the subresources.
+    scratch.groups.clear();
+    scratch.masks.clear();
     for (const RgSubBarrier& s : subs) {
-        Group* g = nullptr;
-        for (Group& candidate : groups) {
+        const RgPhysicalInfo& phys = physicals[s.physical];
+        RgMergeScratch::Group* group = nullptr;
+        for (RgMergeScratch::Group& candidate : scratch.groups) {
             if (candidate.physical == s.physical && candidate.before == s.before && candidate.after == s.after) {
-                g = &candidate;
+                group = &candidate;
                 break;
             }
         }
-        const RgPhysicalInfo& phys = physicals[s.physical];
-        if (!g) {
-            groups.push_back({s.physical, s.before, s.after, std::vector<u8>(phys.subresourceCount(), 0)});
-            g = &groups.back();
+        if (!group) {
+            group = &scratch.groups.emplace_back(
+                RgMergeScratch::Group{s.physical, s.before, s.after, static_cast<u32>(scratch.masks.size())});
+            scratch.masks.resize(scratch.masks.size() + phys.subresourceCount(), 0);
         }
-        g->mask[phys.isTexture ? rgSub(s.mip, s.layer, phys.texture.arrayLayers) : 0] = 1;
+        const u32 sub = phys.isTexture ? rgSub(s.mip, s.layer, phys.texture.arrayLayers) : 0u;
+        scratch.masks[group->mask + sub] = 1;
     }
-    for (const Group& g : groups) {
-        const RgPhysicalInfo& phys = physicals[g.physical];
-        if (!phys.isTexture) {
-            out.push_back({g.physical, g.before, g.after, {0, 1, 0, 1}});
+    for (const RgMergeScratch::Group& group : scratch.groups) {
+        const RgPhysicalInfo& phys = physicals[group.physical];
+        const u32 mips = phys.isTexture ? phys.texture.mipLevels : 1u;
+        const u32 layers = phys.isTexture ? phys.texture.arrayLayers : 1u;
+        if (mips == 1 && layers == 1) {  // a buffer, or a texture with one subresource (the one set)
+            out.push_back({group.physical, group.before, group.after, {0, 1, 0, 1}});
             continue;
         }
-        const u32 mips = phys.texture.mipLevels;
-        const u32 layers = phys.texture.arrayLayers;
         // Layer runs per mip, then merge consecutive mips with identical runs.
-        struct Run {
-            u32 layer, count;
-            bool operator==(const Run&) const = default;
-        };
-        std::vector<std::vector<Run>> runs(mips);
+        const u8* mask = scratch.masks.data() + group.mask;
+        std::vector<RgMergeScratch::Run>& runs = scratch.runs;
+        std::vector<u32>& start = scratch.runStart;
+        runs.clear();
+        start.resize(mips + 1);
         for (u32 m = 0; m < mips; ++m) {
+            start[m] = static_cast<u32>(runs.size());
             u32 l = 0;
             while (l < layers) {
-                if (!g.mask[rgSub(m, l, layers)]) {
+                if (!mask[rgSub(m, l, layers)]) {
                     ++l;
                     continue;
                 }
                 u32 e = l;
-                while (e < layers && g.mask[rgSub(m, e, layers)]) ++e;
-                runs[m].push_back({l, e - l});
+                while (e < layers && mask[rgSub(m, e, layers)]) ++e;
+                runs.push_back({l, e - l});
                 l = e;
             }
         }
+        start[mips] = static_cast<u32>(runs.size());
+        auto sameRuns = [&](u32 a, u32 b) {
+            if (start[a + 1] - start[a] != start[b + 1] - start[b]) return false;
+            for (u32 i = 0; i < start[a + 1] - start[a]; ++i) {
+                const RgMergeScratch::Run& x = runs[start[a] + i];
+                const RgMergeScratch::Run& y = runs[start[b] + i];
+                if (x.layer != y.layer || x.count != y.count) return false;
+            }
+            return true;
+        };
         u32 m = 0;
         while (m < mips) {
-            if (runs[m].empty()) {
+            if (start[m] == start[m + 1]) {
                 ++m;
                 continue;
             }
             u32 e = m + 1;
-            while (e < mips && runs[e] == runs[m]) ++e;
-            for (const Run& r : runs[m]) out.push_back({g.physical, g.before, g.after, {m, e - m, r.layer, r.count}});
+            while (e < mips && sameRuns(e, m)) ++e;
+            for (u32 i = start[m]; i < start[m + 1]; ++i) {
+                const rhi::SubresourceRange range{m, e - m, runs[i].layer, runs[i].count};
+                out.push_back({group.physical, group.before, group.after, range});
+            }
             m = e;
         }
     }
-    return out;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -216,6 +235,20 @@ RenderGraph::RenderGraph(std::string_view name) : m_impl(std::make_unique<Impl>(
 RenderGraph::~RenderGraph() = default;
 RenderGraph::RenderGraph(RenderGraph&&) noexcept = default;
 RenderGraph& RenderGraph::operator=(RenderGraph&&) noexcept = default;
+
+void RenderGraph::reset(std::string_view name) {
+    Impl& g = *m_impl;
+    g.name = name;
+    g.passes.clear();
+    g.passData.clear();
+    g.resources.clear();
+    g.errors.clear();
+    g.compiled = false;
+    g.options = RgCompileOptions{};
+    g.executed = RgPlan{};
+    g.contextErrors.store(0, std::memory_order_relaxed);
+    rgReclaimPlan(g);
+}
 
 std::string_view RenderGraph::name() const noexcept { return m_impl->name; }
 bool RenderGraph::isCompiled() const noexcept { return m_impl->compiled; }

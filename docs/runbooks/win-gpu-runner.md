@@ -40,19 +40,19 @@ installation (`D:\helios-ci\runner`, including `.env`) and the runner's credenti
 off through `.env`, through the PowerShell profile (which the runner loads before the hook), or with
 `Set-ExecutionPolicy -Scope CurrentUser Restricted`: the CurrentUser scope takes precedence over the LocalMachine
 policy of step 4, so the hook would no longer start, and only an execution policy set by Group Policy prevents that
-(the checklist checks the scope and the profiles). It cannot reach your profile, administrator rights or the LAN, nor, after step 4b,
-your folders elsewhere on the drives. Like every local account, it can still read what Windows leaves open to all
-users (the machine-wide tools, which the build needs, `C:\ProgramData` and whatever step 4b's audit lists as `read`),
-create files and folders in `C:\ProgramData` and `C:\Windows\Temp` and folders at the root of a drive, read and change
-`C:\Users\Public` (Windows lets interactive and service logons write there, so keep nothing in it that you would mind
-losing or that you run), and read and write a FAT32 or exFAT drive (most USB sticks) while one is plugged in. It can
-reach programs on the PC itself that listen on the network, including on `localhost` (Windows Firewall does not filter
-loopback): keep such services (databases, dev servers, remote-control tools) behind a password, or stop them while the
-runner is enabled. The firewall blocks private addresses only, so the router's public (WAN) address stays reachable:
-many routers show their admin page there to clients on the LAN, and NAT loopback passes port-forwarded traffic on to
-the LAN device behind it (a NAS), often with the router's LAN address as the source. That depends on the router; the
-checklist tests it, and if the admin page or a forwarded service answers, turn off the router's remote administration
-or NAT loopback (or the port forward). If you suspect misuse, follow "Rotate" below.
+(the checklist checks the scope and the profiles). It cannot reach your profile, administrator rights or the LAN, nor,
+after step 4b, your folders elsewhere on the drives. Like every local account, it can still read what Windows leaves
+open to all users (the machine-wide tools, which the build needs, `C:\ProgramData` and whatever step 4b's audit lists
+as `read`), create files and folders in `C:\ProgramData` and `C:\Windows\Temp` and folders at the root of a drive,
+read and change `C:\Users\Public` (Windows lets interactive and service logons write there, so keep nothing in it that
+you would mind losing or that you run), and read and write a FAT32 or exFAT drive (most USB sticks) while one is
+plugged in. It can reach programs on the PC itself that listen on the network, including on `localhost` (Windows
+Firewall does not filter loopback): keep such services (databases, dev servers, remote-control tools) behind a
+password, or stop them while the runner is enabled. The firewall blocks private addresses only, so the router's public
+(WAN) address stays reachable: many routers show their admin page there to clients on the LAN, and NAT loopback passes
+port-forwarded traffic on to the LAN device behind it (a NAS), often with the router's LAN address as the source. That
+depends on the router; the checklist tests it, and if the admin page or a forwarded service answers, turn off the
+router's remote administration or NAT loopback (or the port forward). If you suspect misuse, follow "Rotate" below.
 
 Code that ran as `helios-ci` while the runner had no working hook was not reviewed at all, and it could have done all
 of the above: that is a runner online before step 9 ("Already done" below), and the jobs behind "`File doesn't
@@ -382,7 +382,8 @@ checklist checks:
             'from a clone (step 6)'
     }
     # Windows PowerShell runs the hook when PowerShell 7 is not installed. A group policy wins over step 4's setting.
-    $gp = Get-ItemProperty -LiteralPath HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell -ErrorAction SilentlyContinue
+    $gp = Get-ItemProperty -LiteralPath HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell `
+        -ErrorAction SilentlyContinue
     $lm = Get-ItemProperty -LiteralPath HKLM:\SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell `
         -ErrorAction SilentlyContinue
     $policy = 'Restricted'                       # what Windows 10 and 11 use when nothing is set

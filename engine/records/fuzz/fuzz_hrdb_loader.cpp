@@ -136,14 +136,20 @@ void heliosFuzzSeeds(std::vector<std::vector<uint8_t>>& out) {
   "ident": "ident", "guid": "guid:01020304-0506-4708-890a-0b0c0d0e0f10", "owner": "ent:9", "net": 10, "cooldown": "11ms",
   "at": 12, "pos": [1, 2, 3], "rot": [0, 0, 0, 1], "tint": [1, 1, 1, 1], "icon": "guid:01020304-0506-4708-890a-0b0c0d0e0f11",
   "tags": ["A.B", "A.C.D"], "query": "all(A)", "formula": "attr(self, X) * 2 + select(tag(self, A.B), 1, 0)",
-  "mounts": [{"$key": "00000000-0000-4000-8000-000000000001", "bone": "m", "force": 1}],
-  "slots": [{"slot": "x", "grade": "Low", "weight": 1}], "extras": ["e"], "parts": [1], "attrs": {"k": 1, "j": 2},
+  "mounts": [{"$key": "00000000-0000-4000-8000-000000000001", "bone": "m", "force": 1, "note": "n1", "noteTags": ["S.M"]}],
+  "slots": [{"slot": "x", "grade": "Low", "weight": 1, "note": "n2"}], "extras": ["e"], "parts": [1], "attrs": {"k": 1, "j": 2},
+  "primary": {"bone": "p", "note": "n3", "noteTags": ["S.P"]}, "bays": {"b": {"slot": "b", "note": "n4"}},
+  "spares": [{"slot": "s", "noteTags": ["S.Q"]}],
+  "roster": {"seats": [{"$key": "00000000-0000-4000-8000-000000000002", "bone": "r", "note": "n5"}]},
   "labels": ["z", "y"], "nums": [1, 2, 3], "maybe": 4, "handling": {"pitch": 1, "yaw": 2, "roll": 3},
   "mode": {"Warp": {"target": "t", "spool": "1s"}}, "nested": [[1], [], [2, 3]], "drop": 2, "skin": 3, "hudColor": [0, 1, 0, 1],
   "loot": 2, "aiNotes": "n", "aiHints": {"h": 1}, "serverTags": ["S.T"], "threat": "attr(self, T)", "secretCode": 13
 })j"),
         src("child.hrec", "test.records.ShipDef",
-            R"({"$rid": 6, "$name": "s/2", "$parent": "s/1", "mass": 1, "extras": ["f"], "mode": "Idle", "maybe": null})"),
+            R"({"$rid": 6, "$name": "s/2", "$parent": "s/1", "mass": 1, "extras": ["f"], "mode": "Idle", "maybe": null,
+  "mounts": [{"$key": "00000000-0000-4000-8000-000000000001", "note": "n6"}, {"$key": "00000000-0000-4000-8000-000000000003"}]})"),
+        src("dlg.hrec", "test.records.DlgDef",
+            R"({"$rid": 7, "$name": "d/1", "root": {"text": "a", "choices": [{"label": "b", "next": {"text": "c", "choices": [{"label": "d"}]}}]}})"),
     });
 }
 

@@ -35,6 +35,25 @@ if(TARGET records_tests)
     HELIOS_RECORDS_TEST_WORK_DIR="${CMAKE_CURRENT_BINARY_DIR}/records_test_work")
 endif()
 
+# AAA-SEC-4 over nested plantings (lint): the sample schemas helios-cook links put no server {} field
+# inside a shared struct, so a test-only copy of `helios-cook records` that registers the test types cooks
+# tests/data/project, and sec4_check.cmake searches the raw bytes. Each sentinel is a server {} value or
+# server-only tag of a struct nested in shared data: in keyed lists ($key and @keyed(slot)) set in the
+# template and merged into or appended to through $parent, in an optional, a struct field, a map value
+# and a plain list. Like the tests, it links engine/gameplay for the TagDef records.
+if(HELIOS_BUILD_TESTS)
+  add_executable(records_fixture_cook ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixture_cook/main.cpp)
+  target_link_libraries(records_fixture_cook PRIVATE helios::records helios_records_testtypes helios::gameplay)
+  set_target_properties(records_fixture_cook PROPERTIES FOLDER tests)
+  helios_apply_warnings(records_fixture_cook)
+  add_test(NAME lint_records_sec4_nested
+    COMMAND ${CMAKE_COMMAND} -DCOOK=$<TARGET_FILE:records_fixture_cook> -DPROJECT=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/project
+            -DWORK=${CMAKE_CURRENT_BINARY_DIR}/sec4_nested
+            "-DSENTINELS=SEC4-NESTED-base-mount-main;SEC4-NESTED-base-mount-left;SEC4-NESTED-base-slot-nose;SEC4-NESTED-base-slot-dorsal;SEC4-NESTED-skiff-mount-override;SEC4-NESTED-skiff-mount-append;SEC4-NESTED-skiff-slot-override;SEC4-NESTED-skiff-slot-append;SEC4-NESTED-roster-seat;SEC4-NESTED-primary;SEC4-NESTED-bay-aft;SEC4-NESTED-spare;Sec4Sentinel.Nested.BaseMount;Sec4Sentinel.Nested.BaseSlot;Sec4Sentinel.Nested.SkiffOverride;Sec4Sentinel.Nested.SkiffAppend;Sec4Sentinel.Nested.Roster;Sec4Sentinel.Nested.Primary;Sec4Sentinel.Nested.Bay;Sec4Sentinel.Nested.Spare"
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/sec4_check.cmake)
+  set_tests_properties(lint_records_sec4_nested PROPERTIES LABELS lint TIMEOUT 120)
+endif()
+
 # ---------------------------------------------------------------------------------------------
 # Fuzz targets (02 §3.7: "loaders validate bounds and are fuzzed"), built like engine/asset's:
 #   records_fuzz_hrdb_loader  the `.hrdb` loader (each input also resealed, so mutations reach the

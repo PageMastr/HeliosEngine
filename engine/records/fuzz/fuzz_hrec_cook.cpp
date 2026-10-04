@@ -2,7 +2,7 @@
 // the `$` header, `$parent` inheritance with its keyed and appending merges, the reference, tag, enum
 // and formula checks, the AAA-SEC-4 layout rules and the encoders.
 //
-// Input: one selector byte (the record type: ShipDef, TreeDef, PartDef or LootDef), then the JSONC text
+// Input: one selector byte (the record type: ShipDef, TreeDef, PartDef, LootDef or DlgDef), then the JSONC text
 // of one record file. It is cooked together with fixed records (a part, a server-only loot table, a
 // client-only skin and a ship template the input may name as its `$parent`). Properties: cook() returns a
 // Result (no crash, sanitizer report or unbounded work); when it succeeds, both cooks open with the loader
@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -39,7 +40,8 @@ const refl::TypeRegistry& registry() {
     return *reg;
 }
 
-constexpr const char* kTypes[] = {"test.records.ShipDef", "test.records.TreeDef", "test.records.PartDef", "test.records.LootDef"};
+constexpr const char* kTypes[] = {"test.records.ShipDef", "test.records.TreeDef", "test.records.PartDef", "test.records.LootDef",
+                                  "test.records.DlgDef"};
 
 const refl::TypeInfo& type(std::string_view name) {
     const refl::TypeInfo* t = registry().find(name);
@@ -84,7 +86,7 @@ void heliosFuzzSeeds(std::vector<std::vector<uint8_t>>& out) {
     };
     add(0, R"({"$rid": 9, "$name": "ship/child", "$parent": "ship/base", "mass": 1, "extras": ["f"], "maybe": null,
   "mounts": [{"$key": "00000000-0000-4000-8000-000000000001", "force": 2}, {"$key": "00000000-0000-4000-8000-000000000002"}],
-  "slots": [{"slot": "x", "weight": 3}, {"slot": "y"}], "handling": {"yaw": 2}, "mode": "Idle"})");
+  "slots": [{"slot": "x", "weight": 3, "note": "n"}, {"slot": "y"}], "handling": {"yaw": 2}, "mode": "Idle"})");
     add(0, R"j({"$rid": 10, "$name": "ship/full", "name": "loc:s", "grade": "High", "perms": ["Read", "Admin"], "hp": 1e300,
   "i8v": -1, "u64v": 18446744073709551615, "flag": true, "label": "x", "ident": "i", "guid": "guid:01020304-0506-4708-890a-0b0c0d0e0f10",
   "owner": "ent:9", "net": 10, "cooldown": "11ms", "at": 12, "pos": [1, 2, 3], "rot": [0, 0, 0, 1], "tint": [1, 1, 1, 1],
@@ -93,12 +95,14 @@ void heliosFuzzSeeds(std::vector<std::vector<uint8_t>>& out) {
     add(1, R"({"$rid": 11, "$name": "tree/t", "root": {"value": 1, "kids": [{"value": 2, "kids": [{"value": 3}]}]}})");
     add(2, R"({"$rid": 12, "$name": "part/q", "mass": 4})");
     add(3, R"({"$rid": 13, "$name": "loot/m", "entries": ["x", "y"], "weight": 0.5})");
+    add(4, R"({"$rid": 14, "$name": "dlg/d", "root": {"text": "a", "choices": [{"label": "b", "next": {"text": "c"}}]}})");
 }
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     if (size < 1 || size > kMaxInput) return 0;
     std::vector<SourceRecord> sources = fixedSources();
-    sources.push_back(SourceRecord{"fuzz.hrec", &type(kTypes[data[0] % 4]), std::string(reinterpret_cast<const char*>(data + 1), size - 1)});
+    sources.push_back(SourceRecord{"fuzz.hrec", &type(kTypes[data[0] % std::size(kTypes)]),
+                                   std::string(reinterpret_cast<const char*>(data + 1), size - 1)});
     auto out = cook(sources);
     if (!out) return 0;
     loadAll(out->client);

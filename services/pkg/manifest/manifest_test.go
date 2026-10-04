@@ -24,7 +24,7 @@ import (
 // The shared vectors: doctest (engine/patch/tests/test_manifest.cpp) checks the same files.
 var vectorsDir = filepath.Join("..", "..", "testdata", "vectors", "hman")
 
-var update = flag.Bool("update", false, "rewrite pipeline.hman, pipeline.go-zstd.hman and hostile.json")
+var update = flag.Bool("update", false, "rewrite pipeline.hman, pipeline.go-zstd.hman, deep-paths.hman and hostile.json")
 
 type pipelineDesc struct {
 	Header struct {
@@ -156,6 +156,28 @@ func pipeline(t testing.TB) *manifest.Manifest {
 	return m
 }
 
+// pathsManifest returns n zero-size files with 1024-byte paths: prefix + "f%07d", where the prefix is "a/"
+// 508 times when deep (508 directory levels: the deepest paths the limits allow) and 1016 bytes of "a"
+// otherwise. With n = 65536 the paths fill the 64 MiB path limit: deep-paths.hman, the worst case for the
+// path-collision check (engine/patch/README.md "Validation"). The C++ tests build the same manifest.
+func pathsManifest(n int, deep bool) *manifest.Manifest {
+	prefix := strings.Repeat("a", 1016)
+	if deep {
+		prefix = strings.Repeat("a/", 508)
+	}
+	m := &manifest.Manifest{Header: manifest.Header{ProductID: "sample-game", Platform: "win64",
+		BuildID: "deep-paths", Sequence: 1, CreatedAt: 1791072000}}
+	m.Files = make([]manifest.File, n)
+	empty := cdc.Sum(nil)
+	for i := range m.Files {
+		m.Files[i] = manifest.File{Path: fmt.Sprintf("%sf%07d", prefix, i), Hash: empty, Tier: 1}
+	}
+	return m
+}
+
+// deepPathFiles is the file count of deep-paths.hman: 64 MiB of 1024-byte paths.
+const deepPathFiles = manifest.MaxStringBytes / manifest.MaxPathBytes
+
 func goldenPath(name string) string { return filepath.Join(vectorsDir, name) }
 
 func readGolden(t testing.TB, name string) []byte {
@@ -199,6 +221,7 @@ type hostileCase struct {
 	Size   int           `json:"size,omitempty"` // new file length (0 = unchanged); new bytes are zero
 	Reseal string        `json:"reseal"`         // none | header (headerHash) | all (payload and body sizes, bodyHash, headerHash)
 	Expect string        `json:"expect"`         // corrupt | version | unsupported | limit
+	Rule   string        `json:"rule"`           // a substring of the error message: the one check the case breaks
 }
 
 func le32(v uint32) string {
@@ -240,6 +263,9 @@ func applyHostile(golden []byte, c hostileCase) []byte {
 	return b
 }
 
+// hostileCases derives the shared hostile cases from the golden's layout. Each case breaks exactly one
+// check, named by its Rule (a message substring both languages share): where one edit would also break
+// another check, the case edits the dependent fields together (a chunk's size with its file's size).
 func hostileCases(t *testing.T, golden []byte, m *manifest.Manifest) []hostileCase {
 	F, R, C, P := len(m.Files), len(m.Refs), len(m.Chunks), len(m.Packs)
 	const H = manifest.HeaderSize
@@ -251,6 +277,7 @@ func hostileCases(t *testing.T, golden []byte, m *manifest.Manifest) []hostileCa
 	chunk := func(i int) int { return chunks + 56*i }
 	packs := chunks + 56*C
 	patches := packs + 40*P
+	patch := func(i int) int { return patches + 80*i }
 	stringsAt := patches + 80*len(m.Patches)
 	looseChunk, packedChunk := -1, -1
 	for i, c := range m.Chunks {
@@ -261,62 +288,103 @@ func hostileCases(t *testing.T, golden []byte, m *manifest.Manifest) []hostileCa
 			packedChunk = i
 		}
 	}
-	if looseChunk < 0 || packedChunk < 0 || len(m.Patches) == 0 || F < 2 {
+	// A file of one chunk that no other file shares: its chunk's size can change with the file's.
+	soloFile, soloChunk := -1, -1
+	uses := make([]int, C)
+	for _, r := range m.Refs {
+		uses[r.Chunk]++
+	}
+	for i, f := range m.Files {
+		if f.RefCount == 1 && uses[m.Refs[f.FirstRef].Chunk] == 1 {
+			soloFile, soloChunk = i, int(m.Refs[f.FirstRef].Chunk)
+			break
+		}
+	}
+	// A patch whose fromHash can become its target's hash without leaving (file, fromHash) order.
+	selfPatch := -1
+	for i, q := range m.Patches {
+		target := m.Files[q.File].Hash
+		after := i == 0 || m.Patches[i-1].File != q.File || bytes.Compare(m.Patches[i-1].FromHash[:], target[:]) < 0
+		before := i == len(m.Patches)-1 || m.Patches[i+1].File != q.File ||
+			bytes.Compare(target[:], m.Patches[i+1].FromHash[:]) < 0
+		if after && before {
+			selfPatch = i
+			break
+		}
+	}
+	if looseChunk < 0 || packedChunk < 0 || soloFile < 0 || selfPatch < 0 || F < 2 {
 		t.Fatal("the pipeline vector lost the features the hostile cases need")
 	}
 	e := func(at int, hexs string) []hostileEdit { return []hostileEdit{{At: at, Hex: hexs}} }
+	solo := func(size uint32) []hostileEdit { // the solo chunk's raw size and its file's size together
+		return []hostileEdit{{At: chunk(soloChunk) + 32, Hex: le32(size)}, {At: file(soloFile) + 8, Hex: le64(uint64(size))}}
+	}
 	all, hdr, none := "all", "header", "none"
+	fileHash := m.Files[m.Patches[selfPatch].File].Hash
 	return []hostileCase{
-		{"bad magic", e(0, "00"), 0, none, "corrupt"},
-		{"version 1", e(4, "0100"), 0, hdr, "version"},
-		{"header size 351", e(6, "5f01"), 0, hdr, "corrupt"},
-		{"header hash mismatch", e(16, "ff"), 0, none, "corrupt"},
-		{"unknown header flag", e(8, "01000000"), 0, hdr, "unsupported"},
-		{"unknown codec", e(12, "02"), 0, hdr, "unsupported"},
-		{"reserved header byte", e(13, "01"), 0, hdr, "corrupt"},
-		{"reserved header word", e(44, "01"), 0, hdr, "corrupt"},
-		{"reserved header tail", e(250, "01"), 0, hdr, "corrupt"},
-		{"product id upper case", e(96, "43"), 0, hdr, "corrupt"},
-		{"product id byte after its end", e(127, "61"), 0, hdr, "corrupt"},
-		{"empty platform", e(128, "00"), 0, hdr, "corrupt"},
-		{"build id with a slash", e(161, "2f"), 0, hdr, "corrupt"},
-		{"expiry before creation", e(32, le64(m.Header.CreatedAt)), 0, hdr, "corrupt"},
-		{"body larger than the cap", e(48, le64(manifest.MaxBodySize+1)), 0, hdr, "limit"},
-		{"body shorter than its header", e(48, le64(31)), 0, hdr, "corrupt"},
-		{"payload size mismatch", e(56, le64(uint64(len(golden)-H+1))), 0, hdr, "corrupt"},
-		{"body hash mismatch", e(stringsAt, "7a"), 0, hdr, "corrupt"},
-		{"truncated payload", nil, len(golden) - 1, none, "corrupt"},
-		{"trailing byte", nil, len(golden) + 1, all, "corrupt"},
-		{"too many files", e(body, le32(manifest.MaxFiles+1)), 0, all, "limit"},
-		{"counts disagree with the body size", e(body, le32(uint32(F+1))), 0, all, "corrupt"},
-		{"reserved body header", e(body+24, "01"), 0, all, "corrupt"},
-		{"path offset out of order", e(file(1), le32(1)), 0, all, "corrupt"},
-		{"path length zero", e(file(0)+4, le32(0)), 0, all, "corrupt"},
-		{"file size disagrees with its chunks", e(file(1)+8, le64(m.Files[1].Size+1)), 0, all, "corrupt"},
-		{"first ref out of order", e(file(1)+48, le32(m.Files[1].FirstRef+1)), 0, all, "corrupt"},
-		{"tier 3", e(file(0)+68, "03"), 0, all, "corrupt"},
-		{"reserved file byte", e(file(0)+69, "01"), 0, all, "corrupt"},
-		{"unknown file flag", e(file(0)+70, "0800"), 0, all, "corrupt"},
-		{"reserved file word", e(file(0)+72, "01"), 0, all, "corrupt"},
-		{"backslash in a path", e(stringsAt+3, "5c"), 0, all, "corrupt"},
-		{"paths out of order", e(stringsAt, "7a"), 0, all, "corrupt"},
-		{"ref to a missing chunk", e(refs, le32(uint32(C))), 0, all, "corrupt"},
-		{"reserved ref word", e(refs+4, "01"), 0, all, "corrupt"},
-		{"ref offset wrong", e(refs+16+8, le64(m.Refs[1].Offset+1)), 0, all, "corrupt"},
-		{"chunk raw size zero", e(chunk(0)+32, le32(0)), 0, all, "corrupt"},
-		{"chunk raw size above max", e(chunk(0)+32, le32(cdc.MaxSize+1)), 0, all, "corrupt"},
-		{"chunk stored size above max", e(chunk(looseChunk)+36, le32(cdc.MaxSize+4097)), 0, all, "corrupt"},
-		{"chunks out of order", e(chunk(0), strings.Repeat("ff", 32)), 0, all, "corrupt"},
-		{"chunk in a missing pack", e(chunk(packedChunk)+40, le32(uint32(P))), 0, all, "corrupt"},
-		{"reserved chunk word", e(chunk(0)+44, "01"), 0, all, "corrupt"},
-		{"loose chunk with a pack offset", e(chunk(looseChunk)+48, le64(1)), 0, all, "corrupt"},
-		{"packed chunk without a stored size", e(chunk(packedChunk)+36, le32(0)), 0, all, "corrupt"},
-		{"packed chunk past its pack", e(chunk(packedChunk)+48, le64(m.Packs[0].Size)), 0, all, "corrupt"},
-		{"pack size zero", e(packs+32, le64(0)), 0, all, "corrupt"},
-		{"patch of a missing file", e(patches, le32(uint32(F))), 0, all, "corrupt"},
-		{"reserved patch word", e(patches+4, "01"), 0, all, "corrupt"},
-		{"patch onto itself", e(patches+8, hex.EncodeToString(m.Files[m.Patches[0].File].Hash[:])), 0, all, "corrupt"},
-		{"patch size zero", e(patches+72, le64(0)), 0, all, "corrupt"},
+		{"bad magic", e(0, "00"), 0, none, "corrupt", "not a .hman file"},
+		{"version 1", e(4, "0100"), 0, hdr, "version", ".hman version 1"},
+		{"header size 351", e(6, "5f01"), 0, hdr, "corrupt", "header size 351"},
+		{"header hash mismatch", e(16, "ff"), 0, none, "corrupt", "the header hash does not match"},
+		{"unknown header flag", e(8, "01000000"), 0, hdr, "unsupported", "unknown header flags"},
+		{"unknown codec", e(12, "02"), 0, hdr, "unsupported", "unknown codec 2"},
+		{"reserved header byte", e(13, "01"), 0, hdr, "corrupt", "reserved header bytes"},
+		{"reserved header word", e(44, "01"), 0, hdr, "corrupt", "reserved header bytes"},
+		{"reserved header tail", e(250, "01"), 0, hdr, "corrupt", "reserved header bytes"},
+		{"product id upper case", e(96, "43"), 0, hdr, "corrupt", "is not ^[a-z][a-z0-9-]{2,31}$"},
+		{"product id byte after its end", e(127, "61"), 0, hdr, "corrupt", "bytes after its end"},
+		{"empty platform", e(128, strings.Repeat("00", 32)), 0, hdr, "corrupt", "is not ^[a-z][a-z0-9_-]{1,31}$"},
+		{"build id with a slash", e(161, "2f"), 0, hdr, "corrupt", "is not ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+		{"expiry before creation", e(32, le64(m.Header.CreatedAt)), 0, hdr, "corrupt", "is not after createdAt"},
+		{"body larger than the cap", e(48, le64(manifest.MaxBodySize+1)), 0, hdr, "limit", "is above"},
+		{"body shorter than its header", e(48, le64(31)), 0, hdr, "corrupt", "shorter than the body header"},
+		{"payload size mismatch", e(56, le64(uint64(len(golden)-H+1))), 0, hdr, "corrupt", "bytes follow the header"},
+		{"body hash mismatch", e(stringsAt, "7a"), 0, hdr, "corrupt", "the body hash does not match"},
+		{"truncated payload", nil, len(golden) - 1, none, "corrupt", "bytes follow the header"},
+		{"trailing byte", nil, len(golden) + 1, all, "corrupt", "its counts need"},
+		{"too many files", e(body, le32(manifest.MaxFiles+1)), 0, all, "limit", "exceed the limits"},
+		{"counts disagree with the body size", e(body, le32(uint32(F+1))), 0, all, "corrupt", "its counts need"},
+		{"reserved body header", e(body+24, "01"), 0, all, "corrupt", "reserved body-header bytes"},
+		{"path offset out of order", e(file(1), le32(1)), 0, all, "corrupt", "file 1: path offset 1"},
+		{"path length zero", e(file(0)+4, le32(0)), 0, all, "corrupt", "file 0: path length 0"},
+		{"file size disagrees with its chunks", e(file(1)+8, le64(m.Files[1].Size+1)), 0, all, "corrupt",
+			fmt.Sprintf("its size is %d", m.Files[1].Size+1)},
+		{"first ref out of order", e(file(1)+48, le32(m.Files[1].FirstRef+1)), 0, all, "corrupt",
+			fmt.Sprintf("first ref %d", m.Files[1].FirstRef+1)},
+		{"tier 3", e(file(0)+68, "03"), 0, all, "corrupt", "tier 3"},
+		{"reserved file byte", e(file(0)+69, "01"), 0, all, "corrupt", "file 0: reserved bytes"},
+		{"unknown file flag", e(file(0)+70, "0800"), 0, all, "corrupt", "unknown flags 0x8"},
+		{"reserved file word", e(file(0)+72, "01"), 0, all, "corrupt", "file 0: reserved bytes"},
+		{"backslash in a path", e(stringsAt+3, "5c"), 0, all, "corrupt", "is not a valid manifest path"},
+		{"paths out of order", e(stringsAt, "7a"), 0, all, "corrupt", "(sorted, unique paths)"},
+		{"ref to a missing chunk", e(refs, le32(uint32(C))), 0, all, "corrupt", fmt.Sprintf("chunk %d does not exist", C)},
+		{"reserved ref word", e(refs+4, "01"), 0, all, "corrupt", "ref 0: reserved bytes"},
+		{"ref offset wrong", e(refs+16+8, le64(m.Refs[1].Offset+1)), 0, all, "corrupt",
+			fmt.Sprintf("ref 1: offset %d is not %d", m.Refs[1].Offset+1, m.Refs[1].Offset)},
+		{"chunk raw size zero", solo(0), 0, all, "corrupt", fmt.Sprintf("chunk %d: raw size 0 is out of range", soloChunk)},
+		{"chunk raw size above max", solo(cdc.MaxSize + 1), 0, all, "corrupt",
+			fmt.Sprintf("chunk %d: raw size %d is out of range", soloChunk, cdc.MaxSize+1)},
+		{"chunk stored size above max", e(chunk(looseChunk)+36, le32(cdc.MaxSize+4097)), 0, all, "corrupt",
+			fmt.Sprintf("stored size %d is out of range", cdc.MaxSize+4097)},
+		{"chunks out of order", e(chunk(0), strings.Repeat("ff", 32)), 0, all, "corrupt", "chunk 1: IDs are not sorted"},
+		{"chunk in a missing pack", e(chunk(packedChunk)+40, le32(uint32(P))), 0, all, "corrupt",
+			fmt.Sprintf("pack %d does not exist", P)},
+		{"reserved chunk word", e(chunk(0)+44, "01"), 0, all, "corrupt", "chunk 0: reserved bytes"},
+		{"loose chunk with a pack offset", e(chunk(looseChunk)+48, le64(1)), 0, all, "corrupt", "a loose chunk has a pack offset"},
+		{"packed chunk without a stored size", e(chunk(packedChunk)+36, le32(0)), 0, all, "corrupt", ": 0 stored bytes at"},
+		{"packed chunk past its pack", e(chunk(packedChunk)+48, le64(m.Packs[0].Size)), 0, all, "corrupt",
+			fmt.Sprintf("stored bytes at %d do not fit pack", m.Packs[0].Size)},
+		{"pack of size zero, which no chunk fits", e(packs+32, le64(0)), 0, all, "corrupt", "do not fit pack 0 (0 bytes)"},
+		{"pack size above max", e(packs+32, le64(manifest.MaxPackSize+1)), 0, all, "corrupt",
+			fmt.Sprintf("pack 0: size %d is out of range", manifest.MaxPackSize+1)},
+		{"patch of a missing file", e(patch(0), le32(uint32(F))), 0, all, "corrupt", fmt.Sprintf("patch 0: file %d does not exist", F)},
+		{"reserved patch word", e(patch(0)+4, "01"), 0, all, "corrupt", "patch 0: reserved bytes"},
+		{"patches out of order", e(patch(0)+8, strings.Repeat("ff", 32)), 0, all, "corrupt", "patch 1: not sorted"},
+		{"patch onto itself", e(patch(selfPatch)+8, hex.EncodeToString(fileHash[:])), 0, all, "corrupt",
+			fmt.Sprintf("patch %d: it patches", selfPatch)},
+		{"patch size zero", e(patch(0)+72, le64(0)), 0, all, "corrupt", "patch 0: size 0 is out of range"},
+		{"patch size above max", e(patch(0)+72, le64(manifest.MaxPatchSize+1)), 0, all, "corrupt",
+			fmt.Sprintf("patch 0: size %d is out of range", manifest.MaxPatchSize+1)},
 	}
 }
 
@@ -337,6 +405,13 @@ func TestUpdateGoldens(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(goldenPath("pipeline.go-zstd.hman"), z, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deep, err := pathsManifest(deepPathFiles, true).Marshal(manifest.WriteOptions{Codec: manifest.CodecZstd, ZstdLevel: 19})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(goldenPath("deep-paths.hman"), deep, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cases := hostileCases(t, raw, m)
@@ -412,6 +487,19 @@ func TestPipelineCrossLanguageRead(t *testing.T) {
 	}
 }
 
+// deep-paths.hman (written by Go, read by both languages) is the deepest-paths manifest: it reads back to
+// pathsManifest(deepPathFiles, true). perf_test.go times it against the read budget.
+func TestSharedDeepPaths(t *testing.T) {
+	want := pathsManifest(deepPathFiles, true)
+	got, err := manifest.Parse(readGolden(t, "deep-paths.hman"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalManifests(got, want) {
+		t.Fatal("deep-paths.hman differs from the deepest-paths manifest")
+	}
+}
+
 // equalManifests compares field by field (a nil and an empty table are equal).
 func equalManifests(a, b *manifest.Manifest) bool {
 	return a.Header == b.Header && slices.Equal(a.Files, b.Files) && slices.Equal(a.Refs, b.Refs) &&
@@ -424,13 +512,15 @@ func TestSharedHostileCases(t *testing.T) {
 	}
 	readJSON(t, "hostile.json", &f)
 	golden := readGolden(t, "pipeline.hman")
-	if len(f.Cases) < 40 {
+	if len(f.Cases) < 50 {
 		t.Fatalf("only %d hostile cases", len(f.Cases))
 	}
 	for _, c := range f.Cases {
 		_, err := manifest.Parse(applyHostile(golden, c), 0)
 		if got := errorKind(err); got != c.Expect {
 			t.Errorf("%s: %s, want %s (%v)", c.Name, got, c.Expect, err)
+		} else if c.Rule == "" || !strings.Contains(err.Error(), c.Rule) {
+			t.Errorf("%s: failed another check than %q: %v", c.Name, c.Rule, err)
 		}
 	}
 	// The cases still match the golden's layout (so a regenerated golden needs regenerated cases).

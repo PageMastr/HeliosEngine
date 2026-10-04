@@ -167,18 +167,30 @@ TEST_CASE("manifest: every shared golden reads back to the description, whicheve
     }
 }
 
-TEST_CASE("manifest: the shared hostile cases fail with the same error kinds as in Go") {
+TEST_CASE("manifest: the shared deep-paths.hman (written by Go) reads back to the deepest-paths manifest") {
+    // 64 MiB of paths 508 directories deep: the worst case for the path-collision check within every limit.
+    // test_perf.cpp times the read against the 400 ms budget.
+    const Result<Manifest> m = readManifestFile(hmanDir() / "deep-paths.hman");
+    REQUIRE_MESSAGE(m.ok(), m.error().toString());
+    CHECK(*m == test::pathsManifest(test::kDeepPathFiles, true));
+}
+
+TEST_CASE("manifest: the shared hostile cases fail the same check with the same error kind as in Go") {
     const test::Json j = test::loadJson(hmanDir() / "hostile.json");
     const std::vector<u8> golden = test::readBytes(hmanDir() / "pipeline.hman");
     yyjson_val* cases = test::get(j.root(), "cases");
-    REQUIRE(yyjson_arr_size(cases) >= 40);
+    REQUIRE(yyjson_arr_size(cases) >= 50);
     usize idx, max;
     yyjson_val* c;
     yyjson_arr_foreach(cases, idx, max, c) {
         const std::string name = test::getStr(c, "name");
+        const std::string rule = test::getStr(c, "rule"); // a message substring: the one check it breaks
         CAPTURE(name);
+        CAPTURE(rule);
         const Result<Manifest> m = readManifest(applyHostile(golden, c));
+        REQUIRE(!m.ok());
         CHECK(test::errorKind(m.errorCode()) == test::getStr(c, "expect"));
+        CHECK_MESSAGE((!rule.empty() && m.error().message.find(rule) != std::string::npos), m.error().message);
     }
 }
 

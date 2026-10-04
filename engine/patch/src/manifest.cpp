@@ -4,9 +4,11 @@
 #include <zstd.h>
 
 #include <algorithm>
+#include <array>
+#include <cstdlib>
 #include <cstring>
 #include <format>
-#include <unordered_set>
+#include <memory>
 
 namespace helios::patch {
 
@@ -85,9 +87,9 @@ u64 effectiveMaxBody(const ManifestReadOptions& options) noexcept {
     return options.maxBodySize == 0 ? kMaxBodySize : std::min(options.maxBodySize, kMaxBodySize);
 }
 
-bool inRange(char c, char lo, char hi) noexcept { return c >= lo && c <= hi; }
-bool isLowerAlnum(char c) noexcept { return inRange(c, 'a', 'z') || inRange(c, '0', '9'); }
-bool isAlnum(char c) noexcept { return isLowerAlnum(c) || inRange(c, 'A', 'Z'); }
+constexpr bool inRange(char c, char lo, char hi) noexcept { return c >= lo && c <= hi; }
+constexpr bool isLowerAlnum(char c) noexcept { return inRange(c, 'a', 'z') || inRange(c, '0', '9'); }
+constexpr bool isAlnum(char c) noexcept { return isLowerAlnum(c) || inRange(c, 'A', 'Z'); }
 
 bool validProductId(std::string_view s) noexcept {
     if (s.size() < 3 || s.size() > kProductIdMax || !inRange(s[0], 'a', 'z')) return false;
@@ -104,10 +106,13 @@ bool validBuildId(std::string_view s) noexcept {
                        [](char c) { return isAlnum(c) || c == '.' || c == '_' || c == '-'; });
 }
 
-char asciiLower(char c) noexcept { return inRange(c, 'A', 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
+constexpr char asciiLower(char c) noexcept {
+    return inRange(c, 'A', 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+}
 
 /// CON, PRN, AUX, NUL, COM0-9 and LPT0-9, with any extension: names Windows reserves for devices.
 bool windowsDeviceName(std::string_view segment) noexcept {
+    if (segment.size() < 3) return false;
     const std::string_view stem = segment.substr(0, segment.find('.'));
     if (stem.size() != 3 && stem.size() != 4) return false;
     char s[4] = {};
@@ -118,12 +123,25 @@ bool windowsDeviceName(std::string_view segment) noexcept {
            inRange(s[3], '0', '9');
 }
 
-bool validSegment(std::string_view seg) noexcept {
-    if (seg.empty() || seg == "." || seg == ".." || seg.back() == '.') return false;
-    for (const char c : seg)
-        if (!(isAlnum(c) || c == '.' || c == '_' || c == '-' || c == '+')) return false;
-    return !windowsDeviceName(seg);
-}
+/// The bytes a path segment may hold: [A-Za-z0-9._+-].
+constexpr std::array<bool, 256> kPathByte = [] {
+    std::array<bool, 256> t{};
+    for (int c = 0; c < 256; ++c) {
+        const char ch = static_cast<char>(c);
+        t[static_cast<usize>(c)] = isAlnum(ch) || ch == '.' || ch == '_' || ch == '-' || ch == '+';
+    }
+    return t;
+}();
+
+/// A path's collision-key byte: ASCII letters lowered and '/' mapped to 0x00, which no valid path holds.
+/// Byte order on keys sorts paths segment by segment with the separator lowest, so the paths inside a
+/// directory follow the directory's own key directly.
+constexpr std::array<char, 256> kCollisionFold = [] {
+    std::array<char, 256> t{};
+    for (int c = 0; c < 256; ++c) t[static_cast<usize>(c)] = asciiLower(static_cast<char>(c));
+    t[static_cast<usize>('/')] = '\0';
+    return t;
+}();
 
 template <class... Args>
 Error invalid(std::format_string<Args...> fmt, Args&&... args) {
@@ -171,7 +189,18 @@ bool allZero(const u8* p, usize n) noexcept {
     return std::all_of(p, p + n, [](u8 b) { return b == 0; });
 }
 
-Result<std::vector<u8>> decompress(std::span<const u8> payload, u64 bodySize) {
+/// A decoded zstd payload in a malloc'd block. It grows with realloc, which (glibc, for large blocks) moves
+/// the pages instead of copying and re-faulting them: doubling a std::vector to 72 MB cost 140 ms.
+struct DecodedBody {
+    struct Free {
+        void operator()(u8* p) const noexcept { std::free(p); }
+    };
+    std::unique_ptr<u8, Free> data;
+    usize size = 0;
+    std::span<const u8> bytes() const noexcept { return {data.get(), size}; }
+};
+
+Result<DecodedBody> decompress(std::span<const u8> payload, u64 bodySize) {
     struct DCtx {
         ZSTD_DCtx* p = ZSTD_createDCtx();
         ~DCtx() { ZSTD_freeDCtx(p); }
@@ -182,22 +211,27 @@ Result<std::vector<u8>> decompress(std::span<const u8> payload, u64 bodySize) {
     // Grow only as bytes decode (the claim alone costs nothing); one byte of room past bodySize
     // catches a payload that decodes to more.
     const u64 cap = bodySize + 1;
-    std::vector<u8> out(static_cast<usize>(std::min<u64>(cap, 1 * kMiB)));
+    DecodedBody out;
+    usize room = 0;
     usize produced = 0;
     ZSTD_inBuffer in{payload.data(), payload.size(), 0};
     for (;;) {
-        if (produced == out.size()) {
-            if (out.size() == cap)
-                return corrupt("the zstd payload decodes to more than bodySize ({})", bodySize);
-            out.resize(static_cast<usize>(std::min<u64>(cap, u64(out.size()) * 2)));
+        if (produced == room) {
+            if (room == cap) return corrupt("the zstd payload decodes to more than bodySize ({})", bodySize);
+            const usize grown = static_cast<usize>(std::min<u64>(cap, room == 0 ? 1 * kMiB : u64(room) * 2));
+            u8* p = static_cast<u8*>(std::realloc(out.data.get(), grown));
+            if (!p) return Error{ErrorCode::OutOfMemory, "no memory for a decoded manifest body"};
+            (void)out.data.release();
+            out.data.reset(p);
+            room = grown;
         }
-        ZSTD_outBuffer o{out.data(), out.size(), produced};
+        ZSTD_outBuffer o{out.data.get(), room, produced};
         const usize before = in.pos;
         const usize ret = ZSTD_decompressStream(d.p, &o, &in);
         if (ZSTD_isError(ret)) return corrupt("zstd payload: {}", ZSTD_getErrorName(ret));
         const bool progressed = in.pos != before || o.pos != produced;
         produced = o.pos;
-        if (in.pos == in.size && produced < out.size()) {
+        if (in.pos == in.size && produced < room) {
             if (ret != 0) return corrupt("the zstd payload ends inside a frame");
             break;
         }
@@ -205,7 +239,7 @@ Result<std::vector<u8>> decompress(std::span<const u8> payload, u64 bodySize) {
     }
     if (produced != bodySize)
         return corrupt("the zstd payload decodes to {} bytes, bodySize is {}", produced, bodySize);
-    out.resize(produced);
+    out.size = produced;
     return out;
 }
 
@@ -312,17 +346,66 @@ bool patchLess(const ManifestPatch& a, const ManifestPatch& b) noexcept {
 // ---------------------------------------------------------------------------------------------
 
 bool isValidManifestPath(std::string_view path) noexcept {
+    // One pass over the bytes, no allocation: readers run this on every path (up to 64 MiB of them).
     if (path.empty() || path.size() > kMaxPathBytes) return false;
+    // path[start, end), a run of path bytes, is a segment: not empty, not ending in '.' (so not "." or
+    // ".."), not a device name.
+    const auto segmentEnds = [path](usize start, usize end) {
+        return end > start && path[end - 1] != '.' &&
+               (end - start < 3 || !windowsDeviceName(path.substr(start, end - start)));
+    };
     usize start = 0;
-    for (;;) {
-        const usize slash = path.find('/', start);
-        const std::string_view seg =
-            path.substr(start, slash == std::string_view::npos ? path.npos : slash - start);
-        if (!validSegment(seg)) return false;
-        if (slash == std::string_view::npos) return true;
-        start = slash + 1;
+    for (usize i = 0; i < path.size(); ++i) {
+        const char c = path[i];
+        if (kPathByte[static_cast<u8>(c)]) continue;
+        if (c != '/' || !segmentEnds(start, i)) return false;
+        start = i + 1;
     }
+    return segmentEnds(start, path.size());
 }
+
+namespace {
+
+/// Rejects two (valid) paths that are equal ignoring ASCII case, and a file that is also a directory of
+/// another file (`a` and `A/b`), so a manifest installs the same tree on NTFS and ext4. It sorts the
+/// collision keys (kCollisionFold) and compares neighbours: O(P + n log n · ℓ) byte operations for P path
+/// bytes, n files and common prefixes of ℓ ≤ kMaxPathBytes, without hashing attacker-chosen strings.
+/// (Looking up every '/'-prefix of every path in a set costs about len²/4 per path: seconds for 64 MiB of
+/// deep paths.)
+Result<void> checkPathCollisions(const std::vector<ManifestFile>& files, u64 stringBytes) {
+    struct Key {
+        std::string_view key;
+        u32 file;
+    };
+    const auto buffer = std::make_unique_for_overwrite<char[]>(static_cast<usize>(stringBytes));
+    std::vector<Key> keys(files.size());
+    char* at = buffer.get();
+    for (usize i = 0; i < files.size(); ++i) {
+        const std::string& p = files[i].path;
+        for (usize j = 0; j < p.size(); ++j) at[j] = kCollisionFold[static_cast<u8>(p[j])];
+        keys[i] = Key{std::string_view(at, p.size()), static_cast<u32>(i)};
+        at += p.size();
+    }
+    const auto less = [](const Key& a, const Key& b) {
+        const int c = a.key.compare(b.key);
+        return c != 0 ? c < 0 : a.file < b.file;
+    };
+    // Paths arrive sorted by bytes, so their keys often are too (unless case or a byte below '/' reorders
+    // them): checking costs one comparison per file, sorting n log n.
+    if (!std::is_sorted(keys.begin(), keys.end(), less)) std::sort(keys.begin(), keys.end(), less);
+    for (usize k = 1; k < keys.size(); ++k) {
+        const Key& a = keys[k - 1];
+        const Key& b = keys[k];
+        if (a.key == b.key)
+            return invalid("'{}' and '{}' differ only in case", files[a.file].path, files[b.file].path);
+        if (b.key.size() > a.key.size() && b.key[a.key.size()] == '\0' && b.key.starts_with(a.key))
+            return invalid("'{}' is a file and also a directory of '{}'", files[a.file].path,
+                           files[b.file].path);
+    }
+    return {};
+}
+
+} // namespace
 
 Result<void> validateManifest(const Manifest& m) {
     HELIOS_TRY(validateHeaderFields(m.header));
@@ -344,8 +427,6 @@ Result<void> validateManifest(const Manifest& m) {
 
     // Files: valid paths in strictly increasing byte order, no two equal ignoring ASCII case, no file
     // that is also another file's directory; tags in range; refs contiguous and tiling the file.
-    std::unordered_set<std::string> lowered;
-    lowered.reserve(m.files.size());
     std::vector<bool> chunkUsed(m.chunks.size(), false);
     u64 refAt = 0;
     for (usize i = 0; i < m.files.size(); ++i) {
@@ -355,10 +436,6 @@ Result<void> validateManifest(const Manifest& m) {
         if (i > 0 && !(m.files[i - 1].path < f.path))
             return invalid("file {}: '{}' is not after '{}' (sorted, unique paths)", i, f.path,
                            m.files[i - 1].path);
-        std::string low(f.path);
-        for (char& c : low) c = asciiLower(c);
-        if (!lowered.insert(std::move(low)).second)
-            return invalid("file {}: '{}' differs from another path only in case", i, f.path);
         if (f.tier > kMaxTier) return invalid("file '{}': tier {} is not 0, 1 or 2", f.path, f.tier);
         if ((toUnderlying(f.flags) & ~kManifestFileFlagsKnown) != 0)
             return invalid("file '{}': unknown flags {:#x}", f.path, toUnderlying(f.flags));
@@ -381,13 +458,7 @@ Result<void> validateManifest(const Manifest& m) {
         refAt += f.refCount;
     }
     if (refAt != refs) return invalid("{} refs belong to no file", refs - refAt);
-    for (const ManifestFile& f : m.files) { // a file may not also be a directory of another file
-        std::string low(f.path);
-        for (char& c : low) c = asciiLower(c);
-        for (usize s = low.find('/'); s != std::string::npos; s = low.find('/', s + 1))
-            if (lowered.count(low.substr(0, s)))
-                return invalid("'{}' is a file and also a directory of '{}'", low.substr(0, s), f.path);
-    }
+    HELIOS_TRY(checkPathCollisions(m.files, stringBytes));
 
     std::vector<bool> packUsed(m.packs.size(), false);
     for (usize i = 0; i < m.chunks.size(); ++i) {
@@ -618,11 +689,11 @@ Result<ManifestHeaderInfo> readManifestHeader(std::span<const u8> file, const Ma
 Result<Manifest> readManifest(std::span<const u8> file, const ManifestReadOptions& options) {
     HELIOS_TRY_ASSIGN(ManifestHeaderInfo info, readManifestHeader(file, options));
     const std::span<const u8> payload = file.subspan(kHeaderSize);
-    std::vector<u8> decoded;
+    DecodedBody decoded;
     std::span<const u8> body = payload;
     if (info.codec == ManifestCodec::Zstd) {
         HELIOS_TRY_ASSIGN(decoded, decompress(payload, info.bodySize));
-        body = decoded;
+        body = decoded.bytes();
     }
     if (blake2b256(body) != info.bodyHash) return corrupt("the body hash does not match");
     Manifest m;

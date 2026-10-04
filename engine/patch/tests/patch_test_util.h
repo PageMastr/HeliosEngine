@@ -5,6 +5,7 @@
 #include <doctest/doctest.h>
 #include <yyjson.h>
 
+#include <format>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -98,6 +99,33 @@ inline std::vector<u8> readBytes(const fs::Path& path) {
     REQUIRE_MESSAGE(b.ok(), fs::pathToUtf8(path));
     return std::move(*b);
 }
+
+/// n zero-size files with 1024-byte paths, prefix + "f%07u": the prefix is "a/" 508 times when `deep` (508
+/// directory levels, the deepest paths the limits allow) and 1016 bytes of "a" otherwise. As Go's
+/// pathsManifest (services/pkg/manifest); with kDeepPathFiles files the paths fill the 64 MiB path limit:
+/// deep-paths.hman, the worst case for the path-collision check.
+inline Manifest pathsManifest(u32 n, bool deep) {
+    std::string prefix;
+    if (deep)
+        for (int i = 0; i < 508; ++i) prefix += "a/";
+    else
+        prefix.assign(1016, 'a');
+    Manifest m;
+    m.header.productId = "sample-game";
+    m.header.platform = "win64";
+    m.header.buildId = "deep-paths";
+    m.header.sequence = 1;
+    m.header.createdAt = 1'791'072'000;
+    m.files.resize(n);
+    const Hash256 empty = blake2b256(std::span<const u8>{});
+    for (u32 i = 0; i < n; ++i) {
+        m.files[i].path = std::format("{}f{:07}", prefix, i);
+        m.files[i].hash = empty;
+        m.files[i].tier = 1;
+    }
+    return m;
+}
+inline constexpr u32 kDeepPathFiles = hman::kMaxStringBytes / hman::kMaxPathBytes;
 
 /// The error kind names the shared hostile vectors use.
 inline std::string errorKind(ErrorCode code) {

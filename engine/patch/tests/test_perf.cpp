@@ -5,7 +5,9 @@
 //     one core chunks a 50 GB build in under 3.5 minutes, and CL-10's full verify of 50 GB in 3 minutes
 //     (≈ 280 MB/s) needs two cores at this rate;
 //   * a 50 GB install's manifest (700k chunks, 20k files): read (BLAKE2b, decode, validate) ≤ 400 ms and
-//     write (codec none) ≤ 400 ms on one core, well inside CL-1's 2 s launcher start.
+//     write (codec none) ≤ 400 ms on one core, well inside CL-1's 2 s launcher start;
+//   * deep-paths.hman, the deepest paths the limits allow (64 MiB of paths 508 directories deep, a 72 MB
+//     body): read ≤ 400 ms, and within 2x of as many bytes of paths without directories.
 // Timings are reported always and asserted only in optimized builds without sanitizers.
 #include <doctest/doctest.h>
 
@@ -116,6 +118,31 @@ TEST_CASE("perf: a 50 GB install's manifest reads and writes within budget") {
     CHECK(writeS <= 0.400);
     CHECK(readS <= 0.400);
 #endif
+}
+
+// The path-collision check is linear in path bytes plus a sort. Looking up every '/'-prefix of every path in
+// a set (len²/4 per path) took 5.6 s on deep-paths.hman; the ratio to flat paths fails that on any machine.
+TEST_CASE("perf: the deepest paths the limits allow read within the 400 ms budget") {
+    const auto readBest = [](const std::vector<u8>& file) {
+        return bestSeconds(3, [&] { REQUIRE(readManifest(file).ok()); });
+    };
+    const auto zstd = [](const Manifest& m) {
+        ManifestWriteOptions o;
+        o.codec = ManifestCodec::Zstd;
+        o.zstdLevel = 3;
+        return writeManifest(m, o).value();
+    };
+    const f64 vectorS = readBest(test::readBytes(test::vectorsDir() / "hman" / "deep-paths.hman"));
+    const f64 deepS = readBest(zstd(test::pathsManifest(test::kDeepPathFiles, true)));
+    const f64 flatS = readBest(zstd(test::pathsManifest(test::kDeepPathFiles, false)));
+    MESSAGE(std::format("64 MiB of paths: 508 levels deep {:.0f} ms (deep-paths.hman {:.0f} ms), without "
+                        "directories {:.0f} ms",
+                        deepS * 1e3, vectorS * 1e3, flatS * 1e3));
+#if HELIOS_PATCH_ASSERT_BUDGETS
+    CHECK(vectorS <= 0.400);
+    CHECK(deepS <= 0.400);
+#endif
+    CHECK(deepS <= 2 * flatS);
 }
 
 } // namespace

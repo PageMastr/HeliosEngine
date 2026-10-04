@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -219,55 +220,74 @@ func validBuildID(s string) bool {
 	return true
 }
 
-func asciiLower(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if c >= 'A' && c <= 'Z' {
-			b[i] = c - 'A' + 'a'
-		}
+func lowerByte(c byte) byte {
+	if c >= 'A' && c <= 'Z' {
+		return c - 'A' + 'a'
 	}
-	return string(b)
+	return c
 }
 
-// windowsDeviceName reports CON, PRN, AUX, NUL, COM0-9 and LPT0-9, with any extension.
+// windowsDeviceName reports CON, PRN, AUX, NUL, COM0-9 and LPT0-9, with any extension. It does not
+// allocate: ValidPath runs it on every segment of every path a reader sees.
 func windowsDeviceName(seg string) bool {
 	stem := seg
+	if len(seg) < 3 {
+		return false
+	}
 	if i := strings.IndexByte(seg, '.'); i >= 0 {
 		stem = seg[:i]
 	}
-	low := asciiLower(stem)
-	switch low {
-	case "con", "prn", "aux", "nul":
-		return true
-	}
-	return len(low) == 4 && (low[:3] == "com" || low[:3] == "lpt") && low[3] >= '0' && low[3] <= '9'
-}
-
-func validSegment(seg string) bool {
-	if seg == "" || seg == "." || seg == ".." || seg[len(seg)-1] == '.' {
+	if len(stem) != 3 && len(stem) != 4 {
 		return false
 	}
-	for i := 0; i < len(seg); i++ {
-		if c := seg[i]; !isAlnum(c) && c != '.' && c != '_' && c != '-' && c != '+' {
-			return false
-		}
+	var low [4]byte
+	for i := 0; i < len(stem); i++ {
+		low[i] = lowerByte(stem[i])
 	}
-	return !windowsDeviceName(seg)
+	if len(stem) == 3 {
+		switch string(low[:3]) {
+		case "con", "prn", "aux", "nul":
+			return true
+		}
+		return false
+	}
+	prefix := string(low[:3])
+	return (prefix == "com" || prefix == "lpt") && low[3] >= '0' && low[3] <= '9'
+}
+
+// pathByte marks the bytes a path segment may hold: [A-Za-z0-9._+-].
+var pathByte = func() (t [256]bool) {
+	for c := 0; c < 256; c++ {
+		t[c] = isAlnum(byte(c)) || c == '.' || c == '_' || c == '-' || c == '+'
+	}
+	return t
+}()
+
+// segmentEnds reports whether path[start:end], a run of path bytes, is a valid segment: not empty, not
+// ending in '.' (so not "." or ".."), not a device name.
+func segmentEnds(path string, start, end int) bool {
+	return end > start && path[end-1] != '.' && (end-start < 3 || !windowsDeviceName(path[start:end]))
 }
 
 // ValidPath reports whether path is a valid manifest path on its own (no ordering or collision checks):
 // 1..1024 bytes of '/'-separated segments of [A-Za-z0-9._+-], none empty, "." or "..", none ending in '.',
-// none a Windows device name.
+// none a Windows device name. One pass over the bytes, no allocation: readers run it on every path.
 func ValidPath(path string) bool {
 	if len(path) == 0 || len(path) > MaxPathBytes {
 		return false
 	}
-	for _, seg := range strings.Split(path, "/") {
-		if !validSegment(seg) {
+	start := 0
+	for i := 0; i < len(path); i++ {
+		c := path[i]
+		if pathByte[c] {
+			continue
+		}
+		if c != '/' || !segmentEnds(path, start, i) {
 			return false
 		}
+		start = i + 1
 	}
-	return true
+	return segmentEnds(path, start, len(path))
 }
 
 func bodySizeFor(files, refs, chunks, packs, patches, stringBytes uint64) uint64 {
@@ -298,6 +318,58 @@ func patchLess(a, b *Patch) bool {
 	return bytes.Compare(a.FromHash[:], b.FromHash[:]) < 0
 }
 
+// collisionFold maps a path byte to its collision-key byte: ASCII letters lowered, '/' to 0x00 (which no
+// valid path holds), so byte order on keys sorts paths segment by segment with the separator lowest and the
+// paths inside a directory follow the directory's own key directly.
+var collisionFold = func() (t [256]byte) {
+	for c := 0; c < 256; c++ {
+		t[c] = lowerByte(byte(c))
+	}
+	t['/'] = 0
+	return t
+}()
+
+// checkPathCollisions rejects two valid paths that are equal ignoring ASCII case, and a file that is also
+// a directory of another file (a and A/b), so a manifest installs the same tree on NTFS and ext4. It sorts
+// the collision keys and compares neighbours: O(P + n log n · ℓ) byte operations for P path bytes, n files
+// and common prefixes of ℓ ≤ MaxPathBytes, with no hashing of attacker-chosen strings. (Checking every
+// '/'-prefix of every path against a set costs about len²/4 per path: seconds for 64 MiB of deep paths.)
+func checkPathCollisions(files []File, stringBytes uint64) error {
+	type entry struct {
+		key  []byte
+		file int
+	}
+	buf := make([]byte, stringBytes)
+	keys := make([]entry, len(files))
+	at := 0
+	for i := range files {
+		p := files[i].Path
+		key := buf[at : at+len(p) : at+len(p)]
+		for j := 0; j < len(p); j++ {
+			key[j] = collisionFold[p[j]]
+		}
+		keys[i] = entry{key: key, file: i}
+		at += len(p)
+	}
+	slices.SortFunc(keys, func(a, b entry) int {
+		if c := bytes.Compare(a.key, b.key); c != 0 {
+			return c
+		}
+		return a.file - b.file
+	})
+	for k := 1; k < len(keys); k++ {
+		a, b := keys[k-1], keys[k]
+		switch {
+		case bytes.Equal(a.key, b.key):
+			return errorf(ErrInvalid, "%q and %q differ only in case", files[a.file].Path, files[b.file].Path)
+		case len(b.key) > len(a.key) && b.key[len(a.key)] == 0 && bytes.HasPrefix(b.key, a.key):
+			return errorf(ErrInvalid, "%q is a file and also a directory of %q", files[a.file].Path,
+				files[b.file].Path)
+		}
+	}
+	return nil
+}
+
 // Validate checks every invariant of the format (engine/patch/README.md "Validation"). It returns an error
 // wrapping ErrLimit for a limit and ErrInvalid otherwise.
 func (m *Manifest) Validate() error {
@@ -321,7 +393,6 @@ func (m *Manifest) Validate() error {
 		return errorf(ErrLimit, "the body would be %d bytes, above %d", size, MaxBodySize)
 	}
 
-	lowered := make(map[string]struct{}, len(m.Files))
 	chunkUsed := make([]bool, len(m.Chunks))
 	var refAt uint64
 	for i := range m.Files {
@@ -332,11 +403,6 @@ func (m *Manifest) Validate() error {
 		if i > 0 && !(m.Files[i-1].Path < f.Path) {
 			return errorf(ErrInvalid, "file %d: %q is not after %q (sorted, unique paths)", i, f.Path, m.Files[i-1].Path)
 		}
-		low := asciiLower(f.Path)
-		if _, dup := lowered[low]; dup {
-			return errorf(ErrInvalid, "file %d: %q differs from another path only in case", i, f.Path)
-		}
-		lowered[low] = struct{}{}
 		if f.Tier > MaxTier {
 			return errorf(ErrInvalid, "file %q: tier %d is not 0, 1 or 2", f.Path, f.Tier)
 		}
@@ -369,19 +435,8 @@ func (m *Manifest) Validate() error {
 	if refAt != refs {
 		return errorf(ErrInvalid, "%d refs belong to no file", refs-refAt)
 	}
-	for i := range m.Files { // a file may not also be a directory of another file
-		low := asciiLower(m.Files[i].Path)
-		for at := 0; ; {
-			j := strings.IndexByte(low[at:], '/')
-			if j < 0 {
-				break
-			}
-			dir := low[:at+j]
-			if _, clash := lowered[dir]; clash {
-				return errorf(ErrInvalid, "%q is a file and also a directory of %q", dir, m.Files[i].Path)
-			}
-			at += j + 1
-		}
+	if err := checkPathCollisions(m.Files, stringBytes); err != nil {
+		return err
 	}
 
 	packUsed := make([]bool, len(m.Packs))
@@ -701,13 +756,29 @@ func decompress(payload []byte, bodySize uint64) ([]byte, error) {
 		return nil, errorf(ErrCorrupt, "zstd payload: %v", err)
 	}
 	defer dec.Close()
-	// io.ReadAll grows only as bytes decode; one byte past bodySize catches a payload that decodes to more.
-	out, err := io.ReadAll(io.LimitReader(dec, int64(bodySize)+1))
-	if err != nil {
-		return nil, errorf(ErrCorrupt, "zstd payload: %v", err)
+	// The buffer grows only as bytes decode (from 1 MiB, doubling), to bodySize + 1: one byte past bodySize
+	// catches a payload that decodes to more, and a small payload that claims a huge body costs only what
+	// it decodes to.
+	limit := bodySize + 1
+	out := make([]byte, 0, min(limit, 1<<20))
+	for {
+		if uint64(len(out)) == limit {
+			return nil, errorf(ErrCorrupt, "the zstd payload decodes to more than bodySize %d", bodySize)
+		}
+		if len(out) == cap(out) {
+			out = slices.Grow(out, int(min(limit, 2*uint64(cap(out))))-len(out))
+		}
+		n, err := dec.Read(out[len(out):min(uint64(cap(out)), limit)])
+		out = out[:len(out)+n]
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, errorf(ErrCorrupt, "zstd payload: %v", err)
+		}
 	}
 	if uint64(len(out)) != bodySize {
-		return nil, errorf(ErrCorrupt, "the zstd payload decodes to %d bytes or more, bodySize is %d", len(out), bodySize)
+		return nil, errorf(ErrCorrupt, "the zstd payload decodes to %d bytes, bodySize is %d", len(out), bodySize)
 	}
 	return out, nil
 }
@@ -746,6 +817,7 @@ func decodeBody(b []byte, m *Manifest) error {
 	strs := e[len(patchesB):]
 
 	m.Files = make([]File, fileCount)
+	paths := string(strs) // one allocation; each file's Path is a substring of it
 	var pathAt uint64
 	for i := range m.Files {
 		x := filesB[i*fileEntrySize:]
@@ -757,7 +829,7 @@ func decodeBody(b []byte, m *Manifest) error {
 		if pathLength == 0 || pathLength > MaxPathBytes || uint64(pathLength) > uint64(stringBytes)-pathAt {
 			return errorf(ErrCorrupt, "file %d: path length %d is out of range", i, pathLength)
 		}
-		f.Path = string(strs[pathAt : pathAt+uint64(pathLength)])
+		f.Path = paths[pathAt : pathAt+uint64(pathLength)]
 		pathAt += uint64(pathLength)
 		f.Size = le.Uint64(x[8:])
 		copy(f.Hash[:], x[16:48])

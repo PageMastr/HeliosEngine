@@ -2,13 +2,14 @@
 # Reviewed changes only: an entry here decides which symbols may cross or sit in which image.
 
 # Third-party libraries that hold process state. Each must be defined in exactly one image of a modular
-# build (02 §1.4 "Singletons"): <library>|<a symbol only that library defines>. ELF names, mangled.
+# build (02 §1.4 "Singletons"): <library>|<a symbol only that library defines>. ELF names, mangled (Luau's
+# C API has C++ linkage; the Tracy marker exists with and without TRACY_ENABLE).
 set(HELIOS_SYMBOL_SINGLETONS
   "mimalloc|mi_malloc"
   "flecs|ecs_init"
   "Jolt|_ZN3JPH7Factory9sInstanceE"
-  "Luau|lua_newstate"
-  "Tracy|___tracy_emit_zone_begin"
+  "Luau|_Z12lua_newstatePFPvS_S_mmES_"
+  "Tracy|_ZN5tracy13SetThreadNameEPKc"
   "SDL3|SDL_Init"
   "Dear ImGui|_ZN5ImGui13CreateContextEP11ImFontAtlas"
   "volk|volkInitialize"
@@ -19,7 +20,7 @@ set(HELIOS_SYMBOL_SINGLETONS
 set(HELIOS_SYMBOL_GAME_FORBIDDEN
   "flecs|^(ecs_|flecs_|FLECS_|_Z(T[VISTHW]|GV|ZN?)?N[rVKRO]*5flecs)"
   "Jolt|^_Z(T[VISTHW]|GV|ZN?)?N[rVKRO]*3JPH"
-  "Luau|^(lua_|luaL_|luau_|luaU_|luaV_|luaD_|luaG_|luaH_|luaM_|luaO_|luaS_|luaT_|luaZ_|_Z(T[VISTHW]|GV|ZN?)?N[rVKRO]*4Luau)"
+  "Luau|^(lua[A-Za-z]?_|_Z[0-9]+lua[A-Za-z]?_|_Z(T[VISTHW]|GV|ZN?)?N[rVKRO]*4Luau)"
   "mimalloc|^_?mi_"
   "Tracy|^(___tracy|_Z(T[VISTHW]|GV|ZN?)?N[rVKRO]*5tracy)")
 
@@ -31,3 +32,11 @@ set(HELIOS_SYMBOL_OWNED_REGEX
 # Symbols the ELF linker defines in every shared object.
 set(HELIOS_SYMBOL_LINKER_DEFINED _init _fini __bss_start _edata _end __end__ __data_start data_start
   _GLOBAL_OFFSET_TABLE_ _DYNAMIC __dso_handle __TMC_END__)
+
+# Third-party code a group exports by design (R1): <group>|<library>|<regex on the raw (mangled) name>.
+# Keep in step with HELIOS_GROUP_EXPORTED_THIRD_PARTY in cmake/HeliosModular.cmake.
+#   Luau's C API (lua.h, lualib.h: lua_*, luaL_*, luau_*; C++ linkage): engine/script's public API is
+#   built on it, so the other groups and generated binding glue call the one VM in helios_runtime. Luau's
+#   internal functions are hidden (LUAI_FUNC) and never exported.
+set(HELIOS_SYMBOL_GROUP_THIRD_PARTY
+  "helios_runtime|Luau VM|^_Z[0-9]+lua[uL]?_")

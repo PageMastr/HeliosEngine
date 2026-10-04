@@ -3,3 +3,4 @@
 0000000000001200 t mi_malloc
 0000000000001300 t _mi_page_malloc
 0000000000003000 B _ZN6helios5probe8g_countsE
+0000000000001400 t _Z12lua_pushnilP9lua_State

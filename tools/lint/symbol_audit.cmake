@@ -17,7 +17,9 @@
 # ELF images (nm):
 #   R1  a group exports only Helios code: every strong exported definition is in namespace helios or is a
 #       C symbol named helios_*. Third-party archives are linked in hidden (--exclude-libs), so anything
-#       else means third-party or global-namespace code was compiled into the group's own objects.
+#       else means third-party or global-namespace code was compiled into the group's own objects. The
+#       policy's HELIOS_SYMBOL_GROUP_THIRD_PARTY lists the third-party API a group exports by design
+#       (helios_runtime: Luau's C API, which engine/script's public API is built on).
 #   R2  each third-party library with process state (the policy's singleton markers) is defined in at most
 #       one image: two copies of mimalloc, flecs, Jolt, Luau, Tracy, SDL3, ImGui, volk or netcode split
 #       their state (02 §1.4 "Singletons").
@@ -222,7 +224,19 @@ if(format STREQUAL "elf")
           set(EXPORTED_DATA_${k} "${name}") # for R3: what a consumer may import by copy relocation
         endif()
       elseif(t MATCHES "^[BDGRST]$" AND NOT s IN_LIST HELIOS_SYMBOL_LINKER_DEFINED)
-        _fail("R1 ${name} exports '${s}' (${t}), which is not Helios code: a group exports only Helios objects, and third-party archives stay hidden (02 §1.4)")
+        set(allowed OFF)
+        foreach(entry IN LISTS HELIOS_SYMBOL_GROUP_THIRD_PARTY)
+          string(REPLACE "|" ";" parts "${entry}")
+          list(GET parts 0 allowedGroup)
+          list(GET parts 2 allowedRegex)
+          if(name STREQUAL allowedGroup AND s MATCHES "${allowedRegex}")
+            set(allowed ON)
+            break()
+          endif()
+        endforeach()
+        if(NOT allowed)
+          _fail("R1 ${name} exports '${s}' (${t}), which is not Helios code: a group exports only Helios objects, and third-party archives stay hidden (02 §1.4)")
+        endif()
       endif()
     endforeach()
     if(exported EQUAL 0)

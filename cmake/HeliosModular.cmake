@@ -24,9 +24,10 @@
 # Exports (the spike's part-1 decision, docs/adr/ADR-0.6c-link-model-spike.md):
 #   * Every external symbol the group's own (Helios) objects define is exported: MSVC through CMake's
 #     WINDOWS_EXPORT_ALL_SYMBOLS, which scans only the target's own objects; ELF through default
-#     visibility for module code. Symbols of the third-party archives a group links are never exported
-#     (WINDOWS_EXPORT_ALL_SYMBOLS does not scan archives; ELF: --exclude-libs,ALL). The symbol audit
-#     (tools/lint/symbol_audit.cmake, CTest lint_symbol_audit) checks both.
+#     visibility for module code. Symbols of the third-party archives a group links are not exported
+#     (WINDOWS_EXPORT_ALL_SYMBOLS does not scan archives; ELF: --exclude-libs,ALL), except the libraries
+#     in HELIOS_GROUP_EXPORTED_THIRD_PARTY (Luau's VM). The symbol audit (tools/lint/symbol_audit.cmake,
+#     CTest lint_symbol_audit) checks both.
 #   * Everything that is not module code (tools, tests, apps, fixtures) builds with -fvisibility=hidden
 #     -fvisibility-inlines-hidden, so on Linux an image keeps its own copy of header-defined inline and
 #     template statics, as every image does on Windows. The audit reports such statics that a group also
@@ -56,6 +57,14 @@
 include_guard(GLOBAL)
 
 set(HELIOS_LINK_GROUPS runtime client editor)
+
+# Third-party libraries whose API a group exports: <group>|<target>. Their objects are linked into the
+# group as its own objects, so they are exported like module code (WINDOWS_EXPORT_ALL_SYMBOLS on MSVC; ELF:
+# not hidden by --exclude-libs). Every other third-party library stays hidden inside its group.
+#   Luau.VM: engine/script's public API (helios/script/binding.h) is the Luau C API, and modules of the
+#   other groups (toolsfw's automation bindings) and generated binding glue call it. The VM must stay one
+#   copy (02 §1.4), so helios_runtime exports it; tools/lint/symbol_audit_policy.cmake lists the names.
+set(HELIOS_GROUP_EXPORTED_THIRD_PARTY "runtime|Luau.VM")
 set(HELIOS_MODULAR_INCLUDE_DIR "${CMAKE_BINARY_DIR}/helios_generated/include")
 
 # Sets <out> to the link group of a module with the given flags (02 §1.4). EDITOR_ONLY wins over HEADLESS:
@@ -263,11 +272,14 @@ function(_helios_modular_link_self_contained target)
   if(modules)
     target_link_libraries(${target} PRIVATE ${modules})
   endif()
-  # Its sources define what they declare: no dllimport of data the image itself carries.
-  foreach(group IN LISTS HELIOS_LINK_GROUPS)
-    string(TOUPPER "${group}" G)
-    target_compile_definitions(${target} PRIVATE HELIOS_${G}_BUILDING)
-  endforeach()
+  # Windows: its sources define what they declare, so no dllimport of data the image itself carries (the
+  # macros expand to the same visibility attribute either way on ELF).
+  if(WIN32)
+    foreach(group IN LISTS HELIOS_LINK_GROUPS)
+      string(TOUPPER "${group}" G)
+      target_compile_definitions(${target} PRIVATE HELIOS_${G}_BUILDING)
+    endforeach()
+  endif()
   # A gated Windows image normally gets the CPU-gate hook from helios_runtime.dll (helios_cpu_gate); this
   # one loads no group, so it links the hook itself, as a shipping image does.
   get_target_property(gateInRuntime ${target} HELIOS_CPU_GATE_IN_RUNTIME)
@@ -303,6 +315,38 @@ extern \"C\" const char* helios_${group}_link_group_modules(void) {
     endif()
     if(NOT old STREQUAL text)
       file(WRITE "${path}" "${text}")
+    endif()
+  endforeach()
+
+  # A group links the groups its modules depend on (through their helios::<module> interfaces). Its
+  # consumers need them too: a test of a client module calls core directly, and a shared library's own
+  # dependencies are not on its consumers' link line (ELF: no DT_NEEDED walk; PE: imports come from the
+  # import libraries named on the link line). So each group passes those groups on (INTERFACE).
+  get_property(moduleTargets GLOBAL PROPERTY HELIOS_MODULE_TARGETS)
+  foreach(m IN LISTS moduleTargets)
+    get_target_property(group ${m} HELIOS_LINK_GROUP)
+    if(NOT group)
+      continue()
+    endif()
+    _helios_module_deps(${m} deps) # HeliosLayering.cmake: module -> module edges
+    foreach(d IN LISTS deps)
+      get_target_property(depGroup ${d} HELIOS_LINK_GROUP)
+      if(depGroup AND NOT depGroup STREQUAL group)
+        get_property(passed TARGET helios_${group} PROPERTY HELIOS_PASSED_GROUPS)
+        if(NOT depGroup IN_LIST passed)
+          target_link_libraries(helios_${group} INTERFACE helios_${depGroup})
+          set_property(TARGET helios_${group} APPEND PROPERTY HELIOS_PASSED_GROUPS ${depGroup})
+        endif()
+      endif()
+    endforeach()
+  endforeach()
+
+  foreach(entry IN LISTS HELIOS_GROUP_EXPORTED_THIRD_PARTY)
+    string(REPLACE "|" ";" parts "${entry}")
+    list(GET parts 0 group)
+    list(GET parts 1 lib)
+    if(TARGET helios_${group} AND TARGET ${lib})
+      target_sources(helios_${group} PRIVATE $<TARGET_OBJECTS:${lib}>)
     endif()
   endforeach()
 

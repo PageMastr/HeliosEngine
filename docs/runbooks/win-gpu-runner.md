@@ -293,13 +293,14 @@ $found = @(foreach ($disk in Get-CimInstance Win32_LogicalDisk -Filter 'DriveTyp
         try { $access = Get-HeliosCiAccess $item.FullName ($write -bor $read) }
         catch { [pscustomobject]@{ Path = $item.FullName; Access = '?'; Who = $_.Exception.Message }; continue }
         if ($access.Bits) {
-            [pscustomobject]@{ Path = $item.FullName; Access = $(if ($access.Bits -band $write) { 'write' } else { 'read' })
-                Who = $access.Who }
+            $kind = $(if ($access.Bits -band $write) { 'write' } else { 'read' })
+            [pscustomobject]@{ Path = $item.FullName; Access = $kind; Who = $access.Who }
         }
     }
 })
 # The PATH and the PSModulePath, the machine's and yours, as every new window gets them.
-$found += @(foreach ($key in 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'HKCU:\Environment') {
+$environment = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'HKCU:\Environment'
+$found += @(foreach ($key in $environment) {
     $values = Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
     foreach ($name in 'Path', 'PSModulePath') {
         if (-not $values -or -not $values.PSObject.Properties[$name]) { continue }
@@ -316,12 +317,17 @@ $found += @(foreach ($key in 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Man
             # may make folders there, which replaces none.
             $parts = $dir.Split('\')
             $at = $parts.Count - 1
-            while ($at -gt 0 -and -not (Test-Path -LiteralPath ($parts[0..$at] -join '\') -PathType Container)) { $at-- }
+            while ($at -gt 0 -and -not (Test-Path -LiteralPath ($parts[0..$at] -join '\') -PathType Container)) {
+                $at--
+            }
             $where = $(if ($at -lt $parts.Count - 1) { "$list, missing" } else { $list })
             foreach ($i in $(if ($at -eq 0) { 0 } else { $at..1 })) {
                 $folder = $(if ($i -eq 0) { $parts[0] + '\' } else { $parts[0..$i] -join '\' })
                 try { $access = Get-HeliosCiAccess $folder $(if ($i -eq $at) { $write } else { $replace }) }
-                catch { [pscustomobject]@{ Path = $dir; Access = 'PATH'; Who = "${where}: $folder ? $($_.Exception.Message)" }; break }
+                catch {
+                    [pscustomobject]@{ Path = $dir; Access = 'PATH'; Who = "${where}: $folder ? $($_.Exception.Message)" }
+                    break
+                }
                 if ($access.Bits) {
                     [pscustomobject]@{ Path = $dir; Access = 'PATH'; Who = "${where}: $folder ($($access.Who))" }
                     break
@@ -330,7 +336,8 @@ $found += @(foreach ($key in 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Man
         }
     }
 })
-if ($found.Count) { $found | Format-Table -Wrap -AutoSize } else { 'Nothing at the root of a local drive or on the PATH is open to helios-ci' }
+if ($found.Count) { $found | Format-Table -Wrap -AutoSize } else {
+    'Nothing at the root of a local drive or on the PATH is open to helios-ci' }
 ```
 
 It leaves out Windows' own folders and `D:\helios-ci`. `write` means that `helios-ci` can change or delete the item (or
@@ -777,8 +784,8 @@ with your rights. Its `remove` also stops and deletes whatever service the `.ser
    then run the block again. The old tree holds the evidence for your report: `D:\helios-ci.old-<time>\runner\_diag`
    holds the runner's log and one `Worker_*.log` per job, beside the old `.env` and the runner's files. The tree of
    2026-10-03 inherited *Modify* for Authenticated Users from `D:\` (step 3), so the new account's jobs may be able to
-   change it: the block copies those logs (the `.log` files only, without following a link below `_diag`) into
-   `helios-ci-diag-<time>` in your profile. Nothing in the old tree is run again, and step 5 deletes it.
+   change it: the block copies those logs (the `.log` files in `_diag`, and none of them if `runner` or `_diag` is a
+   link) into `helios-ci-diag-<time>` in your profile. Nothing in the old tree is run again, and step 5 deletes it.
 
    ```powershell
    # Rotate: set the old D:\helios-ci aside, make step 3's folders again for the new helios-ci, keep the old logs.
@@ -802,11 +809,21 @@ with your rights. Its `remove` also stops and deletes whatever service the `.ser
        if ($LASTEXITCODE -ne 0) { throw 'icacls failed on D:\helios-ci\work' }
        icacls D:\helios-ci\hooks /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "helios-ci:(OI)(CI)RX"
        if ($LASTEXITCODE -ne 0) { throw 'icacls failed on D:\helios-ci\hooks' }
+       # The old runner's logs into your profile, without following a link (a junction, or a symbolic link where
+       # Developer Mode allows one) that the old account may have put there.
        $logs = "$env:USERPROFILE\helios-ci-diag-$stamp"
        New-Item -ItemType Directory -Path $logs | Out-Null
-       Get-ChildItem -LiteralPath "D:\helios-ci.old-$stamp\runner\_diag" -Filter *.log -File -Force -ErrorAction SilentlyContinue |
-           Copy-Item -Destination $logs -ErrorAction Continue
-       "The old tree's logs: $logs"
+       $link = [IO.FileAttributes]::ReparsePoint
+       $runner = Get-Item -LiteralPath "D:\helios-ci.old-$stamp\runner" -Force -ErrorAction SilentlyContinue
+       $diag = $(if ($runner -and -not ($runner.Attributes -band $link)) {
+               Get-Item -LiteralPath "D:\helios-ci.old-$stamp\runner\_diag" -Force -ErrorAction SilentlyContinue })
+       if ($diag -and -not ($diag.Attributes -band $link)) {
+           Get-ChildItem -LiteralPath $diag.FullName -Filter *.log -File -Force -ErrorAction Continue |
+               Where-Object { -not ($_.Attributes -band $link) } | Copy-Item -Destination $logs -ErrorAction Continue
+           "The old runner's logs: $logs"
+       } else {
+           "No logs copied: the old runner\_diag is missing, or it or runner is a link (note it for your report)"
+       }
    }
    ```
 

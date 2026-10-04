@@ -786,7 +786,7 @@ if ($rotateFolders.Count -eq 1) {
     # $FailOn: the logged action (its start) that fails; $Services and $Groups: the runner services and config.cmd
     # groups still there.
     function Invoke-HeliosCiRotateFolders([string]$Old, [string]$Current, [string]$FailOn = '', [string[]]$Services = @(),
-        [string[]]$Groups = @()) {
+        [string[]]$Groups = @(), [string[]]$Links = @()) {
         function Get-LocalUser {
             [CmdletBinding()] param([string]$Name)
             if ($Name -cne 'helios-ci') { throw "unexpected Get-LocalUser $Name" }
@@ -822,13 +822,21 @@ if ($rotateFolders.Count -eq 1) {
             $script:rotateLog.Add($line)
             $global:LASTEXITCODE = if ($FailOn -and $line -like "$FailOn*") { 1332 } else { 0 }
         }
-        # The old runner's _diag: its logs, listed one level deep (a recursive listing would follow links below it).
+        # The old runner's folder and its _diag ($Links: those that are links), and _diag's logs, listed one level deep
+        # (a recursive listing would follow links below it); one of them is a symbolic link.
+        function Get-Item {
+            [CmdletBinding()] param([string]$LiteralPath, [switch]$Force)
+            $script:rotateLog.Add("stat $LiteralPath")
+            $attributes = if ($Links -contains $LiteralPath) { 'Directory, ReparsePoint' } else { 'Directory' }
+            [pscustomobject]@{ FullName = $LiteralPath; Attributes = [IO.FileAttributes]$attributes }
+        }
         function Get-ChildItem {
             [CmdletBinding()] param([string]$LiteralPath, [string]$Filter, [switch]$File, [switch]$Force, [switch]$Recurse)
             if ($Recurse) { throw "unexpected Get-ChildItem -Recurse $LiteralPath" }
             $script:rotateLog.Add("list $LiteralPath $Filter file=$File")
-            foreach ($name in 'Runner_20261003-101500-utc.log', 'Worker_20261003-101600-utc.log') {
-                [pscustomobject]@{ FullName = "$LiteralPath\$name" }
+            foreach ($name in 'Runner_20261003-101500-utc.log', 'Worker_20261003-101600-utc.log', 'Worker_20261003-101700-utc.log') {
+                $attributes = if ($name -like '*101700*') { 'Archive, ReparsePoint' } else { 'Archive' }
+                [pscustomobject]@{ FullName = "$LiteralPath\$name"; Attributes = [IO.FileAttributes]$attributes }
             }
         }
         function Copy-Item {
@@ -849,16 +857,22 @@ if ($rotateFolders.Count -eq 1) {
     # 2026-10-03), and the new runner folder names no account but Administrators and SYSTEM. The old runner's logs, the
     # owner's evidence, are copied into the owner's profile: the tree of 2026-10-03 inherited D:\'s Modify for
     # Authenticated Users, so the new account's jobs may be able to change it.
-    $oldDiag = 'D:\helios-ci.old-20261004-120000\runner\_diag'
+    $oldRunner = 'D:\helios-ci.old-20261004-120000\runner'
+    $oldDiag = "$oldRunner\_diag"
     $logs = 'C:\Users\owner\helios-ci-diag-20261004-120000'
-    $foldersDone = @('rename D:\helios-ci -> helios-ci.old-20261004-120000',
+    $foldersMade = @('rename D:\helios-ci -> helios-ci.old-20261004-120000',
         'mkdir Directory D:\helios-ci\runner D:\helios-ci\work D:\helios-ci\hooks', "icacls D:\helios-ci $grants *S-1-5-32-545:(RX)",
         "icacls D:\helios-ci\runner $grants", "icacls D:\helios-ci\work $grants helios-ci:(OI)(CI)F",
-        "icacls D:\helios-ci\hooks $grants helios-ci:(OI)(CI)RX", "mkdir Directory $logs", "list $oldDiag *.log file=True",
+        "icacls D:\helios-ci\hooks $grants helios-ci:(OI)(CI)RX", "mkdir Directory $logs", "stat $oldRunner")
+    $foldersDone = $foldersMade + @("stat $oldDiag", "list $oldDiag *.log file=True",
         "copy $oldDiag\Runner_20261003-101500-utc.log -> $logs", "copy $oldDiag\Worker_20261003-101600-utc.log -> $logs")
     try { Invoke-HeliosCiRotateFolders $oldSid $newSid } catch { $script:rotateLog.Add("error: $($_.Exception.Message)") }
     Assert-Equal $foldersDone $script:rotateLog.ToArray() `
         'rotating sets the old D:\helios-ci aside, makes step 3''s folders again for the new account and copies the old logs'
+    try { Invoke-HeliosCiRotateFolders $oldSid $newSid -Links @($oldRunner) } catch { $script:rotateLog.Add("error: $($_.Exception.Message)") }
+    Assert-Equal $foldersMade $script:rotateLog.ToArray() 'the old logs are not copied, nor looked for, through a runner folder that is a link'
+    try { Invoke-HeliosCiRotateFolders $oldSid $newSid -Links @($oldDiag) } catch { $script:rotateLog.Add("error: $($_.Exception.Message)") }
+    Assert-Equal ($foldersMade + @("stat $oldDiag")) $script:rotateLog.ToArray() 'nor from a _diag that is a link'
     $foldersRefused = @(
         @{ What = 'without block a''s $old'; Old = ''; Current = $newSid; Error = 'run block a first'; Done = 0 },
         @{ What = 'before the account was created again'; Old = $oldSid; Current = $oldSid; Error = 'old account'; Done = 0 },

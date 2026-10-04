@@ -41,6 +41,10 @@ struct SceneResult {
     std::string message;
     std::string adapter;  ///< Adapter and driver (Vulkan).
     std::string goldenKey;  ///< Golden set used ("vulkan-llvmpipe", "null").
+    /// Vulkan: the device's own golden set ("vulkan-nvidia"), also when goldenKey fell back to the
+    /// lavapipe set; import_goldens.cmake files hardware goldens under it.
+    std::string driverKey;
+    std::string validationLayer;  ///< Vulkan: Caps::validationLayer (empty when not validated).
     f64 meanFlip = 0.0;
     f64 maxFlip = 0.0;
     f64 maxMeanFlip = 0.0;  ///< Thresholds applied.

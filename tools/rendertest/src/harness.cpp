@@ -339,6 +339,8 @@ SceneResult runScene(Scene& scene, rhi::Device& device, const RunOptions& option
                                 countDifferentPixels(first->image, second->image)));
     }
     r.goldenKey = "vulkan-" + driverKey(adapter);
+    r.driverKey = r.goldenKey;
+    r.validationLayer = device.caps().validationLayer;
     std::filesystem::path golden = options.goldenDir / r.goldenKey / (r.scene + ".png");
     if (options.updateGoldens) {
         if (auto w = writePng(golden, actual); !w) return fail("cannot write golden: " + w.error().toString());
@@ -459,6 +461,8 @@ Result<void> writeResult(const SceneResult& r, const std::filesystem::path& file
     str("message", r.message);
     str("adapter", r.adapter);
     str("goldenKey", r.goldenKey);
+    str("driverKey", r.driverKey);
+    str("validationLayer", r.validationLayer);
     str("actualFile", r.actualFile);
     str("goldenFile", r.goldenFile);
     str("flipFile", r.flipFile);
@@ -492,6 +496,8 @@ Result<SceneResult> readResult(const std::filesystem::path& file) {
     r.message = getStr("message");
     r.adapter = getStr("adapter");
     r.goldenKey = getStr("goldenKey");
+    r.driverKey = getStr("driverKey");
+    r.validationLayer = getStr("validationLayer");
     r.actualFile = getStr("actualFile");
     r.goldenFile = getStr("goldenFile");
     r.flipFile = getStr("flipFile");

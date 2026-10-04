@@ -114,6 +114,14 @@ if(HELIOS_BUILD_TESTS)
     set_tests_properties(rendertest.null.${scene} PROPERTIES LABELS "rendertest" TIMEOUT 120)
     list(APPEND vulkan_tests rendertest.vulkan.${scene} rendertest.null.${scene})
   endforeach()
+  # Hardware golden sets (golden/vulkan-<driver>/, filed by import_goldens.cmake from a win-gpu run for
+  # review) carry their provenance; GPU-less, so every toolchain checks it. The self-test exercises the
+  # import and the check on synthetic inputs.
+  add_test(NAME rendertest.goldens
+           COMMAND ${CMAKE_COMMAND} -DGOLDEN_DIR=${CMAKE_CURRENT_SOURCE_DIR}/golden "-DSCENES=${scene_list}"
+                   -DSELF_TEST=${CMAKE_CURRENT_BINARY_DIR}/rendertest-goldens-selftest
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden_checks.cmake)
+  set_tests_properties(rendertest.goldens PROPERTIES LABELS "rendertest" TIMEOUT 120)
   # RC-1 coverage, GPU-less: every shipped shader entry point and pipeline of engine/render is bound by
   # a scene whose lavapipe and Null goldens are committed (helios/render/shader_library.h).
   add_test(NAME rendertest.coverage COMMAND helios-rendertest --coverage)

@@ -518,20 +518,42 @@ Result<void> checkSourcePath(std::string_view path) {
     return {};
 }
 
-/// The directories of `path` (a checked project path) are spelled as on disk in every ASCII case: no
-/// component's directory holds another spelling of it. Windows sees one directory where Linux sees two,
-/// so writing under another spelling would split one tree into two. The first spelling found otherwise.
-std::optional<std::string> otherCaseDirectory(const fs::Path& root, std::string_view path) {
+/// A directory of `path` (a checked project path) that the disk spells differently, ignoring ASCII case:
+/// Windows sees one directory where Linux can hold two, so writing under another spelling would split one
+/// Windows directory into two on Linux. `strict`: any other spelling of a component counts, even next to
+/// the exact one (a tree that already holds both); otherwise only one where the exact spelling is missing.
+std::optional<std::string> otherCaseDirectory(const fs::Path& root, std::string_view path, bool strict) {
     usize start = 0;
     for (usize slash = path.find('/'); slash != std::string_view::npos; slash = path.find('/', start)) {
         const std::string_view dir = path.substr(0, start == 0 ? 0 : start - 1);
         const std::string_view name = path.substr(start, slash - start);
-        for (const std::string& other : namesIgnoringCase(root, dir, name)) {
-            if (other != name) return joinRel(dir, other);
+        const std::vector<std::string> names = namesIgnoringCase(root, dir, name);
+        const bool exact = std::find(names.begin(), names.end(), name) != names.end();
+        for (const std::string& other : names) {
+            if (other != name && (strict || !exact)) return joinRel(dir, other);
         }
         start = slash + 1;
     }
     return std::nullopt;
+}
+
+/// Every existing path that equals `path` ignoring ASCII case in every component: what Windows would open
+/// for it. One path at most on Windows; Linux can hold several spellings.
+std::vector<std::string> caseVariants(const fs::Path& root, std::string_view path) {
+    std::vector<std::string> current = {std::string()};
+    usize start = 0;
+    while (start <= path.size() && !current.empty()) {
+        usize slash = path.find('/', start);
+        if (slash == std::string_view::npos) slash = path.size();
+        const std::string_view name = path.substr(start, slash - start);
+        std::vector<std::string> next;
+        for (const std::string& dir : current) {
+            for (const std::string& n : namesIgnoringCase(root, dir, name)) next.push_back(joinRel(dir, n));
+        }
+        current = std::move(next);
+        start = slash + 1;
+    }
+    return current;
 }
 
 } // namespace
@@ -711,7 +733,7 @@ Result<EnsuredMeta> ensureMeta(const fs::Path& root, std::string_view path, cons
     HELIOS_TRY(checkSourcePath(path));
     if (!fs::isFile(absolute(root, path)))
         return makeError(ErrorCode::NotFound, "{}: no such source file", shown(path));
-    if (const auto other = otherCaseDirectory(root, path)) {
+    if (const auto other = otherCaseDirectory(root, path, true)) {
         return makeError(ErrorCode::InvalidState,
                          "{}: {} is the same directory on Windows; one tree must not hold both spellings",
                          shown(path), shown(*other));
@@ -773,23 +795,24 @@ Result<void> moveAsset(const fs::Path& root, std::string_view from, std::string_
     }
     const std::string fromMeta = metaPathFor(from);
     const std::string toMeta = metaPathFor(to);
-    // Only a rename within one directory (spelled the same) counts as case-only; a change in a directory's
-    // case is a move, so on Windows it finds the file itself in the target and is refused.
+    // Only a rename within one directory (spelled the same) counts as case-only (it goes through a temporary
+    // name); a change in a directory's case is a move, refused below unless both spellings already exist.
     const bool caseOnly = parentOf(from) == parentOf(to) && equalsIgnoringCase(fileName(from), fileName(to));
-    // The target's directories must be spelled as they are on disk: on Windows another spelling is the
-    // same directory, on Linux a second one.
-    if (const auto other = otherCaseDirectory(root, to)) {
+    // The target's directories must exist as spelled where they exist at all: on Windows another spelling
+    // is the same directory, on Linux it would become a second one.
+    if (const auto other = otherCaseDirectory(root, to, false)) {
         return makeError(ErrorCode::AlreadyExists, "{}: {} is already there; Windows sees one directory",
                          shown(to), shown(*other));
     }
-    // A target is taken when its directory holds the name in any ASCII case (Windows sees one file), except
-    // for the file being renamed itself in a case-only rename.
+    // A target is taken when a file equal to it ignoring case exists in any spelling of its directories
+    // (Windows sees one file), except for the file being moved itself (a case-only rename, or on Linux a
+    // move between two spellings of one Windows directory, which merges them).
     for (const std::string_view target : {std::string_view(to), std::string_view(toMeta)}) {
-        const std::string_view self = target == to ? fileName(from) : fileName(fromMeta);
-        for (const std::string& name : namesIgnoringCase(root, parentOf(target), fileName(target))) {
-            if (caseOnly && name == self) continue;
+        const std::string_view self = target == to ? from : std::string_view(fromMeta);
+        for (const std::string& existing : caseVariants(root, target)) {
+            if (existing == self) continue;
             return makeError(ErrorCode::AlreadyExists, "{}: {} is already there; Windows sees one file",
-                             shown(target), shown(joinRel(parentOf(target), name)));
+                             shown(target), shown(existing));
         }
     }
     if (!parentOf(to).empty()) HELIOS_TRY(fs::createDirectories(absolute(root, parentOf(to))));

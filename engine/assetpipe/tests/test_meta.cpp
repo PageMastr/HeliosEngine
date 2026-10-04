@@ -633,6 +633,24 @@ TEST_CASE("meta: moves and renames keep the GUID (the GUID follows the file)") {
     CHECK(!fs::exists(dir.path / "decks" / "new"));
     CHECK(moveAsset(dir.path, "ships/scout/Hull.tga", "Ships/Hull.tga", r).error().code ==
           ErrorCode::AlreadyExists); // a directory's case change is a move into the same directory
+    if (caseSensitive(dir.path)) {
+        // A tree that already holds two spellings of one Windows directory ("Decks" and "decks", made behind
+        // the sidecar functions' back): a target that collides with a file under the other spelling is
+        // refused, and moving a file from one spelling to the other (merging them) is allowed.
+        REQUIRE(ensureMeta(dir.path, "Decks/top.png", newMeta(), r));
+        writeText(dir.path, "staging/side.png", "side");
+        const Guid side = ensureMeta(dir.path, "staging/side.png", newMeta(), r).value().meta.guid;
+        REQUIRE(fs::createDirectories(dir.path / "decks"));
+        REQUIRE(fs::rename(dir.path / "staging" / "side.png", dir.path / "decks" / "side.png"));
+        REQUIRE(fs::rename(dir.path / "staging" / "side.png.meta", dir.path / "decks" / "side.png.meta"));
+        const auto clash = moveAsset(dir.path, "decks/side.png", "decks/top.png", r);
+        REQUIRE(!clash);
+        CHECK(clash.error().code == ErrorCode::AlreadyExists);
+        CHECK(clash.error().message.find("'Decks/top.png'") != std::string::npos);
+        REQUIRE(moveAsset(dir.path, "decks/side.png", "Decks/side.png", r));
+        CHECK(loadMeta(dir.path, "Decks/side.png", r).value().guid == side);
+        CHECK(!fileExists(dir.path, "decks/side.png"));
+    }
     writeText(dir.path, "loose.png", "no sidecar");
     CHECK(moveAsset(dir.path, "loose.png", "loose2.png", r).error().code == ErrorCode::NotFound);
     CHECK(fileExists(dir.path, "loose.png"));

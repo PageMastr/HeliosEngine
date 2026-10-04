@@ -107,8 +107,9 @@ Every source a registered importer claims (by extension, ASCII case ignored) has
   `DirectoryMount` already applied, made public by this work instead of a third copy being written
   (toolsfw's `.hrec` confinement has the other). A source's file name is at most 250 bytes
   (`kMaxSourceNameBytes`), so its sidecar's name fits in 255. Names that differ only in ASCII case are one
-  file on Windows: `scanMetas` reports them, `moveAsset` refuses a target another file holds in any case
-  or under a directory that exists in another spelling, and `ensureMeta` refuses to mint a GUID when a
+  file on Windows: `scanMetas` reports them, `moveAsset` refuses a target that another file holds in any
+  case of any component, or whose directory exists only in another spelling (a move between two spellings
+  that already exist is allowed, since it merges them), and `ensureMeta` refuses to mint a GUID when a
   sidecar exists in another case (on Windows that sidecar is the file's own and is used) or when one of
   the path's directories does (one directory on Windows, two on Linux). Every string in a sidecar must be
   UTF-8, so a sidecar that is written always loads.

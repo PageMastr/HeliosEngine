@@ -3,7 +3,7 @@
 `helios-schemac` compiles `.hschema` files into C++ (types, reflection, codecs), Go (types and a
 byte-identical codec), Luau glue (scriptlib bindings, `.d.luau` declarations, fuel defaults),
 PostgreSQL DDL (table snapshots and goose migration stubs), replication descriptors with full-state
-codecs, and a machine-readable schema description.
+codecs, a lint report, and a machine-readable schema description.
 It implements ADR-004.
 
 **The normative specification is [docs/plan/02-engine-runtime.md §3](../../docs/plan/02-engine-runtime.md#3-schema-and-reflection-normative)**
@@ -29,10 +29,11 @@ APIs) and lists what is not implemented yet.
 | `luau` | Implemented for `scriptlib`s: the C++ call glue on engine/script's `Binder` with the fuel charges, binding ids from the lock, `schema.d.luau` and `fuel_costs.defaults.json` ([Generated Luau](#generated-luau)). Tagged-userdata glue for components and records (`@script` fields) is WP-1.6's |
 | `sql` | Implemented for structs marked `@sql(schema="svc_<service>")`: a PostgreSQL snapshot and a goose migration stub diffed against the baseline lock, per service schema ([Generated SQL](#generated-sql)) |
 | `repl` | Implemented for Phase 0 (04 §11.3: descriptors, full state): `ComponentRepDesc` tables with quantizers, typed full-state codecs, rpc and event tables and a protocol hash per file ([Generated replication](#generated-replication)). Change masks, deltas and variable-size fields are WP-1.10 |
-| `proto`, `editor`, `records`, `lint`, `docs` | Planned; `--emit <name>` fails with exit code 2 "not yet implemented" |
+| `lint` | Implemented: the size-budget lints and a report of what every lint checked, the SEC-1 classification of client→server rpcs and every finding ([Lint report](#lint-report)); the rule lints below already fail every compilation |
+| `proto`, `editor`, `records`, `docs` | Planned; `--emit <name>` fails with exit code 2 "not yet implemented" |
 
-The lints of the planned `lint` emitter (AAA-SEC-1, AAA-SEC-4, ledger/persist, keyed lists,
-naming) already run on every compilation.
+The rule lints (AAA-SEC-1, AAA-SEC-4, ledger/persist, keyed lists, naming, script fuel) run on every
+compilation; `--emit lint` adds the size budgets and the report.
 
 ## Quick start
 
@@ -67,7 +68,8 @@ helios-schemac -I schemas --lock schemas/schema.lock.jsonc --emit cpp,go,json \
 | `--lock <file>` | Schema lock (created if missing, updated in place). Without it ids are per-run (warning) |
 | `--check-lock` | Fail (exit 1) instead of updating an out-of-date lock (CI) |
 | `--allow-default-change` | Accept changed explicit defaults (they are part of the wire contract) |
-| `--emit cpp,go,json,luau,sql,repl` | Generators (default `cpp`; `repl` writes next to the C++ output) |
+| `--emit cpp,go,json,luau,sql,repl,lint` | Generators (default `cpp`; `repl` writes next to the C++ output) |
+| `--lint-out <file>` | Lint report of `--emit lint` (default `schema.lint.json`) |
 | `--cpp-out`, `--go-out`, `--go-package`, `--json-out`, `--luau-out`, `--sql-out` | Output locations (`--luau-out`: `schema.d.luau` and `fuel_costs.defaults.json`; the Luau glue goes to `--cpp-out`. `--sql-out`: `<schema>/schema.sql` and `<schema>/migration.sql`) |
 | `--sql-baseline <lock>` | Lock the SQL migration stub starts from (default: `--lock` as it was before this run) |
 | `--samples` | Also emit `<file>.samples.gen.h` (deterministic sample values shared with the Go test) |
@@ -197,7 +199,7 @@ and argument count; unknown attributes are warnings with a "did you mean" hint. 
 | `@sql(schema="svc_<service>"[, table=])`, `@key` | structs only; a PostgreSQL table for `--emit sql` ([Generated SQL](#generated-sql)); `@store(checkpoint)` is never a table; ledger data only in `svc_ledger` and only ledger data there |
 | `@server_only`, `server {}`, `@opaque` | **AAA-SEC-4**: a shared field may not reference a server-only type unless `@opaque` |
 | `@table`, `@exclusive`/`@acyclic`/`@target`, `@client`/`@server` | only on records, relations, viewmodels respectively |
-| `@range(min, max)`, `@step`, `@unit`, `@max(n)`, `@normalized`, `@asset` | numeric/vector/container/AssetRef field checks; typed payloads in TypeInfo (`attrs::Range`, …) |
+| `@range(min, max)`, `@step`, `@unit`, `@max(n)`, `@normalized`, `@asset` | numeric/vector/container/AssetRef field checks (`@max`: elements of a container, bytes of a string, `Name` or text builtin, and bytes of a `TagSet`'s encoded tags); typed payloads in TypeInfo (`attrs::Range`, …) |
 | `@editor(category=, widget=, order=)` | named arguments only |
 | `@keyed` / `@keyed(field)` | list of structs; the key field must be a valid key type |
 | `@was("old", …)` | field or type rename (see the lock); readers accept the old JSON key |
@@ -432,8 +434,8 @@ auto vm = ScriptVm::create(config, [&](Binder& b) {       // config.profile = Ho
   - Every conversion reads tables raw (`lua_rawgetfield`/`lua_rawgeti`), so no metamethod or other Luau
     code runs inside a binding.
   - `@max` is enforced wherever sema accepts it, on the raw value before anything is converted. That
-    covers string (bytes), list and set (elements) parameters and the fields of struct parameters,
-    recursively. Results are checked the same way: the fn's `@max` and struct fields' `@max`.
+    covers string and text builtin (bytes), list and set (elements) parameters and the fields of struct
+    parameters, recursively. Results are checked the same way: the fn's `@max` and struct fields' `@max`.
   - **Per-call budget.** One call converts at most `glueLimits.maxValues` values (8,192: every number,
     string, table and element counts, a `nil` element of a `T?` list included, so a table referenced
     from many places costs once per reference) and `glueLimits.maxStringBytes` string bytes
@@ -625,6 +627,71 @@ to the C++ output for every generated file. The runtime is `helios/reflect/repl.
   a wire change. If WP-1.10's rpc validation (SEC-1) rejects arguments outside `@range`, it hashes the
   bound then, as `@max` is.
 
+## Lint report
+
+`--emit lint` (02 §3.5: "SEC-1/SEC-4, ledger/persist, keyed lists, naming, size budgets"; for CI):
+
+- **Size budgets** are warnings, printed like any diagnostic with the rule id in brackets. `--Werror`
+  makes them errors.
+  - `size.unbounded`: a `string`, `Name`, text builtin (`LocString`, `TagQuery`, `HxlExpr`: strings on
+    the wire, which take `@max(n)` bytes like `string`), `TagSet`, `list`, `set`, keyed list or `map`
+    needs `@max(n)` when it is network input. That means it is reachable from rpc arguments or `-> T`
+    results (top-level and service rpcs: the result of a server→client rpc is the client's reply),
+    events, messages, or the replicated fields of components, through struct and variant fields.
+    Otherwise one peer could make the receiver allocate at will. A struct reached from several network
+    types, or a `message` that is both network input and another one's field type, is reported once
+    (worded for the shallowest depth). Service rpc arguments are named after the rpc
+    (`Bank.Balance.currency`). `@max` bounds a field's own length or count only, so an element that
+    would need a bound but cannot carry one is a finding too: a string, `Name`, text builtin, `TagSet` or
+    container inside a `list`, `set`, `map` (keys included) or `T[N]`, such as `string[4]`,
+    `list<string>`, `map<string, u8>` or `list<list<i16>>`. Hold such elements in a struct with a
+    bounded field. An rpc result that is itself a string or container cannot carry `@max` either:
+    return a struct with a bounded field. `T[N]` needs no `@max` (its count is fixed); its elements are
+    checked like any container's. Service rpcs (backend calls, 05) and NATS `message`s count as network
+    input too, which is conservative.
+  - `size.unreliable`: the worst-case tagged payload of an unreliable rpc, of its result and of an
+    `@unreliable` event (EVENT_U: fire-and-forget FX, 04 §4.6) fits one message on an unreliable
+    channel: 1,186 B, engine/net's `wire::maxPayloadFor(Channel::Latest, wire::kMaxPacketPayload)`
+    (the 1,200 B netcode payload less reliable's 9 B header and the message's own header, 04 §2.1;
+    EVENT_U allows 1,188 B), since `Connection::send` refuses a larger message
+    rather than fragment it. `schemac_tests` pins the number to `wire.h`. The worst case counts tags,
+    length prefixes, 10-byte varints and `@max` bytes per string and elements per container, saturating
+    rather than wrapping, and is computed once per type, so shared struct graphs stay linear. A list,
+    set or map entry is counted at 22 B over its contents, which covers a list or set element's tag
+    (at most 5 B for a 32-bit field id) and a map entry's tag, length varint and two inner tags. A
+    keyed-list entry is counted as its tag (5 B), its length varint (2 B from 128 B), its `{1: Guid}`
+    key (18 B) and its value's tag (1 B): a flat 22 B under-counted it once the field id is 16 or more
+    and the entry 128 B or more (PR #35's round 3). 02 §3.7 sends rpcs bit-packed, which
+    is never larger than the tagged form, so this budget is an upper bound. `@max(n)` on a `TagSet`
+    bounds its encoded tags (a LEN message of `{1: tag}` entries) to n bytes, as on a string, so its
+    worst case is exact. **Not covered yet (WP-1.10):** reliable gameplay rpcs and events (EVENT_R)
+    have the same one-message limit (04 §2.2: reliable fragmentation serves only CONTROL, and
+    `channel.h` does not mark EVENT_R jumbo), and WP-1.10's rpc and event headers will come out of the budget;
+    WP-1.10, which defines both, owns extending the check to them.
+- **Gate.** The CTest `lint_schemac_size_gameplay` (label `lint`, so every CI test job runs it) runs
+  `--emit lint --Werror --check-lock` over `schemas/gameplay`, the schemas compiled into the engine:
+  a size finding there fails CI. `schemas/sample` keeps known findings, pinned by the corpus golden
+  `tests/golden/corpus/sample/schema.lint.json.expected`, and `lint_schemac_size_fixture_sample` runs
+  the same command over it and must fail with a `[size.unbounded]` error, so a gate that stops
+  reporting fails as well. A new production schema directory adds its own gate.
+- **Report** (`--lint-out`, canonical JSON):
+  - `checked`: counts per rule (rpcs, client→server rpcs, fields under the SEC-4 check, ledger
+    types, keyed lists, scriptlib fns with charges, fields and rpc results under `size.unbounded`, each
+    once however many network types reach it, unreliable rpcs, `@unreliable` events);
+  - `clientToServer`: every client→server rpc with its `@ratelimit`, `@intent` and reliability.
+    This is AAA-SEC-1's "every client→server message is classified", and a compilation fails before
+    the report if one is missing;
+  - `findings`: every finding with rule id, include-relative file, line, column and message, sorted
+    by the printed file, line and column (as `clientToServer` is by the printed rpc name). Other
+    compiler warnings, such as a missing `--lock`, appear under rule `schemac`, also when `--Werror`
+    made them errors. `files` is sorted too, so the report does not depend on the command line's
+    order or the checkout's location.
+  - A run that fails, for example on a size finding under `--Werror`, still writes the report (the
+    other outputs are not written), so CI keeps the report of a failing gate. A run that fails before
+    the lint pass (a schema error, or under `--Werror` a sema warning such as naming) has no report
+    and removes an older one, so CI never keeps a stale report as this run's; its diagnostics are on
+    stderr.
+
 ## CMake: `helios_schema()`
 
 ```cmake
@@ -694,7 +761,11 @@ the signatures `--emit luau` rejects. PR #22's review round 1 added: the per-cal
 Names never interned and sets of names in lexical order, `@max` on string parameters, struct fields and
 results, exact `T[N]`, exact integers up to 2⁵³ − 1, finite `f32`, and realm checks against the host
 profile. 22 mutants of the generator (the reviewer's 11 and 11 more) are each killed by a behavioural
-case. `test_repl.cpp` runs the generated replication code of the golden
+case. `test_lint.cpp` covers both size budgets (what counts as network input, `server {}` fields,
+`T[N]`, one report per struct or message, service rpc argument names, `@unreliable` events, `TagSet`
+bytes, the exact worst case against 1,186 B), the report's positions and SEC-1 table, and `--Werror`
+(the warnings it promotes stay in the report; `test_cli.cpp` checks that a run failing before the lint
+pass removes an older report). `test_repl.cpp` runs the generated replication code of the golden
 fixture and the sample schemas: descriptors against the schema and the `TypeInfo` (ids, offsets,
 change-mask indices), full-state round trips within each quantizer's precision (and frame-cell at 1/256 m,
 range and raw fields re-encoding to the same bits), every truncated prefix and random input rejected cleanly, an undeclared enum value, the rpc
@@ -751,7 +822,7 @@ server as `nobody` when started as root, and is not registered on Windows or whe
 
 Plan-Rev: 12
 
-Written to plan revision 12 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau`, `sql` and `repl` so far), after being
+Written to plan revision 12 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau`, `sql`, `repl` and `lint`), after being
 reconciled by hand with revision 6 on 2026-09-25 under `docs/plan/09-roadmap-and-process.md`
 §5.10.2 D7. Revisions 7–12 changed no anchor of this package. No conformance delta is open; see
 §5.10.4 (c) there.

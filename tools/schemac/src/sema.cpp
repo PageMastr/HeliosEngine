@@ -1412,12 +1412,17 @@ private:
             } else if (a.name == "max") {
                 u64 n = 0;
                 const Type* t = f.type->kind == TypeKind::Optional ? f.type->element : f.type;
+                // Text builtins are strings on the wire, so they take a byte bound like string.
+                const bool text = t->kind == TypeKind::Builtin &&
+                                  (t->builtin == Builtin::LocString || t->builtin == Builtin::TagQuery || t->builtin == Builtin::HxlExpr);
                 const bool sized = t->isContainer() || (t->kind == TypeKind::Prim && (t->prim == Prim::String || t->prim == Prim::Name)) ||
-                                   (t->kind == TypeKind::Builtin && t->builtin == Builtin::TagSet);
+                                   (t->kind == TypeKind::Builtin && t->builtin == Builtin::TagSet) || text;
                 if (!parseUnsigned(a.args[0].value, n) || n == 0) {
                     D.error(a.loc, "@max needs a positive integer");
                 } else if (!sized) {
-                    D.error(a.loc, std::format("@max needs a list, set, map or string field, '{}' is '{}'", f.name, f.type->signature));
+                    D.error(a.loc, std::format("@max needs a list, set, map, string, Name, TagSet or text (LocString, TagQuery, "
+                                               "HxlExpr) field, '{}' is '{}'",
+                                               f.name, f.type->signature));
                 }
             } else if (a.name == "editor") {
                 for (const AttrArg& arg : a.args) {

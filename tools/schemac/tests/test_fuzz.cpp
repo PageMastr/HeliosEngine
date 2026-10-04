@@ -61,6 +61,7 @@ TEST_CASE("fuzz: mutated schemas produce diagnostics, never crashes") {
         options.emitLuau = true;
         options.emitSql = true;
         options.emitRepl = true;
+        options.emitLint = true;
         options.samples = true;
         std::unique_ptr<Compiled> c;
         if (i % 2 == 0) {

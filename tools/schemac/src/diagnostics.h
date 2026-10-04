@@ -25,6 +25,7 @@ struct Diagnostic {
     SourceLoc loc;
     std::string message;
     std::vector<Diagnostic> notes;
+    bool promoted = false; ///< a warning that setWarningsAsErrors() made an error
 };
 
 class DiagnosticEngine {

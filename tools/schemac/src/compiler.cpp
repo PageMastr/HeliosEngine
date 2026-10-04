@@ -383,6 +383,9 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
     if (options.emitRepl) {
         for (OutputFile& o : generateRepl(S, options, diags)) result.outputs.push_back(std::move(o));
     }
+    if (options.emitLint) { // last: the report lists every warning of this compilation
+        for (OutputFile& o : generateLint(S, options, diags)) result.outputs.push_back(std::move(o));
+    }
     result.ok = !diags.hasErrors();
     return result;
 }

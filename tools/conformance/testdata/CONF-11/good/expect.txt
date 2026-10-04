@@ -2,5 +2,5 @@
 # Level sets applied in cmake/HeliosIsa.cmake, baseline pins (x86-64-v1 too), SSE4.2, names in comments
 # and messages, and try-compile probe flags; quoted foreach items that name a flag in a sentence, and a
 # loop variable after its loop.
-# ZIP_LISTS: only the loop variable that takes the flags list holds them (_pcg_o and _pcg_z_1 do not);
-# literal baseline levels.
+# ZIP_LISTS: only the loop variable that takes the flags list holds them (_pcg_o and _pcg_z_1 do not),
+# and every loop variable is restored when the loop ends (_pcg_a2); literal baseline levels.

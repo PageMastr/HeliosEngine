@@ -144,6 +144,11 @@ std::string htmlEscape(std::string_view s) {
 
 std::string_view backendName(Backend backend) noexcept { return backend == Backend::Vulkan ? "vulkan" : "null"; }
 
+bool isLayerValidationError(const rhi::ValidationMessage& m) noexcept {
+    return m.severity == rhi::ValidationMessage::Severity::Error && m.source == rhi::ValidationMessage::Source::Api &&
+           m.validation && (!m.id.empty() || m.idNumber != 0);
+}
+
 Result<std::unique_ptr<rhi::Device>> createTestDevice(Backend backend, bool validation, bool requireValidation,
                                                       bool validationFromEnvironment) {
     rhi::DeviceDesc desc;
@@ -161,6 +166,7 @@ Result<ValidationSelfTest> runValidationSelfTest() {
     struct Messages {
         std::mutex mutex;
         std::vector<std::string> layer;
+        std::string firstOther;  // the first error that is not a layer report, for the failure message
     };
     auto messages = std::make_shared<Messages>();
     rhi::DeviceDesc desc;
@@ -171,12 +177,18 @@ Result<ValidationSelfTest> runValidationSelfTest() {
     desc.requireValidation = true;
     desc.adapterPreference = rhi::AdapterPreference::Software;
     desc.onMessage = [messages](const rhi::ValidationMessage& m) {
-        // The layer's own reports; the RHI's messages have no "[ VUID ]" part.
-        if (m.severity != rhi::ValidationMessage::Severity::Error || m.text.find("Validation Error: [") == std::string::npos) {
-            return;
-        }
+        // The layer's own reports, told apart by structure, not by text (the text format changed
+        // between layer versions: 1.3.275 starts with "Validation Error: [ VUID ]", the SDK the
+        // first win-gpu run used does not): an error from the debug messenger, of the validation
+        // type, with a message ID. The RHI's own reports have Source::Rhi.
         std::lock_guard lock(messages->mutex);
-        messages->layer.push_back(m.text);
+        if (isLayerValidationError(m)) {
+            const std::string id = m.id.empty() ? std::to_string(m.idNumber) : m.id;
+            messages->layer.push_back(m.text.find(id) != std::string::npos ? m.text : std::format("[{}] {}", id, m.text));
+        } else if (m.severity == rhi::ValidationMessage::Severity::Error && messages->firstOther.empty()) {
+            messages->firstOther = std::format("{}{}: {}", m.source == rhi::ValidationMessage::Source::Rhi ? "RHI" : "API",
+                                               m.validation ? " validation" : "", m.text.substr(0, 200));
+        }
     };
     HELIOS_TRY_ASSIGN(std::unique_ptr<rhi::Device> device, rhi::Device::create(desc));
     ValidationSelfTest result;
@@ -205,7 +217,11 @@ Result<ValidationSelfTest> runValidationSelfTest() {
     std::lock_guard lock(messages->mutex);
     if (messages->layer.empty()) {
         return Error{ErrorCode::InvalidState,
-                     std::format("the layer reported nothing for a barrier from the wrong state ({} RHI error(s))", result.errors)};
+                     std::format("the layer reported nothing for a barrier from the wrong state: the device counted {} "
+                                 "error(s), none of them a validation message with a message ID from the debug "
+                                 "messenger{}{}",
+                                 result.errors, messages->firstOther.empty() ? "" : "; first other error: ",
+                                 messages->firstOther)};
     }
     // The goldens fail through validationErrorCount(): the layer's report must reach it too.
     if (result.errors == 0) {

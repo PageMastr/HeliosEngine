@@ -211,6 +211,10 @@ private:
 
     Result<void> createInstance();
     Result<void> selectPhysicalDevice();
+    /// Decides whether Khronos validation is really active (in the instance's call chain), whatever
+    /// the loader listed or accepted; fails when it is required but not active. After
+    /// selectPhysicalDevice().
+    Result<void> verifyValidationLayer();
     Result<void> createLogicalDevice();
     Result<void> createAllocator();
     Result<void> createBindlessHeap();
@@ -257,7 +261,9 @@ private:
     VmaAllocator m_allocator = VK_NULL_HANDLE;
     VkPipelineCache m_pipelineCache = VK_NULL_HANDLE;
     bool m_debugUtils = false;
-    bool m_validationLayer = false;
+    bool m_validationRequested = false;  ///< VK_LAYER_KHRONOS_validation was in ppEnabledLayerNames.
+    bool m_validationLayer = false;      ///< ... and is in the call chain (verifyValidationLayer).
+    std::string m_validationListing;     ///< The loader's listing of the layer: name, versions; or empty.
     bool m_surfaceExtensions = false;
     bool m_swapchainExtension = false;
     bool m_memoryBudget = false;

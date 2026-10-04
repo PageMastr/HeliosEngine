@@ -478,9 +478,24 @@ struct BreadcrumbState {
     u32 lastEnd = 0;
 };
 
+/// A message for DeviceDesc::onMessage. Identify reports by their fields, never by `text`: the
+/// Khronos layer's message format changes between versions (1.3.275 prefixes "Validation Error:
+/// [ VUID ]", the 2026 SDKs do not).
 struct ValidationMessage {
     enum class Severity : u8 { Info, Warning, Error };
+    /// Rhi: the RHI's own checks (both backends). Api: VK_EXT_debug_utils, i.e. a layer (Khronos
+    /// validation), the loader or the driver.
+    enum class Source : u8 { Rhi, Api };
     Severity severity = Severity::Info;
+    Source source = Source::Rhi;
+    /// Api only: the messenger's type had VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT (a report of
+    /// a spec violation), as opposed to general or performance messages.
+    bool validation = false;
+    /// Api only: pMessageIdName, e.g. "VUID-VkImageMemoryBarrier2-oldLayout-01197" or
+    /// "SYNC-HAZARD-WRITE-AFTER-READ"; may be empty.
+    std::string id;
+    /// Api only: messageIdNumber (the Khronos layer's hash of `id`); 0 when not given.
+    i32 idNumber = 0;
     std::string text;
 };
 

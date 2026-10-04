@@ -70,10 +70,15 @@ Result<std::unique_ptr<rhi::Device>> createTestDevice(Backend backend, bool vali
 /// validationErrorCount() (what fails a golden) did not count it.
 struct ValidationSelfTest {
     std::string layer;    ///< Caps::validationLayer.
-    std::string message;  ///< First "Validation Error: [ ... ]" message, trimmed.
+    std::string message;  ///< First layer error as "[<message ID>] <text>", trimmed.
     u64 errors = 0;
 };
 Result<ValidationSelfTest> runValidationSelfTest();
+
+/// True for an error the Khronos layer (or another layer) reported through the debug messenger:
+/// Source::Api, the validation message type, and a message ID (name or number). Decided by the
+/// message's fields, never its text, whose format differs between layer versions. Pure.
+bool isLayerValidationError(const rhi::ValidationMessage& message) noexcept;
 
 /// Runs one scene on `device`: init, render twice, compare with the golden (or update it), write
 /// artifacts and `<out>/<backend>/<scene>.json`.

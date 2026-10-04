@@ -19,6 +19,7 @@ constexpr u32 kTargetStorageImages = 16384;
 constexpr u32 kTargetStorageBuffers = 65536;
 constexpr u32 kTargetSamplers = 128;
 constexpr u64 kBreadcrumbBytes = kQueueCount * 2 * sizeof(u32);
+constexpr const char* kValidationLayerName = "VK_LAYER_KHRONOS_validation";
 
 // volkLoadInstanceTable() writes volk's global vkGetDeviceProcAddr, which volkLoadDeviceTable()
 // then reads: serialize table loading across devices created on different threads.
@@ -236,6 +237,7 @@ VulkanDevice::VulkanDevice(const DeviceDesc& desc) : m_desc(desc) {
 Result<void> VulkanDevice::init() {
     HELIOS_TRY(createInstance());
     HELIOS_TRY(selectPhysicalDevice());
+    HELIOS_TRY(verifyValidationLayer());
     HELIOS_TRY(createLogicalDevice());
     HELIOS_TRY(createAllocator());
     HELIOS_TRY(createBindlessHeap());
@@ -267,23 +269,26 @@ Result<void> VulkanDevice::createInstance() {
 
     std::vector<const char*> enabledLayers;
     std::vector<const char*> enabledExts;
+    const auto layer = std::find_if(layers.begin(), layers.end(), [](const VkLayerProperties& l) {
+        return std::strcmp(l.layerName, kValidationLayerName) == 0;
+    });
+    if (layer != layers.end()) {
+        // Reported so tests can log which layer checked them (helios-rendertest, CI logs), once
+        // verifyValidationLayer() has seen it in the call chain.
+        m_validationListing = std::format("{} {} (implementation {})", layer->layerName,
+                                          versionString(layer->specVersion), layer->implementationVersion);
+    }
     if (m_desc.validation || m_desc.requireValidation) {
-        const auto layer = std::find_if(layers.begin(), layers.end(), [](const VkLayerProperties& l) {
-            return std::strcmp(l.layerName, "VK_LAYER_KHRONOS_validation") == 0;
-        });
         if (layer != layers.end()) {
-            enabledLayers.push_back("VK_LAYER_KHRONOS_validation");
-            m_validationLayer = true;
-            // Reported so tests can log which layer checked them (helios-rendertest, CI logs).
-            m_caps.validationLayer = std::format("{} {} (implementation {})", layer->layerName,
-                                                 versionString(layer->specVersion), layer->implementationVersion);
+            enabledLayers.push_back(kValidationLayerName);
+            m_validationRequested = true;
         } else if (m_desc.requireValidation) {
             return Error{ErrorCode::Unsupported, "VK_LAYER_KHRONOS_validation is required but not installed"};
         } else {
             HELIOS_LOG_INFO(LogRhi, "Vulkan validation requested but VK_LAYER_KHRONOS_validation is not installed");
         }
     }
-    if ((m_desc.debugNames || m_validationLayer) && hasExtension(exts, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) &&
+    if ((m_desc.debugNames || m_validationRequested) && hasExtension(exts, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) &&
         hasFlag(m_desc.capsMask, CapBit::DebugUtils)) {
         enabledExts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         m_debugUtils = true;
@@ -395,6 +400,69 @@ Result<void> VulkanDevice::selectPhysicalDevice() {
     m_vki.vkGetPhysicalDeviceQueueFamilyProperties(m_physical, &familyCount, nullptr);
     m_queueFamilies.resize(familyCount);
     m_vki.vkGetPhysicalDeviceQueueFamilyProperties(m_physical, &familyCount, m_queueFamilies.data());
+    return {};
+}
+
+// The loader can list VK_LAYER_KHRONOS_validation and accept it in ppEnabledLayerNames, yet leave it
+// out of the instance's call chain: VK_LOADER_LAYERS_DISABLE skips an application-requested layer
+// silently, and a loader settings file (Vulkan Configurator) can keep the layer listed while its
+// "auto" entry is filtered. It can also put the layer into every instance unasked (VK_INSTANCE_LAYERS,
+// VK_LOADER_LAYERS_ENABLE, a settings file's "on"). Only the layer itself can answer: it reports itself
+// through vkGetPhysicalDeviceToolProperties (core in 1.3, VK_EXT_tooling_info) when, and only when, it
+// is in the chain. The loader's own list of active layers (vkEnumerateDeviceLayerProperties) is named
+// in the error for diagnosis.
+Result<void> VulkanDevice::verifyValidationLayer() {
+    std::string tool;
+    if (m_vki.vkGetPhysicalDeviceToolProperties) {
+        u32 count = 0;
+        if (m_vki.vkGetPhysicalDeviceToolProperties(m_physical, &count, nullptr) == VK_SUCCESS && count > 0) {
+            std::vector<VkPhysicalDeviceToolProperties> tools(count,
+                                                              {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TOOL_PROPERTIES});
+            const VkResult r = m_vki.vkGetPhysicalDeviceToolProperties(m_physical, &count, tools.data());
+            if (r == VK_SUCCESS || r == VK_INCOMPLETE) {
+                for (u32 i = 0; i < count && i < tools.size(); ++i) {
+                    if ((tools[i].purposes & VK_TOOL_PURPOSE_VALIDATION_BIT) &&
+                        std::strcmp(tools[i].layer, kValidationLayerName) == 0) {
+                        tool = std::format("\"{}\" {}", tools[i].name, tools[i].version);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if (!tool.empty()) {
+        m_validationLayer = true;
+        const std::string listing =
+            m_validationListing.empty() ? std::string(kValidationLayerName) : m_validationListing;
+        m_caps.validationLayer = std::format("{}; in the call chain as {}", listing, tool);
+        if (!m_validationRequested) {
+            m_caps.validationLayer += "; enabled by the loader, not requested";
+            HELIOS_LOG_INFO(LogRhi, "the loader enabled {} without a request (VK_INSTANCE_LAYERS, "
+                                    "VK_LOADER_LAYERS_ENABLE or a loader settings file)", kValidationLayerName);
+        }
+        return {};
+    }
+    m_validationLayer = false;
+    if (!m_validationRequested) return {};
+    std::string active;
+    u32 count = 0;
+    if (m_vki.vkEnumerateDeviceLayerProperties &&
+        m_vki.vkEnumerateDeviceLayerProperties(m_physical, &count, nullptr) == VK_SUCCESS) {
+        std::vector<VkLayerProperties> layers(count);
+        if (count > 0 && m_vki.vkEnumerateDeviceLayerProperties(m_physical, &count, layers.data()) >= 0) {
+            for (u32 i = 0; i < count && i < layers.size(); ++i) {
+                active += (active.empty() ? "" : ", ") + std::string(layers[i].layerName);
+            }
+        }
+    }
+    const std::string why = std::format(
+        "{} is listed and vkCreateInstance accepted it, but it is not in the instance's call chain: it did not "
+        "report itself through vkGetPhysicalDeviceToolProperties (the loader's active layers: {}). The loader "
+        "filtered it (VK_LOADER_LAYERS_DISABLE, a loader settings file from Vulkan Configurator) or its manifest "
+        "names another library",
+        kValidationLayerName, active.empty() ? std::string("none") : active);
+    if (m_desc.requireValidation) return Error{ErrorCode::Unsupported, why};
+    HELIOS_LOG_WARN(LogRhi, "{}; running without validation", why);
     return {};
 }
 
@@ -946,27 +1014,35 @@ void VulkanDevice::setObjectName(VkObjectType type, u64 handle, std::string_view
 void VulkanDevice::reportError(std::string message) {
     m_validationErrors.fetch_add(1, std::memory_order_relaxed);
     HELIOS_LOG_ERROR(LogRhi, "{}", message);
-    if (m_desc.onMessage) m_desc.onMessage(ValidationMessage{ValidationMessage::Severity::Error, std::move(message)});
+    if (m_desc.onMessage) {
+        m_desc.onMessage(ValidationMessage{.severity = ValidationMessage::Severity::Error, .text = std::move(message)});
+    }
 }
 
 VKAPI_ATTR VkBool32 VKAPI_CALL VulkanDevice::debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
-                                                           VkDebugUtilsMessageTypeFlagsEXT,
+                                                           VkDebugUtilsMessageTypeFlagsEXT types,
                                                            const VkDebugUtilsMessengerCallbackDataEXT* data,
                                                            void* userData) {
     auto* self = static_cast<VulkanDevice*>(userData);
-    const char* text = data && data->pMessage ? data->pMessage : "(no message)";
     ValidationMessage msg;
-    msg.text = text;
+    msg.source = ValidationMessage::Source::Api;
+    msg.validation = (types & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) != 0;
+    // The message ID travels in its own fields: newer Khronos layers no longer repeat it in pMessage.
+    if (data && data->pMessageIdName) msg.id = data->pMessageIdName;
+    if (data) msg.idNumber = data->messageIdNumber;
+    msg.text = data && data->pMessage ? data->pMessage : "(no message)";
+    const std::string id = msg.id.empty() || msg.text.find(msg.id) != std::string::npos ? std::string()
+                                                                                         : "[" + msg.id + "] ";
     if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
         msg.severity = ValidationMessage::Severity::Error;
         self->m_validationErrors.fetch_add(1, std::memory_order_relaxed);
-        HELIOS_LOG_ERROR(LogRhi, "[Vulkan] {}", text);
+        HELIOS_LOG_ERROR(LogRhi, "[Vulkan] {}{}", id, msg.text);
     } else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
         msg.severity = ValidationMessage::Severity::Warning;
-        HELIOS_LOG_WARN(LogRhi, "[Vulkan] {}", text);
+        HELIOS_LOG_WARN(LogRhi, "[Vulkan] {}{}", id, msg.text);
     } else {
         msg.severity = ValidationMessage::Severity::Info;
-        HELIOS_LOG_DEBUG(LogRhi, "[Vulkan] {}", text);
+        HELIOS_LOG_DEBUG(LogRhi, "[Vulkan] {}{}", id, msg.text);
     }
     if (self->m_desc.onMessage) self->m_desc.onMessage(msg);
     return VK_FALSE;

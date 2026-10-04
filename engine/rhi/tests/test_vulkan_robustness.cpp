@@ -8,6 +8,8 @@
 
 #include <atomic>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -363,6 +365,62 @@ TEST_CASE("gpu: a destroyed texture's bindless slot falls back to the default te
     CHECK(center[1] == 0);
     CHECK(center[2] == 255);
     CHECK(dev->validationErrorCount() == 0);
+}
+
+TEST_CASE("gpu: validation-layer reports are identified by their fields, not their text") {
+    // The first hardware run's SDK prints messages without 1.3.275's "Validation Error: [ VUID ]"
+    // prefix, so code that matched the text saw no layer report at all. The message ID and type
+    // travel in ValidationMessage's fields; the RHI's own reports are Source::Rhi.
+    struct Seen {
+        std::mutex mutex;
+        std::vector<ValidationMessage> errors;
+    };
+    auto seen = std::make_shared<Seen>();
+    DeviceDesc desc;
+    desc.onMessage = [seen](const ValidationMessage& m) {
+        if (m.severity != ValidationMessage::Severity::Error) return;
+        std::lock_guard lock(seen->mutex);
+        seen->errors.push_back(m);
+    };
+    auto dev = rhitest::createGpuDevice(desc);
+    if (!dev) return;
+    rhitest::QuietRhiLog quiet;
+    // An RHI report: recording into a list that has ended.
+    CommandList* ended = dev->acquireCommandList(Queue::Graphics, "Ended");
+    ended->end();
+    ended->insertLabel("after end");
+    {
+        std::lock_guard lock(seen->mutex);
+        REQUIRE(seen->errors.size() == 1);
+        CHECK(seen->errors[0].source == ValidationMessage::Source::Rhi);
+        CHECK_FALSE(seen->errors[0].validation);
+        CHECK(seen->errors[0].id.empty());
+        seen->errors.clear();
+    }
+    REQUIRE(dev->submit(Queue::Graphics, {&ended, 1}).ok());
+    if (!dev->caps().has(CapBit::ValidationLayer)) {
+        MESSAGE("skipping the layer half: Khronos validation is not active (" << dev->caps().validationLayer << ")");
+        return;
+    }
+    // Only a layer in the call chain sets the cap (it reported itself as a validation tool).
+    CHECK(dev->caps().validationLayer.find("in the call chain") != std::string::npos);
+    // A layer report: a barrier from the wrong state, which the Vulkan RHI does not track.
+    const TextureH tex = dev->createTexture(TextureDesc::tex2D(Format::RGBA8Unorm, 16, 16,
+                                                               TextureUsage::TransferDst | TextureUsage::Sampled, "Seeded"))
+                             .value();
+    CommandList* cmd = dev->acquireCommandList(Queue::Graphics, "Seeded");
+    cmd->barrier(Barrier::textureState(tex, ResourceState::Undefined, ResourceState::CopyDest));
+    cmd->barrier(Barrier::textureState(tex, ResourceState::ShaderResource, ResourceState::CopySource));
+    REQUIRE(dev->submit(Queue::Graphics, {&cmd, 1}).ok());
+    REQUIRE(dev->waitIdle().ok());
+    dev->destroy(tex);
+    std::lock_guard lock(seen->mutex);
+    REQUIRE_FALSE(seen->errors.empty());
+    const ValidationMessage& m = seen->errors.front();
+    CHECK(m.source == ValidationMessage::Source::Api);
+    CHECK(m.validation);
+    CHECK_MESSAGE(m.id.starts_with("VUID-"), m.id);
+    CHECK(m.idNumber != 0);
 }
 
 } // TEST_SUITE("gpu")

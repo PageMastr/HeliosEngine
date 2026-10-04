@@ -256,7 +256,7 @@ int cmdApply(const Context& c) {
         return kOk;
     }
     const tf::Transaction& tx = fw.log().back();
-    out(std::format("{} {} ({} op(s))\n", tx.id.toString(), tx.label, tx.ops.size()));
+    out(std::format("{} {} ({} op(s))\n", tf::printable(tx.id.toString()), tf::printable(tx.label), tx.ops.size()));
     if (!c.cl->has("no-save")) {
         auto saved = fw.saveAll();
         if (!saved) return fail(kFailed, std::format("save: {}", saved.error()));

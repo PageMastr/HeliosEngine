@@ -6,11 +6,13 @@
 // Properties: open() and every read return a Result (no crash, sanitizer report or out-of-bounds
 // access); an opened pak's entries are strictly sorted, 4 KiB aligned and inside the blob region;
 // a successful read returns exactly rawSize bytes that match the cooked hash, and reading again (into
-// a reused buffer) gives the same outcome; the re-fetch hook runs at most once per pak block (it answers Repaired, Pending
-// or Failed by block index, so every path runs); a second mount of the same bytes overlays the first.
-// Every entry is read whatever rawSize it claims: a read allocates only as its blocks decode, so
-// libFuzzer's -malloc_limit_mb catches one that allocates ahead of them.
+// a reused buffer) gives the same outcome; the re-fetch hook runs at most once per pak block (it
+// answers Repaired, Pending or Failed by block index, so every path runs); a second mount of the same
+// bytes overlays the first. Every entry is read whatever rawSize it claims: a read allocates only as
+// its blocks decode, so libFuzzer's -malloc_limit_mb catches one that allocates ahead of them (a seed
+// claims 2 GiB).
 
+#include <algorithm>
 #include <cstdlib>
 #include <memory>
 #include <vector>
@@ -155,4 +157,34 @@ void heliosFuzzSeeds(std::vector<std::vector<uint8_t>>& out) {
     std::vector<u8> truncated = out[2];
     truncated.resize(hpak::kHeaderBlockSize);
     out.push_back(std::move(truncated)); // header only
+
+    // 45 KB claiming a 2 GiB zstd asset in 8192 one-byte (garbage) blocks, with valid fields and
+    // checksums: a read fails at block 0, and -malloc_limit_mb catches one that allocates the claim.
+    {
+        using namespace hpak;
+        constexpr u32 kBlocks = static_cast<u32>(assetBlockCount(kMaxAssetSize));
+        constexpr u64 kBlob = alignUp<u64>(kBlocks, kBlobAlignment);
+        Header h;
+        h.platform = toUnderlying(asset::HpakPlatform::PcClient);
+        h.tocOffset = kHeaderBlockSize + kBlob;
+        h.assetCount = 1;
+        h.assetBlockCount = kBlocks;
+        h.pakBlockCount = static_cast<u32>(pakBlockCount(kBlob));
+        h.tocSize = tocSize(1, kBlocks, h.pakBlockCount);
+        std::vector<u8> claim(static_cast<usize>(h.tocOffset + h.tocSize), 0);
+        encodeHeader(h, std::span<u8, kHeaderBytes>(claim.data(), kHeaderBytes));
+        std::fill_n(claim.data() + kHeaderBlockSize, kBlocks, u8(0xA5));
+        asset::HpakEntry e;
+        e.id = asset::AssetId::fromGuid(guid(10));
+        e.offset = kHeaderBlockSize;
+        e.compSize = kBlocks;
+        e.rawSize = kMaxAssetSize;
+        e.blockCount = kBlocks;
+        e.codec = asset::HpakCodec::Zstd;
+        u8* toc = claim.data() + h.tocOffset;
+        encodeEntry(e, std::span<u8, kTocEntryBytes>(toc, kTocEntryBytes));
+        for (u32 k = 0; k < kBlocks; ++k) storeLE<u32>(toc + kTocEntryBytes + u64(k) * kBlockSizeBytes, 1);
+        assetpipe::resealHpak(claim);
+        out.push_back(std::move(claim));
+    }
 }

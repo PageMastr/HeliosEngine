@@ -418,7 +418,9 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
             std::string key = normalizePath(o.path);
             std::transform(key.begin(), key.end(), key.begin(), [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; });
             if (auto [it, ok] = paths.emplace(std::move(key), &o); !ok)
-                diags.error({}, std::format("two outputs would be written to '{}'{}: rename one of the schema files", o.path,
+                diags.error({}, std::format("two outputs would be written to '{}'{}: give each its own path (rename a schema file or "
+                                            "change an output option)",
+                                            o.path,
                                             it->second->path == o.path ? "" : std::format(" and '{}'", it->second->path)));
         }
     }

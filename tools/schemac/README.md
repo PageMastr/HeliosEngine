@@ -112,9 +112,10 @@ import "helios/world/frames.hschema";    // relative to this file, then to each 
   (`ship_motion`, `shipMotion`) are an error too, as they would define the same functions, and so is a
   top-level declaration named like one of them in that package (`component shipReplication` next to
   `ship.hschema`): `::pkg::shipReplication` would name the function, not the type.
-- Two outputs at one path are an error, whichever emitters write them: `--emit repl`'s header of
-  `t/ship.hschema` is `t/ship.repl.gen.h`, which is also `--emit cpp`'s header of `t/ship.repl.hschema`.
-  Paths compare without ASCII case (`t/Ship.hschema` and `t/ship.hschema` are one file on Windows).
+- Two outputs at one path are an error, whichever emitters or output options (`--json-out`) name them:
+  `--emit repl`'s header of `t/ship.hschema` is `t/ship.repl.gen.h`, which is also `--emit cpp`'s header
+  of `t/ship.repl.hschema`. Paths compare without ASCII case (`t/Ship.hschema` and `t/ship.hschema` are
+  one file on Windows).
 
 ### Declarations
 
@@ -790,7 +791,8 @@ package that name the same functions. Round 6 added `tests/repl/repl_edges.hsche
 generated `replEdgesReplication()` must compile and return its tables, and `f32` fields at `range=±0.7`,
 `±0.9` and `±3.3` up to 32 bits, whose saturated, NaN, infinite and 20,000 random values re-encode to the
 same bits; plus the emitted `f32` bound, a bound that rounds to 0, a declaration named like a generated
-function (imports included), and two outputs at one path (`.repl.gen.h`, `.luau.gen.h`, case).
+function (imports included), and two outputs at one path (`.repl.gen.h`, `.luau.gen.h`, case,
+`--json-out`).
 `engine/reflect`'s `reflect_tests` cover the quantizers: every width of smallest-three accepted by its reader and within one step when re-encoded, saturated `f32`
 range values re-encoding to the same bits with an `f32` bound (and not with 0.7), frame cells read
 back at every cell size, up to the ±4·10¹⁸-step saturation, and re-encoded to the same bits (to the

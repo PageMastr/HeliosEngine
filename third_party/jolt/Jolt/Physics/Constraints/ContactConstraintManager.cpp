@@ -840,6 +840,14 @@ JPH_INLINE ContactConstraintManager::ContactConstraint<Type1, Type2> *ContactCon
 	return constraint;
 }
 
+// Helios patch stable-order: a contact constraint's sort key hashes both bodies' stable keys (object layer, user data) and the sub shape IDs instead of the BodyIDs, so the
+// solver order does not depend on BodyIDs. inBody1 and inBody2 are in Body::sStableOrderLess order.
+static inline uint64 sStableSortKey(const Body &inBody1, const SubShapeID &inSubShapeID1, const Body &inBody2, const SubShapeID &inSubShapeID2)
+{
+	const uint64 data[4] = { inBody1.GetUserData(), (uint64(inBody1.GetObjectLayer()) << 32) | inSubShapeID1.GetValue(), inBody2.GetUserData(), (uint64(inBody2.GetObjectLayer()) << 32) | inSubShapeID2.GetValue() };
+	return HashBytes(data, uint(sizeof(data)));
+}
+
 template <EMotionType Type1, EMotionType Type2>
 void ContactConstraintManager::TemplatedGetContactsFromCache(ContactAllocator &ioContactAllocator, Body &inBody1, Body &inBody2, const CachedBodyPair &inCachedBodyPair, CachedBodyPair &outCachedBodyPair)
 {
@@ -917,8 +925,8 @@ void ContactConstraintManager::TemplatedGetContactsFromCache(ContactAllocator &i
 			&& ((Type1 == EMotionType::Dynamic && settings.mInvMassScale1 != 0.0f) // One of the bodies must have mass to be able to create a contact constraint
 				|| (Type2 == EMotionType::Dynamic && settings.mInvMassScale2 != 0.0f)))
 		{
-			// Create a new constraint
-			ContactConstraint<Type1, Type2> *constraint = CreateConstraint<Type1, Type2>(link_bodies, inBody1, inBody2, input_hash, output_handle, world_space_normal, settings, output_cm->mNumContactPoints);
+			// Create a new constraint (Helios patch stable-order: sorted by the stable key, not by the cache key's hash of BodyIDs)
+			ContactConstraint<Type1, Type2> *constraint = CreateConstraint<Type1, Type2>(link_bodies, inBody1, inBody2, sStableSortKey(inBody1, input_key.GetSubShapeID1(), inBody2, input_key.GetSubShapeID2()), output_handle, world_space_normal, settings, output_cm->mNumContactPoints);
 			if (constraint == nullptr)
 			{
 				ioContactAllocator.mErrors |= EPhysicsUpdateError::ContactConstraintsFull;
@@ -1003,9 +1011,9 @@ void ContactConstraintManager::GetContactsFromCache(ContactAllocator &ioContactA
 	// Start with not handled
 	outPairHandled = false;
 
-	// Swap bodies so that body 1 id < body 2 id
+	// Swap bodies so that body 1 comes first in Body::sStableOrderLess (Helios patch stable-order; upstream: body 1 id < body 2 id)
 	Body *body1, *body2;
-	if (inBody1.GetID() < inBody2.GetID())
+	if (Body::sStableOrderLess(inBody1, inBody2))
 	{
 		body1 = &inBody1;
 		body2 = &inBody2;
@@ -1089,9 +1097,9 @@ void ContactConstraintManager::GetContactsFromCache(ContactAllocator &ioContactA
 
 ContactConstraintManager::BodyPairHandle ContactConstraintManager::AddBodyPair(ContactAllocator &ioContactAllocator, const Body &inBody1, const Body &inBody2)
 {
-	// Swap bodies so that body 1 id < body 2 id
+	// Swap bodies so that body 1 comes first in Body::sStableOrderLess (Helios patch stable-order; upstream: body 1 id < body 2 id)
 	const Body *body1, *body2;
-	if (inBody1.GetID() < inBody2.GetID())
+	if (Body::sStableOrderLess(inBody1, inBody2))
 	{
 		body1 = &inBody1;
 		body2 = &inBody2;
@@ -1140,8 +1148,8 @@ void ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
 	JPH_ASSERT(num_contact_points == (int)inManifold.mRelativeContactPointsOn2.size());
 
 	// Reserve space for new contact cache entry
-	// Note that for dynamic vs dynamic we always require the first body to have a lower body id to get a consistent key
-	// under which to look up the contact
+	// Note that for dynamic vs dynamic we always require the first body to come first in Body::sStableOrderLess to get a consistent key under which to look up the
+	// contact (Helios patch stable-order: AddContactConstraint swaps the bodies into that order; upstream: the first body has the lower body id)
 	MKeyValue *new_manifold_kv = mWriteCache->Create(ioContactAllocator, key, key_hash, num_contact_points);
 	if (new_manifold_kv == nullptr)
 		return; // Out of cache space
@@ -1159,7 +1167,9 @@ void ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
 	settings.mIsSensor = inBody1.IsSensor() || inBody2.IsSensor();
 
 	// Get the contact points for the old cache entry
+	// Helios patch stable-order: on the first collision step of an Update, a NoCrossUpdateCache pair still finds it (persisted-contact callback) but does not warm start from it
 	const MKeyValue *old_manifold_kv = mReadCache->Find(key, key_hash);
+	const bool warm_start = !(ioContactAllocator.mFirstCollisionStep && (inBody1.GetNoCrossUpdateCache() || inBody2.GetNoCrossUpdateCache()));
 	const CachedContactPoint *ccp_start;
 	const CachedContactPoint *ccp_end;
 	if (old_manifold_kv != nullptr)
@@ -1168,10 +1178,10 @@ void ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
 		if (mContactListener != nullptr)
 			mContactListener->OnContactPersisted(inBody1, inBody2, inManifold, settings);
 
-		// Fetch the contact points from the old manifold
+		// Fetch the contact points from the old manifold (Helios patch stable-order: none without warm start)
 		const CachedManifold *old_manifold = &old_manifold_kv->GetValue();
 		ccp_start = old_manifold->mContactPoints;
-		ccp_end = ccp_start + old_manifold->mNumContactPoints;
+		ccp_end = warm_start? ccp_start + old_manifold->mNumContactPoints : ccp_start;
 
 		// Mark contact as persisted so that we won't fire OnContactRemoved callbacks
 		old_manifold->mFlags |= (uint16)CachedManifold::EFlags::ContactPersisted;
@@ -1196,8 +1206,8 @@ void ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
 		&& ((Type1 == EMotionType::Dynamic && settings.mInvMassScale1 != 0.0f) // One of the bodies must have mass to be able to create a contact constraint
 			|| (Type2 == EMotionType::Dynamic && settings.mInvMassScale2 != 0.0f)))
 	{
-		// Create a new constraint
-		ContactConstraint<Type1, Type2> *constraint = CreateConstraint<Type1, Type2>(ioActivateAndLinkBodies, inBody1, inBody2, key_hash, new_manifold_handle, inManifold.mWorldSpaceNormal, settings, num_contact_points);
+		// Create a new constraint (Helios patch stable-order: sorted by the stable key, not by the cache key's hash of BodyIDs)
+		ContactConstraint<Type1, Type2> *constraint = CreateConstraint<Type1, Type2>(ioActivateAndLinkBodies, inBody1, inBody2, sStableSortKey(inBody1, inManifold.mSubShapeID1, inBody2, inManifold.mSubShapeID2), new_manifold_handle, inManifold.mWorldSpaceNormal, settings, num_contact_points);
 		if (constraint == nullptr)
 		{
 			ioContactAllocator.mErrors |= EPhysicsUpdateError::ContactConstraintsFull;
@@ -1280,8 +1290,8 @@ void ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
 		Vec3 t1, t2;
 		constraint->GetTangents(t1, t2);
 
-		// Setup friction constraint
-		if (old_manifold_kv != nullptr)
+		// Setup friction constraint (Helios patch stable-order: from the old manifold only with warm start)
+		if (old_manifold_kv != nullptr && warm_start)
 		{
 			const CachedManifold *old_manifold = &old_manifold_kv->GetValue();
 			constraint->mFrictionConstraint1.SetTotalLambda(old_manifold->mFrictionLambda[0]);
@@ -1341,11 +1351,11 @@ void ContactConstraintManager::AddContactConstraint(ContactAllocator &ioContactA
 
 	JPH_ASSERT(inManifold.mWorldSpaceNormal.IsNormalized());
 
-	// Swap bodies so that body 1 id < body 2 id
+	// Swap bodies so that body 1 comes first in Body::sStableOrderLess (Helios patch stable-order; upstream: body 1 id < body 2 id)
 	const ContactManifold *manifold;
 	Body *body1, *body2;
 	ContactManifold temp;
-	if (inBody2.GetID() < inBody1.GetID())
+	if (Body::sStableOrderLess(inBody2, inBody1))
 	{
 		body1 = &inBody2;
 		body2 = &inBody1;
@@ -1396,11 +1406,11 @@ void ContactConstraintManager::OnCCDContactAdded(ContactAllocator &ioContactAllo
 	// The remainder of this function only deals with calling contact callbacks, if there's no contact callback we also don't need to do this work
 	if (mContactListener != nullptr)
 	{
-		// Swap bodies so that body 1 id < body 2 id
+		// Swap bodies so that body 1 comes first in Body::sStableOrderLess (Helios patch stable-order; upstream: body 1 id < body 2 id)
 		const ContactManifold *manifold;
 		const Body *body1, *body2;
 		ContactManifold temp;
-		if (inBody2.GetID() < inBody1.GetID())
+		if (Body::sStableOrderLess(inBody2, inBody1))
 		{
 			body1 = &inBody2;
 			body2 = &inBody1;
@@ -1484,13 +1494,12 @@ void ContactConstraintManager::SortContacts(uint32 *ioConstraintOffsetBegin, uin
 		if (lhs.mSortKey != rhs.mSortKey)
 			return lhs.mSortKey < rhs.mSortKey;
 
-		// If they're equal we use the IDs of body 1 to order
+		// If they're equal we order by body 1, then by body 2 (Helios patch stable-order: in Body::sStableOrderLess order, upstream: by BodyID)
 		if (lhs.mBody1 != rhs.mBody1)
-			return lhs.mBody1->GetID() < rhs.mBody1->GetID();
+			return Body::sStableOrderLess(*lhs.mBody1, *rhs.mBody1);
 
-		// If they're still equal we use the IDs of body 2 to order
 		if (lhs.mBody2 != rhs.mBody2)
-			return lhs.mBody2->GetID() < rhs.mBody2->GetID();
+			return Body::sStableOrderLess(*lhs.mBody2, *rhs.mBody2);
 
 		JPH_ASSERT(inLHS == inRHS, "Hash collision, ordering will be inconsistent");
 		return false;
@@ -1531,14 +1540,15 @@ void ContactConstraintManager::FinalizeContactCacheAndCallContactPointRemovedCal
 bool ContactConstraintManager::WereBodiesInContact(const BodyID &inBody1ID, const BodyID &inBody2ID) const
 {
 	// The body pair needs to be in the cache and it needs to have a manifold (otherwise it's just a record indicating that there are no collisions)
+	// Helios patch stable-order: the pair is stored in Body::sStableOrderLess order, which the IDs alone do not give, so look it up both ways
 	const ManifoldCache &read_cache = mCache[mCacheWriteIdx ^ 1];
-	BodyPair key;
-	if (inBody1ID < inBody2ID)
-		key = BodyPair(inBody1ID, inBody2ID);
-	else
+	BodyPair key(inBody1ID, inBody2ID);
+	const BPKeyValue *kv = read_cache.Find(key, key.GetHash());
+	if (kv == nullptr)
+	{
 		key = BodyPair(inBody2ID, inBody1ID);
-	uint64 key_hash = key.GetHash();
-	const BPKeyValue *kv = read_cache.Find(key, key_hash);
+		kv = read_cache.Find(key, key.GetHash());
+	}
 	return kv != nullptr && kv->GetValue().mFirstCachedManifold != ManifoldMap::cInvalidHandle;
 }
 

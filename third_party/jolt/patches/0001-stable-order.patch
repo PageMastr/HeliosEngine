@@ -1,0 +1,389 @@
+Helios patch 0001 stable-order (Jolt v5.6.0; 02 §7.1, 04 §10.2; WP-0.9, RT-03)
+
+No simulation result may depend on a BodyID (02 §7.1). A BodyID is a slot index that follows each
+PhysicsSystem's add and remove history, so a client predictor, the cell and a replay hold the same bodies
+under different BodyIDs, and stock Jolt orders solver work by BodyID: a body touching several others solved
+its contacts in a different Gauss-Seidel order on each host and diverged in the low bits. This patch orders
+by each body's stable key instead: Body::sStableOrderLess compares (object layer, user data), with the
+BodyID only as the last tie-break for equal keys. Helios stores the key (EntityId, packed TileKey or PCG
+instance key) in the body's user data, and (layer, key) is unique within a PhysicsSystem.
+
+  1. PhysicsSystem::ProcessBodyPair makes the stable-first body "body 1" when both bodies have the same
+     motion type (upstream: the lower BodyID), so collision detection runs in the same space everywhere.
+  2. ContactConstraintManager stores a pair in stable order (GetContactsFromCache, AddBodyPair,
+     AddContactConstraint, OnCCDContactAdded; upstream: lower BodyID first). That order is also each
+     contact constraint's body 1 / body 2 and the order ContactListener callbacks see. The caches stay
+     keyed by BodyIDs (they are lookups, not orders); WereBodiesInContact, which only has the IDs, looks
+     the pair up both ways.
+  3. A contact constraint's sort key hashes both bodies' (layer, user data) and sub-shape IDs, instead of
+     the cache key's hash of BodyIDs, and SortContacts breaks ties with Body::sStableOrderLess.
+  4. CharacterVirtual orders its contacts by B's (object layer, user data) (upstream: BodyID, then the
+     CharacterID from a global counter); CharacterContact gains mObjectLayerB for it.
+  5. Body::EFlags::NoCrossUpdateCache (bit 7, the last free flag bit; Body::SetNoCrossUpdateCache): on the
+     first collision step of each PhysicsSystem::Update, a pair involving a flagged body skips the
+     body-pair cache (recomputes its manifold) and starts its impulses at zero; the old manifold is still
+     found, so persisted-contact callbacks are unchanged, and later collision steps of the same Update use
+     the cache as usual. Helios sets it on ShipHull and Vehicle bodies, whose predicted step must be a
+     function of their state: a rollback restores bodies, never the cell's contact cache.
+
+Not covered, because Helios uses neither: the CCD (LinearCast) resolve order (JobResolveCCDContacts sorts
+by fraction, then BodyID) and soft bodies. Also not covered: CharacterVirtual's sweeps
+(GetFirstContactForSweep) keep the first of several hits at exactly the same fraction, in broadphase
+order (engine/physics/README.md lists it for WP-1.5). JPH_CROSS_PLATFORM_DETERMINISTIC and
+PhysicsSettings::mDeterministicSimulation stay on; this patch only replaces the order they sort by.
+
+Rebase notes: grep upstream for new BodyID comparisons in Physics/ (`GetID() <`, `mBodyA <`, `mBodyB <`)
+and for new users of the ContactConstraintManager cache key order; every pair order must go through
+Body::sStableOrderLess or the caches stop finding their entries. If upstream uses flag bit 7, move
+NoCrossUpdateCache to a wider flag field rather than dropping it. engine/physics' permuted test build relies
+on BodyManager's LIFO free list to reverse every pair's BodyID order (tests/scene.cpp); if that changes,
+adapt the test so the order still flips, and check that the tests still fail with this patch reverted.
+
+Upstream status: not submitted. Rebase on every Jolt bump (K10); engine/physics' `determinism:` and
+`stable-order:` tests fail if a BodyID order or the cross-Update cache comes back. Licence: MIT (Helios,
+like Jolt).
+
+diff --git a/Jolt/Physics/Body/Body.h b/Jolt/Physics/Body/Body.h
+index 3b17513..a54b1af 100644
+--- a/Jolt/Physics/Body/Body.h
++++ b/Jolt/Physics/Body/Body.h
+@@ -114,6 +114,18 @@ public:
+ 	/// Checks if the combination of this body and inBody2 should use enhanced internal edge removal
+ 	inline bool				GetEnhancedInternalEdgeRemovalWithBody(const Body &inBody2) const { return ((mFlags.load(memory_order_relaxed) | inBody2.mFlags.load(memory_order_relaxed)) & uint8(EFlags::EnhancedInternalEdgeRemoval)) != 0; }
+ 
++	/// Helios patch stable-order: no cached manifold or warm-start impulse survives a PhysicsSystem::Update for a pair involving this body. On the first collision step of each Update the pair
++	/// recomputes its manifold and starts its impulses at zero; later collision steps of the same Update use the cache as usual, and the old manifold is still found, so persisted-contact callbacks
++	/// are unchanged. For bodies whose step must be a function of their state only (a client predicts them and a rollback cannot restore the contact cache).
++	inline void				SetNoCrossUpdateCache(bool inNoCache)							{ JPH_ASSERT(IsRigidBody()); if (inNoCache) mFlags.fetch_or(uint8(EFlags::NoCrossUpdateCache), memory_order_relaxed); else mFlags.fetch_and(uint8(~uint8(EFlags::NoCrossUpdateCache)), memory_order_relaxed); }
++
++	/// Helios patch stable-order: check if this body's contacts start every Update without cached state
++	inline bool				GetNoCrossUpdateCache() const									{ return (mFlags.load(memory_order_relaxed) & uint8(EFlags::NoCrossUpdateCache)) != 0; }
++
++	/// Helios patch stable-order: the order the solver uses where upstream uses BodyID: object layer, then user data (the application's stable body key), then BodyID for bodies with equal keys.
++	/// A BodyID is a slot index that follows a PhysicsSystem's add/remove history, so two systems holding the same bodies under different IDs solved their contacts in a different order.
++	static inline bool		sStableOrderLess(const Body &inLHS, const Body &inRHS)			{ if (inLHS.mObjectLayer != inRHS.mObjectLayer) return inLHS.mObjectLayer < inRHS.mObjectLayer; if (inLHS.mUserData != inRHS.mUserData) return inLHS.mUserData < inRHS.mUserData; return inLHS.mID < inRHS.mID; }
++
+ 	/// Get the bodies motion type.
+ 	inline EMotionType		GetMotionType() const											{ return mMotionType; }
+ 
+@@ -440,6 +452,7 @@ private:
+ 		UseManifoldReduction			= 1 << 4,											///< Set this bit to indicate that this body can use manifold reduction (if PhysicsSettings::mUseManifoldReduction is true)
+ 		ApplyGyroscopicForce			= 1 << 5,											///< Set this bit to indicate that the gyroscopic force should be applied to this body (aka Dzhanibekov effect, see https://en.wikipedia.org/wiki/Tennis_racket_theorem)
+ 		EnhancedInternalEdgeRemoval		= 1 << 6,											///< Set this bit to indicate that enhanced internal edge removal should be used for this body (see BodyCreationSettings::mEnhancedInternalEdgeRemoval)
++		NoCrossUpdateCache				= 1 << 7,											///< Helios patch stable-order: no contact cache across PhysicsSystem::Update for this body (see SetNoCrossUpdateCache)
+ 	};
+ 
+ 	// 16 byte aligned
+diff --git a/Jolt/Physics/Character/CharacterVirtual.cpp b/Jolt/Physics/Character/CharacterVirtual.cpp
+index 8b7644e..c91676f 100644
+--- a/Jolt/Physics/Character/CharacterVirtual.cpp
++++ b/Jolt/Physics/Character/CharacterVirtual.cpp
+@@ -234,6 +234,7 @@ void CharacterVirtual::sFillContactProperties(const CharacterVirtual *inCharacte
+ 	outContact.mMotionTypeB = inBody.GetMotionType();
+ 	outContact.mIsSensorB = inBody.IsSensor();
+ 	outContact.mUserData = inBody.GetUserData();
++	outContact.mObjectLayerB = inBody.GetObjectLayer(); // Helios patch stable-order
+ 	outContact.mMaterial = inCollector.GetContext()->GetMaterial(inResult.mSubShapeID2);
+ }
+ 
+@@ -249,6 +250,7 @@ void CharacterVirtual::sFillCharacterContactProperties(CharacterContact &outCont
+ 	outContact.mMotionTypeB = EMotionType::Kinematic; // Other character is kinematic, we can't directly move it
+ 	outContact.mIsSensorB = false;
+ 	outContact.mUserData = inOtherCharacter->GetUserData();
++	outContact.mObjectLayerB = cObjectLayerInvalid; // Helios patch stable-order: a character has no object layer
+ 	outContact.mMaterial = PhysicsMaterial::sDefault;
+ }
+ 
+@@ -1934,6 +1936,7 @@ void CharacterContact::RestoreState(StateRecorder &inStream)
+ 	inStream.Read(mCanPushCharacter);
+ 	mCharacterB = nullptr; // Cannot restore character B
+ 	mUserData = 0; // Cannot restore user data
++	mObjectLayerB = cObjectLayerInvalid; // Helios patch stable-order: not saved either (like the user data)
+ 	mMaterial = PhysicsMaterial::sDefault; // Cannot restore material
+ }
+ 
+diff --git a/Jolt/Physics/Character/CharacterVirtual.h b/Jolt/Physics/Character/CharacterVirtual.h
+index 64a22ed..50f80c1 100644
+--- a/Jolt/Physics/Character/CharacterVirtual.h
++++ b/Jolt/Physics/Character/CharacterVirtual.h
+@@ -143,6 +143,7 @@ public:
+ 	bool								mIsSensorB;												///< If B is a sensor
+ 	const CharacterVirtual *			mCharacterB = nullptr;									///< Character we're colliding with (if not nullptr). Note that this may be a dangling pointer when accessed through GetActiveContacts(), use mCharacterIDB instead.
+ 	uint64								mUserData;												///< User data of B
++	ObjectLayer							mObjectLayerB = cObjectLayerInvalid;					///< Helios patch stable-order: object layer of B (cObjectLayerInvalid for a character), with mUserData B's stable key
+ 	const PhysicsMaterial *				mMaterial;												///< Material of B
+ 	bool								mHadCollision = false;									///< If the character actually collided with the contact (can be false if a predictive contact never becomes a real one)
+ 	bool								mWasDiscarded = false;									///< If the contact validate callback chose to discard this contact or when the body is a sensor
+@@ -536,10 +537,20 @@ public:
+ 
+ private:
+ 	// Sorting predicate for making contact order deterministic
++	// Helios patch stable-order: bodies before characters (as upstream), then by B's stable key (object layer, user data) instead of BodyID / CharacterID, which remain the tie-break for equal keys
+ 	struct ContactOrderingPredicate
+ 	{
+ 		inline bool						operator () (const CharacterContact &inLHS, const CharacterContact &inRHS) const
+ 		{
++			if (inLHS.mBodyB.IsInvalid() != inRHS.mBodyB.IsInvalid())
++				return inRHS.mBodyB.IsInvalid();
++
++			if (inLHS.mObjectLayerB != inRHS.mObjectLayerB)
++				return inLHS.mObjectLayerB < inRHS.mObjectLayerB;
++
++			if (inLHS.mUserData != inRHS.mUserData)
++				return inLHS.mUserData < inRHS.mUserData;
++
+ 			if (inLHS.mBodyB != inRHS.mBodyB)
+ 				return inLHS.mBodyB < inRHS.mBodyB;
+ 
+diff --git a/Jolt/Physics/Collision/ContactListener.h b/Jolt/Physics/Collision/ContactListener.h
+index 07dacf3..7abf212 100644
+--- a/Jolt/Physics/Collision/ContactListener.h
++++ b/Jolt/Physics/Collision/ContactListener.h
+@@ -99,7 +99,7 @@ public:
+ 	///
+ 	/// Note that this callback is called when all bodies are locked, so don't use any locking functions! See detailed class description of ContactListener.
+ 	///
+-	/// Body 1 and 2 will be sorted such that body 1 ID < body 2 ID, so body 1 may not be dynamic.
++	/// Body 1 and 2 will be sorted such that body 1 comes first in Body::sStableOrderLess (Helios patch stable-order; upstream: body 1 ID < body 2 ID), so body 1 may not be dynamic.
+ 	///
+ 	/// Note that only active bodies will report contacts, as soon as a body goes to sleep the contacts between that body and all other
+ 	/// bodies will receive an OnContactRemoved callback, if this is the case then Body::IsActive() will return false during the callback.
+@@ -113,7 +113,7 @@ public:
+ 	///
+ 	/// Note that this callback is called when all bodies are locked, so don't use any locking functions! See detailed class description of ContactListener.
+ 	///
+-	/// Body 1 and 2 will be sorted such that body 1 ID < body 2 ID, so body 1 may not be dynamic.
++	/// Body 1 and 2 will be sorted such that body 1 comes first in Body::sStableOrderLess (Helios patch stable-order; upstream: body 1 ID < body 2 ID), so body 1 may not be dynamic.
+ 	///
+ 	/// If the structure of the shape of a body changes between simulation steps (e.g. by adding/removing a child shape of a compound shape),
+ 	/// it is possible that the same sub shape ID used to identify the removed child shape is now reused for a different child shape. The physics
+@@ -132,7 +132,7 @@ public:
+ 	/// Cache what you need in the OnContactAdded and OnContactPersisted callbacks and store it in a separate structure to use during this callback.
+ 	/// Alternatively, you could just record that the contact was removed and process it after PhysicsSystem::Update.
+ 	///
+-	/// Body 1 and 2 will be sorted such that body 1 ID < body 2 ID, so body 1 may not be dynamic.
++	/// Body 1 and 2 will be sorted such that body 1 comes first in Body::sStableOrderLess (Helios patch stable-order; upstream: body 1 ID < body 2 ID), so body 1 may not be dynamic.
+ 	///
+ 	/// The sub shape IDs were created in the previous simulation step, so if the structure of a shape changes (e.g. by adding/removing a child shape of a compound shape),
+ 	/// the sub shape ID may not be valid / may not point to the same sub shape anymore.
+diff --git a/Jolt/Physics/Constraints/ContactConstraintManager.cpp b/Jolt/Physics/Constraints/ContactConstraintManager.cpp
+index efb7aee..342b4b7 100644
+--- a/Jolt/Physics/Constraints/ContactConstraintManager.cpp
++++ b/Jolt/Physics/Constraints/ContactConstraintManager.cpp
+@@ -840,6 +840,14 @@ JPH_INLINE ContactConstraintManager::ContactConstraint<Type1, Type2> *ContactCon
+ 	return constraint;
+ }
+ 
++// Helios patch stable-order: a contact constraint's sort key hashes both bodies' stable keys (object layer, user data) and the sub shape IDs instead of the BodyIDs, so the
++// solver order does not depend on BodyIDs. inBody1 and inBody2 are in Body::sStableOrderLess order.
++static inline uint64 sStableSortKey(const Body &inBody1, const SubShapeID &inSubShapeID1, const Body &inBody2, const SubShapeID &inSubShapeID2)
++{
++	const uint64 data[4] = { inBody1.GetUserData(), (uint64(inBody1.GetObjectLayer()) << 32) | inSubShapeID1.GetValue(), inBody2.GetUserData(), (uint64(inBody2.GetObjectLayer()) << 32) | inSubShapeID2.GetValue() };
++	return HashBytes(data, uint(sizeof(data)));
++}
++
+ template <EMotionType Type1, EMotionType Type2>
+ void ContactConstraintManager::TemplatedGetContactsFromCache(ContactAllocator &ioContactAllocator, Body &inBody1, Body &inBody2, const CachedBodyPair &inCachedBodyPair, CachedBodyPair &outCachedBodyPair)
+ {
+@@ -917,8 +925,8 @@ void ContactConstraintManager::TemplatedGetContactsFromCache(ContactAllocator &i
+ 			&& ((Type1 == EMotionType::Dynamic && settings.mInvMassScale1 != 0.0f) // One of the bodies must have mass to be able to create a contact constraint
+ 				|| (Type2 == EMotionType::Dynamic && settings.mInvMassScale2 != 0.0f)))
+ 		{
+-			// Create a new constraint
+-			ContactConstraint<Type1, Type2> *constraint = CreateConstraint<Type1, Type2>(link_bodies, inBody1, inBody2, input_hash, output_handle, world_space_normal, settings, output_cm->mNumContactPoints);
++			// Create a new constraint (Helios patch stable-order: sorted by the stable key, not by the cache key's hash of BodyIDs)
++			ContactConstraint<Type1, Type2> *constraint = CreateConstraint<Type1, Type2>(link_bodies, inBody1, inBody2, sStableSortKey(inBody1, input_key.GetSubShapeID1(), inBody2, input_key.GetSubShapeID2()), output_handle, world_space_normal, settings, output_cm->mNumContactPoints);
+ 			if (constraint == nullptr)
+ 			{
+ 				ioContactAllocator.mErrors |= EPhysicsUpdateError::ContactConstraintsFull;
+@@ -1003,9 +1011,9 @@ void ContactConstraintManager::GetContactsFromCache(ContactAllocator &ioContactA
+ 	// Start with not handled
+ 	outPairHandled = false;
+ 
+-	// Swap bodies so that body 1 id < body 2 id
++	// Swap bodies so that body 1 comes first in Body::sStableOrderLess (Helios patch stable-order; upstream: body 1 id < body 2 id)
+ 	Body *body1, *body2;
+-	if (inBody1.GetID() < inBody2.GetID())
++	if (Body::sStableOrderLess(inBody1, inBody2))
+ 	{
+ 		body1 = &inBody1;
+ 		body2 = &inBody2;
+@@ -1089,9 +1097,9 @@ void ContactConstraintManager::GetContactsFromCache(ContactAllocator &ioContactA
+ 
+ ContactConstraintManager::BodyPairHandle ContactConstraintManager::AddBodyPair(ContactAllocator &ioContactAllocator, const Body &inBody1, const Body &inBody2)
+ {
+-	// Swap bodies so that body 1 id < body 2 id
++	// Swap bodies so that body 1 comes first in Body::sStableOrderLess (Helios patch stable-order; upstream: body 1 id < body 2 id)
+ 	const Body *body1, *body2;
+-	if (inBody1.GetID() < inBody2.GetID())
++	if (Body::sStableOrderLess(inBody1, inBody2))
+ 	{
+ 		body1 = &inBody1;
+ 		body2 = &inBody2;
+@@ -1140,8 +1148,8 @@ void ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
+ 	JPH_ASSERT(num_contact_points == (int)inManifold.mRelativeContactPointsOn2.size());
+ 
+ 	// Reserve space for new contact cache entry
+-	// Note that for dynamic vs dynamic we always require the first body to have a lower body id to get a consistent key
+-	// under which to look up the contact
++	// Note that for dynamic vs dynamic we always require the first body to come first in Body::sStableOrderLess to get a consistent key under which to look up the
++	// contact (Helios patch stable-order: AddContactConstraint swaps the bodies into that order; upstream: the first body has the lower body id)
+ 	MKeyValue *new_manifold_kv = mWriteCache->Create(ioContactAllocator, key, key_hash, num_contact_points);
+ 	if (new_manifold_kv == nullptr)
+ 		return; // Out of cache space
+@@ -1159,7 +1167,9 @@ void ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
+ 	settings.mIsSensor = inBody1.IsSensor() || inBody2.IsSensor();
+ 
+ 	// Get the contact points for the old cache entry
++	// Helios patch stable-order: on the first collision step of an Update, a NoCrossUpdateCache pair still finds it (persisted-contact callback) but does not warm start from it
+ 	const MKeyValue *old_manifold_kv = mReadCache->Find(key, key_hash);
++	const bool warm_start = !(ioContactAllocator.mFirstCollisionStep && (inBody1.GetNoCrossUpdateCache() || inBody2.GetNoCrossUpdateCache()));
+ 	const CachedContactPoint *ccp_start;
+ 	const CachedContactPoint *ccp_end;
+ 	if (old_manifold_kv != nullptr)
+@@ -1168,10 +1178,10 @@ void ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
+ 		if (mContactListener != nullptr)
+ 			mContactListener->OnContactPersisted(inBody1, inBody2, inManifold, settings);
+ 
+-		// Fetch the contact points from the old manifold
++		// Fetch the contact points from the old manifold (Helios patch stable-order: none without warm start)
+ 		const CachedManifold *old_manifold = &old_manifold_kv->GetValue();
+ 		ccp_start = old_manifold->mContactPoints;
+-		ccp_end = ccp_start + old_manifold->mNumContactPoints;
++		ccp_end = warm_start? ccp_start + old_manifold->mNumContactPoints : ccp_start;
+ 
+ 		// Mark contact as persisted so that we won't fire OnContactRemoved callbacks
+ 		old_manifold->mFlags |= (uint16)CachedManifold::EFlags::ContactPersisted;
+@@ -1196,8 +1206,8 @@ void ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
+ 		&& ((Type1 == EMotionType::Dynamic && settings.mInvMassScale1 != 0.0f) // One of the bodies must have mass to be able to create a contact constraint
+ 			|| (Type2 == EMotionType::Dynamic && settings.mInvMassScale2 != 0.0f)))
+ 	{
+-		// Create a new constraint
+-		ContactConstraint<Type1, Type2> *constraint = CreateConstraint<Type1, Type2>(ioActivateAndLinkBodies, inBody1, inBody2, key_hash, new_manifold_handle, inManifold.mWorldSpaceNormal, settings, num_contact_points);
++		// Create a new constraint (Helios patch stable-order: sorted by the stable key, not by the cache key's hash of BodyIDs)
++		ContactConstraint<Type1, Type2> *constraint = CreateConstraint<Type1, Type2>(ioActivateAndLinkBodies, inBody1, inBody2, sStableSortKey(inBody1, inManifold.mSubShapeID1, inBody2, inManifold.mSubShapeID2), new_manifold_handle, inManifold.mWorldSpaceNormal, settings, num_contact_points);
+ 		if (constraint == nullptr)
+ 		{
+ 			ioContactAllocator.mErrors |= EPhysicsUpdateError::ContactConstraintsFull;
+@@ -1280,8 +1290,8 @@ void ContactConstraintManager::TemplatedAddContactConstraint(ContactAllocator &i
+ 		Vec3 t1, t2;
+ 		constraint->GetTangents(t1, t2);
+ 
+-		// Setup friction constraint
+-		if (old_manifold_kv != nullptr)
++		// Setup friction constraint (Helios patch stable-order: from the old manifold only with warm start)
++		if (old_manifold_kv != nullptr && warm_start)
+ 		{
+ 			const CachedManifold *old_manifold = &old_manifold_kv->GetValue();
+ 			constraint->mFrictionConstraint1.SetTotalLambda(old_manifold->mFrictionLambda[0]);
+@@ -1341,11 +1351,11 @@ void ContactConstraintManager::AddContactConstraint(ContactAllocator &ioContactA
+ 
+ 	JPH_ASSERT(inManifold.mWorldSpaceNormal.IsNormalized());
+ 
+-	// Swap bodies so that body 1 id < body 2 id
++	// Swap bodies so that body 1 comes first in Body::sStableOrderLess (Helios patch stable-order; upstream: body 1 id < body 2 id)
+ 	const ContactManifold *manifold;
+ 	Body *body1, *body2;
+ 	ContactManifold temp;
+-	if (inBody2.GetID() < inBody1.GetID())
++	if (Body::sStableOrderLess(inBody2, inBody1))
+ 	{
+ 		body1 = &inBody2;
+ 		body2 = &inBody1;
+@@ -1396,11 +1406,11 @@ void ContactConstraintManager::OnCCDContactAdded(ContactAllocator &ioContactAllo
+ 	// The remainder of this function only deals with calling contact callbacks, if there's no contact callback we also don't need to do this work
+ 	if (mContactListener != nullptr)
+ 	{
+-		// Swap bodies so that body 1 id < body 2 id
++		// Swap bodies so that body 1 comes first in Body::sStableOrderLess (Helios patch stable-order; upstream: body 1 id < body 2 id)
+ 		const ContactManifold *manifold;
+ 		const Body *body1, *body2;
+ 		ContactManifold temp;
+-		if (inBody2.GetID() < inBody1.GetID())
++		if (Body::sStableOrderLess(inBody2, inBody1))
+ 		{
+ 			body1 = &inBody2;
+ 			body2 = &inBody1;
+@@ -1484,13 +1494,12 @@ void ContactConstraintManager::SortContacts(uint32 *ioConstraintOffsetBegin, uin
+ 		if (lhs.mSortKey != rhs.mSortKey)
+ 			return lhs.mSortKey < rhs.mSortKey;
+ 
+-		// If they're equal we use the IDs of body 1 to order
++		// If they're equal we order by body 1, then by body 2 (Helios patch stable-order: in Body::sStableOrderLess order, upstream: by BodyID)
+ 		if (lhs.mBody1 != rhs.mBody1)
+-			return lhs.mBody1->GetID() < rhs.mBody1->GetID();
++			return Body::sStableOrderLess(*lhs.mBody1, *rhs.mBody1);
+ 
+-		// If they're still equal we use the IDs of body 2 to order
+ 		if (lhs.mBody2 != rhs.mBody2)
+-			return lhs.mBody2->GetID() < rhs.mBody2->GetID();
++			return Body::sStableOrderLess(*lhs.mBody2, *rhs.mBody2);
+ 
+ 		JPH_ASSERT(inLHS == inRHS, "Hash collision, ordering will be inconsistent");
+ 		return false;
+@@ -1531,14 +1540,15 @@ void ContactConstraintManager::FinalizeContactCacheAndCallContactPointRemovedCal
+ bool ContactConstraintManager::WereBodiesInContact(const BodyID &inBody1ID, const BodyID &inBody2ID) const
+ {
+ 	// The body pair needs to be in the cache and it needs to have a manifold (otherwise it's just a record indicating that there are no collisions)
++	// Helios patch stable-order: the pair is stored in Body::sStableOrderLess order, which the IDs alone do not give, so look it up both ways
+ 	const ManifoldCache &read_cache = mCache[mCacheWriteIdx ^ 1];
+-	BodyPair key;
+-	if (inBody1ID < inBody2ID)
+-		key = BodyPair(inBody1ID, inBody2ID);
+-	else
++	BodyPair key(inBody1ID, inBody2ID);
++	const BPKeyValue *kv = read_cache.Find(key, key.GetHash());
++	if (kv == nullptr)
++	{
+ 		key = BodyPair(inBody2ID, inBody1ID);
+-	uint64 key_hash = key.GetHash();
+-	const BPKeyValue *kv = read_cache.Find(key, key_hash);
++		kv = read_cache.Find(key, key.GetHash());
++	}
+ 	return kv != nullptr && kv->GetValue().mFirstCachedManifold != ManifoldMap::cInvalidHandle;
+ }
+ 
+diff --git a/Jolt/Physics/Constraints/ContactConstraintManager.h b/Jolt/Physics/Constraints/ContactConstraintManager.h
+index d76f3fc..9ceb488 100644
+--- a/Jolt/Physics/Constraints/ContactConstraintManager.h
++++ b/Jolt/Physics/Constraints/ContactConstraintManager.h
+@@ -89,6 +89,7 @@ public:
+ 		uint					mNumBodyPairs = 0;													///< Total number of body pairs added using this allocator
+ 		uint					mNumManifolds = 0;													///< Total number of manifolds added using this allocator
+ 		EPhysicsUpdateError		mErrors = EPhysicsUpdateError::None;								///< Errors reported on this allocator
++		bool					mFirstCollisionStep = false;										///< Helios patch stable-order: finding the collisions of the first collision step of an Update (NoCrossUpdateCache)
+ 	};
+ 
+ 	/// Get a new allocator context for storing contacts. Note that you should call this once and then add multiple contacts using the context.
+diff --git a/Jolt/Physics/PhysicsSystem.cpp b/Jolt/Physics/PhysicsSystem.cpp
+index de4d0ee..c6eb73a 100644
+--- a/Jolt/Physics/PhysicsSystem.cpp
++++ b/Jolt/Physics/PhysicsSystem.cpp
+@@ -902,6 +902,7 @@ void PhysicsSystem::JobFindCollisions(PhysicsUpdateContext::Step *ioStep, int in
+ 
+ 	// Allocation context for allocating new contact points
+ 	ContactAllocator contact_allocator(mContactManager.GetContactAllocator());
++	contact_allocator.mFirstCollisionStep = ioStep->mIsFirst; // Helios patch stable-order: Body::EFlags::NoCrossUpdateCache applies to the first collision step of an Update
+ 
+ 	// Determine initial queue to read pairs from if no broadphase work can be done
+ 	// (always start looking at results from the next job)
+@@ -1071,14 +1072,16 @@ void PhysicsSystem::ProcessBodyPair(ContactAllocator &ioContactAllocator, const
+ 
+ 	// Ensure that body1 has the higher motion type (i.e. dynamic trumps kinematic), this ensures that we do the collision detection in the space of a moving body,
+ 	// which avoids accuracy problems when testing a very large static object against a small dynamic object
+-	// Ensure that body1 id < body2 id when motion types are the same.
++	// Helios patch stable-order: when motion types are the same, body1 is the first in Body::sStableOrderLess (upstream: the lower BodyID).
+ 	if (body1->GetMotionType() < body2->GetMotionType()
+-		|| (body1->GetMotionType() == body2->GetMotionType() && inBodyPair.mBodyB < inBodyPair.mBodyA))
++		|| (body1->GetMotionType() == body2->GetMotionType() && Body::sStableOrderLess(*body2, *body1)))
+ 		std::swap(body1, body2);
+ 
+ 	// Check if the contact points from the previous frame are reusable and if so copy them
++	// Helios patch stable-order: not on the first collision step of an Update when a body has NoCrossUpdateCache
+ 	bool pair_handled = false;
+-	if (mPhysicsSettings.mUseBodyPairContactCache && !(body1->IsCollisionCacheInvalid() || body2->IsCollisionCacheInvalid()))
++	if (mPhysicsSettings.mUseBodyPairContactCache && !(body1->IsCollisionCacheInvalid() || body2->IsCollisionCacheInvalid())
++		&& !(ioContactAllocator.mFirstCollisionStep && (body1->GetNoCrossUpdateCache() || body2->GetNoCrossUpdateCache())))
+ 		mContactManager.GetContactsFromCache(ioContactAllocator, *body1, *body2, pair_handled);
+ 
+ 	// If the cache hasn't handled this body pair do actual collision detection

@@ -54,18 +54,27 @@ if(HELIOS_BUILD_TESTS)
   if(HELIOS_VK_VALIDATION_LAYER)
     list(APPEND layer_args "-DLAYER=${HELIOS_VK_VALIDATION_LAYER}")
   endif()
-  # Two fake VK_LAYER_KHRONOS_validation layers for that check (Linux test builds; never installed):
+  # Three fake VK_LAYER_KHRONOS_validation layers for that check (Linux test builds; never installed):
   # vkCreateInstance fails with VK_ERROR_INITIALIZATION_FAILED, or with VK_ERROR_INCOMPATIBLE_DRIVER,
-  # which reads like a machine without a driver until the probe device finds one.
+  # which reads like a machine without a driver until the probe device finds one; or a working
+  # pass-through layer under the validator's name that validates nothing (in the call chain, but not
+  # the validator: the RHI must not report validation as active).
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_CROSSCOMPILING)
-    foreach(variant "INITFAIL|VK_ERROR_INITIALIZATION_FAILED" "NODRIVER|VK_ERROR_INCOMPATIBLE_DRIVER")
+    foreach(variant "INITFAIL|VK_ERROR_INITIALIZATION_FAILED" "NODRIVER|VK_ERROR_INCOMPATIBLE_DRIVER"
+                    "PASSTHROUGH|VK_SUCCESS")
       string(REPLACE "|" ";" parts "${variant}")
       list(GET parts 0 kind)
       list(GET parts 1 result)
       string(TOLOWER "${kind}" suffix)
       set(fake helios_rendertest_fake_layer_${suffix})
       add_library(${fake} MODULE ${CMAKE_CURRENT_SOURCE_DIR}/tests/fake_layer.c)
-      target_compile_definitions(${fake} PRIVATE FAKE_LAYER_RESULT=${result})
+      if(kind STREQUAL "PASSTHROUGH")
+        target_compile_definitions(${fake} PRIVATE FAKE_LAYER_PASSTHROUGH)
+        set(what "forwards every call and validates nothing")
+      else()
+        target_compile_definitions(${fake} PRIVATE FAKE_LAYER_RESULT=${result})
+        set(what "vkCreateInstance fails with ${result}")
+      endif()
       target_link_libraries(${fake} PRIVATE helios::tp::vulkan_headers)
       set_target_properties(${fake} PROPERTIES FOLDER tests)
       helios_apply_warnings(${fake})
@@ -78,7 +87,7 @@ if(HELIOS_BUILD_TESTS)
         \"library_path\": \"$<TARGET_FILE:${fake}>\",
         \"api_version\": \"1.3.275\",
         \"implementation_version\": \"1\",
-        \"description\": \"rendertest.validation-required: vkCreateInstance fails with ${result}\",
+        \"description\": \"rendertest.validation-required: ${what}\",
         \"functions\": {
             \"vkGetInstanceProcAddr\": \"fakeGetInstanceProcAddr\",
             \"vkGetDeviceProcAddr\": \"fakeGetDeviceProcAddr\"

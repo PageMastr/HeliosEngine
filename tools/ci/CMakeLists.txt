@@ -13,8 +13,8 @@
 #                                 step runs anything from D:\helios-ci, and the PATH is cleaned and the audit run in
 #                                 a clean elevated window (cmd.exe sets the PATH and PSModulePath to Windows' own
 #                                 folders before Windows PowerShell starts without the profile; on Windows the test
-#                                 runs that window against planted files on the PATH and must say that it ran); with
-#                                 PowerShell 7.
+#                                 runs that window against planted files on the PATH and the PSModulePath and must
+#                                 say that it ran); with PowerShell 7.
 # Python 3.10+ is required in CI, as for tools/scorecard. pwsh is required on GitHub-hosted runners, which all
 # have it; elsewhere (the dev container, the owner's win-gpu PC) lint_runner_scripts is registered only if found.
 if(NOT HELIOS_BUILD_TESTS)

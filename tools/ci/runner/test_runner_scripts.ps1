@@ -23,8 +23,10 @@
 # loaded from the parsed files, so their last block (the run) never runs here. On Windows also the wipe itself on a
 # scratch tree under -WorkDir: a junction to a directory outside, a directory symbolic link where creating one is
 # allowed, read-only files and a deep tree; the links go, their targets stay. And the clean window itself: its lines
-# run in cmd.exe with planted Get-CimInstance.cmd, Get-Acl.cmd and Disable-LocalUser.cmd first on the inherited PATH,
-# and Windows PowerShell 5.1 finds the cmdlets and runs none of them (without the PATH line it runs the planted one).
+# run in cmd.exe with planted Get-CimInstance.cmd, Get-Acl.cmd and Disable-LocalUser.cmd first on the inherited PATH
+# and a planted PSReadLine first on the inherited PSModulePath, and Windows PowerShell 5.1 finds the cmdlets, runs
+# none of the planted files and has only Windows' module folders (without the PATH line it runs the planted
+# Get-CimInstance.cmd; without the PSModulePath line the planted PSReadLine is on its module path).
 # The last line says whether the wipe and the clean window ran, and CTest requires both on Windows
 # (tools/ci/CMakeLists.txt).
 param([string]$WorkDir = (Join-Path ([IO.Path]::GetTempPath()) ('helios-runner-scripts-' + [guid]::NewGuid().ToString('N'))))
@@ -420,6 +422,20 @@ if ($audit.Count -eq 1) {
             $userKey = @{ Path = 'C:\Users\owner\AppData\Local\Microsoft\WindowsApps' } } -AuditFolders $pathFolders
     Assert-Equal @('Nothing at the root of a local drive or on the PATH is open to helios-ci') $script:auditOutput `
         'the audit when nothing on the PATH is open (a missing folder that only Administrators could make included)'
+    # "Already done" deletes C:\VulkanSDK (step 2) and runs the audit again before the SDK is installed again (step 3):
+    # the SDK's Bin entry, left on the PATH, is a missing folder that helios-ci could make at C:\, so that audit shows
+    # no PATH line only once that entry is off the PATH too (the runbook's step 2 says so; checked with its text below).
+    $sdkGone = @{}
+    foreach ($key in $pathAcls.Keys) { if ($key -notlike 'C:\VulkanSDK*') { $sdkGone[$key] = $pathAcls[$key] } }
+    $sdkGoneFolders = @($pathFolders | Where-Object { $_ -notlike 'C:\VulkanSDK*' })
+    Invoke-HeliosCiAudit -AuditDisks @{ 'C:' = 'NTFS' } -AuditItems @{ 'C:\' = @('Windows') } -AuditAcls $sdkGone `
+        -AuditEnvironment @{ $machineKey = @{ Path = '%SystemRoot%\system32;C:\VulkanSDK\1.3.290.0\Bin;C:\Windows' } } `
+        -AuditFolders $sdkGoneFolders
+    Assert-Equal @('C:\VulkanSDK\1.3.290.0\Bin|PATH|machine Path, missing: C:\ (Authenticated Users: 4)') $script:auditRows `
+        'after "Already done" deletes C:\VulkanSDK, its Bin entry left on the PATH is still a PATH line'
+    Invoke-HeliosCiAudit -AuditDisks @{ 'C:' = 'NTFS' } -AuditItems @{ 'C:\' = @('Windows') } -AuditAcls $sdkGone `
+        -AuditEnvironment @{ $machineKey = @{ Path = '%SystemRoot%\system32;C:\Windows' } } -AuditFolders $sdkGoneFolders
+    Assert-Equal 0 $script:auditRows.Count 'and with that entry off the PATH too, the audit shows no PATH line'
 }
 
 # Step 9 starts the service only when the runner will run the hook: .env's last hook line names it, helios-ci (by
@@ -1089,16 +1105,21 @@ Assert-Equal '' ($bareIcacls -join '; ') 'step 4b''s blocks call icacls by its f
 $alreadyAt = @(('Open a clean elevated window (above) before anything else',
         '# Already done: disable helios-ci and end its processes before you run any program.',
         'Run step 4b''s audit (in the clean window it reads ACLs and the `PATH` settings and starts no program)',
-        '# Already done: delete C:\VulkanSDK', 'Take every other `PATH` line''s entry off the `PATH` in System Properties, started from the clean window',
+        '# Already done: delete C:\VulkanSDK',
+        'Take the entry of every `PATH` line off the `PATH`, the SDK''s `Bin` included if you deleted `C:\VulkanSDK`',
+        'in System Properties, started from the clean window by its full path',
         '& "$env:SystemRoot\System32\SystemPropertiesAdvanced.exe"',
         'Run the audit again in the clean window: it must show no `PATH` line. Then close the window.',
-        'Open an ordinary elevated window: it starts with the cleaned `PATH`', '`GoLang.Go`',
-        'follow "Rotate" below from its step 2') | ForEach-Object { $alreadyText.IndexOf($_) })
+        'Open an ordinary elevated window: it starts with the cleaned `PATH`',
+        'If you deleted `C:\VulkanSDK`, install the SDK again', 'Rotate''s step 2, below, audits the result in a clean window',
+        '`GoLang.Go`', 'follow "Rotate" below from its step 2') | ForEach-Object { $alreadyText.IndexOf($_) })
 $inOrder = $alreadyAt[0] -ge 0
 for ($i = 1; $i -lt $alreadyAt.Count; $i++) { $inOrder = $inOrder -and $alreadyAt[$i] -gt $alreadyAt[$i - 1] }
 Assert-Equal $true $inOrder ('"Already done": a clean window first, then disable helios-ci, audit, delete C:\VulkanSDK, take ' +
-    'the PATH entries off with the editor started from that window, no PATH line, and only then an ordinary window, ' +
-    'the Go line and Rotate')
+    'every PATH line''s entry off (the deleted SDK''s Bin included) with the editor started from that window, no PATH ' +
+    'line, and only then an ordinary window, the SDK installed again, the Go line and Rotate')
+Assert-Equal $false ($alreadyText.Contains('every other `PATH` line')) `
+    '"Already done" does not leave the deleted SDK''s Bin entry on the PATH for the audit that must show no PATH line'
 $beforeGo = $already.Substring(0, [Math]::Max(0, $already.IndexOf('`GoLang.Go`')))
 $alreadyBlocks = @([regex]::Matches($beforeGo, '(?ms)^[ \t]*```[A-Za-z]*[ \t]*\r?\n(.*?)^[ \t]*```') | ForEach-Object { $_.Groups[1].Value })
 Assert-Equal 5 $alreadyBlocks.Count '"Already done" has five blocks before the Go line'
@@ -1149,11 +1170,20 @@ Assert-Equal $true ($step4b.Contains('in a clean elevated window (Setup, above) 
     $step4b.Contains('so deal with it before anything else, in the clean window') -and
     $step4b.Contains('Do steps 1 to 4 of "Already done" in a clean elevated window')) `
     'step 4b runs the audit, deals with a PATH line and cleans the PATH after unreviewed code in a clean window'
+# Step 4b's list after unreviewed code matches "Already done": every PATH line's entry off, the deleted SDK's included,
+# and the SDK installed again (its step 4) only after the audit in the clean window.
+Assert-Equal $true ($step4b.Contains('take every `PATH` line''s entry off the `PATH`, the deleted SDK''s included') -and
+    $step4b.Contains('on the "Already done" path, its steps 2 and 4 did this for `C:\VulkanSDK`')) `
+    'step 4b''s list after unreviewed code names "Already done"''s steps as they are'
 
-# On Windows: the clean window's lines as cmd.exe runs them, after a line that puts a folder first on the PATH (as the
-# Vulkan SDK's Bin is) with a planted Get-CimInstance.cmd, Get-Acl.cmd and Disable-LocalUser.cmd in it, each of which
-# leaves a file when it runs. Windows PowerShell 5.1 then finds the cmdlets and runs none of them. Without the clean
-# window's PATH line, it runs the planted Get-CimInstance.cmd: the lookup that the clean window is for.
+# On Windows: the clean window's lines as cmd.exe runs them, after two lines that stand for an elevated window's
+# inherited settings with a folder open to helios-ci first on each: on the PATH (as the Vulkan SDK's Bin is) a planted
+# Get-CimInstance.cmd, Get-Acl.cmd and Disable-LocalUser.cmd, each of which leaves a file when it runs, and on the
+# PSModulePath a planted PSReadLine module (Windows PowerShell loads PSReadLine as an interactive window opens).
+# Windows PowerShell 5.1 then finds the cmdlets, runs none of the planted files, lists no PSReadLine but Windows' own,
+# and its PSModulePath holds only System32's folder and the Program Files one that it adds itself. Without the clean
+# window's PATH line it runs the planted Get-CimInstance.cmd, and without its PSModulePath line the planted folder
+# and its PSReadLine are on the module path: the lookups that the clean window is for.
 $cleanWindow = 'skipped, not Windows'
 if (-not $onWindows) {
     Write-Host 'The clean window itself (cmd.exe, Windows PowerShell 5.1) runs on Windows only; skipped here.'
@@ -1161,33 +1191,53 @@ if (-not $onWindows) {
     $cleanWindow = 'ran'
     $cleanDir = [IO.Path]::Combine([IO.Path]::GetFullPath($WorkDir), 'clean-window')
     $planted = Join-Path $cleanDir 'planted'
-    New-Item -ItemType Directory -Force -Path $planted | Out-Null
+    $plantedModules = Join-Path $cleanDir 'planted-modules'
+    New-Item -ItemType Directory -Force -Path $planted, (Join-Path $plantedModules 'PSReadLine') | Out-Null
     foreach ($name in 'Get-CimInstance', 'Get-Acl', 'Disable-LocalUser') {
         Set-Content -LiteralPath (Join-Path $planted "$name.cmd") -Encoding Ascii -Value "@echo planted>""%~dp0ran-$name.txt"""
     }
-    # Runs $Lines in cmd.exe, after a line that puts the planted folder first on the PATH, with $Probe given to the last
-    # line (Windows PowerShell); returns what it printed. Not with the test's own PATH after the planted folder: a '"'
-    # in it would end the quoted set.
+    Set-Content -LiteralPath (Join-Path $plantedModules 'PSReadLine\PSReadLine.psd1') -Encoding Ascii `
+        -Value "@{ ModuleVersion = '99.0'; RootModule = 'PSReadLine.psm1' }"
+    Set-Content -LiteralPath (Join-Path $plantedModules 'PSReadLine\PSReadLine.psm1') -Encoding Ascii `
+        -Value "Set-Content -LiteralPath '$planted\ran-PSReadLine.txt' -Value planted"
+    # Runs $Lines in cmd.exe, after the two lines that put the planted folders first on the PATH and the PSModulePath,
+    # with $Probe given to the last line (Windows PowerShell); returns what it printed. Not with the test's own PATH
+    # after the planted folder: a '"' in it would end the quoted set.
     function Invoke-HeliosCiWindow([string[]]$Lines, [string]$Probe) {
         $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Probe))
         $batch = Join-Path $cleanDir 'window.cmd'
-        $all = @('@echo off', "set ""PATH=$planted;%SystemRoot%\System32;%SystemRoot%""") + @($Lines[0..($Lines.Count - 2)]) +
-            @("$($Lines[-1]) -NonInteractive -EncodedCommand $encoded")
+        $all = @('@echo off', "set ""PATH=$planted;%SystemRoot%\System32;%SystemRoot%""",
+            "set ""PSModulePath=$plantedModules;%SystemRoot%\System32\WindowsPowerShell\v1.0\Modules""") +
+            @($Lines[0..($Lines.Count - 2)]) + @("$($Lines[-1]) -NonInteractive -EncodedCommand $encoded")
         Set-Content -LiteralPath $batch -Encoding Ascii -Value $all
         return @(& (Join-Path $env:SystemRoot 'System32\cmd.exe') /d /c $batch | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
     }
-    $cleanProbe = "foreach (`$name in 'Get-CimInstance', 'Get-Acl', 'Disable-LocalUser') { " +
+    # The PSModulePath entries and the PSReadLine modules that are neither below the Windows folder nor below the
+    # Program Files folder that Windows PowerShell adds (where Windows keeps PSReadLine).
+    $modulesProbe = "function Test-Windows([string]`$Path) { `$Path = `$Path.TrimEnd('\'); " +
+        "foreach (`$root in `$env:SystemRoot, (Join-Path `$env:ProgramFiles 'WindowsPowerShell\Modules')) { " +
+        "if (`$Path -eq `$root -or `$Path.StartsWith(`$root + '\', 'OrdinalIgnoreCase')) { return `$true } }; `$false }; " +
+        "'modules outside Windows: [{0}]' -f (@(`$env:PSModulePath.Split(';') | Where-Object { `$_ -and -not (Test-Windows `$_) }) -join ';'); " +
+        "'PSReadLine outside Windows: [{0}]' -f (@(Get-Module -ListAvailable -Name PSReadLine | ForEach-Object ModuleBase | " +
+        "Where-Object { -not (Test-Windows `$_) }) -join ';'); "
+    $cleanProbe = $modulesProbe + "foreach (`$name in 'Get-CimInstance', 'Get-Acl', 'Disable-LocalUser') { " +
         "'{0} {1}' -f `$name, (Get-Command `$name).CommandType }; " +
         "`$null = Get-CimInstance -ClassName Win32_OperatingSystem; `$null = Get-Acl -LiteralPath `$env:SystemRoot; 'probe done'"
-    Assert-Equal @('Get-CimInstance Cmdlet', 'Get-Acl Cmdlet', 'Disable-LocalUser Cmdlet', 'probe done') `
-        (Invoke-HeliosCiWindow $cleanLines $cleanProbe) 'in the clean window, Windows PowerShell finds the cmdlets, not the planted files'
+    Assert-Equal @('modules outside Windows: []', 'PSReadLine outside Windows: []', 'Get-CimInstance Cmdlet', 'Get-Acl Cmdlet',
+        'Disable-LocalUser Cmdlet', 'probe done') (Invoke-HeliosCiWindow $cleanLines $cleanProbe) `
+        ('in the clean window, Windows PowerShell finds the cmdlets, not the planted files, and its module path holds ' +
+            'Windows'' folders only')
     Assert-Equal '' (@(Get-ChildItem -LiteralPath $planted -Filter 'ran-*' | ForEach-Object Name) -join ', ') `
         'the clean window runs none of the planted files'
     $dirtyProbe = "`$null = Get-CimInstance -ClassName Win32_OperatingSystem; 'probe done'"
     Assert-Equal @('probe done') (Invoke-HeliosCiWindow @($cleanLines[1], $cleanLines[2]) $dirtyProbe) `
-        'without the clean window''s PATH, Windows PowerShell still answers'
+        'without the clean window''s PATH line, Windows PowerShell still answers'
     Assert-Equal 'ran-Get-CimInstance.txt' (@(Get-ChildItem -LiteralPath $planted -Filter 'ran-*' | ForEach-Object Name) -join ', ') `
-        'without the clean window''s PATH, Windows PowerShell runs the planted Get-CimInstance.cmd (the lookup the window is for)'
+        'without the clean window''s PATH line, Windows PowerShell runs the planted Get-CimInstance.cmd (the lookup the window is for)'
+    Assert-Equal @("modules outside Windows: [$plantedModules]", "PSReadLine outside Windows: [$plantedModules\PSReadLine]",
+        'probe done') (Invoke-HeliosCiWindow @($cleanLines[0], $cleanLines[2]) ($modulesProbe + "'probe done'")) `
+        ('without the clean window''s PSModulePath line, the planted folder and its PSReadLine are on the module path ' +
+            '(what the line is for)')
     Remove-Item -LiteralPath $cleanDir -Recurse -Force
 } else {
     $script:checks++

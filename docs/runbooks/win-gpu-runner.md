@@ -95,11 +95,13 @@ Run the commands in an elevated PowerShell (Run as administrator) unless a step 
 **A clean elevated window.** A folder on the `PATH` that `helios-ci` can change (step 4b's audit lists it as a `PATH`
 line) gives it what you run by name in an ordinary elevated window. That window loads your PowerShell profile, which
 may run `git` or other programs by name (posh-git and oh-my-posh do), and PowerShell looks on the `PATH` for a cmdlet
-whose module it has not loaded yet before it loads the module: in a new window, `Disable-LocalUser`, `Get-CimInstance`
-or `Get-Acl` runs a `Get-Acl.exe` (or `.cmd`, `.bat`, `.ps1`) that it finds there first. A clean window loads no
-profile and looks only in Windows' own folders. Run step 4b's audit only in one, and whatever else this page says to
-run in one. Press Win+R, type `%SystemRoot%\System32\cmd.exe /d`, press Ctrl+Shift+Enter (run as administrator) and
-confirm, then paste these three lines into the window that opens:
+whose module it has not loaded yet before it loads the module: in a new window, `Get-Acl` runs a `Get-Acl.exe` (or
+`.cmd`, `.bat`, `.ps1`) that it finds there first, and so do `Disable-LocalUser` and `Get-CimInstance`. A clean window
+loads no profile, looks for programs only in Windows' own folders, and loads modules only from System32's and from
+`C:\Program Files\WindowsPowerShell\Modules`, which Windows PowerShell puts in front of it (Windows keeps PSReadLine
+there; the audit checks it where it is on the machine's `PSModulePath`, as by default). Run step 4b's audit only in
+one, and whatever else this page says to run in one. Press Win+R, type `%SystemRoot%\System32\cmd.exe /d`, press
+Ctrl+Shift+Enter (run as administrator) and confirm, then paste these three lines into the window that opens:
 
 ```bat
 set "PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem;%SystemRoot%\System32\WindowsPowerShell\v1.0"
@@ -163,8 +165,10 @@ window:
    & "$env:SystemRoot\System32\cmd.exe" /d /c rd /s /q "\\?\C:\VulkanSDK"
    ```
 
-   Take every other `PATH` line's entry off the `PATH` in System Properties, started from the clean window by its full
-   path (started from Start, it would get Explorer's `PATH`):
+   Take the entry of every `PATH` line off the `PATH`, the SDK's `Bin` included if you deleted `C:\VulkanSDK` (a
+   missing folder that `helios-ci` could make again at `C:\` is still a `PATH` line; installing the SDK again in step
+   4 puts the entry back), in System Properties, started from the clean window by its full path (started from Start,
+   it would get Explorer's `PATH`):
 
    ```powershell
    # Already done: the PATH editor (System Properties), started from the clean window by its full path.
@@ -177,7 +181,7 @@ window:
 4. Open an ordinary elevated window: it starts with the cleaned `PATH` (a window keeps the `PATH` it started with),
    which finds `winget` and `git` again. If you deleted `C:\VulkanSDK`, install the SDK again (step 4's line; if
    `winget` still finds the old installation, add `--force`) and close its new folder at once with step 4b's block for
-   a tool: nothing of `helios-ci` can run in between.
+   a tool: nothing of `helios-ci` can run in between. Rotate's step 2, below, audits the result in a clean window.
 
 Then start over, whatever the list of jobs showed: install Go and set the execution policy (the `GoLang.Go` and
 `Set-ExecutionPolicy` lines of step 4), require approval for fork pull requests (step 8), then follow "Rotate" below
@@ -437,14 +441,14 @@ you close or move anything:
 - **`PATH` lines first**: until they are gone, any program that you start by name, `cmd` and `icacls` included, and
   in any window but a clean one any cmdlet whose module the window has not loaded yet, may be one that this code put
   there. Do steps 1 to 4 of "Already done" in a clean elevated window (disable `helios-ci`, delete `C:\VulkanSDK`,
-  take the other entries off the `PATH` with the editor started from that window, run the audit again; then install
-  the SDK again in an ordinary window and close it) before the rest of this list.
+  take every `PATH` line's entry off the `PATH`, the deleted SDK's included, with the editor started from that window,
+  run the audit again; then install the SDK again in an ordinary window and close it) before the rest of this list.
 - **A tool listed as `write`** (for example `C:\VulkanSDK`, whose validation layer the Vulkan loader loads into your
   own validated runs): delete the folder without running anything in it, its uninstaller included (that would run
   as you), calling `cmd.exe` by its full path:
   `& "$env:SystemRoot\System32\cmd.exe" /d /c rd /s /q "\\?\C:\VulkanSDK"`. Then install the tool again (step 4's
   line; if `winget` still finds the old installation, add `--force`) and close the new folder as above (on the
-  "Already done" path, its steps 2 and 3 did this for `C:\VulkanSDK`).
+  "Already done" path, its steps 2 and 4 did this for `C:\VulkanSDK`).
 - **A clone of a repository**: clone it again into your profile instead of moving the old one, and do not build, run
   or open anything from the old clone; delete it with `rd` as above.
 - **Secrets in any listed folder**, `read` lines included (a token in a clone's `.git\config`, `.env` files, keys):

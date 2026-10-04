@@ -4,8 +4,8 @@
 # distinctive: common English words (Hollow, Quiet, Ember, Mule, Vane, Guardian, Ghost) would drown
 # the lint in false positives.
 
-# Reference-content names (*Cinder Reach*, 01 §4.2). Allowed only in content/; engine and
-# Foundation code must stay setting-agnostic. Case-sensitive.
+# Reference-content names (*Cinder Reach*, 01 §4.2). Allowed only in the content directories (below);
+# engine and Foundation code must stay setting-agnostic. Case-sensitive.
 set(HELIOS_IP_REFERENCE_NAMES
   "Cinder Reach" Tallis Harrow "Harrow High" Saltmarch Kestrel Keth "Meridian Directorate" "Free Compact"
   "Osk Yard" "Lattice Heart" Osk)
@@ -23,12 +23,15 @@ set(HELIOS_IP_FRANCHISE_NAMES_ANYCASE
 set(HELIOS_IP_FRANCHISE_NAMES_CASED Vader Yoda Jawa Ewok Hutt Jove Oryx Banu "Old Republic")
 
 # Franchise titles: fine in code comments that credit an architecture ("EVE's time dilation"), but
-# never in shipped sample content. Case-insensitive, checked under content/ only.
+# never in shipped sample content or concept art. Case-insensitive, checked in the content directories only.
 set(HELIOS_IP_FRANCHISE_TITLES "star wars" swtor swg "eve online" "star citizen" "destiny 2" "squadron 42")
 
-# Where the lint looks (relative to the repository root) and what it skips.
-set(HELIOS_IP_SCAN_DIRS engine apps tools schemas services shaders content gems cmake)
-set(HELIOS_IP_CONTENT_DIRS content)
+# Where the lint looks (relative to the repository root) and what it skips. The content directories
+# may use reference-content names and must not use franchise titles. docs/concept/ (concept art: sidecars
+# with their AI prompts, and reviews) is one of them: it names the reference setting as docs/plan/ does
+# (which the lint does not scan), and its prompts must not reach for other franchises by name or title.
+set(HELIOS_IP_SCAN_DIRS engine apps tools schemas services shaders content gems cmake docs/concept)
+set(HELIOS_IP_CONTENT_DIRS content docs/concept)
 # tools/lint/ itself is skipped: its policy files, fixtures and tests spell the names out.
 set(HELIOS_IP_EXCLUDE_PATTERNS
   "^tools/lint/"

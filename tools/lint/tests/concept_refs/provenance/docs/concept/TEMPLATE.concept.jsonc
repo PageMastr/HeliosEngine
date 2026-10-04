@@ -1,0 +1,7 @@
+// Fixture template: valid, so that only this fixture's seeded findings are reported.
+{
+  "image": "t01-demo-v09.png", "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "title": "Demo", "author": "Fixture author", "created": "2026-10-04", "source": {"kind": "owner"},
+  "tools": [], "ai": null, "licence": "MIT", "ipReview": "Fixture.", "status": "directional",
+  "elements": [], "phase": "Ph1", "planRefs": ["07 §2.1 T01"], "deviations": [], "review": ""
+}

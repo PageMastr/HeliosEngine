@@ -651,13 +651,14 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 				mark(v, "", c)
 			}
 		}
-		if outs, ok := fs.producers[c.name]; ok { // helios_isa_avx2_flags(out): out holds the flags
+		// helios_isa_avx2_flags(out): out holds the flags. The call is read on as any other: a function that
+		// also grants its other arguments (a wrapper) is passed them, and the output names are bare words.
+		if outs, ok := fs.producers[c.name]; ok {
 			for i := range outs {
 				if i < len(fields) {
 					mark(strings.Trim(fields[i], `"`), "", c)
 				}
 			}
-			continue
 		}
 		if m := nestedRefRE.FindString(c.args); m != "" && !isaInertCmds[c.name] {
 			flags = append(flags, m) // ${${n}}: a value CONF-11 cannot tell, so it fails closed

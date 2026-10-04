@@ -17,6 +17,7 @@
 #include <string_view>
 
 #include "helios/rhi/types.h"
+#include "vk_sync.h"
 
 namespace helios::rhi::vk {
 
@@ -26,16 +27,6 @@ std::string_view resultName(VkResult result) noexcept;
 VkFormat toVkFormat(Format format) noexcept;
 Format fromVkFormat(VkFormat format) noexcept;
 VkImageAspectFlags aspectOf(Format format) noexcept;
-
-/// Pipeline stages, access mask and image layout that a ResourceState stands for.
-struct StateInfo {
-    VkPipelineStageFlags2 stages = VK_PIPELINE_STAGE_2_NONE;
-    VkAccessFlags2 access = VK_ACCESS_2_NONE;
-    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
-};
-StateInfo stateInfo(ResourceState state) noexcept;
-/// Restricts a stage mask to what a queue family supports (falls back to ALL_COMMANDS).
-VkPipelineStageFlags2 maskStages(VkPipelineStageFlags2 stages, VkQueueFlags queueFlags) noexcept;
 
 VkFilter toVkFilter(Filter f) noexcept;
 VkSamplerMipmapMode toVkMipmapMode(Filter f) noexcept;

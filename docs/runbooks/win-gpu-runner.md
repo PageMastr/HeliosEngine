@@ -40,25 +40,31 @@ installation (`D:\helios-ci\runner`, including `.env`) and the runner's credenti
 off through `.env`, through the PowerShell profile (which the runner loads before the hook), or with
 `Set-ExecutionPolicy -Scope CurrentUser Restricted`: the CurrentUser scope takes precedence over the LocalMachine
 policy of step 4, so the hook would no longer start, and only an execution policy set by Group Policy prevents that
-(the checklist checks the scope and the profiles). It cannot reach your profile, administrator rights or the LAN, nor,
-after step 4b, your folders elsewhere on the drives. Like every local account, it can still read what Windows leaves
-open to all users (the machine-wide tools, which the build needs, `C:\ProgramData` and whatever step 4b's audit lists
-as `read`), create files and folders in `C:\ProgramData` and `C:\Windows\Temp` and folders at the root of a drive,
-read and change `C:\Users\Public` (Windows lets interactive and service logons write there, so keep nothing in it that
-you would mind losing or that you run), and read and write a FAT32 or exFAT drive (most USB sticks) while one is
-plugged in. It can reach programs on the PC itself that listen on the network, including on `localhost` (Windows
-Firewall does not filter loopback): keep such services (databases, dev servers, remote-control tools) behind a
-password, or stop them while the runner is enabled. The firewall blocks private addresses only, so the router's public
-(WAN) address stays reachable: many routers show their admin page there to clients on the LAN, and NAT loopback passes
-port-forwarded traffic on to the LAN device behind it (a NAS), often with the router's LAN address as the source. That
-depends on the router; the checklist tests it, and if the admin page or a forwarded service answers, turn off the
-router's remote administration or NAT loopback (or the port forward). If you suspect misuse, follow "Rotate" below.
+(the checklist checks the scope and the profiles). It cannot reach your profile or the LAN, nor, after step 4b, your
+folders elsewhere on the drives. It cannot reach administrator rights either, **as long as you never run anything from
+`D:\helios-ci` in an elevated window once the service has run**: not `config.cmd`, `run.cmd` or a program in `bin`,
+and not from a folder that "Rotate" sets aside. The account can change every file there, `config.cmd` included, and
+what you run elevated runs with your rights ("Rotate or remove" below never does it). Like every local account, it can
+still read what Windows leaves open to all users (the machine-wide tools, which the build needs, `C:\ProgramData` and
+whatever step 4b's audit lists as `read`), create files and folders in `C:\ProgramData` and `C:\Windows\Temp` and
+folders at the root of a drive, read and change `C:\Users\Public` (Windows lets interactive and service logons write
+there, so keep nothing in it that you would mind losing or that you run), and read and write a FAT32 or exFAT drive
+(most USB sticks) while one is plugged in. It can reach programs on the PC itself that listen on the network,
+including on `localhost` (Windows Firewall does not filter loopback): keep such services (databases, dev servers,
+remote-control tools) behind a password, or stop them while the runner is enabled. The firewall blocks private
+addresses only, so the router's public (WAN) address stays reachable: many routers show their admin page there to
+clients on the LAN, and NAT loopback passes port-forwarded traffic on to the LAN device behind it (a NAS), often with
+the router's LAN address as the source. That depends on the router; the checklist tests it, and if the admin page or a
+forwarded service answers, turn off the router's remote administration or NAT loopback (or the port forward). If you
+suspect misuse, follow "Rotate" below.
 
 Code that ran as `helios-ci` while the runner had no working hook was not reviewed at all, and it could have done all
-of the above: that is a runner online before step 9 ("Already done" below), and the jobs behind "`File doesn't
-exist`" and "could not end the job" under "Day to day". Changed runner files, a planted profile or a copy of the
-runner's credentials leave nothing that a checklist could reliably find, and a job can delete its own log, so treat
-it as suspected misuse: Rotate with a new account and new runner folders.
+of the above: that is a runner online before step 9 ("Already done" below), and the jobs behind "`File doesn't exist`"
+and "could not end the job" under "Day to day". Changed runner files, a planted profile or a copy of the runner's
+credentials leave nothing that a checklist could reliably find, and a job can delete its own log, so treat it as
+suspected misuse: "Rotate", which replaces the registration, the account and `D:\helios-ci`. That code could also
+change everything else the account could change at the time: before step 4b, every folder that step 4b's audit lists
+as `write`. Closing such a folder afterwards keeps what was planted in it; step 4b says what to do.
 
 ## Names (binding)
 
@@ -104,9 +110,15 @@ Get-ChildItem D:\helios-ci\runner\_diag -Filter 'Worker_*.log' | Select-Object N
 
 A job can also delete its own log, so an empty list does not prove that none ran. Start over either way: install Go
 and set the execution policy (the `GoLang.Go` and `Set-ExecutionPolicy` lines of step 4), require approval for fork
-pull requests (step 8), then follow "Rotate" below from its step 2, on the suspected-misuse path. It replaces the
-account and the runner's folders, installs the hook and the firewall before it registers the runner again, and goes
-on with step 4b, step 9 (which starts the service), the checklist and step 10.
+pull requests (step 8), then follow "Rotate" below from its step 2. It removes the runner with Windows' own tools,
+never with `config.cmd` from the old runner folder, which that code could have changed; it replaces the account and
+`D:\helios-ci`, installs the hook and the firewall before it registers the runner again from a fresh download in a new
+folder, and goes on with step 4b, step 9 (which starts the service), the checklist and step 10.
+
+Until step 4b, that code could also change every folder that step 4b's first audit lists as `write`, including
+`C:\VulkanSDK` (step 4 created it open, and the Vulkan loader loads its validation layer into your own validated
+runs), and read every folder the audit lists. Closing or moving such a folder keeps whatever was planted in it, so do
+step 4b's "After unreviewed code" list for that first audit before you close anything.
 
 ### 1. Prerequisites
 
@@ -125,20 +137,25 @@ Get-LocalGroupMember -SID S-1-5-32-544                                          
 
 ### 3. Folders, ACLs, BitLocker
 
-Create `D:\helios-ci\runner`, `work` and `hooks` without inherited permissions: `helios-ci`, Administrators and
-SYSTEM get full control of `runner` and `work`, and `helios-ci` gets read and execute only on `hooks`, so that no job
-can rewrite the hook. Turn BitLocker on for `D:` with auto-unlock.
+Create `D:\helios-ci\runner`, `work` and `hooks` without inherited permissions. Administrators and SYSTEM get full
+control of all three; `helios-ci` gets full control of `work`, read and execute only on `hooks`, so that no job can
+rewrite the hook, and nothing on `runner`: `config.cmd` (step 5) gives the account full control of `runner` and
+`work` through a local group of its own (`GITHUB_ActionsRunner_G...`), and until then no process of the account can
+change the runner's files that you run elevated in step 5. `D:\helios-ci` itself would inherit *Modify* for
+Authenticated Users from `D:\`, with which the account could rename it while nothing in it is open and put a tree of
+its own, `hooks` included, in its place; it gets Administrators and SYSTEM, and Users may only list it. Turn
+BitLocker on for `D:` with auto-unlock.
 
 ```powershell
 New-Item -ItemType Directory -Force -Path D:\helios-ci\runner, D:\helios-ci\work, D:\helios-ci\hooks | Out-Null
-icacls D:\helios-ci\runner /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "helios-ci:(OI)(CI)F"
+icacls D:\helios-ci /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-545:(RX)"
+icacls D:\helios-ci\runner /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F"
 icacls D:\helios-ci\work /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "helios-ci:(OI)(CI)F"
 icacls D:\helios-ci\hooks /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "helios-ci:(OI)(CI)RX"
 ```
 
 The entries name the account by its SID. An account created again under the same name has a new SID, so "Rotate"
-runs these lines again: `config.cmd` gives the account access to `runner` and `work` through a group of its own, but
-not to `hooks`.
+makes these folders again for the new account.
 
 ### 4. Tools, machine-wide
 
@@ -261,23 +278,45 @@ line:
 - **A FAT32 or exFAT drive**: unplug it while the runner is enabled, or keep nothing on it that is private or that you
   run.
 
+**After unreviewed code.** If code that nobody reviewed ran as `helios-ci` before you closed these folders (a runner
+online before step 9, as under "Already done", or a suspected misuse), every `write` line of the first audit was open
+to it and every line could be read. Closing or moving a folder keeps whatever was planted in it, so first:
+
+- **A tool listed as `write`** (for example `C:\VulkanSDK`, whose validation layer the Vulkan loader loads into your
+  own validated runs): delete the folder without running anything in it, its uninstaller included (that would run
+  as you): `cmd /c rd /s /q "\\?\C:\VulkanSDK"`. Then install the tool again (step 4's line; if `winget` still finds
+  the old installation, add `--force`) and close the new folder as above.
+- **A clone of a repository**: clone it again into your profile instead of moving the old one, and do not build, run
+  or open anything from the old clone; delete it with `rd` as above.
+- **Secrets in any listed folder**, `read` lines included (a token in a clone's `.git\config`, `.env` files, keys):
+  treat them as read, and replace them.
+- **Anything else you run** from a `write` folder, from `C:\Users\Public` or from a FAT32 or exFAT drive that was
+  plugged in: restore it from a backup made before the runner came online (2026-10-03), or install it again.
+
 Run the audit again until its `write` lines are at most such drives and its `read` lines are only tools the job uses. It reads the top
 level only: a folder you closed stays closed below, unless something below it grants access itself. A folder you
 create at a drive root later starts open again: run the audit after creating one (the checklist repeats it).
 
 ### 5. Register the runner
 
-GitHub → Settings → Actions → Runners → New self-hosted runner → Windows x64. Download the runner into
-`D:\helios-ci\runner`, then run `config.cmd` interactively with `--url`, `--token` (from that page), `--name
-helios-win-gpu`, `--labels win-gpu`, `--work D:\helios-ci\work` and `--runasservice`, and enter `.\helios-ci` and its
-password at the prompts. Never paste the token or the password anywhere else. The registration token is used once and
-is not stored; the runner keeps its own credentials in `D:\helios-ci\runner`.
+Register only from a fresh download into the new `runner` folder that step 3, or "Rotate", has just made (it may
+already hold step 6's `.env`). You run `config.cmd` elevated, so its folder must never have been open to
+`helios-ci`; once the service has run there, the account can change every file in it. To register again, follow
+"Rotate", which makes a new folder.
+
+GitHub → Settings → Actions → Runners → New self-hosted runner → Windows x64. In the elevated window, go to
+`D:\helios-ci\runner` (in place of the page's `mkdir actions-runner; cd actions-runner`) and run the page's Download
+commands there, including the line that checks the download's SHA-256. Then run `config.cmd` interactively with
+`--url`, `--token` (from that page), `--name helios-win-gpu`, `--labels win-gpu`, `--work D:\helios-ci\work` and
+`--runasservice`, and enter `.\helios-ci` and its password at the prompts. Never paste the token or the password
+anywhere else. The registration token is used once and is not stored; the runner keeps its own credentials in
+`D:\helios-ci\runner`.
 
 `config.cmd` starts the service at once, and the runner takes a job that waits for it within seconds. On Windows it
 never writes `.env`, so in a runner folder without one the service runs with no hook. Where you can, do steps 6 and 7
-before this step, as "Rotate" does after a suspected misuse: the download holds no `.env` either, so the service that
-`config.cmd` starts then reads your hook line, and the firewall rules already apply to its account. Either way, stop
-it and keep it from starting until step 9:
+before this step, as "Rotate" does: the download holds no `.env` either, so the service that `config.cmd` starts then
+reads your hook line, and the firewall rules already apply to its account. Either way, stop it and keep it from
+starting until step 9:
 
 ```powershell
 Get-Service actions.runner.* | Stop-Service
@@ -350,8 +389,10 @@ nothing ends the job ("`File doesn't exist`" under "Day to day"). PowerShell, in
 the execution policy is stricter than RemoteSigned or the file is marked as downloaded, which also fails the step
 without ending the job. This block starts the service only when `.env` sets the hook, `helios-ci` can read it, the
 file carries no download mark, and Windows PowerShell's machine-wide policy (step 4, or a group policy, which wins)
-lets it run; it stops with a message otherwise. It cannot see `helios-ci`'s own CurrentUser policy, which the
-checklist checks:
+lets it run; it stops with a message otherwise. It checks Windows PowerShell's policies only: when PowerShell 7 is
+installed, the runner starts the hook with `pwsh`, which keeps its own machine-wide policy (RemoteSigned, unless
+`$PSHOME\powershell.config.json` or a group policy under PowerShellCore sets another), and neither shell's
+CurrentUser policy for `helios-ci` shows here. The checklist asks `helios-ci` for the policy in effect in both:
 
 ```powershell
 # Step 9: start the runner only if .env sets the hook and helios-ci can read and run it.
@@ -410,8 +451,8 @@ GitHub → Settings → Secrets and variables → Actions → Variables → New 
 `enabled`. If the PC has more than one GPU, also set `HELIOS_WIN_GPU_ADAPTER` to part of the discrete GPU's name
 (for example `RTX`); the RHI then uses that adapter. Then Actions → win-gpu → Run workflow, on `main`.
 
-If the hook is ever removed, `.env` loses its line, the runner is registered again or `helios-ci` is created again,
-stop the service and set it to Manual (step 5) until steps 3, 6, 7 and 9 are done again.
+If the hook is ever removed or `.env` loses its line, stop the service and set it to Manual (step 5) until steps 6
+and 9 are done again. Register the runner again, or create `helios-ci` again, only through "Rotate".
 
 ## Verification checklist
 
@@ -427,6 +468,9 @@ Do this after the setup and after any change to the PC, the hook or the firewall
 - [ ] `icacls D:\helios-ci\hooks` gives `helios-ci` `(RX)` only and lists no bare `*S-1-5-21-...` SID (a deleted
       account's: see "Rotate"); `.env` has the hook line and no line that you did not write (each line sets a
       variable for the runner); the hash check above is True.
+- [ ] `icacls D:\helios-ci` lists Administrators, SYSTEM and `BUILTIN\Users:(RX)` only, and `icacls
+      D:\helios-ci\runner` names no account but Administrators, SYSTEM and `config.cmd`'s `GITHUB_ActionsRunner_G...`
+      group (step 3).
 - [ ] Step 4b's audit lists no `write` line but FAT32 or exFAT drives you accepted, and its `read` lines are only tools
       the job uses.
 - [ ] `Get-NetFirewallRule -Group 'Helios CI runner: LAN block for helios-ci'` lists 3 rules (2 with `-AllowAddress`),
@@ -439,7 +483,7 @@ Do this after the setup and after any change to the PC, the hook or the firewall
     the same command in `pwsh -NoProfile` if PowerShell 7 is installed. The runner loads these profiles before the
     hook, so code in one runs before the hook can refuse a job ("What stays possible" above). Ask `$PROFILE` as
     `helios-ci`, not a path under `C:\Users\helios-ci`: the account can move its own Documents folder. If one exists
-    and you did not make it, follow "Rotate" on the suspected-misuse path;
+    and you did not make it, follow "Rotate";
   - `Get-ChildItem C:\Users\<you>` fails with access denied;
   - for a folder that step 4b closed, `Get-ChildItem D:\Photos` and `Set-Content D:\Photos\probe.txt x` fail with
     access denied, and for a tool folder, `Set-Content C:\VulkanSDK\probe.txt x` does too;
@@ -447,10 +491,11 @@ Do this after the setup and after any change to the PC, the hook or the firewall
   - `Test-NetConnection <your public IP address> -Port 80` and `-Port 443` (the router's status page shows the
     address) fail, or reach nothing you would mind `helios-ci` using (see "What stays possible" above);
   - `git --version; cmake --version; python --version; go version; $env:VULKAN_SDK` all answer;
-  - `Get-ExecutionPolicy -Scope CurrentUser` answers `Undefined` (anything else overrides step 4's policy for
-    `helios-ci`; `Restricted` there would keep the hook from running), and so does
-    `pwsh -NoProfile -c Get-ExecutionPolicy -Scope CurrentUser` if PowerShell 7 is installed (it keeps its own
-    setting, and the runner starts the hook with `pwsh` when it finds it).
+  - `Get-ExecutionPolicy` (the policy in effect for `helios-ci`) answers `RemoteSigned`, `Unrestricted` or `Bypass`,
+    and `Get-ExecutionPolicy -Scope CurrentUser` answers `Undefined` (anything else overrides step 4's policy for
+    `helios-ci`; `Restricted` there would keep the hook from running). If PowerShell 7 is installed, the same two
+    answers come from `pwsh -NoProfile -c Get-ExecutionPolicy` and `pwsh -NoProfile -c Get-ExecutionPolicy -Scope
+    CurrentUser`: it keeps its own settings, and the runner starts the hook with `pwsh` when it finds it.
 - [ ] A dispatched run on `main`: "Set up runner" prints `job-started hook: workflow_dispatch job on refs/heads/main;
       removed N entries ...`; "Runner isolation" and "LAN egress blocked" pass (the latter says how many connects the
       firewall denied); the job builds; "The goldens and the bench ran on a hardware GPU" names your GPU.
@@ -486,17 +531,18 @@ Do this after the setup and after any change to the PC, the hook or the firewall
   possibly with a message about the runner's worker; the runner stays online. Look at which branch or fork started it.
 - **"could not end the job"** at "Set up runner": the hook refused a job but found no worker process to stop, or
   could not stop it, so that job's `if: always()` and `pre:` steps may have run. Stop the service (step 5), report
-  it, and follow "Rotate" on the suspected-misuse path before the runner runs again: that code was not reviewed. A
+  it, and follow "Rotate" (and step 4b's "After unreviewed code") before the runner runs again: that code was not
+  reviewed. A
   line saying that the parent process is not the runner's `Runner.Worker.exe`, or that its lookup failed,
   followed by "ending the job: stopping every Runner.Worker.exe", means the hook found the worker by name instead;
   the job was ended, but report it too.
 - **`File doesn't exist`** at "Set up runner", after "A job started hook has been configured by the self-hosted
   runner administrator": the runner could not see the hook. The file is missing, `.env` names another path, or
-  `helios-ci` cannot read it (for example because the account was created again and step 3's `icacls` line was not
-  run again). The hook did not run, so it did not end the job: the job's `if: always()` and `pre:` steps may have run.
-  Stop the service (step 5) and report it with the run's branch or fork. If the job was not a run of `main`, its code
-  was not reviewed: follow "Rotate" on the suspected-misuse path. Otherwise fix steps 3 and 6 and start the service
-  again with step 9's block.
+  `helios-ci` cannot read it (for example because the account was created again without "Rotate"). The hook did not
+  run, so it did not end the job: the job's `if: always()` and `pre:` steps may have run. Stop the service (step 5)
+  and report it with the run's branch or fork. If the job was not a run of `main`, its code was not reviewed: follow
+  "Rotate" (and step 4b's "After unreviewed code"). Otherwise fix steps 3 and 6 and start the service again with step
+  9's block.
 - **"entries survived the wipe"** at "Set up runner": a leftover process holds files in `D:\helios-ci\work`. Reboot
   (or end `helios-ci`'s processes); the next job wipes again.
 - **`rhi_triangle_smoke`** opens a window. A service runs without a desktop, so it may fail on this runner; that is a
@@ -512,29 +558,57 @@ Do this after the setup and after any change to the PC, the hook or the firewall
 ## Rotate or remove
 
 Rotate periodically, and at once if you suspect that a job misbehaved or that code nobody reviewed ran while the
-runner had no working hook:
+runner had no working hook. Every rotation is the same: it removes the runner without running anything from its
+folder, replaces the account and `D:\helios-ci`, installs the hook and the firewall rules for the new account, and
+only then registers the runner again, from a fresh download in the new `runner` folder.
+
+**Never run `config.cmd remove`**, the removal command that GitHub's page shows, and never run anything else from
+`D:\helios-ci`, or from a folder set aside from it, in an elevated window. Removing and registering a runner service
+both need administrator rights, and `config.cmd` runs `powershell.exe` over its folder and then
+`bin\Runner.Listener.exe`, all of which `helios-ci` can change: it has full control of the runner's folder, and the
+runner itself replaces `bin` when it updates. `config.cmd` is a plain batch file, so one line added to it would run
+with your rights. Its `remove` also stops and deletes whatever service the `.service` file there names.
 
 1. Set `HELIOS_WIN_GPU` to `disabled`.
-2. GitHub → Settings → Actions → Runners → `helios-win-gpu` → Remove; copy the removal token. On the PC:
-   `cd D:\helios-ci\runner; .\config.cmd remove --token <token>` (this also removes the service). The runner's
-   credentials stop working, and so does any copy of them.
-3. No suspected misuse: reset the account's password,
-   `Set-LocalUser helios-ci -Password (Read-Host -AsSecureString)`, and go on with step 4. `config.cmd remove`
-   deletes only the registration (`.runner`, `.credentials`), so `.env` keeps the hook line, and the account keeps
-   the SID that the `hooks` ACL and the firewall rules name.
+2. Remove the runner. On the PC, elevated, stop and delete the runner's service and the local group through which
+   `config.cmd` gave the account the runner's folders. `config.cmd` reuses a group of the same name, so a group left
+   behind would give the next account the folders that this rotation sets aside. (Like the rest of this runbook, the
+   block assumes that this PC runs no other runner.)
 
-   Suspected misuse: replace the account and the runner's folders, and install the hook and the firewall rules for
-   the new account **before** you register the runner again. `config.cmd` starts the service at once, jobs that asked
-   for this runner while it was stopped or removed still wait in the queue (up to 24 h), and the new runner takes one
-   within seconds: without the hook and the firewall rules, that job would run all of its steps, with the LAN open.
-   Run blocks a to d in one elevated window, in this order.
+   ```powershell
+   # Rotate: delete the runner's service and config.cmd's group with Windows' own tools, not with config.cmd.
+   & {
+       $ErrorActionPreference = 'Stop'
+       foreach ($service in @(Get-Service -Name actions.runner.*)) {
+           Stop-Service -Name $service.Name -Force
+           sc.exe delete $service.Name
+           if ($LASTEXITCODE -ne 0) { throw "sc.exe could not delete the service $($service.Name)" }
+       }
+       Get-LocalGroup -Name 'GITHUB_ActionsRunner_G*' | Remove-LocalGroup
+       'What is left (nothing below this line):'
+       Get-Service -Name actions.runner.*
+       Get-LocalGroup -Name 'GITHUB_ActionsRunner_G*'
+   }
+   ```
+
+   Then GitHub → Settings → Actions → Runners → `helios-win-gpu` → Remove → **Force remove this runner**, not the
+   command that the dialog shows. This deletes the registration, so the runner's credentials stop working, and so
+   does any copy of them.
+3. Replace the account and `D:\helios-ci`, and install the hook and the firewall rules for the new account
+   **before** you register the runner again. `config.cmd` starts the service at once, jobs that asked for this runner
+   while it was stopped or removed still wait in the queue (up to 24 h), and the new runner takes one within seconds:
+   without the hook and the firewall rules, that job would run all of its steps, with the LAN open. Run blocks a to d
+   in one elevated window, in this order.
 
    **a.** List what `helios-ci` owns outside its profile (it reads ACLs only, and may take a few minutes). Once the
    account is deleted, Windows shows these items' owner as a bare SID, and step 4b's audit no longer labels them
    `owner: helios-ci`. An `Owner` that starts with `?` means that the item's ACL could not be read, which the account
    can arrange for what it owns: look at it with `icacls`, after `takeown /f <path>` if need be. Keep the list for
    your report, and find out what each item is before you delete it: it may have been left for you, or for a program
-   you use, to run.
+   you use, to run. Windows PowerShell 5.1 follows directory links when it lists recursively, so a link that the old
+   account left in `ProgramData` or `Public` (to `C:\`, or in a loop) can keep this block busy for a very long time,
+   though it only reads. If it has not finished after half an hour, press Ctrl+C, look for such links (an `l` in the
+   `Mode` column of `Get-ChildItem -Force`) and note them for your report.
 
    ```powershell
    # Rotate: what helios-ci owns outside its profile, listed before the account is deleted.
@@ -579,34 +653,36 @@ runner had no working hook:
 
    Then create the account again (step 2).
 
-   **c.** Set the old `runner` and `work` folders aside, create new ones with step 3's permissions for the new
-   account, and give it step 3's access to the hook: the `hooks` ACL still names the old SID, and without the new
-   one `helios-ci` cannot read the hook ("`File doesn't exist`" under "Day to day"). The old folders keep the
-   evidence for your report: `runner.old-<time>\_diag` holds the runner's log and one `Worker_*.log` per job, beside
-   the old `.env` and the runner's files. Their ACLs name only the deleted account, Administrators and SYSTEM, so the
-   new account cannot open them.
+   **c.** Set the old `D:\helios-ci` aside, with its `runner`, `work` and `hooks`, and make step 3's folders again for
+   the new account: a new `runner` that only Administrators and SYSTEM can change until `config.cmd` has run, and a
+   new `hooks`, which the old account cannot have touched (the setup of 2026-10-03 gave it full control of `hooks`).
+   Renaming `D:\helios-ci` changes no permissions on anything inside it. If `Rename-Item` says that the folder is in
+   use, close what has it open (an Explorer window, or a window whose current folder is inside it) or restart the
+   PC, then run the block again. The old tree keeps the evidence for your report: `D:\helios-ci.old-<time>\runner\_diag`
+   holds the runner's log and one `Worker_*.log` per job, beside the old `.env` and the runner's files. Nothing in it
+   is run again, and step 5 deletes it.
 
    ```powershell
-   # Rotate: set the old runner and work folders aside, and give the new helios-ci step 3's folders and hook access.
+   # Rotate: set the old D:\helios-ci aside, and make step 3's folders again for the new helios-ci.
    & {
        $ErrorActionPreference = 'Stop'
        if (-not $old) { throw 'no $old: run block a first, it sets it' }
        if ((Get-LocalUser -Name helios-ci).SID.Value -eq $old) {
            throw 'helios-ci is still the old account: do block b and step 2 first'
        }
-       $stamp = Get-Date -Format yyyyMMdd-HHmmss
-       Rename-Item -LiteralPath D:\helios-ci\runner -NewName "runner.old-$stamp"
-       Rename-Item -LiteralPath D:\helios-ci\work -NewName "work.old-$stamp"
-       New-Item -ItemType Directory -Path D:\helios-ci\runner, D:\helios-ci\work | Out-Null
-       icacls D:\helios-ci\runner /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "helios-ci:(OI)(CI)F"
+       if (@(Get-Service -Name actions.runner.*).Count -or @(Get-LocalGroup -Name 'GITHUB_ActionsRunner_G*').Count) {
+           throw "the runner's service or config.cmd's group is still there: do Rotate's step 2 first"
+       }
+       Rename-Item -LiteralPath D:\helios-ci -NewName "helios-ci.old-$(Get-Date -Format yyyyMMdd-HHmmss)"
+       New-Item -ItemType Directory -Path D:\helios-ci\runner, D:\helios-ci\work, D:\helios-ci\hooks | Out-Null
+       icacls D:\helios-ci /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-545:(RX)"
+       if ($LASTEXITCODE -ne 0) { throw 'icacls failed on D:\helios-ci' }
+       icacls D:\helios-ci\runner /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F"
        if ($LASTEXITCODE -ne 0) { throw 'icacls failed on D:\helios-ci\runner' }
        icacls D:\helios-ci\work /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "helios-ci:(OI)(CI)F"
        if ($LASTEXITCODE -ne 0) { throw 'icacls failed on D:\helios-ci\work' }
        icacls D:\helios-ci\hooks /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "helios-ci:(OI)(CI)RX"
        if ($LASTEXITCODE -ne 0) { throw 'icacls failed on D:\helios-ci\hooks' }
-       icacls D:\helios-ci\hooks /remove:g "*$old"
-       if ($LASTEXITCODE -ne 0) { throw "icacls could not drop $old from D:\helios-ci\hooks" }
-       icacls D:\helios-ci\hooks\job-started.ps1      # <PC>\helios-ci:(I)(RX), and no bare *S-1-5-21-... SID
    }
    ```
 
@@ -631,24 +707,28 @@ runner had no working hook:
        Set-Content -LiteralPath D:\helios-ci\runner\.env -Encoding Ascii `
            -Value 'ACTIONS_RUNNER_HOOK_JOB_STARTED=D:\helios-ci\hooks\job-started.ps1'
        & "$repo\tools\ci\runner\firewall.ps1"
+       icacls D:\helios-ci\hooks\job-started.ps1      # <PC>\helios-ci:(I)(RX), Administrators and SYSTEM only
    }
    ```
 
    Last, cancel the runs that still wait for this runner: Actions → filter `is:queued` → each run whose job waits for
    a runner with the `win-gpu` label → Cancel workflow. The hook would end them too, but this way nothing rests on it.
    Go on with step 4: the service that `config.cmd` starts runs the hook, and the firewall rules apply to its account.
-4. Register again (step 5, which ends with stopping the service), run step 4b's audit, start the service with step 9's
-   block (it refuses while `.env` does not set the hook or `helios-ci` cannot read it), go through the checklist, and
-   set `HELIOS_WIN_GPU=enabled`.
-5. After a suspected misuse, delete the set-aside folders once your report no longer needs them:
-   `cmd /c rd /s /q "\\?\D:\helios-ci\runner.old-<time>"`, and the same for `work.old-<time>`. Like the hook's wipe,
-   `rd` removes a link inside without following it, whereas Windows PowerShell 5.1's `Remove-Item -Recurse` can follow
-   a directory link that the old account left there into its target, with your administrator rights.
+4. Register again (step 5: a fresh download into the new `runner` folder, then `config.cmd`; it ends with stopping
+   the service), run step 4b's audit (and its "After unreviewed code" list, if that is why you rotate), start the
+   service with step 9's block (it refuses while `.env` does not set the hook or `helios-ci` cannot read it), go
+   through the checklist, and set `HELIOS_WIN_GPU=enabled`.
+5. Delete the set-aside tree once your report no longer needs it, without running anything in it:
+   `cmd /c rd /s /q "\\?\D:\helios-ci.old-<time>"`. Like the hook's wipe, `rd` removes a link inside without following
+   it, whereas Windows PowerShell 5.1's `Remove-Item -Recurse` can follow a directory link that the old account left
+   there into its target, with your administrator rights.
 
-Remove for good: delete the `HELIOS_WIN_GPU` variable, `config.cmd remove --token <token>`,
-`.\tools\ci\runner\firewall.ps1 -Remove` (it also works after the account is gone), then
-`$old = (Get-LocalUser -Name helios-ci).SID.Value` and Rotate's block b (the account's processes, its profile and the
-account), and `cmd /c rd /s /q "\\?\D:\helios-ci"`.
+Remove for good: delete the `HELIOS_WIN_GPU` variable; do Rotate's step 2 (the service, `config.cmd`'s group and the
+registration, without `config.cmd`); remove the firewall rules from your clone with
+`& "$env:USERPROFILE\src\HeliosEngine\tools\ci\runner\firewall.ps1" -Remove` (it also works after the account is
+gone); run Rotate's blocks a and b (what the account owns, then its processes, its profile and the account); then
+delete the folders without running anything in them: `cmd /c rd /s /q "\\?\D:\helios-ci"`, and the same for every
+`D:\helios-ci.old-<time>`.
 
 ## Not covered yet (WP-0.4)
 

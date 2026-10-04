@@ -6,8 +6,8 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// TTLs on configs reached through new(T), an address, an index and a range variable, and in elided
-// elements of a collection literal.
+// TTLs on configs reached through new(T), an address, an index, a range variable and a variable set from
+// an element, and in elided elements of a collection literal.
 func forms(cfgs []jetstream.KeyValueConfig) {
 	q := new(jetstream.KeyValueConfig)
 	q.Bucket = "LEASES"
@@ -27,4 +27,11 @@ func forms(cfgs []jetstream.KeyValueConfig) {
 	}
 	_ = []jetstream.KeyValueConfig{{Bucket: "fence", TTL: time.Second}}
 	_ = map[string]*jetstream.KeyValueConfig{"a": {Bucket: "leader", LimitMarkerTTL: time.Second}}
+	first := cfgs[1]
+	first.TTL = time.Second
+	m := map[string]*jetstream.KeyValueConfig{"l": {Bucket: "LEASES"}}
+	m["l"].TTL = time.Second
+	if v, ok := m["l"]; ok {
+		v.TTL = time.Second
+	}
 }

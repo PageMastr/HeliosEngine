@@ -7,17 +7,21 @@
 # `key = "zone.1"`). In Go NATS code, CAS on a key the lint cannot resolve and a TTL on a bucket it cannot
 # resolve fail closed (kv.go:18 is both an unresolved KeyTTL key and CAS on it; elect.go, both APIs).
 # A TTL in a nats.c file that sets no Bucket fails closed (ttl_helper.cpp), also in a file that includes
-# <nats.h> and never names kvConfig (ttl_include.cpp).
+# <nats.h> and never names kvConfig (ttl_include.cpp). A nats.c MaxAge (a jsStreamConfig field) counts on
+# a lease bucket's KV_ stream, and kvStore_*WithTTL is CAS with a per-key TTL (stream.cpp).
 # TTL fields assigned after the literal count the same way (ttl_assign.go: a lease bucket, a parameter's
 # unresolved bucket, a field of the config type, a lease bucket's KV_ stream), also on configs reached
-# through new(T), an address, an index or a range variable, and in a collection literal's elided elements
-# (ttl_forms.go; cfgs is a parameter, so its bucket does not resolve).
+# through new(T), an address, an index, a range variable or an element's copy, and in a collection
+# literal's elided elements (ttl_forms.go; cfgs is a parameter, so its bucket does not resolve).
 # (CONF-01 also fires on these buckets; this fixture runs CONF-02 alone.)
 apps/cell/config.cpp:6: CONF-02
 apps/cell/leader.cpp:8: CONF-02
 apps/cell/leader.cpp:11: CONF-02
 apps/cell/lease.cpp:5: CONF-02
 apps/cell/lease.cpp:7: CONF-02
+apps/cell/stream.cpp:6: CONF-02
+apps/cell/stream.cpp:10: CONF-02
+apps/cell/stream.cpp:11: CONF-02
 apps/cell/ttl_helper.cpp:4: CONF-02
 apps/cell/ttl_include.cpp:6: CONF-02
 services/internal/orch/elect.go:16: CONF-02
@@ -46,3 +50,6 @@ services/internal/orch/ttl_forms.go:23: CONF-02
 services/internal/orch/ttl_forms.go:26: CONF-02
 services/internal/orch/ttl_forms.go:28: CONF-02
 services/internal/orch/ttl_forms.go:29: CONF-02
+services/internal/orch/ttl_forms.go:31: CONF-02
+services/internal/orch/ttl_forms.go:33: CONF-02
+services/internal/orch/ttl_forms.go:35: CONF-02

@@ -3,3 +3,4 @@
 # resolve), a store's own Create outside NATS code, and another struct's TTL outside nats.c code.
 # A TTL assigned after the literal to a projection's config, and MaxAge on an ordinary stream, also through
 # new(T), a range variable and elided collection elements.
+# nats.c: an ordinary stream's MaxAge in a file that sets no Bucket, and CAS with a TTL on a zone key.

@@ -7,17 +7,19 @@
 # addresses, IPv4 and IPv6, stray and non-canonical addresses) and the rules it adds and removes (the firewall
 # cmdlets mocked); job-started.ps1's refusal rules, how it ends a refused job (the process cmdlets mocked) and the
 # entries it would delete; every PowerShell block of docs/runbooks/win-gpu-runner.md parses, and its step 4b audit
-# (what helios-ci can open at the root of each local drive), step 9's check before the service starts (the hook is
-# set in .env, readable by helios-ci and not marked as downloaded, and the execution policy lets it run) and the
-# rotate blocks (the runner's service and config.cmd's group deleted with Windows' tools; what helios-ci owns;
-# deleting its processes, profile and account; a new D:\helios-ci with step 3's folders for a new account; the hook,
-# .env and firewall rules before the runner is registered again) run against stand-ins for WMI, the account, group,
-# process, file, ACL, registry, git and service cmdlets; no runbook step runs anything from D:\helios-ci (config.cmd
-# remove included) or changes into it, and every registration is in a new runner folder that helios-ci could not
-# change; the "Already done" path, step 4b and the checklist name the steps that matter for a runner that already ran
-# without the hook. The
-# scripts have no test switch: their functions and constants are loaded from the parsed files, so their last block
-# (the run) never runs here. On Windows also the wipe itself on a scratch tree under -WorkDir: a junction to a
+# (what helios-ci can open at the root of each local drive, and the folders on the PATH and PSModulePath that it could
+# change, replace or make), step 9's check before the service starts (the hook is set in .env, readable by helios-ci
+# and not marked as downloaded, and the execution policy lets it run), "Already done"'s first block (helios-ci
+# disabled, its processes ended) and the rotate blocks (the runner's service and config.cmd's group deleted with
+# Windows' tools; what helios-ci owns; deleting its processes, profile and account; a new D:\helios-ci with step 3's
+# folders for a new account, the old logs copied out; the hook, .env and firewall rules before the runner is
+# registered again) run against stand-ins for WMI, the account, group, process, file, ACL, registry, git and service
+# cmdlets; no runbook step runs anything from D:\helios-ci (config.cmd remove included) or changes into it, every
+# registration is in a new runner folder that helios-ci could not change, and every rd runs in cmd.exe called by its
+# full path; the "Already done" path cleans the PATH before the owner runs any program by name, and it, step 4b and
+# the checklist name the steps that matter for a runner that already ran without the hook. The scripts have no test
+# switch: their functions and constants are loaded from the parsed files, so their last block (the run) never runs
+# here. On Windows also the wipe itself on a scratch tree under -WorkDir: a junction to a
 # directory outside, a directory symbolic link where creating one is allowed, read-only files and a deep tree; the
 # links go, their targets stay. The last line says whether the wipe ran, and CTest requires "(wipe: ran)" on Windows
 # (tools/ci/CMakeLists.txt).
@@ -222,12 +224,13 @@ function New-AuditAcl([string]$Owner, [object[]]$Rules = @()) {
     }
     return $acl
 }
-# Runs the audit on $AuditDisks (drive -> file system), $AuditItems (drive root -> names) and $AuditAcls (path -> ACL,
-# or the message Get-Acl fails with), in a child scope so that its variables cannot change this script's. Leaves its
-# rows ('path|access|who') in $script:auditRows, its output in $script:auditOutput and its warnings in
-# $script:auditWarnings.
+# Runs the audit on $AuditDisks (drive -> file system), $AuditItems (drive root -> names), $AuditAcls (path -> ACL,
+# or the message Get-Acl fails with), $AuditEnvironment (registry key -> its values, as a hashtable; a key that is not
+# there is missing) and $AuditFolders (the folders that exist, for the PATH's entries), in a child scope so that its
+# variables cannot change this script's. Leaves its rows ('path|access|who') in $script:auditRows, its output in
+# $script:auditOutput and its warnings in $script:auditWarnings.
 function Invoke-HeliosCiAudit([hashtable]$AuditDisks, [hashtable]$AuditItems, [hashtable]$AuditAcls,
-    [string]$AuditAccount = $ciSid) {
+    [string]$AuditAccount = $ciSid, [hashtable]$AuditEnvironment = @{}, [string[]]$AuditFolders = @()) {
     function Get-CimInstance {
         [CmdletBinding()]
         param([Parameter(Position = 0)] [string]$ClassName, [string]$Filter)
@@ -253,19 +256,33 @@ function Invoke-HeliosCiAudit([hashtable]$AuditDisks, [hashtable]$AuditItems, [h
         if ($null -eq $entry) { throw "unexpected Get-Acl $LiteralPath" }
         return $entry
     }
+    # The PATH settings come from the registry (what every new window gets), as Get-ItemProperty gives them: values
+    # expanded. A missing key is a non-terminating error, as from the cmdlet (the audit asks to ignore it).
+    function Get-ItemProperty {
+        [CmdletBinding()] param([string]$LiteralPath)
+        if ($LiteralPath -cne 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -and
+            $LiteralPath -cne 'HKCU:\Environment') { throw "unexpected Get-ItemProperty $LiteralPath" }
+        if (-not $AuditEnvironment.ContainsKey($LiteralPath)) { Write-Error "Cannot find path '$LiteralPath'."; return }
+        [pscustomobject]$AuditEnvironment[$LiteralPath]
+    }
+    function Test-Path {
+        [CmdletBinding()] param([string]$LiteralPath, [string]$PathType)
+        if ($PathType -ne 'Container') { throw "unexpected Test-Path $LiteralPath $PathType" }
+        return $AuditFolders -contains $LiteralPath
+    }
     function Write-Warning([string]$Message) { $script:auditWarnings.Add($Message) }
     $script:auditWarnings = New-Object System.Collections.Generic.List[string]
     $script:auditRows = @()
     $script:auditOutput = @()
-    $savedDrive = $env:SystemDrive
-    $env:SystemDrive = 'C:'
+    $savedDrive, $savedRoot = $env:SystemDrive, $env:SystemRoot
+    $env:SystemDrive, $env:SystemRoot = 'C:', 'C:\Windows'
     try {
         & {
             $script:auditOutput = @(. ([scriptblock]::Create($audit[0])))
             $script:auditRows = @($found | ForEach-Object { "$($_.Path)|$($_.Access)|$($_.Who)" })
         }
     } finally {
-        $env:SystemDrive = $savedDrive
+        $env:SystemDrive, $env:SystemRoot = $savedDrive, $savedRoot
     }
 }
 if ($audit.Count -eq 1) {
@@ -322,10 +339,82 @@ if ($audit.Count -eq 1) {
 
     Invoke-HeliosCiAudit -AuditDisks @{ 'C:' = 'NTFS' } -AuditItems @{ 'C:\' = @('Closed', 'Windows') } `
         -AuditAcls @{ 'C:\Closed' = $closed }
-    Assert-Equal @('Nothing at the root of a local drive is open to helios-ci') $script:auditOutput 'the audit when nothing is open'
+    Assert-Equal @('Nothing at the root of a local drive or on the PATH is open to helios-ci') $script:auditOutput 'the audit when nothing is open'
     Assert-Equal 0 $script:auditRows.Count 'and it has no rows'
     Assert-Throws { Invoke-HeliosCiAudit -AuditDisks @{} -AuditItems @{} -AuditAcls @{} -AuditAccount '' } 'do step 2 first' `
         'the audit without the helios-ci account'
+
+    # The PATH and PSModulePath, the machine's and the owner's: every program started by name, elevated or not, and
+    # every DLL that a program does not find in its own folder or in System32 is looked for in these folders, in order,
+    # and the Vulkan SDK puts its Bin first. A folder on them must not be open to helios-ci; a folder above it must not
+    # let helios-ci rename it and put its own in its place (the right to make folders, which Users have in ProgramData
+    # and every account at a drive root, does not count there); and a missing one must not be creatable.
+    $machineKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+    $userKey = 'HKCU:\Environment'
+    $installer = 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'   # TrustedInstaller
+    $systemOnly = New-AuditAcl $installer @($admins, (New-AuditRule 'S-1-5-18' $full), (New-AuditRule 'S-1-5-32-545' $readExecute))
+    $ownerOnly = New-AuditAcl 'S-1-5-21-1-2-3-1001' @($admins, (New-AuditRule 'S-1-5-18' $full), (New-AuditRule 'S-1-5-21-1-2-3-1001' $full))
+    $makeOnly = 0x116   # WriteData, AppendData, WriteExtendedAttributes, WriteAttributes: Users' entry on ProgramData
+    $pathAcls = @{
+        'C:\'                                                 = New-AuditAcl $installer @($admins, (New-AuditRule 'S-1-5-11' 0x4),
+            (New-AuditRule 'S-1-5-32-545' $readExecute))
+        'D:\'                                                 = New-AuditAcl 'S-1-5-32-544' @($admins, (New-AuditRule 'S-1-5-11' $modify),
+            (New-AuditRule 'S-1-5-32-545' $readExecute))
+        'C:\Windows\system32'                                 = $systemOnly
+        'C:\Windows'                                          = $systemOnly
+        'C:\VulkanSDK\1.3.290.0\Bin'                          = New-AuditAcl 'S-1-5-32-544' $openToAll
+        'C:\Program Files\Git\cmd'                            = $systemOnly
+        'C:\Program Files\Git'                                = $systemOnly
+        'C:\Program Files'                                    = $systemOnly
+        'C:\Tools\Closed\bin'                                 = $closed
+        'C:\Tools\Closed'                                     = $closed
+        'C:\Tools'                                            = New-AuditAcl 'S-1-5-32-544' $openToAll
+        'C:\ProgramData\Vendor\bin'                           = $systemOnly
+        'C:\ProgramData\Vendor'                               = $systemOnly
+        'C:\ProgramData'                                      = New-AuditAcl 'S-1-5-18' @($admins, (New-AuditRule 'S-1-5-32-545' $readExecute),
+            (New-AuditRule 'S-1-5-32-545' $makeOnly))
+        'C:\Unreadable\bin'                                   = 'Attempted to perform an unauthorized operation.'
+        'C:\Owned'                                            = New-AuditAcl $ciSid @($admins)
+        'D:\Closed'                                           = $closed
+        'C:\Program Files\WindowsPowerShell\Modules'          = $systemOnly
+        'C:\Program Files\WindowsPowerShell'                  = $systemOnly
+        'C:\Modules'                                          = New-AuditAcl 'S-1-5-32-544' $openToAll
+        'C:\Users\owner\AppData\Local\Microsoft\WindowsApps'  = $ownerOnly
+        'C:\Users\owner\AppData\Local\Microsoft'              = $ownerOnly
+        'C:\Users\owner\AppData\Local'                        = $ownerOnly
+        'C:\Users\owner\AppData'                              = $ownerOnly
+        'C:\Users\owner'                                      = $ownerOnly
+        'C:\Users'                                            = New-AuditAcl 'S-1-5-18' @($admins, (New-AuditRule 'S-1-1-0' $readExecute),
+            (New-AuditRule 'S-1-5-32-545' $readExecute))
+        'D:\tools'                                            = New-AuditAcl 'S-1-5-21-1-2-3-1001' $openToAll
+    }
+    $pathFolders = @($pathAcls.Keys | Where-Object { $_ -notlike '?:\' }) + @('C:\Unreadable')
+    $pathEnvironment = @{
+        $machineKey = @{
+            Path         = ('%SystemRoot%\system32;C:\Windows;C:\VulkanSDK\1.3.290.0\Bin;"C:\Program Files\Git\cmd";;' +
+                'C:\Tools\Closed\bin\;C:\ProgramData\Vendor\bin;C:\Gone\bin;C:\Program Files\Gone;relative\bin;' +
+                'C:\Unreadable\bin;C:\Owned;D:\Closed')
+            PSModulePath = 'C:\Program Files\WindowsPowerShell\Modules;C:\Modules'
+        }
+        $userKey    = @{ Path = 'C:\Users\owner\AppData\Local\Microsoft\WindowsApps;D:\tools' }
+    }
+    Invoke-HeliosCiAudit -AuditDisks @{ 'C:' = 'NTFS' } -AuditItems @{ 'C:\' = @('Windows') } -AuditAcls $pathAcls `
+        -AuditEnvironment $pathEnvironment -AuditFolders $pathFolders
+    Assert-Equal @(
+        'C:\VulkanSDK\1.3.290.0\Bin|PATH|machine Path: C:\VulkanSDK\1.3.290.0\Bin (Authenticated Users: 1245631)',
+        'C:\Tools\Closed\bin|PATH|machine Path: C:\Tools (Authenticated Users: 1245631)',
+        'C:\Gone\bin|PATH|machine Path, missing: C:\ (Authenticated Users: 4)',
+        'relative\bin|PATH|machine Path: not a full path on a local drive',
+        'C:\Unreadable\bin|PATH|machine Path: C:\Unreadable\bin ? Attempted to perform an unauthorized operation.',
+        'C:\Owned|PATH|machine Path: C:\Owned (owner: helios-ci)',
+        'C:\Modules|PATH|machine PSModulePath: C:\Modules (Authenticated Users: 1245631)',
+        'D:\tools|PATH|your Path: D:\tools (Authenticated Users: 1245631)') $script:auditRows `
+        'the audit: what helios-ci can change on the PATH and the PSModulePath, or put in place of a folder there, or make'
+    Invoke-HeliosCiAudit -AuditDisks @{ 'C:' = 'NTFS' } -AuditItems @{ 'C:\' = @('Windows') } -AuditAcls $pathAcls `
+        -AuditEnvironment @{ $machineKey = @{ Path = '%SystemRoot%\system32;C:\Program Files\Gone' }
+            $userKey = @{ Path = 'C:\Users\owner\AppData\Local\Microsoft\WindowsApps' } } -AuditFolders $pathFolders
+    Assert-Equal @('Nothing at the root of a local drive or on the PATH is open to helios-ci') $script:auditOutput `
+        'the audit when nothing on the PATH is open (a missing folder that only Administrators could make included)'
 }
 
 # Step 9 starts the service only when the runner will run the hook: .env's last hook line names it, helios-ci (by
@@ -733,20 +822,43 @@ if ($rotateFolders.Count -eq 1) {
             $script:rotateLog.Add($line)
             $global:LASTEXITCODE = if ($FailOn -and $line -like "$FailOn*") { 1332 } else { 0 }
         }
+        # The old runner's _diag: its logs, listed one level deep (a recursive listing would follow links below it).
+        function Get-ChildItem {
+            [CmdletBinding()] param([string]$LiteralPath, [string]$Filter, [switch]$File, [switch]$Force, [switch]$Recurse)
+            if ($Recurse) { throw "unexpected Get-ChildItem -Recurse $LiteralPath" }
+            $script:rotateLog.Add("list $LiteralPath $Filter file=$File")
+            foreach ($name in 'Runner_20261003-101500-utc.log', 'Worker_20261003-101600-utc.log') {
+                [pscustomobject]@{ FullName = "$LiteralPath\$name" }
+            }
+        }
+        function Copy-Item {
+            [CmdletBinding()] param([Parameter(ValueFromPipeline = $true)] $InputObject, [string]$Destination, [switch]$Recurse)
+            process {
+                if ($Recurse) { throw "unexpected Copy-Item -Recurse $($InputObject.FullName)" }
+                $script:rotateLog.Add("copy $($InputObject.FullName) -> $Destination")
+            }
+        }
         $script:rotateLog = New-Object System.Collections.Generic.List[string]
         $old = $Old
-        & { . ([scriptblock]::Create($rotateFolders[0])) } | Out-Null
+        $savedProfile = $env:USERPROFILE
+        $env:USERPROFILE = 'C:\Users\owner'
+        try { & { . ([scriptblock]::Create($rotateFolders[0])) } | Out-Null } finally { $env:USERPROFILE = $savedProfile }
     }
     $grants = '/inheritance:r /grant:r *S-1-5-32-544:(OI)(CI)F *S-1-5-18:(OI)(CI)F'
     # The whole tree goes aside (runner, work and hooks: the old account had full control of hooks in the setup of
-    # 2026-10-03), and the new runner folder names no account but Administrators and SYSTEM.
+    # 2026-10-03), and the new runner folder names no account but Administrators and SYSTEM. The old runner's logs, the
+    # owner's evidence, are copied into the owner's profile: the tree of 2026-10-03 inherited D:\'s Modify for
+    # Authenticated Users, so the new account's jobs may be able to change it.
+    $oldDiag = 'D:\helios-ci.old-20261004-120000\runner\_diag'
+    $logs = 'C:\Users\owner\helios-ci-diag-20261004-120000'
     $foldersDone = @('rename D:\helios-ci -> helios-ci.old-20261004-120000',
         'mkdir Directory D:\helios-ci\runner D:\helios-ci\work D:\helios-ci\hooks', "icacls D:\helios-ci $grants *S-1-5-32-545:(RX)",
         "icacls D:\helios-ci\runner $grants", "icacls D:\helios-ci\work $grants helios-ci:(OI)(CI)F",
-        "icacls D:\helios-ci\hooks $grants helios-ci:(OI)(CI)RX")
+        "icacls D:\helios-ci\hooks $grants helios-ci:(OI)(CI)RX", "mkdir Directory $logs", "list $oldDiag *.log file=True",
+        "copy $oldDiag\Runner_20261003-101500-utc.log -> $logs", "copy $oldDiag\Worker_20261003-101600-utc.log -> $logs")
     try { Invoke-HeliosCiRotateFolders $oldSid $newSid } catch { $script:rotateLog.Add("error: $($_.Exception.Message)") }
     Assert-Equal $foldersDone $script:rotateLog.ToArray() `
-        'rotating sets the old D:\helios-ci aside and makes step 3''s folders again for the new account'
+        'rotating sets the old D:\helios-ci aside, makes step 3''s folders again for the new account and copies the old logs'
     $foldersRefused = @(
         @{ What = 'without block a''s $old'; Old = ''; Current = $newSid; Error = 'run block a first'; Done = 0 },
         @{ What = 'before the account was created again'; Old = $oldSid; Current = $oldSid; Error = 'old account'; Done = 0 },
@@ -869,15 +981,22 @@ $step5 = if ($step5Start -ge 0 -and $step5End -gt $step5Start) { $runbook.Substr
 Assert-Equal $true ($step5.Contains('Register only from a fresh download into the new `runner` folder that step 3, or "Rotate", has just made') -and
     $step5.Contains('including the line that checks the download''s SHA-256')) `
     'step 5 registers only from a fresh, checked download into a new runner folder'
+Assert-Equal $true ($step5.Contains('step 4b''s audit must show no `PATH` line: `config.cmd` starts `powershell.exe` by name')) `
+    'step 5 needs a clean PATH: config.cmd starts powershell.exe by name'
 $rotateText = $rotateSection -replace '\s+', ' '
 Assert-Equal $true ($rotateText.Contains('only then registers the runner again, from a fresh download in the new `runner` folder') -and
     $rotateText.Contains('**Force remove this runner**, not the command that the dialog shows')) `
     'every rotation removes the runner on GitHub without config.cmd and registers it in a new folder'
+# Every rotation starts with step 4b's audit: Rotate's steps 2 and 3 run sc.exe, icacls and git by name.
+$rotatePath = $rotateText.IndexOf('First, in an elevated window, run step 4b''s audit: this step and the next run `sc.exe`, ' +
+    '`icacls` and `git` by name, so if it shows a `PATH` line, do steps 1 to 4 of "Already done" before anything else.')
+Assert-Equal $true ($rotatePath -ge 0 -and $rotatePath -lt $rotateText.IndexOf('# Rotate: delete the runner''s service')) `
+    'every rotation cleans the PATH before it runs sc.exe, icacls or git'
 $removeAt = $rotateText.IndexOf('Remove for good:')
 $remove = if ($removeAt -ge 0) { $rotateText.Substring($removeAt) } else { '' }
 Assert-Equal $true ($remove.Contains('do Rotate''s step 2') -and
     $remove.Contains('`& "$env:USERPROFILE\src\HeliosEngine\tools\ci\runner\firewall.ps1" -Remove`') -and
-    $remove.Contains('`cmd /c rd /s /q "\\?\D:\helios-ci"`')) `
+    $remove.Contains('`& "$env:SystemRoot\System32\cmd.exe" /d /c rd /s /q "\\?\D:\helios-ci"`')) `
     'removing for good uses Rotate''s step 2, runs firewall.ps1 from the clone by its full path and deletes with rd'
 # Administrator rights are out of the account's reach only while the owner never runs anything from D:\helios-ci
 # elevated; the residual risk says so instead of claiming it outright.
@@ -888,6 +1007,8 @@ $conditional = 'It cannot reach administrator rights either, **as long as you ne
     'elevated window once the service has run**'
 Assert-Equal $true ($risk.Contains($conditional) -and -not $risk.Contains('administrator rights or the LAN')) `
     'the residual risk makes "no administrator rights" conditional on never running D:\helios-ci elevated'
+Assert-Equal $true ($risk.Contains('The same holds **as long as no folder on the `PATH` is open to it**')) `
+    'and on no folder on the PATH being open to helios-ci'
 
 # The runner was online without the hook from 2026-10-03: the runbook's "Already done" path shows the jobs that ran
 # and sends the owner through Rotate, whatever they show (a job can delete its own log); and since step 4b had not
@@ -899,7 +1020,7 @@ $already = if ($alreadyStart -ge 0 -and $alreadyEnd -gt $alreadyStart) { $runboo
 Assert-Equal $true ($already -match "Get-ChildItem D:\\helios-ci\\runner\\_diag -Filter 'Worker_\*\.log'") `
     '"Already done" lists the jobs that ran without the hook'
 $alreadyText = $already -replace '\s+', ' '
-Assert-Equal $true ($alreadyText -match ('Start over either way.*follow "Rotate" below from its step 2\. ' +
+Assert-Equal $true ($alreadyText -match ('Then start over, whatever the list of jobs showed: .*follow "Rotate" below from its step 2\. ' +
         'It removes the runner with Windows'' own tools, never with `config\.cmd`')) `
     '"Already done" removes the runner without config.cmd, then replaces the account and D:\helios-ci'
 Assert-Equal $false ($already -match 'steps 6 to 10') '"Already done" no longer goes on with the same account and runner folder'
@@ -910,11 +1031,102 @@ $step4bStart = $runbook.IndexOf('### 4b. Close your own folders')
 $step4b = if ($step4bStart -ge 0 -and $step5Start -gt $step4bStart) { $runbook.Substring($step4bStart, $step5Start - $step4bStart) -replace '\s+', ' ' } else { '' }
 Assert-Equal $true ($step4b.Contains('**After unreviewed code.**') -and
     $step4b.Contains('delete the folder without running anything in it, its uninstaller included') -and
-    $step4b.Contains('`cmd /c rd /s /q "\\?\C:\VulkanSDK"`') -and
+    $step4b.Contains('`& "$env:SystemRoot\System32\cmd.exe" /d /c rd /s /q "\\?\C:\VulkanSDK"`') -and
     $step4b.Contains('clone it again into your profile instead of moving the old one') -and
     $step4b.Contains('**Secrets in any listed folder**, `read` lines included') -and
     $step4b.Contains('restore it from a backup made before the runner came online (2026-10-03)')) `
     'step 4b says what to do with folders that unreviewed code could change: reinstall, clone again, replace secrets, restore'
+
+# A folder on the PATH that helios-ci can change gives it every program the owner starts by name, elevated or not (the
+# Vulkan SDK puts its Bin first, ahead of System32). Step 4 says so, step 4b's audit lists such folders as PATH lines
+# and deals with them before anything else, and "Already done" cleans the PATH before the owner runs any program: it
+# disables helios-ci and ends its processes, runs the audit, deletes C:\VulkanSDK with cmd.exe called by its full
+# path, takes the other entries off the PATH and opens a new window, all before the Go line and Rotate (sc.exe,
+# icacls, git by name). Until then its blocks call cmdlets only, and cmd.exe by its full path.
+$step4Start = $runbook.IndexOf('### 4. Tools, machine-wide')
+$step4 = if ($step4Start -ge 0 -and $step4bStart -gt $step4Start) { $runbook.Substring($step4Start, $step4bStart - $step4Start) -replace '\s+', ' ' } else { '' }
+Assert-Equal $true ($step4.Contains('puts `C:\VulkanSDK\<version>\Bin` first on the machine `PATH`, ahead of `C:\Windows\System32`') -and
+    $step4.Contains('A folder on the `PATH` that `helios-ci` can write to gives it every command you run elevated')) `
+    'step 4 says that the Vulkan SDK puts its Bin first on the PATH, and what a writable PATH folder gives helios-ci'
+Assert-Equal $true ($step4b.Contains('**A `PATH` line**: until it is gone, any program that you start by name may be one that `helios-ci` put there') -and
+    $step4b.Contains('when the tool''s folder is on the machine `PATH` (the Vulkan SDK''s `Bin` comes first, ahead of System32), the next time you run any program by name') -and
+    $step4b.Contains('**`PATH` lines first**') -and $step4b.Contains('Do steps 1 to 4 of "Already done"') -and
+    $step4b.Contains('Run the audit again until it has no `PATH` line')) `
+    'step 4b deals with PATH lines first, and says that a tool folder on the PATH affects every program run by name'
+$step4bRaw = if ($step4bStart -ge 0 -and $step5Start -gt $step4bStart) { $runbook.Substring($step4bStart, $step5Start - $step4bStart) } else { '' }
+$bareIcacls = @([regex]::Matches($step4bRaw, '(?ms)^[ \t]*```powershell[ \t]*\r?\n(.*?)^[ \t]*```') | ForEach-Object {
+        $tokens = $null
+        $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($_.Groups[1].Value, [ref]$tokens, [ref]$errors)
+        $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -match '^icacls(\.exe)?$' }, $true) | ForEach-Object { $_.Extent.Text }
+    })
+Assert-Equal '' ($bareIcacls -join '; ') 'step 4b''s blocks call icacls by its full path'
+$alreadyAt = @(('# Already done: disable helios-ci and end its processes before you run any program.',
+        'Run step 4b''s audit (it reads ACLs and the `PATH` settings and starts no program)',
+        '# Already done: delete C:\VulkanSDK', 'Take every other `PATH` line''s entry off the `PATH`',
+        'Close this window and open a new elevated one', 'Run the audit again: it must show no `PATH` line', '`GoLang.Go`',
+        'follow "Rotate" below from its step 2') | ForEach-Object { $alreadyText.IndexOf($_) })
+$inOrder = $alreadyAt[0] -ge 0
+for ($i = 1; $i -lt $alreadyAt.Count; $i++) { $inOrder = $inOrder -and $alreadyAt[$i] -gt $alreadyAt[$i - 1] }
+Assert-Equal $true $inOrder ('"Already done": disable helios-ci, audit, delete C:\VulkanSDK, take the PATH entries off, a ' +
+    'new window, no PATH line, and only then the Go line and Rotate')
+$beforeGo = $already.Substring(0, [Math]::Max(0, $already.IndexOf('`GoLang.Go`')))
+$alreadyBlocks = @([regex]::Matches($beforeGo, '(?ms)^[ \t]*```powershell[ \t]*\r?\n(.*?)^[ \t]*```') | ForEach-Object { $_.Groups[1].Value })
+$byName = New-Object System.Collections.Generic.List[string]
+foreach ($block in $alreadyBlocks) {
+    $tokens = $null
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($block, [ref]$tokens, [ref]$errors)
+    foreach ($command in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+        $first = $command.CommandElements[0]
+        $cmdlet = $first -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+            $first.StringConstantType -eq 'BareWord' -and $first.Value -match '^[A-Za-z]+-[A-Za-z]+$'
+        if (-not $cmdlet -and $first.Extent.Text -cne '"$env:SystemRoot\System32\cmd.exe"') { $byName.Add($command.Extent.Text) }
+    }
+}
+Assert-Equal 4 $alreadyBlocks.Count '"Already done" has four blocks before the Go line'
+Assert-Equal '' ($byName -join '; ') '"Already done" runs only cmdlets, and cmd.exe by its full path, until the PATH is clean'
+$alreadyDisable = @($blocks | Where-Object { $_ -match '(?m)^[ \t]*# Already done: disable helios-ci' })
+Assert-Equal 1 $alreadyDisable.Count '"Already done" has one block that disables helios-ci'
+if ($alreadyDisable.Count -eq 1) {
+    function Invoke-HeliosCiAlreadyDisable {
+        function Disable-LocalUser {
+            [CmdletBinding()] param([string]$Name)
+            $script:rotateLog.Add("disable $Name")
+        }
+        function Get-Process {
+            [CmdletBinding()] param([switch]$IncludeUserName)
+            if (-not $IncludeUserName) { throw 'without -IncludeUserName, Get-Process shows no owners' }
+            [pscustomobject]@{ Id = 11; UserName = 'PC\helios-ci' }
+            [pscustomobject]@{ Id = 12; UserName = 'PC\owner' }
+            [pscustomobject]@{ Id = 13; UserName = 'PC\HELIOS-CI' }
+            [pscustomobject]@{ Id = 15; UserName = $null }
+            [pscustomobject]@{ Id = 16; UserName = 'PC\helios-ci2' }
+        }
+        function Stop-Process {
+            [CmdletBinding()] param([Parameter(ValueFromPipeline = $true)] $InputObject, [switch]$Force)
+            process { $script:rotateLog.Add("stop $($InputObject.Id) force=$Force") }
+        }
+        $script:rotateLog = New-Object System.Collections.Generic.List[string]
+        $savedComputer = $env:COMPUTERNAME
+        $env:COMPUTERNAME = 'PC'
+        try { & { . ([scriptblock]::Create($alreadyDisable[0])) } | Out-Null } finally { $env:COMPUTERNAME = $savedComputer }
+    }
+    try { Invoke-HeliosCiAlreadyDisable } catch { $script:rotateLog.Add("error: $($_.Exception.Message)") }
+    Assert-Equal @('disable helios-ci', 'stop 11 force=True', 'stop 13 force=True') $script:rotateLog.ToArray() `
+        '"Already done" disables helios-ci first, then ends its processes and no others'
+}
+# Every rd runs in cmd.exe called by its full path, with /d (no AutoRun commands): a bare cmd is looked for on the
+# PATH first. No command in the runbook calls cmd by name.
+$runbookText = $runbook -replace '\s+', ' '
+$rdAll = [regex]::Matches($runbookText, '\brd /s /q').Count
+Assert-Equal $true ($rdAll -ge 4) 'the runbook deletes with rd (C:\VulkanSDK, the old trees, D:\helios-ci)'
+$rdBare = @([regex]::Matches($runbook, '(?m)^.*\brd /s /q.*$') | ForEach-Object { $_.Value.Trim() } |
+        Where-Object { $_ -notmatch [regex]::Escape('& "$env:SystemRoot\System32\cmd.exe" /d /c rd /s /q "\\?\') })
+Assert-Equal '' ($rdBare -join '; ') 'every rd in the runbook runs in cmd.exe called by its full path, with /d'
+Assert-Equal '' (@([regex]::Matches($runbook, '(?i)(?<![\\\w.-])cmd(\.exe)?\s+/[a-z]') | ForEach-Object { $_.Value }) -join '; ') `
+    'no command in the runbook calls cmd by name'
 # The checklist looks for helios-ci's PowerShell profiles, which the runner loads before the hook, from a window that
 # does not load them, and asks for the execution policy in effect for helios-ci in both shells (the runner starts the
 # hook with pwsh when PowerShell 7 is installed, which has policies of its own that step 9's block does not read).
@@ -925,6 +1137,8 @@ Assert-Equal $true ($checklist.Contains('runas /user:helios-ci "powershell -NoPr
     $checklist.Contains('$PROFILE.CurrentUserAllHosts') -and $checklist.Contains('$PROFILE.CurrentUserCurrentHost')) `
     'the checklist looks for helios-ci''s PowerShell profiles from a window without them'
 $checklistText = $checklist -replace '\s+', ' '
+Assert-Equal $true ($checklistText.Contains('Step 4b''s audit lists no `PATH` line, no `write` line but')) `
+    'the checklist repeats the audit, PATH included'
 Assert-Equal $true ($checklistText.Contains('`Get-ExecutionPolicy` (the policy in effect for `helios-ci`) answers `RemoteSigned`, `Unrestricted` or `Bypass`') -and
     $checklistText.Contains('`pwsh -NoProfile -c Get-ExecutionPolicy` and `pwsh -NoProfile -c Get-ExecutionPolicy -Scope CurrentUser`')) `
     'the checklist asks for helios-ci''s execution policy in effect, in Windows PowerShell and in pwsh'

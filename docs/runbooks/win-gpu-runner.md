@@ -44,19 +44,22 @@ policy of step 4, so the hook would no longer start, and only an execution polic
 folders elsewhere on the drives. It cannot reach administrator rights either, **as long as you never run anything from
 `D:\helios-ci` in an elevated window once the service has run**: not `config.cmd`, `run.cmd` or a program in `bin`,
 and not from a folder that "Rotate" sets aside. The account can change every file there, `config.cmd` included, and
-what you run elevated runs with your rights ("Rotate or remove" below never does it). Like every local account, it can
-still read what Windows leaves open to all users (the machine-wide tools, which the build needs, `C:\ProgramData` and
-whatever step 4b's audit lists as `read`), create files and folders in `C:\ProgramData` and `C:\Windows\Temp` and
-folders at the root of a drive, read and change `C:\Users\Public` (Windows lets interactive and service logons write
-there, so keep nothing in it that you would mind losing or that you run), and read and write a FAT32 or exFAT drive
-(most USB sticks) while one is plugged in. It can reach programs on the PC itself that listen on the network,
-including on `localhost` (Windows Firewall does not filter loopback): keep such services (databases, dev servers,
-remote-control tools) behind a password, or stop them while the runner is enabled. The firewall blocks private
-addresses only, so the router's public (WAN) address stays reachable: many routers show their admin page there to
-clients on the LAN, and NAT loopback passes port-forwarded traffic on to the LAN device behind it (a NAS), often with
-the router's LAN address as the source. That depends on the router; the checklist tests it, and if the admin page or a
-forwarded service answers, turn off the router's remote administration or NAT loopback (or the port forward). If you
-suspect misuse, follow "Rotate" below.
+what you run elevated runs with your rights ("Rotate or remove" below never does it). The same holds **as long as no
+folder on the `PATH` is open to it**: Windows and PowerShell look in the `PATH` folders, in order, for every program
+you start by name (`git`, `icacls`, `winget`, `cmd`), elevated or not, and the Vulkan SDK puts its own folder first,
+so a file of that name that the account put there would run with your rights (step 4b's audit checks the `PATH`, and
+the checklist repeats it). Like every local account, it can still read what Windows leaves open to all users (the
+machine-wide tools, which the build needs, `C:\ProgramData` and whatever step 4b's audit lists as `read`), create
+files and folders in `C:\ProgramData` and `C:\Windows\Temp` and folders at the root of a drive, read and change
+`C:\Users\Public` (Windows lets interactive and service logons write there, so keep nothing in it that you would mind
+losing or that you run), and read and write a FAT32 or exFAT drive (most USB sticks) while one is plugged in. It can
+reach programs on the PC itself that listen on the network, including on `localhost` (Windows Firewall does not filter
+loopback): keep such services (databases, dev servers, remote-control tools) behind a password, or stop them while the
+runner is enabled. The firewall blocks private addresses only, so the router's public (WAN) address stays reachable:
+many routers show their admin page there to clients on the LAN, and NAT loopback passes port-forwarded traffic on to
+the LAN device behind it (a NAS), often with the router's LAN address as the source. That depends on the router; the
+checklist tests it, and if the admin page or a forwarded service answers, turn off the router's remote administration
+or NAT loopback (or the port forward). If you suspect misuse, follow "Rotate" below.
 
 Code that ran as `helios-ci` while the runner had no working hook was not reviewed at all, and it could have done all
 of the above: that is a runner online before step 9 ("Already done" below), and the jobs behind "`File doesn't exist`"
@@ -108,12 +111,47 @@ runner's credentials, with which another machine can take this runner's jobs. Th
 Get-ChildItem D:\helios-ci\runner\_diag -Filter 'Worker_*.log' | Select-Object Name, Length, LastWriteTime
 ```
 
-A job can also delete its own log, so an empty list does not prove that none ran. Start over either way: install Go
-and set the execution policy (the `GoLang.Go` and `Set-ExecutionPolicy` lines of step 4), require approval for fork
-pull requests (step 8), then follow "Rotate" below from its step 2. It removes the runner with Windows' own tools,
-never with `config.cmd` from the old runner folder, which that code could have changed; it replaces the account and
-`D:\helios-ci`, installs the hook and the firewall before it registers the runner again from a fresh download in a new
-folder, and goes on with step 4b, step 9 (which starts the service), the checklist and step 10.
+A job can also delete its own log, so an empty list does not prove that none ran.
+
+**Then clean the `PATH`, before you run any program**: `winget`, `git`, `icacls`, `sc.exe`, `cmd`, an installer, or
+any step below. The Vulkan SDK's installer puts `C:\VulkanSDK\<version>\Bin` first on the machine `PATH`, ahead of
+`C:\Windows\System32`, and step 4 left `C:\VulkanSDK` open to `helios-ci`. Windows and PowerShell look for a program
+that you start by name in the `PATH` folders, in order, and a program looks there for a DLL that it does not find in
+its own folder or in System32, so a file that this code left in such a folder would run with your administrator
+rights. In this elevated window, and with only the commands shown here:
+
+1. Disable `helios-ci` and end its processes, so that nothing of it runs from here on ("Rotate" deletes the account):
+
+   ```powershell
+   # Already done: disable helios-ci and end its processes before you run any program.
+   Disable-LocalUser -Name helios-ci
+   Get-Process -IncludeUserName | Where-Object { $_.UserName -eq "$env:COMPUTERNAME\helios-ci" } | Stop-Process -Force
+   ```
+
+2. Run step 4b's audit (it reads ACLs and the `PATH` settings and starts no program) and keep its output: it is the
+   first audit, which step 4b's "After unreviewed code" list works through later. If it lists `C:\VulkanSDK` as
+   `write`, or a `PATH` line under it, delete that folder without running anything in it, its uninstaller included,
+   calling `cmd.exe` by its full path:
+
+   ```powershell
+   # Already done: delete C:\VulkanSDK, which was open to helios-ci, calling cmd.exe by its full path.
+   & "$env:SystemRoot\System32\cmd.exe" /d /c rd /s /q "\\?\C:\VulkanSDK"
+   ```
+
+   Take every other `PATH` line's entry off the `PATH` (Start → "Edit the system environment variables" →
+   Environment Variables → `Path` or `PSModulePath`, under System variables or under your own → Edit → select the
+   entry → Delete → OK → OK); step 4b's list deals with the folder itself later.
+3. Close this window and open a new elevated one (a window keeps the `PATH` it started with). Install the Vulkan SDK
+   again (step 4's line; if `winget` still finds the old installation, add `--force`) and close its new folder at once
+   with step 4b's block for a tool: nothing of `helios-ci` can run in between.
+4. Run the audit again: it must show no `PATH` line.
+
+Then start over, whatever the list of jobs showed: install Go and set the execution policy (the `GoLang.Go` and
+`Set-ExecutionPolicy` lines of step 4), require approval for fork pull requests (step 8), then follow "Rotate" below
+from its step 2. It removes the runner with Windows' own tools, never with `config.cmd` from the old runner folder,
+which that code could have changed; it replaces the account and `D:\helios-ci`, installs the hook and the firewall
+before it registers the runner again from a fresh download in a new folder, and goes on with step 4b, step 9 (which
+starts the service), the checklist and step 10.
 
 Until step 4b, that code could also change every folder that step 4b's first audit lists as `write`, including
 `C:\VulkanSDK` (step 4 created it open, and the Vulkan loader loads its validation layer into your own validated
@@ -166,7 +204,7 @@ winget install -e --id Git.Git --scope machine
 winget install -e --id Kitware.CMake --scope machine
 winget install -e --id Python.Python.3.12 --scope machine
 winget install -e --id GoLang.Go --scope machine          # configure requires Go when CI is set (tools/conformance)
-winget install -e --id KhronosGroup.VulkanSDK              # sets VULKAN_SDK for all users; the goldens need its layer
+winget install -e --id KhronosGroup.VulkanSDK              # sets VULKAN_SDK; its Bin goes first on PATH (step 4b)
 winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 Set-ExecutionPolicy -Scope LocalMachine RemoteSigned       # Windows PowerShell's Restricted default blocks the hook and every step
 ```
@@ -175,6 +213,11 @@ Ninja is not needed: `win-gpu.yml` uses the Visual Studio generator, so no third
 environment. Go is needed only so that configure succeeds; the job does not run Go. `python` must be on the machine
 `PATH` (the installer's "Add python.exe to PATH"; the job fails when `python` is missing or is only the Microsoft Store
 alias). The runner service sees the new `PATH` and `VULKAN_SDK` the next time it starts (step 9).
+
+The goldens need the Vulkan SDK's validation layer. Its installer puts the SDK in `C:\VulkanSDK`, which Windows leaves
+open to every account, and puts `C:\VulkanSDK\<version>\Bin` first on the machine `PATH`, ahead of
+`C:\Windows\System32`, where every program that you start by name is looked for first. A folder on the `PATH` that
+`helios-ci` can write to gives it every command you run elevated, not only the SDK's tools: step 4b closes it.
 
 ### 4b. Close your own folders to `helios-ci`
 
@@ -188,10 +231,17 @@ exFAT drive has no permissions at all. The worst case is a clone of this reposit
 could change it, and the next time you build or validate from it (09 §5.9), that code runs as you. **Keep every clone
 of this repository inside your profile**, the one you validate from included (step 6 puts its clone there).
 
-List what `helios-ci` can open at the root of each local drive (elevated; it reads ACLs and changes nothing):
+The `PATH` matters even more. Windows and PowerShell look in its folders, in order, for every program that you start
+by name, elevated or not; a program looks there for a DLL that it does not find in its own folder or in System32; and
+PowerShell looks for modules in the `PSModulePath` folders. The Vulkan SDK puts its `Bin` folder first, ahead of
+System32 (step 4). A file that `helios-ci` can put in such a folder runs as you the next time you run `git`, `icacls`,
+`winget` or anything else by name, and with your administrator rights in an elevated window.
+
+List what `helios-ci` can open at the root of each local drive and what it can change on the `PATH` (elevated; it
+reads ACLs and the `PATH` settings, starts no program and changes nothing):
 
 ```powershell
-# Step 4b audit: files and folders at the root of each local drive that helios-ci can read or change.
+# Step 4b audit: what helios-ci can read or change at the root of each local drive, and on the PATH.
 $account = Get-CimInstance Win32_UserAccount -Filter "LocalAccount = TRUE AND Name = 'helios-ci'"
 if (-not $account) { throw 'There is no local account helios-ci yet: do step 2 first' }
 $ci = $account.SID
@@ -201,7 +251,27 @@ $anyone = @{ 'S-1-1-0' = 'Everyone'; 'S-1-2-0' = 'LOCAL'; 'S-1-5-6' = 'SERVICE';
 $write = [int][Security.AccessControl.FileSystemRights]('WriteData, AppendData, WriteExtendedAttributes, ' +
     'WriteAttributes, DeleteSubdirectoriesAndFiles, Delete, ChangePermissions, TakeOwnership') -bor 0x50000000
 $read = [int][Security.AccessControl.FileSystemRights]'ReadData' -bor 0x90000000
-# (0x50000000: generic all and generic write; 0x90000000: generic all and generic read)
+# Above a folder on the PATH, what lets an account rename the folder (or one above it) and put its own in its place.
+$replace = [int][Security.AccessControl.FileSystemRights]('DeleteSubdirectoriesAndFiles, Delete, ' +
+    'ChangePermissions, TakeOwnership') -bor 0x10000000
+# (0x50000000: generic all and generic write; 0x90000000: generic all and generic read; 0x10000000: generic all)
+# The rights in $Mask that $Path's ACL gives helios-ci, as its owner or through an Allow entry, and who gives them.
+function Get-HeliosCiAccess([string]$Path, [int]$Mask) {
+    $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+    $bits = 0
+    $who = @()
+    $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($owner -and $anyone.ContainsKey($owner)) { $bits = $Mask; $who += "owner: $($anyone[$owner])" }
+    foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+        $sid = $rule.IdentityReference.Value
+        $allowed = [int]$rule.FileSystemRights -band $Mask
+        if ($rule.AccessControlType -eq 'Allow' -and $anyone.ContainsKey($sid) -and $allowed) {
+            $bits = $bits -bor $allowed
+            $who += "$($anyone[$sid]): $($rule.FileSystemRights)"
+        }
+    }
+    [pscustomobject]@{ Bits = $bits; Who = $who -join '; ' }
+}
 $everyDrive = '$Recycle.Bin', 'System Volume Information', 'pagefile.sys', 'swapfile.sys'
 $windowsDrive = 'Windows', 'Windows.old', 'Program Files', 'Program Files (x86)', 'ProgramData', 'Users',
     'Documents and Settings', 'PerfLogs', 'Recovery', 'Boot', 'bootmgr', 'BOOTNXT', 'Config.Msi', 'OneDriveTemp',
@@ -220,57 +290,91 @@ $found = @(foreach ($disk in Get-CimInstance Win32_LogicalDisk -Filter 'DriveTyp
     foreach ($item in Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue) {
         if ($item.Name -in $everyDrive -or $item.FullName -eq 'D:\helios-ci' -or
             ($disk.DeviceID -eq $env:SystemDrive -and $item.Name -in $windowsDrive)) { continue }
-        try { $acl = Get-Acl -LiteralPath $item.FullName -ErrorAction Stop }
+        try { $access = Get-HeliosCiAccess $item.FullName ($write -bor $read) }
         catch { [pscustomobject]@{ Path = $item.FullName; Access = '?'; Who = $_.Exception.Message }; continue }
-        $bits = 0
-        $who = @()
-        $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
-        if ($owner -and $anyone.ContainsKey($owner)) { $bits = $write; $who += "owner: $($anyone[$owner])" }
-        foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
-            $sid = $rule.IdentityReference.Value
-            $mask = [int]$rule.FileSystemRights -band ($write -bor $read)
-            if ($rule.AccessControlType -eq 'Allow' -and $anyone.ContainsKey($sid) -and $mask) {
-                $bits = $bits -bor $mask
-                $who += "$($anyone[$sid]): $($rule.FileSystemRights)"
-            }
-        }
-        if ($bits) {
-            $access = if ($bits -band $write) { 'write' } else { 'read' }
-            [pscustomobject]@{ Path = $item.FullName; Access = $access; Who = $who -join '; ' }
+        if ($access.Bits) {
+            [pscustomobject]@{ Path = $item.FullName; Access = $(if ($access.Bits -band $write) { 'write' } else { 'read' })
+                Who = $access.Who }
         }
     }
 })
-if ($found.Count) { $found | Format-Table -Wrap -AutoSize } else { 'Nothing at the root of a local drive is open to helios-ci' }
+# The PATH and the PSModulePath, the machine's and yours, as every new window gets them.
+$found += @(foreach ($key in 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'HKCU:\Environment') {
+    $values = Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
+    foreach ($name in 'Path', 'PSModulePath') {
+        if (-not $values -or -not $values.PSObject.Properties[$name]) { continue }
+        $list = $(if ($key -like 'HKLM:*') { 'machine' } else { 'your' }) + " $name"
+        foreach ($entry in "$($values.$name)".Split(';')) {
+            $dir = [Environment]::ExpandEnvironmentVariables($entry.Trim().Trim('"')).TrimEnd('\')
+            if (-not $dir) { continue }
+            if ($dir -notmatch '^[A-Za-z]:(\\|$)') {
+                [pscustomobject]@{ Path = $dir; Access = 'PATH'; Who = "${list}: not a full path on a local drive" }
+                continue
+            }
+            # A missing folder can be made where helios-ci may write: check the deepest one that exists, then the
+            # folders above it for what would let helios-ci replace them. Not the drive root above it: every account
+            # may make folders there, which replaces none.
+            $parts = $dir.Split('\')
+            $at = $parts.Count - 1
+            while ($at -gt 0 -and -not (Test-Path -LiteralPath ($parts[0..$at] -join '\') -PathType Container)) { $at-- }
+            $where = $(if ($at -lt $parts.Count - 1) { "$list, missing" } else { $list })
+            foreach ($i in $(if ($at -eq 0) { 0 } else { $at..1 })) {
+                $folder = $(if ($i -eq 0) { $parts[0] + '\' } else { $parts[0..$i] -join '\' })
+                try { $access = Get-HeliosCiAccess $folder $(if ($i -eq $at) { $write } else { $replace }) }
+                catch { [pscustomobject]@{ Path = $dir; Access = 'PATH'; Who = "${where}: $folder ? $($_.Exception.Message)" }; break }
+                if ($access.Bits) {
+                    [pscustomobject]@{ Path = $dir; Access = 'PATH'; Who = "${where}: $folder ($($access.Who))" }
+                    break
+                }
+            }
+        }
+    }
+})
+if ($found.Count) { $found | Format-Table -Wrap -AutoSize } else { 'Nothing at the root of a local drive or on the PATH is open to helios-ci' }
 ```
 
 It leaves out Windows' own folders and `D:\helios-ci`. `write` means that `helios-ci` can change or delete the item (or
 its permissions), `read` that it can read it; `Who` names the entries that allow it (Allow entries only: a Deny entry
-does not take a line off the list). `?` means the ACL could not be read: check that item with `icacls`. For every
-line:
+does not take a line off the list). `?` means the ACL could not be read: check that item with `icacls`. `PATH` means
+that `helios-ci` can change a folder on the `PATH` or the `PSModulePath`, or put its own folder in the place of that
+folder or of one above it, or make the folder where it is missing (`missing`); `Who` names the list, the folder whose
+ACL allows it, and the entries (with `?`, that folder's ACL could not be read). For every line:
+
+- **A `PATH` line**: until it is gone, any program that you start by name may be one that `helios-ci` put there, so
+  deal with it before anything else in an elevated window. A tool's folder (the Vulkan SDK's `Bin` is in
+  `C:\VulkanSDK`): close the tool's folder as below. Your own folder: move it into your profile, or close it as
+  below. A folder you do not need, a missing one, or one that is not a full path: take its entry off the `PATH`
+  (Start → "Edit the system environment variables" → Environment Variables → `Path` or `PSModulePath` → Edit → select
+  it → Delete → OK → OK). Then open a new elevated window, which reads the `PATH` again.
 
 - **Your files, or a clone of a repository**: move it into your profile, or close it. A file at a drive root: move it
   into your profile or into a folder you close. To close a folder, give yourself access first: with User Account
   Control, your membership in Administrators counts only in an elevated window, so once Users and Authenticated Users
   are gone, your everyday access comes from this entry alone (if you elevate with another account's password, set `$me`
-  to your own account's SID instead, which `whoami /user` shows in a window that is not elevated):
+  to your own account's SID instead, which `whoami /user` shows in a window that is not elevated). These blocks call
+  `icacls` by its full path, so that a `PATH` line cannot change which program runs:
 
   ```powershell
   $dir = 'D:\Photos'                                                    # a folder the audit listed
   $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value   # you (elevated, it is still your account)
-  icacls $dir /inheritance:d                    # turn the inherited entries into the folder's own
-  icacls $dir /grant "*${me}:(OI)(CI)F"
-  icacls $dir /remove:g '*S-1-1-0' '*S-1-2-0' '*S-1-5-6' '*S-1-5-11' '*S-1-5-15' '*S-1-5-32-545' '*S-1-5-113' helios-ci
+  $icacls = "$env:SystemRoot\System32\icacls.exe"
+  & $icacls $dir /inheritance:d                 # turn the inherited entries into the folder's own
+  & $icacls $dir /grant "*${me}:(OI)(CI)F"
+  & $icacls $dir /remove:g '*S-1-1-0' '*S-1-2-0' '*S-1-5-6' '*S-1-5-11' '*S-1-5-15' '*S-1-5-32-545' '*S-1-5-113' helios-ci
   ```
 
 - **A tool that the job uses** (for example `C:\VulkanSDK`, or a tool installed outside `C:\Program Files`):
   `helios-ci` has to read it, so `read` is fine. `write` is not: code that `helios-ci` plants there runs as you the
-  next time you use the tool. Keep Users' read and execute and remove the rest:
+  next time you use the tool, and when the tool's folder is on the machine `PATH` (the Vulkan SDK's `Bin` comes
+  first, ahead of System32), the next time you run any program by name, with your administrator rights in an
+  elevated window. Keep Users' read and execute and remove the rest:
 
   ```powershell
   $dir = 'C:\VulkanSDK'
-  icacls $dir /inheritance:d
-  icacls $dir /remove:g '*S-1-1-0' '*S-1-2-0' '*S-1-5-6' '*S-1-5-11' '*S-1-5-15' '*S-1-5-113' helios-ci
-  icacls $dir /grant:r '*S-1-5-32-545:(OI)(CI)RX'
+  $icacls = "$env:SystemRoot\System32\icacls.exe"
+  & $icacls $dir /inheritance:d
+  & $icacls $dir /remove:g '*S-1-1-0' '*S-1-2-0' '*S-1-5-6' '*S-1-5-11' '*S-1-5-15' '*S-1-5-113' helios-ci
+  & $icacls $dir /grant:r '*S-1-5-32-545:(OI)(CI)RX'
   ```
 
 - **Something you do not need** (for example a driver installer's leftover `C:\AMD` or `C:\NVIDIA`): delete it. An
@@ -281,14 +385,20 @@ line:
   run.
 
 **After unreviewed code.** If code that nobody reviewed ran as `helios-ci` before you closed these folders (a runner
-online before step 9, as under "Already done", or a suspected misuse), every `write` line of the first audit was open
-to it and every line could be read. Closing or moving a folder keeps whatever was planted in it, so before you close
-or move anything:
+online before step 9, as under "Already done", or a suspected misuse), every `write` and `PATH` line of the first audit
+was open to it and every line could be read. Closing or moving a folder keeps whatever was planted in it, so before
+you close or move anything:
 
+- **`PATH` lines first**: until they are gone, any program that you start by name, `cmd` and `icacls` included, may
+  be one that this code put there. Do steps 1 to 4 of "Already done" (disable `helios-ci`, delete `C:\VulkanSDK`,
+  take the other entries off the `PATH`, install the SDK again in a new window and close it) before the rest of this
+  list.
 - **A tool listed as `write`** (for example `C:\VulkanSDK`, whose validation layer the Vulkan loader loads into your
   own validated runs): delete the folder without running anything in it, its uninstaller included (that would run
-  as you): `cmd /c rd /s /q "\\?\C:\VulkanSDK"`. Then install the tool again (step 4's line; if `winget` still finds
-  the old installation, add `--force`) and close the new folder as above.
+  as you), calling `cmd.exe` by its full path:
+  `& "$env:SystemRoot\System32\cmd.exe" /d /c rd /s /q "\\?\C:\VulkanSDK"`. Then install the tool again (step 4's
+  line; if `winget` still finds the old installation, add `--force`) and close the new folder as above (on the
+  "Already done" path, its steps 2 and 3 did this for `C:\VulkanSDK`).
 - **A clone of a repository**: clone it again into your profile instead of moving the old one, and do not build, run
   or open anything from the old clone; delete it with `rd` as above.
 - **Secrets in any listed folder**, `read` lines included (a token in a clone's `.git\config`, `.env` files, keys):
@@ -296,17 +406,18 @@ or move anything:
 - **Anything else you run** from a `write` folder, from `C:\Users\Public` or from a FAT32 or exFAT drive that was
   plugged in: restore it from a backup made before the runner came online (2026-10-03), or install it again.
 
-Run the audit again until its `write` lines are at most such drives and set-aside trees, and its `read` lines are only
-tools the job uses. It reads the top level only: a folder you closed stays closed below, unless something below it
-grants access itself. A folder you create at a drive root later starts open again: run the audit after creating one
-(the checklist repeats it).
+Run the audit again until it has no `PATH` line, its `write` lines are at most such drives and set-aside trees, and
+its `read` lines are only tools the job uses. At the drive roots it reads the top level only: a folder you closed
+stays closed below, unless something below it grants access itself. A folder you create at a drive root later starts
+open again, and an installer may add a folder to the `PATH`: run the audit after either (the checklist repeats it).
 
 ### 5. Register the runner
 
 Register only from a fresh download into the new `runner` folder that step 3, or "Rotate", has just made (it may
 already hold step 6's `.env`). You run `config.cmd` elevated, so its folder must never have been open to
-`helios-ci`; once the service has run there, the account can change every file in it. To register again, follow
-"Rotate", which makes a new folder.
+`helios-ci`; once the service has run there, the account can change every file in it. For the same reason step 4b's
+audit must show no `PATH` line: `config.cmd` starts `powershell.exe` by name. To register again, follow "Rotate",
+which makes a new folder.
 
 GitHub → Settings → Actions → Runners → New self-hosted runner → Windows x64. In the elevated window, go to
 `D:\helios-ci\runner` (in place of the page's `mkdir actions-runner; cd actions-runner`) and run the page's Download
@@ -475,8 +586,8 @@ Do this after the setup and after any change to the PC, the hook or the firewall
 - [ ] `icacls D:\helios-ci` lists Administrators, SYSTEM and `BUILTIN\Users:(RX)` only, and `icacls
       D:\helios-ci\runner` names no account but Administrators, SYSTEM and `config.cmd`'s `GITHUB_ActionsRunner_G...`
       group (step 3).
-- [ ] Step 4b's audit lists no `write` line but FAT32 or exFAT drives you accepted and `D:\helios-ci.old-<time>` trees
-      that you have not deleted yet, and its `read` lines are only tools the job uses.
+- [ ] Step 4b's audit lists no `PATH` line, no `write` line but FAT32 or exFAT drives you accepted and
+      `D:\helios-ci.old-<time>` trees that you have not deleted yet, and its `read` lines are only tools the job uses.
 - [ ] `Get-NetFirewallRule -Group 'Helios CI runner: LAN block for helios-ci'` lists 3 rules (2 with `-AllowAddress`),
       Enabled, Outbound, Block; `... | Get-NetFirewallAddressFilter` shows the ranges of step 7;
       `Get-NetFirewallProfile | Select-Object Name, Enabled` shows every profile enabled.
@@ -573,10 +684,12 @@ runner itself replaces `bin` when it updates. `config.cmd` is a plain batch file
 with your rights. Its `remove` also stops and deletes whatever service the `.service` file there names.
 
 1. Set `HELIOS_WIN_GPU` to `disabled`.
-2. Remove the runner. On the PC, elevated, stop and delete the runner's service and the local group through which
-   `config.cmd` gave the account the runner's folders. `config.cmd` reuses a group of the same name, so a group left
-   behind would give the next account the folders that this rotation sets aside. (Like the rest of this runbook, the
-   block assumes that this PC runs no other runner.)
+2. Remove the runner. First, in an elevated window, run step 4b's audit: this step and the next run `sc.exe`,
+   `icacls` and `git` by name, so if it shows a `PATH` line, do steps 1 to 4 of "Already done" before anything else.
+   Then stop and delete the runner's service and the local group through which `config.cmd` gave the account the
+   runner's folders. `config.cmd` reuses a group of the same name, so a group left behind would give the next account
+   the folders that this rotation sets aside. (Like the rest of this runbook, the block assumes that this PC runs no
+   other runner.)
 
    ```powershell
    # Rotate: delete the runner's service and config.cmd's group with Windows' own tools, not with config.cmd.
@@ -661,12 +774,14 @@ with your rights. Its `remove` also stops and deletes whatever service the `.ser
    new `hooks`, which the old account cannot have touched (the setup of 2026-10-03 gave it full control of `hooks`).
    Renaming `D:\helios-ci` changes no permissions on anything inside it. If `Rename-Item` says that the folder is in
    use, close what has it open (an Explorer window, or a window whose current folder is inside it) or restart the PC,
-   then run the block again. The old tree keeps the evidence for your report: `D:\helios-ci.old-<time>\runner\_diag`
-   holds the runner's log and one `Worker_*.log` per job, beside the old `.env` and the runner's files. Nothing in it
-   is run again, and step 5 deletes it.
+   then run the block again. The old tree holds the evidence for your report: `D:\helios-ci.old-<time>\runner\_diag`
+   holds the runner's log and one `Worker_*.log` per job, beside the old `.env` and the runner's files. The tree of
+   2026-10-03 inherited *Modify* for Authenticated Users from `D:\` (step 3), so the new account's jobs may be able to
+   change it: the block copies those logs (the `.log` files only, without following a link below `_diag`) into
+   `helios-ci-diag-<time>` in your profile. Nothing in the old tree is run again, and step 5 deletes it.
 
    ```powershell
-   # Rotate: set the old D:\helios-ci aside, and make step 3's folders again for the new helios-ci.
+   # Rotate: set the old D:\helios-ci aside, make step 3's folders again for the new helios-ci, keep the old logs.
    & {
        $ErrorActionPreference = 'Stop'
        if (-not $old) { throw 'no $old: run block a first, it sets it' }
@@ -676,7 +791,8 @@ with your rights. Its `remove` also stops and deletes whatever service the `.ser
        if (@(Get-Service -Name actions.runner.*).Count -or @(Get-LocalGroup -Name 'GITHUB_ActionsRunner_G*').Count) {
            throw "the runner's service or config.cmd's group is still there: do Rotate's step 2 first"
        }
-       Rename-Item -LiteralPath D:\helios-ci -NewName "helios-ci.old-$(Get-Date -Format yyyyMMdd-HHmmss)"
+       $stamp = Get-Date -Format yyyyMMdd-HHmmss
+       Rename-Item -LiteralPath D:\helios-ci -NewName "helios-ci.old-$stamp"
        New-Item -ItemType Directory -Path D:\helios-ci\runner, D:\helios-ci\work, D:\helios-ci\hooks | Out-Null
        icacls D:\helios-ci /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-545:(RX)"
        if ($LASTEXITCODE -ne 0) { throw 'icacls failed on D:\helios-ci' }
@@ -686,6 +802,11 @@ with your rights. Its `remove` also stops and deletes whatever service the `.ser
        if ($LASTEXITCODE -ne 0) { throw 'icacls failed on D:\helios-ci\work' }
        icacls D:\helios-ci\hooks /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "helios-ci:(OI)(CI)RX"
        if ($LASTEXITCODE -ne 0) { throw 'icacls failed on D:\helios-ci\hooks' }
+       $logs = "$env:USERPROFILE\helios-ci-diag-$stamp"
+       New-Item -ItemType Directory -Path $logs | Out-Null
+       Get-ChildItem -LiteralPath "D:\helios-ci.old-$stamp\runner\_diag" -Filter *.log -File -Force -ErrorAction SilentlyContinue |
+           Copy-Item -Destination $logs -ErrorAction Continue
+       "The old tree's logs: $logs"
    }
    ```
 
@@ -721,16 +842,18 @@ with your rights. Its `remove` also stops and deletes whatever service the `.ser
    the service), run step 4b's audit (and its "After unreviewed code" list, if that is why you rotate), start the
    service with step 9's block (it refuses while `.env` does not set the hook or `helios-ci` cannot read it), go
    through the checklist, and set `HELIOS_WIN_GPU=enabled`.
-5. Delete the set-aside tree once your report no longer needs it, without running anything in it:
-   `cmd /c rd /s /q "\\?\D:\helios-ci.old-<time>"`. Like the hook's wipe, `rd` removes a link inside without following
-   it, whereas Windows PowerShell 5.1's `Remove-Item -Recurse` can follow a directory link that the old account left
-   there into its target, with your administrator rights.
+5. Delete the set-aside tree once your report no longer needs it, without running anything in it, and with `cmd.exe`
+   called by its full path: `& "$env:SystemRoot\System32\cmd.exe" /d /c rd /s /q "\\?\D:\helios-ci.old-<time>"`. Like
+   the hook's wipe, `rd` removes a link inside without following it, whereas Windows PowerShell 5.1's
+   `Remove-Item -Recurse` can follow a directory link that the old account left there into its target, with your
+   administrator rights.
 
 Remove for good: delete the `HELIOS_WIN_GPU` variable; do Rotate's step 2 (the service, `config.cmd`'s group and the
 registration, without `config.cmd`); remove the firewall rules from your clone with
 `& "$env:USERPROFILE\src\HeliosEngine\tools\ci\runner\firewall.ps1" -Remove` (it also works after the account is
 gone); run Rotate's blocks a and b (what the account owns, then its processes, its profile and the account); then
-delete the folders without running anything in them: `cmd /c rd /s /q "\\?\D:\helios-ci"`, and the same for every
+delete the folders without running anything in them, and with `cmd.exe` called by its full path:
+`& "$env:SystemRoot\System32\cmd.exe" /d /c rd /s /q "\\?\D:\helios-ci"`, and the same for every
 `D:\helios-ci.old-<time>`.
 
 ## Not covered yet (WP-0.4)

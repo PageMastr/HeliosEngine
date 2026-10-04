@@ -1,7 +1,7 @@
 # Runs the repository lints that need no build (licences, vendored patches, IP names, shipped pipelines,
-# Windows manifest, test namespaces, the D6 status check of 09 §5.10.2, which needs Python 3.10+, and the
-# conformance lint of 09 §5.10.3, which needs Go), and the ISA audit when a build directory is given. One
-# entry point for CI jobs and pre-commit hooks:
+# Windows manifest, test namespaces, the D6 status check of 09 §5.10.2 and the self-hosted runner policy of
+# 09 §5.4a, which need Python 3.10+, and the conformance lint of 09 §5.10.3, which needs Go), and the ISA audit
+# when a build directory is given. One entry point for CI jobs and pre-commit hooks:
 #
 #   cmake -P tools/ci/run_lints.cmake                         # from the repository root
 #   cmake -DBUILD_DIR=build/linux-gcc -P tools/ci/run_lints.cmake
@@ -43,6 +43,8 @@ if(HELIOS_STATUS_PYTHON)
   list(APPEND statusArgs "-DHELIOS_STATUS_PYTHON=${HELIOS_STATUS_PYTHON}")
 endif()
 _run_lint(status ${statusArgs} -P ${root}/tools/status/check_status.cmake)
+# 09 §5.4a (WP-0.4): workflows that reach the self-hosted win-gpu runner keep its rules. Same Python search.
+_run_lint(runner-policy ${statusArgs} -P ${root}/tools/ci/check_runner_policy.cmake)
 # CONF-01…12 over the working tree, with tools/conformance/known_failing.jsonc applied (09 §5.10.3).
 find_program(HELIOS_CI_go go)
 if(HELIOS_CI_go)

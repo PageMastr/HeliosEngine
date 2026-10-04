@@ -1,0 +1,13 @@
+# expect: guard-ref guard-var
+# Both terms, but joined by || (either one admits the job).
+on:
+  schedule:
+    - cron: "0 4 * * *"
+permissions:
+  contents: read
+jobs:
+  gpu:
+    if: github.ref == 'refs/heads/main' || vars.HELIOS_WIN_GPU == 'enabled'
+    runs-on: [self-hosted, win-gpu]
+    steps:
+      - run: echo gpu

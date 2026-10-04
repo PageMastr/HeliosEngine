@@ -467,6 +467,15 @@ TEST_CASE("repl: two outputs at one path are an error") {
     auto cased = compileFiles({{"schemas/t/ship.hschema", "package a;\n"}, {"schemas/t/Ship.hschema", "package b;\n"}}, options);
     CHECK_FALSE(cased->ok());
     CHECK_MESSAGE(cased->messages.find("two outputs would be written to 'cpp/t/") != std::string::npos, cased->messages);
+    // An output option counts too: --json-out onto a generated header.
+    CompileOptions json = options;
+    json.emitRepl = false;
+    json.emitJson = true;
+    json.jsonOut = "cpp/t/ship.gen.h";
+    json.files = {"schemas/t/ship.hschema"};
+    auto j = compileFiles({{"schemas/t/ship.hschema", "package a;\n"}}, json);
+    CHECK_FALSE(j->ok());
+    CHECK_MESSAGE(j->messages.find("two outputs would be written to 'cpp/t/ship.gen.h': give each its own path") != std::string::npos, j->messages);
     // Distinct names compile.
     options.files = {"schemas/t/ship.hschema", "schemas/t/hull.hschema"};
     auto apart = compileFiles({{"schemas/t/ship.hschema", "package a;\n"}, {"schemas/t/hull.hschema", "package b;\n"}}, options);

@@ -97,6 +97,25 @@ component Motion replicate(owner) lod(core) {
 
 component Plain { value: i32 @was("old_value") }
 
+/// Every raw full-state form (`--emit repl`) and a range-quantized f64.
+component Status replicate(all) {
+  mode:   Color = Green
+  alive:  bool = true
+  level:  i16 = -3
+  perm:   Perm
+  who:    EntityId
+  ref:    ThingRef
+  at:     Tick
+  wait:   Duration
+  handle: NetHandle
+  rot:    quatf @interp(slerp)
+  flat:   vec2f
+  tint:   color
+  far:    vec3d
+  where:  WorldPos
+  score:  f64 @quant(range=±1000, bits=20)
+}
+
 event Exploded @audience(relevant) { at: WorldPos; radius: f32 }
 message Chat { from: EntityId; text: string @max(256) }
 viewmodel Hud @client { hp: f32; target: ThingRef? }

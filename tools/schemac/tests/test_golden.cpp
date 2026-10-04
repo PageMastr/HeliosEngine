@@ -73,6 +73,8 @@ constexpr GoldenOutput kOutputs[] = {
     {"luau/fuel_costs.defaults.json", "fuel_costs.defaults.json.expected"},
     {"sql/svc_golden/schema.sql", "svc_golden.schema.sql.expected"},
     {"sql/svc_golden/migration.sql", "svc_golden.migration.sql.expected"},
+    {"cpp/golden.repl.gen.h", "golden.repl.gen.h.expected"},
+    {"cpp/golden.repl.gen.cpp", "golden.repl.gen.cpp.expected"},
 };
 
 TEST_CASE("golden: generator output matches the committed expectations") {
@@ -96,6 +98,7 @@ TEST_CASE("golden: generator output matches the committed expectations") {
     options.emitJson = true;
     options.emitLuau = true;
     options.emitSql = true;
+    options.emitRepl = true;
     options.cppOut = "cpp";
     options.goOut = "go";
     options.jsonOut = "golden.schema.json";
@@ -132,7 +135,7 @@ struct CorpusSet {
     std::vector<std::pair<const char*, const char*>> outputs; ///< output suffix -> expected file
 };
 
-TEST_CASE("golden: the schemas/ corpus generates the committed Luau and SQL outputs") {
+TEST_CASE("golden: the schemas/ corpus generates the committed Luau, SQL and replication outputs") {
     const std::vector<CorpusSet> sets = {
         {"sample",
          {"schemas/sample/common.hschema", "schemas/sample/ship.hschema", "schemas/sample/items.hschema"},
@@ -142,7 +145,10 @@ TEST_CASE("golden: the schemas/ corpus generates the committed Luau and SQL outp
           {"luau/schema.d.luau", "schema.d.luau.expected"},
           {"luau/fuel_costs.defaults.json", "fuel_costs.defaults.json.expected"},
           {"sql/svc_character/schema.sql", "svc_character.schema.sql.expected"},
-          {"sql/svc_character/migration.sql", "svc_character.migration.sql.expected"}}},
+          {"sql/svc_character/migration.sql", "svc_character.migration.sql.expected"},
+          {"cpp/sample/common.repl.gen.cpp", "common.repl.gen.cpp.expected"},
+          {"cpp/sample/ship.repl.gen.h", "ship.repl.gen.h.expected"},
+          {"cpp/sample/ship.repl.gen.cpp", "ship.repl.gen.cpp.expected"}}},
     };
     for (const CorpusSet& set : sets) {
         INFO(set.name);
@@ -162,6 +168,7 @@ TEST_CASE("golden: the schemas/ corpus generates the committed Luau and SQL outp
         options.lockPath = set.lock;
         options.emitLuau = true;
         options.emitSql = true;
+        options.emitRepl = true;
         options.cppOut = "cpp";
         options.luauOut = "luau";
         options.sqlOut = "sql";
@@ -197,6 +204,7 @@ TEST_CASE("golden: generation is deterministic and independent of declaration-ir
     options.emitJson = true;
     options.emitLuau = true;
     options.emitSql = true;
+    options.emitRepl = true;
     auto a = compileFiles({{"golden/golden.hschema", *source}}, options);
     // Comments and whitespace do not change the output.
     std::string reformatted;

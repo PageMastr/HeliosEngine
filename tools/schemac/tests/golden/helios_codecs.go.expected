@@ -927,13 +927,13 @@ func enc_list_list_u8___35(b []byte, id uint32, v []U8List) []byte {
 	}
 	for _, e := range v {
 		b = appendTag(b, id, wireLen)
-		{ var mk int; b, mk = beginLen(b); b = enc_list_u8__58(b, 1, e); b = endLen(b, mk) }
+		{ var mk int; b, mk = beginLen(b); b = enc_list_u8__59(b, 1, e); b = endLen(b, mk) }
 	}
 	return b
 }
 
 func dec_list_list_u8___35(r *wireReader, wt int, v *[]U8List) error {
-	e := zero_list_u8__58()
+	e := zero_list_u8__59()
 	if wt != wireLen {
 		return wireMismatch("wrapped element", wt, wireLen)
 	}
@@ -947,7 +947,7 @@ func dec_list_list_u8___35(r *wireReader, wt int, v *[]U8List) error {
 			return err
 		}
 		if eid == 1 {
-			if err := dec_list_u8__58(esub, ewt, &e); err != nil {
+			if err := dec_list_u8__59(esub, ewt, &e); err != nil {
 				return err
 			}
 		} else if err := esub.skip(ewt); err != nil {
@@ -1276,15 +1276,15 @@ func enc_Ref_golden_all_ThingDef___44(b []byte, id uint32, v *ThingRef) []byte {
 	if v == nil {
 		return b
 	}
-	return enc_Ref_golden_all_ThingDef__61(b, id, *v)
+	return enc_Ref_golden_all_ThingDef__58(b, id, *v)
 }
 
 func dec_Ref_golden_all_ThingDef___44(r *wireReader, wt int, v **ThingRef) error {
 	if *v == nil {
-		x := zero_Ref_golden_all_ThingDef__61()
+		x := zero_Ref_golden_all_ThingDef__58()
 		*v = &x
 	}
-	return dec_Ref_golden_all_ThingDef__61(r, wt, *v)
+	return dec_Ref_golden_all_ThingDef__58(r, wt, *v)
 }
 
 func zero_list_Ref_golden_all_ThingDef___45() []ThingRef { return ([]ThingRef)(nil) }
@@ -1300,7 +1300,7 @@ func enc_list_Ref_golden_all_ThingDef___45(b []byte, id uint32, v []ThingRef) []
 	b = appendTag(b, id, wireLen)
 	b, mk := beginLen(b)
 	for _, e := range v {
-		b = encv_Ref_golden_all_ThingDef__61(b, e)
+		b = encv_Ref_golden_all_ThingDef__58(b, e)
 	}
 	return endLen(b, mk)
 }
@@ -1313,16 +1313,16 @@ func dec_list_Ref_golden_all_ThingDef___45(r *wireReader, wt int, v *[]ThingRef)
 		}
 		sub := &wireReader{data: p, depth: r.depth}
 		for !sub.atEnd() {
-			e := zero_Ref_golden_all_ThingDef__61()
-			if err := decv_Ref_golden_all_ThingDef__61(sub, wireI64, &e); err != nil {
+			e := zero_Ref_golden_all_ThingDef__58()
+			if err := decv_Ref_golden_all_ThingDef__58(sub, wireI64, &e); err != nil {
 				return err
 			}
 			*v = append(*v, e)
 		}
 		return nil
 	}
-	e := zero_Ref_golden_all_ThingDef__61()
-	if err := decv_Ref_golden_all_ThingDef__61(r, wt, &e); err != nil {
+	e := zero_Ref_golden_all_ThingDef__58()
+	if err := decv_Ref_golden_all_ThingDef__58(r, wt, &e); err != nil {
 		return err
 	}
 	*v = append(*v, e)
@@ -1743,13 +1743,38 @@ func dec_golden_all_ThingDef_Mode_57(r *wireReader, wt int, v *ThingDefMode) err
 	return decv_golden_all_ThingDef_Mode_57(r, wt, v)
 }
 
-func zero_list_u8__58() U8List { return (U8List)(nil) }
+func zero_Ref_golden_all_ThingDef__58() ThingRef { return ThingRef(0) }
 
-func def_list_u8__58(v U8List) bool {
+func def_Ref_golden_all_ThingDef__58(v ThingRef) bool {
+	return v == 0
+}
+
+func encv_Ref_golden_all_ThingDef__58(b []byte, v ThingRef) []byte {
+	return appendFixed64(b, uint64(v))
+}
+
+func decv_Ref_golden_all_ThingDef__58(r *wireReader, wt int, v *ThingRef) error {
+	x, err := readFixed64Field(r, wt, "record reference")
+	*v = ThingRef(x)
+	return err
+}
+
+func enc_Ref_golden_all_ThingDef__58(b []byte, id uint32, v ThingRef) []byte {
+	b = appendTag(b, id, wireI64)
+	return encv_Ref_golden_all_ThingDef__58(b, v)
+}
+
+func dec_Ref_golden_all_ThingDef__58(r *wireReader, wt int, v *ThingRef) error {
+	return decv_Ref_golden_all_ThingDef__58(r, wt, v)
+}
+
+func zero_list_u8__59() U8List { return (U8List)(nil) }
+
+func def_list_u8__59(v U8List) bool {
 	return len(v) == 0
 }
 
-func enc_list_u8__58(b []byte, id uint32, v U8List) []byte {
+func enc_list_u8__59(b []byte, id uint32, v U8List) []byte {
 	if len(v) == 0 {
 		return b
 	}
@@ -1761,7 +1786,7 @@ func enc_list_u8__58(b []byte, id uint32, v U8List) []byte {
 	return endLen(b, mk)
 }
 
-func dec_list_u8__58(r *wireReader, wt int, v *U8List) error {
+func dec_list_u8__59(r *wireReader, wt int, v *U8List) error {
 	if wt == wireLen {
 		p, err := r.lenBytes()
 		if err != nil {
@@ -1785,19 +1810,19 @@ func dec_list_u8__58(r *wireReader, wt int, v *U8List) error {
 	return nil
 }
 
-func zero_golden_all_LedgerLine_Shape_Dot_59() LedgerLineShapeDot { return NewLedgerLineShapeDot() }
+func zero_golden_all_LedgerLine_Shape_Dot_60() LedgerLineShapeDot { return NewLedgerLineShapeDot() }
 
-func def_golden_all_LedgerLine_Shape_Dot_59(v LedgerLineShapeDot) bool {
+func def_golden_all_LedgerLine_Shape_Dot_60(v LedgerLineShapeDot) bool {
 	return v.isDefault()
 }
 
-func encv_golden_all_LedgerLine_Shape_Dot_59(b []byte, v LedgerLineShapeDot) []byte {
+func encv_golden_all_LedgerLine_Shape_Dot_60(b []byte, v LedgerLineShapeDot) []byte {
 	b, mk := beginLen(b)
 	b = v.appendFields(b)
 	return endLen(b, mk)
 }
 
-func decv_golden_all_LedgerLine_Shape_Dot_59(r *wireReader, wt int, v *LedgerLineShapeDot) error {
+func decv_golden_all_LedgerLine_Shape_Dot_60(r *wireReader, wt int, v *LedgerLineShapeDot) error {
 	if wt != wireLen {
 		return wireMismatch("Dot", wt, wireLen)
 	}
@@ -1808,28 +1833,28 @@ func decv_golden_all_LedgerLine_Shape_Dot_59(r *wireReader, wt int, v *LedgerLin
 	return v.readFields(sub)
 }
 
-func enc_golden_all_LedgerLine_Shape_Dot_59(b []byte, id uint32, v LedgerLineShapeDot) []byte {
+func enc_golden_all_LedgerLine_Shape_Dot_60(b []byte, id uint32, v LedgerLineShapeDot) []byte {
 	b = appendTag(b, id, wireLen)
-	return encv_golden_all_LedgerLine_Shape_Dot_59(b, v)
+	return encv_golden_all_LedgerLine_Shape_Dot_60(b, v)
 }
 
-func dec_golden_all_LedgerLine_Shape_Dot_59(r *wireReader, wt int, v *LedgerLineShapeDot) error {
-	return decv_golden_all_LedgerLine_Shape_Dot_59(r, wt, v)
+func dec_golden_all_LedgerLine_Shape_Dot_60(r *wireReader, wt int, v *LedgerLineShapeDot) error {
+	return decv_golden_all_LedgerLine_Shape_Dot_60(r, wt, v)
 }
 
-func zero_golden_all_LedgerLine_Shape_Line_60() LedgerLineShapeLine { return NewLedgerLineShapeLine() }
+func zero_golden_all_LedgerLine_Shape_Line_61() LedgerLineShapeLine { return NewLedgerLineShapeLine() }
 
-func def_golden_all_LedgerLine_Shape_Line_60(v LedgerLineShapeLine) bool {
+func def_golden_all_LedgerLine_Shape_Line_61(v LedgerLineShapeLine) bool {
 	return v.isDefault()
 }
 
-func encv_golden_all_LedgerLine_Shape_Line_60(b []byte, v LedgerLineShapeLine) []byte {
+func encv_golden_all_LedgerLine_Shape_Line_61(b []byte, v LedgerLineShapeLine) []byte {
 	b, mk := beginLen(b)
 	b = v.appendFields(b)
 	return endLen(b, mk)
 }
 
-func decv_golden_all_LedgerLine_Shape_Line_60(r *wireReader, wt int, v *LedgerLineShapeLine) error {
+func decv_golden_all_LedgerLine_Shape_Line_61(r *wireReader, wt int, v *LedgerLineShapeLine) error {
 	if wt != wireLen {
 		return wireMismatch("Line", wt, wireLen)
 	}
@@ -1840,38 +1865,13 @@ func decv_golden_all_LedgerLine_Shape_Line_60(r *wireReader, wt int, v *LedgerLi
 	return v.readFields(sub)
 }
 
-func enc_golden_all_LedgerLine_Shape_Line_60(b []byte, id uint32, v LedgerLineShapeLine) []byte {
+func enc_golden_all_LedgerLine_Shape_Line_61(b []byte, id uint32, v LedgerLineShapeLine) []byte {
 	b = appendTag(b, id, wireLen)
-	return encv_golden_all_LedgerLine_Shape_Line_60(b, v)
+	return encv_golden_all_LedgerLine_Shape_Line_61(b, v)
 }
 
-func dec_golden_all_LedgerLine_Shape_Line_60(r *wireReader, wt int, v *LedgerLineShapeLine) error {
-	return decv_golden_all_LedgerLine_Shape_Line_60(r, wt, v)
-}
-
-func zero_Ref_golden_all_ThingDef__61() ThingRef { return ThingRef(0) }
-
-func def_Ref_golden_all_ThingDef__61(v ThingRef) bool {
-	return v == 0
-}
-
-func encv_Ref_golden_all_ThingDef__61(b []byte, v ThingRef) []byte {
-	return appendFixed64(b, uint64(v))
-}
-
-func decv_Ref_golden_all_ThingDef__61(r *wireReader, wt int, v *ThingRef) error {
-	x, err := readFixed64Field(r, wt, "record reference")
-	*v = ThingRef(x)
-	return err
-}
-
-func enc_Ref_golden_all_ThingDef__61(b []byte, id uint32, v ThingRef) []byte {
-	b = appendTag(b, id, wireI64)
-	return encv_Ref_golden_all_ThingDef__61(b, v)
-}
-
-func dec_Ref_golden_all_ThingDef__61(r *wireReader, wt int, v *ThingRef) error {
-	return decv_Ref_golden_all_ThingDef__61(r, wt, v)
+func dec_golden_all_LedgerLine_Shape_Line_61(r *wireReader, wt int, v *LedgerLineShapeLine) error {
+	return decv_golden_all_LedgerLine_Shape_Line_61(r, wt, v)
 }
 
 func zero_golden_all_Item_62() Item { return NewItem() }

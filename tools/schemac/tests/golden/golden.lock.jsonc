@@ -322,6 +322,28 @@
         {"id": 2, "name": "r", "type": "f32", "default": "0.5"}
       ]
     },
+    "golden.all.Status": {
+      "id": 3718832219,
+      "kind": "struct",
+      "nextField": 16,
+      "fields": [
+        {"id": 1, "name": "mode", "type": "golden.all.Color", "default": "\"Green\""},
+        {"id": 2, "name": "alive", "type": "bool", "default": "true"},
+        {"id": 3, "name": "level", "type": "i16", "default": "-3"},
+        {"id": 4, "name": "perm", "type": "golden.all.Perm"},
+        {"id": 5, "name": "who", "type": "EntityId"},
+        {"id": 6, "name": "ref", "type": "Ref<golden.all.ThingDef>"},
+        {"id": 7, "name": "at", "type": "Tick"},
+        {"id": 8, "name": "wait", "type": "Duration"},
+        {"id": 9, "name": "handle", "type": "NetHandle"},
+        {"id": 10, "name": "rot", "type": "quatf"},
+        {"id": 11, "name": "flat", "type": "vec2f"},
+        {"id": 12, "name": "tint", "type": "color"},
+        {"id": 13, "name": "far", "type": "vec3d"},
+        {"id": 14, "name": "where", "type": "WorldPos"},
+        {"id": 15, "name": "score", "type": "f64"}
+      ]
+    },
     "golden.all.StoreBuyRequest": {
       "id": 1211075103,
       "kind": "struct",

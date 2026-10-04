@@ -1,5 +1,5 @@
 #pragma once
-// Code generators (02 §3.5): `--emit cpp`, `--emit go`, `--emit json`, `--emit luau`, `--emit sql`.
+// Code generators (02 §3.5): `--emit cpp`, `--emit go`, `--emit json`, `--emit luau`, `--emit sql`, `--emit repl`.
 
 #include <string>
 #include <vector>
@@ -24,6 +24,10 @@ std::vector<OutputFile> generateLuau(const Schema& schema, const CompileOptions&
 /// `<schema>/schema.sql` (snapshot) and `<schema>/migration.sql` (goose stub from `baseline`) per
 /// service schema with @sql structs, in options.sqlOut. Reports fields that cannot be columns.
 std::vector<OutputFile> generateSql(const Schema& schema, const Lock& baseline, const CompileOptions& options, DiagnosticEngine& diags);
+/// `<logical>.repl.gen.h/.cpp` per generated file: ComponentRepDesc tables, typed full-state codecs,
+/// rpc and event tables and the file's protocol hash (helios/reflect/repl.h). Reports @quant errors
+/// and replicated fields the Phase 0 full-state codec cannot carry.
+std::vector<OutputFile> generateRepl(const Schema& schema, const CompileOptions& options, DiagnosticEngine& diags);
 
 /// C++ identifier for a schema field name (keywords get a trailing '_').
 std::string cppFieldName(const std::string& name);

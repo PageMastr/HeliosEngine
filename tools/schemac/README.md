@@ -2,7 +2,8 @@
 
 `helios-schemac` compiles `.hschema` files into C++ (types, reflection, codecs), Go (types and a
 byte-identical codec), Luau glue (scriptlib bindings, `.d.luau` declarations, fuel defaults),
-PostgreSQL DDL (table snapshots and goose migration stubs) and a machine-readable schema description.
+PostgreSQL DDL (table snapshots and goose migration stubs), replication descriptors with full-state
+codecs, and a machine-readable schema description.
 It implements ADR-004.
 
 **The normative specification is [docs/plan/02-engine-runtime.md §3](../../docs/plan/02-engine-runtime.md#3-schema-and-reflection-normative)**
@@ -27,7 +28,8 @@ APIs) and lists what is not implemented yet.
 | `json` | Implemented: schema description (types, ids, fields, attributes, defaults, layout hashes, services, constants, aliases, formulas, scriptlibs with fuel costs) |
 | `luau` | Implemented for `scriptlib`s: the C++ call glue on engine/script's `Binder` with the fuel charges, binding ids from the lock, `schema.d.luau` and `fuel_costs.defaults.json` ([Generated Luau](#generated-luau)). Tagged-userdata glue for components and records (`@script` fields) is WP-1.6's |
 | `sql` | Implemented for structs marked `@sql(schema="svc_<service>")`: a PostgreSQL snapshot and a goose migration stub diffed against the baseline lock, per service schema ([Generated SQL](#generated-sql)) |
-| `repl`, `proto`, `editor`, `records`, `lint`, `docs` | Planned; `--emit <name>` fails with exit code 2 "not yet implemented" |
+| `repl` | Implemented for Phase 0 (04 §11.3: descriptors, full state): `ComponentRepDesc` tables with quantizers, typed full-state codecs, rpc and event tables and a protocol hash per file ([Generated replication](#generated-replication)). Change masks, deltas and variable-size fields are WP-1.10 |
+| `proto`, `editor`, `records`, `lint`, `docs` | Planned; `--emit <name>` fails with exit code 2 "not yet implemented" |
 
 The lints of the planned `lint` emitter (AAA-SEC-1, AAA-SEC-4, ledger/persist, keyed lists,
 naming) already run on every compilation.
@@ -65,7 +67,7 @@ helios-schemac -I schemas --lock schemas/schema.lock.jsonc --emit cpp,go,json \
 | `--lock <file>` | Schema lock (created if missing, updated in place). Without it ids are per-run (warning) |
 | `--check-lock` | Fail (exit 1) instead of updating an out-of-date lock (CI) |
 | `--allow-default-change` | Accept changed explicit defaults (they are part of the wire contract) |
-| `--emit cpp,go,json,luau,sql` | Generators (default `cpp`) |
+| `--emit cpp,go,json,luau,sql,repl` | Generators (default `cpp`; `repl` writes next to the C++ output) |
 | `--cpp-out`, `--go-out`, `--go-package`, `--json-out`, `--luau-out`, `--sql-out` | Output locations (`--luau-out`: `schema.d.luau` and `fuel_costs.defaults.json`; the Luau glue goes to `--cpp-out`. `--sql-out`: `<schema>/schema.sql` and `<schema>/migration.sql`) |
 | `--sql-baseline <lock>` | Lock the SQL migration stub starts from (default: `--lock` as it was before this run) |
 | `--samples` | Also emit `<file>.samples.gen.h` (deterministic sample values shared with the Go test) |
@@ -101,6 +103,11 @@ import "helios/world/frames.hschema";    // relative to this file, then to each 
   Luau and PostgreSQL, so the rest of the line would run as code. (A CRLF line ending is fine.)
   For the same reason a schema file path (an input or an import) with a control character is an
   error: every emitter prints it in a header comment.
+- A schema file's name up to its first `.` (its stem: `ship` for `ship.hschema`) must be an identifier,
+  a letter followed by letters, digits and `_`: generated C++ names `register<Stem>Types()` and
+  `<stem>Replication()` after it, so `ship-motion.hschema` or `2d.hschema` is an error, not code that
+  does not compile. Two files of one package whose stems differ only by `_` or the first letter's case
+  (`ship_motion`, `shipMotion`) are an error too, as they would define the same functions.
 
 ### Declarations
 
@@ -543,6 +550,81 @@ helios-schemac -I schemas --lock schemas/sample/schema.lock.jsonc --emit sql --s
   does not have yet. Changing the key of an existing table is a hand-written migration (the lock does not
   record keys). `helios_schema()` has no SQL option: run the CLI, since stubs are copied by hand.
 
+## Generated replication
+
+`--emit repl` (02 §3.5; 04 §4.1, §4.5, §4.6) writes `<file>.repl.gen.h` and `<file>.repl.gen.cpp` next
+to the C++ output for every generated file. The runtime is `helios/reflect/repl.h`
+(engine/reflect).
+
+- **`RepOf<C>`** for each replicated component `C`:
+  - `desc()` returns a `ComponentRepDesc`: qualified name, lock type id, audience (`all`, `owner`,
+    `server`), LOD group, and per replicated field (never `server {}` fields) the name, lock id, byte
+    offset, change-mask index (`FieldInfo::repIndex`, the `Mut<C>` dirty bit), LOD (`lod(near)` on the
+    field overrides the component's), `@predicted`, `@interp(linear|slerp)`, quantizer and worst-case
+    bits. It also holds the component's worst case and a descriptor hash.
+  - `writeFullState(BitWriter&, const C&)` and `readFullState(BitReader&, C&)` carry every replicated
+    field in change-mask order. This is 04 §4.2's full-state chunk; masks and deltas are WP-1.10.
+- **`@quant`** forms:
+
+  | Form | Fields | Wire |
+  |---|---|---|
+  | `range=±x, bits=n` (or `range=x`) | `f32`, `f64`, `vec2f`, `vec3f`, `vec4f`, `vec3d`, `color` | each component clamped to [−x, x] on 2ⁿ−1 steps |
+  | `smallest3, bits=n` | `quatf` | index of the largest component (2 bits) and the other three in ±1/√2 at n bits |
+  | `frame_cell, cell=<m>, res=<m>` | `WorldPos` | the position rounded to `res`, per axis a zigzag varint cell index and the offset in ⌈log₂(cell/res)⌉ bits (04 §4.5: `cell=4096m, res=1/256m` is 20 bits per axis) |
+  | none | fixed-size values | raw: `bool` 1 bit, integers and enums at their width, floats as IEEE bits, ids at 64 (`NetHandle` 32) |
+
+  `bits` is 1 to 32 (3 to 32 for `smallest3`: at 1 or 2 bits rounding pushes most quaternions past
+  unit length), and `cell` must be a whole multiple of `res` (2 to 2³² steps). An argument the form
+  does not use (`bits=` on `frame_cell`, `range=` on `smallest3`) is an error, not ignored. Lengths
+  are metres: `m` or no unit (`cell=4km` is an error, not a 4 m cell); fractions (`1/256m`), hex
+  (`0xA`) and `±` are accepted, and `range=x` is the same as `range=±x` (02 §3.1 writes `range=4096`, 04 §4.1
+  `range=±4096`). The bound must fit an `f32` component for `f32` fields, and the range's width must
+  be finite. With 2ⁿ−1 steps, 0 is not exact in a symmetric range (`range=±4096, bits=16` sends a
+  stationary velocity as +0.0625 m/s per axis); 04 §4.5's at-rest bit (WP-1.10) is meant to cover
+  velocities. The Phase 0 codec carries no strings, `Name`s, containers, structs or variants: a
+  replicated field of those types is an error under `--emit repl`.
+- **Determinism.** Quantizers use f64 arithmetic with round-half-up, and frame cells use integer
+  steps, so a cell and a client produce the same bits (04 §4.5). Range and raw fields re-encode from
+  their decoded value to identical bits. Frame-cell fields do at every position when `res` is a power
+  of two (04 §4.5's 1/256 m and 1/1024 m); with another `res` (`res=1/1000m`, say), only below 2⁵⁰
+  steps (about 10¹² m at 1 mm), since from about 2⁵¹ steps the f64 rounding of `steps · res` and of
+  `v / res` together reach half a step. Smallest-three need not: when two components
+  are within a step, the decoded largest (√(1 − sum)) can come out below a quantized one, so its
+  index flips (26 of 20,000 random rotations at 10 bits), and above 24 bits the `f32` result is
+  coarser than a step. The rotation it decodes to stays within one step per component (or `f32`
+  precision) of the first decode. WP-1.10's "both sides quantize" extrapolation (04 §4.5) must
+  compare decoded rotations, not their bits.
+- **Non-finite and out-of-range input** stays decodable: range maps NaN to its minimum, frame cells
+  map a non-finite axis to 0 and saturate a finite one at ±4·10¹⁸ steps of `res` (the reader accepts
+  exactly that range at every cell size), and smallest-three normalises its input and sends a non-finite or zero quaternion as the
+  identity (and steps a rounded-up component back toward 0 when the three would exceed unit length),
+  so a reader always accepts what a writer wrote.
+- **Hostile input.** Readers are bounds-checked and never overread. They reject truncated streams,
+  varints longer than 10 bytes or overlong, frame-cell offsets of a whole cell or more, frame-cell
+  positions beyond ±4·10¹⁸ steps of `res`, enum values and flag bits the schema does not declare, and
+  smallest-three components whose squares sum to more than 1 (no unit quaternion sends them).
+- **`<stem>Replication()`** returns the file's `FileRepTables`:
+  - its replicated components;
+  - its top-level rpcs, with direction, reliability, `@ratelimit` per second and `@intent` (service
+    rpcs are backend calls, 05, not netcode);
+  - its events, with `@audience(owner|relevant|party)`, default `relevant`, and reliability
+    (`@unreliable` is EVENT_U, otherwise EVENT_R; 04 §2.2);
+  - a **protocol hash**, which is `protocolHash()` over the descriptor, rpc and event hashes.
+  `protocolHash()` over several files' hashes gives a build's hash, independent of order; it is an
+  input of 05 §1.14.1's compat fingerprint. For components it covers type and field ids, names,
+  types, audience, LOD, prediction, interpolation, every quantizer parameter, each field's worst-case
+  bits, and the underlying types (the raw wire width) and values of the enums and flags the fields
+  use. For rpcs and events it covers the direction, reliability, rate, intent and audience, and the
+  payload: each argument's or field's lock id, name, type, explicit default and `@max`, a top-level
+  rpc's `-> T` result type (04 §4.6 defines no reply yet; the result is hashed so that peers agree on
+  it), and the fields, defaults, `@max`es, enum and flags underlying types and values, and
+  alternatives of every struct, variant, enum and flags type the payload reaches (by name; reached
+  types contribute no lock ids, so the hash does not depend on which files are compiled). So any
+  wire change changes it, and comments or declaration order do not. `@range(min, max)` on a payload
+  field is not hashed: it is a validation bound (a `TypeInfo` attribute) that no decoder enforces, not
+  a wire change. If WP-1.10's rpc validation (SEC-1) rejects arguments outside `@range`, it hashes the
+  bound then, as `@max` is.
+
 ## CMake: `helios_schema()`
 
 ```cmake
@@ -555,6 +637,7 @@ helios_schema(<target>
     [JSON_OUT <file>]               # also write the schema description
     [LUAU_OUT <dir>]                # also generate the Luau glue (links helios::script), schema.d.luau
                                     # and fuel_costs.defaults.json
+    [REPL]                          # also generate <file>.repl.gen.h/.cpp (replication descriptors)
     [SAMPLES])                      # also generate <file>.samples.gen.h
 ```
 
@@ -611,7 +694,21 @@ the signatures `--emit luau` rejects. PR #22's review round 1 added: the per-cal
 Names never interned and sets of names in lexical order, `@max` on string parameters, struct fields and
 results, exact `T[N]`, exact integers up to 2⁵³ − 1, finite `f32`, and realm checks against the host
 profile. 22 mutants of the generator (the reviewer's 11 and 11 more) are each killed by a behavioural
-case. `test_sql.cpp` covers the column mapping, the migration stub
+case. `test_repl.cpp` runs the generated replication code of the golden
+fixture and the sample schemas: descriptors against the schema and the `TypeInfo` (ids, offsets,
+change-mask indices), full-state round trips within each quantizer's precision (and frame-cell at 1/256 m,
+range and raw fields re-encoding to the same bits), every truncated prefix and random input rejected cleanly, an undeclared enum value, the rpc
+and event tables, the protocol hash (stable under comments and the order of files, changed by a
+quantizer, an audience, an enum's values, an rpc argument's or event field's type, name or default,
+and a field of a struct an rpc reaches; since PR #33's round 2 also an enum's or flags' underlying
+type, a top-level rpc's result, a payload `@max` and an event's reliability), undeclared flag bits, an
+`INT64_MIN` enum value, 30 `@quant` / field diagnostics (round 3: a repeated argument or a second
+form), and (round 5) file names that are not identifiers, imported ones included, and two stems of one
+package that name the same functions. `engine/reflect`'s `reflect_tests` cover the quantizers: every
+width of smallest-three accepted by its reader and within one step when re-encoded, frame cells read
+back at every cell size, up to the ±4·10¹⁸-step saturation, and re-encoded to the same bits (to the
+saturation at 1/256 m and 1/1024 m; below 2⁵⁰ steps at 1 mm, 1 cm, 0.1 m and 1/3 m), and the offset
+width `writeFrameCell` asserts. `test_sql.cpp` covers the column mapping, the migration stub
 (renames, widenings, `T→T?`, new columns and tables, removed fields and tables as contract comments,
 Down in reverse, the empty stub, `--sql-baseline`), string defaults (one line, `E'…'`, no NUL) and
 the rules of `@sql`. The CTest `schemac_sql_postgres`
@@ -631,7 +728,7 @@ server as `nobody` when started as root, and is not registered on Windows or whe
   `ecs::NetHandle{u32}` and `ecs::Tick = u64`; `engine/ecs` should alias the `refl` vocabulary
   types (or vice versa) so generated components use one set.
 - Not generated yet (later work packages): `registerComponents(ecs::World&)` / flecs traits,
-  `ComponentRepDesc` and quantizers (`repl`), cooked layouts (`Cooked<T>`), NATS stubs, the Luau
+  replication change masks, deltas and variable-size replicated fields (WP-1.10), cooked layouts (`Cooked<T>`), NATS stubs, the Luau
   tagged-userdata glue for components and records (`@script(read|write)` fields; WP-1.6, with the
   host's `Entity` type), editor JSON, record cooking, HXL compilation of formulas and
   `@validate`, `upgrade<T>` hooks for `@version`.
@@ -652,9 +749,9 @@ server as `nobody` when started as root, and is not registered on Windows or whe
 
 ## Plan conformance
 
-Plan-Rev: 11
+Plan-Rev: 12
 
-Written to plan revision 11 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau` and `sql` so far), after being
+Written to plan revision 12 by WP-0.7b (the Phase 0 emitters, 09 §2: `luau`, `sql` and `repl` so far), after being
 reconciled by hand with revision 6 on 2026-09-25 under `docs/plan/09-roadmap-and-process.md`
-§5.10.2 D7. Revisions 7–11 changed no anchor of this package. No conformance delta is open; see
+§5.10.2 D7. Revisions 7–12 changed no anchor of this package. No conformance delta is open; see
 §5.10.4 (c) there.

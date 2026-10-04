@@ -27,6 +27,7 @@ Depends on `helios::core`, `helios::math` and yyjson (private). Headless (server
 | `path.h` | `PropertyPath` (`thrusters[#9a1e…]/maxForce`, `baseAttrs[Ship.Speed]`, `points[3]`, `duration/Periodic/period`), `resolve`, `getJson`, `setJson`, `getAs<T>` |
 | `patch.h` | `diff(before, after)` → `Patch` of `set`/`remove` ops by property path; `apply`; JSON form |
 | `mut.h` | `Mut<C>` base for generated per-field dirty-bit mutators of replicated components |
+| `repl.h` | Replication descriptors (`ComponentRepDesc`, `FieldRep`, `Quantizer`, `RpcRep`, `EventRep`, `FileRepTables`, `RepOf<C>`) and the full-state primitives the generated codecs use: `BitWriter`/`BitReader`, range, smallest-three and frame-cell quantizers, `protocolHash` (02 §3.5 `--emit repl`, 04 §4.1, §4.5) |
 | `record.h` | `.hrec` record files: `$rid`, `$name`, `$parent`, `$comment` header + fields |
 | `builder.h` | `StructBuilder`, `EnumBuilder`, `VariantBuilder`, `HELIOS_REFLECT_TYPE/ENUM/VARIANT` |
 | `generated.h` | Everything generated code includes |
@@ -106,12 +107,21 @@ Both produce identical bytes and text (cross-checked by the tests on every sampl
 formatting (shortest round trip, f32 exactness, non-finite), every codec (vocabulary types,
 containers, variants, keyed lists, widening reads, corrupt input), builder types vs. the walker,
 the registry (including concurrent readers during registration), property paths, diff/patch
-(including a randomized property test), record files and `Mut<C>`. The generated-code side is
-tested by `schemac_tests` (tools/schemac).
+(including a randomized property test), record files, `Mut<C>`, and the replication primitives
+(bit streams at every width, hostile varints, range quantization within half a step, smallest-three
+quaternions (hostile ones that cannot be a unit quaternion rejected, while whatever the writer sends,
+NaN, zero and unnormalised input included, decodes at every width from 2 bits; a decoded rotation
+re-encodes within one step; the `bits` range asserted), frame-cell positions exact to half the
+resolution at 10¹³ m and read back at every cell size up to the ±4·10¹⁸-step saturation, out-of-range
+cells and offsets rejected, re-encoding to the same bits (any position at a power-of-two `res`, below
+2⁵⁰ steps at another), the offset width asserted, order-independent protocol hash). The
+generated-code side is tested by `schemac_tests` (tools/schemac).
 
 ## Plan conformance
 
-Plan-Rev: 6
+Plan-Rev: 12
 
-Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
-`docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.
+`repl.h` was written to plan revision 12 by WP-0.7b (`--emit repl`, 02 §3.5; 04 §4.1, §4.5); the rest
+was reconciled by hand with revision 6 on 2026-09-25, under `docs/plan/09-roadmap-and-process.md`
+§5.10.2 D7, and revisions 7–12 changed none of its anchors. No conformance delta is open; see §5.10.4
+(c) there.

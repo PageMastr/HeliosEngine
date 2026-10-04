@@ -42,6 +42,7 @@ struct CompileOptions {
     bool emitJson = false;
     bool emitLuau = false; ///< scriptlib glue next to the C++ output, schema.d.luau + fuel defaults in luauOut
     bool emitSql = false;  ///< PostgreSQL DDL of @sql structs into sqlOut/<schema>/
+    bool emitRepl = false; ///< replication descriptors + full-state codecs next to the C++ output
     bool samples = false; ///< C++ sample-value header (tests / cross-language vectors)
     std::string cppOut = ".";
     std::string goOut = ".";

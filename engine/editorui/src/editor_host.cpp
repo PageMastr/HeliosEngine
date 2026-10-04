@@ -839,8 +839,8 @@ Result<std::unique_ptr<EditorHost>> EditorHost::create(const EditorConfig& confi
         (void)fs::createDirectories(fs::pathFromUtf8(m.iniPath).parent_path());
         io.IniFilename = m.iniPath.c_str();
     }
-    // The embedded vector font only (fixed across machines; re-rasterized at every scale).
-    io.Fonts->AddFontDefaultVector();
+    // The embedded Roboto only (the same glyphs on every machine; re-rasterized at every scale).
+    addEditorFont(io);
     if (!ImGui_ImplSDL3_InitForVulkan(m.window)) return Error{ErrorCode::Unsupported, "ImGui SDL3 backend initialization failed"};
     m.platformInit = true;
     HELIOS_TRY_ASSIGN(m.renderer, ImGuiRenderer::create(*m.device, kFrameFormat));

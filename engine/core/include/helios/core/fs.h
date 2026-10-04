@@ -50,6 +50,8 @@ bool isFile(const Path& path) noexcept;
 bool isDirectory(const Path& path) noexcept;
 Result<u64> fileSize(const Path& path);
 Result<std::filesystem::file_time_type> lastWriteTime(const Path& path);
+/// Sets a file's last write time (caches that evict least recently used entries refresh it on a hit).
+Result<void> setLastWriteTime(const Path& path, std::filesystem::file_time_type time);
 Result<void> createDirectories(const Path& path);
 /// Removes a file or an empty directory. Removing a missing path is an error (NotFound).
 Result<void> remove(const Path& path);

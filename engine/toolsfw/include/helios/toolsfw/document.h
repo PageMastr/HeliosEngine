@@ -153,7 +153,7 @@ public:
     /// - '/' and '\' separate components on every platform, so a journal means the same on
     ///   Windows and Linux; empty and "." components are dropped;
     /// - refused: a ".." component; a leading separator (absolute, UNC `\\server`, device `\\?\`
-    ///   and `\\.\` paths); any of `<>:"|?*` (drive letters such as `C:` or `c:`, NTFS streams,
+    ///   and `\\.\` paths) or a trailing one; any of `<>:"|?*` (drive letters such as `C:` or `c:`, NTFS streams,
     ///   wildcards) and control characters; a component that ends in '.' or ' ' (Windows drops
     ///   them, so `x.hrec.` names `x.hrec` and `.. ` names `..`); a Windows device name (CON, PRN,
     ///   AUX, NUL, COM0-9, LPT0-9 and their superscript forms, CONIN$, CONOUT$; any case, any

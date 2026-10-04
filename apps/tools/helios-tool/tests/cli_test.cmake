@@ -31,6 +31,7 @@ function(tool expected outvar)
   endif()
   message(STATUS "step ${n}: helios-tool ${ARGN} -> ${rc}")
   set(${outvar} "${out}" PARENT_SCOPE)
+  set(${outvar}_err "${err}" PARENT_SCOPE)
 endfunction()
 
 function(expect_contains text needle what)
@@ -150,6 +151,28 @@ file(READ "${FRIGATE}" t)
 expect_contains("${t}" "\"mass\": 12345," "the replayed journal-only edit reached the file")
 tool(0 out undo)
 expect_file_equals("${FRIGATE}" "${ORIGINAL}" "the replayed (and saved) edit is undoable")
+
+# The journal is untrusted input. A journal whose header names another project is refused and
+# nothing is written, unless --allow-other-project says the project was renamed. (Crafted paths
+# are covered by toolsfw_tests, test_confine.cpp; the CLI's replay is Framework::recover.)
+tool(3 out --project=renamed-cli-test journal replay ${nosave_journal} --save)
+expect_contains("${out_err}" "belongs to project \"cli-test\", not \"renamed-cli-test\"" "replay of another project's journal")
+expect_file_equals("${FRIGATE}" "${ORIGINAL}" "a refused replay writes nothing")
+tool(0 out --project=renamed-cli-test journal replay ${nosave_journal} --save --allow-other-project)
+expect_contains("${out}" "replayed 1 transaction(s)" "journal replay --allow-other-project")
+file(READ "${FRIGATE}" t)
+expect_contains("${t}" "\"mass\": 12345," "the allowed replay reached the file")
+file(WRITE "${FRIGATE}" "${ORIGINAL}")
+
+# A command may not create a record outside the project or of another file type.
+tool(3 out apply --command=doc.create
+     "--args={\"type\": \"sample.ship.ShipHullDef\", \"file\": \"../outside/evil.hrec\", \"name\": \"hull/evil\"}")
+expect_contains("${out_err}" "../outside/evil.hrec" "doc.create outside the project")
+tool(3 out apply --command=doc.create
+     "--args={\"type\": \"sample.ship.ShipHullDef\", \"file\": \"records/hull/evil.sh\", \"name\": \"hull/evil\"}")
+if(EXISTS "${WORK}/outside" OR EXISTS "${PROJECT_DIR}/records/hull/evil.sh")
+  message(FATAL_ERROR "a refused doc.create wrote a file")
+endif()
 file(GLOB journals "${JOURNALS}/*/*.hjl")
 list(LENGTH journals njournals)
 if(njournals LESS 10)

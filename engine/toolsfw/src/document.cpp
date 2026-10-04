@@ -102,23 +102,7 @@ std::optional<std::string> underRoot(const fs::Path& root, const fs::Path& path)
 /// A path for an error message: quoted, control characters escaped (a hostile journal must not
 /// write terminal escape sequences through an error), and cut after 200 bytes.
 std::string shown(std::string_view path) {
-    constexpr usize kMax = 200;
-    std::string out = "'";
-    for (usize i = 0; i < path.size() && i < kMax; ++i) {
-        const auto c = static_cast<unsigned char>(path[i]);
-        const auto next = i + 1 < path.size() ? static_cast<unsigned char>(path[i + 1]) : 0;
-        if (c < 0x20 || c == 0x7F) {
-            out += std::format("\\x{:02x}", c);
-        } else if (c == 0xC2 && next >= 0x80 && next <= 0x9F) {  // a C1 control character
-            out += std::format("\\u{:04x}", next);
-            ++i;
-        } else {
-            out += static_cast<char>(c);
-        }
-    }
-    if (path.size() > kMax) out += "...";
-    out += "'";
-    return out;
+    return "'" + printable(path, 200) + "'";
 }
 
 /// CON, PRN, AUX, NUL, COM0-9, LPT0-9 (and COM/LPT with a superscript 1-3), CONIN$ and CONOUT$:
@@ -233,6 +217,7 @@ Result<ProjectFile> Workspace::confine(std::string_view path, PathOrigin origin,
     if (rel.front() == '/' || rel.front() == '\\') {
         return refuse("an absolute, UNC or device path; journal and op paths are relative to the project root");
     }
+    if (rel.back() == '/' || rel.back() == '\\') return refuse("ends in a separator, so it names a directory");
     // The spelling rule is the same on every platform: a journal written on Linux may be replayed
     // on Windows, so whatever Windows would read differently is refused everywhere.
     std::vector<std::string_view> parts;

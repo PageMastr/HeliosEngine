@@ -63,4 +63,9 @@ inline bool containsDoc(std::span<const DocId> ids, const DocId& id) noexcept {
 std::string hashHex(u64 hash);
 std::optional<u64> parseHashHex(std::string_view text) noexcept;
 
+/// `text` for a terminal, a log line or an error message: control characters (C0 and DEL as
+/// `\xNN`, UTF-8 C1 as `\u00NN`) escaped, so a string from a journal (untrusted input) cannot
+/// carry terminal escape sequences, and cut after `maxBytes` bytes with "...".
+std::string printable(std::string_view text, usize maxBytes = ~usize{0});
+
 } // namespace helios::tf

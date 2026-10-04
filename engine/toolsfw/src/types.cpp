@@ -2,6 +2,7 @@
 
 #include <array>
 #include <charconv>
+#include <format>
 #include <string>
 
 namespace helios::tf {
@@ -43,6 +44,26 @@ std::optional<u64> parseHashHex(std::string_view text) noexcept {
     const auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), v, 16);
     if (ec != std::errc() || ptr != text.data() + text.size()) return std::nullopt;
     return v;
+}
+
+std::string printable(std::string_view text, usize maxBytes) {
+    std::string out;
+    out.reserve(std::min(text.size(), maxBytes));
+    usize i = 0;
+    for (; i < text.size() && i < maxBytes; ++i) {
+        const auto c = static_cast<unsigned char>(text[i]);
+        const auto next = i + 1 < text.size() ? static_cast<unsigned char>(text[i + 1]) : 0;
+        if (c < 0x20 || c == 0x7F) {
+            out += std::format("\\x{:02x}", c);
+        } else if (c == 0xC2 && next >= 0x80 && next <= 0x9F) {
+            out += std::format("\\u{:04x}", next);
+            ++i;
+        } else {
+            out += static_cast<char>(c);
+        }
+    }
+    if (i < text.size()) out += "...";
+    return out;
 }
 
 } // namespace helios::tf

@@ -43,12 +43,12 @@ Verbs
   journal show <file|latest> [--json]
   journal verify <file>             record integrity (torn tail, clean end)
   journal replay <file|auto> [--save] [--ignore-source-changes] [--allow-other-project]
-                                    crash recovery. The journal is untrusted input: every
-                                    file it names must be a .hrec inside the project (no
-                                    '..', absolute, drive, UNC or device paths, no link out
-                                    of the project), and its header must name this project
-                                    (--allow-other-project: a renamed project). One bad entry
-                                    refuses the whole replay (exit 3) and nothing is written
+                                    crash recovery. A journal is untrusted input: each file
+                                    it names must be a .hrec inside the project (no '..',
+                                    absolute, drive, UNC or device path, no link out of it)
+                                    and its header must name this project (--allow-other-
+                                    project: it was renamed). One bad entry refuses the whole
+                                    replay (exit 3); nothing is written
   run <script.luau>                 run an automation script (Editor.*, Record.*, Validate.*)
   commands [--json]                 list the command registry
 
@@ -393,8 +393,8 @@ int cmdJournal(const Context& c) {
     if (sub == "list") {
         const auto sessions = tf::listJournalSessions(journalRootOf(c), c.project, !c.cl->has("all"));
         for (const tf::JournalSessionInfo& s : sessions) {
-            out(std::format("{}  session={} user={} host={} pid={} tx={} {}{}\n", fs::pathToUtf8(s.path), s.header.session, s.header.user,
-                            s.header.host, s.header.pid, s.txCount, s.clean ? "clean" : "UNCLEAN",
+            out(std::format("{}  session={} user={} host={} pid={} tx={} {}{}\n", fs::pathToUtf8(s.path), tf::printable(s.header.session),
+                            tf::printable(s.header.user), tf::printable(s.header.host), s.header.pid, s.txCount, s.clean ? "clean" : "UNCLEAN",
                             s.tornBytes ? std::format(" torn={}B", s.tornBytes) : std::string()));
         }
         if (sessions.empty()) out(std::format("no {}journals for project '{}'\n", c.cl->has("all") ? "" : "unclean ", c.project));
@@ -412,16 +412,16 @@ int cmdJournal(const Context& c) {
             return scan->tornBytes == 0 ? kOk : kCheckFailed;
         }
         const bool json = c.cl->has("json");
-        out(std::format("# project={} session={} user={} host={} pid={}\n", scan->header.project, scan->header.session, scan->header.user,
-                        scan->header.host, scan->header.pid));
+        out(std::format("# project={} session={} user={} host={} pid={}\n", tf::printable(scan->header.project),
+                        tf::printable(scan->header.session), tf::printable(scan->header.user), tf::printable(scan->header.host), scan->header.pid));
         for (const tf::JournalRecord& r : scan->records) {
             if (json) {
                 out(r.toJson() + "\n");
             } else if (r.kind == tf::JournalRecordKind::Tx) {
-                out(std::format("@{} tx {} {} {} \"{}\" ({} op(s))\n", r.offset, r.tx.id.toString(), tf::txKindName(r.tx.kind),
-                                tf::originName(r.tx.origin), r.tx.label, r.tx.ops.size()));
+                out(std::format("@{} tx {} {} {} \"{}\" ({} op(s))\n", r.offset, tf::printable(r.tx.id.toString()), tf::txKindName(r.tx.kind),
+                                tf::originName(r.tx.origin), tf::printable(r.tx.label), r.tx.ops.size()));
             } else {
-                out(std::format("@{} {} {}\n", r.offset, tf::journalRecordKindName(r.kind), r.file));
+                out(std::format("@{} {} {}\n", r.offset, tf::journalRecordKindName(r.kind), tf::printable(r.file)));
             }
         }
         return kOk;

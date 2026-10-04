@@ -1,0 +1,12 @@
+# expect: parse
+# YAML anchors and aliases are outside the subset the check reads, so the workflow fails closed.
+on: pull_request
+jobs:
+  gpu:
+    runs-on: &runner [self-hosted, win-gpu]
+    steps:
+      - run: echo gpu
+  again:
+    runs-on: *runner
+    steps:
+      - run: echo again

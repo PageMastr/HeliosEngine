@@ -202,12 +202,14 @@ function(_cr_sidecar rel imageAbs)
   file(READ "${concept}/${rel}" text)
   string(JSON rootType ERROR_VARIABLE err TYPE "${text}")
   if(err)
+    # CMake 3.x reports "failed parsing json string: * Line L, Column C <reason>"; CMake 4 echoes the
+    # whole input between the prefix and the position. Keep the line and the reason after the last
+    # position (the echoed input comes before it, so text in a sidecar cannot stand in for it).
     set(line 1)
-    if(err MATCHES "Line ([0-9]+), Column")
+    if(err MATCHES ".*\\* Line ([0-9]+), Column [0-9]+[ \t\r\n]*(.*)$")
       set(line ${CMAKE_MATCH_1})
+      set(err "${CMAKE_MATCH_2}")
     endif()
-    string(REGEX REPLACE "^failed parsing json string: (\\* Line [0-9]+, Column [0-9]+)?[ \t\n]*" ""
-           err "${err}")
     string(STRIP "${err}" err)
     _cr_find("${shown}:${line}: not valid JSONC: ${err}")
     return()

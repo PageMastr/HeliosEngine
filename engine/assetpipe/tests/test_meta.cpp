@@ -7,6 +7,7 @@
 
 #include "assetpipe_test_util.h"
 #include "helios/core/platform.h"
+#include "helios/core/utf.h"
 
 namespace {
 
@@ -81,7 +82,7 @@ TEST_CASE("meta: the importer registry checks ids, versions, extensions and sett
     bad.id = "tex2";
     bad.extensions = {".tga"};
     CHECK(r.add(bad).error().code == ErrorCode::AlreadyExists); // ".tga" is png's
-    for (const char* ext : {"tga", ".TGA", ".", ".a-b", ".abcdefghijklmnopq"}) {
+    for (const char* ext : {"tga", ".TGA", ".", ".a-b", ".abcdefghijklmnopq", ".meta"}) {
         CAPTURE(ext);
         bad.extensions = {ext};
         CHECK(r.add(bad).error().code == ErrorCode::InvalidArgument);
@@ -148,14 +149,100 @@ TEST_CASE("meta: project paths follow the Windows-first rule") {
                             "x.png ",
                             "tab\t.png",
                             "nl\n.png",
-                            "c1\xC2\x85.png"}) {
+                            "c1\xC2\x85.png",
+                            // Not UTF-8 (NTFS cannot store it; converting it to a path throws on MSVC):
+                            "\xFF.png",                   // not a lead byte
+                            "a/caf\xC3.png",              // truncated sequence
+                            "\xC0\xAF.png",                // overlong '/'
+                            "\xED\xA0\x80.png",            // a UTF-16 surrogate
+                            "\xF4\x90\x80\x80.png"}) {      // above U+10FFFF
         CAPTURE(bad);
         const auto r = checkProjectPath(bad);
         REQUIRE(!r);
         CHECK(r.error().code == ErrorCode::InvalidArgument);
+        CHECK(isValidUtf8(r.error().message)); // the message shows the path safely
     }
     CHECK(checkProjectPath("a/" + std::string(255, 'n') + "/b.png"));
     CHECK(!checkProjectPath("a/" + std::string(256, 'n') + "/b.png"));
+}
+
+TEST_CASE("meta: sidecar operations refuse paths that are not UTF-8 or leave no room for '.meta'") {
+    TempDir dir;
+    const ImporterRegistry r = makeRegistry();
+    writeText(dir.path, "a.png", "a");
+    REQUIRE(ensureMeta(dir.path, "a.png", newMeta(), r));
+    // Refused before any conversion to a native path (on MSVC that conversion throws).
+    for (const std::string& bad : {std::string("\xFF.png"), std::string("art/\xC3.png")}) {
+        CAPTURE(bad);
+        CHECK(ensureMeta(dir.path, bad, newMeta(), r).error().code == ErrorCode::InvalidArgument);
+        CHECK(loadMeta(dir.path, bad, r).error().code == ErrorCode::InvalidArgument);
+        CHECK(saveMeta(dir.path, bad, loadMeta(dir.path, "a.png", r).value(), r).error().code ==
+              ErrorCode::InvalidArgument);
+        CHECK(moveAsset(dir.path, "a.png", bad, r).error().code == ErrorCode::InvalidArgument);
+        auto ddc = LocalDdc::open(LocalDdcOptions{.root = dir.path / "ddc"}).value();
+        CHECK(cookAsset(CookRequest{&r, ddc.get(), dir.path, bad}).error().code == ErrorCode::InvalidArgument);
+    }
+    CHECK(fileExists(dir.path, "a.png"));
+
+    // A source's name leaves room for its sidecar's: 250 bytes plus ".meta" is a 255-byte component.
+    static_assert(kMaxSourceNameBytes == 250);
+    const std::string longest = std::string(kMaxSourceNameBytes - 4, 'n') + ".png";
+    const std::string tooLong = std::string(kMaxSourceNameBytes - 3, 'n') + ".png";
+    CHECK(checkProjectPath(tooLong)); // a fine name for any other file...
+    CHECK(ensureMeta(dir.path, longest, newMeta(), r).error().code == ErrorCode::NotFound); // (no such file)
+    const auto refused = ensureMeta(dir.path, tooLong, newMeta(), r); // ...but no sidecar can be made for it
+    REQUIRE(!refused);
+    CHECK(refused.error().code == ErrorCode::InvalidArgument);
+    CHECK(refused.error().message.find("251-byte file name") != std::string::npos);
+    CHECK(moveAsset(dir.path, "a.png", "d/" + tooLong, r).error().code == ErrorCode::InvalidArgument);
+    CHECK(loadMeta(dir.path, "a.png", r)); // nothing moved
+    // The scan names such a source where one can be created (Windows' MAX_PATH may refuse the long name).
+    // (Direct: an atomic write's temp name would be longer still.)
+    if (fs::createDirectories(dir.path / "long") &&
+        fs::writeTextFile(dir.path / "long" / tooLong, "x", fs::WriteMode::Direct)) {
+        const MetaScan scan = scanMetas(dir.path, r).value();
+        CHECK(std::any_of(scan.problems.begin(), scan.problems.end(), [&](const MetaProblem& p) {
+            return p.path == "long/" + tooLong && p.message.find("251-byte file name") != std::string::npos;
+        }));
+    }
+    // A name that is not UTF-8 (Linux can hold one; Windows cannot, and a narrow path holding it may not
+    // even convert there) is reported, not skipped.
+    if constexpr (!platform::kIsWindows) {
+        REQUIRE(fs::writeTextFile(dir.path / fs::Path(std::string("\xFF\xFE.png")), "x"));
+        const MetaScan scan = scanMetas(dir.path, r).value();
+        const auto listed = fs::listDirectory(dir.path).value();
+        const bool keptBytes = std::any_of(listed.begin(), listed.end(), [](const fs::DirEntry& e) {
+            return e.relativePath == "\xFF\xFE.png";
+        });
+        if (keptBytes) { // the file system stored the bytes as given
+            CHECK(std::any_of(scan.problems.begin(), scan.problems.end(), [](const MetaProblem& p) {
+                return p.path == "\xFF\xFE.png" && p.message.find("not valid UTF-8") != std::string::npos;
+            }));
+        }
+    }
+}
+
+TEST_CASE("meta: every string a sidecar holds is UTF-8, so a written sidecar always loads") {
+    TempDir dir;
+    const ImporterRegistry r = makeRegistry();
+    writeText(dir.path, "a.png", "a");
+    NewMeta init = newMeta();
+    init.provenance.author = "Ow\xFFner";
+    auto bad = ensureMeta(dir.path, "a.png", init, r);
+    REQUIRE(!bad);
+    CHECK(bad.error().code == ErrorCode::InvalidArgument);
+    CHECK(bad.error().message.find("provenance.author") != std::string::npos);
+    init = newMeta();
+    init.labels = {"ok", "caf\xC3"};
+    CHECK(ensureMeta(dir.path, "a.png", init, r).error().message.find("labels[0]") != std::string::npos);
+    init = newMeta();
+    init.provenance.notes = "\xC0\x80";
+    CHECK(ensureMeta(dir.path, "a.png", init, r).error().message.find("provenance.notes") != std::string::npos);
+    CHECK(!fileExists(dir.path, "a.png.meta"));
+    init = newMeta();
+    init.provenance.notes = "caf\xC3\xA9 \xE2\x9C\x93"; // valid UTF-8 round-trips
+    const AssetMeta meta = ensureMeta(dir.path, "a.png", init, r).value().meta;
+    CHECK(loadMeta(dir.path, "a.png", r).value() == meta);
 }
 
 TEST_CASE("meta: settings resolve through the importer's reflected type, canonical and strict") {
@@ -435,6 +522,26 @@ TEST_CASE("meta: create on first import mints the GUID once") {
         CHECK(!cased.value().created);
         CHECK(cased.value().meta.guid == kGuid);
     }
+
+    // A directory spelled in another case is the same directory on Windows: no sidecar is minted under a
+    // second spelling of it (where both can exist), nor under a spelling the disk does not have.
+    writeText(dir.path, "Ships/Scout/hull.png", "png bytes");
+    if (caseSensitive(dir.path)) {
+        writeText(dir.path, "ships/scout/deck.png", "png bytes"); // Linux: a second tree
+        const auto split = ensureMeta(dir.path, "ships/scout/deck.png", newMeta(), r);
+        REQUIRE(!split);
+        CHECK(split.error().code == ErrorCode::InvalidState);
+        CHECK(split.error().message.find("'Ships'") != std::string::npos);
+        CHECK(!fileExists(dir.path, "ships/scout/deck.png.meta"));
+        // The first spelling is refused too while both exist: the tree itself is wrong.
+        CHECK(ensureMeta(dir.path, "Ships/Scout/hull.png", newMeta(), r).error().code == ErrorCode::InvalidState);
+        REQUIRE(fs::removeAll(dir.path / "ships"));
+    } else {
+        const auto respelled = ensureMeta(dir.path, "ships/scout/hull.png", newMeta(), r); // Windows: one tree
+        REQUIRE(!respelled);
+        CHECK(respelled.error().code == ErrorCode::InvalidState);
+    }
+    CHECK(ensureMeta(dir.path, "Ships/Scout/hull.png", newMeta(), r).value().created);
 }
 
 TEST_CASE("meta: saveMeta never changes a GUID and skips identical rewrites") {
@@ -513,6 +620,15 @@ TEST_CASE("meta: moves and renames keep the GUID (the GUID follows the file)") {
           ErrorCode::InvalidArgument);
     CHECK(moveAsset(dir.path, "ships/scout/Hull.tga", "../out.png", r).error().code ==
           ErrorCode::InvalidArgument);
+    // A target directory spelled in another case than on disk: one directory on Windows, two on Linux.
+    writeText(dir.path, "Decks/top.png", "top");
+    CHECK(moveAsset(dir.path, "ships/scout/Hull.tga", "decks/Hull.tga", r).error().code ==
+          ErrorCode::AlreadyExists);
+    CHECK(moveAsset(dir.path, "ships/scout/Hull.tga", "decks/new/Hull.tga", r).error().code ==
+          ErrorCode::AlreadyExists);
+    CHECK(!fs::exists(dir.path / "decks" / "new"));
+    CHECK(moveAsset(dir.path, "ships/scout/Hull.tga", "Ships/Hull.tga", r).error().code ==
+          ErrorCode::AlreadyExists); // a directory's case change is a move into the same directory
     writeText(dir.path, "loose.png", "no sidecar");
     CHECK(moveAsset(dir.path, "loose.png", "loose2.png", r).error().code == ErrorCode::NotFound);
     CHECK(fileExists(dir.path, "loose.png"));

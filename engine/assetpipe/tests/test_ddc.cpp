@@ -257,6 +257,19 @@ TEST_CASE("local ddc: put and get, misses, damaged entries are misses, foreign f
     REQUIRE(ddc->put(key, payload)); // the next put replaces a damaged entry
     CHECK(ddc->get(key).value() == payload);
 
+    // A name that is not a regular file is a damaged entry and is never opened (opening a FIFO would block
+    // get() until a writer came; a directory stands in for it portably). A put cannot replace it.
+    const Hash128 dirKey = keyOf(23);
+    REQUIRE(fs::createDirectories(ddc->entryPath(dirKey)));
+    const auto notFile = ddc->get(dirKey);
+    REQUIRE(!notFile);
+    CHECK(notFile.error().code == ErrorCode::Corrupt);
+    CHECK(notFile.error().message.find("not a regular file") != std::string::npos);
+    CHECK(ddc->stats().bad == damages.size() + 1);
+    CHECK(!ddc->put(dirKey, payload));
+    CHECK(fs::isDirectory(ddc->entryPath(dirKey)));
+    REQUIRE(fs::removeAll(ddc->entryPath(dirKey)));
+
     // A store opened over existing entries measures them; files it does not own are never counted or touched.
     writeText(dir.path / "ddc", "notes.txt", "mine");
     writeText(dir.path / "ddc", "ab/not-an-entry.hddc", "x");
@@ -360,6 +373,72 @@ TEST_CASE("local ddc: LRU eviction under the cap, hits refresh recency, stale te
     CHECK(t.evicted == 0);
     CHECK(t.entries == 5);
     CHECK(t.bytes == 5 * 1064);
+}
+
+TEST_CASE("local ddc: trims keep puts that finish meanwhile in the running total") {
+    // Before review round 1 a trim overwrote the running total with what its listing saw, losing every put
+    // that finished between the listing and the store: the total then undercounted the store.
+    TempDir dir;
+    auto ddc = openStore(dir.path / "ddc");
+    constexpr int kWriters = 3;
+    constexpr int kPuts = 150;
+    std::atomic<int> writersDone{0};
+    std::vector<std::thread> threads;
+    for (int t = 0; t < kWriters; ++t) {
+        threads.emplace_back([&, t] {
+            for (int i = 0; i < kPuts; ++i) {
+                const u64 n = static_cast<u64>(t * kPuts + i);
+                CHECK(ddc->put(keyOf(5000 + n), noise(512 + n % 7 * 100, n)));
+            }
+            writersDone.fetch_add(1);
+        });
+    }
+    u64 trims = 0;
+    while (writersDone.load() < kWriters) { // trims race the puts; the cap is never reached
+        REQUIRE(ddc->trim());
+        ++trims;
+    }
+    for (std::thread& t : threads) t.join();
+    u64 onDisk = 0;
+    const std::vector<fs::DirEntry> files = fs::listDirectory(dir.path / "ddc", {.recursive = true}).value();
+    for (const fs::DirEntry& e : files) {
+        if (!e.isDirectory) onDisk += e.size;
+    }
+    CAPTURE(trims);
+    CHECK(onDisk == static_cast<u64>(kWriters * kPuts) * 64 + [] {
+        u64 payload = 0;
+        for (u64 n = 0; n < static_cast<u64>(kWriters * kPuts); ++n) payload += 512 + n % 7 * 100;
+        return payload;
+    }());
+    CHECK(ddc->sizeBytes() >= onDisk); // an overcount only trims early; an undercount overfills the store
+    const TrimResult settled = ddc->trim().value();
+    CHECK(settled.bytes == onDisk);
+    CHECK(ddc->sizeBytes() == onDisk);
+    CHECK(ddc->stats().trims == trims + 1);
+}
+
+TEST_CASE("local ddc: puts trim only past the cap, and concurrent puts past it share one trim") {
+    TempDir dir;
+    LocalDdcOptions o;
+    o.root = dir.path / "ddc";
+    o.capBytes = 20 * (1000 + 64);
+    o.trimTargetPercent = 50;
+    auto ddc = LocalDdc::open(o).value();
+    for (u64 k = 0; k < 20; ++k) REQUIRE(ddc->put(keyOf(k), noise(1000, k)));
+    CHECK(ddc->stats().trims == 0); // at the cap, not past it
+    REQUIRE(ddc->put(keyOf(20), noise(1000, 20)));
+    CHECK(ddc->stats().trims == 1);
+    CHECK(ddc->sizeBytes() <= 10 * 1064);
+    // Several threads pass the cap together: the trims they ask for find the store already trimmed.
+    std::vector<std::thread> threads;
+    for (u64 t = 0; t < 4; ++t) {
+        threads.emplace_back([&, t] {
+            for (u64 i = 0; i < 5; ++i) CHECK(ddc->put(keyOf(100 + t * 5 + i), noise(1000, t * 5 + i)));
+        });
+    }
+    for (std::thread& t : threads) t.join();
+    CHECK(ddc->stats().trims <= 3); // 20 more entries pass the cap at most twice, never once per put
+    CHECK(ddc->sizeBytes() <= o.capBytes);
 }
 
 TEST_CASE("local ddc: a hit refreshes recency at most once per touch interval") {

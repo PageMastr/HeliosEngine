@@ -282,7 +282,8 @@ line:
 
 **After unreviewed code.** If code that nobody reviewed ran as `helios-ci` before you closed these folders (a runner
 online before step 9, as under "Already done", or a suspected misuse), every `write` line of the first audit was open
-to it and every line could be read. Closing or moving a folder keeps whatever was planted in it, so first:
+to it and every line could be read. Closing or moving a folder keeps whatever was planted in it, so before you close
+or move anything:
 
 - **A tool listed as `write`** (for example `C:\VulkanSDK`, whose validation layer the Vulkan loader loads into your
   own validated runs): delete the folder without running anything in it, its uninstaller included (that would run
@@ -418,7 +419,7 @@ CurrentUser policy for `helios-ci` shows here. The checklist asks `helios-ci` fo
     if (-not @($rules | Where-Object {
                 $_.IdentityReference.Value -eq $ci -and ([int]$_.FileSystemRights -band $read) -eq $read }).Count) {
         throw "helios-ci ($ci) cannot read $hook (icacls shows the entry of an account deleted since as a bare " +
-            '*S-1-5-21-... SID): run the icacls line of step 3 again'
+            '*S-1-5-21-... SID): run the icacls line of step 3 for D:\helios-ci\hooks again'
     }
     # RemoteSigned refuses an unsigned script that carries the mark of a download (a browser's copy).
     if (Get-Item -LiteralPath $hook -Stream Zone.Identifier -ErrorAction SilentlyContinue) {
@@ -543,7 +544,8 @@ Do this after the setup and after any change to the PC, the hook or the firewall
   cannot read it (for example because the account was created again without "Rotate"). The hook did not run, so it did
   not end the job: the job's `if: always()` and `pre:` steps may have run. Stop the service (step 5) and report it
   with the run's branch or fork. If the job was not a run of `main`, its code was not reviewed: follow "Rotate" (and
-  step 4b's "After unreviewed code"). Otherwise fix steps 3 and 6 and start the service again with step 9's block.
+  step 4b's "After unreviewed code"). Otherwise fix step 6 (and step 3's `icacls` line for `hooks`) and start the
+  service again with step 9's block.
 - **"entries survived the wipe"** at "Set up runner": a leftover process holds files in `D:\helios-ci\work`. Reboot
   (or end `helios-ci`'s processes); the next job wipes again.
 - **`rhi_triangle_smoke`** opens a window. A service runs without a desktop, so it may fail on this runner; that is a

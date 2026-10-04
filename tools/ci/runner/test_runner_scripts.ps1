@@ -407,7 +407,7 @@ if ($step9.Count -eq 1) {
     Assert-Equal @("Automatic $service", "start $service") $script:serviceLog.ToArray() 'step 9 starts the runner when the hook is in place'
     $refused = @(
         @{ What = 'helios-ci was created again (new SID) and the hooks ACL still names the old one'
-            Env = $envLines; Acl = $hookAcl; Sid = 'S-1-5-21-1-2-3-1003'; Error = 'run the icacls line of step 3 again' },
+            Env = $envLines; Acl = $hookAcl; Sid = 'S-1-5-21-1-2-3-1003'; Error = 'run the icacls line of step 3 for D:\\helios-ci\\hooks again' },
         @{ What = 'helios-ci may only list the hook, not read it'; Env = $envLines; Sid = $ciSid; Error = 'cannot read'
             Acl = New-AuditAcl 'S-1-5-32-544' @((New-AuditRule $ciSid 0x1200a0 -Inherited)) },
         @{ What = 'only Users may read the hook'; Env = $envLines; Sid = $ciSid; Error = 'cannot read'

@@ -1,6 +1,7 @@
 package cdc_test
 
 import (
+	"bytes"
 	"os"
 	"testing"
 	"time"
@@ -35,8 +36,13 @@ func TestPerfChunking(t *testing.T) {
 	data := cdctest.Random(1, 32<<20)
 	mb := float64(len(data)) / 1e6
 	cut := mb / bestOf(5, func() { _ = cdc.Boundaries(data) }).Seconds()
-	split := mb / bestOf(3, func() { _ = cdc.Split(data) }).Seconds()
-	t.Logf("boundaries %.0f MB/s, split + BLAKE2b %.0f MB/s", cut, split)
+	// As in C++: a BLAKE2b-256 per chunk and one for the whole input (what a manifest entry needs).
+	split := mb / bestOf(3, func() {
+		if _, err := cdc.ChunkReader(bytes.NewReader(data)); err != nil {
+			t.Fatal(err)
+		}
+	}).Seconds()
+	t.Logf("boundaries %.0f MB/s, chunking with hashes %.0f MB/s", cut, split)
 	scale := 0.25
 	if os.Getenv("HELIOS_PERF") == "1" {
 		scale = 1
@@ -59,5 +65,15 @@ func BenchmarkSplit(b *testing.B) {
 	b.SetBytes(int64(len(data)))
 	for i := 0; i < b.N; i++ {
 		_ = cdc.Split(data)
+	}
+}
+
+func BenchmarkChunkReader(b *testing.B) {
+	data := cdctest.Random(1, 16<<20)
+	b.SetBytes(int64(len(data)))
+	for i := 0; i < b.N; i++ {
+		if _, err := cdc.ChunkReader(bytes.NewReader(data)); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

@@ -15,7 +15,7 @@ helios_module(patch HEADLESS
 # Tests (doctest). The FastCDC and .hman vectors are shared with Go's services/pkg/cdc and
 # services/pkg/manifest (services/testdata/vectors), so a divergence fails both suites.
 file(GLOB HELIOS_PATCH_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp)
-helios_test(patch_tests SOURCES ${HELIOS_PATCH_TEST_SOURCES} DEPS helios::patch helios::tp::yyjson helios::tp::zstd)
+helios_test(patch_tests SOURCES ${HELIOS_PATCH_TEST_SOURCES} DEPS helios::patch helios::tp::yyjson)
 if(TARGET patch_tests)
   target_compile_definitions(patch_tests PRIVATE
     HELIOS_PATCH_VECTORS_DIR="${PROJECT_SOURCE_DIR}/services/testdata/vectors"

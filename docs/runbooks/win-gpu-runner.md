@@ -621,8 +621,13 @@ and 9 are done again. Register the runner again, or create `helios-ci` again, on
 
 ## Verification checklist
 
-Do this after the setup and after any change to the PC, the hook or the firewall.
+Do this after the setup and after any change to the PC, the hook or the firewall. Start with the audit: the other
+items run cmdlets by name, in an ordinary elevated window that you open once the audit shows no `PATH` line (an
+installer may have added a folder to the `PATH` since the last audit).
 
+- [ ] Step 4b's audit, in a clean elevated window, lists no `PATH` line, no `write` line but FAT32 or exFAT drives you
+      accepted and `D:\helios-ci.old-<time>` trees that you have not deleted yet, and its `read` lines are only tools
+      the job uses.
 - [ ] The runner page shows `helios-win-gpu` Idle with the labels `self-hosted`, `Windows`, `X64`, `win-gpu`.
 - [ ] `Get-CimInstance Win32_Service -Filter "Name LIKE 'actions.runner.%'" | Select-Object Name, StartName, State, StartMode`
       shows `.\helios-ci`, Running, Auto, and it was started only after the hook and the firewall were in place.
@@ -636,9 +641,6 @@ Do this after the setup and after any change to the PC, the hook or the firewall
 - [ ] `icacls D:\helios-ci` lists Administrators, SYSTEM and `BUILTIN\Users:(RX)` only, and `icacls
       D:\helios-ci\runner` names no account but Administrators, SYSTEM and `config.cmd`'s `GITHUB_ActionsRunner_G...`
       group (step 3).
-- [ ] Step 4b's audit, in a clean elevated window, lists no `PATH` line, no `write` line but FAT32 or exFAT drives you
-      accepted and `D:\helios-ci.old-<time>` trees that you have not deleted yet, and its `read` lines are only tools
-      the job uses.
 - [ ] `Get-NetFirewallRule -Group 'Helios CI runner: LAN block for helios-ci'` lists 3 rules (2 with `-AllowAddress`),
       Enabled, Outbound, Block; `... | Get-NetFirewallAddressFilter` shows the ranges of step 7;
       `Get-NetFirewallProfile | Select-Object Name, Enabled` shows every profile enabled.

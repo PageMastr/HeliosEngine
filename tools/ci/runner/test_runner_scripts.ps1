@@ -1297,6 +1297,12 @@ Assert-Equal $true ($checklist.Contains('runas /user:helios-ci "powershell -NoPr
 $checklistText = $checklist -replace '\s+', ' '
 Assert-Equal $true ($checklistText.Contains('Step 4b''s audit, in a clean elevated window, lists no `PATH` line, no `write` line but')) `
     'the checklist repeats the audit in a clean window, PATH included'
+# Its other items run cmdlets by name in an ordinary window, so the audit comes first (an installer may have put an
+# open folder on the PATH since the last one).
+$checklistFirst = [regex]::Match($checklist, '(?m)^- \[ \] (.*)$')
+Assert-Equal $true ($checklistFirst.Success -and $checklistFirst.Groups[1].Value.StartsWith('Step 4b''s audit, in a clean elevated window') -and
+    $checklistText.Contains('Start with the audit: the other items run cmdlets by name, in an ordinary elevated window that you open once the audit shows no `PATH` line')) `
+    'the checklist starts with the audit, before its items that run cmdlets in an ordinary window'
 Assert-Equal $true ($checklistText.Contains('`Get-ExecutionPolicy` (the policy in effect for `helios-ci`) answers `RemoteSigned`, `Unrestricted` or `Bypass`') -and
     $checklistText.Contains('`pwsh -NoProfile -c Get-ExecutionPolicy` and `pwsh -NoProfile -c Get-ExecutionPolicy -Scope CurrentUser`')) `
     'the checklist asks for helios-ci''s execution policy in effect, in Windows PowerShell and in pwsh'

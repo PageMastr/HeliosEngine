@@ -1,0 +1,8 @@
+{
+  "$rid": 2531117344111056078,
+  "$name": "loot/pirate_drop",
+  "$comment": "Server-only: no byte of this record may reach the client cook (AAA-SEC-4).",
+  "entries": ["Sec4SentinelLootEntry", "scrap_plate"],
+  "secret": "SEC4-SENTINEL-loot-secret",
+  "weight": 0.125
+}

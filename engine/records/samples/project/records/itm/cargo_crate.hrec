@@ -1,0 +1,11 @@
+{
+  "$rid": 1865113562915643914,
+  "$name": "itm/cargo_crate",
+  "name": "loc:item.cargo_crate.name",
+  "tags": ["Item.Container"],
+  "stackMax": 1,
+  "volume": 4,
+  "mass": 80,
+  "lifetime": "30d",
+  "quality": [3, 2, 1]
+}

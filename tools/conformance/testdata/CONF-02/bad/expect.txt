@@ -19,9 +19,10 @@
 # and vcfgs are parameters, so their buckets do not resolve). Names are not scoped, so a range variable or
 # parameter named like a DIRECTORY config must not borrow its bucket (ttl_shared.go: a range over a
 # collection holding LEASES, over a parameter's, and a parameter; a parameter collection named like a
-# DIRECTORY one, :43, a range variable over it, :45, and a copy of one of its elements, :48). A range
-# variable or element copy is its own config: a later same-named one over a DIRECTORY collection gives
-# neither it nor its collection that bucket (ttl_order.go: a parameter's collection and a make() one).
+# DIRECTORY one, :43, a range variable over it, :45, and a copy of one of its elements, :48; a parameter
+# named like a range variable over a DIRECTORY literal, :59). A range variable or element copy is its own
+# config: a later same-named one over a DIRECTORY collection gives neither it nor its collection that
+# bucket (ttl_order.go: a parameter's collection and a make() one).
 # (CONF-01 also fires on these buckets; this fixture runs CONF-02 alone.)
 apps/cell/config.cpp:6: CONF-02
 apps/cell/kv_delete.cpp:7: CONF-02
@@ -80,3 +81,4 @@ services/internal/orch/ttl_shared.go:32: CONF-02
 services/internal/orch/ttl_shared.go:43: CONF-02
 services/internal/orch/ttl_shared.go:45: CONF-02
 services/internal/orch/ttl_shared.go:48: CONF-02
+services/internal/orch/ttl_shared.go:59: CONF-02

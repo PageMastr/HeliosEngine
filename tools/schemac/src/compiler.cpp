@@ -87,6 +87,14 @@ std::string stemOf(const std::string& logical) {
     return dot == std::string::npos ? name : name.substr(0, dot);
 }
 
+/// A letter, then ASCII letters, digits and '_': generated C++ names functions after the stem
+/// (register<Stem>Types(), <stem>Replication()), and Go skips files whose name starts with '_'.
+bool isStemIdentifier(std::string_view stem) {
+    auto letter = [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); };
+    return !stem.empty() && letter(stem[0]) &&
+           std::all_of(stem.begin(), stem.end(), [&](char c) { return letter(c) || (c >= '0' && c <= '9') || c == '_'; });
+}
+
 /// Declarations whose layout is part of `t`'s layout (by value or as container elements; record
 /// refs are plain ids and do not count).
 void layoutDeps(const Type* t, std::vector<const Decl*>& out) {
@@ -205,6 +213,15 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
                                           printable(logical), static_cast<unsigned>(static_cast<unsigned char>(*bad))));
             return nullptr;
         }
+        // The stem becomes part of C++ function names, so it must be an identifier: unchecked, `ship-motion`
+        // and `2d` gave code that does not compile and `x() noexcept;} int injected(){...} y` gave code
+        // (PR #33's round-5 review).
+        if (const std::string stem = stemOf(logical); !isStemIdentifier(stem)) {
+            diags.error(from, std::format("the schema file '{}' is named '{}' up to its first '.', which is not an identifier (a letter, "
+                                          "then letters, digits and '_'); generated C++ names functions after it, so rename the file",
+                                          logical, stem));
+            return nullptr;
+        }
         if (stack.size() >= kMaxImportDepth) {
             diags.error(from, std::format("imports nest more than {} files deep (at '{}')", kMaxImportDepth, path));
             return nullptr;
@@ -272,6 +289,18 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
     {
         std::map<std::string, const SourceFile*> stems;
         std::map<std::string, const SourceFile*> logicals;
+        // register<Stem>Types() and <stem>Replication() drop '_' and the first letter's case, so
+        // `ship_motion` and `shipMotion` in one package would define the same C++ functions (a link error).
+        // Imports count too: whatever links one file's generated code links its imports' code.
+        std::map<std::pair<std::string, std::string>, const SourceFile*> cppNames;
+        for (const auto& f : S.files) {
+            const std::string name = pascalCase(f->stem);
+            auto [it, ok] = cppNames.emplace(std::pair(f->ast.package, name), f.get());
+            if (!ok && it->second->logicalPath != f->logicalPath)
+                diags.error({}, std::format("'{}' and '{}' are both in package '{}' and would both define register{}Types() in "
+                                            "generated C++; rename one",
+                                            it->second->path, f->path, f->ast.package, name));
+        }
         for (const auto& f : S.files) {
             if (!f->generate) continue;
             if (auto [it, ok] = logicals.emplace(f->logicalPath, f.get()); !ok)

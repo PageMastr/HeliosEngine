@@ -18,8 +18,6 @@ constexpr refl::RecordId kBase = 4390381077356775243ull;
 constexpr refl::RecordId kSkiff = 8721150164252052334ull;
 constexpr refl::RecordId kSkiffMk2 = 872142931993027468ull;
 constexpr refl::RecordId kWren = 5505769937651519472ull;
-constexpr refl::RecordId kLoot = 2531117344111056078ull;
-constexpr refl::RecordId kSkin = 1759060513237310278ull;
 constexpr refl::RecordId kHullPlate = 499464797028555293ull;
 
 const ShipDef& ship(const refl::Value& v) { return *static_cast<const ShipDef*>(v.data()); }

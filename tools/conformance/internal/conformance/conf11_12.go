@@ -27,13 +27,18 @@ var (
 	cmakeCmdRE   = regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
 	avxListRE    = regexp.MustCompile(`\bHELIOS_ISA_AVX2_(TARGETS|SOURCE_PATTERNS)\b`)
 	avxListVarRE = regexp.MustCompile(`(?i)^\w*avx\w*_(targets|sources|source_patterns|patterns|files|kernels|allowlist)$`)
-	avxFlagRE    = regexp.MustCompile(`(?i)([/-]arch:AVX\w*|-mavx\w*|-mbmi\w*|-mf16c|-mlzcnt|-mfma\b)`)
-	marchRE      = regexp.MustCompile(`-march=([A-Za-z0-9_.-]+)`)
-	// An ISA level CONF-11 cannot tell: a variable or generator expression in the value of -march=, /arch:
-	// or -m (-march=${level}, /arch:${v}, -march=$<IF:…>, -march=x86-64${suffix}, -m${ext}). It fails closed.
-	computedISARE = regexp.MustCompile(`(?i)(?:-march=|[/-]arch:)[A-Za-z0-9_.-]*\$[{<][^\s"]*|-m\$[{<][^\s"]*`)
-	// $ENV{X} in a grant: its value comes from outside the build files, so it fails closed.
+	// AVX-class flags; -mfma4 and -mxop (AMD's) imply AVX too.
+	avxFlagRE = regexp.MustCompile(`(?i)([/-]arch:AVX\w*|-mavx\w*|-mbmi\w*|-mf16c|-mlzcnt|-mfma4?\b|-mxop\b)`)
+	marchRE   = regexp.MustCompile(`-march=([A-Za-z0-9_.-]+)`)
+	// An ISA level CONF-11 cannot tell: a variable (also $CACHE{v} and $ENV{v}) or generator expression in
+	// the value of -march=, /arch: or -m (-march=${level}, /arch:$CACHE{v}, -march=$<IF:…>,
+	// -march=x86-64${suffix}, -m${ext}). It fails closed.
+	computedISARE = regexp.MustCompile(`(?i)(?:-march=|[/-]arch:)[A-Za-z0-9_.-]*\$(?:CACHE|ENV)?[{<][^\s"]*|-m\$(?:CACHE|ENV)?[{<][^\s"]*`)
+	// $ENV{X} in a grant, passed to a wrapper or set into a compiler flags variable: its value comes from
+	// outside the build files, so it fails closed.
 	envRefRE = regexp.MustCompile(`\$ENV\{[^}]*\}`)
+	// The variables that hold compiler flags (CMAKE_CXX_FLAGS, CMAKE_C_FLAGS_RELEASE, CMAKE_CXX_COMPILE_OBJECT).
+	compilerFlagsVarRE = regexp.MustCompile(`^CMAKE_\w*(?:FLAGS|COMPILE_OBJECT|COMPILE_OPTIONS)\w*$`)
 	// Variables that reach the compiler: CMake's own (CMAKE_<LANG>_FLAGS*, CMAKE_<LANG>_COMPILE_OBJECT, …)
 	// and the environment (ENV{CXXFLAGS} seeds CMAKE_CXX_FLAGS when a language is enabled).
 	compilerVarRE = regexp.MustCompile(`^(?:CMAKE_\w+|ENV\{\w+\})$`)
@@ -630,6 +635,10 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 				if compilerVarRE.MatchString(name) && !probeFlagsRE.MatchString(name) && len(flags) > 0 && !levelSets {
 					reportf(c.line, "%s carries %s: ISA flags come only from the image level (02 §1.1)", name,
 						strings.Join(flags, " "))
+				} else if m := envRefRE.FindString(c.args); m != "" && compilerFlagsVarRE.MatchString(name) &&
+					!probeFlagsRE.MatchString(name) && !levelSets {
+					reportf(c.line, "%s carries %s, a value from outside the build files that CONF-11 cannot tell: ISA "+
+						"flags come only from the image level (02 §1.1)", name, m)
 				}
 			}
 			continue
@@ -654,7 +663,7 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 			flags = append(flags, m) // ${${n}}: a value CONF-11 cannot tell, so it fails closed
 		}
 		// $ENV{X} in a grant: a value from outside the build files, which CONF-11 cannot tell.
-		if m := envRefRE.FindString(c.args); m != "" && (c.name == "target_compile_options" ||
+		if m := envRefRE.FindString(c.args); m != "" && (c.name == "target_compile_options" || s.wrappers[c.name] ||
 			c.name == "add_compile_options" || c.name == "add_definitions" || grantPropRE.MatchString(c.args) &&
 			(c.name == "set_property" || c.name == "set_target_properties" || c.name == "set_source_files_properties" ||
 				c.name == "set_directory_properties")) {
@@ -686,7 +695,7 @@ func (s *isaScan) run(fileVars map[string]bool, report bool) map[string]bool {
 				"carry ISA flags (02 §1.1)", c.name, strings.Join(flags, " "), isaLevelSets)
 		case s.wrappers[c.name] && !levelSets:
 			// Only arguments that are options: a flag named in a message is not passed on.
-			if opts := optionFlags(c.args, cur.vars); len(opts) > 0 {
+			if opts := append(optionFlags(c.args, cur.vars), envRefRE.FindAllString(c.args, -1)...); len(opts) > 0 {
 				reportf(c.line, "%s() is passed %s: a wrapper can grant them below the image level, and only "+
 					"%s's level sets carry ISA flags (02 §1.1)", c.name, strings.Join(opts, " "), isaLevelSets)
 			}

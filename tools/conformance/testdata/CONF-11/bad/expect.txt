@@ -10,7 +10,10 @@
 # environment or another CMAKE_ variable that reaches the compiler (30, 31). Round 6 (engine/loops): the
 # ZIP_LISTS loop variable that takes the flags list (38) and <v>_1 of a single one (41); an ISA level after
 # -march=, /arch: or -m that is a variable or a generator expression (44-48); a quoted list with an option
-# (50); and $ENV{} in a grant (52).
+# (50); and $ENV{} in a grant (52). Round 7: an ISA level from $CACHE{} or $ENV{} in a grant (55, 56),
+# through a variable (58) and in CMAKE_CXX_FLAGS (59); $ENV{} passed to a wrapper (63), appended to
+# CMAKE_C_FLAGS (64) and in add_compile_options, add_definitions and set_property COMPILE_OPTIONS (65-67).
+# -m$CACHE{} (68), and AMD's -mfma4 and -mxop, which imply AVX (69, 70).
 cmake/HeliosIsa.cmake:15: CONF-11
 cmake/HeliosIsa.cmake:24: CONF-11
 cmake/isa_allowlist.cmake:12: CONF-11
@@ -47,6 +50,18 @@ engine/loops/CMakeLists.txt:47: CONF-11
 engine/loops/CMakeLists.txt:48: CONF-11
 engine/loops/CMakeLists.txt:50: CONF-11
 engine/loops/CMakeLists.txt:52: CONF-11
+engine/loops/CMakeLists.txt:55: CONF-11
+engine/loops/CMakeLists.txt:56: CONF-11
+engine/loops/CMakeLists.txt:58: CONF-11
+engine/loops/CMakeLists.txt:59: CONF-11
+engine/loops/CMakeLists.txt:63: CONF-11
+engine/loops/CMakeLists.txt:64: CONF-11
+engine/loops/CMakeLists.txt:65: CONF-11
+engine/loops/CMakeLists.txt:66: CONF-11
+engine/loops/CMakeLists.txt:67: CONF-11
+engine/loops/CMakeLists.txt:68: CONF-11
+engine/loops/CMakeLists.txt:69: CONF-11
+engine/loops/CMakeLists.txt:70: CONF-11
 engine/unknown/CMakeLists.txt:1: CONF-11
 engine/unknown/CMakeLists.txt:2: CONF-11
 engine/unknown/CMakeLists.txt:4: CONF-11

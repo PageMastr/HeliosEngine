@@ -35,6 +35,18 @@
               "apps/cellserver/**", "apps/gateway/**"],
     "rules": ["CONF-04", "CONF-05"]
   },
+  "05 §3": {
+    "paths": ["services/migrations/**", "schemas/**"],
+    "rules": ["CONF-06", "CONF-07"]
+  },
+  "05 §6.6": {
+    "paths": ["services/migrations/**", "schemas/**"],
+    "rules": ["CONF-07"]
+  },
+  "04 §2": {
+    "paths": ["services/**", "services/deploy/**", "engine/net/**", "engine/server/**", "apps/gateway/**"],
+    "rules": ["CONF-08"]
+  },
   "ADR-014": {
     "paths": ["services/go.mod", "tools/conformance/go.mod", ".github/**"],
     "rules": ["CONF-09"]

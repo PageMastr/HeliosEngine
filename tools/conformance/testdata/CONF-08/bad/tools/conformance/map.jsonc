@@ -1,0 +1,2 @@
+// D2: the gateway runtime is mapped to 04 §2, which widens CONF-08 beyond its table scope.
+{"04 §2": {"paths": ["engine/server/**"], "rules": ["CONF-08"]}}

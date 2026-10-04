@@ -1,5 +1,5 @@
-// POSIX half of ToolsFramework's OS services: process ids, host name and the Unix-domain-socket
-// transport of the remote-control endpoint (ipc.h).
+// POSIX half of ToolsFramework's OS services: process ids, host name, the link inspection of
+// Workspace::confine and the Unix-domain-socket transport of the remote-control endpoint (ipc.h).
 
 #include <errno.h>
 #include <fcntl.h>
@@ -53,6 +53,31 @@ std::string runtimeDirectory() {
         if (v && *v && ::stat(v, &st) == 0 && S_ISDIR(st.st_mode)) return std::string(v);
     }
     return "/tmp";
+}
+
+Result<EntryKind> entryKind(const fs::Path& path) {
+    struct stat st {};
+    if (::lstat(path.c_str(), &st) != 0) {
+        const int err = errno;
+        if (err == ENOENT || err == ENOTDIR) return EntryKind::Missing;
+        return Error{ErrorCode::IoError, std::format("cannot inspect {}: {}", fs::pathToGenericUtf8(path), std::strerror(err))};
+    }
+    if (S_ISLNK(st.st_mode)) return EntryKind::Link;
+    if (S_ISDIR(st.st_mode)) return EntryKind::Directory;
+    if (S_ISREG(st.st_mode)) return EntryKind::File;
+    return EntryKind::Other;
+}
+
+Result<fs::Path> finalPath(const fs::Path& path) {
+    char* resolved = ::realpath(path.c_str(), nullptr);
+    if (!resolved) {
+        const int err = errno;
+        return Error{err == ENOENT ? ErrorCode::NotFound : ErrorCode::IoError,
+                     std::format("cannot resolve {}: {}", fs::pathToGenericUtf8(path), std::strerror(err))};
+    }
+    fs::Path out(resolved);
+    std::free(resolved);
+    return out;
 }
 
 } // namespace helios::tf::os

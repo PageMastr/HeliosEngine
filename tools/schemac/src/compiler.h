@@ -42,6 +42,8 @@ struct CompileOptions {
     bool emitJson = false;
     bool emitLuau = false; ///< scriptlib glue next to the C++ output, schema.d.luau + fuel defaults in luauOut
     bool emitSql = false;  ///< PostgreSQL DDL of @sql structs into sqlOut/<schema>/
+    bool emitRepl = false; ///< replication descriptors + full-state codecs next to the C++ output
+    bool emitLint = false; ///< size-budget lints + the lint report (lintOut)
     bool samples = false; ///< C++ sample-value header (tests / cross-language vectors)
     std::string cppOut = ".";
     std::string goOut = ".";
@@ -49,6 +51,7 @@ struct CompileOptions {
     std::string jsonOut = "schema.json";
     std::string luauOut = ".";
     std::string sqlOut = ".";
+    std::string lintOut = "schema.lint.json";
     std::string sqlBaseline; ///< lock that --emit sql diffs against (default: the lock before this run)
     bool warningsAsErrors = false;
     bool namingLints = true;

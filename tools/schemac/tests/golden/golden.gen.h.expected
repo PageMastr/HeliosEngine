@@ -14,6 +14,7 @@ struct Item;
 struct ThingDef;
 struct Motion;
 struct Plain;
+struct Status;
 struct Exploded;
 struct Chat;
 struct Hud;
@@ -220,6 +221,32 @@ struct Plain {
 
     /// Field-wise equality (floats compare bitwise).
     [[nodiscard]] bool operator==(const Plain& other) const noexcept;
+};
+
+/// Every raw full-state form (`--emit repl`) and a range-quantized f64.
+struct Status {
+    ::golden::all::Color mode = ::golden::all::Color::Green;
+    bool alive = true;
+    ::helios::i16 level = -3;
+    ::golden::all::Perm perm{};
+    ::helios::refl::EntityId who{};
+    ::helios::refl::RecordRef<::golden::all::ThingDef> ref{};
+    ::helios::refl::Tick at{};
+    ::helios::refl::Duration wait{};
+    ::helios::refl::NetHandle handle{};
+    ::helios::Quat rot{};
+    ::helios::Vec2 flat{};
+    ::helios::Color tint{};
+    ::helios::DVec3 far{};
+    ::helios::refl::WorldPos where{};
+    ::helios::f64 score{};
+
+    /// Replication dirty bits (bit i = kReplicatedFields[i]); set by Mut<C> (02 §4.4).
+    ::helios::u64 _dirty = 0;
+    static constexpr auto kReplicatedFields = std::make_tuple(&Status::mode, &Status::alive, &Status::level, &Status::perm, &Status::who, &Status::ref, &Status::at, &Status::wait, &Status::handle, &Status::rot, &Status::flat, &Status::tint, &Status::far, &Status::where, &Status::score);
+
+    /// Field-wise equality (floats compare bitwise; _dirty is ignored).
+    [[nodiscard]] bool operator==(const Status& other) const noexcept;
 };
 
 struct Exploded {
@@ -487,6 +514,19 @@ struct Codec<::golden::all::Plain> : StructCodec<::golden::all::Plain> {
     static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::Plain& v);
     static void writeJsonFields(JsonWriter& w, const ::golden::all::Plain& v);
     static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::Plain& v, ReadCtx& ctx);
+};
+template <>
+struct TypeOf<::golden::all::Status> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct Codec<::golden::all::Status> : StructCodec<::golden::all::Status> {
+    static bool isDefault(const ::golden::all::Status& v) noexcept;
+    static bool equals(const ::golden::all::Status& a, const ::golden::all::Status& b) noexcept;
+    static void writeFields(TaggedWriter& w, const ::golden::all::Status& v);
+    static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::Status& v);
+    static void writeJsonFields(JsonWriter& w, const ::golden::all::Status& v);
+    static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::Status& v, ReadCtx& ctx);
 };
 template <>
 struct TypeOf<::golden::all::Exploded> {
@@ -818,6 +858,199 @@ public:
     }
     /// Mutable access to the whole component; marks every replicated field dirty.
     ::golden::all::Motion& raw() noexcept {
+        markBits(kAllFields);
+        return *m_c;
+    }
+};
+
+/// Named dirty-bit mutators for golden.all.Status (replicate(all)).
+template <>
+class Mut<::golden::all::Status> : public detail::MutBase<::golden::all::Status> {
+public:
+    using MutBase::MutBase;
+    static constexpr ::helios::u64 kMode = 1ull << 0;
+    static constexpr ::helios::u64 kAlive = 1ull << 1;
+    static constexpr ::helios::u64 kLevel = 1ull << 2;
+    static constexpr ::helios::u64 kPerm = 1ull << 3;
+    static constexpr ::helios::u64 kWho = 1ull << 4;
+    static constexpr ::helios::u64 kRef = 1ull << 5;
+    static constexpr ::helios::u64 kAt = 1ull << 6;
+    static constexpr ::helios::u64 kWait = 1ull << 7;
+    static constexpr ::helios::u64 kHandle = 1ull << 8;
+    static constexpr ::helios::u64 kRot = 1ull << 9;
+    static constexpr ::helios::u64 kFlat = 1ull << 10;
+    static constexpr ::helios::u64 kTint = 1ull << 11;
+    static constexpr ::helios::u64 kFar = 1ull << 12;
+    static constexpr ::helios::u64 kWhere = 1ull << 13;
+    static constexpr ::helios::u64 kScore = 1ull << 14;
+    static constexpr ::helios::u64 kAllFields = kMode | kAlive | kLevel | kPerm | kWho | kRef | kAt | kWait | kHandle | kRot | kFlat | kTint | kFar | kWhere | kScore;
+    /// Writes mode and marks it dirty if the value changed.
+    void setMode(const ::golden::all::Color& value) {
+        if (::helios::refl::valuesEqual(m_c->mode, value)) return;
+        m_c->mode = value;
+        markBits(kMode);
+    }
+    /// In-place access to mode; marks it dirty.
+    ::golden::all::Color& editMode() noexcept {
+        markBits(kMode);
+        return m_c->mode;
+    }
+    /// Writes alive and marks it dirty if the value changed.
+    void setAlive(const bool& value) {
+        if (::helios::refl::valuesEqual(m_c->alive, value)) return;
+        m_c->alive = value;
+        markBits(kAlive);
+    }
+    /// In-place access to alive; marks it dirty.
+    bool& editAlive() noexcept {
+        markBits(kAlive);
+        return m_c->alive;
+    }
+    /// Writes level and marks it dirty if the value changed.
+    void setLevel(const ::helios::i16& value) {
+        if (::helios::refl::valuesEqual(m_c->level, value)) return;
+        m_c->level = value;
+        markBits(kLevel);
+    }
+    /// In-place access to level; marks it dirty.
+    ::helios::i16& editLevel() noexcept {
+        markBits(kLevel);
+        return m_c->level;
+    }
+    /// Writes perm and marks it dirty if the value changed.
+    void setPerm(const ::golden::all::Perm& value) {
+        if (::helios::refl::valuesEqual(m_c->perm, value)) return;
+        m_c->perm = value;
+        markBits(kPerm);
+    }
+    /// In-place access to perm; marks it dirty.
+    ::golden::all::Perm& editPerm() noexcept {
+        markBits(kPerm);
+        return m_c->perm;
+    }
+    /// Writes who and marks it dirty if the value changed.
+    void setWho(const ::helios::refl::EntityId& value) {
+        if (::helios::refl::valuesEqual(m_c->who, value)) return;
+        m_c->who = value;
+        markBits(kWho);
+    }
+    /// In-place access to who; marks it dirty.
+    ::helios::refl::EntityId& editWho() noexcept {
+        markBits(kWho);
+        return m_c->who;
+    }
+    /// Writes ref and marks it dirty if the value changed.
+    void setRef(const ::helios::refl::RecordRef<::golden::all::ThingDef>& value) {
+        if (::helios::refl::valuesEqual(m_c->ref, value)) return;
+        m_c->ref = value;
+        markBits(kRef);
+    }
+    /// In-place access to ref; marks it dirty.
+    ::helios::refl::RecordRef<::golden::all::ThingDef>& editRef() noexcept {
+        markBits(kRef);
+        return m_c->ref;
+    }
+    /// Writes at and marks it dirty if the value changed.
+    void setAt(const ::helios::refl::Tick& value) {
+        if (::helios::refl::valuesEqual(m_c->at, value)) return;
+        m_c->at = value;
+        markBits(kAt);
+    }
+    /// In-place access to at; marks it dirty.
+    ::helios::refl::Tick& editAt() noexcept {
+        markBits(kAt);
+        return m_c->at;
+    }
+    /// Writes wait and marks it dirty if the value changed.
+    void setWait(const ::helios::refl::Duration& value) {
+        if (::helios::refl::valuesEqual(m_c->wait, value)) return;
+        m_c->wait = value;
+        markBits(kWait);
+    }
+    /// In-place access to wait; marks it dirty.
+    ::helios::refl::Duration& editWait() noexcept {
+        markBits(kWait);
+        return m_c->wait;
+    }
+    /// Writes handle and marks it dirty if the value changed.
+    void setHandle(const ::helios::refl::NetHandle& value) {
+        if (::helios::refl::valuesEqual(m_c->handle, value)) return;
+        m_c->handle = value;
+        markBits(kHandle);
+    }
+    /// In-place access to handle; marks it dirty.
+    ::helios::refl::NetHandle& editHandle() noexcept {
+        markBits(kHandle);
+        return m_c->handle;
+    }
+    /// Writes rot and marks it dirty if the value changed.
+    void setRot(const ::helios::Quat& value) {
+        if (::helios::refl::valuesEqual(m_c->rot, value)) return;
+        m_c->rot = value;
+        markBits(kRot);
+    }
+    /// In-place access to rot; marks it dirty.
+    ::helios::Quat& editRot() noexcept {
+        markBits(kRot);
+        return m_c->rot;
+    }
+    /// Writes flat and marks it dirty if the value changed.
+    void setFlat(const ::helios::Vec2& value) {
+        if (::helios::refl::valuesEqual(m_c->flat, value)) return;
+        m_c->flat = value;
+        markBits(kFlat);
+    }
+    /// In-place access to flat; marks it dirty.
+    ::helios::Vec2& editFlat() noexcept {
+        markBits(kFlat);
+        return m_c->flat;
+    }
+    /// Writes tint and marks it dirty if the value changed.
+    void setTint(const ::helios::Color& value) {
+        if (::helios::refl::valuesEqual(m_c->tint, value)) return;
+        m_c->tint = value;
+        markBits(kTint);
+    }
+    /// In-place access to tint; marks it dirty.
+    ::helios::Color& editTint() noexcept {
+        markBits(kTint);
+        return m_c->tint;
+    }
+    /// Writes far and marks it dirty if the value changed.
+    void setFar(const ::helios::DVec3& value) {
+        if (::helios::refl::valuesEqual(m_c->far, value)) return;
+        m_c->far = value;
+        markBits(kFar);
+    }
+    /// In-place access to far; marks it dirty.
+    ::helios::DVec3& editFar() noexcept {
+        markBits(kFar);
+        return m_c->far;
+    }
+    /// Writes where and marks it dirty if the value changed.
+    void setWhere(const ::helios::refl::WorldPos& value) {
+        if (::helios::refl::valuesEqual(m_c->where, value)) return;
+        m_c->where = value;
+        markBits(kWhere);
+    }
+    /// In-place access to where; marks it dirty.
+    ::helios::refl::WorldPos& editWhere() noexcept {
+        markBits(kWhere);
+        return m_c->where;
+    }
+    /// Writes score and marks it dirty if the value changed.
+    void setScore(const ::helios::f64& value) {
+        if (::helios::refl::valuesEqual(m_c->score, value)) return;
+        m_c->score = value;
+        markBits(kScore);
+    }
+    /// In-place access to score; marks it dirty.
+    ::helios::f64& editScore() noexcept {
+        markBits(kScore);
+        return m_c->score;
+    }
+    /// Mutable access to the whole component; marks every replicated field dirty.
+    ::golden::all::Status& raw() noexcept {
         markBits(kAllFields);
         return *m_c;
     }

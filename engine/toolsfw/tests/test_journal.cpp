@@ -182,6 +182,7 @@ TEST_CASE("journal: session files, names and unclean detection") {
         REQUIRE((*w)->close(false));
     }
     JournalHeader ok = header();
+    ok.project = "proj";  // a journal of another project is skipped (test_confine.cpp)
     ok.created = 2;
     {
         auto w = JournalWriter::create(dir / "clean.hjl", ok, {.fsync = false});

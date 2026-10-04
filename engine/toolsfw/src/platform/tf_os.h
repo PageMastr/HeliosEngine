@@ -4,6 +4,8 @@
 
 #include <string>
 
+#include "helios/core/fs.h"
+#include "helios/core/result.h"
 #include "helios/core/types.h"
 
 namespace helios::tf::os {
@@ -17,5 +19,21 @@ bool processIsRunning(u32 pid) noexcept;
 std::string environment(const char* name);
 /// Directory for IPC endpoints that are files (POSIX Unix sockets); unused on Windows.
 std::string runtimeDirectory();
+
+/// What a directory entry is, looked at without following it (Workspace::confine's link walk).
+enum class EntryKind : u8 {
+    Missing,    ///< Nothing there (or a parent is missing or not a directory).
+    File,       ///< A regular file.
+    Directory,
+    Link,       ///< POSIX: a symbolic link. Windows: any reparse point (symbolic link, junction, mount point).
+    Other,      ///< A device, FIFO or socket.
+};
+/// lstat() on POSIX, GetFileAttributesW() on Windows. Fails (IoError) when the entry cannot be
+/// inspected, e.g. a parent directory is not searchable: callers treat that as a refusal.
+Result<EntryKind> entryKind(const fs::Path& path);
+/// `path` with every link on it resolved: realpath() on POSIX; on Windows the handle's
+/// GetFinalPathNameByHandleW() name, which follows symbolic links, junctions and mount points
+/// (a `\\?\` path). Fails when the path (or a link's target) does not exist.
+Result<fs::Path> finalPath(const fs::Path& path);
 
 } // namespace helios::tf::os

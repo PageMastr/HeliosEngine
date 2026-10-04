@@ -1,5 +1,5 @@
-// Win32 half of ToolsFramework's OS services: process ids, host name and the named-pipe transport
-// of the remote-control endpoint (ipc.h). Overlapped I/O throughout, so shutdown() can wake a
+// Win32 half of ToolsFramework's OS services: process ids, host name, the link inspection of
+// Workspace::confine and the named-pipe transport of the remote-control endpoint (ipc.h). Overlapped I/O throughout, so shutdown() can wake a
 // thread blocked in accept() or read() with an event.
 
 #ifndef NOMINMAX
@@ -62,6 +62,49 @@ std::string environment(const char* name) {
 
 std::string runtimeDirectory() {
     return {};
+}
+
+Result<EntryKind> entryKind(const fs::Path& path) {
+    // GetFileAttributesW does not follow a reparse point on the last component, so a symbolic
+    // link, a junction and a mount point all report FILE_ATTRIBUTE_REPARSE_POINT here.
+    const DWORD attrs = ::GetFileAttributesW(path.c_str());
+    if (attrs == INVALID_FILE_ATTRIBUTES) {
+        const DWORD err = ::GetLastError();
+        if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND || err == ERROR_DIRECTORY) return EntryKind::Missing;
+        return Error{ErrorCode::IoError, std::format("cannot inspect {}: Win32 error {}", fs::pathToGenericUtf8(path), err)};
+    }
+    if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) return EntryKind::Link;
+    if (attrs & FILE_ATTRIBUTE_DIRECTORY) return EntryKind::Directory;
+    if (attrs & FILE_ATTRIBUTE_DEVICE) return EntryKind::Other;
+    return EntryKind::File;
+}
+
+Result<fs::Path> finalPath(const fs::Path& path) {
+    // No access rights are needed to query the name; FILE_FLAG_BACKUP_SEMANTICS opens directories,
+    // and leaving out FILE_FLAG_OPEN_REPARSE_POINT makes CreateFileW follow every reparse point.
+    HANDLE h = ::CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                             FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        const DWORD err = ::GetLastError();
+        return Error{err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND ? ErrorCode::NotFound : ErrorCode::IoError,
+                     std::format("cannot resolve {}: Win32 error {}", fs::pathToGenericUtf8(path), err)};
+    }
+    std::wstring name(MAX_PATH, L'\0');
+    DWORD n = 0;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        // Too small a buffer returns the size needed, terminator included; success returns the
+        // length without it.
+        n = ::GetFinalPathNameByHandleW(h, name.data(), static_cast<DWORD>(name.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+        if (n == 0 || n < name.size()) break;
+        name.resize(n);
+    }
+    const DWORD err = ::GetLastError();
+    ::CloseHandle(h);
+    if (n == 0 || n >= name.size()) {
+        return Error{ErrorCode::IoError, std::format("cannot resolve {}: Win32 error {}", fs::pathToGenericUtf8(path), err)};
+    }
+    name.resize(n);
+    return fs::Path(name);
 }
 
 } // namespace helios::tf::os

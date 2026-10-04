@@ -22,7 +22,8 @@ struct FwAccess {
     static void truncate(TxBuilder& tx, usize count);
     static Result<TxId> finishCommit(Framework& fw, TxBuilder& b, Transaction tx);
     static void eraseHistoryEntries(Framework& fw, std::vector<usize> indices);
-    static Result<Document*> openDocument(Framework& fw, const fs::Path& abs, const refl::TypeInfo* type, bool journal,
+    /// Reads and opens `file` (already through Workspace::confine) as a document with id `id`.
+    static Result<Document*> openDocument(Framework& fw, const ProjectFile& file, const refl::TypeInfo* type, bool journal,
                                           DocId id);
     /// Brings `d` to the record text `text` (a reload's journaled snapshot) as one Import
     /// transaction; nothing changes when it fails.

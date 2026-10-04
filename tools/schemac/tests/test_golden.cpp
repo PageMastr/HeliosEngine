@@ -8,6 +8,7 @@
 
 #include <cstdlib>
 #include <fstream>
+#include <regex>
 #include <sstream>
 
 #include "golden.gen.h"
@@ -75,6 +76,7 @@ constexpr GoldenOutput kOutputs[] = {
     {"sql/svc_golden/migration.sql", "svc_golden.migration.sql.expected"},
     {"cpp/golden.repl.gen.h", "golden.repl.gen.h.expected"},
     {"cpp/golden.repl.gen.cpp", "golden.repl.gen.cpp.expected"},
+    {"golden.lint.json", "golden.lint.json.expected"},
 };
 
 TEST_CASE("golden: generator output matches the committed expectations") {
@@ -99,6 +101,8 @@ TEST_CASE("golden: generator output matches the committed expectations") {
     options.emitLuau = true;
     options.emitSql = true;
     options.emitRepl = true;
+    options.emitLint = true;
+    options.lintOut = "golden.lint.json";
     options.cppOut = "cpp";
     options.goOut = "go";
     options.jsonOut = "golden.schema.json";
@@ -107,7 +111,11 @@ TEST_CASE("golden: generator output matches the committed expectations") {
     options.sqlBaseline = "golden/golden.sql-baseline.lock.jsonc";
     auto c = compileFiles({{"golden/golden.hschema", *source}}, options, &fs);
     REQUIRE_MESSAGE(c->ok(), c->messages);
-    CHECK_MESSAGE(c->diags.diagnostics().empty(), c->messages);
+    // The only diagnostics are the size budgets' warnings, which golden.lint.json pins: the service rpc
+    // Store.Buy returns Containers, whose containers are unbounded on purpose.
+    for (const Diagnostic& d : c->diags.diagnostics()) {
+        CHECK_MESSAGE((d.severity == Severity::Warning && d.message.starts_with("[size.")), c->messages);
+    }
     CHECK_MESSAGE(!c->result.lockChanged, "the golden lock is stale; rebuild schemac_tests (which updates it) and commit it");
 
     for (const GoldenOutput& g : kOutputs) {
@@ -135,7 +143,7 @@ struct CorpusSet {
     std::vector<std::pair<const char*, const char*>> outputs; ///< output suffix -> expected file
 };
 
-TEST_CASE("golden: the schemas/ corpus generates the committed Luau, SQL and replication outputs") {
+TEST_CASE("golden: the schemas/ corpus generates the committed Luau, SQL, replication and lint outputs") {
     const std::vector<CorpusSet> sets = {
         {"sample",
          {"schemas/sample/common.hschema", "schemas/sample/ship.hschema", "schemas/sample/items.hschema"},
@@ -148,7 +156,8 @@ TEST_CASE("golden: the schemas/ corpus generates the committed Luau, SQL and rep
           {"sql/svc_character/migration.sql", "svc_character.migration.sql.expected"},
           {"cpp/sample/common.repl.gen.cpp", "common.repl.gen.cpp.expected"},
           {"cpp/sample/ship.repl.gen.h", "ship.repl.gen.h.expected"},
-          {"cpp/sample/ship.repl.gen.cpp", "ship.repl.gen.cpp.expected"}}},
+          {"cpp/sample/ship.repl.gen.cpp", "ship.repl.gen.cpp.expected"},
+          {"schema.lint.json", "schema.lint.json.expected"}}},
     };
     for (const CorpusSet& set : sets) {
         INFO(set.name);
@@ -169,6 +178,7 @@ TEST_CASE("golden: the schemas/ corpus generates the committed Luau, SQL and rep
         options.emitLuau = true;
         options.emitSql = true;
         options.emitRepl = true;
+        options.emitLint = true;
         options.cppOut = "cpp";
         options.luauOut = "luau";
         options.sqlOut = "sql";
@@ -205,6 +215,7 @@ TEST_CASE("golden: generation is deterministic and independent of declaration-ir
     options.emitLuau = true;
     options.emitSql = true;
     options.emitRepl = true;
+    options.emitLint = true;
     auto a = compileFiles({{"golden/golden.hschema", *source}}, options);
     // Comments and whitespace do not change the output.
     std::string reformatted;
@@ -216,9 +227,17 @@ TEST_CASE("golden: generation is deterministic and independent of declaration-ir
     REQUIRE_MESSAGE(a->ok(), a->messages);
     REQUIRE_MESSAGE(b->ok(), b->messages);
     REQUIRE(a->result.outputs.size() == b->result.outputs.size());
+    // (The lint report's findings carry source lines and columns, which the noise moves: compare them
+    // without the positions.)
+    auto withoutPositions = [](const std::string& text) {
+        static const std::regex position(R"("line": \d+, "col": \d+)");
+        return std::regex_replace(text, position, "");
+    };
     for (usize i = 0; i < a->result.outputs.size(); ++i) {
         CHECK(a->result.outputs[i].path == b->result.outputs[i].path);
-        const bool same = a->result.outputs[i].content == b->result.outputs[i].content;
+        const bool lint = a->result.outputs[i].path == options.lintOut;
+        const bool same = lint ? withoutPositions(a->result.outputs[i].content) == withoutPositions(b->result.outputs[i].content)
+                               : a->result.outputs[i].content == b->result.outputs[i].content;
         CHECK_MESSAGE(same, a->result.outputs[i].path);
     }
 }

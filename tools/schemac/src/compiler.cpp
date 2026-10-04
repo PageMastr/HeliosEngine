@@ -404,11 +404,14 @@ CompileResult compile(const CompileOptions& options, SourceProvider& fsys, Diagn
     if (options.emitRepl) {
         for (OutputFile& o : generateRepl(S, options, diags)) result.outputs.push_back(std::move(o));
     }
+    if (options.emitLint) { // last: the report lists every warning of this compilation
+        for (OutputFile& o : generateLint(S, options, diags)) result.outputs.push_back(std::move(o));
+    }
     // Two outputs at one path would overwrite each other: --emit repl's header of `t/ship.hschema` is
     // `t/ship.repl.gen.h`, which is also --emit cpp's header of `t/ship.repl.hschema` in another package
     // (PR #33's round-6 review; `.luau.gen.*` and `.samples.gen.h` likewise). Paths compare without ASCII
     // case, as file names do on Windows and macOS. (After another error nothing is written, and the Go
-    // stem check above already reports two `<stem>.go`.)
+    // stem check above already reports two `<stem>.go`.) After --emit lint, so --lint-out counts too.
     if (!diags.hasErrors()) {
         std::map<std::string, const OutputFile*> paths;
         for (const OutputFile& o : result.outputs) {

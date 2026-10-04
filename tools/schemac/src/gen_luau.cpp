@@ -425,8 +425,10 @@ private:
         w.line();
     }
 
-    /// C++ expression of the length @max bounds: bytes of a string, elements of a container.
+    /// C++ expression of the length @max bounds: bytes of a string or text builtin, elements of a container.
     static std::string sizeExpr(const Type* t, const std::string& v, bool member) {
+        if (t->kind == TypeKind::Builtin && t->builtin == Builtin::LocString) return v + ".key.size()";
+        if (t->kind == TypeKind::Builtin && (t->builtin == Builtin::TagQuery || t->builtin == Builtin::HxlExpr)) return v + ".text.size()";
         return t->kind == TypeKind::Prim && t->prim == Prim::Name && member ? v + ".view().size()" : v + ".size()";
     }
 

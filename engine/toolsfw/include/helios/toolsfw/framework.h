@@ -216,6 +216,11 @@ struct RecoveryOptions {
     /// Replay even when a document's file changed after the session's last save (the ops'
     /// preconditions still guard the replay).
     bool ignoreSourceChanges = false;
+    /// Replay a journal whose header names another project (FrameworkConfig::project), e.g. after
+    /// the project was renamed. A guard against replaying the wrong journal, not a security
+    /// boundary: whoever crafts a journal also writes its header. Every path stays confined to
+    /// this project either way.
+    bool allowOtherProject = false;
 };
 
 /// A change the UI and remote clients may want to react to.
@@ -313,6 +318,11 @@ public:
     /// Replays an unclean journal of this project (07 §1.2): per document, verifies that its file
     /// still matches the session's last open/save hash and re-applies the transactions after it.
     /// Replayed transactions join this session's history (undoable) and journal.
+    /// The journal is untrusted input. Before any file is read or anything is applied, its header
+    /// must name this project (unless RecoveryOptions::allowOtherProject) and every file it names
+    /// (open and save records, Create and Destroy ops) must pass Workspace::confine with
+    /// PathOrigin::Untrusted and PathCheck::OnDisk; otherwise the whole recovery is refused
+    /// (InvalidArgument naming the record) and nothing changes.
     Result<RecoveryReport> recover(const fs::Path& journalFile, const RecoveryOptions& options = {});
 
     /// Current unix time from the configured clock.
@@ -339,7 +349,7 @@ private:
     void trimHistory();
     void emit(const FrameworkEvent& event);
     Result<void> journalRecord(const JournalRecord& record);
-    Result<Document*> openInternal(const fs::Path& absolute, const refl::TypeInfo* type, bool journal);
+    Result<Document*> openInternal(const ProjectFile& file, const refl::TypeInfo* type, bool journal);
     Guid newKey();
 
     FrameworkConfig m_config;

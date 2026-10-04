@@ -42,7 +42,13 @@ Verbs
   journal list [--all]              this project's journals (unclean sessions only without --all)
   journal show <file|latest> [--json]
   journal verify <file>             record integrity (torn tail, clean end)
-  journal replay <file|auto> [--save] [--ignore-source-changes]
+  journal replay <file|auto> [--save] [--ignore-source-changes] [--allow-other-project]
+                                    crash recovery. The journal is untrusted input: every
+                                    file it names must be a .hrec inside the project (no
+                                    '..', absolute, drive, UNC or device paths, no link out
+                                    of the project), and its header must name this project
+                                    (--allow-other-project: a renamed project). One bad entry
+                                    refuses the whole replay (exit 3) and nothing is written
   run <script.luau>                 run an automation script (Editor.*, Record.*, Validate.*)
   commands [--json]                 list the command registry
 
@@ -140,6 +146,10 @@ int cmdFmt(const Context& c) {
     const bool check = c.cl->has("check");
     usize changed = 0;
     for (const tf::Document* d : (*fw)->documents().documents()) {
+        // Read and write only inside the project, checked at the time of use like Framework::save.
+        if (auto file = (*fw)->documents().confine(d->relativePath(), tf::PathOrigin::Untrusted); !file) {
+            return fail(kFailed, std::format("{}", file.error()));
+        }
         // The document's text is canonical; compare it with the bytes on disk.
         auto bytes = fs::readTextFile(d->path());
         if (!bytes) return fail(kFailed, std::format("{}", bytes.error()));
@@ -312,7 +322,10 @@ Result<tf::TxId> revert(tf::Framework& fw, const CliEntry& entry, bool undo) {
             if (f == entry.files.end()) return Error{ErrorCode::NotFound, "the journal does not name the document's file"};
             file = f->second;
         }
-        HELIOS_TRY_ASSIGN(tf::Document * d, fw.open(file));
+        // A journal names the file: project-relative only (Framework::open would also take an
+        // absolute path under the root, which a journal never needs).
+        HELIOS_TRY_ASSIGN(const tf::ProjectFile target, fw.documents().confine(file, tf::PathOrigin::Untrusted));
+        HELIOS_TRY_ASSIGN(tf::Document * d, fw.open(fs::pathFromUtf8(target.relative)));
         remap[op.doc] = d->id();
         return d->id();
     };
@@ -418,6 +431,7 @@ int cmdJournal(const Context& c) {
         if (!created) return fail(kFailed, std::format("{}", created.error()));
         tf::RecoveryOptions options;
         options.ignoreSourceChanges = c.cl->has("ignore-source-changes");
+        options.allowOtherProject = c.cl->has("allow-other-project");
         auto report = (*created)->recover(*path, options);
         if (!report) return fail(kFailed, std::format("{}", report.error()));
         out(std::format("replayed {} transaction(s), skipped {}{}\n", report->replayed, report->skipped,

@@ -403,6 +403,12 @@ std::vector<JournalSessionInfo> listJournalSessions(const fs::Path& root, std::s
             HELIOS_LOG_WARN(LogTools, "skipping {}: {}", e.relativePath, scan.error());
             continue;
         }
+        if (scan->header.project != project) {
+            // Another project's journal (two names that sanitize to one directory, or a planted
+            // file): never offered for recovery or counted in this project's undo stack.
+            HELIOS_LOG_WARN(LogTools, "skipping {}: it belongs to project {}", e.relativePath, json::quote(scan->header.project));
+            continue;
+        }
         JournalSessionInfo info;
         info.path = e.path;
         info.header = scan->header;

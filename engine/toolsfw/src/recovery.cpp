@@ -8,6 +8,10 @@
 // in the session and never saved comes back from the snapshot in its Create op. Each journaled transaction (do, undo and
 // redo alike) is replayed as one new transaction with its original ops, label, origin and merge
 // key, so the recovered edits are undoable and journaled again in the new session.
+//
+// The journal is untrusted input (a file the user was handed, or one planted in the journal
+// directory): every path in it goes through Workspace::confine before anything is read or
+// applied, and a journal of another project is refused. One bad entry refuses the whole replay.
 
 #include <algorithm>
 #include <format>
@@ -38,7 +42,7 @@ std::string_view docRecoveryName(DocRecovery status) noexcept {
 namespace {
 
 struct DocState {
-    std::string file;
+    ProjectFile file;      ///< The journaled file, through Workspace::confine.
     std::string typeName;
     u64 hash = 0;          ///< Hash the file must have (last open/save).
     usize baseRecord = 0;  ///< Index of that record.
@@ -48,6 +52,14 @@ struct DocState {
     usize report = 0;      ///< Index into RecoveryReport::documents.
     DocId localId;         ///< Id in this framework (differs when the file was already open).
 };
+
+/// "record 3 (open of <doc>) at offset 812" for refusals.
+std::string describe(const JournalRecord& r, usize index) {
+    if (r.kind == JournalRecordKind::Tx) {
+        return std::format("record {} (transaction {}) at offset {}", index, r.tx.id.toString(), r.offset);
+    }
+    return std::format("record {} ({} of document {}) at offset {}", index, journalRecordKindName(r.kind), r.doc, r.offset);
+}
 
 } // namespace
 
@@ -72,19 +84,37 @@ Result<void> detail::FwAccess::restoreSnapshot(Framework& fw, Document& d, std::
 Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const RecoveryOptions& options) {
     if (m_group) return Error{ErrorCode::InvalidState, "cannot recover inside a transaction group"};
     HELIOS_TRY_ASSIGN(const JournalScan scan, readJournal(journalFile));
+    const std::string journalName = fs::pathToGenericUtf8(journalFile);
+    if (scan.header.project != m_config.project && !options.allowOtherProject) {
+        return Error{ErrorCode::InvalidArgument,
+                     std::format("{}: the journal belongs to project {}, not {}; nothing was replayed (a renamed project "
+                                 "needs RecoveryOptions::allowOtherProject, helios-tool --allow-other-project)",
+                                 journalName, json::quote(scan.header.project), json::quote(m_config.project))};
+    }
     RecoveryReport report;
     report.tornBytes = scan.tornBytes;
     report.clean = scan.clean;
 
-    // Pass 1: the replay base of every document.
+    // Pass 1: the replay base of every document, and the project-confinement rule on every file
+    // the journal names. It reads no file's contents and changes nothing, so a refusal leaves no
+    // trace.
+    const auto confined = [&](const std::string& file, const JournalRecord& r, usize index) -> Result<ProjectFile> {
+        auto checked = m_workspace->confine(file, PathOrigin::Untrusted, PathCheck::OnDisk);
+        if (!checked) {
+            return Error{checked.error().code, std::format("{}: {}: {}; nothing was replayed", journalName, describe(r, index),
+                                                           checked.error().message)};
+        }
+        return checked;
+    };
     std::map<DocId, DocState> docs;
     u64 maxLamport = 0;
     for (usize i = 0; i < scan.records.size(); ++i) {
         const JournalRecord& r = scan.records[i];
         switch (r.kind) {
         case JournalRecordKind::Open: {
+            HELIOS_TRY_ASSIGN(ProjectFile file, confined(r.file, r, i));
             DocState& s = docs[r.doc];
-            s.file = r.file;
+            s.file = std::move(file);
             s.typeName = r.typeName;
             s.hash = r.hash;
             s.baseRecord = i;
@@ -93,8 +123,9 @@ Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const Rec
             break;
         }
         case JournalRecordKind::Save: {
+            HELIOS_TRY_ASSIGN(ProjectFile file, confined(r.file, r, i));
             DocState& s = docs[r.doc];
-            s.file = r.file;
+            s.file = std::move(file);
             s.hash = r.hash;
             s.baseRecord = i;
             s.snapshot.reset();
@@ -104,10 +135,12 @@ Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const Rec
         case JournalRecordKind::Tx:
             maxLamport = std::max(maxLamport, r.tx.id.lamport);
             for (const Op& op : r.tx.ops) {
+                if (op.kind != OpKind::Create && op.kind != OpKind::Destroy) continue;
+                HELIOS_TRY_ASSIGN(ProjectFile file, confined(op.file, r, i));
                 if (op.kind == OpKind::Create && !docs.contains(op.doc)) {
                     // Created in the session: no file yet; the Create op itself is the base.
                     DocState& s = docs[op.doc];
-                    s.file = op.file;
+                    s.file = std::move(file);
                     s.typeName = op.typeName;
                     s.hash = 0;
                     s.baseRecord = ~usize{0};  // replay from the start: the Create op recreates it
@@ -122,7 +155,7 @@ Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const Rec
     for (auto& [id, s] : docs) {
         RecoveredDocument rd;
         rd.doc = id;
-        rd.file = s.file;
+        rd.file = s.file.relative;
         s.report = report.documents.size();
         s.localId = id;
         if (s.closed) {
@@ -139,7 +172,7 @@ Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const Rec
             report.documents.push_back(std::move(rd));
             continue;
         }
-        const fs::Path abs = m_workspace->absolute(s.file);
+        const fs::Path& abs = s.file.absolute;
         if (s.hash == 0) {
             // Saved as destroyed: the file was deleted; nothing to base a replay on.
             rd.status = fs::exists(abs) ? DocRecovery::SourceChanged : DocRecovery::UpToDate;
@@ -165,7 +198,7 @@ Result<RecoveryReport> Framework::recover(const fs::Path& journalFile, const Rec
         Document* open = m_workspace->findByPath(abs);
         if (!open) {
             const refl::TypeInfo* type = s.typeName.empty() ? nullptr : m_workspace->types().find(s.typeName);
-            auto opened = detail::FwAccess::openDocument(*this, abs, type, true, id);
+            auto opened = detail::FwAccess::openDocument(*this, s.file, type, true, id);
             if (!opened) {
                 rd.status = DocRecovery::Missing;
                 rd.message = opened.error().toString();

@@ -92,6 +92,28 @@ const refl::TypeInfo* recordTypeForPath(const refl::TypeRegistry& types, std::st
 /// Canonical record text of a type-erased object (refl::writeRecord).
 std::string recordText(const refl::TypeInfo& type, const void* object, const refl::RecordHeader& header);
 
+/// Where a path given to Workspace::confine() comes from.
+enum class PathOrigin : u8 {
+    /// A journal record or a raw op (crash recovery, `helios-tool journal replay` and undo,
+    /// collaboration, patches). Untrusted: only a project-relative path is accepted.
+    Untrusted,
+    /// An API or command argument (Framework::open, doc.open, TxBuilder::createRecord, doc.create):
+    /// a project-relative path, or an absolute one inside the project root.
+    Caller,
+};
+
+/// How far Workspace::confine() looks.
+enum class PathCheck : u8 {
+    Lexical,  ///< The spelling only; nothing on disk is consulted.
+    OnDisk,   ///< The spelling, then every link on the way from the root (see confine()).
+};
+
+/// A record file inside the project, as Workspace::confine() accepted it.
+struct ProjectFile {
+    std::string relative;  ///< Normalized, '/'-separated, project-relative ("records/hull/frigate.hrec").
+    fs::Path absolute;     ///< The project root joined with `relative`.
+};
+
 /// The documents of one project. Owned by the Framework; exposed read-only.
 class Workspace {
 public:
@@ -116,10 +138,36 @@ public:
     /// a differently cased path finds the open document instead of opening the file twice.
     Document* findByPath(const fs::Path& path) const;
 
-    /// Project-relative, '/'-separated path of `path` ("" when it is outside the root).
+    /// Project-relative, '/'-separated path of `path` ("" when it is outside the root or is the
+    /// root). On Windows the root prefix compares without ASCII case, as NTFS does. Lexical only.
     std::string relativeTo(const fs::Path& path) const;
-    /// Absolute path of a project-relative one.
+    /// Absolute path of a project-relative one. Lexical, and not a confinement check: `../x` and
+    /// absolute paths pass through. Anything that reads or writes a file uses confine().
     fs::Path absolute(std::string_view relative) const;
+
+    /// The project-confinement rule: every path that a journal record, a raw op or a caller names
+    /// goes through it before a file is read, written, created or deleted (README, "The journal
+    /// is untrusted input"). Accepted is a `.hrec` file inside the project:
+    /// - relative to the root; for PathOrigin::Caller also an absolute path under the root (on
+    ///   Windows the root prefix compares without ASCII case);
+    /// - '/' and '\' separate components on every platform, so a journal means the same on
+    ///   Windows and Linux; empty and "." components are dropped;
+    /// - refused: a ".." component; a leading separator (absolute, UNC `\\server`, device `\\?\`
+    ///   and `\\.\` paths); any of `<>:"|?*` (drive letters such as `C:` or `c:`, NTFS streams,
+    ///   wildcards) and control characters; a component that ends in '.' or ' ' (Windows drops
+    ///   them, so `x.hrec.` names `x.hrec` and `.. ` names `..`); a Windows device name (CON, PRN,
+    ///   AUX, NUL, COM0-9, LPT0-9 and their superscript forms, CONIN$, CONOUT$; any case, any
+    ///   extension); a last component that does not end in ".hrec".
+    /// With PathCheck::OnDisk every existing component from the root down is also inspected
+    /// without following it (lstat; GetFileAttributesW on Windows): a link (a symbolic link, or
+    /// on Windows any reparse point, junctions and mount points included) must resolve to a
+    /// directory or regular file inside the root's resolved path, and a device, FIFO or socket is
+    /// refused. Not detected: a hard link to a file outside the project (it is that file), and a
+    /// link created between this check and the read or write that follows it (no handle-relative
+    /// walk); 8.3 short names pass the spelling rule but only alias entries of the same directory.
+    /// Refusals are InvalidArgument (IoError when an entry cannot be inspected) and name the path.
+    /// Threading: reads the file system only; owner thread like the rest of the workspace.
+    Result<ProjectFile> confine(std::string_view path, PathOrigin origin, PathCheck check = PathCheck::OnDisk) const;
 
 private:
     friend struct DocAccess;

@@ -25,7 +25,8 @@ options:
   --lock <file>               append-only schema lock (stable type/field ids); created if missing
   --check-lock                fail instead of updating an out-of-date lock (CI)
   --allow-default-change      accept changed field defaults (they are part of the wire contract)
-  --emit <list>               comma-separated generators: cpp, go, json, luau, sql (default: cpp)
+  --emit <list>               comma-separated generators: cpp, go, json, luau, sql, repl (default: cpp);
+                              repl writes <file>.repl.gen.h/.cpp to --cpp-out
   --cpp-out <dir>             C++ output root (default: .)
   --go-out <dir>              Go package directory (default: .)
   --go-package <name>         Go package name (default: last component of the schema package)
@@ -42,7 +43,7 @@ options:
   --quiet                     only print diagnostics
   --version, --help
 
-planned generators (not yet implemented): repl, proto, editor, records, lint, docs
+planned generators (not yet implemented): proto, editor, records, lint, docs
 )";
 
 struct PlannedEmitter {
@@ -50,7 +51,6 @@ struct PlannedEmitter {
     std::string_view what;
 };
 constexpr PlannedEmitter kPlanned[] = {
-    {"repl", "replication descriptors / ComponentRepDesc (04 §4.1)"},
     {"proto", ".proto files for connect-go (05 §2.1)"},
     {"editor", "schema.editor.json (07); use --emit json meanwhile"},
     {"records", "record cooking to .hrdb (02 §3.3)"},
@@ -203,6 +203,8 @@ int runCli(std::span<const std::string> args, std::string& out, std::string& err
             options.emitLuau = true;
         } else if (e == "sql") {
             options.emitSql = true;
+        } else if (e == "repl") {
+            options.emitRepl = true;
         } else {
             for (const PlannedEmitter& p : kPlanned) {
                 if (p.name == e) {
@@ -211,7 +213,7 @@ int runCli(std::span<const std::string> args, std::string& out, std::string& err
                     return 2;
                 }
             }
-            err += std::format("helios-schemac: error: unknown generator '{}' (available: cpp, go, json, luau, sql)\n", e);
+            err += std::format("helios-schemac: error: unknown generator '{}' (available: cpp, go, json, luau, sql, repl)\n", e);
             return 2;
         }
     }

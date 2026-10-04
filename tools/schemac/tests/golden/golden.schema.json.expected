@@ -629,6 +629,147 @@
       "attrs": []
     },
     {
+      "name": "golden.all.Status",
+      "kind": "component",
+      "file": "golden.hschema",
+      "doc": "Every raw full-state form (`--emit repl`) and a range-quantized f64.",
+      "id": 3718832219,
+      "layoutHash": "99ed6b97e8a6a699",
+      "replicate": "all",
+      "fields": [
+        {
+          "name": "mode",
+          "id": 1,
+          "type": "golden.all.Color",
+          "default": "Green",
+          "audience": "shared",
+          "repIndex": 0,
+          "attrs": []
+        },
+        {
+          "name": "alive",
+          "id": 2,
+          "type": "bool",
+          "default": true,
+          "audience": "shared",
+          "repIndex": 1,
+          "attrs": []
+        },
+        {
+          "name": "level",
+          "id": 3,
+          "type": "i16",
+          "default": -3,
+          "audience": "shared",
+          "repIndex": 2,
+          "attrs": []
+        },
+        {
+          "name": "perm",
+          "id": 4,
+          "type": "golden.all.Perm",
+          "audience": "shared",
+          "repIndex": 3,
+          "attrs": []
+        },
+        {
+          "name": "who",
+          "id": 5,
+          "type": "EntityId",
+          "audience": "shared",
+          "repIndex": 4,
+          "attrs": []
+        },
+        {
+          "name": "ref",
+          "id": 6,
+          "type": "Ref<golden.all.ThingDef>",
+          "audience": "shared",
+          "repIndex": 5,
+          "attrs": []
+        },
+        {
+          "name": "at",
+          "id": 7,
+          "type": "Tick",
+          "audience": "shared",
+          "repIndex": 6,
+          "attrs": []
+        },
+        {
+          "name": "wait",
+          "id": 8,
+          "type": "Duration",
+          "audience": "shared",
+          "repIndex": 7,
+          "attrs": []
+        },
+        {
+          "name": "handle",
+          "id": 9,
+          "type": "NetHandle",
+          "audience": "shared",
+          "repIndex": 8,
+          "attrs": []
+        },
+        {
+          "name": "rot",
+          "id": 10,
+          "type": "quatf",
+          "audience": "shared",
+          "repIndex": 9,
+          "attrs": [
+            {"name": "interp", "args": [{"value": "slerp"}]}
+          ]
+        },
+        {
+          "name": "flat",
+          "id": 11,
+          "type": "vec2f",
+          "audience": "shared",
+          "repIndex": 10,
+          "attrs": []
+        },
+        {
+          "name": "tint",
+          "id": 12,
+          "type": "color",
+          "audience": "shared",
+          "repIndex": 11,
+          "attrs": []
+        },
+        {
+          "name": "far",
+          "id": 13,
+          "type": "vec3d",
+          "audience": "shared",
+          "repIndex": 12,
+          "attrs": []
+        },
+        {
+          "name": "where",
+          "id": 14,
+          "type": "WorldPos",
+          "audience": "shared",
+          "repIndex": 13,
+          "attrs": []
+        },
+        {
+          "name": "score",
+          "id": 15,
+          "type": "f64",
+          "audience": "shared",
+          "repIndex": 14,
+          "attrs": [
+            {"name": "quant", "args": [{"key": "range", "value": "±1000"}, {"key": "bits", "value": "20"}]}
+          ]
+        }
+      ],
+      "attrs": [
+        {"name": "replicate", "args": [{"value": "all"}]}
+      ]
+    },
+    {
       "name": "golden.all.Exploded",
       "kind": "event",
       "file": "golden.hschema",

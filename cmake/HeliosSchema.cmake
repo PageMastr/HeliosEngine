@@ -8,6 +8,8 @@
 #     [LUAU_OUT <dir>]                also generate the scriptlib glue (<file>.luau.gen.h/.cpp, compiled into
 #                                     <target>, which then links helios::script) and write schema.d.luau and
 #                                     fuel_costs.defaults.json into <dir>
+#     [REPL]                          also generate <file>.repl.gen.h/.cpp (replication descriptors and
+#                                     full-state codecs, compiled into <target>)
 #     [SAMPLES])                      also generate <file>.samples.gen.h (test values shared with Go)
 #
 # Runs helios-schemac at build time (add_custom_command with a depfile, so edits to the schemas,
@@ -83,7 +85,7 @@ function(_helios_schemac_command out_exe out_dep)
 endfunction()
 
 function(helios_schema target)
-  cmake_parse_arguments(S "SAMPLES" "LOCK;CPP_OUT;GO_OUT;GO_PACKAGE;JSON_OUT;LUAU_OUT" "FILES;INCLUDE_DIRS" ${ARGN})
+  cmake_parse_arguments(S "SAMPLES;REPL" "LOCK;CPP_OUT;GO_OUT;GO_PACKAGE;JSON_OUT;LUAU_OUT" "FILES;INCLUDE_DIRS" ${ARGN})
   if(NOT S_FILES)
     message(FATAL_ERROR "helios_schema(${target}): FILES is required")
   endif()
@@ -120,6 +122,10 @@ function(helios_schema target)
     list(APPEND cpp_sources "${S_CPP_OUT}/${base}.gen.h" "${S_CPP_OUT}/${base}.gen.cpp")
     if(S_SAMPLES)
       list(APPEND outputs "${S_CPP_OUT}/${base}.samples.gen.h")
+    endif()
+    if(S_REPL)
+      list(APPEND outputs "${S_CPP_OUT}/${base}.repl.gen.h" "${S_CPP_OUT}/${base}.repl.gen.cpp")
+      list(APPEND cpp_sources "${S_CPP_OUT}/${base}.repl.gen.h" "${S_CPP_OUT}/${base}.repl.gen.cpp")
     endif()
     if(S_LUAU_OUT)
       list(APPEND outputs "${S_CPP_OUT}/${base}.luau.gen.h" "${S_CPP_OUT}/${base}.luau.gen.cpp")
@@ -158,6 +164,9 @@ function(helios_schema target)
     string(APPEND emit ",json")
     list(APPEND args --json-out "${json_abs}")
     list(APPEND outputs "${json_abs}")
+  endif()
+  if(S_REPL)
+    string(APPEND emit ",repl")
   endif()
   if(S_LUAU_OUT)
     get_filename_component(luau_abs "${S_LUAU_OUT}" ABSOLUTE BASE_DIR ${CMAKE_CURRENT_BINARY_DIR})

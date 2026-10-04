@@ -11,6 +11,7 @@ helios_module(reflect HEADLESS
     src/path.cpp
     src/record.cpp
     src/registry.cpp
+    src/repl.cpp
     src/serialize.cpp
     src/tagged.cpp
     src/type_info.cpp

@@ -27,7 +27,9 @@ if(NOT WIN32)
   helios_apply_warnings(link_model_bad_game)
 endif()
 
-helios_test(link_model_tests SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_link_model.cpp DEPS helios::core)
+helios_test(link_model_tests
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_main.cpp ${CMAKE_CURRENT_SOURCE_DIR}/test_link_model.cpp
+  DEPS helios::core)
 add_dependencies(link_model_tests link_model_probe)
 target_compile_definitions(link_model_tests PRIVATE HELIOS_LINK_MODEL_PROBE_PATH="$<TARGET_FILE:link_model_probe>")
 # The other groups exist only in builds with graphics (client) and with editor modules (editor).

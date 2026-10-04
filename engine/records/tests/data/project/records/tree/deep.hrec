@@ -1,0 +1,5 @@
+{
+  "$rid": 1919945915813493850,
+  "$name": "tree/deep",
+  "root": {"value": 1, "kids": [{"value": 2, "kids": [{"value": 3}]}, {"value": 4}]}
+}

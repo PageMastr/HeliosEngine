@@ -1,0 +1,127 @@
+// helios-schemac schema lock (docs/plan/02-engine-runtime.md §3.4). Generated; append-only.
+// Commit this file. Never edit or delete entries: ids must never be reused. CI runs --check-lock.
+{
+  "format": 1,
+  "types": {
+    "repl_edges.Audience": {
+      "id": 2850889163,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "All", "value": 0},
+        {"name": "Owner", "value": 1}
+      ]
+    },
+    "repl_edges.BitReader": {
+      "id": 3601864251,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "x", "type": "u8"}
+      ]
+    },
+    "repl_edges.BitWriter": {
+      "id": 2575819503,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "x", "type": "u8"}
+      ]
+    },
+    "repl_edges.Boom": {
+      "id": 63023202,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "a", "type": "u8"}
+      ]
+    },
+    "repl_edges.ComponentRepDesc": {
+      "id": 456998606,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "x", "type": "u8"}
+      ]
+    },
+    "repl_edges.EventAudience": {
+      "id": 2905407645,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "Owner", "value": 0},
+        {"name": "Relevant", "value": 1},
+        {"name": "Party", "value": 2}
+      ]
+    },
+    "repl_edges.EventRep": {
+      "id": 4079431114,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "x", "type": "u8"}
+      ]
+    },
+    "repl_edges.FieldRep": {
+      "id": 194623250,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "x", "type": "u8"}
+      ]
+    },
+    "repl_edges.FileRepTables": {
+      "id": 1998499603,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "x", "type": "u8"}
+      ]
+    },
+    "repl_edges.Hit": {
+      "id": 1173477794,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "x", "type": "u8"}
+      ]
+    },
+    "repl_edges.RepOf": {
+      "id": 3078019337,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "x", "type": "u8"}
+      ]
+    },
+    "repl_edges.RpcDirection": {
+      "id": 4250774109,
+      "kind": "enum",
+      "base": "u8",
+      "values": [
+        {"name": "ClientToServer", "value": 0},
+        {"name": "ServerToClient", "value": 1},
+        {"name": "ServerToServer", "value": 2}
+      ]
+    },
+    "repl_edges.RpcRep": {
+      "id": 1351792967,
+      "kind": "struct",
+      "nextField": 2,
+      "fields": [
+        {"id": 1, "name": "x", "type": "u8"}
+      ]
+    },
+    "repl_edges.Saturating": {
+      "id": 460726271,
+      "kind": "struct",
+      "nextField": 5,
+      "fields": [
+        {"id": 1, "name": "a", "type": "f32"},
+        {"id": 2, "name": "b", "type": "vec3f"},
+        {"id": 3, "name": "c", "type": "f32"},
+        {"id": 4, "name": "d", "type": "f64"}
+      ]
+    }
+  }
+}

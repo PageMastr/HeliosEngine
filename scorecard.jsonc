@@ -23,7 +23,7 @@
     "linux-clang": {"os": "linux", "default": true,
                     "description": "Linux Clang RelWithDebInfo: every CTest except perf (lavapipe under Xvfb)"},
     "linux-asan": {"os": "linux", "default": false,
-                   "description": "Linux Clang Debug with ASan and UBSan"},
+                   "description": "Linux Clang Debug with ASan and UBSan: every CTest except perf"},
     "linux-fuzz": {"os": "linux", "default": true,
                    "description": "libFuzzer (Clang, -fsanitize=fuzzer with ASan and UBSan), 1 h per engine/net target"},
     "windows-vs2026": {"os": "windows", "default": true,
@@ -39,13 +39,32 @@
     "windows-local": {"os": "windows", "default": true, "nightly": false,
                       "description": "tools/milestone/validate.ps1 on the user's Windows machine (09 §5.9)"},
     "windows-lab": {"os": "windows", "default": false, "nightly": false,
-                    "description": "WP-0.4's lab pair (09 §5.6 class H): server_tests_ns03_remote from the win-gpu runner's MSVC build against helios-gateway and helios-cell on a Linux lab host. Not produced yet: nightly.yml gains the job when WP-0.4 registers the runner, and this run then drops \"nightly\": false"}
+                    "description": "WP-0.4's lab pair (09 §5.6 class H): server_tests_ns03_remote from the win-gpu runner's MSVC build against helios-gateway and helios-cell on a Linux lab host. Not produced yet: it needs the Linux lab host, then a job on the win-gpu runner (.github/workflows/win-gpu.yml), which the hosted nightly does not wait for"},
+    "win-gpu": {"os": "windows", "default": false, "nightly": false,
+                "description": "WP-0.4's win-gpu runner, the owner's PC with a real GPU (09 §5.4a): .github/workflows/win-gpu.yml, daily and on dispatch, on main only, builds windows-vs2022 and runs the gpu-labelled CTests (the Vulkan goldens on the hardware adapter), ADR-0.9c's pcg_hnoise_bench --hardware-gpu and a strict net_bench --gate, and uploads this result set as the results-win-gpu artifact. Not produced yet: the owner registered the runner on 2026-10-03 but has not set HELIOS_WIN_GPU (docs/runbooks/win-gpu-runner.md); the nightly report does not read that artifact yet"}
   },
 
   // Commands the nightly workflow runs outside CTest; each writes one JUnit result named after the gate.
+  // A gate that measures several criteria declares `cases`: runners.py gate adds one JUnit case per clause,
+  // read from the command's output (`result`: the line that reports the measurement; `failure`: the line it
+  // prints when the clause fails; a non-zero exit that no failure line explains, i.e. any code but 1 or 1 with
+  // no failure line, fails every clause), and each criterion cites only its own cases, so one criterion's
+  // failure line cannot fail another's (#43's review, N4). Every clause case carries the command's wall time,
+  // so a run that ends before min_seconds fails every clause (a trunk that never connects ends it ~18 s in).
   "gates": {
     "net_bench_gate": {"runs": ["linux-gcc", "windows-vs2026"], "min_seconds": 600,
-                       "description": "net_bench --gate: NS-0.2 raw and encrypted-stack pps per core, NS-0.7 600 s trunk run"},
+                       "description": "net_bench --gate: NS-0.2 raw and encrypted-stack pps per core, NS-0.7 600 s trunk run",
+                       "cases": {
+                         "NS-0.2 socket": {"criterion": "NS-0.2",
+                                           "result": "NS-0\\.2 socket: \\d+/\\d+ datagrams, \\d+ pps per core",
+                                           "failure": "NS-0\\.2 FAILED: needs 100k pps per core"},
+                         "NS-0.2 HTP stack": {"criterion": "NS-0.2",
+                                              "result": "NS-0\\.2 HTP stack: \\d+/\\d+ encrypted packets delivered, \\d+ packets per core",
+                                              "failure": "NS-0\\.2 FAILED: the HTP stack"},
+                         "NS-0.7 trunk": {"criterion": "NS-0.7",
+                                          "result": "NS-0\\.7 trunk: [\\d.]+ s, sent \\d+, delivered \\d+ \\(\\d+ pps",
+                                          "failure": "NS-0\\.7(?: FAILED|: trunk did not connect)"}
+                       }},
     "libfuzzer_packet_parser": {"runs": ["linux-fuzz"], "min_seconds": 3600,
                                 "description": "net_fuzz_packet_parser under libFuzzer for 1 h"},
     "libfuzzer_connection_receive": {"runs": ["linux-fuzz"], "min_seconds": 3600,
@@ -90,6 +109,10 @@
     {"id": "pcg.cpu_vm_avx2_ms_per_tile", "doctest": "pcg_tests",
      "case": "perf: CPU VM ms per 65x65 tile per core on the dispatched AVX2 kernel (03 §5.5a budget 0.5 ms)", "run": "linux-gcc",
      "pattern": "avx2 ([\\d.]+) ms", "unit": "ms", "better": "lower", "category": "runtime"},
+    {"id": "render.graph_compile_200_passes_ms", "doctest": "render_tests",
+     "case": "perf: render graph compile of 200 passes <= 0.3 ms (no topology cache)", "run": "linux-gcc",
+     "pattern": "graph compile: \\d+ passes in ([\\d.]+) ms \\(best of 10 batches", "unit": "ms", "better": "lower", "category": "render",
+     "note": "The best of 10 batches of 5 full compiles (no topology cache) that render_tests_perf gates at 03 §8.1.5's REF 60 fps 0.3 ms: the gate fails only above 0.3 ms, and this tracks drift below it per host class"},
     {"id": "schemac.regenerate_2000_types_s", "doctest": "schemac_tests",
      "case": "perf: 2,000 types regenerate within the 02 §3.5 budget", "run": "linux-gcc",
      "pattern": "types, \\d+ outputs \\(\\d+ KiB\\) in ([\\d.]+) s", "unit": "s", "better": "lower", "category": "iteration"}
@@ -200,17 +223,20 @@
       "title": "Physics hash (Phase 0 scope): the scripted scene's golden on every determinism toolchain and worker count, and the permuted-BodyID variant",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Phase 0 scope (02 §8.1): small hash; `stable-order` patch and stable body keys (RT-03 permuted variant). From RT-03: identical on every determinism toolchain (both MSVC toolsets, clang-cl, GCC, Clang and MinGW), at 1/4/16 workers; the permuted variant is rebuilt so that every `BodyID` differs and must give the identical hash; a CI build without the `stable-order` patch must fail it",
-      "notes": "The 1,000-body, 50-character, 10-vehicle scene, the AMD and Intel runs, the FBW hash and the slope-creep clause are RT-03's Phase 1 scope",
+      "notes": "The 1,000-body, 50-character, 10-vehicle scene, the AMD and Intel runs, the FBW hash and the slope-creep clause are RT-03's Phase 1 scope. The negative control (a build without third_party/jolt/patches/0001-stable-order.patch fails both permuted cases) is run by reverting the patch locally, not by a CI job; engine/physics/README.md records the result",
       "status": "partial",
       "tests": [
         {"doctest": "physics_tests", "case": "determinism: the scripted scene matches its golden hash (RT-03 Phase 0)"},
         {"doctest": "physics_tests", "case": "determinism: the golden holds at 1, 2, 4 and 16 workers"},
         {"doctest": "physics_tests", "case": "determinism: repeated runs in one process are identical"},
-        {"doctest": "physics_tests", "case": "determinism: permuted BodyIDs give the same result when no island has two contacts"}
+        {"doctest": "physics_tests", "case": "determinism: permuted BodyIDs give the same result when no island has two contacts"},
+        {"doctest": "physics_tests", "case": "determinism: permuted BodyIDs give the identical hash, multi-contact islands included (RT-03 permuted variant)"},
+        {"doctest": "physics_tests", "case": "determinism: permuted BodyIDs give the identical hash with a hull, a chassis and a character on four tiles each"},
+        {"doctest": "physics_tests", "case": "stable-order: ShipHull and Vehicle bodies keep no contact cache across steps (NoCrossUpdateCache)"},
+        {"doctest": "physics_tests", "case": "stable-order: NoCrossUpdateCache keeps the warm start between the collision steps of one step()"},
+        {"doctest": "physics_tests", "case": "stable-order: control: a Dynamic-layer body warm-starts from contacts cached by earlier steps"}
       ],
       "gaps": [
-        {"clause": "Permuted variant: multi-contact islands diverge until third_party/jolt/patches/stable-order is vendored; when it lands, a CI build without the patch must also fail the variant (the negative control)", "state": "failing", "owner": "WP-0.9",
-         "pinned_by": {"doctest": "physics_tests", "case": "determinism: KNOWN DIVERGENCE: permuted BodyIDs change multi-contact islands (stable-order patch pending)"}},
         {"clause": "MinGW: the cross-built binaries are never executed, so the hash is not checked on MinGW", "state": "unmeasured", "owner": "WP-0.1"}
       ]
     },
@@ -258,10 +284,13 @@
       "title": "Headless ToolsFramework round-trips 10k random transactions; kill -9 loses at most one",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Headless ToolsFramework round-trips 10k random transactions (apply, undo, redo) to byte-identical JSONC on MSVC, GCC and Clang; `kill -9` mid-burst loses ≤ 1 transaction",
-      "status": "unmeasured",
-      "tests": [],
-      "gaps": [
-        {"clause": "No ToolsFramework or editor exists yet", "state": "unmeasured", "owner": "WP-0.18"}
+      "notes": "toolsfw_tests runs in every native C++ job (MSVC, clang-cl, GCC, Clang). Byte-identical: after every undo and redo of 10,000 committed random transactions the canonical JSONC hashes to the text recorded at that step, and a golden workload's final text has one pinned XXH3 hash on every compiler. kill -9: toolsfw_burst_child is killed mid-burst at three points (TerminateProcess on Windows), and the journal recovers the acknowledged prefix plus at most the one transaction in flight, byte for byte",
+      "status": "measured",
+      "tests": [
+        {"doctest": "toolsfw_tests", "case": "ED-1: 10k random transactions round-trip through undo and redo byte-identically"},
+        {"doctest": "toolsfw_tests", "case": "ED-1: interleaved undo/redo, gestures and rejected edits stay byte-exact, and the journal replays them"},
+        {"doctest": "toolsfw_tests", "case": "ED-1: the golden workload hashes identically on every compiler"},
+        {"doctest": "toolsfw_tests", "case": "ED-1: kill -9 mid-burst loses at most the transaction in flight"}
       ]
     },
     {
@@ -280,16 +309,17 @@
       "title": "Loopback 100k pps per core without loss",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Loopback 100k pps/core without loss",
-      "notes": "net_bench --gate measures raw datagrams and encrypted HTP packets through the full stack. Passed on the hosted Linux nightly on the repository owner's approval of 2026-09-30 (09 §5.6; the record quotes it): hosted Linux measured the encrypted stack at 88k to 132k packets per core with no code change, so linux-gcc runs `net_bench --gate --advisory ns02-stack`, which reports that one rate instead of failing on it. Raw datagrams (100k per core), loss at either level (none allowed), the stack's connection and NS-0.7 in the same run still fail the gate. Hosted Windows is not covered: its stack measured 85,399 and 84,970 on 2026-09-27 and 125,611 on 2026-10-03 (a strict pass), the owner has not confirmed the approval for it, and windows-vs2026 gates everything, as does any run without --advisory",
+      "notes": "net_bench --gate measures raw datagrams and encrypted HTP packets through the full stack; NS-0.2 reads that run's `NS-0.2 socket` and `NS-0.2 HTP stack` cases, so the NS-0.7 trunk run of the same command gates NS-0.7 and not NS-0.2, except a trunk that never connects: that ends the run at its 3 s connect deadline, long before the gate's min_seconds, so NS-0.2's cases fail too. Passed on the hosted Linux nightly on the repository owner's approval of 2026-09-30 (09 §5.6; the record quotes it): hosted Linux measured the encrypted stack at 88k to 132k packets per core with no code change, so linux-gcc runs `net_bench --gate --advisory ns02-stack`, which reports that one rate instead of failing on it. Raw datagrams (100k per core), loss at either level (none allowed) and a stack that never sent still fail their case, and NS-0.7 still gates NS-0.7. Hosted Windows is not covered: its stack measured 85,399 and 84,970 on 2026-09-27 and 125,611 on 2026-10-03 (a strict pass), the owner has not confirmed the approval for it, and windows-vs2026 gates everything, as does any run without --advisory",
       "status": "approved",
       "tests": [
-        {"gate": "net_bench_gate"},
+        {"gate": "net_bench_gate", "case": "NS-0.2 socket"},
+        {"gate": "net_bench_gate", "case": "NS-0.2 HTP stack"},
         {"doctest": "net_tests", "case": "perf: NS-0.2: loopback 100k pps per core without loss", "platforms": ["linux"]},
         {"evidence": "docs/evidence/ns-0.2-owner-approval-2026-09-30.md", "owner_approval": "2026-09-30",
          "advisory": ["net.ns02.stack_packets_per_core"], "advisory_runs": ["linux-gcc"]}
       ],
       "follow_ups": [
-        {"clause": "Re-test the encrypted stack's 100k packets per core on fixed hardware, without --advisory: `net_bench --gate` on WP-0.4's win-gpu runner and on a Linux lab host. If it is below 100k there, NS-0.2 goes back to failing and the stack gets a second pass (owner, 2026-09-30)", "owner": "WP-0.4, WP-0.13"},
+        {"clause": "Re-test the encrypted stack's 100k packets per core on fixed hardware, without --advisory: `net_bench --gate` on WP-0.4's win-gpu runner and on a Linux lab host. If it is below 100k there, NS-0.2 goes back to failing and the stack gets a second pass (owner, 2026-09-30). The win-gpu half is a strict step of .github/workflows/win-gpu.yml (the win-gpu run), which has not run yet and which the nightly report does not read yet; the Linux lab host does not exist", "owner": "WP-0.4, WP-0.13"},
         {"clause": "Hosted Windows (windows-vs2026) is not covered. The owner's question on Windows now has three data points: its stack measured 85,399 and 84,970 per core on 2026-09-27 and 125,611 on 2026-10-03, a strict pass. The step stays strict, so NS-0.2 fails on Windows each night its stack measures below 100k, and one pass is not class N's 3-night streak: NS-0.2 cannot turn green until Windows has such a streak or the owner confirms the approval for it with these numbers in view (quoted in the record; then the run joins advisory_runs and its step passes --advisory)", "owner": "User"}
       ]
     },
@@ -309,7 +339,7 @@
         {"ctest": "server_tests_ns03_remote", "platforms": ["windows"], "run": "windows-lab"}
       ],
       "gaps": [
-        {"clause": "H: no lab run yet, so the cross-host half is unmeasured (it counts as failing), and no MSVC-built client has run against a Linux gateway. WP-0.4 registers win-gpu and puts a Linux host on its network running `helios-cell --standalone --trunk-keys ring.json` and `helios-gateway --standalone --listen <lan-ip>:7777 --keys ring.json --trunk-keys ring.json`; nightly.yml then builds windows-msvc-release on win-gpu, runs `ctest -R server_tests_ns03_remote` with HELIOS_NS03_GATEWAY=<lan-ip>:7777 and HELIOS_NS03_KEYS=ring.json, and uploads the result set as windows-lab", "state": "unmeasured", "owner": "WP-0.4"}
+        {"clause": "H: no lab run yet, so the cross-host half is unmeasured (it counts as failing), and no MSVC-built client has run against a Linux gateway. WP-0.4 puts a Linux host on the win-gpu runner's network running `helios-cell --standalone --trunk-keys ring.json` and `helios-gateway --standalone --listen <lan-ip>:7777 --keys ring.json --trunk-keys ring.json`, allowed through the runner's LAN block with `tools/ci/runner/firewall.ps1 -AllowAddress <lan-ip>`; a win-gpu.yml job then builds windows-msvc-release on win-gpu, runs `ctest -R server_tests_ns03_remote` with HELIOS_NS03_GATEWAY=<lan-ip>:7777 and HELIOS_NS03_KEYS=ring.json, and uploads the result set as windows-lab", "state": "unmeasured", "owner": "WP-0.4"}
       ]
     },
     {
@@ -364,10 +394,10 @@
       "title": "Trunk throughput: 20k pps of 1,200 B payloads for 10 min",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Trunk throughput: one trunk connection sustains 20k pps of 1,200 B payloads (≈ 200 Mbit/s) for 10 min with < 0.1 % drops on ≤ 1 core, on loopback on Windows and Linux CI; otherwise the §2.6 fallback starts",
-      "notes": "net_bench --gate reads ≤ 1 core as ≤ 1 core for each side (the cell and gateway threads)",
+      "notes": "net_bench --gate reads ≤ 1 core as ≤ 1 core for each side (the cell and gateway threads). NS-0.7 reads that run's `NS-0.7 trunk` case, so an NS-0.2 failure of the same command (the strict Windows step's stack rate) does not fail NS-0.7",
       "status": "measured",
       "tests": [
-        {"gate": "net_bench_gate"},
+        {"gate": "net_bench_gate", "case": "NS-0.7 trunk"},
         {"doctest": "net_tests", "case": "perf: NS-0.7 (short run): trunk throughput over UDP loopback", "platforms": ["linux"]}
       ]
     },
@@ -420,6 +450,33 @@
       "gaps": [
         {"clause": "linux/arm64: no runner runs the corpus there; only the arm64 machine-code listing is checked (TestNoFusedMultiplyAddInMachineCode)", "state": "unmeasured", "owner": "WP-0.1"}
       ]
+    },
+
+    // Registered ahead of its phase: 09 §2's WP-0.8 row asks for AAA-SEC-4 on sample records in Phase 0.
+    // `covers` stays [0] until the Director starts Phase 1's registration.
+    {
+      "id": "AAA-SEC-4", "phase": 1, "source": "01 §3.8", "owner": "WP-0.8",
+      "title": "Client cooks contain no server-only data",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Client cooks contain no `server_only` data (CI; R08-ED-P0-01)",
+      "notes": "Measured on sample records (engine/records, 02 §3.3 and §6.5): the records cook refuses a client layout that keeps a server-only field, embeds a server-only type or references a server-only record without @opaque (and the reverse direction for the server cook); records_tests and the lint_records_sec4 CTests search the raw bytes of both cooks for planted server-only sentinels, each of which must be in the server cook and in no client cook (the fixture test scans the server cook as a client cook and must fail); lint_records_sec4_nested plants them in server {} fields of structs nested in shared data (keyed lists merged and appended through $parent, an optional, a struct field, a map value, a plain list). Accepted trade-off: a withheld tag keeps its slot, parent, depth, subtree range, audience and declared flag in the client cook (TagIndex agreement needs the slots), so a client can count server-only tags and see where they sort; only their names are withheld",
+      "status": "partial",
+      "tests": [
+        {"doctest": "records_tests", "case": "AAA-SEC-4: the client cook of the test records holds no server-only field, record, tag name or sentinel"},
+        {"doctest": "records_tests", "case": "AAA-SEC-4: a shared reference to a server-only record without @opaque is refused with a precise error"},
+        {"doctest": "records_tests", "case": "AAA-SEC-4: an @opaque reference cooks as the bare RecordId; the record stays server-side"},
+        {"doctest": "records_tests", "case": "AAA-SEC-4: a server-only struct or enum inside shared data is refused, @opaque or not"},
+        {"doctest": "records_tests", "case": "AAA-SEC-4: the reverse direction refuses a client-only record referenced by server-cooked data"},
+        {"doctest": "records_tests", "case": "AAA-SEC-4: a loader refuses a client cook that claims server-side content"},
+        {"ctest": "lint_records_sec4"},
+        {"ctest": "lint_records_sec4_m0_sample"},
+        {"ctest": "lint_records_sec4_fixture_leak"},
+        {"ctest": "lint_records_sec4_nested"}
+      ],
+      "gaps": [
+        {"clause": "The game's own records: CI cooks only sample records, because the reference project's content/ does not exist yet; its client cook must run the same checks", "state": "unmeasured", "owner": "WP-0.20"},
+        {"clause": "Client paks: only records are cooked so far; 02 §6.5's server-side asset data (collision, hitboxes, server{} records packed per zone) reaches paks with the zone cook, which must lint both directions too", "state": "unmeasured", "owner": "WP-2.1"}
+      ]
     }
   ],
 
@@ -446,17 +503,18 @@
       "title": "helios-schemac emits C++, Go, Luau and SQL",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "`helios-schemac` emits C++/Go/Luau/SQL",
-      "status": "partial",
+      "status": "measured",
       "tests": [
         {"doctest": "schemac_tests", "case": "golden: generator output matches the committed expectations"},
-        {"doctest": "schemac_tests", "case": "golden: the schemas/ corpus generates the committed Luau outputs"},
+        {"doctest": "schemac_tests", "case": "golden: the schemas/ corpus generates the committed Luau, SQL, replication and lint outputs"},
         {"doctest": "schemac_tests", "case": "go interop: generated Go matches the C++ codecs byte for byte"},
         {"doctest": "schemac_tests", "case": "luau: the generated glue converts arguments and results through a script VM"},
         {"doctest": "schemac_tests", "case": "luau: the generated glue charges each fn's schema fuel"},
         {"doctest": "schemac_tests", "case": "luau: the generated schema.d.luau type-checks scripts with Luau.Analysis"},
+        {"doctest": "schemac_tests", "case": "sql: the migration stub expands from the baseline lock and never drops"},
+        {"ctest": "schemac_sql_postgres", "platforms": ["linux"]},
         {"doctest": "schemac_tests", "case": "lock: --check-lock fails on a stale or missing lock"}
-      ],
-      "gaps": [{"clause": "The sql emitter is a stub that reports 'not yet implemented'", "state": "unmeasured", "owner": "WP-0.7b"}]
+      ]
     },
     {
       "id": "EXIT-0.goldens", "phase": 0, "source": "01 §5.4", "owner": "WP-0.12",
@@ -464,8 +522,9 @@
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Golden images pass on the Vulkan and Null backends (demonstrated on Windows and Linux)",
       "status": "partial",
-      "tests": [{"ctest": "rendertest.vulkan.*", "platforms": ["linux"]}, {"ctest": "rendertest.null.*"}],
-      "gaps": [{"clause": "Windows Vulkan goldens: the win-gpu runner does not exist (09 §5.4)", "state": "unmeasured", "owner": "WP-0.4"}]
+      "tests": [{"ctest": "rendertest.vulkan.*", "platforms": ["linux"]}, {"ctest": "rendertest.null.*"},
+                {"ctest": "rendertest.vulkan.*", "platforms": ["windows"], "run": "win-gpu"}],
+      "gaps": [{"clause": "Windows Vulkan goldens on a real GPU: .github/workflows/win-gpu.yml runs rendertest.vulkan.* on the win-gpu runner (the win-gpu run), but no run exists yet (the runner is registered; the owner has not set HELIOS_WIN_GPU, docs/runbooks/win-gpu-runner.md) and the nightly report does not read its results-win-gpu artifact yet (09 §5.4)", "state": "unmeasured", "owner": "WP-0.4, User"}]
     },
     {
       "id": "EXIT-0.cell-tick", "phase": 0, "source": "01 §5.4", "owner": "WP-0.14",
@@ -510,9 +569,9 @@
       "title": "The WP-0.4 runner policy check is green",
       "class": "N", "platforms": ["any"],
       "threshold": "The WP-0.4 runner policy check green",
-      "status": "unmeasured",
-      "tests": [],
-      "gaps": [{"clause": "tools/ci/check_runner_policy does not exist", "state": "unmeasured", "owner": "WP-0.4"}]
+      "notes": "tools/ci/check_runner_policy.py runs as CTest lint_runner_policy (label lint) in every CI job that runs CTest, over every .github/workflows file: a workflow whose jobs can reach the win-gpu runner keeps 09 §5.4a's rules (post-merge triggers only, the main and HELIOS_WIN_GPU guards, no secrets, contents: read, pinned actions), and a runs-on it cannot resolve fails. The headless job is the one cited; its seeded fixtures run as lint_runner_policy_unittest",
+      "status": "measured",
+      "tests": [{"ci_job": "Linux (headless servers + tools)"}]
     },
     {
       "id": "EXIT-0.conformance", "phase": 0, "source": "09 §2.1", "owner": "WP-0.2",

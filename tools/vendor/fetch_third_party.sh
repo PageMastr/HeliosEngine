@@ -61,6 +61,8 @@ if want implot;     then clone implot epezent/implot v1.0; fresh implot; (cd "$W
 if want meshoptimizer; then clone meshoptimizer zeux/meshoptimizer v1.2; fresh meshoptimizer; copy meshoptimizer src LICENSE.md; fi
 if want cgltf;      then clone cgltf jkuhlmann/cgltf v1.15; fresh cgltf; copy cgltf cgltf.h cgltf_write.h LICENSE; fi
 if want stb;        then clone stb nothings/stb master; fresh stb; copy stb stb_image.h stb_image_write.h stb_truetype.h stb_rect_pack.h stb_perlin.h LICENSE; fi
+if want roboto;     then fresh roboto; curl -fsSL -o "$WORK/roboto-unhinted.zip" https://github.com/googlefonts/roboto/releases/download/v2.138/roboto-unhinted.zip
+  (cd "$TP/roboto" && unzip -q -o "$WORK/roboto-unhinted.zip" LICENSE Roboto-Regular.ttf); fi
 if want miniaudio;  then clone miniaudio mackron/miniaudio 0.11.25; fresh miniaudio; copy miniaudio miniaudio.h LICENSE; fi
 if want zstd;       then clone zstd facebook/zstd v1.5.7; fresh zstd; copy zstd lib/common lib/compress lib/decompress lib/zstd.h lib/zdict.h lib/zstd_errors.h LICENSE; fi
 if want xxhash;     then clone xxhash Cyan4973/xxHash v0.8.4; fresh xxhash; copy xxhash xxhash.h LICENSE; fi

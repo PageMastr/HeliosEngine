@@ -1480,6 +1480,167 @@ func (m *Plain) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Every raw full-state form (`--emit repl`) and a range-quantized f64.
+type Status struct {
+	Mode Color `json:"mode"`
+	Alive bool `json:"alive"`
+	Level int16 `json:"level"`
+	Perm Perm `json:"perm"`
+	Who EntityId `json:"who"`
+	Ref ThingRef `json:"ref"`
+	At Tick `json:"at"`
+	Wait Duration `json:"wait"`
+	Handle NetHandle `json:"handle"`
+	Rot Quat `json:"rot"`
+	Flat Vec2 `json:"flat"`
+	Tint RGBA `json:"tint"`
+	Far DVec3 `json:"far"`
+	Where WorldPos `json:"where"`
+	Score float64 `json:"score"`
+}
+
+var dfltStatusMode = ColorGreen
+var dfltStatusAlive = true
+var dfltStatusLevel = int16(-3)
+// NewStatus returns a Status with every field at its schema default.
+func NewStatus() Status {
+	return Status{Mode: dfltStatusMode, Alive: dfltStatusAlive, Level: dfltStatusLevel, Perm: zero_golden_all_Perm_31(), Who: zero_EntityId_5(), Ref: zero_Ref_golden_all_ThingDef__58(), At: zero_Tick_7(), Wait: zero_Duration_29(), Handle: zero_NetHandle_6(), Rot: zero_quatf_27(), Flat: zero_vec2f_24(), Tint: zero_color_28(), Far: zero_vec3d_26(), Where: zero_WorldPos_4(), Score: zero_f64_20(), }
+}
+
+func (m *Status) isDefault() bool {
+	return m.Mode == dfltStatusMode &&
+		m.Alive == dfltStatusAlive &&
+		m.Level == dfltStatusLevel &&
+		def_golden_all_Perm_31(m.Perm) &&
+		def_EntityId_5(m.Who) &&
+		def_Ref_golden_all_ThingDef__58(m.Ref) &&
+		def_Tick_7(m.At) &&
+		def_Duration_29(m.Wait) &&
+		def_NetHandle_6(m.Handle) &&
+		def_quatf_27(m.Rot) &&
+		def_vec2f_24(m.Flat) &&
+		def_color_28(m.Tint) &&
+		def_vec3d_26(m.Far) &&
+		def_WorldPos_4(m.Where) &&
+		def_f64_20(m.Score)
+}
+
+func (m *Status) appendFields(b []byte) []byte {
+	if !(m.Mode == dfltStatusMode) {
+		b = enc_golden_all_Color_30(b, 1, m.Mode)
+	}
+	if !(m.Alive == dfltStatusAlive) {
+		b = enc_bool_12(b, 2, m.Alive)
+	}
+	if !(m.Level == dfltStatusLevel) {
+		b = enc_i16_0(b, 3, m.Level)
+	}
+	if !(def_golden_all_Perm_31(m.Perm)) {
+		b = enc_golden_all_Perm_31(b, 4, m.Perm)
+	}
+	if !(def_EntityId_5(m.Who)) {
+		b = enc_EntityId_5(b, 5, m.Who)
+	}
+	if !(def_Ref_golden_all_ThingDef__58(m.Ref)) {
+		b = enc_Ref_golden_all_ThingDef__58(b, 6, m.Ref)
+	}
+	if !(def_Tick_7(m.At)) {
+		b = enc_Tick_7(b, 7, m.At)
+	}
+	if !(def_Duration_29(m.Wait)) {
+		b = enc_Duration_29(b, 8, m.Wait)
+	}
+	if !(def_NetHandle_6(m.Handle)) {
+		b = enc_NetHandle_6(b, 9, m.Handle)
+	}
+	if !(def_quatf_27(m.Rot)) {
+		b = enc_quatf_27(b, 10, m.Rot)
+	}
+	if !(def_vec2f_24(m.Flat)) {
+		b = enc_vec2f_24(b, 11, m.Flat)
+	}
+	if !(def_color_28(m.Tint)) {
+		b = enc_color_28(b, 12, m.Tint)
+	}
+	if !(def_vec3d_26(m.Far)) {
+		b = enc_vec3d_26(b, 13, m.Far)
+	}
+	if !(def_WorldPos_4(m.Where)) {
+		b = enc_WorldPos_4(b, 14, m.Where)
+	}
+	if !(def_f64_20(m.Score)) {
+		b = enc_f64_20(b, 15, m.Score)
+	}
+	return b
+}
+
+func (m *Status) readFields(r *wireReader) error {
+	for !r.atEnd() {
+		id, wt, err := r.tag()
+		if err != nil {
+			return err
+		}
+		switch id {
+			case 1:
+				err = dec_golden_all_Color_30(r, wt, &m.Mode)
+			case 2:
+				err = dec_bool_12(r, wt, &m.Alive)
+			case 3:
+				err = dec_i16_0(r, wt, &m.Level)
+			case 4:
+				err = dec_golden_all_Perm_31(r, wt, &m.Perm)
+			case 5:
+				err = dec_EntityId_5(r, wt, &m.Who)
+			case 6:
+				err = dec_Ref_golden_all_ThingDef__58(r, wt, &m.Ref)
+			case 7:
+				err = dec_Tick_7(r, wt, &m.At)
+			case 8:
+				err = dec_Duration_29(r, wt, &m.Wait)
+			case 9:
+				err = dec_NetHandle_6(r, wt, &m.Handle)
+			case 10:
+				err = dec_quatf_27(r, wt, &m.Rot)
+			case 11:
+				err = dec_vec2f_24(r, wt, &m.Flat)
+			case 12:
+				err = dec_color_28(r, wt, &m.Tint)
+			case 13:
+				err = dec_vec3d_26(r, wt, &m.Far)
+			case 14:
+				err = dec_WorldPos_4(r, wt, &m.Where)
+			case 15:
+				err = dec_f64_20(r, wt, &m.Score)
+			default:
+				err = r.skip(wt)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MarshalHelios encodes the tagged binary message (identical bytes to the C++ codec).
+func (m *Status) MarshalHelios() []byte { return m.appendFields(nil) }
+
+// UnmarshalHelios decodes a tagged message; missing fields take their schema defaults.
+func (m *Status) UnmarshalHelios(b []byte) error {
+	*m = NewStatus()
+	return m.readFields(newWireReader(b))
+}
+
+// UnmarshalJSON reads JSON (e.g. canonical JSONC written by the C++ codec); missing fields keep defaults.
+func (m *Status) UnmarshalJSON(b []byte) error {
+	type plain Status
+	p := plain(NewStatus())
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*m = Status(p)
+	return nil
+}
+
 type Exploded struct {
 	At WorldPos `json:"at"`
 	Radius float32 `json:"radius"`
@@ -1870,13 +2031,13 @@ func NewSpellings() Spellings {
 }
 
 func (m *Spellings) isDefault() bool {
-	return def_list_u8__58(m.N) &&
+	return def_list_u8__59(m.N) &&
 		f32Bits(m.R, dfltSpellingsR)
 }
 
 func (m *Spellings) appendFields(b []byte) []byte {
-	if !(def_list_u8__58(m.N)) {
-		b = enc_list_u8__58(b, 1, m.N)
+	if !(def_list_u8__59(m.N)) {
+		b = enc_list_u8__59(b, 1, m.N)
 	}
 	if !(f32Bits(m.R, dfltSpellingsR)) {
 		b = enc_f32_19(b, 2, m.R)
@@ -1892,7 +2053,7 @@ func (m *Spellings) readFields(r *wireReader) error {
 		}
 		switch id {
 			case 1:
-				err = dec_list_u8__58(r, wt, &m.N)
+				err = dec_list_u8__59(r, wt, &m.N)
 			case 2:
 				err = dec_f32_19(r, wt, &m.R)
 			default:
@@ -1922,6 +2083,486 @@ func (m *Spellings) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*m = Spellings(p)
+	return nil
+}
+
+type LedgerLineShapeDot struct {
+}
+
+// NewLedgerLineShapeDot returns a LedgerLineShapeDot with every field at its schema default.
+func NewLedgerLineShapeDot() LedgerLineShapeDot {
+	return LedgerLineShapeDot{}
+}
+
+func (m *LedgerLineShapeDot) isDefault() bool {
+	return true
+}
+
+func (m *LedgerLineShapeDot) appendFields(b []byte) []byte {
+	return b
+}
+
+func (m *LedgerLineShapeDot) readFields(r *wireReader) error {
+	for !r.atEnd() {
+		id, wt, err := r.tag()
+		if err != nil {
+			return err
+		}
+		switch id {
+			default:
+				err = r.skip(wt)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MarshalHelios encodes the tagged binary message (identical bytes to the C++ codec).
+func (m *LedgerLineShapeDot) MarshalHelios() []byte { return m.appendFields(nil) }
+
+// UnmarshalHelios decodes a tagged message; missing fields take their schema defaults.
+func (m *LedgerLineShapeDot) UnmarshalHelios(b []byte) error {
+	*m = NewLedgerLineShapeDot()
+	return m.readFields(newWireReader(b))
+}
+
+// UnmarshalJSON reads JSON (e.g. canonical JSONC written by the C++ codec); missing fields keep defaults.
+func (m *LedgerLineShapeDot) UnmarshalJSON(b []byte) error {
+	type plain LedgerLineShapeDot
+	p := plain(NewLedgerLineShapeDot())
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*m = LedgerLineShapeDot(p)
+	return nil
+}
+
+type LedgerLineShapeLine struct {
+	Length float32 `json:"length"`
+}
+
+// NewLedgerLineShapeLine returns a LedgerLineShapeLine with every field at its schema default.
+func NewLedgerLineShapeLine() LedgerLineShapeLine {
+	return LedgerLineShapeLine{Length: zero_f32_19(), }
+}
+
+func (m *LedgerLineShapeLine) isDefault() bool {
+	return def_f32_19(m.Length)
+}
+
+func (m *LedgerLineShapeLine) appendFields(b []byte) []byte {
+	if !(def_f32_19(m.Length)) {
+		b = enc_f32_19(b, 1, m.Length)
+	}
+	return b
+}
+
+func (m *LedgerLineShapeLine) readFields(r *wireReader) error {
+	for !r.atEnd() {
+		id, wt, err := r.tag()
+		if err != nil {
+			return err
+		}
+		switch id {
+			case 1:
+				err = dec_f32_19(r, wt, &m.Length)
+			default:
+				err = r.skip(wt)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MarshalHelios encodes the tagged binary message (identical bytes to the C++ codec).
+func (m *LedgerLineShapeLine) MarshalHelios() []byte { return m.appendFields(nil) }
+
+// UnmarshalHelios decodes a tagged message; missing fields take their schema defaults.
+func (m *LedgerLineShapeLine) UnmarshalHelios(b []byte) error {
+	*m = NewLedgerLineShapeLine()
+	return m.readFields(newWireReader(b))
+}
+
+// UnmarshalJSON reads JSON (e.g. canonical JSONC written by the C++ codec); missing fields keep defaults.
+func (m *LedgerLineShapeLine) UnmarshalJSON(b []byte) error {
+	type plain LedgerLineShapeLine
+	p := plain(NewLedgerLineShapeLine())
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*m = LedgerLineShapeLine(p)
+	return nil
+}
+
+// LedgerLineShape is a variant: exactly one alternative is set (none set = the first alternative's default).
+type LedgerLineShape struct {
+	Dot *LedgerLineShapeDot
+	Line *LedgerLineShapeLine
+}
+
+func NewLedgerLineShape() LedgerLineShape {
+	x := NewLedgerLineShapeDot()
+	return LedgerLineShape{Dot: &x}
+}
+
+func (m *LedgerLineShape) index() int {
+	switch {
+		case m.Dot != nil:
+			return 0
+		case m.Line != nil:
+			return 1
+	}
+	return -1
+}
+
+func (m *LedgerLineShape) isDefault() bool {
+	switch m.index() {
+		case -1:
+			return true
+		case 0:
+			return m.Dot.isDefault()
+	}
+	return false
+}
+
+func (m *LedgerLineShape) appendValue(b []byte) []byte {
+	b, mk := beginLen(b)
+	switch m.index() {
+		case -1:
+			b = enc_golden_all_LedgerLine_Shape_Dot_60(b, 1, NewLedgerLineShapeDot())
+		case 0:
+			b = enc_golden_all_LedgerLine_Shape_Dot_60(b, 1, *m.Dot)
+		case 1:
+			b = enc_golden_all_LedgerLine_Shape_Line_61(b, 2, *m.Line)
+	}
+	return endLen(b, mk)
+}
+
+func (m *LedgerLineShape) readValue(r *wireReader, wt int) error {
+	if wt != wireLen {
+		return wireMismatch("Shape", wt, wireLen)
+	}
+	sub, err := r.message()
+	if err != nil {
+		return err
+	}
+	for !sub.atEnd() {
+		id, awt, err := sub.tag()
+		if err != nil {
+			return err
+		}
+		switch id {
+			case 1:
+				if m.Dot == nil {
+					x := NewLedgerLineShapeDot()
+					*m = LedgerLineShape{Dot: &x}
+				}
+				err = dec_golden_all_LedgerLine_Shape_Dot_60(sub, awt, m.Dot)
+			case 2:
+				if m.Line == nil {
+					x := NewLedgerLineShapeLine()
+					*m = LedgerLineShape{Line: &x}
+				}
+				err = dec_golden_all_LedgerLine_Shape_Line_61(sub, awt, m.Line)
+			default:
+				err = sub.skip(awt)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m LedgerLineShape) MarshalJSON() ([]byte, error) {
+	switch m.index() {
+		case 0:
+			return json.Marshal("Dot")
+		case 1:
+			return json.Marshal(map[string]any{"Line": m.Line})
+	}
+	return json.Marshal("Dot")
+}
+
+func (m *LedgerLineShape) UnmarshalJSON(b []byte) error {
+	var name string
+	var body json.RawMessage
+	if err := json.Unmarshal(b, &name); err != nil {
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(b, &obj); err != nil || len(obj) != 1 {
+			return fmt.Errorf("helios: golden.all.LedgerLine.Shape must be an alternative name or {\"Alternative\": {...}}")
+		}
+		for k, v := range obj {
+			name, body = k, v
+		}
+	}
+	switch name {
+		case "Dot":
+			x := NewLedgerLineShapeDot()
+			if body != nil {
+				if err := json.Unmarshal(body, &x); err != nil {
+					return err
+				}
+			}
+			*m = LedgerLineShape{Dot: &x}
+			return nil
+		case "Line":
+			x := NewLedgerLineShapeLine()
+			if body != nil {
+				if err := json.Unmarshal(body, &x); err != nil {
+					return err
+				}
+			}
+			*m = LedgerLineShape{Line: &x}
+			return nil
+	}
+	return fmt.Errorf("helios: unknown alternative %q of golden.all.LedgerLine.Shape", name)
+}
+
+// A PostgreSQL table (`--emit sql`, 05 §3): every column form, a composite key and a reserved word
+// as a column. Since tests/golden/golden.sql-baseline.lock.jsonc it gained a rename, widenings, an
+// optional, new columns and a removed field, which the migration stub golden shows.
+type LedgerLine struct {
+	Owner EntityId `json:"owner"`
+	Seq uint32 `json:"seq"`
+	Order uint8 `json:"order"`
+	Amount int64 `json:"amount"`
+	Small uint16 `json:"small"`
+	Note *string `json:"note,omitempty"`
+	Flag bool `json:"flag"`
+	Big uint64 `json:"big"`
+	Ratio float32 `json:"ratio"`
+	Exact float64 `json:"exact"`
+	Label string `json:"label"`
+	Tag string `json:"tag"`
+	Delay Duration `json:"delay"`
+	At Tick `json:"at"`
+	Thing ThingRef `json:"thing"`
+	Id Guid `json:"id"`
+	Color Color `json:"color"`
+	Perm Perm `json:"perm"`
+	Mesh AssetRef `json:"mesh"`
+	Text LocString `json:"text"`
+	Pos WorldPos `json:"pos"`
+	Items []Item `json:"items,omitempty"`
+	Inner Item `json:"inner"`
+	Bag map[string]uint8 `json:"bag,omitempty"`
+	Shape LedgerLineShape `json:"shape"`
+}
+
+var dfltLedgerLineOrder = uint8(7)
+var dfltLedgerLineAmount = int64(-5)
+var dfltLedgerLineSmall = uint16(3)
+var dfltLedgerLineFlag = true
+var dfltLedgerLineRatio = float32(0.5)
+var dfltLedgerLineLabel = "it's"
+var dfltLedgerLineDelay = Duration(1500000000)
+var dfltLedgerLineColor = ColorBlue
+var dfltLedgerLinePerm = Perm(1)
+// NewLedgerLine returns a LedgerLine with every field at its schema default.
+func NewLedgerLine() LedgerLine {
+	return LedgerLine{Owner: zero_EntityId_5(), Seq: zero_u32_17(), Order: dfltLedgerLineOrder, Amount: dfltLedgerLineAmount, Small: dfltLedgerLineSmall, Flag: dfltLedgerLineFlag, Big: zero_u64_18(), Ratio: dfltLedgerLineRatio, Exact: zero_f64_20(), Label: dfltLedgerLineLabel, Tag: zero_Name_22(), Delay: dfltLedgerLineDelay, At: zero_Tick_7(), Thing: zero_Ref_golden_all_ThingDef__58(), Id: zero_Guid_23(), Color: dfltLedgerLineColor, Perm: dfltLedgerLinePerm, Mesh: zero_AssetRef_Mesh__32(), Text: zero_LocString_8(), Pos: zero_WorldPos_4(), Inner: zero_golden_all_Item_62(), Shape: zero_golden_all_LedgerLine_Shape_63(), }
+}
+
+func (m *LedgerLine) isDefault() bool {
+	return def_EntityId_5(m.Owner) &&
+		def_u32_17(m.Seq) &&
+		m.Order == dfltLedgerLineOrder &&
+		m.Amount == dfltLedgerLineAmount &&
+		m.Small == dfltLedgerLineSmall &&
+		def_string__64(m.Note) &&
+		m.Flag == dfltLedgerLineFlag &&
+		def_u64_18(m.Big) &&
+		f32Bits(m.Ratio, dfltLedgerLineRatio) &&
+		def_f64_20(m.Exact) &&
+		m.Label == dfltLedgerLineLabel &&
+		def_Name_22(m.Tag) &&
+		m.Delay == dfltLedgerLineDelay &&
+		def_Tick_7(m.At) &&
+		def_Ref_golden_all_ThingDef__58(m.Thing) &&
+		def_Guid_23(m.Id) &&
+		m.Color == dfltLedgerLineColor &&
+		m.Perm == dfltLedgerLinePerm &&
+		def_AssetRef_Mesh__32(m.Mesh) &&
+		def_LocString_8(m.Text) &&
+		def_WorldPos_4(m.Pos) &&
+		def_list_golden_all_Item__43(m.Items) &&
+		def_golden_all_Item_62(m.Inner) &&
+		def_map_string_u8__65(m.Bag) &&
+		def_golden_all_LedgerLine_Shape_63(m.Shape)
+}
+
+func (m *LedgerLine) appendFields(b []byte) []byte {
+	if !(def_EntityId_5(m.Owner)) {
+		b = enc_EntityId_5(b, 1, m.Owner)
+	}
+	if !(def_u32_17(m.Seq)) {
+		b = enc_u32_17(b, 2, m.Seq)
+	}
+	if !(m.Order == dfltLedgerLineOrder) {
+		b = enc_u8_16(b, 3, m.Order)
+	}
+	if !(m.Amount == dfltLedgerLineAmount) {
+		b = enc_i64_15(b, 4, m.Amount)
+	}
+	if !(m.Small == dfltLedgerLineSmall) {
+		b = enc_u16_1(b, 5, m.Small)
+	}
+	if !(def_string__64(m.Note)) {
+		b = enc_string__64(b, 6, m.Note)
+	}
+	if !(m.Flag == dfltLedgerLineFlag) {
+		b = enc_bool_12(b, 8, m.Flag)
+	}
+	if !(def_u64_18(m.Big)) {
+		b = enc_u64_18(b, 9, m.Big)
+	}
+	if !(f32Bits(m.Ratio, dfltLedgerLineRatio)) {
+		b = enc_f32_19(b, 10, m.Ratio)
+	}
+	if !(def_f64_20(m.Exact)) {
+		b = enc_f64_20(b, 11, m.Exact)
+	}
+	if !(m.Label == dfltLedgerLineLabel) {
+		b = enc_string_21(b, 12, m.Label)
+	}
+	if !(def_Name_22(m.Tag)) {
+		b = enc_Name_22(b, 13, m.Tag)
+	}
+	if !(m.Delay == dfltLedgerLineDelay) {
+		b = enc_Duration_29(b, 14, m.Delay)
+	}
+	if !(def_Tick_7(m.At)) {
+		b = enc_Tick_7(b, 15, m.At)
+	}
+	if !(def_Ref_golden_all_ThingDef__58(m.Thing)) {
+		b = enc_Ref_golden_all_ThingDef__58(b, 16, m.Thing)
+	}
+	if !(def_Guid_23(m.Id)) {
+		b = enc_Guid_23(b, 17, m.Id)
+	}
+	if !(m.Color == dfltLedgerLineColor) {
+		b = enc_golden_all_Color_30(b, 18, m.Color)
+	}
+	if !(m.Perm == dfltLedgerLinePerm) {
+		b = enc_golden_all_Perm_31(b, 19, m.Perm)
+	}
+	if !(def_AssetRef_Mesh__32(m.Mesh)) {
+		b = enc_AssetRef_Mesh__32(b, 20, m.Mesh)
+	}
+	if !(def_LocString_8(m.Text)) {
+		b = enc_LocString_8(b, 21, m.Text)
+	}
+	if !(def_WorldPos_4(m.Pos)) {
+		b = enc_WorldPos_4(b, 22, m.Pos)
+	}
+	if !(def_list_golden_all_Item__43(m.Items)) {
+		b = enc_list_golden_all_Item__43(b, 23, m.Items)
+	}
+	if !(def_golden_all_Item_62(m.Inner)) {
+		b = enc_golden_all_Item_62(b, 24, m.Inner)
+	}
+	if !(def_map_string_u8__65(m.Bag)) {
+		b = enc_map_string_u8__65(b, 25, m.Bag)
+	}
+	if !(def_golden_all_LedgerLine_Shape_63(m.Shape)) {
+		b = enc_golden_all_LedgerLine_Shape_63(b, 26, m.Shape)
+	}
+	return b
+}
+
+func (m *LedgerLine) readFields(r *wireReader) error {
+	for !r.atEnd() {
+		id, wt, err := r.tag()
+		if err != nil {
+			return err
+		}
+		switch id {
+			case 1:
+				err = dec_EntityId_5(r, wt, &m.Owner)
+			case 2:
+				err = dec_u32_17(r, wt, &m.Seq)
+			case 3:
+				err = dec_u8_16(r, wt, &m.Order)
+			case 4:
+				err = dec_i64_15(r, wt, &m.Amount)
+			case 5:
+				err = dec_u16_1(r, wt, &m.Small)
+			case 6:
+				err = dec_string__64(r, wt, &m.Note)
+			case 8:
+				err = dec_bool_12(r, wt, &m.Flag)
+			case 9:
+				err = dec_u64_18(r, wt, &m.Big)
+			case 10:
+				err = dec_f32_19(r, wt, &m.Ratio)
+			case 11:
+				err = dec_f64_20(r, wt, &m.Exact)
+			case 12:
+				err = dec_string_21(r, wt, &m.Label)
+			case 13:
+				err = dec_Name_22(r, wt, &m.Tag)
+			case 14:
+				err = dec_Duration_29(r, wt, &m.Delay)
+			case 15:
+				err = dec_Tick_7(r, wt, &m.At)
+			case 16:
+				err = dec_Ref_golden_all_ThingDef__58(r, wt, &m.Thing)
+			case 17:
+				err = dec_Guid_23(r, wt, &m.Id)
+			case 18:
+				err = dec_golden_all_Color_30(r, wt, &m.Color)
+			case 19:
+				err = dec_golden_all_Perm_31(r, wt, &m.Perm)
+			case 20:
+				err = dec_AssetRef_Mesh__32(r, wt, &m.Mesh)
+			case 21:
+				err = dec_LocString_8(r, wt, &m.Text)
+			case 22:
+				err = dec_WorldPos_4(r, wt, &m.Pos)
+			case 23:
+				err = dec_list_golden_all_Item__43(r, wt, &m.Items)
+			case 24:
+				err = dec_golden_all_Item_62(r, wt, &m.Inner)
+			case 25:
+				err = dec_map_string_u8__65(r, wt, &m.Bag)
+			case 26:
+				err = dec_golden_all_LedgerLine_Shape_63(r, wt, &m.Shape)
+			default:
+				err = r.skip(wt)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MarshalHelios encodes the tagged binary message (identical bytes to the C++ codec).
+func (m *LedgerLine) MarshalHelios() []byte { return m.appendFields(nil) }
+
+// UnmarshalHelios decodes a tagged message; missing fields take their schema defaults.
+func (m *LedgerLine) UnmarshalHelios(b []byte) error {
+	*m = NewLedgerLine()
+	return m.readFields(newWireReader(b))
+}
+
+// UnmarshalJSON reads JSON (e.g. canonical JSONC written by the C++ codec); missing fields keep defaults.
+func (m *LedgerLine) UnmarshalJSON(b []byte) error {
+	b, err := renameJSONKeys(b, map[string]string{"rank": "order"})
+	if err != nil {
+		return err
+	}
+	type plain LedgerLine
+	p := plain(NewLedgerLine())
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*m = LedgerLine(p)
 	return nil
 }
 
@@ -2005,13 +2646,13 @@ func NewBag() Bag {
 }
 
 func (m *Bag) isDefault() bool {
-	return def_list_u32__59(m.Ids) &&
+	return def_list_u32__66(m.Ids) &&
 		def_string_21(m.Tag)
 }
 
 func (m *Bag) appendFields(b []byte) []byte {
-	if !(def_list_u32__59(m.Ids)) {
-		b = enc_list_u32__59(b, 1, m.Ids)
+	if !(def_list_u32__66(m.Ids)) {
+		b = enc_list_u32__66(b, 1, m.Ids)
 	}
 	if !(def_string_21(m.Tag)) {
 		b = enc_string_21(b, 2, m.Tag)
@@ -2027,7 +2668,7 @@ func (m *Bag) readFields(r *wireReader) error {
 		}
 		switch id {
 			case 1:
-				err = dec_list_u32__59(r, wt, &m.Ids)
+				err = dec_list_u32__66(r, wt, &m.Ids)
 			case 2:
 				err = dec_string_21(r, wt, &m.Tag)
 			default:
@@ -2144,16 +2785,16 @@ type StoreBuyRequest struct {
 
 // NewStoreBuyRequest returns a StoreBuyRequest with every field at its schema default.
 func NewStoreBuyRequest() StoreBuyRequest {
-	return StoreBuyRequest{Req: zero_golden_all_Req_60(), }
+	return StoreBuyRequest{Req: zero_golden_all_Req_67(), }
 }
 
 func (m *StoreBuyRequest) isDefault() bool {
-	return def_golden_all_Req_60(m.Req)
+	return def_golden_all_Req_67(m.Req)
 }
 
 func (m *StoreBuyRequest) appendFields(b []byte) []byte {
-	if !(def_golden_all_Req_60(m.Req)) {
-		b = enc_golden_all_Req_60(b, 1, m.Req)
+	if !(def_golden_all_Req_67(m.Req)) {
+		b = enc_golden_all_Req_67(b, 1, m.Req)
 	}
 	return b
 }
@@ -2166,7 +2807,7 @@ func (m *StoreBuyRequest) readFields(r *wireReader) error {
 		}
 		switch id {
 			case 1:
-				err = dec_golden_all_Req_60(r, wt, &m.Req)
+				err = dec_golden_all_Req_67(r, wt, &m.Req)
 			default:
 				err = r.skip(wt)
 		}

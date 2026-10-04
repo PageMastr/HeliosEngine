@@ -74,7 +74,9 @@ UNRECORDED = "unrecorded"  # the host class of entries written before host finge
 
 
 def load_hosts(root: Path) -> dict[str, dict]:
-    """{run name: host fingerprint} from each result set's host.json (the first one per run)."""
+    """{run name: host fingerprint} from each result set's host.json (the first one per run). The CPU model's
+    whitespace is collapsed, as `runners.py host` writes it: a host.json is read as written, and a model that
+    held a newline would otherwise start a line of the job log, where `::` begins a workflow command."""
     hosts = {}
     for d in sorted(p for p in root.iterdir() if p.is_dir() and (p / "run.json").is_file()):
         try:
@@ -83,7 +85,8 @@ def load_hosts(root: Path) -> dict[str, dict]:
         except (OSError, ValueError, KeyError, TypeError):
             continue
         if isinstance(fingerprint, dict) and isinstance(fingerprint.get("cpu"), str):
-            hosts.setdefault(run, {"cpu": fingerprint["cpu"], "logical_cpus": fingerprint.get("logical_cpus")})
+            hosts.setdefault(run, {"cpu": " ".join(fingerprint["cpu"].split()),
+                                   "logical_cpus": fingerprint.get("logical_cpus")})
     return hosts
 
 
@@ -532,7 +535,9 @@ def markdown(rows: list[dict], entry: dict, notes: list[str] = (), started: dict
         new = "first night on this class; " if run in (entry.get("new_class_runs") or []) else ""
         return f" ({new}{_count_classes(levels, run)} with levels)" if levels is not None else ""
 
-    hosts = "; ".join(f"`{run}` on {run_class(entry, run)}{classes(run)}" for run in runs)
+    # One line: the summary also goes to the job log. load_hosts collapses the CPU model, and an entry built
+    # any other way is collapsed here, so no class name can start a line there.
+    hosts = " ".join("; ".join(f"`{run}` on {run_class(entry, run)}{classes(run)}" for run in runs).split())
     churn = {_split(r["metric"])[0]: r["churn"] for r in rows if r.get("churn")}  # rows are in key order
     churn_lines = [f"**{text[0].upper()}{text[1:]}.** Its rows that no level gated tonight fail as `host-churn` "
                    f"(tools/scorecard/README.md, host classes)." for text in churn.values()]

@@ -114,6 +114,18 @@ public:
 	/// Checks if the combination of this body and inBody2 should use enhanced internal edge removal
 	inline bool				GetEnhancedInternalEdgeRemovalWithBody(const Body &inBody2) const { return ((mFlags.load(memory_order_relaxed) | inBody2.mFlags.load(memory_order_relaxed)) & uint8(EFlags::EnhancedInternalEdgeRemoval)) != 0; }
 
+	/// Helios patch stable-order: no cached manifold or warm-start impulse survives a PhysicsSystem::Update for a pair involving this body. On the first collision step of each Update the pair
+	/// recomputes its manifold and starts its impulses at zero; later collision steps of the same Update use the cache as usual, and the old manifold is still found, so persisted-contact callbacks
+	/// are unchanged. For bodies whose step must be a function of their state only (a client predicts them and a rollback cannot restore the contact cache).
+	inline void				SetNoCrossUpdateCache(bool inNoCache)							{ JPH_ASSERT(IsRigidBody()); if (inNoCache) mFlags.fetch_or(uint8(EFlags::NoCrossUpdateCache), memory_order_relaxed); else mFlags.fetch_and(uint8(~uint8(EFlags::NoCrossUpdateCache)), memory_order_relaxed); }
+
+	/// Helios patch stable-order: check if this body's contacts start every Update without cached state
+	inline bool				GetNoCrossUpdateCache() const									{ return (mFlags.load(memory_order_relaxed) & uint8(EFlags::NoCrossUpdateCache)) != 0; }
+
+	/// Helios patch stable-order: the order the solver uses where upstream uses BodyID: object layer, then user data (the application's stable body key), then BodyID for bodies with equal keys.
+	/// A BodyID is a slot index that follows a PhysicsSystem's add/remove history, so two systems holding the same bodies under different IDs solved their contacts in a different order.
+	static inline bool		sStableOrderLess(const Body &inLHS, const Body &inRHS)			{ if (inLHS.mObjectLayer != inRHS.mObjectLayer) return inLHS.mObjectLayer < inRHS.mObjectLayer; if (inLHS.mUserData != inRHS.mUserData) return inLHS.mUserData < inRHS.mUserData; return inLHS.mID < inRHS.mID; }
+
 	/// Get the bodies motion type.
 	inline EMotionType		GetMotionType() const											{ return mMotionType; }
 
@@ -440,6 +452,7 @@ private:
 		UseManifoldReduction			= 1 << 4,											///< Set this bit to indicate that this body can use manifold reduction (if PhysicsSettings::mUseManifoldReduction is true)
 		ApplyGyroscopicForce			= 1 << 5,											///< Set this bit to indicate that the gyroscopic force should be applied to this body (aka Dzhanibekov effect, see https://en.wikipedia.org/wiki/Tennis_racket_theorem)
 		EnhancedInternalEdgeRemoval		= 1 << 6,											///< Set this bit to indicate that enhanced internal edge removal should be used for this body (see BodyCreationSettings::mEnhancedInternalEdgeRemoval)
+		NoCrossUpdateCache				= 1 << 7,											///< Helios patch stable-order: no contact cache across PhysicsSystem::Update for this body (see SetNoCrossUpdateCache)
 	};
 
 	// 16 byte aligned

@@ -14,10 +14,11 @@ Vendored code is never edited in place: the few changes Helios needs are patches
 | Dear ImGui (docking) | ocornut/imgui | v1.92.9-docking (9b4eb24) | MIT | Editor / launcher / debug UI (SDL3 + Vulkan backends) |
 | ImGuizmo suite | CedricGuillemet/ImGuizmo | master (18cef5e) | MIT | Transform gizmos, sequencer, curve & gradient editors, graph editor |
 | ImPlot | epezent/implot | v1.0 (524f9fc) | MIT | Profiler / telemetry / economy charts |
-| Jolt Physics | jrouwe/JoltPhysics | v5.6.0 (e77f175) | MIT | Physics (`JPH_DOUBLE_PRECISION` + `JPH_CROSS_PLATFORM_DETERMINISTIC`; Compute/Shaders/Hair removed) |
+| Jolt Physics | jrouwe/JoltPhysics | v5.6.0 (e77f175) + 1 Helios patch | MIT | Physics (`JPH_DOUBLE_PRECISION` + `JPH_CROSS_PLATFORM_DETERMINISTIC`; Compute/Shaders/Hair removed) |
 | meshoptimizer | zeux/meshoptimizer | v1.2 (9d9890c) | MIT | Mesh optimization, meshlets, LOD simplification |
 | cgltf | jkuhlmann/cgltf | v1.15 (360db1a) | MIT | glTF 2.0 import |
 | stb | nothings/stb | master (2c980bb) | MIT / public domain | Image load/write, font rasterization, Perlin noise |
+| Roboto | googlefonts/roboto | v2.138 (release asset `roboto-unhinted.zip`; `Roboto-Regular.ttf` SHA-256 f3edb8058e523f5612bfd99d0745e661568ad85e1b6217bc62f786fabae624c6) | Apache-2.0 | Editor UI font (07 §1.3), embedded in `helios_editorui`; only Regular is vendored |
 | miniaudio | mackron/miniaudio | 0.11.25 (9634bed) | MIT-0 / public domain | Audio device + mixing + 3D spatialization |
 | zstd | facebook/zstd | v1.5.7 (f8745da) | BSD-3 | Pak/chunk compression, network compression |
 | xxHash | Cyan4973/xxHash | v0.8.4 (c87183a) | BSD-2 | Content hashing (XXH3/XXH128) |
@@ -54,6 +55,16 @@ outside every hunk: the full proof that a tree is its upstream plus its patches 
 **On every bump of a patched dependency (K10)** the patches are rebased onto the new upstream in the same
 change (the script stops at the first patch that no longer applies), the dependency's table below is
 updated, and the tests named in its last column must pass. A patch that upstream has absorbed is deleted.
+
+### Jolt Physics (`third_party/jolt/patches/`)
+
+| Patch | What it changes | Why | Upstream | Tests; `sim_abi` |
+|---|---|---|---|---|
+| `0001-stable-order.patch` | `Physics/`: `Body::sStableOrderLess` orders bodies by (object layer, user data), with the BodyID only as the last tie-break, wherever upstream orders by BodyID: `PhysicsSystem::ProcessBodyPair`'s body 1 for equal motion types, `ContactConstraintManager`'s pair order (each contact constraint's body 1 and body 2, the cache keys' body order, `SortContacts`' tie-break) and `CharacterVirtual`'s contact order (`CharacterContact::mObjectLayerB`); a contact constraint's sort key hashes both bodies' (layer, user data) and sub-shape IDs instead of their BodyIDs. Adds `Body::EFlags::NoCrossUpdateCache` (bit 7): on the first collision step of each `PhysicsSystem::Update`, a pair with a flagged body recomputes its manifold and starts its impulses at zero (persisted-contact callbacks unchanged) | A BodyID is a slot index that follows each `PhysicsSystem`'s add and remove history, so a predictor, the cell and a replay holding the same bodies under different BodyIDs solved contacts in a different order and diverged (02 §7.1, RT-03's permuted variant). `engine/physics` stores each body's stable key in its user data and sets `NoCrossUpdateCache` on ShipHull and Vehicle bodies, whose predicted step must not depend on a contact cache that a rollback cannot restore (02 §7.1, 04 §5.3) | not submitted | `physics_tests` (`determinism: permuted BodyIDs …` (both cases), `determinism: the scripted scene matches its golden hash …`, `determinism: the golden holds at …`, `stable-order: ShipHull and Vehicle bodies keep no contact cache …`, `stable-order: NoCrossUpdateCache keeps the warm start between the collision steps …` and the control); `sim_abi.physics` |
+
+The patch changes simulation results (the RT-03 goldens moved once when it landed), so it is an input of
+`sim_abi.physics` (04 §6.7): a change to it, or a Jolt bump that changes its effect, changes the physics ABI.
+Not covered, because `engine/physics` uses neither: the CCD (LinearCast) resolve order and soft bodies.
 
 ### Luau (`third_party/luau/patches/`)
 

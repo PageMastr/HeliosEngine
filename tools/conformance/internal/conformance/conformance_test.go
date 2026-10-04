@@ -518,6 +518,11 @@ func TestCBlockBrace(t *testing.T) {
 		{"auto* listen = new T[n]", false},
 		{"return [x]", true}, // a returned lambda
 		{"throw [x]", true},
+		{"co_await [x]", true},        // an awaited lambda
+		{"} else [[likely]]", true},   // an attribute after else, do or try
+		{"} else [[unlikely]]", true}, // (keywords, never an array's name)
+		{"do [[likely]]", true},
+		{"try [[likely]]", true},
 	} {
 		if got := cBlockBrace(tc.stmt); got != tc.block {
 			t.Errorf("cBlockBrace(%q) = %v, want %v", tc.stmt, got, tc.block)

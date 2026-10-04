@@ -89,7 +89,7 @@ inline std::vector<u8> generateInput(yyjson_val* in) {
         out.insert(out.begin() + static_cast<std::ptrdiff_t>(at), ins.begin(), ins.end());
         return out;
     }
-    FAIL("unknown input kind " << kind);
+    FAIL_CHECK("unknown input kind " << kind);
     return {};
 }
 

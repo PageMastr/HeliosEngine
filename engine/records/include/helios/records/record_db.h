@@ -10,7 +10,9 @@
 // cook carries). Out-of-line data is walked at most once per byte of the file and at most
 // hrdb::kMaxNesting levels deep, so validation is linear in the file size whatever the input. A
 // RecordDb that opened is therefore safe to read with the unchecked views below; hostile bytes fail
-// with Corrupt (or LimitExceeded / VersionMismatch / NotFound), never with undefined behaviour.
+// with Corrupt (or LimitExceeded / VersionMismatch / NotFound), never with undefined behaviour. The
+// guarantee covers the bytes that were validated: openFile() maps the file, so a file modified in place
+// while it is open is outside it (writeCookOutput() replaces files by renaming, never in place).
 // Fuzzed by fuzz/fuzz_hrdb_loader.cpp.
 //
 // Threading: a RecordDb is immutable after open; every const method is safe to call from any thread.

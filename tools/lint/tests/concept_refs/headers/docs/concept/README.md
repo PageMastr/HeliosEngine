@@ -2,6 +2,8 @@
 
 ## Index
 
+### Concepts
+
 | Concept | Notes |
 |---|---|
 | `t01-cut` | fixture |

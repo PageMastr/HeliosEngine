@@ -9,12 +9,13 @@
 | `t01-demo` | fixture |
 | `hud-demo` | fixture |
 | `vista-demo` | fixture |
+| `launcher/start-demo-v01.webp` | a file name of the concept indexes it too |
 
 ### Requested
 
 | File | Notes |
 |---|---|
-| `launcher/start-demo-v01.webp` | a file name of the concept indexes it too |
+| `editor/t02-later-v01.png` | requested, not committed |
 
 ## Notes
 

@@ -6,15 +6,18 @@
 #  * a file type the folder does not take (images .png/.webp/.jpg/.jpeg, `<image>.concept.jsonc`
 #    sidecars, Markdown, .gitattributes), or an upper-case extension;
 #  * an image outside editor/, client/, launcher/ or world/, or not named
-#    `<tool-or-area>-<subject>[-<variant>]-vNN.<ext>`, or whose concept name is not in the `## Index`
-#    section of README.md (as the concept name or a file name of the concept, `<concept>-vNN.<ext>`);
+#    `<tool-or-area>-<subject>[-<variant>]-vNN.<ext>`, or whose concept name is not in the `### Concepts`
+#    table of README.md's `## Index` (as the concept name or a file name of the concept,
+#    `<concept>-vNN.<ext>`; a `### Requested` row does not count);
 #  * an image over 1 MB (1,048,576 bytes) or 2,560 px on its long side, or whose bytes do not match
 #    its extension;
 #  * an image without a sidecar, a sidecar without an image (or next to a file that is not an image),
-#    and a sidecar (or TEMPLATE.concept.jsonc)
-#    that is not JSONC, lacks a required field, has an unknown one, a value of the wrong type or
-#    outside its set, or a sha256 that does not match the image;
-#  * a missing README.md, or one without a `## Index` section.
+#    and a sidecar (or TEMPLATE.concept.jsonc) that is over 64 KB or holds more than 256 '[' and '{'
+#    (deeper nesting than CMake's JSON reader takes aborts cmake with no file named), is not JSONC,
+#    lacks a required field, has an unknown one, a value of the wrong type or outside its set, or a
+#    sha256 that does not match the image;
+#  * a missing README.md, one without a `## Index` section or without a `### Concepts` table in it, and
+#    a missing TEMPLATE.concept.jsonc.
 # The files: in a git checkout those git tracks or would track (an ignored .DS_Store does not count);
 # elsewhere every file. Findings are `path: message`, or `path:line: message` in a sidecar (the line
 # of the field, best effort). JSONC is read with CMake's JSON parser, which takes comments and trailing
@@ -33,6 +36,9 @@ set(kAreas editor client launcher world)
 set(kMaxBytes 1048576)
 set(kMaxSide 2560)
 set(kMaxSidecarBytes 65536)   # a sidecar is a few KB; this bounds the work on a hostile one
+# CMake's JSON reader (jsoncpp) throws past 1,000 levels of nesting, and cmake aborts without naming the
+# file. Each level needs a '[' or '{', so a sidecar is held to far fewer of them (it uses about 10).
+set(kMaxSidecarOpeners 256)
 set(kStatuses binding directional mood-only)
 set(kSourceKinds owner commissioned cc0 ai-assisted)
 set(kInputSources owner commissioned cc0 ai-assisted)
@@ -200,6 +206,13 @@ function(_cr_sidecar rel imageAbs)
     return()
   endif()
   file(READ "${concept}/${rel}" text)
+  string(REGEX REPLACE "[^[{]+" "" openers "${text}")
+  string(LENGTH "${openers}" nOpeners)
+  if(nOpeners GREATER kMaxSidecarOpeners)
+    set(why "deeper nesting aborts CMake's JSON reader")
+    _cr_find("${shown}: ${nOpeners} '[' and '{', over the ${kMaxSidecarOpeners} a sidecar may hold (${why})")
+    return()
+  endif()
   string(JSON rootType ERROR_VARIABLE err TYPE "${text}")
   if(err)
     # CMake 3.x reports "failed parsing json string: * Line L, Column C <reason>"; CMake 4 echoes the
@@ -512,16 +525,24 @@ endforeach()
 list(REMOVE_DUPLICATES rels)
 list(SORT rels)
 
-# The index: README.md from its `## Index` heading to the next `## ` heading (its `###` subsections
-# included).
+# The index: the `### Concepts` subsection of README.md's `## Index` section, up to the next `##` or
+# `###` heading. The `### Requested` rows name images that do not exist yet, so they do not count.
 set(index "")
 if(EXISTS "${concept}/README.md")
   file(READ "${concept}/README.md" readme)
-  string(REGEX MATCH "(^|\n)## Index[ \t]*\r?\n.*" index "${readme}")
-  string(REGEX REPLACE "^\n?## Index[^\n]*\n" "" index "${index}")
-  string(REGEX REPLACE "(^|\n)## [^\n]*.*" "" index "${index}")
   if(NOT readme MATCHES "(^|\n)## Index[ \t]*\r?\n")
     _cr_find("docs/concept/README.md: no '## Index' section (the table of concepts)")
+  else()
+    string(REGEX MATCH "(^|\n)## Index[ \t]*\r?\n.*" section "${readme}")
+    string(REGEX REPLACE "^\n?## Index[^\n]*\n" "" section "${section}")
+    string(REGEX REPLACE "(^|\n)## [^\n]*.*" "" section "${section}")
+    if(NOT section MATCHES "(^|\n)### Concepts[ \t]*\r?\n")
+      _cr_find("docs/concept/README.md: no '### Concepts' table in the '## Index' section")
+    else()
+      string(REGEX MATCH "(^|\n)### Concepts[ \t]*\r?\n.*" index "${section}")
+      string(REGEX REPLACE "^\n?### Concepts[^\n]*\n" "" index "${index}")
+      string(REGEX REPLACE "(^|\n)###? [^\n]*.*" "" index "${index}")
+    endif()
   endif()
 else()
   _cr_find("docs/concept/README.md: missing (the index and the rules)")
@@ -562,7 +583,8 @@ foreach(rel IN LISTS images)
   else()
     string(REGEX REPLACE "-v[0-9][0-9]\\.[a-z]+$" "" conceptName "${name}")
     if(NOT index MATCHES "(^|[^a-z0-9-])${conceptName}(-v[0-9][0-9])?([^a-z0-9-]|$)")
-      _cr_find("${shown}: concept '${conceptName}' is not in the index (docs/concept/README.md)")
+      set(where "the Concepts table of docs/concept/README.md")
+      _cr_find("${shown}: concept '${conceptName}' is not in the index (${where})")
     endif()
   endif()
   file(SIZE "${path}" bytes)
@@ -588,6 +610,8 @@ endforeach()
 
 if(template)
   _cr_sidecar("${template}" "")
+else()
+  _cr_find("docs/concept/TEMPLATE.concept.jsonc: missing (the sidecar template, field by field)")
 endif()
 foreach(rel IN LISTS sidecars)
   string(REGEX REPLACE "\\.concept\\.jsonc$" "" imageRel "${rel}")

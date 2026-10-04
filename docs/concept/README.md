@@ -33,10 +33,13 @@ What the plan says:
 - Agents may produce "generative art only with 01 §5.2 provenance". (09 §4.2)
 - Footage of the look-and-feel reference titles "stays with the vendor and never enters the repository or
   the asset DB (§5.2)". (01 §3.3.1)
-- 01 §5.2 rules out the names, species, factions, silhouettes and designs of the franchises it lists, and
-  the [README](../../README.md#legal-and-ip) any other franchise's names, characters, art or audio.
+- 01 §5.2 rules out the names, species, factions, silhouettes and designs of the franchises it lists.
+- The [README](../../README.md#legal-and-ip): "Sample content must not include other franchises' names,
+  characters, art or audio. Assets you contribute must be your own or carry a compatible licence, recorded
+  in their provenance metadata."
 
-The rules of this folder (the owner's, 2026-10-04), which apply the plan's rules to concept art:
+The rules of this folder (set at the owner's request, 2026-10-04), which apply the plan's rules to concept
+art:
 
 - An image is **made by the owner**, **commissioned** with the rights assigned to the owner, **CC0**
   (with the address it came from), or **AI-assisted** (below).
@@ -45,6 +48,9 @@ The rules of this folder (the owner's, 2026-10-04), which apply the plan's rules
 - **AI-assisted** images are allowed only when the sidecar records the tool, the model, the full prompt
   and every input image (each one made by the owner, commissioned, CC0, or an earlier AI-assisted image
   in this folder). This is how this folder records the "01 §5.2 provenance" that 09 §4.2 asks for.
+- **The sidecar stands in for the asset DB** (this folder's interpretation): 01 §5.2 records provenance
+  "in the asset DB", but concept art is not a shipped asset and the asset DB does not exist yet, so each
+  image's provenance is recorded in its sidecar.
 
 A recommendation, not a plan rule: do not name another game, studio or living artist in a prompt. The IP
 lint (below) rejects the franchise names and titles on its list anywhere in this folder, prompts included.
@@ -82,8 +88,9 @@ docs/concept/
   on an image without a sidecar or with a wrong sha256, a sidecar without an image, a missing or unknown
   sidecar field or a value outside its set, an image over the limits or whose bytes do not match its
   extension, a file type this folder does not take, an image outside the four area directories or
-  misnamed, and an image whose concept is not in the [index](#index) below (by its concept name or a
-  file name of the concept).
+  misnamed, an image whose concept is not in the index's [Concepts](#concepts) table below (by its
+  concept name or a file name of the concept; a Requested row does not count), and a missing README,
+  Concepts table or `TEMPLATE.concept.jsonc`.
 - **The IP-name lint** ([`tools/lint/ip_names.cmake`](../../tools/lint/ip_names.cmake)) scans this folder
   like `content/`: *Cinder Reach* names are allowed here, other franchises' names and titles are not.
 
@@ -96,15 +103,15 @@ does.
 1. Export it within the limits and name it as above.
 2. Copy `TEMPLATE.concept.jsonc` to `<image>.concept.jsonc` next to it and fill in every field. The
    sha256 comes from `cmake -E sha256sum <image>`.
-3. Add the concept's row to the index (moving it out of Requested if it is there), or update its latest
-   version, status and phase.
+3. Add the concept's row to the Concepts table (moving it out of Requested if it is there), or update
+   its latest version, status and phase.
 4. Run `cmake -DSOURCE_DIR=. -P tools/lint/concept_refs.cmake` and the IP lint (or all of
    `cmake -P tools/ci/run_lints.cmake`).
 
 ## Index
 
-The lint finds a committed image's concept here, in this section, by its concept name or a versioned file
-name.
+The lint finds a committed image's concept in the Concepts table, by its concept name or a versioned file
+name. A Requested row does not count: an image's row moves to Concepts when the image is committed.
 
 ### Concepts
 

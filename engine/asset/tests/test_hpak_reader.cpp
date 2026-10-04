@@ -101,6 +101,26 @@ TEST_CASE("hpak: an expected platform rejects a pak cooked for another") {
     CHECK(openPak(bytes, server).ok());
 }
 
+TEST_CASE("hpak mounts: one table holds paks of one platform") {
+    assetpipe::HpakWriterOptions server;
+    server.platform = HpakPlatform::Server;
+    const auto client = openPak(buildPak({{guidOf(1), compressible(100, 1), {}}}));
+    const auto serverPatch = openPak(buildPak({{guidOf(1), compressible(100, 2), {}}}, server));
+    const auto clientPatch = openPak(buildPak({{guidOf(1), compressible(100, 3), {}}}));
+    REQUIRE((client.ok() && serverPatch.ok() && clientPatch.ok()));
+    PakMountTable table;
+    const auto base = table.mount(*client);
+    REQUIRE(base.ok());
+    CHECK(table.mount(*serverPatch).errorCode() == ErrorCode::Unsupported);
+    CHECK(table.read(AssetId::fromGuid(guidOf(1))).value() == compressible(100, 1));
+    REQUIRE(table.mount(*clientPatch).ok());
+    CHECK(table.read(AssetId::fromGuid(guidOf(1))).value() == compressible(100, 3));
+    // An emptied table takes any platform again.
+    CHECK(table.unmount(*base));
+    CHECK(table.unmount(table.mounts().front()));
+    CHECK(table.mount(*serverPatch).ok());
+}
+
 TEST_CASE("hpak: large assets are 256 KiB blocks, and only the blocks read are verified") {
     // Two raw (incompressible) assets so blob offsets map to pak blocks predictably.
     const std::vector<TestAsset> assets = {{guidOf(1), incompressible(600 * 1024, 1), {0, 0, 0, 0}},

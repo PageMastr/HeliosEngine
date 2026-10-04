@@ -12,6 +12,11 @@ Result<PakMountId> PakMountTable::mount(std::shared_ptr<const HpakReader> pak) {
     std::unique_lock lock(m_mutex);
     for (const Mounted& m : m_mounts)
         if (m.pak == pak) return makeError(ErrorCode::AlreadyExists, "'{}' is already mounted", pak->name());
+    // One cook per table: a server or editor pak must not overlay client assets (or the reverse).
+    if (!m_mounts.empty() && pak->info().platform != m_mounts.front().pak->info().platform)
+        return makeError(ErrorCode::Unsupported, "'{}' is cooked for {}, the mounted paks for {}", pak->name(),
+                         hpakPlatformName(pak->info().platform),
+                         hpakPlatformName(m_mounts.front().pak->info().platform));
     const PakMountId id = m_nextId++;
     m_mounts.push_back(Mounted{id, std::move(pak)});
     indexMount(static_cast<u32>(m_mounts.size() - 1));

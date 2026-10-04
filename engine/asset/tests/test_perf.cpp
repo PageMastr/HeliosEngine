@@ -4,7 +4,9 @@
 //     ≤ 40 ms; a lookup through the table ≤ 250 ns mean (random ids, 100k-asset table);
 //   * first read (XXH3-64 block verification + zstd decode + XXH3-128 cooked-hash check) ≥ 300 MB/s
 //     of decoded bytes on one thread, i.e. ≤ 0.85 ms per 256 KiB block: twice 02 §5.7's sustained I/O
-//     budget of 150 MB/s, so one decode thread keeps up with the disk; a later (verified) read ≥ 400 MB/s.
+//     budget of 150 MB/s, so one decode thread keeps up with the disk; a later (verified) read ≥ 400 MB/s,
+//     into the caller's buffer (readInto, or read() into a reused vector) or into a new vector (read(),
+//     which grows it block by block).
 // Timings are reported always and asserted only in optimized builds without sanitizers.
 #include <doctest/doctest.h>
 
@@ -135,13 +137,28 @@ TEST_CASE("perf: first read verifies and decodes at >= 300 MB/s, later reads at 
         readAll();
         laterMs.push_back(msSince(t1));
     }
+    // The same later reads through read(): into one reused vector, and into a new vector per asset.
+    std::vector<u8> reused;
+    std::vector<f64> reusedMs, freshMs;
+    for (int run = 0; run < 3; ++run) {
+        const auto t1 = Clock::now();
+        for (const HpakEntry& e : r.entries()) REQUIRE(r.read(e, reused).ok());
+        reusedMs.push_back(msSince(t1));
+        const auto t2 = Clock::now();
+        for (const HpakEntry& e : r.entries()) REQUIRE(r.read(e).ok());
+        freshMs.push_back(msSince(t2));
+    }
     const f64 mb = f64(total) / 1e6;
     const f64 firstMBs = mb / (firstMs / 1e3), laterMBs = mb / (median(laterMs) / 1e3);
+    const f64 reusedMBs = mb / (median(reusedMs) / 1e3), freshMBs = mb / (median(freshMs) / 1e3);
     MESSAGE("hpak read " << mb << " MB (pak " << bytes.size() / 1e6 << " MB): first " << firstMBs
-                         << " MB/s, later " << laterMBs << " MB/s");
+                         << " MB/s, later " << laterMBs << " MB/s (readInto), " << reusedMBs
+                         << " MB/s (read, reused vector), " << freshMBs << " MB/s (read, new vectors)");
 #if HELIOS_ASSET_ASSERT_BUDGETS
     CHECK(firstMBs >= 300.0);
     CHECK(laterMBs >= 400.0);
+    CHECK(reusedMBs >= 400.0);
+    CHECK(freshMBs >= 400.0);
 #endif
 }
 

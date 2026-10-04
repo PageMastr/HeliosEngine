@@ -36,7 +36,8 @@ struct AssetLocation {
 class PakMountTable {
 public:
     /// Mounts `pak` above every mounted pak. Errors: InvalidArgument for null, AlreadyExists when this
-    /// reader is already mounted. Cost: O(assets in `pak`).
+    /// reader is already mounted, Unsupported when it was cooked for another platform than the paks
+    /// already mounted. Cost: O(assets in `pak`).
     Result<PakMountId> mount(std::shared_ptr<const HpakReader> pak);
     /// Unmounts; the assets it overlaid resolve to the paks below again. False for an unknown id.
     /// Cost: rebuilds the index, O(assets in all mounted paks).

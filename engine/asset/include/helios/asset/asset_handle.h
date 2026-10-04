@@ -70,14 +70,18 @@ public:
     }
 
     /// Stages `next` as the version pin() returns after the next commitSwaps(). A later stage() before
-    /// the commit replaces an earlier one. False for a stale handle or a null `next`.
+    /// the commit replaces an earlier one, which is released outside the lock. False for a stale
+    /// handle or a null `next`.
     bool stage(AssetHandle<T> h, Pin next) {
         if (!next) return false;
-        std::lock_guard lock(m_mutex);
-        Slot* s = m_pool.get(h);
-        if (!s) return false;
-        if (!s->staged) ++m_stagedCount;
-        s->staged = std::move(next);
+        Pin replaced; // released after the lock, like commitSwaps()'s
+        {
+            std::lock_guard lock(m_mutex);
+            Slot* s = m_pool.get(h);
+            if (!s) return false;
+            if (!s->staged) ++m_stagedCount;
+            replaced = std::exchange(s->staged, std::move(next));
+        }
         return true;
     }
 

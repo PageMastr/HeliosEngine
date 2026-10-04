@@ -5,9 +5,11 @@
 // mutated header and TOC fields reach the field checks behind the header and TOC checksums.
 // Properties: open() and every read return a Result (no crash, sanitizer report or out-of-bounds
 // access); an opened pak's entries are strictly sorted, 4 KiB aligned and inside the blob region;
-// a successful read returns exactly rawSize bytes that match the cooked hash, and reading again gives
-// the same outcome; the re-fetch hook runs at most once per pak block (it answers Repaired, Pending
+// a successful read returns exactly rawSize bytes that match the cooked hash, and reading again (into
+// a reused buffer) gives the same outcome; the re-fetch hook runs at most once per pak block (it answers Repaired, Pending
 // or Failed by block index, so every path runs); a second mount of the same bytes overlays the first.
+// Every entry is read whatever rawSize it claims: a read allocates only as its blocks decode, so
+// libFuzzer's -malloc_limit_mb catches one that allocates ahead of them.
 
 #include <cstdlib>
 #include <memory>
@@ -27,8 +29,7 @@ namespace {
 using namespace helios;
 using namespace helios::asset;
 
-constexpr usize kMaxInput = 8 * kMiB; // bounds memory per run; the 2 GiB limit has its own unit test
-constexpr u64 kMaxAssetRead = 4 * kMiB;
+constexpr usize kMaxInput = 8 * kMiB; // bounds the pak; the 2 GiB limit has its own unit test
 constexpr usize kMaxAssetsRead = 64;
 
 [[noreturn]] void fail() { std::abort(); }
@@ -69,15 +70,13 @@ void exercise(const u8* data, usize size) {
             fail();
         if (r.find(e.id) != &e) fail();
     }
-    usize reads = 0;
-    for (const HpakEntry& e : entries) {
-        if (reads == kMaxAssetsRead) break;
-        if (e.rawSize > kMaxAssetRead) continue;
-        ++reads;
+    std::vector<u8> reused;
+    for (usize i = 0; i < entries.size() && i < kMaxAssetsRead; ++i) {
+        const HpakEntry& e = entries[i];
         const Result<std::vector<u8>> got = r.read(e);
         if (got && (got->size() != e.rawSize || hash128(got->data(), got->size()) != e.cookedHash)) fail();
-        const Result<std::vector<u8>> again = r.read(e);
-        if (got.ok() != again.ok() || (got && *got != *again)) fail();
+        const Result<void> again = r.read(e, reused);
+        if (got.ok() != again.ok() || (got && *got != reused)) fail();
     }
     (void)r.verifyAll();
     r.retryBlocks(0, size);

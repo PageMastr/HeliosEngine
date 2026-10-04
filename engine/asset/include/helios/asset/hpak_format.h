@@ -123,7 +123,10 @@ struct RawEntry {
     u8 reserved[7] = {};
 };
 
+/// Writes `entry` as a 64-byte TOC entry (codec as its value, reserved bytes zero).
 void encodeEntry(const HpakEntry& entry, std::span<u8, kTocEntryBytes> out) noexcept;
+/// Reads a 64-byte TOC entry; no validation (an unknown codec is kept in RawEntry::codec, and
+/// RawEntry::entry.codec is then meaningless).
 RawEntry decodeEntry(std::span<const u8, kTocEntryBytes> in) noexcept;
 
 /// Number of 256 KiB asset blocks an asset of `rawSize` bytes has (0 for an empty asset).

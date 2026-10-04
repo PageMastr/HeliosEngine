@@ -2,6 +2,8 @@
 
 #include <doctest/doctest.h>
 
+#include <chrono>
+#include <future>
 #include <memory>
 #include <string>
 #include <thread>
@@ -71,6 +73,40 @@ TEST_CASE("asset store: a staged version becomes visible only at commitSwaps") {
     CHECK(store.stage(b, std::make_shared<Mesh>(Mesh{9})));
     CHECK(store.erase(b));
     CHECK(store.commitSwaps() == 0);
+}
+
+TEST_CASE("asset store: replaced versions are released outside the store's lock") {
+    // A version's deleter calls back into the store from another thread: under the lock it would
+    // block until the store returned (on this thread, it would deadlock).
+    AssetStore<Mesh> store;
+    const AssetHandle<Mesh> h = store.insert(AssetId{1}, std::make_shared<Mesh>(Mesh{1}));
+    std::future<u32> probe;
+    bool released = false, blocked = false;
+    const auto probed = [&](int version) {
+        return std::shared_ptr<const Mesh>(new Mesh{version}, [&](const Mesh* m) {
+            probe = std::async(std::launch::async, [&] { return store.size(); });
+            blocked = probe.wait_for(std::chrono::seconds(10)) == std::future_status::timeout;
+            released = true;
+            delete m;
+        });
+    };
+    const auto check = [&] {
+        REQUIRE(released);
+        CHECK_FALSE(blocked);
+        CHECK(probe.get() == store.size());
+        released = blocked = false;
+    };
+    CHECK(store.stage(h, probed(2)));
+    CHECK(store.stage(h, std::make_shared<Mesh>(Mesh{3}))); // replaces the staged version 2
+    check();
+    CHECK(store.stage(h, probed(4)));
+    CHECK(store.commitSwaps() == 1);
+    CHECK(store.stage(h, std::make_shared<Mesh>(Mesh{5})));
+    CHECK(store.commitSwaps() == 1); // replaces the current version 4
+    check();
+    CHECK(store.stage(h, probed(6)));
+    CHECK(store.erase(h)); // drops the staged version 6
+    check();
 }
 
 TEST_CASE("asset store: concurrent pins while another thread stages and commits") {

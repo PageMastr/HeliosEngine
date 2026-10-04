@@ -44,9 +44,11 @@ reaches (objects and third-party libraries, as in a shipping build) instead of t
 module closure is computed at the end of configure. Two kinds of image need it:
 - `helios-schemac`, which runs during the build and generates `gameplay`'s sources. Linked against
   `helios_runtime`, which contains `gameplay`, it would form a target cycle.
-- White-box tests and benches that call a group's third-party library directly: SELF_CONTAINED_LIST. A
-  group never exports third-party code (§2), so these cannot link against it, and a second copy of flecs
-  or Luau beside the group's would split its state.
+- White-box tests and benches that call a group's third-party library directly: `ecs_tests` and
+  `ecs_bench` (flecs and mimalloc), `script_tests` (Luau's internals), `net_tests` and the `net_fuzz_*`
+  targets (netcode), and `schemac_tests` (Luau.Analysis links its own Luau VM and compiler). A group
+  hides its third-party code (§2), so these cannot link against it, and a second copy of flecs, Luau or
+  netcode beside the group's would split its state.
 
 Such an image shares nothing with the groups, so it tests its modules as a shipping image would, and the
 symbol audit skips it. Every other test and tool links the groups.
@@ -80,6 +82,14 @@ points. It is `dllexport` while building the group, `dllimport` when consuming i
 on ELF, and empty in shipping builds. Exports are therefore explicit per namespace (namespace `helios` and
 the `helios_` C prefix, which the audit enforces: R1, P1) and per declaration only for data.
 
+**One third-party library is exported: Luau's VM.** `engine/script`'s public API is built on the Luau C API
+(`helios/script/binding.h` includes `lua.h`), `toolsfw` in `helios_editor` binds its automation functions to
+it directly, and the glue that `helios-schemac` generates calls it. The VM must stay one copy, so
+`helios_runtime` links Luau.VM's objects as its own and exports them (`HELIOS_GROUP_EXPORTED_THIRD_PARTY`
+in `cmake/HeliosModular.cmake`). The audit accepts exactly what the Luau.VM archive defines (R1). That
+includes Luau's `FFlag`/`FInt` globals, which also have to be one copy. Every other vendored library stays
+hidden in its group.
+
 **Why not `-fvisibility=hidden` with an annotation on every exported declaration now.** 02 §1.4 and the
 brief ask for it. It means annotating every exported class and function in the 171 public headers of
 every module, plus the internal headers that white-box tests include. On MSVC a `dllexport` class also
@@ -90,13 +100,21 @@ miss an export, and the audit keeps third-party code out of the export tables. T
 exports, module by module, is follow-up work once part 2 shows which symbols game modules import.
 
 **Data that crosses an image boundary.** On Windows, data needs `dllimport` on the consumer side, so every
-variable that code outside its group reads carries the group macro. EXPORTED_DATA Log channels that a public
-header names are declared with `HELIOS_LOG_CHANNEL_EXTERN` and defined in one `.cpp`; `HELIOS_LOG_CHANNEL`
-stays for channels of a module's own sources (an inline variable, so one copy per image).
+variable that code outside its group reads carries the group macro. A scan of the GCC modular build (each
+image's undefined and copy-relocated Helios data symbols, resolved against the image that exports them)
+finds three today: `log::detail::g_globalLevel`, which every image's `log::isEnabled` reads, and
+`edui::detail::kRobotoRegular` and `kRobotoRegularSize`, which `editorui_tests` reads. All three carry
+their group's macro. A missing one is an MSVC link error (`LNK2019` on `__imp_…`), so the `windows-msvc-dev`
+job catches the next one. Log channels that a header outside a module's sources names (the core channels,
+`LogEcs`, `LogTools`, and `LogRhi`, whose private header `rhi_tests` includes) are declared with
+`HELIOS_LOG_CHANNEL_EXTERN` and defined in one `.cpp`; `HELIOS_LOG_CHANNEL` stays for channels of a
+module's own sources (an inline variable, so one copy per image).
 
-**Export counts** (GCC 13, `HELIOS_MODULAR=ON`, RelWithDebInfo; `nm -D --defined-only`): EXPORT_COUNTS. The
-PE format allows 65,535 exports per image. The MSVC counts come from the CI job's symbol-audit step, which
-prints them.
+**Export counts** (GCC 13, `HELIOS_MODULAR=ON`, RelWithDebInfo; `nm -D --defined-only`): `helios_runtime`
+4,474 (271 of them Luau's VM), `helios_client` 349, `helios_editor` 485; SDL3 1,272 and Dear ImGui 4,316.
+The PE format allows 65,535 exports per image. `WINDOWS_EXPORT_ALL_SYMBOLS` also exports the inline and
+template instantiations of the group's objects, so the MSVC counts are higher; the CI job's symbol-audit
+step prints them.
 
 ## 3. Decision: the CPU gate in modular builds
 
@@ -157,7 +175,51 @@ copies of header code, and R3's ELF run covers the stateful ones.
 
 ## 5. Findings
 
-FINDINGS
+What the first modular builds of the tree showed (GCC and Clang on Linux; MSVC through CI):
+
+1. **White-box tests reach into third-party internals.** `ecs_tests` calls flecs and mimalloc, `script_tests`
+   Luau's internals, `net_tests` netcode, and `schemac_tests` links Luau.Analysis, which brings its own VM.
+   A group hides those libraries, so these images became self-contained (§1). The link model itself is
+   exercised by `link_model_tests` and by every other test, which links the groups.
+2. **Luau's C API crosses groups** (§2). This also bears on part 2: 02 §1.4 says Luau headers never reach
+   game code, but `helios-schemac`'s Luau emitter generates binding glue that includes `lualib.h`. Part 2
+   must either route generated game-module glue through `engine/script`'s binder or allow game modules to
+   import (never define) Luau symbols, which R4 already permits.
+3. **Consumers need the groups their groups need.** `render_tests` calls `core` directly but named only
+   `helios::render`. A shared library's own dependencies are not on its consumers' link line (ELF does not
+   resolve through `DT_NEEDED`; PE imports come from the import libraries on the link line), so each group
+   passes on the groups its modules depend on.
+4. **Third-party code compiled inside a module leaks into the exports.** VMA's implementation TU sits in
+   `engine/rhi/src` and made `helios_client` export 373 VMA symbols (R1 on ELF; on MSVC its `vma*` C names
+   would fail P1). In modular builds it is now an archive of its own inside the group.
+5. **Header-defined state.** R3 found two kinds:
+   - a log channel in `rhi`'s private header, which `rhi_tests` includes, so the test image registered a
+     second "RHI" channel. It is now defined once and exported;
+   - `engine/reflect`'s container TypeInfos (`TypeOf<std::vector<E>>`, `std::optional<E>`, …), built in
+     function-local statics of header templates: 20 copies in 10 consumer images today. Two TypeInfo
+     addresses for one type break identity checks across images, and a TypeInfo built inside a game module
+     dies with it on unload. This is a known finding of the audit (policy `HELIOS_SYMBOL_KNOWN_FINDINGS`),
+     owned by part 2: the TypeInfos must come from the registry in `helios_runtime` before the `Probe`
+     module registers reflected types.
+6. **Copy relocations and constants.** GCC's PIE executables import exported data by copy relocation, so
+   the executable holds the one instance; R3 treats those as imports. Vtables, typeinfo and `constexpr`
+   `string_view`s are per image but sit in `.data.rel.ro` and are not state; the audit reads sections
+   (`nm -f sysv`) to tell them apart.
+7. **SDL3 and Dear ImGui are shared libraries of their own** in modular builds, where 02 §1.4's table puts
+   them inside `helios_client` and `helios_editor`. Their state must be one copy (SDL's video subsystem,
+   windows and events; ImGui's `GImGui`), and both are called from more than one group and from apps and
+   tests. Their own DLLs export them through the libraries' own macros (`SDL_DECLSPEC`, `IMGUI_API`), which
+   a group's export-all scan of its own objects would not do for an archive. ImGui's Vulkan backend is left
+   out of the modular build: the editor draws ImGui through the Helios RHI, and the backend would carry a
+   second copy of volk. The goal of the table, one copy of each library, holds.
+8. **Exceptions across images.** Luau raises errors as C++ exceptions. They are thrown and caught inside
+   `helios_runtime` (`luaD_throw`, `luaD_rawrunprotected`) but unwind through binding frames in other images
+   (`toolsfw`'s automation bindings). One CRT and `/EHsc` everywhere make that safe; the throw and catch
+   sites stay in one image.
+9. **Not verified here.** MSVC is built and tested only by the `windows-msvc-dev` CI job: the data imports
+   (`dllimport`), the export counts, `WINDOWS_EXPORT_ALL_SYMBOLS` over object libraries (CMake's Ninja
+   generator passes linked object libraries' objects to its export scan) and the DLL search at test time
+   (every image is written to `bin/`).
 
 ## 6. Part 2
 

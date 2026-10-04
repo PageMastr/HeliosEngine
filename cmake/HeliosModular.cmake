@@ -11,15 +11,18 @@
 #         helios_runtime  every HEADLESS module (core ... authority, server, netgame, clientcore)
 #         helios_client   every module that is neither HEADLESS nor EDITOR_ONLY (rhi, render, ...)
 #         helios_editor   every EDITOR_ONLY module (assetpipe, toolsfw, editorui, edtools)
-#       Each third-party library a module links is linked into that module's group, so it has one copy.
-#       /MD for every image (CMAKE_MSVC_RUNTIME_LIBRARY in the top-level CMakeLists.txt).
+#       Each third-party library a module links is linked into that module's group, so it has one copy
+#       (SDL3 and Dear ImGui, which several groups call, are shared libraries of their own:
+#       third_party/CMakeLists.txt). /MD for every image (CMAKE_MSVC_RUNTIME_LIBRARY in the top-level
+#       CMakeLists.txt).
 #
 # Consumers are unchanged: they link helios::<module>. In a modular build that alias names an INTERFACE
 # target, helios_<module>_api, which carries the module's compile usage requirements ($<COMPILE_ONLY:...>,
 # never its objects) and links the module's group library. A module of the same group gets only the
 # compile requirements (its objects already sit in the group), which keeps the group libraries free of
-# self-links and cycles. The layering checks (HeliosLayering.cmake) map helios_<module>_api back to the
-# module, so they see the same module graph in both flavours.
+# self-links and cycles. A group passes on the groups its modules depend on (INTERFACE), because a
+# consumer that calls them needs their import libraries too. The layering checks (HeliosLayering.cmake)
+# map helios_<module>_api back to the module, so they see the same module graph in both flavours.
 #
 # Exports (the spike's part-1 decision, docs/adr/ADR-0.6c-link-model-spike.md):
 #   * Every external symbol the group's own (Helios) objects define is exported: MSVC through CMake's
@@ -44,15 +47,15 @@
 #   of image need it:
 #     * a build-time tool whose output feeds a module (helios-schemac generates gameplay's sources), which
 #       would otherwise depend on its own output through helios_runtime (a target cycle);
-#     * a white-box test or bench that calls a module's third-party library directly (flecs, Luau,
-#       mimalloc, netcode): a group never exports third-party code (02 §1.4, symbol audit R1/P1).
+#     * a white-box test or bench that calls a module's third-party library directly (flecs, mimalloc,
+#       Luau's internals, netcode): a group hides its third-party code (02 §1.4, symbol audit R1/P1).
 #   The module closure is computed at the end of configure (helios_modular_finalize). Such an image shares
 #   no state with the groups and is not audited. A static library marked self-contained only stops its
 #   helios::<module> links from naming the groups (its consumers decide). No-op in shipping builds.
 #
-# Toolchains: MSVC and clang-cl (windows-msvc-dev), GCC and Clang on Linux (linux-dev). MinGW builds only
-# the shipping flavour: the cross build is a portability check of what ships, and the dev flavour's
-# Windows behaviour is MSVC's (09 §5.6).
+# Toolchains: MSVC (windows-msvc-dev; clang-cl takes the same path but no job builds it modular yet), GCC
+# and Clang on Linux (linux-dev). MinGW builds only the shipping flavour: the cross build is a
+# portability check of what ships, and the dev flavour's Windows behaviour is MSVC's (09 §5.6).
 
 include_guard(GLOBAL)
 
@@ -63,7 +66,8 @@ set(HELIOS_LINK_GROUPS runtime client editor)
 # not hidden by --exclude-libs). Every other third-party library stays hidden inside its group.
 #   Luau.VM: engine/script's public API (helios/script/binding.h) is the Luau C API, and modules of the
 #   other groups (toolsfw's automation bindings) and generated binding glue call it. The VM must stay one
-#   copy (02 §1.4), so helios_runtime exports it; tools/lint/symbol_audit_policy.cmake lists the names.
+#   copy (02 §1.4), so helios_runtime exports it. The symbol audit accepts exactly what the library's
+#   archive defines (tools/lint/lint_tests.cmake passes it).
 set(HELIOS_GROUP_EXPORTED_THIRD_PARTY "runtime|Luau.VM")
 set(HELIOS_MODULAR_INCLUDE_DIR "${CMAKE_BINARY_DIR}/helios_generated/include")
 

@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <iterator>
 #include <map>
+#include <set>
 
 #include "patch_test_util.h"
 
@@ -85,6 +86,18 @@ Manifest pipeline() {
     return std::move(*m);
 }
 
+/// A manifest of zero-size files with these paths, in this order.
+Manifest zeroSizeFiles(const ManifestHeader& h, const std::vector<std::string>& paths) {
+    Manifest m;
+    m.header = h;
+    for (const std::string& p : paths) {
+        ManifestFile f;
+        f.path = p;
+        m.files.push_back(std::move(f));
+    }
+    return m;
+}
+
 ManifestWriteOptions rawOptions() {
     ManifestWriteOptions o;
     o.codec = ManifestCodec::None;
@@ -139,7 +152,9 @@ TEST_CASE("manifest: the C++ writer reproduces the shared pipeline.hman byte for
 
     // The C++-written zstd vector (HELIOS_PATCH_UPDATE_VECTORS=1 rewrites it).
     if (const char* updateEnv = std::getenv("HELIOS_PATCH_UPDATE_VECTORS"); updateEnv && *updateEnv == '1') {
-        const Result<std::vector<u8>> z = writeManifest(m); // zstd level 19
+        ManifestWriteOptions zstd19;
+        zstd19.codec = ManifestCodec::Zstd; // level 0: the default, 19
+        const Result<std::vector<u8>> z = writeManifest(m, zstd19);
         REQUIRE(z.ok());
         REQUIRE(fs::writeFile(hmanDir() / "pipeline.cpp-zstd.hman", *z).ok());
         MESSAGE("rewrote pipeline.cpp-zstd.hman");
@@ -227,6 +242,64 @@ TEST_CASE("manifest: the shared identifier and path vectors") {
     check("productIds", &ManifestHeader::productId);
     check("platforms", &ManifestHeader::platform);
     check("buildIds", &ManifestHeader::buildId);
+
+    // Whole path lists: no two equal ignoring case, no file that is also a directory of another.
+    yyjson_val* sets = test::get(root, "pathSets");
+    const auto filesOf = [&](yyjson_val* arr) {
+        std::vector<std::string> paths;
+        usize idx, max;
+        yyjson_val* p;
+        yyjson_arr_foreach(arr, idx, max, p) paths.emplace_back(yyjson_get_str(p), yyjson_get_len(p));
+        return zeroSizeFiles(base, paths);
+    };
+    REQUIRE(yyjson_arr_size(test::get(sets, "valid")) > 0);
+    REQUIRE(yyjson_arr_size(test::get(sets, "invalid")) > 0);
+    usize idx, max;
+    yyjson_val* v;
+    yyjson_arr_foreach(test::get(sets, "valid"), idx, max, v) {
+        const Result<void> ok = validateManifest(filesOf(v));
+        CHECK_MESSAGE(ok.ok(), (ok.ok() ? std::string() : ok.error().message));
+    }
+    yyjson_arr_foreach(test::get(sets, "invalid"), idx, max, v) {
+        const std::string rule = test::getStr(v, "rule");
+        const Result<void> ok = validateManifest(filesOf(test::get(v, "paths")));
+        REQUIRE_MESSAGE(!ok.ok(), rule);
+        CHECK_MESSAGE(ok.error().message.find(rule) != std::string::npos, ok.error().message);
+    }
+}
+
+TEST_CASE("manifest: the sorted-key collision check agrees with the obvious one on random path sets") {
+    // As Go's TestPathCollisionsMatchNaive: paths over "aAb-./", so case, '-' and '.' (which sort before
+    // '/') and nesting all meet; the reference looks up every '/'-prefix of every lowered path.
+    constexpr std::string_view kAlphabet = "aAb-./";
+    SplitMix64 rng(0x0C011151);
+    const ManifestHeader h = pipeline().header;
+    usize outcomes[2] = {};
+    for (int iter = 0; iter < 20'000; ++iter) {
+        std::vector<std::string> paths;
+        for (usize n = 2 + rng.next() % 5; paths.size() < n;) {
+            std::string p(static_cast<usize>(1 + rng.next() % 6), ' ');
+            for (char& c : p) c = kAlphabet[rng.next() % kAlphabet.size()];
+            if (isValidManifestPath(p) && std::find(paths.begin(), paths.end(), p) == paths.end())
+                paths.push_back(std::move(p));
+        }
+        std::sort(paths.begin(), paths.end());
+        std::set<std::string> lowered;
+        bool want = true;
+        for (const std::string& p : paths) {
+            std::string low = p;
+            for (char& c : low) c = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+            want = lowered.insert(low).second && want;
+        }
+        for (const std::string& low : lowered)
+            for (usize i = 0; i < low.size(); ++i)
+                if (low[i] == '/' && lowered.count(low.substr(0, i))) want = false;
+        const Result<void> got = validateManifest(zeroSizeFiles(h, paths));
+        REQUIRE_MESSAGE(got.ok() == want, (got.ok() ? std::string("valid") : got.error().message));
+        ++outcomes[want ? 1 : 0];
+    }
+    CHECK(outcomes[0] >= 1000);
+    CHECK(outcomes[1] >= 1000);
 }
 
 TEST_CASE("manifest: every truncation and every byte flip fails, except in the uninterpreted signature") {
@@ -249,6 +322,7 @@ TEST_CASE("manifest: every truncation and every byte flip fails, except in the u
 TEST_CASE("manifest: a zstd payload must decode to exactly bodySize, within the body cap") {
     const Manifest m = pipeline();
     ManifestWriteOptions o;
+    o.codec = ManifestCodec::Zstd;
     o.zstdLevel = 3;
     const std::vector<u8> z = writeManifest(m, o).value();
     const auto withBodySize = [&](u64 size) {
@@ -299,8 +373,24 @@ TEST_CASE("manifest: the writer refuses invalid manifests and options") {
     bad.codec = static_cast<ManifestCodec>(7);
     CHECK(writeManifest(base, bad).errorCode() == ErrorCode::InvalidArgument);
     bad.codec = ManifestCodec::Zstd;
-    bad.zstdLevel = 20;
-    CHECK(writeManifest(base, bad).errorCode() == ErrorCode::InvalidArgument);
+    for (const int level : {-1, 20}) {
+        bad.zstdLevel = level;
+        CHECK(writeManifest(base, bad).errorCode() == ErrorCode::InvalidArgument);
+    }
+}
+
+TEST_CASE("manifest: write options default as Go's zero WriteOptions do") {
+    // Default options write codec None; with codec Zstd, level 0 is level 19 (pkg/manifest's
+    // TestWriteOptionDefaults checks the same in Go).
+    const Manifest m = pipeline();
+    const std::vector<u8> plain = writeManifest(m).value();
+    CHECK(plain == writeManifest(m, rawOptions()).value());
+    CHECK(readManifestHeader(plain)->codec == ManifestCodec::None);
+    ManifestWriteOptions level0;
+    level0.codec = ManifestCodec::Zstd;
+    ManifestWriteOptions level19 = level0;
+    level19.zstdLevel = 19;
+    CHECK(writeManifest(m, level0).value() == writeManifest(m, level19).value());
 }
 
 TEST_CASE("manifest: the builder refuses what the format cannot hold") {

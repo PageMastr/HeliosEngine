@@ -9,11 +9,15 @@
 //	repeat  random(Seed, Period) repeated and truncated to Size
 //	insert  random(Seed, Size) with random(InsertSeed, InsertSize) inserted before byte At
 //
+// Edits, if any, then overwrite bytes of the result (each the bytes of Hex, from offset At): crafted
+// inputs, such as a gear-hash match at an exact offset.
+//
 // Functions here are safe for concurrent use.
 package cdctest
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/PageMastr/scifi-test/services/pkg/cdc"
@@ -28,6 +32,13 @@ type Input struct {
 	At         int    `json:"at,omitempty"`
 	InsertSize int    `json:"insertSize,omitempty"`
 	InsertSeed uint64 `json:"insertSeed,omitempty"`
+	Edits      []Edit `json:"edits,omitempty"`
+}
+
+// Edit overwrites len(Hex)/2 bytes at At with the bytes Hex spells.
+type Edit struct {
+	At  int    `json:"at"`
+	Hex string `json:"hex"`
 }
 
 // Random returns size bytes of the SplitMix64(seed) stream.
@@ -42,6 +53,21 @@ func Random(seed uint64, size int) []byte {
 
 // Bytes generates the input.
 func (in Input) Bytes() ([]byte, error) {
+	out, err := in.generate()
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range in.Edits {
+		b, err := hex.DecodeString(e.Hex)
+		if err != nil || e.At < 0 || e.At > len(out)-len(b) {
+			return nil, fmt.Errorf("cdctest: edit %q at %d of %d bytes is invalid", e.Hex, e.At, len(out))
+		}
+		copy(out[e.At:], b)
+	}
+	return out, nil
+}
+
+func (in Input) generate() ([]byte, error) {
 	if in.Size < 0 {
 		return nil, fmt.Errorf("cdctest: negative size %d", in.Size)
 	}

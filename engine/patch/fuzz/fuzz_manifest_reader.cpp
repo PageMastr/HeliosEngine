@@ -13,6 +13,8 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <format>
+#include <string>
 #include <vector>
 
 #include "helios/core/random.h"
@@ -65,7 +67,11 @@ void reseal(std::vector<u8>& bytes) {
     const std::span<const u8> payload(bytes.data() + kHeaderSize, bytes.size() - kHeaderSize);
     h.payloadSize = payload.size();
     if (h.codec == 1) {
-        // Decode with zstd directly (bounded) to learn the body; leave the header alone if that fails.
+        // Decode with zstd directly (bounded) to learn the body; leave the header alone if that fails, or
+        // if the first frame declares more than the cap (deep-paths.hman: 72 MB), without decoding it.
+        const unsigned long long declared = ZSTD_getFrameContentSize(payload.data(), payload.size());
+        if (declared != ZSTD_CONTENTSIZE_UNKNOWN && declared != ZSTD_CONTENTSIZE_ERROR && declared > kMaxBody)
+            return;
         static std::vector<u8> body(static_cast<usize>(kMaxBody)); // allocated once, never cleared
         const usize n = ZSTD_decompress(body.data(), body.size(), payload.data(), payload.size());
         if (ZSTD_isError(n)) return;
@@ -158,6 +164,24 @@ void heliosFuzzSeeds(std::vector<std::vector<uint8_t>>& out) {
     }
     out.push_back(write(many, ManifestCodec::Zstd));
 
+    // Deep paths (as deep-paths.hman, whose 72 MB body is above this target's cap): 64 files of 1024-byte
+    // paths 508 directories deep, so mutations meet the path-collision check at depth.
+    std::string deep;
+    for (int i = 0; i < 508; ++i) deep += "a/";
+    Manifest deepPaths;
+    deepPaths.header = header;
+    for (int i = 0; i < 64; ++i) {
+        ManifestFile f;
+        f.path = deep + std::format("f{:07}", i);
+        f.hash = blake2b256(std::span<const u8>{});
+        deepPaths.files.push_back(std::move(f));
+    }
+    ManifestWriteOptions zstd3;
+    zstd3.codec = ManifestCodec::Zstd;
+    zstd3.zstdLevel = 3;
+    Result<std::vector<u8>> deepFile = writeManifest(deepPaths, zstd3);
+    if (!deepFile) fail();
+
     // A header that claims a 16 MiB + 1 body (LimitExceeded) and a zstd payload of zeros (Corrupt).
     std::vector<u8> claim = out[1];
     hman::RawHeader h =
@@ -169,4 +193,5 @@ void heliosFuzzSeeds(std::vector<std::vector<uint8_t>>& out) {
     h.headerHash = hman::computeHeaderHash(head);
     hman::encodeHeader(h, head);
     out.push_back(std::move(claim));
+    out.push_back(std::move(*deepFile)); // last, so the earlier seeds keep their file names
 }

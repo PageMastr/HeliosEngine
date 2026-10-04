@@ -221,12 +221,15 @@ bool isValidManifestPath(std::string_view path) noexcept;
 /// The canonical body of a valid manifest (what bodyHash covers). InvalidArgument/LimitExceeded if invalid.
 Result<std::vector<u8>> encodeManifestBody(const Manifest& manifest);
 
+/// How writeManifest() stores the payload. The defaults match Go's zero WriteOptions (pkg/manifest): codec
+/// None, and zstdLevel 0 means 19 when the codec is Zstd.
 struct ManifestWriteOptions {
-    ManifestCodec codec = ManifestCodec::Zstd;
-    int zstdLevel = 19; ///< 1..19 (so the window stays within hman::kMaxZstdWindowLog).
+    ManifestCodec codec = ManifestCodec::None;
+    int zstdLevel = 0; ///< 1..19, or 0 for 19 (levels up to 19 keep the window within kMaxZstdWindowLog).
 };
 
-/// A complete .hman file for a valid manifest.
+/// A complete .hman file for a valid manifest. InvalidArgument for an unknown codec or a zstd level
+/// outside 0..19; InvalidArgument/LimitExceeded for an invalid manifest. Thread-safe (a pure function).
 Result<std::vector<u8>> writeManifest(const Manifest& manifest, const ManifestWriteOptions& options = {});
 
 struct ManifestReadOptions {

@@ -308,5 +308,24 @@
   {"offset": 3928593, "size": 84678, "hash": "fb68edd03353ce578cadb56e23869a7a264ec23918e03de67152779fd1880ebc"},
   {"offset": 4013271, "size": 79094, "hash": "8dc35625e5caeb448fc726b35b7210b08db55bd85cfee3853245e345475580ad"},
   {"offset": 4092365, "size": 37855, "hash": "a23786de2ddec42ca0febf4f8d42f257535f2da5c20a6c7b8e1f022c3c4c5d62"},
-  {"offset": 4130220, "size": 64101, "hash": "85dfec26aa5383f412100a638f01e4a48526a3c82d25cd6d828314f984d98d2a"}]}
+  {"offset": 4130220, "size": 64101, "hash": "85dfec26aa5383f412100a638f01e4a48526a3c82d25cd6d828314f984d98d2a"}]},
+{"name": "masks-match-at-16386", "input": {"kind":"random","seed":100,"size":300000,"edits":[{"at":16384,"hex":"0e446d"}]}, "size": 300000, "fileHash": "568bbe2061d3a99471bcafb78c49221f0b681ca1a1083a5afaf12d853d90de6f", "chunks": [
+  {"offset": 0, "size": 16387, "hash": "d6eaaf88f3e885dbd523f3612a505c5a40d4047ddec5dd20bfc2d9331ce69804"},
+  {"offset": 16387, "size": 65952, "hash": "af81f61d2e0eea5a7306c1360f53c1d4cac068b8ac402fc8334c14de91620884"},
+  {"offset": 82339, "size": 21820, "hash": "b660140131e85bf0581ed31ecf31fba62a8e82b90a7c0d912fd26218b5caa5f4"},
+  {"offset": 104159, "size": 67626, "hash": "a5231747d588bb955894065695ee9b4532089c3a1effd3b3017d80dca000bfc1"},
+  {"offset": 171785, "size": 52110, "hash": "69325baf3d07a4b6ac1243ae91fa1183f11c6e8a51460bd81c861c15716a68c6"},
+  {"offset": 223895, "size": 76105, "hash": "7496a3ce309060ca94daaef0d36d997143fc834fb8b89db9ea837e79661f0870"}]},
+{"name": "maskl-only-match-at-65535", "input": {"kind":"random","seed":100,"size":300000,"edits":[{"at":65534,"hex":"541f"}]}, "size": 300000, "fileHash": "624e72fdd90457a23528ac4d575b840bb3a6d10817724ef82b573f0c176a5c30", "chunks": [
+  {"offset": 0, "size": 78438, "hash": "5aabcfc72701861236daa193d0395107281b22558428bd7a70358f146ba171a1"},
+  {"offset": 78438, "size": 25721, "hash": "e75a0fc3fd2082ccdedd649792eb6d8a3673a5ef4855ce9a7f3154d102c0a1f1"},
+  {"offset": 104159, "size": 67626, "hash": "a5231747d588bb955894065695ee9b4532089c3a1effd3b3017d80dca000bfc1"},
+  {"offset": 171785, "size": 52110, "hash": "69325baf3d07a4b6ac1243ae91fa1183f11c6e8a51460bd81c861c15716a68c6"},
+  {"offset": 223895, "size": 76105, "hash": "7496a3ce309060ca94daaef0d36d997143fc834fb8b89db9ea837e79661f0870"}]},
+{"name": "maskl-only-match-at-65536", "input": {"kind":"random","seed":100,"size":300000,"edits":[{"at":65535,"hex":"13fc"}]}, "size": 300000, "fileHash": "a61f9befe6045c5979770690ae00e6ce5ed684f23fe0b1b4d8e84574565eb5fc", "chunks": [
+  {"offset": 0, "size": 65537, "hash": "4bf718fd10ff4a6629f47ac568c0e39278f17e03feb44702f72997732bd8ca8e"},
+  {"offset": 65537, "size": 38622, "hash": "41629318d39f5293484495eca53995165324dc170ad115331fed6f4e0d89607e"},
+  {"offset": 104159, "size": 67626, "hash": "a5231747d588bb955894065695ee9b4532089c3a1effd3b3017d80dca000bfc1"},
+  {"offset": 171785, "size": 52110, "hash": "69325baf3d07a4b6ac1243ae91fa1183f11c6e8a51460bd81c861c15716a68c6"},
+  {"offset": 223895, "size": 76105, "hash": "7496a3ce309060ca94daaef0d36d997143fc834fb8b89db9ea837e79661f0870"}]}
 ]}

@@ -592,7 +592,8 @@ Result<std::vector<u8>> encodeManifestBody(const Manifest& m) {
 Result<std::vector<u8>> writeManifest(const Manifest& m, const ManifestWriteOptions& options) {
     if (options.codec != ManifestCodec::None && options.codec != ManifestCodec::Zstd)
         return invalid("unknown codec {}", toUnderlying(options.codec));
-    if (options.codec == ManifestCodec::Zstd && (options.zstdLevel < 1 || options.zstdLevel > 19))
+    const int level = options.zstdLevel == 0 ? 19 : options.zstdLevel; // as Go: 0 is the default level
+    if (options.codec == ManifestCodec::Zstd && (level < 1 || level > 19))
         return invalid("zstd level {} is not 1..19", options.zstdLevel);
     HELIOS_TRY_ASSIGN(std::vector<u8> body, encodeManifestBody(m));
 
@@ -603,7 +604,7 @@ Result<std::vector<u8>> writeManifest(const Manifest& m, const ManifestWriteOpti
     } else {
         out.resize(kHeaderSize + ZSTD_compressBound(body.size()));
         const usize n = ZSTD_compress(out.data() + kHeaderSize, out.size() - kHeaderSize, body.data(),
-                                      body.size(), options.zstdLevel);
+                                      body.size(), level);
         if (ZSTD_isError(n)) return makeError(ErrorCode::Unknown, "zstd: {}", ZSTD_getErrorName(n));
         out.resize(kHeaderSize + n);
     }

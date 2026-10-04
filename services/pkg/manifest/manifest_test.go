@@ -548,6 +548,13 @@ func TestSharedNames(t *testing.T) {
 		ProductIDs validity `json:"productIds"`
 		Platforms  validity `json:"platforms"`
 		BuildIDs   validity `json:"buildIds"`
+		PathSets   struct {
+			Valid   [][]string `json:"valid"`
+			Invalid []struct {
+				Paths []string `json:"paths"`
+				Rule  string   `json:"rule"`
+			} `json:"invalid"`
+		} `json:"pathSets"`
 	}
 	readJSON(t, "names.json", &raw)
 	for _, p := range append(raw.Paths.Valid, strings.Repeat("a", manifest.MaxPathBytes)) {
@@ -583,6 +590,81 @@ func TestSharedNames(t *testing.T) {
 	check("productId", raw.ProductIDs, func(h *manifest.Header, s string) { h.ProductID = s })
 	check("platform", raw.Platforms, func(h *manifest.Header, s string) { h.Platform = s })
 	check("buildId", raw.BuildIDs, func(h *manifest.Header, s string) { h.BuildID = s })
+
+	if len(raw.PathSets.Valid) == 0 || len(raw.PathSets.Invalid) == 0 {
+		t.Fatal("pathSets: empty vector list")
+	}
+	for _, paths := range raw.PathSets.Valid {
+		if err := zeroSizeFiles(base, paths).Validate(); err != nil {
+			t.Errorf("path set %q: %v", paths, err)
+		}
+	}
+	for _, c := range raw.PathSets.Invalid {
+		if err := zeroSizeFiles(base, c.Paths).Validate(); err == nil || !strings.Contains(err.Error(), c.Rule) {
+			t.Errorf("path set %q: %v, want an error containing %q", c.Paths, err, c.Rule)
+		}
+	}
+}
+
+// zeroSizeFiles is a manifest of zero-size files with these paths, in this order.
+func zeroSizeFiles(h manifest.Header, paths []string) *manifest.Manifest {
+	m := &manifest.Manifest{Header: h}
+	for _, p := range paths {
+		m.Files = append(m.Files, manifest.File{Path: p, Tier: 1})
+	}
+	return m
+}
+
+// The sorted-key collision check agrees with the obvious one (every '/'-prefix of every lowered path looked
+// up among the lowered paths) on random path sets over a small alphabet, so case, '-' and '.' (which sort
+// before '/') and nesting all meet. engine/patch's tests run the same sets.
+func TestPathCollisionsMatchNaive(t *testing.T) {
+	const alphabet = "aAb-./"
+	rng := cdc.SplitMix64{State: 0x0C011151}
+	outcomes := map[bool]int{}
+	for iter := 0; iter < 20000; iter++ {
+		seen := map[string]bool{}
+		var paths []string
+		for n := 2 + int(rng.Next()%5); len(paths) < n; {
+			b := make([]byte, 1+rng.Next()%6)
+			for i := range b {
+				b[i] = alphabet[rng.Next()%uint64(len(alphabet))]
+			}
+			if p := string(b); manifest.ValidPath(p) && !seen[p] {
+				seen[p] = true
+				paths = append(paths, p)
+			}
+		}
+		slices.Sort(paths)
+		want := naiveCollisionFree(paths)
+		err := zeroSizeFiles(manifest.Header{ProductID: "sample-game", Platform: "win64", BuildID: "x"}, paths).Validate()
+		if (err == nil) != want {
+			t.Fatalf("%q: Validate says %v, the naive check %v", paths, err, want)
+		}
+		outcomes[want]++
+	}
+	if outcomes[true] < 1000 || outcomes[false] < 1000 {
+		t.Fatalf("unbalanced cases: %v", outcomes)
+	}
+}
+
+func naiveCollisionFree(paths []string) bool {
+	lowered := map[string]bool{}
+	for _, p := range paths {
+		low := strings.ToLower(p)
+		if lowered[low] {
+			return false
+		}
+		lowered[low] = true
+	}
+	for low := range lowered {
+		for i := 0; i < len(low); i++ {
+			if low[i] == '/' && lowered[low[:i]] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Every truncation and every single-byte change of the golden fails cleanly, except in the signature,
@@ -668,8 +750,28 @@ func TestWriterRefusesInvalidManifests(t *testing.T) {
 	if _, err := m.Marshal(manifest.WriteOptions{Codec: 7}); err == nil {
 		t.Error("unknown codec accepted")
 	}
-	if _, err := m.Marshal(manifest.WriteOptions{Codec: manifest.CodecZstd, ZstdLevel: 20}); err == nil {
-		t.Error("zstd level 20 accepted")
+	for _, level := range []int{-1, 20} {
+		if _, err := m.Marshal(manifest.WriteOptions{Codec: manifest.CodecZstd, ZstdLevel: level}); err == nil {
+			t.Errorf("zstd level %d accepted", level)
+		}
+	}
+}
+
+// The zero WriteOptions write codec none, and with CodecZstd level 0 is level 19, as C++'s default
+// ManifestWriteOptions (engine/patch/tests/test_manifest.cpp checks the same).
+func TestWriteOptionDefaults(t *testing.T) {
+	m := pipeline(t)
+	plain, err := m.Marshal(manifest.WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(plain, readGolden(t, "pipeline.hman")) {
+		t.Fatal("the zero WriteOptions did not write codec none")
+	}
+	z0, err0 := m.Marshal(manifest.WriteOptions{Codec: manifest.CodecZstd})
+	z19, err19 := m.Marshal(manifest.WriteOptions{Codec: manifest.CodecZstd, ZstdLevel: 19})
+	if err0 != nil || err19 != nil || !bytes.Equal(z0, z19) {
+		t.Fatalf("level 0 is not level 19: %v %v", err0, err19)
 	}
 }
 
@@ -761,12 +863,18 @@ func TestLookups(t *testing.T) {
 
 // FuzzParse: Parse never panics; a manifest that parses is valid, its canonical body hashes to the
 // header's bodyHash, and it re-marshals (codec none) to bytes that parse back equal. The seeds are the
-// shared goldens and the hostile cases; the normal go test run executes them.
+// shared goldens (deep-paths.hman among them), a small deep-paths manifest and the hostile cases; the
+// normal go test run executes them.
 func FuzzParse(f *testing.F) {
-	for _, name := range []string{"pipeline.hman", "pipeline.go-zstd.hman", "pipeline.cpp-zstd.hman"} {
+	// deep-paths.hman's 72 MB body is above this target's 16 MiB cap (it stops at the header), so a
+	// 64-file version of it seeds mutations of deep paths.
+	for _, name := range []string{"pipeline.hman", "pipeline.go-zstd.hman", "pipeline.cpp-zstd.hman", "deep-paths.hman"} {
 		if b, err := os.ReadFile(goldenPath(name)); err == nil {
 			f.Add(b)
 		}
+	}
+	if b, err := pathsManifest(64, true).Marshal(manifest.WriteOptions{Codec: manifest.CodecZstd, ZstdLevel: 3}); err == nil {
+		f.Add(b)
 	}
 	var hf struct {
 		Cases []hostileCase `json:"cases"`

@@ -117,5 +117,27 @@
    "a:b",
    "01234567890123456789012345678901234567890123456789012345678901234"
   ]
+ },
+ "pathSets": {
+  "comment": "Whole path lists (each sorted by bytes) that validateManifest / Manifest.Validate must accept or reject as zero-size files: no two paths equal ignoring ASCII case, no file that is also a directory of another file (ignoring case). The invalid sets name the check (a message substring).",
+  "valid": [
+   ["a-b/c", "a/b"],
+   ["A/x", "a/y"],
+   ["a.b/c", "a/b", "a_b"],
+   ["a", "a-b", "a.b", "a_b", "ab"],
+   ["a/b-c", "a/b/c", "a/bc"],
+   ["X/y", "x-y", "xy"]
+  ],
+  "invalid": [
+   {"paths": ["a", "a/b"], "rule": "is a file and also a directory of"},
+   {"paths": ["a", "a-b", "a/b"], "rule": "is a file and also a directory of"},
+   {"paths": ["A/b", "a"], "rule": "is a file and also a directory of"},
+   {"paths": ["a/B/c", "a/b"], "rule": "is a file and also a directory of"},
+   {"paths": ["a/b", "a/b-c", "a/b.d/e", "a/b/c"], "rule": "is a file and also a directory of"},
+   {"paths": ["X/y/z", "x/Y"], "rule": "is a file and also a directory of"},
+   {"paths": ["Docs/a", "docs/a"], "rule": "differ only in case"},
+   {"paths": ["A", "B", "a"], "rule": "differ only in case"},
+   {"paths": ["a/B", "a/b", "a/b-"], "rule": "differ only in case"}
+  ]
  }
 }

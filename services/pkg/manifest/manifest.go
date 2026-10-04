@@ -598,7 +598,8 @@ func (m *Manifest) EncodeBody() ([]byte, error) {
 	return b, nil
 }
 
-// WriteOptions choose the payload codec. ZstdLevel is a zstd level, 1..19 (0 means 19).
+// WriteOptions choose the payload codec. ZstdLevel is a zstd level, 1..19 (0 means 19). The zero value
+// writes codec none, as C++'s default ManifestWriteOptions does.
 type WriteOptions struct {
 	Codec     Codec
 	ZstdLevel int

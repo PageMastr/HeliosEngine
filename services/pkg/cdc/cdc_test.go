@@ -74,6 +74,15 @@ var caseInputs = []struct {
 	{"repeat-4093-2mib", cdctest.Input{Kind: "repeat", Seed: 5, Size: 2 << 20, Period: 4093}},
 	{"random-4mib", cdctest.Input{Kind: "random", Seed: 4, Size: 4 << 20}},
 	{"random-4mib-insert-17", cdctest.Input{Kind: "insert", Seed: 4, Size: 4 << 20, At: 1000000, InsertSize: 17, InsertSeed: 6}},
+	// Crafted (found by searching the last bytes before the target): the mask switch and the start of
+	// hashing. The earliest possible MaskS match is at byte 16386 (no gear entry, and no two, has the top 18
+	// bits zero), the last byte MaskS covers is 65535 and the first MaskL covers is 65536.
+	{"masks-match-at-16386", cdctest.Input{Kind: "random", Seed: 100, Size: 300000,
+		Edits: []cdctest.Edit{{At: 16384, Hex: "0e446d"}}}}, // cut at 16387
+	{"maskl-only-match-at-65535", cdctest.Input{Kind: "random", Seed: 100, Size: 300000,
+		Edits: []cdctest.Edit{{At: 65534, Hex: "541f"}}}}, // no cut there: MaskS still applies
+	{"maskl-only-match-at-65536", cdctest.Input{Kind: "random", Seed: 100, Size: 300000,
+		Edits: []cdctest.Edit{{At: 65535, Hex: "13fc"}}}}, // cut at 65537
 }
 
 func gearDigest() string {

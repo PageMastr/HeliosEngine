@@ -2,6 +2,7 @@
 #include "helios/patch/fastcdc.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 
 #include "helios/core/random.h"

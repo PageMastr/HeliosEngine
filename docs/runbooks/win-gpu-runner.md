@@ -19,7 +19,8 @@ you start it from the Actions tab ("Run workflow" on `main`). A queued job waits
    `vulkaninfo --summary`, and the RHI's verdict in full with a summary of the loader's own log: the settings file
    and the layers it loaded in full, each variable it ignored once), and runs
    the `gpu`-labelled CTests on the real GPU: the Vulkan golden images (`rendertest.vulkan.*`, Khronos-validated),
-   `rhi_tests_gpu`, `pcg_gpu_tests` and `rhi_triangle_smoke`; a case of `rendertest.validation-required` that this
+   `rendertest.validation-*` and `rendertest.report`, `rhi_tests_gpu`, `pcg_gpu_tests`, `rhi_triangle_smoke`, and
+   the editor's `editorui_tests_gpu`, `helios_editor_smoke` and `editorui_ed15` (the ED-15 goldens); a case of `rendertest.validation-required` that this
    PC's loader does not let the job set up shows as a warning on the run;
 3. runs ADR-0.9c's `pcg_hnoise_bench --hardware-gpu` and a strict `net_bench --gate` (NS-0.2's re-test on fixed
    hardware), then fails if the goldens or the bench ran on a software rasterizer or found no GPU;
@@ -718,7 +719,8 @@ installer may have added a folder to the `PATH` since the last audit).
   service again with step 9's block.
 - **"entries survived the wipe"** at "Set up runner": a leftover process holds files in `D:\helios-ci\work`. Reboot
   (or end `helios-ci`'s processes); the next job wipes again.
-- **`rhi_triangle_smoke`** opens a window. A service runs without a desktop, so it may fail on this runner; that is a
+- **`rhi_triangle_smoke`** (and the editor's `helios_editor_smoke` and `editorui_ed15`) open a window. A service runs
+  without a desktop, yet they have passed on this runner since run 37263321224 (2026-10-05); if one fails, that is a
   finding to report, not a reason to run the runner interactively.
 - **Golden images**: the goldens were blessed on lavapipe (`golden/vulkan-llvmpipe/`); a real GPU may differ beyond
   the ꟻLIP tolerance. A failure is a finding for WP-0.12, not a setting to relax: first a scene that depends on

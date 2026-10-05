@@ -5,13 +5,22 @@
 //
 //   * A type declared in a named namespace (every engine and game component) is keyed by name: a
 //     compile-time hash of its canonical name, its size and its alignment. Every image computes the same
-//     key without keeping state, so a type that one image binds is found by every other, whichever of the
-//     supported compilers built each image (MSVC, clang-cl, GCC, Clang). The canonical name drops the
-//     class-keys MSVC prints ("struct ", "class ", "union ", "enum "), also inside template arguments, and
-//     keeps a space only between two identifier characters. For a non-template type that is the qualified
-//     name, which every compiler prints alike; keys of template specializations are guaranteed stable only
-//     within one compiler (MSVC prints default template arguments and spells builtin types differently),
-//     and so are keys of types in inline namespaces (Clang omits them).
+//     key without keeping state, so a type that one image binds is found by every other image that the same
+//     compiler built. The canonical name drops the class-keys MSVC prints ("struct ", "class ", "union ",
+//     "enum "), also inside template arguments, and keeps a space only between two identifier characters.
+//     For a class, union or enum declared with a name, whose qualified name has neither template arguments
+//     nor an inline namespace, that is the qualified name, which MSVC, clang-cl, GCC and Clang print alike,
+//     so its key is the same whichever of them built each image. Two kinds of name hold only within one
+//     compiler:
+//       - names with template arguments, of template specializations and of the types nested in them
+//         ("ns::Box<unsigned long>::Inner"): MSVC prints default template arguments, and the compilers
+//         spell builtin types differently ("long unsigned int", "unsigned long", "unsigned __int64");
+//       - names in an inline namespace: GCC and MSVC print it ("ns::v1::T"); Clang and clang-cl leave it
+//         out ("ns::T") wherever the name is unambiguous without it. A Clang translation unit that also
+//         sees a "T" declared in "ns" itself prints "ns::v1::T", so on Clang the key also depends on the
+//         declarations each translation unit sees.
+//     An unnamed class that a typedef names ("typedef struct { ... } T;") prints as "ns::T" on GCC and
+//     Clang; no test pins MSVC's spelling of it, so it is not known to cross compilers.
 //   * Every other type is keyed per image: a number drawn once per type from a process-wide counter in
 //     helios_runtime. That covers what only one translation unit can name (types in unnamed namespaces,
 //     local classes, closure types), types in the global namespace, and every specialization with such a
@@ -23,10 +32,16 @@
 //     declare a component that crosses images, and its template arguments, in named namespaces.
 //
 // What a key cannot tell apart:
-//   * Two distinct name-keyed types with one canonical name and one layout. In a correct program that is
-//     only a class nested in a local class, which Clang prints as "Local::Inner" for one in any function,
-//     as the type itself or in a template argument ("ns::Box<Local::Inner>"). Typed access through the
-//     second such type reaches the first type's component, which has the same size and alignment.
+//   * Two distinct name-keyed types with one canonical name and one layout. In a correct program that
+//     happens only on Clang and clang-cl, which print a local class without its enclosing function:
+//       - a type named through a local class: a class nested in one ("Local::Inner", itself a local class)
+//         or a pointer to a member of one ("int Local::*"), the same text for a local class "Local" of any
+//         function and for a global-namespace "Local", as the type itself or in a template argument
+//         ("ns::Box<Local::Inner>", "ns::Box<int Local::*>");
+//       - a type in an inline namespace and a type of the same name declared in the enclosing namespace
+//         itself, used by translation units that never see both (each prints "ns::T").
+//     Typed access through the second such type reaches the first type's component, which has the same
+//     size and alignment.
 //   * A 64-bit collision of two name keys (the name, size and alignment hashed together), which can join
 //     two types of different layouts: typed access through the second type would then reach a component
 //     of another size.

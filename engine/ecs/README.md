@@ -89,23 +89,29 @@ World add `RepDirty` in the same structural step (spawn, add, set, override, com
 the per-entity summary appears without a flecs `With` trait (which would create intermediate
 tables). Spawns and command-buffer groups look up their final table with `ecs_table_find` (no
 intermediate tables in the table graph).
-C++ types map to ids through `typeKey<T>()` (`helios/ecs/type_key.h`) and a per-world open-addressing
-table (O(1), lock-free). A type in a named namespace has a name key: a compile-time hash of its canonical
-name (MSVC's `struct `/`class `/`union `/`enum ` dropped, spaces only between identifier characters), size
-and alignment, which every image and every supported compiler derives alike for a non-template type (02
-§1.4: no per-image caches, so a modular build's executables and game modules, clang-cl ones included, see
-the ids `helios_runtime` bound; template specializations are stable only within one compiler). Every other
+C++ types map to ids through `typeKey<T>()` (`helios/ecs/type_key.h`) and a per-world open-addressing table
+(O(1), lock-free). A type in a named namespace has a name key: a compile-time hash of its canonical name
+(MSVC's `struct `/`class `/`union `/`enum ` dropped, spaces only between identifier characters), size and
+alignment, which every image built by one compiler derives alike (02 §1.4: no per-image caches, so a modular
+build's executables and game modules see the ids `helios_runtime` bound). Every supported compiler derives the
+same key for a class, union or enum declared with a name whose qualified name has neither template arguments
+nor an inline namespace, so clang-cl game modules beside an MSVC-built SDK see those ids too. Other names hold
+only within one compiler: template specializations and the types nested in them (the compilers spell template
+arguments differently) and types in inline namespaces (GCC and MSVC print `ns::v1::T`, Clang and clang-cl
+`ns::T`); a component that crosses images built by different compilers has neither in its name. Every other
 type has a per-image key drawn once from a counter in `helios_runtime`: types in unnamed namespaces, local
-classes and closures, which only one translation unit can name, global-namespace types, which Clang
-prints exactly like its local classes, and specializations with such a type among their template arguments
-(Clang and clang-cl print `ns::Box<Local>` for every function's `Local`). Two types that print the same name
-therefore never share a key, and an unregistered one resolves to no component; declare a component that
-crosses images, and its template arguments, in named namespaces. A reloadable game module keys no type per
-image (02 §1.4; symbol audit R5). Name keys clash only for two types with one canonical name and one layout
-(a class nested in a local class, on Clang, also as a template argument): typed access through the second
-reaches the first's component, of the same size and alignment. A 64-bit collision of two name keys could
-also join types of different layouts. Either way `registerComponent<T>`/`bindType<T>` refuse to bind the
-second type (`AlreadyExists`).
+classes and closures, which only one translation unit can name, global-namespace types, which Clang prints
+exactly like its local classes, and specializations with such a type among their template arguments (Clang and
+clang-cl print `ns::Box<Local>` for every function's `Local`). Two types that print the same name therefore
+never share a key, and an unregistered one resolves to no component; declare a component that crosses images,
+and its template arguments, in named namespaces. A reloadable game module keys no type per image (02 §1.4;
+symbol audit R5). Name keys clash only for two types with one canonical name and one layout, which in a
+correct program happens only on Clang and clang-cl: a type named through a local class (a class nested in one,
+`Local::Inner`, or a pointer to a member of one, `int Local::*`, also as template arguments), or a type in an
+inline namespace beside a same-named type of the enclosing namespace, in translation units that see only one
+of them. Typed access through the second type reaches the first's component, of the same size and alignment. A
+64-bit collision of two name keys could also join types of different layouts. Either way
+`registerComponent<T>`/`bindType<T>` refuse to bind the second type (`AlreadyExists`).
 `registerComponent<T>` returns 0 after a `HELIOS_VERIFY` failure whenever T cannot be bound.
 Component names must not resolve to an existing flecs entity (builtins, relations, named frames or
 scopes); such registrations fail with `AlreadyExists` instead of silently re-typing that entity.

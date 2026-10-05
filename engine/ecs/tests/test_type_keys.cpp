@@ -1,7 +1,8 @@
 // Type keys (helios/ecs/type_key.h; 02 §1.4, WP-0.6c): the World's C++ type -> component table is keyed by
-// typeKey<T>(). A type in a named namespace has a name key that every image and every supported compiler
-// derives alike (its canonical name, size and alignment); every other type has a per-image key, so two
-// types that print the same name never reach each other's component.
+// typeKey<T>(). A type in a named namespace has a name key that every image derives alike (its canonical
+// name, size and alignment), and every supported compiler too unless its name has template arguments or an
+// inline namespace; every other type has a per-image key, so two types that print the same name never reach
+// each other's component (except the Clang residuals type_key.h lists).
 
 #include <doctest/doctest.h>
 
@@ -38,6 +39,17 @@ template <helios::u32 N>
 struct KeyNumbered {
     helios::u32 value = N;
 };
+template <class T>
+struct KeyHolder {
+    struct Inner {
+        T value{};
+    };
+};
+inline namespace v1 {
+struct KeyVersioned {
+    helios::u32 value = 0;
+};
+} // namespace v1
 
 } // namespace ecs_test
 // helios-lint: outside-anon-namespace end
@@ -110,13 +122,17 @@ static_assert(!isPerImageTypeName("struct ns::Box<class ns::A,unsigned __int64>"
 static_assert(!isPerImageTypeName("ns::Fn<void (__cdecl *)(const ns::A &) noexcept>"));    // MSVC
 static_assert(!isPerImageTypeName("ns::Fn<void (*)(const volatile ns::A&, signed char)>")); // GCC
 static_assert(!isPerImageTypeName("ns::Flag<true, false, nullptr>"));
-// What a name cannot tell apart: Clang prints a class nested in a local class as "Local::Inner" (the header's
-// documented residual), as the type itself and as an argument.
+// What a name cannot tell apart (the header's documented residual): Clang prints a class nested in a local
+// class as "Local::Inner" and a pointer to a member of a local class as "int Local::*", as the type itself
+// and as an argument.
 static_assert(!isPerImageTypeName("Local::Inner"));
 static_assert(!isPerImageTypeName("ns::Box<Local::Inner>"));
+static_assert(!isPerImageTypeName("int Local::*"));
+static_assert(!isPerImageTypeName("ns::Box<int Local::*>"));
 
 // ---------------------------------------------------------------------------------------------
-// This compiler's keys. A name key is the same on every compiler: its canonical name is pinned here.
+// This compiler's keys. The name key of a class, union or enum whose name has neither template arguments nor
+// an inline namespace is the same on every compiler: its canonical name is pinned here.
 // ---------------------------------------------------------------------------------------------
 
 static_assert(tk::kKeyedByName<NetIdentity>);
@@ -139,6 +155,35 @@ static_assert(tk::kNameTypeKey<NetIdentity> != tk::kNameTypeKey<RepDirty>);
 static_assert(tk::kNameTypeKey<ecs_test::KeyNumbered<1>> != tk::kNameTypeKey<ecs_test::KeyNumbered<2>>);
 // The layout is part of a name key: one name, another size, another key.
 static_assert(tk::nameTypeKey(fnv1a64("ns::A"), 4, 4) != tk::nameTypeKey(fnv1a64("ns::A"), 16, 8));
+
+// Names that hold only within one compiler (type_key.h), pinned per compiler so that CI records each
+// compiler's spelling. An inline namespace: GCC and MSVC print it, Clang and clang-cl leave it out.
+static_assert(tk::kKeyedByName<ecs_test::KeyVersioned>);
+#if defined(HELIOS_COMPILER_CLANG)
+static_assert(canonicalNameEquals(tk::kPrintedTypeName<ecs_test::KeyVersioned>, "ecs_test::KeyVersioned"));
+#else
+static_assert(canonicalNameEquals(tk::kPrintedTypeName<ecs_test::KeyVersioned>,
+                                  "ecs_test::v1::KeyVersioned"));
+#endif
+// A type nested in a specialization is not a template, but its name has the template's arguments, which GCC
+// and Clang spell differently.
+using NestedInSpecialization = ecs_test::KeyHolder<unsigned long>::Inner;
+static_assert(tk::kKeyedByName<NestedInSpecialization>);
+#if defined(HELIOS_COMPILER_GCC)
+static_assert(canonicalNameEquals(tk::kPrintedTypeName<NestedInSpecialization>,
+                                  "ecs_test::KeyHolder<long unsigned int>::Inner"));
+#elif defined(HELIOS_COMPILER_CLANG)
+static_assert(canonicalNameEquals(tk::kPrintedTypeName<NestedInSpecialization>,
+                                  "ecs_test::KeyHolder<unsigned long>::Inner"));
+#endif
+
+// Clang and clang-cl print a local class without its function, so a type named through one is keyed by name
+// there (the header's residual) and per image on GCC and MSVC, which print the function.
+#if defined(HELIOS_COMPILER_CLANG)
+constexpr bool kLocalMembersKeyedByName = true;
+#else
+constexpr bool kLocalMembersKeyedByName = false;
+#endif
 
 struct Cooldown {
     u32 ticks = 0;
@@ -239,9 +284,14 @@ TEST_CASE("ecs type keys: two types with one printed name bind to their own comp
 // Two local classes with one name. Clang prints both as "Local", like a global-namespace type.
 u32 useLocalA(World& world, Entity e, u32 value) {
     struct Local {
+        struct Inner {
+            u32 value = 0;
+        };
         u32 value = 0;
     };
     static_assert(!tk::kKeyedByName<Local>);
+    static_assert(tk::kKeyedByName<Local::Inner> == kLocalMembersKeyedByName);
+    static_assert(tk::kKeyedByName<ecs_test::KeyPair<u32 Local::*, u32>> == kLocalMembersKeyedByName);
     if (world.id<Local>() == 0) world.registerComponent<Local>(ComponentFlags::None, "ecs_test.LocalA");
     if (value != 0) world.set(e, Local{value});
     const Local* local = world.get<Local>(e);

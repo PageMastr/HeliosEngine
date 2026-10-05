@@ -435,6 +435,11 @@ quiet one.
 In C++ that read is mostly hashing (about 85 ms), zstd (60 ms) and validation (140 ms, most of it the paths)
 of a body 1.4 times the large manifest's.
 
+**The trust chain** is not on a hot path, so it states no budget: a launcher runs it once per start and pointer
+refresh, and chunk checks are the hashing above. Verifying the vectors' keyset, pointer and manifest header (three
+Ed25519 verifications and the canonical parses) took 0.34 ms in C++ (portable Monocypher, GCC 13 RelWithDebInfo,
+best of 5 × 200) and 0.17–0.24 ms in Go (`BenchmarkVerifyChain`) on the dev VM, 2026-10-05.
+
 Hashing dominates the chunking rows: each byte is hashed twice (its chunk's ID and the file hash). C++ uses
 Monocypher's portable BLAKE2b; Go's `x/crypto/blake2b` uses AVX2 but pays for the `io.Reader` copy. At 250
 MB/s one core chunks a 50 GB build in 3.5 minutes; CL-10's full verify (50 GB in 3 minutes, about 280 MB/s)

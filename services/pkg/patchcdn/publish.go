@@ -77,6 +77,9 @@ func Publish(ctx context.Context, o PublishOptions, keys *Keys) (*PublishResult,
 		o.Lifetime = patchtrust.MaxPointerLifetime * time.Second
 	}
 	now := uint64(o.Now.Unix())
+	if err := t.Validate(); err != nil {
+		return nil, err
+	}
 	switch {
 	case o.Now.Unix() <= 0:
 		return nil, errors.New("patchcdn: publish needs a clock")

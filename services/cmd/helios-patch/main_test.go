@@ -80,6 +80,8 @@ func TestUsage(t *testing.T) {
 		{"verify", "--product", "p-p"},
 		{"verify", "--product", "p-p", "--channel", "dev", "--platform", "win64", "extra"},
 		{"verify", "--bogus"},
+		{"verify", "--product", "../evil", "--channel", "dev", "--platform", "win64"},
+		{"publish", "--build", "x", "--product", "p-p", "--channel", "../dev", "--platform", "win64"},
 	} {
 		if code, _, _ := runCmd(t, time.Now(), args...); code != 2 {
 			t.Errorf("%q: exit %d, want 2", args, code)

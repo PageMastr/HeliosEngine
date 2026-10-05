@@ -13,7 +13,6 @@
 package patchcdn
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -23,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -137,37 +137,42 @@ func (h HTTPSource) Fetch(ctx context.Context, path string, limit int64) ([]byte
 	return readLimited(resp.Body, path, limit)
 }
 
+// The chunk codec's encoder and decoder: EncodeAll and DecodeAll are safe for concurrent use, and creating a
+// level-19 encoder per chunk would cost more than compressing a small chunk.
+var (
+	chunkEncoder = sync.OnceValues(func() (*zstd.Encoder, error) {
+		return zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBestCompression), zstd.WithEncoderConcurrency(1))
+	})
+	// MaxMemory bounds what DecodeAll produces (a chunk is at most cdc.MaxSize bytes), MaxWindow the window
+	// a frame may ask for (32 MiB, as engine/patch).
+	chunkDecoder = sync.OnceValues(func() (*zstd.Decoder, error) {
+		return zstd.NewReader(nil, zstd.WithDecoderConcurrency(0), zstd.WithDecoderMaxMemory(cdc.MaxSize),
+			zstd.WithDecoderMaxWindow(1<<25))
+	})
+)
+
 // EncodeChunk stores a chunk: one zstd frame at level 19 (05 §7) with the content size and a checksum.
 func EncodeChunk(raw []byte) ([]byte, error) {
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBestCompression),
-		zstd.WithEncoderConcurrency(1))
+	enc, err := chunkEncoder()
 	if err != nil {
 		return nil, err
 	}
-	defer enc.Close()
 	return enc.EncodeAll(raw, make([]byte, 0, len(raw)/2+64)), nil
 }
 
-// DecodeChunk decodes a chunk object that must hold exactly rawSize bytes. Output is bounded by rawSize, so
-// a hostile object cannot make it allocate more.
+// DecodeChunk decodes a chunk object that must hold exactly rawSize bytes. Output is bounded by cdc.MaxSize,
+// so a hostile object cannot make it allocate more.
 func DecodeChunk(stored []byte, rawSize uint32) ([]byte, error) {
-	dec, err := zstd.NewReader(bytes.NewReader(stored), zstd.WithDecoderConcurrency(1), zstd.WithDecoderLowmem(true),
-		zstd.WithDecoderMaxWindow(1<<25))
+	dec, err := chunkDecoder()
 	if err != nil {
 		return nil, err
 	}
-	defer dec.Close()
-	out := make([]byte, int(rawSize)+1)
-	n, err := io.ReadFull(dec, out)
+	out, err := dec.DecodeAll(stored, make([]byte, 0, rawSize))
 	switch {
-	case err == nil:
-		return nil, fmt.Errorf("decodes to more than %d bytes", rawSize)
-	case errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF):
-		if n != int(rawSize) {
-			return nil, fmt.Errorf("decodes to %d bytes, expected %d", n, rawSize)
-		}
-		return out[:n], nil
-	default:
+	case err != nil:
 		return nil, err
+	case len(out) != int(rawSize):
+		return nil, fmt.Errorf("decodes to %d bytes, expected %d", len(out), rawSize)
 	}
+	return out, nil
 }

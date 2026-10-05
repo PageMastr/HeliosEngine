@@ -122,6 +122,11 @@ func parse(fs *flag.FlagSet, args []string, t *patchtrust.Target) error {
 		fmt.Fprintln(fs.Output(), "--product, --channel and --platform are required; no positional arguments")
 		return errUsage
 	}
+	// The three become path segments (the dev keys' directory, the CDN's paths): check them first.
+	if err := t.Validate(); err != nil {
+		fmt.Fprintln(fs.Output(), err)
+		return errUsage
+	}
 	return nil
 }
 

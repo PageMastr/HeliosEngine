@@ -89,8 +89,16 @@ type RootPair struct {
 // Target is what an install verifies for: its product, channel and platform.
 type Target struct {
 	ProductID string
-	Channel   string
+	Channel   string // ^[a-z][a-z0-9-]{1,31}$
 	Platform  string
+}
+
+// Validate checks the three identifiers (they become CDN path segments).
+func (t Target) Validate() error {
+	if !manifest.ValidProductID(t.ProductID) || !validChannel(t.Channel) || !manifest.ValidPlatform(t.Platform) {
+		return fmt.Errorf("patchtrust: invalid target %q/%q/%q", t.ProductID, t.Channel, t.Platform)
+	}
+	return nil
 }
 
 // State holds the ratchets an install persists (08 §2.5: install.db keeps them; WP-0.17). The zero
@@ -129,9 +137,10 @@ type Verifier struct {
 
 // NewVerifier checks the target's identifiers and the root pair.
 func NewVerifier(t Target, roots RootPair, opts Options) (*Verifier, error) {
+	if err := t.Validate(); err != nil {
+		return nil, err
+	}
 	switch {
-	case !manifest.ValidProductID(t.ProductID) || !validChannel(t.Channel) || !manifest.ValidPlatform(t.Platform):
-		return nil, fmt.Errorf("patchtrust: invalid target %+v", t)
 	case roots.Epoch == 0 || roots.Epoch == ^uint32(0):
 		return nil, fmt.Errorf("patchtrust: root epoch %d is outside 1..%d", roots.Epoch, ^uint32(0)-1)
 	case roots.Current == roots.Next:

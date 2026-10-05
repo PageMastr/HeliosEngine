@@ -115,9 +115,9 @@ found one (`core_tests` compares `assertHandler()` with `&defaultAssertHandler`)
 `HELIOS_LOG_CHANNEL_EXTERN` and defined in one `.cpp`; `HELIOS_LOG_CHANNEL` stays for channels of a
 module's own sources (an inline variable, so one copy per image).
 
-**Export counts** (`HELIOS_MODULAR=ON`, RelWithDebInfo; `nm -D --defined-only`): GCC 13: `helios_runtime`
-4,474 (271 of them Luau's VM), `helios_client` 349, `helios_editor` 485, SDL3 1,272, Dear ImGui 4,316;
-Clang 18: 4,944 (272 Luau), 407 and 585.
+**Export counts** (`HELIOS_MODULAR=ON`, RelWithDebInfo; `nm -D --defined-only`; after review round 1):
+GCC 13: `helios_runtime` 4,466 (273 of them Luau's VM), `helios_client` 354, `helios_editor` 485, SDL3
+1,272, Dear ImGui 4,316; Clang 18: 4,936 (272 Luau), 412 and 585.
 MSVC 14.51 (`windows-msvc-dev` job): `helios_runtime` 10,084, `helios_client` 1,817, `helios_editor` 2,002;
 `WINDOWS_EXPORT_ALL_SYMBOLS` also exports the inline and template instantiations of the group's objects.
 The PE format allows 65,535 exports per image, so the largest group uses about 15 % of it.

@@ -7,8 +7,10 @@ Helios channels, message reliability, budgets and statistics. The same stack ser
 and private server trunks. Helios adds **no cryptography of its own**.
 
 ```
-L0  udp_socket.h   UdpSocket: Winsock2 / BSD, IPv4 + dual-stack IPv6, non-blocking,
-                   sendmmsg/recvmmsg batches of 64 (Linux), SO_*BUF(FORCE) sizing, SIO_UDP_CONNRESET off
+L0  udp_socket.h   UdpSocket: Winsock2 / BSD, IPv4 + dual-stack IPv6, non-blocking, batch APIs:
+                   sendmmsg/recvmmsg batches of 64 (Linux), Registered I/O with polled completion
+                   queues (Windows), WSASendMsg/WSARecvMsg or sendto/recvmsg per datagram as the
+                   fallback; SO_*BUF(FORCE) sizing, SIO_UDP_CONNRESET off
     transport.h    IDatagramTransport; SocketTransport (batched socket); VirtualNetwork (in-process)
     netsim.h       NetSim: latency, jitter, Bernoulli + Gilbert-Elliott loss, duplication,
                    reordering, bandwidth cap; profiles lan/good/mobile/awful
@@ -184,7 +186,7 @@ thread-safe. Handlers run inside `update()` on the updating thread and may call 
 
 ## Tests, fuzzers, gates
 
-`net_tests` (doctest, 84 test cases; `ctest -R net_`):
+`net_tests` (doctest, 92 test cases on Linux, 93 on Windows; `ctest -R net_`):
 
 | Suite | Covers |
 |---|---|
@@ -196,7 +198,8 @@ thread-safe. Handlers run inside `update()` on the updating thread and may call 
 | `net.endpoint` | token handshake + session info, NS-0.1, 16 clients × all channels under 10 % loss/reorder/dup, timeouts + reconnect, graceful disconnects, stale handles, token validation (protocol, key, address, expiry, full, reuse, junk), pre-filter, malformed authenticated peer, server and client handler re-entrancy (send/disconnect from callbacks), real UDP loopback, keyed pre-filter buckets (a precomputed colliding source cannot starve a victim), IPv6 /64 rate limiting, NetSim timing of flush()-time sends, NAT-rebinding reconnect via `findSession` + `disconnect` |
 | `net.connect_token` | round trip, tamper detection, **Go golden vectors** (`services/testdata/vectors`): public + private parts byte-exact, a Go-issued token completes the handshake, an expired one is refused |
 | `net.trunk` | profile, 256 KB CONTROL + 200 KB BULK under loss, coalescing, 2,000-packet bursts with acks, short NS-0.7 run with full 1,200 B datagrams |
-| `net.udp` | loopback send/receive, batches, truncation, IPv6/dual-stack (skipped when the OS lacks IPv6), 32 MB buffers, bind errors, SocketTransport batching, NS-0.2 |
+| `net.udp` | loopback send/receive, batches, truncation, IPv6/dual-stack (skipped when the OS lacks IPv6), 32 MB buffers, bind errors, SocketTransport batching, NS-0.2; **batch APIs**: what Auto and each forced API resolve to (Registered on Windows, MultiMessage on Linux, Message otherwise), the same semantics under every API (nothing pending, empty batches, an unreachable destination skipped and counted, partial batches, sender addresses, truncation through receiveBatch and receiveFrom, byte counters), interop between APIs with a 400-datagram burst (more than RIO's 256 send slots and 128 posted receives), SocketTransport over every API, and on Windows RIO's 2 KB slot limits |
+| `net.netcode_patches` | `0001-write-bytes-memcpy`: bytes and pointer advance unchanged for 0–1,200 bytes and negative counts; `perf:` a 1,200 B payload in ≤ 0.5 µs (1.28 µs unpatched, 0.018 µs patched here) |
 
 **Fuzz targets** (`fuzz/`, `net_fuzz` target): `packet_parser` (HTP framing; property:
 canonical re-serialisation), `connection_receive` (reliable headers, fragment reassembly, parser,
@@ -229,10 +232,64 @@ without the flag, as do local runs and fixed hardware.
 | NS-0.4 fuzzers 1 h clean | harnesses + seeds + CTest smoke; long runs under ASan/UBSan clean (see WP report); the 1 h libFuzzer nightly needs Clang's compiler-rt (absent in this container) |
 | NS-0.7 trunk 20k pps × 1,200 B, < 0.1 % drops, ≤ 1 core | `net_bench --gate`, 600 s, full datagrams (1,188 B STATE payload → 1,200 B netcode payload): 11,999,999 of 11,999,999 delivered (20,000 pps, 190.1 Mbit/s payload, 199.7 Mbit/s wire), 0 drops, cell thread 0.26 cores, gateway thread 0.29 cores; `net.trunk` repeats it for 1 s on every test run |
 
+### NS-0.2 per-packet budget (WP-0.13r)
+
+NS-0.2's 100k packets per core is a CPU budget of **≤ 10 µs per encrypted packet, send and receive
+together, on one core** (`bench::kNs02BudgetMicrosPerPacket`; `net_bench --stack` prints the measured µs
+per packet beside it). The win-gpu runner (AMD Ryzen 5 5500, Windows 11) measured 12.1–12.2 µs (82,842 and
+82,134 packets per core on 2026-10-04/05) against 6.2 µs for a raw datagram, so the Windows socket path and
+the stack's own work both had to shrink.
+
+Where a packet's CPU goes (`perf record -e cpu-clock` of `net_bench --stack 8`, GCC 13 RelWithDebInfo, this
+container; the bench sends 700-byte EVENT_U messages, one per ≈ 730-byte datagram, and the same thread
+receives them):
+
+| Component | main (aa80a1d) | with patch 0001 |
+|---|---|---|
+| ChaCha20 (SSSE3 kernel), encrypt + decrypt | 24.7 % | 32.3 % |
+| Poly1305 (SSE2) and the AEAD wrappers | 10.1 % | 11.5 % |
+| `sodium_memzero` (a volatile byte loop on Linux) | 12.0 % | 8.2 % |
+| `netcode_write_bytes` (one call per payload byte) | 11.5 % | 0.2 % |
+| netcode, other (framing, queues; replay protection 0.04 %) | 2.7 % | 3.1 % |
+| reliable (acks, sequence buffers) | 3.5 % | 3.7 % |
+| Helios (channels, packing, transport, socket wrappers, allocation tracking) | 5.7 % | 6.5 % |
+| libc copies and allocations, mimalloc | 1.8 % | 2.0 % |
+| Kernel: `sendmmsg` with loopback delivery (≈ 21 %), `recvmmsg` (≈ 5 %), page faults | 28.2 % | 32.7 % |
+| The bench harness (loop, clock reads, handler) | 0.2 % | 0.1 % |
+
+Helios' own code is about 6 % and allocations about 1 % (mimalloc plus the "Net" tag accounting), so the
+cuts are in vendored code: **netcode patch `0001-write-bytes-memcpy`** (third_party/MANIFEST.md, "Patches")
+removes the byte loop, @@AFTER_SUMMARY@@
+
+Crypto is now half of a packet. The bundled libsodium subset compiles ChaCha20 (reference, SSSE3, AVX2) and
+Poly1305 (donna, SSE2) and picks one at run time; it is not the reference ChaCha20 alone. Under GCC and
+Clang, however, its CPU probe reads XCR0 only when `HAVE__XGETBV` or `HAVE_AVX_ASM` is defined, which the
+amalgamation never does, so it never reports AVX and keeps the SSSE3 ChaCha20 on AVX2 hardware, and on Linux
+`sodium_memzero` falls back to a volatile byte loop because `HAVE_EXPLICIT_BZERO` is not defined. MSVC builds
+(the Windows nightly, win-gpu) should, by the code, select the AVX2 ChaCha20 (`/arch:AVX2` defines `__AVX2__`
+and the probe reads XCR0 with `_xgetbv`) and wipe with `SecureZeroMemory` (not observed on Windows), but they
+have no `__int128`, so Poly1305 runs the portable donna32 code there. Defining `HAVE_AVX_ASM` and
+`HAVE_EXPLICIT_BZERO` for `tp_netcode` (no source edit) measured 164k against 132k packets per core here (5
+interleaved runs, medians), and forcing donna32 cost 0.6 µs per packet. That is a change to how the crypto
+library runs, so it is a **proposal awaiting the owner's decision** (WP-0.13r's PR), not part of this code.
+
+**Windows.** `UdpSocket` now batches with Registered I/O (04 §2.6): one kernel entry per batch of sends or
+re-posted receives instead of one `sendto`/`recvfrom` per datagram, and no kernel entry to read completions.
+Windows numbers come only from the hosted Windows nightly and the owner's `win-gpu` runner.
+
 ## Known limitations
 
-* Windows batching loops `sendto`/`recvfrom` (WSARecvMsg loops / RIO are the Phase 2 options);
-  the Win32 path is compile/link-checked with MinGW here and needs the Windows CI runner.
+* The Win32 batch path (Registered I/O, and the WSASendMsg/WSARecvMsg fallback) is compiled with MinGW
+  here and runs only on the Windows CI runners and the owner's `win-gpu` runner. Registered I/O copies
+  each datagram through a registered 2 KB slot (128 receives posted, 256 sends in flight per socket,
+  ≈ 0.8 MB of locked memory), so it refuses sends of 2,048 bytes or more and drops larger datagrams as
+  truncated; HTP datagrams are at most 1,300 bytes. The fallback polls a non-blocking socket rather than
+  using IOCP: 04 §2.6's IOCP + `WSARecvMsg` fallback belongs to the Phase 2 trunk IO threads, which block
+  between bursts.
+* The bundled libsodium subset never selects its AVX2 ChaCha20 under GCC/Clang (its CPU probe needs
+  `HAVE_AVX_ASM` to read XCR0) and wipes secrets with a volatile byte loop on Linux (no
+  `HAVE_EXPLICIT_BZERO`); both cost NS-0.2 headroom and are a proposal awaiting an owner decision, not a
+  change (see "NS-0.2 per-packet budget" below).
 * IPv6 sockets are exercised only where the OS provides them (this container has no IPv6);
   IPv6 addressing is covered through VirtualNetwork and the Go vectors.
 * A peer can disturb reassembly of its *own* fragmented packets (e.g. by sending bogus fragments
@@ -256,9 +313,12 @@ without the flag, as do local runs and fixed hardware.
 
 ## Plan conformance
 
-Plan-Rev: 12
+Plan-Rev: 13
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
 `docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked at revision 12 (09 §5.6's owner approval)
-on 2026-10-03: the approval adds `net_bench --advisory ns02-stack` and changes nothing in `helios_net`. No
-conformance delta is open; see §5.10.4 (c) there.
+on 2026-10-03: the approval adds `net_bench --advisory ns02-stack` and changes nothing in `helios_net`.
+Re-checked at revision 13 on 2026-10-05 (WP-0.13r): revision 13 changes 02 §5.5–5.6 and 07 §1.7.1 only.
+WP-0.13r implements 04 §2.6's Windows batch I/O (Registered I/O with a polled completion queue per
+socket); its fallback is a polled non-blocking socket with `WSARecvMsg`/`WSASendMsg` instead of IOCP (see
+Known limitations). No conformance delta is open; see §5.10.4 (c) there.

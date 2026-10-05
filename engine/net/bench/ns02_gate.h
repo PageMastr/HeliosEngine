@@ -12,6 +12,10 @@ namespace helios::net::bench {
 /// NS-0.2's rate, for raw datagrams and for encrypted HTP packets alike.
 inline constexpr f64 kNs02PerCore = 100'000.0;
 
+/// The same threshold as a CPU budget: 10 us of one core per packet, send and receive together, for the
+/// whole encrypted stack (netcode's AEAD, reliable, HTP channels, the transport and its system calls).
+inline constexpr f64 kNs02BudgetMicrosPerPacket = 1e6 / kNs02PerCore;
+
 /// The only threshold `net_bench --advisory` accepts: the encrypted-stack rate on hosted runners.
 inline constexpr std::string_view kNs02StackAdvisoryName = "ns02-stack";
 

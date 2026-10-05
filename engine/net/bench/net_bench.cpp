@@ -19,6 +19,7 @@
 //                                   --advisory name.
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "helios/core/log.h"
@@ -80,8 +81,18 @@ struct StackResult {
     u64 sent = 0;
     u64 packets = 0;
     f64 cpuSeconds = 0.0;
+    f64 wallSeconds = 0.0;
     f64 ppsPerCore() const { return cpuSeconds > 0 ? static_cast<f64>(packets) / cpuSeconds : 0.0; }
+    f64 microsPerPacket() const { return packets > 0 ? cpuSeconds * 1e6 / static_cast<f64>(packets) : 0.0; }
 };
+
+/// The batch API the bench's sockets get (they all ask for Auto, as SocketTransport does by default).
+std::string_view autoBatchApi() {
+    UdpSocketConfig c;
+    c.bindAddress = Address::loopbackV4(0);
+    auto s = UdpSocket::open(c);
+    return s ? udpBatchApiName(s.value().batchApi()) : std::string_view("unavailable");
+}
 
 /// Encrypted HTP packets (netcode + reliable + channels) per core: server and client in one
 /// thread over UDP loopback, 100-byte EVENT_U messages, one per packet.
@@ -121,6 +132,7 @@ StackResult runStackPps(f64 seconds) {
     }
     if (se.sessions.empty()) return r;
     const std::vector<u8> msg(700, 1); // one message per packet
+    const f64 wall0 = monotonicSeconds();
     const f64 cpu0 = os::threadCpuSeconds();
     const f64 end = monotonicSeconds() + seconds;
     while (monotonicSeconds() < end) {
@@ -144,6 +156,7 @@ StackResult runStackPps(f64 seconds) {
         server->update(now, se);
     }
     r.cpuSeconds = os::threadCpuSeconds() - cpu0;
+    r.wallSeconds = monotonicSeconds() - wall0;
     r.packets = ce.messages;
     return r;
 }
@@ -195,8 +208,9 @@ int main(int argc, char** argv) {
     if (all || gate || has("--socket")) {
         const u64 count = static_cast<u64>(number("--socket", 0, 1'000'000));
         const SocketResult s = runSocketPps(count);
-        HELIOS_LOG_INFO("NS-0.2 socket: {}/{} datagrams, {:.0f} pps per core ({:.1f} ms CPU, {:.1f} ms wall)", s.received,
-                        s.sent, s.ppsPerCore(), s.cpuSeconds * 1e3, s.wallSeconds * 1e3);
+        HELIOS_LOG_INFO("NS-0.2 socket: {}/{} datagrams, {:.0f} pps per core ({:.1f} ms CPU, {:.1f} ms wall, batch API "
+                        "{})",
+                        s.received, s.sent, s.ppsPerCore(), s.cpuSeconds * 1e3, s.wallSeconds * 1e3, autoBatchApi());
         if (gate && (s.received != s.sent || s.ppsPerCore() < bench::kNs02PerCore)) {
             HELIOS_LOG_ERROR("NS-0.2 FAILED: needs 100k pps per core without loss");
             ok = false;
@@ -204,9 +218,13 @@ int main(int argc, char** argv) {
     }
     if (all || gate || has("--stack")) {
         const StackResult s = runStackPps(number("--stack", 0, gate ? 10.0 : 2.0));
+        // The wall time is a cross-check of the per-thread CPU time: the loop never sleeps, so CPU well below
+        // wall means the thread was preempted or work ran outside it (an OS completing I/O elsewhere).
         HELIOS_LOG_INFO("NS-0.2 HTP stack: {}/{} encrypted packets delivered, {:.0f} packets per core (send + receive, "
-                        "1 thread)",
-                        s.packets, s.sent, s.ppsPerCore());
+                        "1 thread): {:.2f} us of CPU per packet against a budget of {:.0f} ({:.2f} s CPU, {:.2f} s wall, "
+                        "batch API {})",
+                        s.packets, s.sent, s.ppsPerCore(), s.microsPerPacket(), bench::kNs02BudgetMicrosPerPacket,
+                        s.cpuSeconds, s.wallSeconds, autoBatchApi());
         const bench::Ns02Verdict verdict =
             bench::ns02StackVerdict(s.sent, s.packets, s.ppsPerCore(), stackAdvisory);
         if (gate && verdict == bench::Ns02Verdict::Fail) {

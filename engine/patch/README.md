@@ -128,8 +128,8 @@ then 8 reserved bytes), then the tables back to back, then the paths:
 **Validation** (the reader's and the writer's; `validateManifest` / `Manifest.Validate`):
 
 - **Sizes:** the counts give exactly `bodySize`; limits: 2^20 files, 2^24 chunks, 2^24 refs, 2^20 packs, 2^20
-  patches and 64 MiB of paths (`LimitExceeded` beyond one). A path of 0 or more than 1024 bytes is not a
-  limit but an invalid path: `Corrupt` from the readers, `InvalidArgument` (Go: `ErrInvalid`) from
+  patches and 64 MiB of paths (`LimitExceeded` beyond one). A path of 0 or more than 1024 bytes (or with a
+  segment over 255) is not a limit but an invalid path: `Corrupt` from the readers, `InvalidArgument` (Go: `ErrInvalid`) from
   `validateManifest` and the writers.
 - **Files:** sorted by path (byte order) and unique, also ignoring ASCII case; no file is also a directory of
   another file, also ignoring case (`a` and `A/b`); `pathOffset` is the running sum of path lengths; `tier` ≤ 2;
@@ -137,9 +137,12 @@ then 8 reserved bytes), then the tables back to back, then the paths:
   collision rules are checked together: each path's key is the path with ASCII letters lowered and `/` mapped
   to 0x00, so byte order on keys puts a directory's contents directly after it; the keys are sorted (only if
   they are not already) and neighbours compared. That costs O(P + n log n · ℓ) byte operations for P path
-  bytes, n files and common prefixes ℓ ≤ 1024, and hashes no attacker-chosen string. (Looking up every
-  `/`-prefix of every path in a set, as the first version did, costs about len²/4 per path: 2.4 s (Go) and
-  5 s (C++) for `deep-paths.hman`.)
+  bytes, n files and common prefixes ℓ ≤ 1024, and hashes no attacker-chosen string. A build's keys mostly
+  arrive sorted (lowered paths sort like the paths unless case or `+`, `-`, `.` reorder them), and then the
+  check is one comparison per file; keys an attacker puts out of order cost the sort, about 50–150 ms more
+  for 65,536 keys of 1 KiB (see [Performance](#performance)). (Looking up every `/`-prefix of every path in a
+  set, as the first version did, costs about len²/4 per path: 2.4 s (Go) and 5 s (C++) for
+  `deep-paths.hman`.)
 - **Refs:** a file's refs tile it: each `chunk` exists, each `offset` is the sum of the previous chunks' raw
   sizes, and the total is the file's `size` (so `refCount` is 0 exactly when `size` is 0).
 - **Chunks:** sorted by ID and unique; `rawSize` 1..256 KiB; `storedSize` ≤ 256 KiB + 4 KiB (0 = not recorded);
@@ -154,10 +157,12 @@ then 8 reserved bytes), then the tables back to back, then the paths:
 So a manifest has exactly one body: the Go and C++ writers emit identical bytes for codec 0, and identical
 bodies (different zstd frames) for codec 1.
 
-**Paths** are relative, `/`-separated ASCII: each segment is `[A-Za-z0-9._+-]+`, not `.` or `..`, does not end
-in `.` (Windows drops it), and is not a Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM0`–`COM9`,
-`LPT0`–`LPT9`, with any extension, any case). With the case-insensitive uniqueness rule, a manifest installs the
-same tree on NTFS and ext4.
+**Paths** are relative, `/`-separated ASCII of at most 1024 bytes: each segment is 1–255 bytes of
+`[A-Za-z0-9._+-]` (ext4's `NAME_MAX` is 255 bytes and NTFS allows 255 UTF-16 units per name), not `.` or `..`,
+does not end in `.` (Windows drops it), and is not a Windows device name (`CON`, `PRN`, `AUX`, `NUL`,
+`COM0`–`COM9`, `LPT0`–`LPT9`, with any extension, any case). With the case-insensitive uniqueness rules, a
+manifest's relative tree can be created on NTFS and ext4 alike (the install root plus a 1024-byte path can still
+exceed Windows' 260-character `MAX_PATH`; the installer needs long-path support for such trees).
 
 **zstd payloads** may be one or more frames (skippable frames are skipped) whose output is exactly `bodySize`
 bytes, with a window of at most 32 MiB. The writers use zstd levels 1–19, whose windows fit. Write options default alike in both
@@ -172,9 +177,9 @@ means 19.
 | `hman/pipeline.json` | A build description: 8 files given by generator (shared chunks, an empty file, all-zero data, every tag), a pack with two placed chunks, a stored size, two patches, a key ID and signature | by hand |
 | `hman/pipeline.hman` | That description written with codec 0: both writers must produce it byte for byte, from files added in any order | `go test ./pkg/manifest -run TestUpdateGoldens -update` |
 | `hman/pipeline.go-zstd.hman`, `pipeline.cpp-zstd.hman` | The same manifest with a zstd-19 payload from each language's encoder; both readers must read both | Go: as above; C++: `HELIOS_PATCH_UPDATE_VECTORS=1 patch_tests` |
-| `hman/hostile.json` | 53 edits of `pipeline.hman` (header, every table, reserved bytes, sizes, truncation, trailing bytes), resealed or not, each with the error kind both readers must return and the one check it breaks (`rule`, a substring of the error message both languages share); where one edit would break two checks, the case edits the dependent field too (a chunk's raw size with its file's size) | `go test ./pkg/manifest -run TestUpdateGoldens -update` |
+| `hman/hostile.json` | 56 edits of `pipeline.hman` (header, every table, reserved bytes, sizes, truncation, trailing bytes, a ref after the last file's, a path byte of no file, a pack that holds no chunk) and one of `pipeline.go-zstd.hman` (a trailing skippable frame one byte past the payload bound), resealed or not, each with the error kind both readers must return and the one check it breaks (`rule`, a substring of the error message both languages share); an edit overwrites or (`insert`) inserts bytes; where one edit would break two checks, the case edits the dependent field too (a chunk's raw size with its file's size, a table entry with its count) | `go test ./pkg/manifest -run TestUpdateGoldens -update` |
 | `hman/deep-paths.hman` | The deepest paths the limits allow: 65,536 empty files whose 1024-byte paths sit 508 directories deep (64 MiB of paths, a 72 MB body, 187 KB with zstd-19). Both readers read it; the perf tests hold it to the read budget | `go test ./pkg/manifest -run TestUpdateGoldens -update` |
-| `hman/names.json` | Valid and invalid paths, product IDs, platforms and build IDs, and whole path lists that must pass or fail the collision rules (the invalid ones with the check they fail) | by hand |
+| `hman/names.json` | Valid and invalid paths (among them 255- and 256-byte segments), product IDs, platforms and build IDs, and whole path lists that must pass or fail the collision rules (the invalid ones with the check they fail) | by hand |
 
 Inputs come from a seeded generator (`services/pkg/cdc/cdctest`, mirrored in `tests/patch_test_util.h`): `random`
 (SplitMix64 outputs as little-endian bytes), `zero`, `repeat` (a random unit repeated) and `insert`, each
@@ -188,10 +193,13 @@ optionally followed by `edits` (bytes written at offsets: the crafted inputs).
   body size, path offsets, reserved bytes) and validates the manifest. Every failure is a `Result` error
   (`Corrupt`, `VersionMismatch`, `Unsupported` or `LimitExceeded`), never UB. Go returns errors wrapping
   `ErrCorrupt`, `ErrVersion`, `ErrUnsupported` and `ErrLimit` and never panics. `hostile.json` pins the kind
-  and the failing check for 53 cases in both languages.
+  and the failing check for 57 cases in both languages.
 - **CPU.** Every check is linear in the body's bytes except the path-collision sort (above), which costs at
   most n log n key comparisons of ≤ 1 KiB each. `deep-paths.hman` (the case the first version's prefix check
-  took 5 s on) reads within the read budget; see [Performance](#performance).
+  took 5 s on) reads within the read budget, and the same paths with their keys in random order within their
+  own; see [Performance](#performance). A non-perf case in `patch_tests` (every PR) also holds validating paths
+  508 levels deep to 4 times the cost of paths 4 levels deep, so a quadratic check fails PR CI in both
+  languages, not only the nightly.
 - **Memory.** A zstd payload decodes into a buffer that grows only as bytes decode (from 1 MiB, doubling) up to
   `bodySize + 1`, so a small file that claims a 256 MiB body costs what it really decodes to. C++ grows it with
   `realloc`, which moves large blocks' pages instead of copying them (doubling a `std::vector` to 72 MB cost
@@ -223,11 +231,20 @@ Measured on the shared, loaded 4-vCPU dev VM (load average 3–5), GCC 13 RelWit
 | Chunking with a BLAKE2b-256 ID per chunk and one for the whole input | ≥ 250 MB/s | 318–436 MB/s (`splitBuffer`), 307–353 MB/s (`StreamChunker`) | 333–343 MB/s (`ChunkReader`) |
 | Read a 50 GB install's manifest (20k files, 700k chunks, 52.6 MB body): BLAKE2b, decode, validate | ≤ 400 ms | 114–122 ms | 103–125 ms |
 | Write it (codec 0) | ≤ 400 ms | 153–171 ms | 130–154 ms |
-| Read `deep-paths.hman` (64 MiB of paths 508 directories deep, a 72 MB body, zstd) | ≤ 400 ms | 315–325 ms | 300–354 ms |
+| Read `deep-paths.hman` (64 MiB of paths 508 directories deep, a 72 MB body, zstd), whose collision keys arrive sorted | ≤ 400 ms | 315–325 ms | 300–354 ms |
+| Read the same paths with their collision keys in random order (the first 16 directories named `a` or `A` by a random permutation, so the check sorts 65,536 keys of 1 KiB); C++ also asserts at most twice the sorted-key read | ≤ 800 ms | 384–475 ms ¹ | 449–470 ms ¹ |
 
-The deep-paths read is also held to twice the read of as many bytes of paths without directories (the same
-body size): 0.9–1.2 times here, against 4.6 times (Go, 2.4 s) and 13 times (C++, 5.1 s) for the first
-version's prefix check, so the ratio fails a quadratic check on any machine while the budget needs a quiet one.
+¹ Measured 2026-10-05 (load average 5–7), when the sorted-key read took 305–395 ms (C++) and 302–371 ms (Go).
+Out of order the sort costs C++ (libstdc++ `std::sort`) about 50–150 ms here; the round-2 review measured 145 ms
+for the sort alone, and a 463 ms read, with only the first directory's case alternating (294 ms in order). At
+the file-count limit reads are slower still, and no budget is stated for them: 2^20 files of 64-byte paths took
+C++ 661 ms in order and 848 ms with three case bits shuffled here; the review measured C++ 638 ms in order and
+1,226 ms out of order, and Go 699 and 764 ms (Go's pdqsort copes better with out-of-order keys).
+
+The deep-paths read is also held to twice the read of as many bytes of paths four directories deep (255-byte
+names, the same body size): 0.9–1.3 times here, against 4.6 times (Go, 2.4 s) and 13 times (C++, 5.1 s) for
+the first version's prefix check, so the ratio fails a quadratic check on any machine while the budget needs a
+quiet one.
 In C++ that read is mostly hashing (about 85 ms), zstd (60 ms) and validation (140 ms, most of it the paths)
 of a body 1.4 times the large manifest's.
 
@@ -250,7 +267,7 @@ needs two cores at this rate, or the SSE4.1/AVX2 BLAKE2b that 08 §2.1.1 lists f
   Without `HELIOS_PATCH_LIBFUZZER` the target is a CTest (label `fuzz`, every PR) that replays the corpus plus
   20,000 deterministic mutations.
 - **Go:** `FuzzParse` (pkg/manifest; its seeds, which every `go test` runs, are the shared goldens with
-  `deep-paths.hman`, a 64-file deep-paths manifest and the 53 hostile cases) checks the same properties, and
+  `deep-paths.hman`, a 64-file deep-paths manifest and the 57 hostile cases) checks the same properties, and
   `FuzzChunker` (pkg/cdc) checks that the streaming chunker agrees with `Split` and the size bounds for any input
   and read pattern.
 
@@ -311,4 +328,5 @@ WP-0.16) on 2026-10-04. Deviations and choices the plan leaves open:
 - **Fields the plan does not list:** `expiresAt` in the manifest (05 §7 puts `expires` on the pointer; the brief
   asks for the field so part 2 can use it), `compatEpoch`, `keyId`, the chunk's `storedSize`, and the pack and
   patch entry layouts.
-- **Paths** are restricted to ASCII `[A-Za-z0-9._+-]` segments, unique ignoring case, with no device names.
+- **Paths** are restricted to ASCII `[A-Za-z0-9._+-]` segments of at most 255 bytes, unique ignoring case,
+  with no device names.

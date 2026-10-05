@@ -33,6 +33,11 @@ namespace cdn {
 
 /// The largest chunk object: zstd's bound for a kMaxSize chunk fits.
 inline constexpr u64 kMaxChunkObject = fastcdc::kMaxSize + 4096;
+/// The largest zstd window a chunk object may declare: 2^18 = fastcdc::kMaxSize. Go's EncodeChunk declares
+/// at most max(content size, 1 KiB), so every object publish writes fits, and a hostile one cannot make the
+/// decoder reserve a larger window.
+inline constexpr int kMaxChunkWindowLog = 18;
+static_assert(u64(1) << kMaxChunkWindowLog == fastcdc::kMaxSize);
 /// The largest .hman object: the header, the largest body and zstd's worst-case expansion.
 inline constexpr u64 kMaxManifestObject =
     hman::kHeaderSize + hman::kMaxBodySize + hman::kMaxBodySize / 128 + 4096;
@@ -55,8 +60,9 @@ using CdnFetch = std::function<Result<std::vector<u8>>(std::string_view path, u6
 /// A CdnFetch over a CDN directory, through the platform layer (core fs).
 CdnFetch localCdn(fs::Path root);
 
-/// Decodes a chunk object that must hold exactly `rawSize` bytes; output is bounded by rawSize and the zstd
-/// window by 32 MiB, so a hostile object cannot make it allocate more. Corrupt otherwise.
+/// Decodes a chunk object that must hold exactly `rawSize` bytes; output is bounded by rawSize + 1 bytes and
+/// the zstd window by cdn::kMaxChunkWindowLog (256 KiB), so a hostile object cannot make it allocate more.
+/// Corrupt otherwise.
 Result<std::vector<u8>> decodeChunkObject(std::span<const u8> stored, u32 rawSize);
 
 /// Fetches a loose chunk and checks it: chunk-missing, chunk-corrupt (stored size, decoding), chunk-hash.

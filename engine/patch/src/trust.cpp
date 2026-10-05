@@ -19,14 +19,15 @@ constexpr std::string_view kPointerContext = "HELIOS-POINTER-V0\n";
 constexpr usize kMaxIdText = 64; // product IDs, channels, platforms and build IDs are shorter
 
 constexpr std::string_view kCheckNames[] = {
-    "keyset-malformed",  "keyset-root",        "keyset-root-ratchet",   "keyset-signature",
-    "keyset-product",    "keyset-version",     "pointer-malformed",     "pointer-key-unknown",
-    "pointer-key-role",  "pointer-signature",  "pointer-key-window",    "pointer-lifetime",
-    "pointer-product",   "pointer-channel",    "pointer-platform",      "pointer-expired",
-    "pointer-sequence",  "manifest-malformed", "manifest-hash",         "manifest-key-unknown",
-    "manifest-key-role", "manifest-signature", "manifest-key-window",   "manifest-product",
-    "manifest-platform", "manifest-build",     "manifest-compat-epoch", "manifest-expired",
-    "manifest-body",     "chunk-missing",      "chunk-corrupt",         "chunk-hash",
+    "keyset-malformed",    "keyset-root",        "keyset-root-ratchet",   "keyset-signature",
+    "keyset-product",      "keyset-version",     "pointer-malformed",     "pointer-key-unknown",
+    "pointer-key-role",    "pointer-signature",  "pointer-key-window",    "pointer-future",
+    "pointer-lifetime",    "pointer-product",    "pointer-channel",       "pointer-platform",
+    "pointer-expired",     "pointer-sequence",   "manifest-malformed",    "manifest-hash",
+    "manifest-key-unknown", "manifest-key-role", "manifest-signature",    "manifest-key-window",
+    "manifest-future",     "manifest-product",   "manifest-platform",     "manifest-build",
+    "manifest-compat-epoch", "manifest-expired", "manifest-body",         "chunk-missing",
+    "chunk-corrupt",       "chunk-hash",
 };
 static_assert(std::size(kCheckNames) == static_cast<usize>(TrustCheck::Count));
 
@@ -244,18 +245,37 @@ bool validVersionText(std::string_view s) noexcept {
     return true;
 }
 
+/// The part of `rest` (a URL after its "scheme://") before the first '/', '?' or '#'.
+std::string_view urlAuthority(std::string_view rest) noexcept {
+    return rest.substr(0, rest.find_first_of("/?#"));
+}
+
+/// Go's patchtrust.IsLoopbackURL: http:// with an authority of exactly localhost, 127.0.0.1 or [::1] and an
+/// optional port of 1-5 digits, then nothing or a path. Userinfo is refused: its host is after the '@'.
+bool isLoopbackUrl(std::string_view s) noexcept {
+    constexpr std::string_view kScheme = "http://";
+    if (!s.starts_with(kScheme) || s.find('@') != std::string_view::npos) return false;
+    const std::string_view rest = s.substr(kScheme.size());
+    const std::string_view auth = urlAuthority(rest);
+    if (auth.size() < rest.size() && rest[auth.size()] != '/') return false; // a query or fragment
+    for (const std::string_view host : {"localhost", "127.0.0.1", "[::1]"}) {
+        if (!auth.starts_with(host)) continue;
+        const std::string_view port = auth.substr(host.size());
+        if (port.empty()) return true;
+        if (port[0] != ':' || port.size() < 2 || port.size() > 6) return false;
+        return std::all_of(port.begin() + 1, port.end(), [](char c) { return c >= '0' && c <= '9'; });
+    }
+    return false;
+}
+
+/// https:// with a non-empty authority, or a loopback http:// URL; no spaces and no userinfo ('@').
 bool validHost(std::string_view s) noexcept {
     if (s.empty() || s.size() > kMaxHostLength) return false;
     for (const char c : s)
-        if (!inStringAlphabet(static_cast<u8>(c)) || c == ' ') return false;
-    if (s.starts_with("https://")) return s.size() > 8;
-    for (const std::string_view loop : {"http://localhost", "http://127.0.0.1", "http://[::1]"}) {
-        if (s.starts_with(loop)) {
-            const std::string_view rest = s.substr(loop.size());
-            if (rest.empty() || rest[0] == ':' || rest[0] == '/') return true;
-        }
-    }
-    return false;
+        if (!inStringAlphabet(static_cast<u8>(c)) || c == ' ' || c == '@') return false;
+    constexpr std::string_view kHttps = "https://";
+    if (s.starts_with(kHttps)) return !urlAuthority(s.substr(kHttps.size())).empty();
+    return isLoopbackUrl(s);
 }
 
 Result<void> validateKeyset(const Keyset& k) {
@@ -696,6 +716,9 @@ Result<Keyset> TrustVerifier::verifyKeyset(std::span<const u8> doc, const TrustS
 }
 
 namespace {
+/// A signer-claimed time more than kMaxClockSkew after now.
+constexpr bool inFuture(u64 t, u64 now) noexcept { return t > now && t - now > kMaxClockSkew; }
+
 Result<const KeysetKey*> signingKey(const Keyset& ks, const KeyId& id, TrustCheck unknown, TrustCheck role) {
     const KeysetKey* key = ks.findKey(id);
     if (!key) return reject(unknown, "key {} is not in keyset version {}", hexOf(id), ks.version);
@@ -721,6 +744,9 @@ Result<Pointer> TrustVerifier::verifyPointer(std::span<const u8> doc, const Keys
     if (p.signedAt < key->notBefore || p.signedAt >= key->notAfter)
         return reject(TrustCheck::PointerKeyWindow, "signed at {}, key {} signs in [{}, {})", p.signedAt,
                       hexOf(p.keyId), key->notBefore, key->notAfter);
+    if (inFuture(p.signedAt, now))
+        return reject(TrustCheck::PointerFuture, "signed at {}, more than {} s after now ({})", p.signedAt,
+                      kMaxClockSkew, now);
     if (p.expires <= p.signedAt || p.expires - p.signedAt > kMaxPointerLifetime)
         return reject(TrustCheck::PointerLifetime, "expires {} is not within {} s after signed_at {}",
                       p.expires, kMaxPointerLifetime, p.signedAt);
@@ -758,6 +784,9 @@ Result<ManifestHeaderInfo> TrustVerifier::verifyManifestHeader(std::span<const u
     if (h.createdAt < key->notBefore || h.createdAt >= key->notAfter)
         return reject(TrustCheck::ManifestKeyWindow, "created at {}, key {} signs in [{}, {})", h.createdAt,
                       hexOf(h.keyId), key->notBefore, key->notAfter);
+    if (inFuture(h.createdAt, now))
+        return reject(TrustCheck::ManifestFuture, "created at {}, more than {} s after now ({})", h.createdAt,
+                      kMaxClockSkew, now);
     if (h.productId != m_target.productId)
         return reject(TrustCheck::ManifestProduct, "manifest of \"{}\", expected \"{}\"", h.productId,
                       m_target.productId);

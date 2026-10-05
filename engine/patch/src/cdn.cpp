@@ -63,7 +63,7 @@ Result<std::vector<u8>> decodeChunkObject(std::span<const u8> stored, u32 rawSiz
     };
     const std::unique_ptr<ZSTD_DCtx, FreeDCtx> d(ZSTD_createDCtx());
     if (!d) return Error{ErrorCode::OutOfMemory, "ZSTD_createDCtx failed"};
-    if (ZSTD_isError(ZSTD_DCtx_setParameter(d.get(), ZSTD_d_windowLogMax, hman::kMaxZstdWindowLog)))
+    if (ZSTD_isError(ZSTD_DCtx_setParameter(d.get(), ZSTD_d_windowLogMax, cdn::kMaxChunkWindowLog)))
         return Error{ErrorCode::Unknown, "ZSTD_d_windowLogMax refused"};
     // One byte of room past rawSize catches an object that decodes to more.
     std::vector<u8> out(usize(rawSize) + 1);

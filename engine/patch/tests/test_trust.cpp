@@ -358,6 +358,9 @@ TEST_CASE("trust: ratchet state record, file store and advance") {
     s.keysetVersion = 9;
     s.pointerSequence = u64(1) << 40;
     const auto rec = encodeTrustState(s);
+    // Go's patchtrust.EncodeState writes the same bytes (TestFileStateStore pins this record too).
+    CHECK(test::fromHex("4854525300000000030000000900000000000000000000000001000047ae02f5") ==
+          std::vector<u8>(rec.begin(), rec.end()));
     REQUIRE(decodeTrustState(rec).ok());
     CHECK(*decodeTrustState(rec) == s);
     for (usize i = 0; i < rec.size(); ++i) {
@@ -426,6 +429,58 @@ TEST_CASE("cdn: paths, the local fetcher and chunk objects") {
     CHECK_FALSE(decodeChunkObject(twice, n).ok());
     const std::vector<u8> garbage(100, 0x42);
     CHECK_FALSE(decodeChunkObject(garbage, 100).ok());
+    // One byte too many stops at the byte of room past rawSize.
+    const Result<std::vector<u8>> longer = decodeChunkObject(stored, n - 1);
+    REQUIRE_FALSE(longer.ok());
+    CHECK(longer.error().message.find("decodes to more than") != std::string::npos);
+
+    // The window a frame may declare: 2^18 decodes, 2^20 is refused (a hand-made frame: no content size, the
+    // window descriptor, one raw block).
+    const std::vector<u8> raw = *decodeChunkObject(stored, n);
+    const auto windowFrame = [&](u8 exponent) {
+        std::vector<u8> f = {0x28, 0xB5, 0x2F, 0xFD, 0x00, static_cast<u8>((exponent - 10) << 3)};
+        const u32 h = static_cast<u32>(raw.size()) << 3 | 1; // a raw block, the last
+        f.insert(f.end(), {static_cast<u8>(h), static_cast<u8>(h >> 8), static_cast<u8>(h >> 16)});
+        f.insert(f.end(), raw.begin(), raw.end());
+        return f;
+    };
+    CHECK(decodeChunkObject(windowFrame(static_cast<u8>(cdn::kMaxChunkWindowLog)), n).ok());
+    CHECK_FALSE(decodeChunkObject(windowFrame(20), n).ok());
+
+    // verifyChunk: the length first (chunk-corrupt), then the hash (chunk-hash).
+    ManifestChunk c;
+    c.hash = blake2b256(raw);
+    c.rawSize = n;
+    CHECK(TrustVerifier::verifyChunk(c, raw).ok());
+    const Result<void> shortRaw =
+        TrustVerifier::verifyChunk(c, std::span<const u8>(raw.data(), raw.size() - 1));
+    REQUIRE_FALSE(shortRaw.ok());
+    CHECK(trustCheckOf(shortRaw.error()) == TrustCheck::ChunkCorrupt);
+    std::vector<u8> flipped = raw;
+    flipped[0] ^= 1;
+    const Result<void> badHash = TrustVerifier::verifyChunk(c, flipped);
+    REQUIRE_FALSE(badHash.ok());
+    CHECK(trustCheckOf(badHash.error()) == TrustCheck::ChunkHash);
+}
+
+TEST_CASE("trust: cdn_hosts are https:// or exactly a loopback http:// authority") {
+    const Result<Pointer> base = parsePointer(cdnFile(cdn::pointerPath("vector-game", "live", "win64")));
+    REQUIRE(base.ok());
+    const auto parses = [&](std::string host) {
+        Pointer p = *base;
+        p.cdnHosts = {std::move(host)};
+        return parsePointer(encodePointer(p)).ok();
+    };
+    for (const char* good :
+         {"http://localhost", "http://127.0.0.1:7700/cdn", "http://[::1]:8080/", "https://cdn.example:443/x"})
+        CHECK_MESSAGE(parses(good), good);
+    for (const char* bad : {"http://localhost:1@evil.example/cdn", "http://127.0.0.1:80@203.0.113.9/",
+                            "https://cdn.example@evil.example", "http://localhost.evil.example",
+                            "http://localhost:80x/", "http://localhost:", "http://127.0.0.1:123456/",
+                            "http://localhost?x", "http://localhost#x", "http://localhost/a@b",
+                            "https:///cdn", "https://",
+                            "http://cdn.example", "ftp://localhost"})
+        CHECK_MESSAGE(!parses(bad), bad);
 }
 
 } // namespace

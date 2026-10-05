@@ -44,7 +44,13 @@ inline constexpr usize kMaxHostLength = 256;
 inline constexpr usize kMaxRoleLength = 32;
 inline constexpr usize kMaxVersionText = 39;              ///< Four dotted parts of at most 9 digits.
 inline constexpr u64 kMaxJsonInt = (u64(1) << 53) - 1;    ///< The largest integer a document holds.
-inline constexpr u64 kMaxPointerLifetime = 7 * 24 * 3600; ///< expires - signed_at (08 §2.10.3: 7 days).
+/// expires - signed_at (08 §2.10.3: 7 days, against freeze attacks). With kMaxClockSkew it bounds a pointer's
+/// life from the verifier's clock: one that verifies expires at most 7 days and 1 hour after now.
+inline constexpr u64 kMaxPointerLifetime = 7 * 24 * 3600;
+/// How far a pointer's signed_at or a manifest's createdAt may lie after the verifier's now (the signer's
+/// and the install's clocks differ). Without it a signer-claimed future time would pass the subkey window
+/// check: a pre-staged subkey could sign before its notBefore, and a pointer could outlive now + 7 days.
+inline constexpr u64 kMaxClockSkew = 3600;
 
 /// The subkey roles of 08 §2.10.3. A keyset may name other roles (a later phase's); they never match.
 inline constexpr std::string_view kRoleManifest = "manifest"; ///< Pointers and manifests.
@@ -155,6 +161,7 @@ enum class TrustCheck : u8 {
     PointerKeyRole,      ///< pointer-key-role: not a manifest subkey
     PointerSignature,    ///< pointer-signature
     PointerKeyWindow,    ///< pointer-key-window: signed_at outside the subkey's validity
+    PointerFuture,       ///< pointer-future: signed_at later than now + kMaxClockSkew
     PointerLifetime,     ///< pointer-lifetime: expires not within 7 days after signed_at
     PointerProduct,      ///< pointer-product
     PointerChannel,      ///< pointer-channel
@@ -167,6 +174,7 @@ enum class TrustCheck : u8 {
     ManifestKeyRole,     ///< manifest-key-role
     ManifestSignature,   ///< manifest-signature: over bytes [0, 256)
     ManifestKeyWindow,   ///< manifest-key-window: createdAt outside the subkey's validity
+    ManifestFuture,      ///< manifest-future: createdAt later than now + kMaxClockSkew
     ManifestProduct,     ///< manifest-product
     ManifestPlatform,    ///< manifest-platform
     ManifestBuild,       ///< manifest-build
@@ -174,7 +182,7 @@ enum class TrustCheck : u8 {
     ManifestExpired,     ///< manifest-expired: expiresAt set and now >= expiresAt
     ManifestBody,        ///< manifest-body: the payload does not decode to a valid body
     ChunkMissing,        ///< chunk-missing
-    ChunkCorrupt,        ///< chunk-corrupt: does not decode to rawSize bytes
+    ChunkCorrupt,        ///< chunk-corrupt: another stored size, or does not decode to rawSize bytes
     ChunkHash,           ///< chunk-hash: the bytes do not hash to the chunk ID
     Count
 };
@@ -274,14 +282,14 @@ public:
     /// keyset-malformed, keyset-root, keyset-root-ratchet, keyset-signature, keyset-product, keyset-version.
     Result<Keyset> verifyKeyset(std::span<const u8> doc, const TrustState& state) const;
     /// Against a verified keyset, at `now` (unix seconds): pointer-malformed, pointer-key-unknown,
-    /// pointer-key-role, pointer-signature, pointer-key-window, pointer-lifetime, pointer-product,
-    /// pointer-channel, pointer-platform, pointer-expired, pointer-sequence.
+    /// pointer-key-role, pointer-signature, pointer-key-window, pointer-future, pointer-lifetime,
+    /// pointer-product, pointer-channel, pointer-platform, pointer-expired, pointer-sequence.
     Result<Pointer> verifyPointer(std::span<const u8> doc, const Keyset& keyset, u64 now,
                                   const TrustState& state) const;
     /// A .hman file's header against a verified keyset and the manifest a verified pointer names (its ref or
     /// its next's): manifest-malformed, manifest-hash, manifest-key-unknown, manifest-key-role,
-    /// manifest-signature, manifest-key-window, manifest-product, manifest-platform, manifest-build,
-    /// manifest-compat-epoch, manifest-expired. Does not decode the payload.
+    /// manifest-signature, manifest-key-window, manifest-future, manifest-product, manifest-platform,
+    /// manifest-build, manifest-compat-epoch, manifest-expired. Does not decode the payload.
     Result<ManifestHeaderInfo> verifyManifestHeader(std::span<const u8> file, const Keyset& keyset,
                                                     const ManifestRef& ref, u64 now) const;
     /// verifyManifestHeader(), then the whole manifest (manifest-body).

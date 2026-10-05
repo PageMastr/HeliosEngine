@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <format>
+#include <functional>
 #include <map>
 #include <unordered_map>
 
@@ -468,19 +469,41 @@ Result<std::string> readSidecar(const fs::Path& path) {
     return fs::readTextFile(path);
 }
 
-/// Names in `dir` (a project-relative directory, "" for the root) that equal `name` ignoring ASCII case.
-std::vector<std::string> namesIgnoringCase(const fs::Path& root, std::string_view dir,
-                                           std::string_view name) {
-    std::vector<std::string> out;
-    const fs::Path abs = dir.empty() ? root : absolute(root, dir);
-    if (!fs::isDirectory(abs)) return out;
-    auto listing = fs::listDirectory(abs);
-    if (!listing) return out;
-    for (const fs::DirEntry& e : *listing) {
-        if (equalsIgnoringCase(e.relativePath, name)) out.push_back(e.relativePath);
+/// The entries of a project's directories for the case checks, each directory listed at most once: one
+/// sidecar call checks the same directories several times, and a listing costs O(entries) (a stat each).
+/// Lives for one call, so it never sees the call's own renames.
+class DirectoryNames {
+public:
+    explicit DirectoryNames(const fs::Path& root) : m_root(root) {}
+
+    const fs::Path& root() const noexcept { return m_root; }
+
+    /// Names in `dir` (project-relative, "" for the root) that equal `name` ignoring ASCII case.
+    std::vector<std::string> matching(std::string_view dir, std::string_view name) {
+        std::vector<std::string> out;
+        for (const std::string& n : names(dir)) {
+            if (equalsIgnoringCase(n, name)) out.push_back(n);
+        }
+        return out;
     }
-    return out;
-}
+
+private:
+    const std::vector<std::string>& names(std::string_view dir) {
+        if (const auto it = m_names.find(dir); it != m_names.end()) return it->second;
+        std::vector<std::string>& out = m_names[std::string(dir)];
+        const fs::Path abs = dir.empty() ? m_root : absolute(m_root, dir);
+        if (fs::isDirectory(abs)) {
+            if (auto listing = fs::listDirectory(abs)) {
+                out.reserve(listing->size());
+                for (fs::DirEntry& e : *listing) out.push_back(std::move(e.relativePath));
+            }
+        }
+        return out;
+    }
+
+    const fs::Path& m_root;
+    std::map<std::string, std::vector<std::string>, std::less<>> m_names;
+};
 
 std::string joinRel(std::string_view dir, std::string_view name) {
     if (dir.empty()) return std::string(name);
@@ -544,12 +567,12 @@ Result<void> checkSourcePath(std::string_view path) {
 /// Windows sees one directory where Linux can hold two, so writing under another spelling would split one
 /// Windows directory into two on Linux. `strict`: any other spelling of a component counts, even next to
 /// the exact one (a tree that already holds both); otherwise only one where the exact spelling is missing.
-std::optional<std::string> otherCaseDirectory(const fs::Path& root, std::string_view path, bool strict) {
+std::optional<std::string> otherCaseDirectory(DirectoryNames& dirs, std::string_view path, bool strict) {
     usize start = 0;
     for (usize slash = path.find('/'); slash != std::string_view::npos; slash = path.find('/', start)) {
         const std::string_view dir = path.substr(0, start == 0 ? 0 : start - 1);
         const std::string_view name = path.substr(start, slash - start);
-        const std::vector<std::string> names = namesIgnoringCase(root, dir, name);
+        const std::vector<std::string> names = dirs.matching(dir, name);
         const bool exact = std::find(names.begin(), names.end(), name) != names.end();
         for (const std::string& other : names) {
             if (other != name && (strict || !exact)) return joinRel(dir, other);
@@ -561,7 +584,7 @@ std::optional<std::string> otherCaseDirectory(const fs::Path& root, std::string_
 
 /// Every existing path that equals `path` ignoring ASCII case in every component: what Windows would open
 /// for it. One path at most on Windows; Linux can hold several spellings.
-std::vector<std::string> caseVariants(const fs::Path& root, std::string_view path) {
+std::vector<std::string> caseVariants(DirectoryNames& dirs, std::string_view path) {
     std::vector<std::string> current = {std::string()};
     usize start = 0;
     while (start <= path.size() && !current.empty()) {
@@ -570,7 +593,7 @@ std::vector<std::string> caseVariants(const fs::Path& root, std::string_view pat
         const std::string_view name = path.substr(start, slash - start);
         std::vector<std::string> next;
         for (const std::string& dir : current) {
-            for (const std::string& n : namesIgnoringCase(root, dir, name)) next.push_back(joinRel(dir, n));
+            for (const std::string& n : dirs.matching(dir, name)) next.push_back(joinRel(dir, n));
         }
         current = std::move(next);
         start = slash + 1;
@@ -581,9 +604,9 @@ std::vector<std::string> caseVariants(const fs::Path& root, std::string_view pat
 /// Whether `rel` (a checked project path) is a file spelled exactly so in every component. Where names
 /// ignore case (Windows) fs::isFile() also finds another spelling; asking the listings too gives the same
 /// answer on both platforms.
-bool isFileAsSpelled(const fs::Path& root, std::string_view rel) {
-    if (!fs::isFile(absolute(root, rel))) return false;
-    const std::vector<std::string> variants = caseVariants(root, rel);
+bool isFileAsSpelled(DirectoryNames& dirs, std::string_view rel) {
+    if (!fs::isFile(absolute(dirs.root(), rel))) return false;
+    const std::vector<std::string> variants = caseVariants(dirs, rel);
     return std::find(variants.begin(), variants.end(), rel) != variants.end();
 }
 
@@ -744,9 +767,10 @@ Result<void> saveMeta(const fs::Path& root, std::string_view path, const AssetMe
     // must exist exactly as spelled, so that another spelling (one file on Windows, two on Linux) is
     // refused on both platforms.
     const std::string metaRel = metaPathFor(path);
-    if (!isFileAsSpelled(root, path))
+    DirectoryNames dirs(root);
+    if (!isFileAsSpelled(dirs, path))
         return makeError(ErrorCode::NotFound, "{}: no such source file (spelled so)", shown(path));
-    if (!isFileAsSpelled(root, metaRel)) {
+    if (!isFileAsSpelled(dirs, metaRel)) {
         return makeError(ErrorCode::NotFound,
                          "{} has no sidecar {} to update; ensureMeta creates a sidecar, with a new GUID",
                          shown(path), shown(metaRel));
@@ -777,7 +801,8 @@ Result<EnsuredMeta> ensureMeta(const fs::Path& root, std::string_view path, cons
     HELIOS_TRY(checkSourcePath(path));
     if (!fs::isFile(absolute(root, path)))
         return makeError(ErrorCode::NotFound, "{}: no such source file", shown(path));
-    if (const auto other = otherCaseDirectory(root, path, true)) {
+    DirectoryNames dirs(root);
+    if (const auto other = otherCaseDirectory(dirs, path, true)) {
         return makeError(ErrorCode::InvalidState,
                          "{}: {} is the same directory on Windows; one tree must not hold both spellings",
                          shown(path), shown(*other));
@@ -787,7 +812,7 @@ Result<EnsuredMeta> ensureMeta(const fs::Path& root, std::string_view path, cons
         HELIOS_TRY_ASSIGN(AssetMeta meta, loadMeta(root, path, importers));
         return EnsuredMeta{std::move(meta), false};
     }
-    for (const std::string& other : namesIgnoringCase(root, parentOf(path), fileName(metaRel))) {
+    for (const std::string& other : dirs.matching(parentOf(path), fileName(metaRel))) {
         if (other != fileName(metaRel)) {
             return makeError(
                 ErrorCode::InvalidState,
@@ -844,7 +869,8 @@ Result<void> moveAsset(const fs::Path& root, std::string_view from, std::string_
     const bool caseOnly = parentOf(from) == parentOf(to) && equalsIgnoringCase(fileName(from), fileName(to));
     // The target's directories must exist as spelled where they exist at all: on Windows another spelling
     // is the same directory, on Linux it would become a second one.
-    if (const auto other = otherCaseDirectory(root, to, false)) {
+    DirectoryNames dirs(root);
+    if (const auto other = otherCaseDirectory(dirs, to, false)) {
         return makeError(ErrorCode::AlreadyExists, "{}: {} is already there; Windows sees one directory",
                          shown(to), shown(*other));
     }
@@ -853,7 +879,7 @@ Result<void> moveAsset(const fs::Path& root, std::string_view from, std::string_
     // move between two spellings of one Windows directory, which merges them).
     for (const std::string_view target : {std::string_view(to), std::string_view(toMeta)}) {
         const std::string_view self = target == to ? from : std::string_view(fromMeta);
-        for (const std::string& existing : caseVariants(root, target)) {
+        for (const std::string& existing : caseVariants(dirs, target)) {
             if (existing == self) continue;
             return makeError(ErrorCode::AlreadyExists, "{}: {} is already there; Windows sees one file",
                              shown(target), shown(existing));

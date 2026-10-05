@@ -39,7 +39,9 @@
 //
 // Threading: the free functions are stateless and may run concurrently, except that the sidecar writers
 // (ensureMeta, saveMeta, moveAsset) assume one writer per project (helios-assetd, 02 §6.1); two
-// processes creating the same sidecar at once can each mint a GUID, and the last rename wins.
+// processes creating the same sidecar at once can each mint a GUID, and the last rename wins. Cost: the
+// writers list each directory on their path once per call for the case checks, O(entries there), and write
+// durably (flushed temp file, persisted rename); the README states the budget.
 
 #include <optional>
 #include <span>

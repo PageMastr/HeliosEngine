@@ -7,7 +7,10 @@
 //   * a hit (LocalDdc::get: open, header, read, XXH3-128 check) of a 256 KiB entry ≤ 1 ms p95, and a put
 //     of one (temp file, write, rename; no flush) ≤ 5 ms p95;
 //   * a whole cook that hits (sidecar load and validation, source read and hash, key, get) for a 64 KiB
-//     source ≤ 1 ms p95.
+//     source ≤ 1 ms p95;
+//   * a sidecar writer (ensureMeta, saveMeta, moveAsset: the case checks' directory listings and a durable
+//     write) in a directory of 2,000 entries ≤ 50 ms p95, half the smallest build-step budget, since a
+//     first import or a settings edit precedes a build step.
 // Timings are reported always and asserted only in optimized builds without sanitizers.
 
 #include <algorithm>
@@ -162,6 +165,62 @@ TEST_CASE("perf: a cook that hits the DDC (64 KiB source)") {
     MESSAGE("cookAsset hit, 64 KiB source: p50 " << p50 << " us, p95 " << p95 << " us (budget p95 1000 us)");
 #if HELIOS_ASSETPIPE_ASSERT_BUDGETS
     CHECK(p95 <= 1000.0);
+#endif
+}
+
+TEST_CASE("perf: sidecar writers in a directory of 2,000 entries") {
+    // ensureMeta, saveMeta and moveAsset list each directory on their paths once per call (the case checks)
+    // and write durably (flushed temp file, persisted rename), so a call costs O(entries there) plus the
+    // flushes, and a first import of n files into one directory lists O(n^2) entries in all.
+    TempDir dir;
+    const ImporterRegistry r = makeRegistry();
+    REQUIRE(fs::createDirectories(dir.path / "a"));
+    constexpr int kAssets = 1000; // with their sidecars, 2,000 entries
+    constexpr int kTimed = 64;
+    std::vector<f64> ensures;
+    const auto bulk = Clock::now();
+    for (int i = 0; i < kAssets; ++i) {
+        const std::string path = "a/asset" + std::to_string(i) + ".png";
+        REQUIRE(fs::writeTextFile(dir.path / fs::pathFromUtf8(path), "x", fs::WriteMode::Direct));
+        const auto t0 = Clock::now();
+        REQUIRE(ensureMeta(dir.path, path, newMeta(), r).value().created);
+        ensures.push_back(usSince(t0));
+    }
+    const f64 bulkSecs = usSince(bulk) / 1e6;
+    const std::vector<f64> full(ensures.end() - kTimed, ensures.end()); // into about 2,000 entries
+    std::vector<f64> saves;
+    std::vector<f64> moves;
+    for (int i = 0; i < kTimed; ++i) {
+        const std::string path = "a/asset" + std::to_string(i) + ".png";
+        AssetMeta meta = loadMeta(dir.path, path, r).value();
+        meta.labels = {"edited"};
+        auto t0 = Clock::now();
+        REQUIRE(saveMeta(dir.path, path, meta, r));
+        saves.push_back(usSince(t0));
+        t0 = Clock::now();
+        REQUIRE(moveAsset(dir.path, path, "a/renamed" + std::to_string(i) + ".png", r));
+        moves.push_back(usSince(t0));
+    }
+    // The two parts of a call's cost, for the record: one listing, and one durable write.
+    std::vector<f64> lists;
+    std::vector<f64> writes;
+    for (int i = 0; i < kTimed; ++i) {
+        auto t0 = Clock::now();
+        REQUIRE(fs::listDirectory(dir.path / "a").value().size() == 2 * kAssets);
+        lists.push_back(usSince(t0));
+        t0 = Clock::now();
+        REQUIRE(fs::writeTextFile(dir.path / "probe.txt", "x"));
+        writes.push_back(usSince(t0));
+    }
+    MESSAGE("in a directory of 2,000 entries, p95: ensureMeta "
+            << percentile(full, 0.95) << " us, saveMeta " << percentile(saves, 0.95) << " us, moveAsset "
+            << percentile(moves, 0.95) << " us (budget 50000 us each); of which a listing p50 "
+            << percentile(lists, 0.5) << " us and a durable write p50 " << percentile(writes, 0.5)
+            << " us; first import of 1,000 files into one directory " << bulkSecs << " s");
+#if HELIOS_ASSETPIPE_ASSERT_BUDGETS
+    CHECK(percentile(full, 0.95) <= 50000.0);
+    CHECK(percentile(saves, 0.95) <= 50000.0);
+    CHECK(percentile(moves, 0.95) <= 50000.0);
 #endif
 }
 

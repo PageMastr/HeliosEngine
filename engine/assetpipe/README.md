@@ -80,9 +80,15 @@ Every source a registered importer claims (by extension, ASCII case ignored) has
   `settingsSchema`), so they come out in schema order with defaults omitted, and an unknown setting is an
   error. `writeMeta(parseMeta(text)) == text` for canonical text, and any spelling of the same sidecar
   (comments, other key orders, explicit defaults, unsorted labels) rewrites to it. `saveMeta` writes only
-  when the bytes change, through a temp file and a rename.
-- **Identity.** `ensureMeta` mints the GUID (version 4) on first import; nothing else ever changes it:
-  `saveMeta` refuses a sidecar whose GUID differs from the one on disk, and one whose GUID it cannot read.
+  when the bytes change. Sidecars are written durably: a flushed temp file with a short hidden name of its
+  own (`.<GUID>.tmp`, so it fits next to any source name and a leftover one is skipped by the scan),
+  renamed over the sidecar with core's persisted `fs::rename`.
+- **Identity.** `ensureMeta` mints the GUID (version 4) on first import and is the only function that
+  creates a sidecar; nothing else ever changes the GUID. `saveMeta` only updates: it needs the source and
+  its sidecar to exist spelled exactly as given (`NotFound` otherwise, so it cannot give a copied file, a
+  missing source or another case spelling of a file an existing GUID), refuses an importer that does not
+  claim the source's extension, and refuses a sidecar whose GUID differs from the one on disk or cannot be
+  read.
   A sidecar stores no path, so `moveAsset` (move or rename, including a case-only rename through a
   temporary name) moves the file and its sidecar together and the GUID follows the file.
 - **Fail closed on load.** `parseMeta` refuses, with the file, the JSON path and the reason: an unknown or
@@ -106,13 +112,16 @@ Every source a registered importer claims (by extension, ASCII case ignored) has
   extension (`CON`, `nul.png`, `COM1`, `CONOUT$`...) and names ending in `.` or a space. That is the rule
   `DirectoryMount` already applied, made public by this work instead of a third copy being written
   (toolsfw's `.hrec` confinement has the other). A source's file name is at most 250 bytes
-  (`kMaxSourceNameBytes`), so its sidecar's name fits in 255. Names that differ only in ASCII case are one
-  file on Windows: `scanMetas` reports them, `moveAsset` refuses a target that another file holds in any
-  case of any component, or whose directory exists only in another spelling (a move between two spellings
-  that already exist is allowed, since it merges them), and `ensureMeta` refuses to mint a GUID when a
-  sidecar exists in another case (on Windows that sidecar is the file's own and is used) or when one of
-  the path's directories does (one directory on Windows, two on Linux). Every string in a sidecar must be
-  UTF-8, so a sidecar that is written always loads.
+  (`kMaxSourceNameBytes`), so its sidecar's name fits in 255; the temporary names of the sidecar writers
+  (`.<GUID>.tmp`, and `.<GUID>.moving` in a case-only rename) do not grow with the source's, so every name
+  up to that cap can be imported, saved and renamed (tested at the cap). Names that differ only in ASCII
+  case are one file on Windows: `scanMetas` reports them, `moveAsset` refuses a target that another file
+  holds in any case of any component, or whose directory exists only in another spelling (a move between
+  two spellings that already exist is allowed, since it merges them), `ensureMeta` refuses to mint a GUID
+  when a sidecar exists in another case (on Windows that sidecar is the file's own and is used) or when one
+  of the path's directories does (one directory on Windows, two on Linux), and `saveMeta` takes only the
+  exact spelling. Case is folded for ASCII letters only (see Gaps). Every string in a sidecar must be UTF-8,
+  so a sidecar that is written always loads.
 - **The scan** (`scanMetas`, the input of a registry rebuild, 02 §6.1) returns the valid assets and every
   problem with its file: a source without a sidecar, an orphan sidecar, a sidecar spelled in another case or
   with an upper-case `.META`, an invalid sidecar, an importer that does not import the source's extension,
@@ -227,6 +236,15 @@ VM, GCC 13, RelWithDebInfo, 2026-10-04, three runs after review round 1 (load av
 | `LocalDdc::get`, 256 KiB entry (a hit) | ≤ 1 ms p95 | 70–84 µs p95 (36–49 µs p50) |
 | `LocalDdc::put`, 256 KiB entry | ≤ 5 ms p95 | 0.22–0.31 ms p95 (0.15–0.21 ms p50) |
 | `cookAsset` hit, 64 KiB source (sidecar load and validation, source read and hash, key, get) | ≤ 1 ms p95 | 49–57 µs p95 (30–34 µs p50) |
+| `ensureMeta`, `saveMeta`, `moveAsset` in a directory of 2,000 entries (case-check listings, durable write) | ≤ 50 ms p95 each | 15.7–22.3, 18.1–23.9 and 12.0–19.9 ms p95 |
+
+The sidecar writers' row was measured after review round 2 (2026-10-05, three runs, load average about 5.7).
+Their budget is half the smallest build-step budget, since a first import or a settings edit comes before a
+build step. Each call lists every directory on its path once for the case checks (a listing of 2,000 entries
+took about 4.4 ms here, a stat per entry) and writes durably (a flushed temp file and a persisted rename: 1–12
+ms on this VM's disk). So a first import of n files into one directory lists O(n²) entries in all: 1,000 files
+took 9.8–11.3 s here, mostly in flushes. A batch import that lists each directory once is `helios-assetd`'s
+(Gaps).
 
 Puts no longer fsync the fan-out directory (`fs::renameNoSync`; strace counts no `fsync` in 64 puts). With the
 fsync, the same case measured 1.0–2.4 ms p95 here at a load average of about 3, and the reviewer saw 4.0–10.7 ms
@@ -276,6 +294,13 @@ CTest replay (the corpus plus its mutations) aborts on the re-encoding property,
   environment lookup.
 - **Provenance for captures.** 09 §4.3.3 asks a mocap clip's `.meta` to record the performer, session and
   consent; v0 has `notes` for them. The fields come with WP-3.13.
+- **Case folding beyond ASCII.** The case checks fold ASCII letters only. NTFS also folds other letters
+  (`Ä.png` and `ä.png` are one file there), so on Linux `scanMetas`, `ensureMeta` and `moveAsset` accept two
+  sidecars, with two GUIDs, for what is one file on Windows. Folding like NTFS needs its upcase table (simple
+  Unicode case mapping of UTF-16 units), which core does not have yet.
+- **Batch import.** Each sidecar writer lists the directories on its path (see Performance), so importing n
+  files into one directory one call at a time lists O(n²) entries. `helios-assetd`'s import queue should
+  list each directory once per batch.
 - **Single writer.** Sidecar creation assumes one writer per project (02 §6.1: `helios-assetd`). Two
   processes creating the same sidecar at once can each mint a GUID, and the last rename wins (core has no
   exclusive create).
@@ -297,5 +322,6 @@ BSD-2-Clause or BSD-3-Clause, CC0 as CC0-1.0), the key's preimage layout and `kC
 type's fingerprint as the key's "layout hashes" for settings (it adds default values and field types, which
 `layoutHash` lacks), a build context limited to keyed inputs (as 07 §1.10's `IBuilder` has its declared inputs
 feed the key), the entry format, LRU by file time with a touch interval, the 90 % trim target, the store's
-fan-out, not flushing entries or their renames, and the 250-byte cap on source file names.
+fan-out, not flushing entries or their renames, the 250-byte cap on source file names with short hidden
+temporary names for the sidecar writers, `saveMeta` as an update only, and the sidecar writers' 50 ms budget.
 The `.hpak` writer was written for revision 12; nothing it implements changed in revision 13.

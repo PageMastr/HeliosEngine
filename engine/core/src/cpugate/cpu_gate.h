@@ -2,12 +2,16 @@
  * helios/core/cpu.h. Shared by cpu_gate.c (the probe), the per-OS pre-initializer hooks in
  * src/platform/{win32,posix}/cpu_gate_hook.c and src/cpu.cpp.
  *
- * Rules for every gate TU (checked by the ISA audit, tools/lint/isa_audit.cmake):
+ * Rules for every gate TU (02 §1.1 "Gate object rules"; checked by the ISA audit,
+ * tools/lint/isa_audit.cmake, and by CONF-12, tools/conformance):
  *  - C only; no libc or C++ runtime calls (the hooks run before the C/C++ runtimes are initialized);
  *  - compiled at the x86-64-v1 baseline (the `gate` level of cmake/HeliosIsa.cmake): no SSE3+, POPCNT,
- *    LZCNT, BMI, AVX or AVX-512 encodings;
- *  - only static functions plus the extern "C" entry helios_cpu_gate_run(); no weak, COMDAT or
- *    selectany symbols, so no AVX2 copy of anything can be picked for the gate at link time.
+ *    LZCNT, BMI, AVX or AVX-512 encodings, no stack protector or /GS cookie, no sanitizer, coverage or
+ *    /RTC instrumentation;
+ *  - static functions and data plus exactly three external symbols over all gate objects:
+ *    helios_cpu_gate_run and helios_cpu_gate_verdict (the probe, cpu_gate.c) and the Windows TLS-callback
+ *    slot helios_cpu_gate_tls_entry (win32/cpu_gate_hook.c); no weak, COMDAT or selectany symbols, so no
+ *    AVX2 copy of anything can be picked for the gate at link time.
  */
 #ifndef HELIOS_CORE_CPU_GATE_H
 #define HELIOS_CORE_CPU_GATE_H
@@ -79,11 +83,30 @@ typedef struct HeliosCpuGateReport {
     char message[512];    /* human-readable verdict, ASCII, no trailing newline */
 } HeliosCpuGateReport;
 
-/* Evaluates `raw` (or the running CPU if raw is NULL) against `required` and fills `out`.
- * `display_name` names the product in the message ("Helios" if NULL). Returns out->supported.
- * Async-signal-safe, allocation-free, callable before the C runtime is initialized. */
+/* Flag bit in helios_cpu_gate_run's `required`: record the result as this image's verdict
+ * (helios_cpu_gate_verdict). Only the pre-initializer hooks pass it; cpu.cpp's queries never do, so a
+ * query cannot stand in for a gate that did not run. It is not a feature bit and never appears in a
+ * report. */
+#define HELIOS_CPU_GATE_RECORD 0x80000000u
+
+/* What helios_cpu_gate_verdict() returns. */
+#define HELIOS_CPU_GATE_NOT_RUN 0 /* no hook recorded one in this image (02 §1.1 "Proof that it ran") */
+#define HELIOS_CPU_GATE_PASS 1
+#define HELIOS_CPU_GATE_FAIL 2 /* recorded just before the hook ends the process with exit code 78 */
+
+/* Evaluates `raw` (or the running CPU if raw is NULL) against `required` (feature bits, optionally with
+ * HELIOS_CPU_GATE_RECORD) and fills `out`. `display_name` names the product in the message ("Helios" if
+ * NULL). Returns out->supported. Async-signal-safe, allocation-free, callable before the C runtime is
+ * initialized. With HELIOS_CPU_GATE_RECORD it also records the verdict; the hooks call it that way once,
+ * before any thread exists. */
 int helios_cpu_gate_run(const HeliosCpuidRaw* raw, uint32_t required, const char* display_name,
                         HeliosCpuGateReport* out);
+
+/* The verdict the gate's pre-initializer hook recorded in the image that holds this probe (the executable in
+ * a shipping build; helios_runtime in a modular one, where the Linux hook calls this probe across the image
+ * boundary): HELIOS_CPU_GATE_NOT_RUN, _PASS or _FAIL. core::platformInit() stops unless it reads PASS.
+ * Any thread: written once before main(), read afterwards. */
+int helios_cpu_gate_verdict(void);
 
 #ifdef __cplusplus
 }

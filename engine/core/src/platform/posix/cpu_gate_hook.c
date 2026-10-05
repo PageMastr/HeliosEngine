@@ -1,15 +1,21 @@
-/* CPU gate pre-initializer for ELF executables (02 §1.1, 08 §2.2).
+/* CPU gate pre-initializer for ELF executables (02 §1.1 "Linux: .preinit_array", 08 §2.2).
  *
- * Linked into every AVX2 image by helios_cpu_gate() (cmake/HeliosIsa.cmake) as an object file, so
- * the .preinit_array entry below is always present. glibc runs .preinit_array before the
- * initializers of the executable and of every shared library, so no Helios-compiled C++ code can
- * execute before the check. On an unsupported CPU it prints the gate message to stderr and exits
- * with code 78; on a supported one it installs a SIGILL backstop that prints a CPU hint instead of
- * dying silently (core's crash handler replaces it once main() installs one). Deliberate traps
- * (ud2) are passed through, so they still crash normally.
+ * Linked into every gated avx2 executable by helios_executable() (cmake/HeliosModule.cmake and
+ * cmake/HeliosIsa.cmake) as an object file, so the .preinit_array entry below is always present, in both
+ * link flavours. glibc runs .preinit_array before the initializers of the executable and of every shared
+ * library (libhelios_runtime.so included), so no Helios-compiled C++ code can execute before the check.
+ * On an unsupported CPU it prints the gate message to stderr and exits with code 78; on a supported one it
+ * records the verdict (helios_cpu_gate_verdict, which core::platformInit() checks) and installs a SIGILL
+ * backstop that prints a CPU hint instead of dying silently (core's crash handler replaces it once main()
+ * installs one). Deliberate traps (ud2) are passed through, so they still crash normally.
  *
- * Gate TU rules (cpu_gate.h): C, x86-64-v1 flags, static functions only, and only write, _exit
- * and sigaction from libc.
+ * In a modular dev build (HELIOS_MODULAR=ON) the probe and the verdict live in libhelios_runtime.so, and
+ * this hook calls helios_cpu_gate_run across the image boundary (a PLT call, after relocation and before
+ * any initializer; ADR-0.6c §3 item 4). The probe there is a gate-level object (audit check 1), and the
+ * verdict it records is the one core::platformInit() reads in the same library.
+ *
+ * Gate TU rules (cpu_gate.h): C, x86-64-v1 flags, static functions and data only (no external symbol),
+ * and only write, _exit and sigaction from libc.
  */
 /* sigaction, siginfo_t, SA_SIGINFO and SA_RESETHAND are POSIX/XSI: request them explicitly so
  * the hook also builds with a strict -std=c11 (CMAKE_C_EXTENSIONS OFF). */
@@ -89,7 +95,8 @@ static void hcg_gate(int argc, char** argv, char** envp) {
     (void)argc;
     (void)argv;
     (void)envp;
-    if (!helios_cpu_gate_run(HCG_GATE_INPUT, HELIOS_CPU_REQUIRE_AVX2_IMAGE, 0, &report)) {
+    if (!helios_cpu_gate_run(HCG_GATE_INPUT, HELIOS_CPU_REQUIRE_AVX2_IMAGE | HELIOS_CPU_GATE_RECORD, 0,
+                             &report)) {
         unsigned n = 0;
         char line[600];
         n = hcg_append(line, n, sizeof(line), report.message);

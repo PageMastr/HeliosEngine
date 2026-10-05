@@ -21,6 +21,7 @@
 #include "helios/core/fs.h"
 #include "helios/core/log.h"
 #include "helios/core/platform.h"
+#include "helios/core/platform_init.h"
 #include "helios/core/process.h"
 #include "helios/core/version.h"
 #include "helios/render/flip.h"
@@ -508,6 +509,7 @@ int run(const CommandLine& cl) {
 } // namespace
 
 int main(int argc, char** argv) {
+    helios::core::platformInit(); // stops unless the CPU gate ran and passed (02 §1.1)
     const CommandLine cl = platform::kIsWindows ? CommandLine::fromProcess() : CommandLine::parse(argc, argv);
     return run(cl);
 }

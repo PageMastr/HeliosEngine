@@ -13,6 +13,7 @@
 #include "helios/core/crash.h"
 #include "helios/core/fs.h"
 #include "helios/core/log.h"
+#include "helios/core/platform_init.h"
 #include "helios/core/time.h"
 #include "helios/core/version.h"
 #include "helios/server/app_env.h"
@@ -255,6 +256,7 @@ int run(const ProcessArgs& args) {
 } // namespace
 
 int main(int argc, char** argv) {
+    helios::core::platformInit(); // stops unless the CPU gate ran and passed (02 §1.1)
     (void)argc;
     (void)argv;
     return run(ProcessArgs(CommandLine::fromProcess()));

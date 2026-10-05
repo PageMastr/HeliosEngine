@@ -1,10 +1,12 @@
-/* CPU gate probe: CPUID/XGETBV feature detection and the verdict message (02 §1.1, 08 §2.2).
+/* CPU gate probe: CPUID/XGETBV feature detection, the verdict message and the process verdict
+ * (02 §1.1, 08 §2.2).
  *
  * This TU is compiled at the x86-64-v1 baseline (the `gate` ISA level, cmake/HeliosIsa.cmake) and must
  * stay free of libc calls, so it can run from the pre-initializer hooks before the C runtime is up
  * and on CPUs that lack every extension Helios otherwise assumes. See cpu_gate.h for the rules the
  * ISA audit enforces. Architecture- and compiler-specific code only; no OS calls (those live in
- * src/platform/{win32,posix}/cpu_gate_hook.c).
+ * src/platform/{win32,posix}/cpu_gate_hook.c). It defines two of the gate's three external symbols,
+ * helios_cpu_gate_run and helios_cpu_gate_verdict.
  */
 #include "cpu_gate.h"
 
@@ -153,7 +155,12 @@ static uint32_t hcg_bit(uint32_t reg, uint32_t bit, uint32_t feature) {
     return (reg >> bit) & 1u ? feature : 0u;
 }
 
-int helios_cpu_gate_run(const HeliosCpuidRaw* raw, uint32_t required, const char* display_name,
+/* The process verdict (helios_cpu_gate_verdict): zero, HELIOS_CPU_GATE_NOT_RUN, until a hook records
+ * one. It lives beside the probe, which every image that can call core::platformInit() links, so an image
+ * whose hook was dropped reads NOT_RUN instead of failing to link. */
+static int hcg_verdict;
+
+static int hcg_evaluate(const HeliosCpuidRaw* raw, uint32_t required, const char* display_name,
                         HeliosCpuGateReport* out) {
     HcgText msg;
     uint32_t i;
@@ -303,4 +310,17 @@ int helios_cpu_gate_run(const HeliosCpuidRaw* raw, uint32_t required, const char
         hcg_put(&msg, " The CPU has AVX, but the operating system has not enabled AVX (XSAVE/YMM) state.");
     }
     return 0;
+}
+
+int helios_cpu_gate_run(const HeliosCpuidRaw* raw, uint32_t required, const char* display_name,
+                        HeliosCpuGateReport* out) {
+    const int supported = hcg_evaluate(raw, required & ~HELIOS_CPU_GATE_RECORD, display_name, out);
+    if (required & HELIOS_CPU_GATE_RECORD) {
+        hcg_verdict = supported ? HELIOS_CPU_GATE_PASS : HELIOS_CPU_GATE_FAIL;
+    }
+    return supported;
+}
+
+int helios_cpu_gate_verdict(void) {
+    return hcg_verdict;
 }

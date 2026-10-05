@@ -6,8 +6,10 @@
 #include "cli.h"
 #include "helios/core/cmdline.h"
 #include "helios/core/log.h"
+#include "helios/core/platform_init.h"
 
 int main(int, char**) {
+    helios::core::platformInit(); // stops unless the CPU gate ran and passed (02 §1.1)
     helios::log::setLevel(helios::log::Level::Warn);
     const helios::CommandLine cmd = helios::CommandLine::fromProcess();
     std::string out;

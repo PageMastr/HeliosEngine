@@ -203,13 +203,15 @@ function(_helios_isa_base_eligible out)
   set(${out} "${eligible}" PARENT_SCOPE)
 endfunction()
 
-# Whether a base image may link `tgt`: an eligible library, an imported one (no code built here), or a
-# gate object library (already x86-64-v1).
+# Whether a base image may link `tgt`: an eligible library, an imported one (no code built here), an
+# interface library (its headers compile at the consumer's level; what it links is checked on its own)
+# or a gate object library (already x86-64-v1).
 function(_helios_isa_base_allowed tgt out)
   get_property(eligible GLOBAL PROPERTY _HELIOS_ISA_BASE_ELIGIBLE)
   get_target_property(imported "${tgt}" IMPORTED)
   get_target_property(level "${tgt}" HELIOS_ISA_LEVEL)
-  if(imported OR level STREQUAL "gate" OR tgt IN_LIST eligible)
+  get_target_property(type "${tgt}" TYPE)
+  if(imported OR level STREQUAL "gate" OR type STREQUAL "INTERFACE_LIBRARY" OR tgt IN_LIST eligible)
     set(${out} ON PARENT_SCOPE)
   else()
     set(${out} OFF PARENT_SCOPE)

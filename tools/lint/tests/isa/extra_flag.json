@@ -72,9 +72,9 @@
     "output": "apps\\CMakeFiles\\fx_launcher.dir\\helios_manifest.rc.res"
   },
   {
-    "directory": "C:\\b",
-    "command": "C:\\VS\\cl.exe /nologo /TP /W4 /arch:AVX2 /fp:precise /Fothird_party\\CMakeFiles\\helios_core.base.dir\\engine\\core\\src\\log.cpp.obj /c C:\\src\\engine\\core\\src\\log.cpp",
-    "file": "C:\\src\\engine\\core\\src\\log.cpp",
-    "output": "third_party\\CMakeFiles\\helios_core.base.dir\\engine\\core\\src\\log.cpp.obj"
+    "directory": "/build",
+    "command": "/usr/bin/g++ -I/src/engine/core/include -O2 -Wall -mavx2 -mbmi -mbmi2 -mlzcnt -mpopcnt -mf16c -mno-fma -mfpmath=sse -ffp-contract=off -msha -mcx16 -o x/CMakeFiles/helios_world.dir/engine/world/src/world.cpp.o -c /src/engine/world/src/world.cpp",
+    "file": "/src/engine/world/src/world.cpp",
+    "output": "x/CMakeFiles/helios_world.dir/engine/world/src/world.cpp.o"
   }
 ]

@@ -171,6 +171,28 @@ endif()
 # Tools may link editor-only modules.
 helios_executable(fx-cook ROLE tool NO_CPU_GATE SOURCES ${src} DEPS helios::assetpipe)
 
+# ISA levels (02 §1.1, cmake/HeliosIsa.cmake; WP-0.2r). A base image (launcher, bootstrap) links the base
+# copies of core and its libraries; linking anything built only at avx2 stops configure.
+add_library(tp_jolt STATIC ${src}) # stands in for Jolt: an avx2-only third-party library
+if(CASE STREQUAL "isa_base_ok")
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} DEPS helios::core)
+elseif(CASE STREQUAL "isa_base_links_jolt")
+  # 09 §2 WP-0.2r's seeded fixture: a base image that links tp_jolt.
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} DEPS helios::core tp_jolt)
+elseif(CASE STREQUAL "isa_base_links_physics")
+  # Through a helper that is not a module: the path names it.
+  target_link_libraries(fx_helper INTERFACE helios::physics)
+  helios_executable(fx-bootstrap ROLE bootstrap SOURCES ${src} DEPS helios::core fx_helper)
+elseif(CASE STREQUAL "isa_fixture_base")
+  # The fixtures-only override: a tool image at base, outside apps/ and engine/.
+  helios_executable(fx-isa-fixture ROLE tool ISA base SOURCES ${src} DEPS helios::core)
+elseif(CASE STREQUAL "isa_override_in_apps")
+  add_subdirectory(apps/isa) # helios_executable(... ISA base) where real images live
+elseif(CASE STREQUAL "isa_interface_options")
+  # tp_jolt's options before WP-0.2r, on its interface: every consumer inherited them.
+  target_compile_options(tp_jolt INTERFACE -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c) # conformance:allow CONF-11 the configure check's seeded fixture (09 §5.10.3)
+endif()
+
 # Runs after helios_finalize_build (deferred calls run in scheduling order), so it is only reached
 # when the checks passed. Stop before generation: the dummy sources have no enabled language.
 cmake_language(DEFER CALL message STATUS "HELIOS_FIXTURE_CONFIGURE_OK")

@@ -29,8 +29,10 @@ function(helios_lint_test name)
 endfunction()
 
 # ---------------------------------------------------------------------------------------------
-# ISA audit (02 §1.1, RT-09): flags of every TU, disassembly + symbols of the CPU-gate objects,
-# .preinit_array / IRELATIVE of every gated ELF executable.
+# ISA audit (02 §1.1, RT-09; WP-0.2r): check 1 (every TU against its image's level) over the whole
+# compile database, check 2 (disassembly and symbols of the CPU-gate objects), the ELF part of check 3
+# (.preinit_array, IRELATIVE of every gated executable) and check 4 (base images after linking). Each
+# check has seeded fixtures that must fail with their diagnostic.
 # ---------------------------------------------------------------------------------------------
 get_property(gated GLOBAL PROPERTY HELIOS_CPU_GATE_TARGETS)
 set(imageLines "")
@@ -48,65 +50,123 @@ if(CMAKE_READELF AND NOT WIN32)
   list(APPEND isaTools -DREADELF=${CMAKE_READELF})
 endif()
 set(isaCommon -DALLOWLIST=${PROJECT_SOURCE_DIR}/cmake/isa_allowlist.cmake)
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" AND NOT CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
+set(isaX86 OFF)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+  set(isaX86 ON)
+endif()
+# Check 4 reads ELF images with GNU binutils here; COFF images and PDBs are WP-0.2r part 2's. Sanitizer
+# runtimes add code and pre-initializers of their own, so checks 3 and 4 run in normal builds only.
+set(isaElfImages OFF)
+if(isaX86 AND NOT WIN32 AND NOT HELIOS_SANITIZE AND isaTools MATCHES "OBJDUMP")
+  set(isaElfImages ON)
+endif()
+
+# The base fixture image (check 4 "on a base fixture image now", 09 §2 WP-0.2r): a launcher-like image
+# that links core and patch, built from their base copies on every toolchain, so the copies are compiled
+# wherever tests are. ISA base is the fixtures-only override of helios_executable().
+if(isaX86 AND TARGET helios::patch)
+  helios_executable(lint_isa_fixture_base ROLE tool ISA base SOURCES ${LINT_TESTS}/isa/base_image.cpp
+                    DEPS helios::core helios::patch)
+  set_target_properties(lint_isa_fixture_base PROPERTIES FOLDER tests)
+endif()
+# Base images that lint_isa_audit checks after linking (every one but the seeded canary below).
+set(baseImageLines "")
+get_property(apps GLOBAL PROPERTY HELIOS_APP_TARGETS)
+foreach(t IN LISTS apps)
+  get_target_property(level ${t} HELIOS_ISA_LEVEL)
+  if(level STREQUAL "base")
+    string(APPEND baseImageLines "$<TARGET_FILE:${t}>\n")
+  endif()
+endforeach()
+
+if(isaX86 AND NOT CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
   message(STATUS "lint_isa_audit needs compile_commands.json (Ninja or Makefile generators); "
                  "Visual Studio builds are audited by the Ninja CI presets")
 endif()
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
-  # Generated only where lint_isa_audit reads it. The Visual Studio generators evaluate it once per
+if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
+  # Generated only where lint_isa_audit reads them. The Visual Studio generators evaluate them once per
   # configuration, $<TARGET_FILE> differs between them, and one path cannot hold differing content.
   file(GENERATE OUTPUT ${CMAKE_BINARY_DIR}/helios_generated/isa_images.txt CONTENT "${imageLines}")
+  file(GENERATE OUTPUT ${CMAKE_BINARY_DIR}/helios_generated/isa_base_images.txt CONTENT "${baseImageLines}")
   # Sanitizer runtimes add their own .preinit_array entries, so the image check (exactly one
   # pre-initializer: the gate) only runs in normal builds.
   set(isaImages -DIMAGES_FILE=${CMAKE_BINARY_DIR}/helios_generated/isa_images.txt)
   if(HELIOS_SANITIZE)
     set(isaImages "")
   endif()
+  if(isaElfImages)
+    list(APPEND isaImages -DBASE_IMAGES_FILE=${CMAKE_BINARY_DIR}/helios_generated/isa_base_images.txt)
+  endif()
+  # isa_levels.txt is written by helios_isa_finalize(), which runs right after this file.
   helios_lint_test(lint_isa_audit COMMAND ${CMAKE_COMMAND} ${isaCommon} ${isaTools} ${isaImages}
-    -DCOMPILE_COMMANDS=${CMAKE_BINARY_DIR}/compile_commands.json -DREQUIRE_GATE=ON
+    -DCOMPILE_COMMANDS=${CMAKE_BINARY_DIR}/compile_commands.json
+    -DLEVELS=${CMAKE_BINARY_DIR}/helios_generated/isa_levels.txt -DREQUIRE_GATE=ON
     -P ${LINT}/isa_audit.cmake)
 
-  # Seeded violations: each fixture compile database must be rejected with its diagnostic.
+  # Check 1's seeded violations: each fixture compile database (the ok one plus one seeded unit, against
+  # the fixture level map tests/isa/levels.txt) must be rejected with its diagnostic.
+  set(isaLevels -DLEVELS=${LINT_TESTS}/isa/levels.txt)
   foreach(case
-      "unlisted_avx2|not on the ISA allowlist"
+      "default_level|noise.cpp .helios_math.: avx2 unit built below its image's level .missing: avx2, bmi, bmi2, lzcnt, popcnt, f16c."
+      "partial_level|PhysicsSystem.cpp .tp_jolt.: avx2 unit built below its image's level .missing: bmi2."
+      "msvc_default|world.cpp .helios_world.: avx2 unit built below its image's level .missing: /arch:AVX2."
+      "clang_cl_fma|world.cpp .helios_world.: FMA enabled"
+      "extra_flag|world.cpp .helios_world.: flags outside the avx2 level set .-msha -mcx16."
+      "no_level|target 'helios_mystery' has no ISA level"
+      "base_avx2|entropy_common.c .tp_zstd.base.: baseline unit .base image. compiled with AVX-class flags .avx2, bmi, bmi2, f16c, lzcnt."
       "gate_avx|baseline unit .CPU gate. compiled with AVX-class flags"
+      "gate_sse42|baseline unit .CPU gate. compiled with flags above x86-64-v1 .-mpopcnt -msse4.2."
+      "gate_march|baseline unit .CPU gate. compiled with flags above x86-64-v1 .-march=nehalem."
+      "gate_in_avx2|cpu_gate.c .helios_core.: CPU-gate unit compiled in a target of level 'avx2'"
       "kernel_fma|FMA enabled"
       "kernel_avx512|AVX-512 enabled"
       "march_native|-march=native"
       "fast_math|fast-math"
       "contract|FP contraction enabled"
-      "msvc_arch|compiled with AVX-class flags .avx, avx2."
-      "gate_sse42|baseline unit .CPU gate. compiled with flags above x86-64-v1 .-mpopcnt -msse4.2."
-      "gate_march|baseline unit .CPU gate. compiled with flags above x86-64-v1 .-march=nehalem."
-      "clang_cl_forwarded|compiled with AVX-class flags .avx2, bmi2. but not on the ISA allowlist")
+      "msvc_arch|log.cpp .helios_core.base.: baseline unit .base image. compiled with AVX-class flags .avx, avx2."
+      "clang_cl_forwarded|window.cpp .fx_launcher.: baseline unit .base image. compiled with AVX-class flags .avx2, bmi2.")
     string(REPLACE "|" ";" parts "${case}")
     list(GET parts 0 fixture)
     list(GET parts 1 expect)
     helios_lint_test(lint_isa_fixture_${fixture} EXPECT_FAIL "${expect}"
-      COMMAND ${CMAKE_COMMAND} ${isaCommon} -DSKIP_OBJECTS=ON
+      COMMAND ${CMAKE_COMMAND} ${isaCommon} ${isaLevels} -DSKIP_OBJECTS=ON
               -DCOMPILE_COMMANDS=${LINT_TESTS}/isa/${fixture}.json -P ${LINT}/isa_audit.cmake)
   endforeach()
-  helios_lint_test(lint_isa_fixture_ok COMMAND ${CMAKE_COMMAND} ${isaCommon} -DSKIP_OBJECTS=ON -DREQUIRE_GATE=ON
-    -DCOMPILE_COMMANDS=${LINT_TESTS}/isa/ok.json -P ${LINT}/isa_audit.cmake)
+  helios_lint_test(lint_isa_fixture_ok COMMAND ${CMAKE_COMMAND} ${isaCommon} ${isaLevels} -DSKIP_OBJECTS=ON
+    -DREQUIRE_GATE=ON -DCOMPILE_COMMANDS=${LINT_TESTS}/isa/ok.json -P ${LINT}/isa_audit.cmake)
 
-  # The disassembly check must catch AVX code: a designated kernel (allowlisted by name, so the
-  # flags audit accepts it) audited as if it were a baseline object.
+  # Check 2's disassembly and symbol checks must catch what a gate object may not contain. Each fixture
+  # is an ordinary avx2 library (never a gate one, or lint_isa_audit would audit it as a gate unit),
+  # audited as if it were a gate object.
   if(isaTools MATCHES "OBJDUMP")
-    add_library(lint_isa_fixture_kernel OBJECT)
-    helios_avx2_sources( # conformance:allow CONF-11 the audit's own disassembly fixture (09 §5.10.3)
-      lint_isa_fixture_kernel ${LINT_TESTS}/isa/fixture_kernel_avx2.c)
-    set_target_properties(lint_isa_fixture_kernel PROPERTIES FOLDER tests)
-    add_custom_target(lint_isa_fixture_kernel_build ALL DEPENDS lint_isa_fixture_kernel)
+    add_library(lint_isa_fixture_kernel OBJECT ${LINT_TESTS}/isa/fixture_kernel_avx2.c)
+    # CMPXCHG16B behind a lock prefix (the assembler accepts it at any level).
+    add_library(lint_isa_fixture_prefixed OBJECT ${LINT_TESTS}/isa/fixture_cx16.c)
+    set_target_properties(lint_isa_fixture_kernel lint_isa_fixture_prefixed PROPERTIES FOLDER tests)
+    add_custom_target(lint_isa_fixture_kernel_build ALL DEPENDS lint_isa_fixture_kernel lint_isa_fixture_prefixed)
     helios_lint_test(lint_isa_disasm_detects_avx EXPECT_FAIL "instruction not allowed at the x86-64-v1 baseline"
       COMMAND ${CMAKE_COMMAND} ${isaCommon} ${isaTools} -DMODE=object
               "-DOBJECT=$<TARGET_OBJECTS:lint_isa_fixture_kernel>" -P ${LINT}/isa_audit.cmake)
-    # CMPXCHG16B behind a lock prefix, compiled at the baseline (the assembler accepts it anyway).
-    add_library(lint_isa_fixture_prefixed OBJECT ${LINT_TESTS}/isa/fixture_cx16.c)
-    set_target_properties(lint_isa_fixture_prefixed PROPERTIES FOLDER tests)
-    add_dependencies(lint_isa_fixture_kernel_build lint_isa_fixture_prefixed)
     helios_lint_test(lint_isa_disasm_detects_prefixed EXPECT_FAIL "not allowed at the x86-64-v1 baseline.*cmpxchg16b"
       COMMAND ${CMAKE_COMMAND} ${isaCommon} ${isaTools} -DMODE=object
               "-DOBJECT=$<TARGET_OBJECTS:lint_isa_fixture_prefixed>" -P ${LINT}/isa_audit.cmake)
+    # A stack-protector reference and AddressSanitizer references (02 §1.1: no __security_cookie or
+    # __asan_* in the gate objects). GCC and Clang on ELF; MSVC's /GS cookie is WP-0.2r part 2's.
+    if(NOT WIN32 AND isaTools MATCHES "NM")
+      add_library(lint_isa_fixture_cookie OBJECT ${LINT_TESTS}/isa/gate_stack_protector.c)
+      target_compile_options(lint_isa_fixture_cookie PRIVATE -fstack-protector-all)
+      add_library(lint_isa_fixture_asan OBJECT ${LINT_TESTS}/isa/gate_asan.c)
+      target_compile_options(lint_isa_fixture_asan PRIVATE -fsanitize=address)
+      set_target_properties(lint_isa_fixture_cookie lint_isa_fixture_asan PROPERTIES FOLDER tests)
+      add_dependencies(lint_isa_fixture_kernel_build lint_isa_fixture_cookie lint_isa_fixture_asan)
+      helios_lint_test(lint_isa_object_detects_stack_protector
+        EXPECT_FAIL "references '__stack_chk_fail': the gate objects run before the CRT"
+        COMMAND ${CMAKE_COMMAND} ${isaCommon} ${isaTools} -DMODE=object
+                "-DOBJECT=$<TARGET_OBJECTS:lint_isa_fixture_cookie>" -P ${LINT}/isa_audit.cmake)
+      helios_lint_test(lint_isa_object_detects_asan EXPECT_FAIL "references '__asan_[a-z_0-9]+': the gate objects run"
+        COMMAND ${CMAKE_COMMAND} ${isaCommon} ${isaTools} -DMODE=object
+                "-DOBJECT=$<TARGET_OBJECTS:lint_isa_fixture_asan>" -P ${LINT}/isa_audit.cmake)
+    endif()
   endif()
   # Check 3's canary (ELF): one .preinit_array entry that is not the gate's hook. (Not in sanitizer
   # builds: their runtimes add .preinit_array entries of their own.)
@@ -116,6 +176,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" AND CMAKE_GENERATOR MATCH
     helios_lint_test(lint_isa_image_detects_foreign_preinit EXPECT_FAIL "is not the CPU gate .hcg_gate at"
       COMMAND ${CMAKE_COMMAND} ${isaCommon} ${isaTools} -DMODE=image
               "-DIMAGE=$<TARGET_FILE:lint_isa_fixture_foreign_preinit>" -P ${LINT}/isa_audit.cmake)
+  endif()
+  # Check 4: the base fixture image passes on its own (zstd's listed BMI2 decoders included), and the
+  # seeded canary (an unlisted AVX2 symbol in a base image, 09 §2 WP-0.2r) fails, naming only its symbol.
+  if(isaElfImages AND TARGET lint_isa_fixture_base)
+    helios_lint_test(lint_isa_base_image COMMAND ${CMAKE_COMMAND} ${isaCommon} ${isaTools} -DMODE=base_image
+      "-DIMAGE=$<TARGET_FILE:lint_isa_fixture_base>" -P ${LINT}/isa_audit.cmake)
+    helios_executable(lint_isa_fixture_base_canary ROLE tool ISA base SOURCES ${LINT_TESTS}/isa/base_canary.c)
+    set_target_properties(lint_isa_fixture_base_canary PROPERTIES FOLDER tests)
+    helios_lint_test(lint_isa_base_image_detects_avx2
+      EXPECT_FAIL "base image: 1 symbol.s. with instructions above x86-64-v1 that are not on HELIOS_ISA_SELF_DISPATCH_SYMBOLS: helios_isa_canary_avx2 .[0-9]+ instruction"
+      COMMAND ${CMAKE_COMMAND} ${isaCommon} ${isaTools} -DMODE=base_image
+              "-DIMAGE=$<TARGET_FILE:lint_isa_fixture_base_canary>" -P ${LINT}/isa_audit.cmake)
   endif()
 endif()
 
@@ -482,8 +554,11 @@ helios_lint_test(lint_run_lints_status_python
           -P ${PROJECT_SOURCE_DIR}/tools/ci/run_lints.cmake)
 
 # ---------------------------------------------------------------------------------------------
-# Module layering (02 §1.1): a fixture project configured once per case. Good graphs configure;
-# each seeded violation must stop configure with its diagnostic.
+# Module layering and ISA levels (02 §1.1): a fixture project configured once per case. Good graphs
+# configure; each seeded violation must stop configure with its diagnostic. The isa_* cases check the
+# image levels of cmake/HeliosIsa.cmake: base copies, and the configure errors for a base image that links
+# an avx2 library (tp_jolt, physics), an ISA override outside the fixtures, and ISA options on a
+# library's interface.
 # ---------------------------------------------------------------------------------------------
 # The fixture declares LANGUAGES NONE and stops right after the checks, so no compiler is probed;
 # the generator is passed through only so CMake does not go looking for a default one.
@@ -524,7 +599,13 @@ foreach(case
     "bridge_upward|module 'reflect' .layer 2. depends upward on 'world' .layer 4. .through fx_bridge."
     "bridge_same_layer|module 'net' depends on same-layer module 'physics' .*.through fx_bridge."
     "bridge_cycle|dependency cycle between modules: helios_ecs -> fx_bridge -> helios_app -> helios_ecs"
-    "unknown_role|helios_executable.fx-zonehost.: no ROLE given and none is known for.*'apps/zonehost/'")
+    "unknown_role|helios_executable.fx-zonehost.: no ROLE given and none is known for.*'apps/zonehost/'"
+    "isa_base_ok|Helios ISA levels: 1 base image.s.: fx-launcher .helios_core.base, tp_yyjson.base..*HELIOS_FIXTURE_CONFIGURE_OK"
+    "isa_fixture_base|Helios ISA levels: 1 base image.s.: fx-isa-fixture .helios_core.base, tp_yyjson.base..*HELIOS_FIXTURE_CONFIGURE_OK"
+    "isa_base_links_jolt|ISA level check failed .1 violation.*helios isa: base image 'fx-launcher' links 'tp_jolt', which is built only at avx2: fx-launcher -> tp_jolt"
+    "isa_base_links_physics|helios isa: base image 'fx-bootstrap' links 'helios_physics', which is built only at avx2: fx-bootstrap -> fx_helper -> helios_physics"
+    "isa_override_in_apps|helios_executable.fx-isa-app.: ISA is for the ISA audit's fixtures only.*'apps/isa/'"
+    "isa_interface_options|helios isa: 'tp_jolt' carries ISA compile options on its interface .-mavx2 -mbmi -mpopcnt -mlzcnt -mf16c.")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)
   list(GET parts 1 expect)
@@ -533,8 +614,8 @@ foreach(case
             -DHELIOS_FIXTURE_CASE=${fixture} -DHELIOS_SOURCE_DIR=${PROJECT_SOURCE_DIR})
   set_tests_properties(lint_layering_${fixture} PROPERTIES LABELS lint TIMEOUT 120
     PASS_REGULAR_EXPRESSION "${expect}")
-  if(expect STREQUAL "HELIOS_FIXTURE_CONFIGURE_OK")
-    set_tests_properties(lint_layering_${fixture} PROPERTIES FAIL_REGULAR_EXPRESSION "helios layering:")
+  if(expect MATCHES "HELIOS_FIXTURE_CONFIGURE_OK")
+    set_tests_properties(lint_layering_${fixture} PROPERTIES FAIL_REGULAR_EXPRESSION "helios (layering|isa):")
   else()
     set_tests_properties(lint_layering_${fixture} PROPERTIES FAIL_REGULAR_EXPRESSION "HELIOS_FIXTURE_CONFIGURE_OK")
   endif()

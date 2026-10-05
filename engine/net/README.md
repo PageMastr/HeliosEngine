@@ -289,9 +289,9 @@ the hosted Windows nightly and the owner's `win-gpu` runner.
   datagrams as truncated; HTP datagrams are at most 1,300 bytes. A RIO socket buffers nothing beyond its
   posted receives (Windows CI: 128 posted receives took 128 of a 400-datagram burst), so the receive and
   send slot counts follow `receiveBufferBytes`/`sendBufferBytes` (128–16,384 each), and the region is that
-  much locked memory per socket: ≈ 17 MB at the 8 MB defaults, ≈ 67 MB for a 32 MB trunk socket. The fallback polls a non-blocking socket rather than
-  using IOCP: 04 §2.6's IOCP + `WSARecvMsg` fallback belongs to the Phase 2 trunk IO threads, which block
-  between bursts.
+  much locked memory per socket: ≈ 17 MB at the 8 MB defaults, ≈ 67 MB for a 32 MB trunk socket. The
+  fallback polls a non-blocking socket rather than using IOCP: 04 §2.6's IOCP + `WSARecvMsg` fallback
+  belongs to the Phase 2 trunk IO threads, which block between bursts.
 * MSVC builds run the bundled libsodium's portable donna32 Poly1305 (no `__int128`); see "NS-0.2 per-packet
   budget".
 * IPv6 sockets are exercised only where the OS provides them (this container has no IPv6);

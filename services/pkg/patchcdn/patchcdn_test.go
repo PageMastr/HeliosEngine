@@ -310,6 +310,35 @@ func TestChunkObjects(t *testing.T) {
 	}
 }
 
+// Every object EncodeChunk writes declares a zstd window of at most cdc.MaxSize (engine/patch's
+// kMaxChunkWindowLog), so both decoders' window limit never refuses one publish wrote: a single-segment
+// frame (window = content size) above 1 KiB, a 1 or 2 KiB window below.
+func TestChunkObjectWindows(t *testing.T) {
+	for i, n := range []int{1, 100, 1023, 1024, 1025, 4096, 65536, 100000, cdc.MaxSize - 1, cdc.MaxSize} {
+		for _, raw := range [][]byte{cdctest.Random(uint64(i), n), make([]byte, n)} {
+			stored, err := patchcdn.EncodeChunk(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var h zstd.Header
+			if err := h.Decode(stored); err != nil {
+				t.Fatalf("%d bytes: %v", n, err)
+			}
+			window := h.WindowSize
+			if h.SingleSegment {
+				window = h.FrameContentSize
+			}
+			if window == 0 || window > cdc.MaxSize {
+				t.Errorf("%d bytes: the frame declares a %d-byte window (single segment %v)", n, window,
+					h.SingleSegment)
+			}
+			if back, err := patchcdn.DecodeChunk(stored, uint32(n)); err != nil || !bytes.Equal(back, raw) {
+				t.Errorf("%d bytes: round trip: %v", n, err)
+			}
+		}
+	}
+}
+
 func TestSources(t *testing.T) {
 	dir := t.TempDir()
 	writeFiles(t, dir, map[string][]byte{"keys/p/keyset.json": []byte("12345")})

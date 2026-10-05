@@ -357,7 +357,8 @@ keys/<product>/keyset.json                         the root-signed keyset (mutab
 limit (`NotFound`, `LimitExceeded`); `localCdn(root)` reads a directory through the platform layer and refuses
 paths with empty, `.` or `..` segments, `\` or `:`. A chunk object decodes into exactly `rawSize` bytes (one byte of
 room catches more), and its frame may declare a zstd window of at most 256 KiB (`cdn::kMaxChunkWindowLog`, the
-largest chunk; Go's encoder declares at most max(content size, 1 KiB)), so a hostile object costs at most
+largest chunk; Go's encoder writes a single-segment frame, whose window is its content size, above 1 KiB and a
+1 or 2 KiB window below), so a hostile object costs at most
 `rawSize + 1` bytes of output and a decoder with a 256 KiB window.
 Go's `patchcdn` has the same read path (`DirSource`, and `HTTPSource`, which tests point at an `http.FileServer`)
 and writes the layout (`helios-patch publish`, [services/README.md](../../services/README.md#patching-helios-patch)).

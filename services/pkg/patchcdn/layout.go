@@ -145,8 +145,9 @@ var (
 	})
 	// MaxMemory bounds what DecodeAll produces (a chunk is at most cdc.MaxSize bytes) and, in this decoder,
 	// also refuses a frame declaring a larger window; MaxWindow states that window bound outright, as
-	// engine/patch's kMaxChunkWindowLog. EncodeAll declares a window of at most max(content size, 1 KiB) (a
-	// single-segment frame from 256 bytes, a 1 KiB window below), so every chunk object it writes fits.
+	// engine/patch's kMaxChunkWindowLog. EncodeAll writes a single-segment frame (window = content size) above
+	// 1 KiB and declares a 1 or 2 KiB window below, so every chunk object it writes fits
+	// (TestChunkObjectWindows checks the declared window over the size range).
 	chunkDecoder = sync.OnceValues(func() (*zstd.Decoder, error) {
 		return zstd.NewReader(nil, zstd.WithDecoderConcurrency(0), zstd.WithDecoderMaxMemory(cdc.MaxSize),
 			zstd.WithDecoderMaxWindow(cdc.MaxSize))

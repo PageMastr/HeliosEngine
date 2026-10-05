@@ -33,9 +33,9 @@ namespace cdn {
 
 /// The largest chunk object: zstd's bound for a kMaxSize chunk fits.
 inline constexpr u64 kMaxChunkObject = fastcdc::kMaxSize + 4096;
-/// The largest zstd window a chunk object may declare: 2^18 = fastcdc::kMaxSize. Go's EncodeChunk declares
-/// at most max(content size, 1 KiB), so every object publish writes fits, and a hostile one cannot make the
-/// decoder reserve a larger window.
+/// The largest zstd window a chunk object may declare: 2^18 = fastcdc::kMaxSize. Go's EncodeChunk writes a
+/// single-segment frame (window = content size) above 1 KiB and a 1 or 2 KiB window below, so every object
+/// publish writes fits, and a hostile one cannot make the decoder reserve a larger window.
 inline constexpr int kMaxChunkWindowLog = 18;
 static_assert(u64(1) << kMaxChunkWindowLog == fastcdc::kMaxSize);
 /// The largest .hman object: the header, the largest body and zstd's worst-case expansion.

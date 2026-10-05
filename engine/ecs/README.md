@@ -278,11 +278,13 @@ SPIKES.md §3 (Phase 0) and §5 (WP-1.1a).
 
 ## Plan conformance
 
-Plan-Rev: 10
+Plan-Rev: 14
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
 `docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.
 Revisions 7–9 change no anchor that maps to this module. Revision 10 is WP-1.1a's own change to
 ADR-004a (§6 M1 and M5, §7: its results, the `InFrame` choice and the owner's decision on the M1
 statistic). It records measurements of this module's code and bench, and adds no requirement that the
-code does not meet.
+code does not meet. Revisions 11–13 change no anchor that maps to this module. Revision 14 is WP-0.6c part
+1's amendment of 02 §1.4 (PR #59): the typed API looks a C++ type up by `kTypeKey<T>`, never by a per-image
+cache, which this module implements in the same PR.

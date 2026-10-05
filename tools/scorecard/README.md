@@ -385,8 +385,10 @@ report at exit).
   fixed hardware are WP-0.4's (its runner and the lab), and until they exist a red or a green here is
   evidence to read, not a measurement on REF.
 - **Expected red today.** `pcg_tests_perf` fails by design (K5b, armed by WP-0.9c's red outcome; 09 §8.1),
-  so the GCC job's perf step is red every night. That is a real result, reported as such; look for anything
-  else first. (`script_tests`' abort under `linux-asan` was fixed by #24.)
+  so the GCC job's perf step is red every night. The `windows-vs2026` job's strict `net_bench --gate` step
+  (NS-0.2) is red on each night that the encrypted stack measures below 100k packets per core: the owner's
+  approval of 2026-09-30 covers only the hosted Linux run (09 §8.1, WP-0.13 row). Both are real results,
+  reported as such; look for anything else first. (`script_tests`' abort under `linux-asan` was fixed by #24.)
 
 The scorecard job also checks the registry against tonight's inventories, Go tests included. It uses the
 workflow's read-only token to read the previous nightly's artifacts and the jobs of the latest `ci.yml` run

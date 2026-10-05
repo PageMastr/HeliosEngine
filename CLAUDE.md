@@ -5,8 +5,9 @@ architecture is `docs/plan/00-decisions.md`; the master plan is `docs/PLAN.md` w
 `docs/plan/`. Research that motivates decisions is in `docs/research/`.
 
 ## Platforms (non-negotiable)
-- **Windows x64 is the primary platform** (MSVC 2022 / clang-cl). Linux x64 (GCC 13+, Clang 17+)
-  must also build and pass tests. Never write POSIX-only or Win32-only code outside a module's
+- **Windows x64 is the primary platform** (MSVC: VS 2026 is the primary toolset, VS 2022 17.14 /
+  MSVC 14.44 the floor and release toolset, ADR-001; clang-cl). Linux x64 (GCC 13+, Clang 17+) must also
+  build and pass tests. Never write POSIX-only or Win32-only code outside a module's
   `src/platform/{win32,posix}/` (today `engine/core`, `engine/net` and `engine/toolsfw`); everything else
   goes through the platform layer.
 - Use `std::filesystem` for paths, fixed-width integer types, no `long` in serialized data, no

@@ -3,11 +3,13 @@
 Every lint in this directory is a CMake script (`cmake -P …`), so it runs wherever CMake runs.
 `cmake/HeliosLayering.cmake` registers them as CTests (label `lint`) at the end of configure, and
 `tools/ci/run_lints.cmake` runs the build-independent ones in one go (a fast local check, or a pre-commit
-hook; no CI job calls it, since CI runs the same lints as CTests), together with the D6 status check of
+hook; no CI job calls it, since CI runs those lints as CTests), together with the D6 status check of
 09 §5.10.2 (`tools/status/check_status.cmake`): a module directory not named in 09 §8.1, or a module README
-without its `Plan-Rev`, fails it. It also runs the self-hosted runner policy check; both need Python 3.10+
-(where it is not on `PATH`, pass `-DHELIOS_STATUS_PYTHON=<path>` to `run_lints.cmake`, which forwards it to
-both), and the conformance lint (`go run`, so Go 1.27; `run_lints.cmake` fails without Go).
+without its `Plan-Rev`, fails it. CI does not run the D6 check (no CTest or workflow calls it; it runs at the
+round audit, and CTest runs only its fixture tests, `lint_status_unittest`). `run_lints.cmake` also runs the
+self-hosted runner policy check; both need Python 3.10+ (where it is not on `PATH`, pass
+`-DHELIOS_STATUS_PYTHON=<path>` to `run_lints.cmake`, which forwards it to both), and the conformance lint
+(`go run`, so Go 1.27; `run_lints.cmake` fails without Go).
 
 ```
 ctest --test-dir build/<dir> -L lint --output-on-failure      # all lints + their fixtures

@@ -1,4 +1,4 @@
-# pkg/hxl — the Go HXL interpreter
+# pkg/hxl — HXL in Go (compiler, verifier and VM)
 
 Go twin of [`engine/hxl`](../../../engine/hxl) (06 §1.2, 05 §8): the same compiler, bytecode format,
 verifier and VM, bit-identical with C++ on the shared corpus [`tests/corpus/hxl`](../../../tests/corpus/hxl).

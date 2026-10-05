@@ -3,7 +3,8 @@
 The Go control plane of Helios (ADR-008, ADR-014, `docs/plan/05-backend-services.md`). Phase 0 ships one
 service binary, `helios-backend` (plus `helios-patch`, the patch publishing tool, below), that runs every
 service in-process on top of **embedded PostgreSQL 18**, an **embedded NATS server with JetStream** and
-**miniredis** (the Valkey stand-in), so a Windows developer needs nothing but Go. The same code runs against real PostgreSQL, NATS and Valkey via flags or Docker Compose.
+**miniredis** (the Valkey stand-in), so a Windows developer needs nothing but Go. The same code runs against
+real PostgreSQL, NATS and Valkey via flags or Docker Compose.
 
 | Service | Package | Phase 0 scope |
 |---|---|---|
@@ -385,7 +386,7 @@ pkg/cdc/                   FastCDC + BLAKE2b-256 chunk IDs (cdctest/: the shared
 pkg/manifest/              .hman v0 manifests: reader, writer, builder (05 §7)
 pkg/patchtrust/            keysets, signed pointers, the verifier and ratchets (trusttest/: test-only keys)
 pkg/patchcdn/              the CDN layout, read path, Verify, Publish, signing directories
-pkg/hxl/                   the Go HXL interpreter, twin of engine/hxl (see pkg/hxl/README.md; gamedef/ is generated)
+pkg/hxl/                   HXL in Go: compiler, verifier and VM, twin of engine/hxl (gamedef/ is generated)
 pkg/idgen/ pkg/keyring/ pkg/clock/ pkg/testkit/
 migrations/<service>/      goose migrations for svc_<service>, embedded (plus Go steps in migrations.go)
 deploy/                    docker-compose.yml, Dockerfile, helios.example.toml

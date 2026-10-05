@@ -66,7 +66,7 @@ tools/production) against the goal above over five review/revise rounds, finishi
 ```
 engine/        engine modules (engine/<module>/include/helios/<module>, src/, tests/)
 apps/          executables: cellserver, gateway, editor, tools (helios-tool, helios-cook, helios-uitest),
-               samples (client, launcher to come)
+               samples (rhi_triangle); the client and launcher are still to come (WP-0.17)
 services/      Go backend module (cmd/helios-backend, cmd/helios-patch, internal/, pkg/)
 tools/         schemac (schema compiler), shaderc, rendertest, lint, conformance, scorecard and status,
                milestone validation, CI, prebuilt-tool and vendoring scripts

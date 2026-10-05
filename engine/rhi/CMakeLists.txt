@@ -43,8 +43,9 @@ target_compile_definitions(helios_rhi PRIVATE VMA_STATIC_VULKAN_FUNCTIONS=0 VMA_
 file(GLOB HELIOS_RHI_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp)
 # SDL3 only for test_swapchain.cpp (offscreen video driver + VK_EXT_headless_surface: swapchains
 # without a display server).
+# Vulkan headers (no loader) for test_vk_sync.cpp, which checks src/vulkan/vk_sync.h's tables on the CPU.
 helios_test(rhi_tests SOURCES ${HELIOS_RHI_TEST_SOURCES}
-            DEPS helios::rhi helios::math helios::tp::headers helios::tp::sdl3)
+            DEPS helios::rhi helios::math helios::tp::headers helios::tp::sdl3 helios::tp::vulkan_headers)
 if(TARGET rhi_tests)
   target_include_directories(rhi_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)  # detail:: helpers (test_environment.cpp)
   file(GLOB HELIOS_RHI_TEST_SHADERS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/shaders/*.slang)

@@ -105,7 +105,10 @@ image's undefined and copy-relocated Helios data symbols, resolved against the i
 finds three today: `log::detail::g_globalLevel`, which every image's `log::isEnabled` reads, and
 `edui::detail::kRobotoRegular` and `kRobotoRegularSize`, which `editorui_tests` reads. All three carry
 their group's macro. A missing one is an MSVC link error (`LNK2019` on `__imp_…`), so the `windows-msvc-dev`
-job catches the next one. Log channels that a header outside a module's sources names (the core channels,
+job catches the next one. The same applies to a function whose address is compared across images: without
+`dllimport`, `&f` in a consumer is its own import thunk, not the DLL's function. The first MSVC test run
+found one (`core_tests` compares `assertHandler()` with `&defaultAssertHandler`), which now carries
+`HELIOS_RUNTIME_API`. Log channels that a header outside a module's sources names (the core channels,
 `LogEcs`, `LogTools`, and `LogRhi`, whose private header `rhi_tests` includes) are declared with
 `HELIOS_LOG_CHANNEL_EXTERN` and defined in one `.cpp`; `HELIOS_LOG_CHANNEL` stays for channels of a
 module's own sources (an inline variable, so one copy per image).
@@ -219,8 +222,9 @@ What the first modular builds of the tree showed (GCC and Clang on Linux; MSVC t
    sites stay in one image.
 9. **The first MSVC modular build linked cleanly.** The data imports found by the ELF scan were all it
    needed, and `WINDOWS_EXPORT_ALL_SYMBOLS` works over linked object libraries (CMake's Ninja generator
-   passes their objects to its export scan). Its audit found one class of names the ELF build cannot show:
-   the CRT's and STL's header inlines with C linkage (P1 above).
+   passes their objects to its export scan). Two things showed up only on Windows: the CRT's and STL's
+   header inlines with C linkage in the export tables (P1 above), and one function-address comparison
+   across images (§2). 307 of 308 tests passed on the first run.
 10. **Not verified here.** MSVC is built and tested only by the `windows-msvc-dev` CI job, including the DLL
    search at test time (every image is written to `bin/`).
 

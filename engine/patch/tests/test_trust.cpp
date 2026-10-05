@@ -180,7 +180,6 @@ Overlay caseOverlay(const Vectors& v, yyjson_val* c) {
     return o;
 }
 
-} // namespace
 
 TEST_CASE("trust: the shared CL-14 vectors (each rejection fails exactly its check)") {
     const Vectors v = loadVectors();
@@ -428,3 +427,5 @@ TEST_CASE("cdn: paths, the local fetcher and chunk objects") {
     const std::vector<u8> garbage(100, 0x42);
     CHECK_FALSE(decodeChunkObject(garbage, 100).ok());
 }
+
+} // namespace

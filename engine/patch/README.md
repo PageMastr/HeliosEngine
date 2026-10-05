@@ -462,10 +462,20 @@ needs two cores at this rate, or the SSE4.1/AVX2 BLAKE2b that 08 §2.1.1 lists f
   header check, and the reseal step skips a zstd frame that declares more than the cap instead of decoding it.
   Without `HELIOS_PATCH_LIBFUZZER` the target is a CTest (label `fuzz`, every PR) that replays the corpus plus
   20,000 deterministic mutations.
+- **C++, trust:** `fuzz/fuzz_trust_parser.cpp` runs each input as a keyset, a pointer and (from 352 bytes) a `.hman`
+  header. It checks that every call returns a Result, that a document that parses re-encodes to exactly the input,
+  that what verifies also parses, and that every verification failure names its check. Verification uses the
+  test-only keys (a keyset signed by `root-1` with a manifest, a news and an unknown-role subkey), so the seeds'
+  signatures verify and mutations reach the checks behind them. `fuzz/corpus/trust_parser/` holds `seed_000`–`seed_004`
+  (`--make-seeds`: a keyset, a pointer with `next`, a minimal rollback pointer, a news-key pointer, a keyset of the
+  next root) and copies of the shared vectors (`vector_*`). Without `HELIOS_PATCH_LIBFUZZER` it is the CTest
+  `patch_fuzz_trust_parser` (label `fuzz`), replaying the corpus plus 20,000 mutations.
 - **Go:** `FuzzParse` (pkg/manifest; its seeds, which every `go test` runs, are the shared goldens with
   `deep-paths.hman`, a 64-file deep-paths manifest and the 57 hostile cases) checks the same properties, and
   `FuzzChunker` (pkg/cdc) checks that the streaming chunker agrees with `Split` and the size bounds for any input
-  and read pattern.
+  and read pattern. `FuzzParseKeyset` and `FuzzParsePointer` (pkg/patchtrust) check the parsers' round trip and
+  that verification returns a rejection or a document, and `FuzzVerifyManifestHeader` runs the manifest checks on
+  hostile `.hman` bytes; their seeds are the shared trust vectors.
 
 A campaign:
 
@@ -473,9 +483,11 @@ A campaign:
 cmake --preset linux-clang -B build/fuzz -DHELIOS_BUILD_GRAPHICS=OFF -DHELIOS_BUILD_TESTS=OFF \
   -DHELIOS_PATCH_LIBFUZZER=ON "-DCMAKE_C_FLAGS=-fsanitize=fuzzer-no-link,address,undefined" \
   "-DCMAKE_CXX_FLAGS=-fsanitize=fuzzer-no-link,address,undefined"
-cmake --build build/fuzz --target patch_fuzz_manifest_reader
+cmake --build build/fuzz --target patch_fuzz_manifest_reader patch_fuzz_trust_parser
 build/fuzz/bin/patch_fuzz_manifest_reader -max_total_time=600 -rss_limit_mb=2048 -malloc_limit_mb=512 corpus-copy/
+build/fuzz/bin/patch_fuzz_trust_parser -max_total_time=600 -rss_limit_mb=2048 -malloc_limit_mb=512 trust-copy/
 cd services && go test ./pkg/manifest -run '^$' -fuzz FuzzParse -fuzztime 5m
+go test ./pkg/patchtrust -run '^$' -fuzz '^FuzzParseKeyset$' -fuzztime 5m   # and FuzzParsePointer, FuzzVerifyManifestHeader
 ```
 
 Local campaigns (Clang 18.1.3, ASan and UBSan with `-fno-sanitize-recover=undefined`, one process,
@@ -487,6 +499,10 @@ units; peak RSS 261 MB); `patch_tests` (all 26 cases) passed twice in the same s
 ran 977,340 and 848,423 inputs in two first runs (5.5 and 5.3 minutes) and 1,189,554 in 5 minutes after round 1
 (two workers, 21 new interesting inputs), and `FuzzChunker` 22,345 inputs in 90 seconds, with no failure; on the
 loaded VM the Go fuzzer ran in bursts of about 20,000 inputs per second between pauses.
+
+Part 2 (2026-10-05, load average 5–8): CPP_TRUST_FUZZ_TBD Go, one worker, 5 minutes each:
+`FuzzParseKeyset` ran 2,379,149 inputs (corpus 37 → 65), `FuzzParsePointer` 1,473,096 (39 → 52) and
+`FuzzVerifyManifestHeader` 1,381,666 (13 → 20), with no failure.
 
 ## Gaps (v0)
 

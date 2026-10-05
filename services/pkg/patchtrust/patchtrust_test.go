@@ -1,0 +1,644 @@
+package patchtrust_test
+
+import (
+	"bytes"
+	"crypto/ed25519"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/PageMastr/scifi-test/services/pkg/cdc"
+	"github.com/PageMastr/scifi-test/services/pkg/manifest"
+	"github.com/PageMastr/scifi-test/services/pkg/patchtrust"
+	"github.com/PageMastr/scifi-test/services/pkg/patchtrust/trusttest"
+)
+
+var vectorsDir = filepath.Join("..", "..", "testdata", "vectors", "trust")
+
+func pubOf(name string) patchtrust.PublicKey { return patchtrust.PublicKeyOf(trusttest.Key(name)) }
+
+func testKeyset() *patchtrust.Keyset {
+	ks := &patchtrust.Keyset{ProductID: "sample-game", Version: 2, RootEpoch: 1}
+	for _, n := range []string{"manifest-a", "news-a"} {
+		p := pubOf(n)
+		ks.Keys = append(ks.Keys, patchtrust.KeysetKey{ID: patchtrust.Fingerprint(p), Role: strings.TrimSuffix(n, "-a"),
+			Pub: p, NotBefore: 1000, NotAfter: 1_000_000})
+	}
+	if bytes.Compare(ks.Keys[0].ID[:], ks.Keys[1].ID[:]) > 0 {
+		ks.Keys[0], ks.Keys[1] = ks.Keys[1], ks.Keys[0]
+	}
+	return ks
+}
+
+func testPointer() *patchtrust.Pointer {
+	return &patchtrust.Pointer{ProductID: "sample-game", Channel: "live", Platform: "linux64",
+		ManifestRef: patchtrust.ManifestRef{BuildID: "b1", ManifestHash: cdc.Sum([]byte("m")), CompatEpoch: 3},
+		Sequence:    9, MinLauncher: "1", MinClient: "1.0.2.3", CDNHosts: []string{"https://a.example", "http://localhost:7700/cdn"},
+		RolloutPct: 50, SignedAt: 5000, Expires: 5000 + patchtrust.MaxPointerLifetime}
+}
+
+// The test-only roots listed in the verifier are exactly the trusttest roots, and a verifier refuses them
+// unless a test allows them.
+func TestTestOnlyRoots(t *testing.T) {
+	for _, n := range trusttest.RootNames {
+		if !patchtrust.IsTestOnlyKey(pubOf(n)) {
+			t.Fatalf("%s is not listed as test-only", n)
+		}
+	}
+	if patchtrust.IsTestOnlyKey(pubOf("manifest-a")) {
+		t.Fatal("a subkey is listed as a test-only root")
+	}
+	target := patchtrust.Target{ProductID: "sample-game", Channel: "live", Platform: "win64"}
+	_, priv, _ := ed25519.GenerateKey(nil)
+	for _, rp := range []patchtrust.RootPair{
+		{Epoch: 1, Current: pubOf("root-1"), Next: patchtrust.PublicKeyOf(priv)},
+		{Epoch: 1, Current: patchtrust.PublicKeyOf(priv), Next: pubOf("root-x")},
+	} {
+		if _, err := patchtrust.NewVerifier(target, rp, patchtrust.Options{}); err == nil {
+			t.Fatal("a product verifier accepted a test-only root")
+		}
+		if _, err := patchtrust.NewVerifier(target, rp, patchtrust.Options{AllowTestKeys: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, bad := range []struct {
+		t  patchtrust.Target
+		rp patchtrust.RootPair
+	}{
+		{patchtrust.Target{ProductID: "Sample", Channel: "live", Platform: "win64"}, patchtrust.RootPair{Epoch: 1}},
+		{target, patchtrust.RootPair{Epoch: 0, Next: pubOf("root-2")}},
+		{target, patchtrust.RootPair{Epoch: ^uint32(0), Next: pubOf("root-2")}},
+		{target, patchtrust.RootPair{Epoch: 1, Current: pubOf("root-1"), Next: pubOf("root-1")}},
+	} {
+		if _, err := patchtrust.NewVerifier(bad.t, bad.rp, patchtrust.Options{AllowTestKeys: true}); err == nil {
+			t.Fatalf("accepted %+v %+v", bad.t, bad.rp)
+		}
+	}
+}
+
+// smallOrder are the encodings IsWeakPublicKey must refuse (libsodium's has_small_order list).
+var smallOrder = []string{
+	"0000000000000000000000000000000000000000000000000000000000000000", // y = 0, order 4
+	"0100000000000000000000000000000000000000000000000000000000000000", // the identity, order 1
+	"26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05", // order 8
+	"c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a", // order 8
+	"ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p-1, order 2
+	"edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p (non-canonical 0), order 4
+	"eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p+1 (non-canonical 1), order 1
+}
+
+func keyOfHex(t *testing.T, s string) patchtrust.PublicKey {
+	t.Helper()
+	var k patchtrust.PublicKey
+	if b, err := hex.DecodeString(s); err != nil || len(b) != len(k) {
+		t.Fatalf("%s: %v", s, err)
+	} else {
+		copy(k[:], b)
+	}
+	return k
+}
+
+// identitySig is R = the identity, S = 0: no key made it, yet a small-order key verifies it whenever the
+// challenge is a multiple of the key's order.
+var identitySig = append([]byte{1}, make([]byte, 63)...)
+
+// The small-order encodings are weak in either sign and every one is a real hazard: crypto/ed25519 accepts
+// the identity signature under it for some message. Real keys are not weak.
+func TestWeakPublicKeys(t *testing.T) {
+	for _, s := range smallOrder {
+		k := keyOfHex(t, s)
+		forged := false
+		for i := 0; i < 64 && !forged; i++ {
+			forged = ed25519.Verify(k[:], []byte{byte(i)}, identitySig)
+		}
+		if !forged {
+			t.Errorf("%s: no forgery in 64 messages (not a small-order point to Go?)", s)
+		}
+		for _, sign := range []byte{0, 0x80} {
+			k[31] = k[31]&0x7f | sign
+			if !patchtrust.IsWeakPublicKey(k) {
+				t.Errorf("%x is not weak", k)
+			}
+		}
+	}
+	for _, n := range []string{"root-1", "root-2", "manifest-a", "news-a"} {
+		if patchtrust.IsWeakPublicKey(pubOf(n)) {
+			t.Errorf("%s is weak", n)
+		}
+	}
+	// One byte away from a weak key is not weak.
+	k := keyOfHex(t, smallOrder[2])
+	k[0] ^= 1
+	if patchtrust.IsWeakPublicKey(k) {
+		t.Error("a neighbour of an order-8 encoding is weak")
+	}
+}
+
+// A root pair with a zero or other small-order key is refused (RootPair.Validate, NewVerifier): with a zero
+// next root, anyone could sign a keyset of the next epoch. The forgery is real: for one keyset version in
+// about four, crypto/ed25519 accepts the identity signature under the zero key.
+func TestSmallOrderRootsRefused(t *testing.T) {
+	target := patchtrust.Target{ProductID: "sample-game", Channel: "live", Platform: "win64"}
+	_, priv, _ := ed25519.GenerateKey(nil)
+	good := patchtrust.PublicKeyOf(priv)
+	ks := testKeyset()
+	ks.RootEpoch = 2
+	forged := false
+	for v := uint64(100); v < 164 && !forged; v++ {
+		ks.Version = v
+		forged = ed25519.Verify(make([]byte, 32), ks.SignedMessage(), identitySig)
+	}
+	if !forged {
+		t.Fatal("no keyset version in 64 verifies under the zero key")
+	}
+	for _, s := range smallOrder {
+		weak := keyOfHex(t, s)
+		for _, rp := range []patchtrust.RootPair{
+			{Epoch: 1, Current: good, Next: weak},
+			{Epoch: 1, Current: weak, Next: good},
+		} {
+			if err := rp.Validate(); err == nil {
+				t.Errorf("Validate accepted %x / %x", rp.Current, rp.Next)
+			}
+			if _, err := patchtrust.NewVerifier(target, rp, patchtrust.Options{AllowTestKeys: true}); err == nil {
+				t.Errorf("NewVerifier accepted %x / %x", rp.Current, rp.Next)
+			}
+		}
+	}
+	// The zero value's Next, as a pair whose next root was never set gets it.
+	if _, err := patchtrust.NewVerifier(target, patchtrust.RootPair{Epoch: 1, Current: good}, patchtrust.Options{}); err == nil {
+		t.Error("NewVerifier accepted a pair without a next root")
+	}
+	if err := (patchtrust.RootPair{Epoch: 1, Current: good, Next: pubOf("root-2")}).Validate(); err != nil {
+		t.Errorf("a real pair: %v", err)
+	}
+}
+
+// A keyset subkey of small order is refused by Validate, so neither Sign nor ParseKeyset accepts it (the
+// shared syntax vectors pin the parsers).
+func TestSmallOrderSubkeyRefused(t *testing.T) {
+	for _, s := range smallOrder {
+		ks := testKeyset()
+		weak := keyOfHex(t, s)
+		ks.Keys = []patchtrust.KeysetKey{{ID: patchtrust.Fingerprint(weak), Role: patchtrust.RoleManifest, Pub: weak,
+			NotBefore: 1000, NotAfter: 2000}}
+		if err := ks.Validate(); err == nil || !strings.Contains(err.Error(), "small order") {
+			t.Errorf("%s: %v", s, err)
+		}
+		if err := ks.Sign(trusttest.Key("root-1")); err == nil {
+			t.Errorf("%s: signed", s)
+		}
+	}
+}
+
+func TestKeysetRoundTrip(t *testing.T) {
+	ks := testKeyset()
+	if err := ks.Sign(trusttest.Key("root-1")); err != nil {
+		t.Fatal(err)
+	}
+	b, err := ks.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := patchtrust.ParseKeyset(b)
+	if err != nil || !reflect.DeepEqual(back, ks) {
+		t.Fatalf("round trip: %v\n%s", err, b)
+	}
+	if !json.Valid(b) {
+		t.Fatal("not JSON")
+	}
+	// The signed message is the context and the document without "sig".
+	msg := ks.SignedMessage()
+	if !bytes.HasPrefix(msg, []byte("HELIOS-KEYSET-V0\n")) || bytes.Contains(msg, []byte(`"sig"`)) {
+		t.Fatalf("signed message %s", msg)
+	}
+	ks.Sig[0] ^= 1
+	if !bytes.Equal(msg, ks.SignedMessage()) {
+		t.Fatal("the signature is part of the signed message")
+	}
+	if ks.Key(ks.Keys[1].ID) != &ks.Keys[1] || ks.Key(patchtrust.KeyID{}) != nil {
+		t.Fatal("Key lookup")
+	}
+}
+
+func TestPointerRoundTrip(t *testing.T) {
+	for _, mod := range []func(*patchtrust.Pointer){
+		func(*patchtrust.Pointer) {},
+		func(p *patchtrust.Pointer) { p.CDNHosts = nil },
+		func(p *patchtrust.Pointer) { p.Rollback = true },
+		func(p *patchtrust.Pointer) {
+			p.Next = &patchtrust.Next{ManifestRef: patchtrust.ManifestRef{BuildID: "b2", CompatEpoch: 4}, AvailableAt: 7}
+		},
+		func(p *patchtrust.Pointer) { p.Sequence, p.Expires = patchtrust.MaxInt, patchtrust.MaxInt },
+	} {
+		p := testPointer()
+		mod(p)
+		if err := p.Sign(trusttest.Key("manifest-a")); err != nil {
+			t.Fatal(err)
+		}
+		b, err := p.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, err := patchtrust.ParsePointer(b)
+		if err != nil || !reflect.DeepEqual(back, p) {
+			t.Fatalf("round trip: %v\n%s", err, b)
+		}
+		if p.KeyID != patchtrust.Fingerprint(pubOf("manifest-a")) || !json.Valid(b) {
+			t.Fatal("key ID or JSON")
+		}
+	}
+}
+
+// The validators refuse what the parsers refuse, so Sign and Marshal never produce a document that does
+// not parse.
+func TestInvalidDocumentsAreNotSigned(t *testing.T) {
+	for name, mod := range map[string]func(*patchtrust.Keyset){
+		"product":     func(k *patchtrust.Keyset) { k.ProductID = "helios dev" },
+		"version":     func(k *patchtrust.Keyset) { k.Version = 0 },
+		"big version": func(k *patchtrust.Keyset) { k.Version = patchtrust.MaxInt + 1 },
+		"epoch":       func(k *patchtrust.Keyset) { k.RootEpoch = 0 },
+		"no keys":     func(k *patchtrust.Keyset) { k.Keys = nil },
+		"order":       func(k *patchtrust.Keyset) { k.Keys[0], k.Keys[1] = k.Keys[1], k.Keys[0] },
+		"fingerprint": func(k *patchtrust.Keyset) { k.Keys[0].ID[0] ^= 1 },
+		"role":        func(k *patchtrust.Keyset) { k.Keys[0].Role = "Manifest" },
+		"window":      func(k *patchtrust.Keyset) { k.Keys[0].NotAfter = k.Keys[0].NotBefore },
+	} {
+		ks := testKeyset()
+		mod(ks)
+		if ks.Sign(trusttest.Key("root-1")) == nil {
+			t.Errorf("keyset %s: signed", name)
+		}
+		if _, err := ks.Marshal(); err == nil {
+			t.Errorf("keyset %s: marshaled", name)
+		}
+	}
+	for name, mod := range map[string]func(*patchtrust.Pointer){
+		"product":      func(p *patchtrust.Pointer) { p.ProductID = "x" },
+		"channel":      func(p *patchtrust.Pointer) { p.Channel = "l" },
+		"platform":     func(p *patchtrust.Pointer) { p.Platform = "Linux" },
+		"build":        func(p *patchtrust.Pointer) { p.BuildID = "" },
+		"sequence":     func(p *patchtrust.Pointer) { p.Sequence = 0 },
+		"min launcher": func(p *patchtrust.Pointer) { p.MinLauncher = "1..2" },
+		"min client":   func(p *patchtrust.Pointer) { p.MinClient = "1234567890" },
+		"rollout":      func(p *patchtrust.Pointer) { p.RolloutPct = 101 },
+		"expires":      func(p *patchtrust.Pointer) { p.Expires = patchtrust.MaxInt + 1 },
+		"host":         func(p *patchtrust.Pointer) { p.CDNHosts = []string{"ftp://x"} },
+		"quote":        func(p *patchtrust.Pointer) { p.CDNHosts = []string{`https://a"b`} },
+		"next build":   func(p *patchtrust.Pointer) { p.Next = &patchtrust.Next{} },
+		"hosts":        func(p *patchtrust.Pointer) { p.CDNHosts = make([]string, 17) },
+	} {
+		p := testPointer()
+		mod(p)
+		if p.Sign(trusttest.Key("manifest-a")) == nil {
+			t.Errorf("pointer %s: signed", name)
+		}
+	}
+}
+
+func TestAdvance(t *testing.T) {
+	ks := &patchtrust.Keyset{Version: 4, RootEpoch: 2}
+	st := patchtrust.State{RootEpoch: 3, KeysetVersion: 5, PointerSequence: 10}
+	if got := patchtrust.Advance(st, ks, &patchtrust.Pointer{Sequence: 8}); got != st {
+		t.Fatalf("a ratchet moved back: %+v", got)
+	}
+	got := patchtrust.Advance(st, ks, &patchtrust.Pointer{Sequence: 8, Rollback: true})
+	if got != (patchtrust.State{RootEpoch: 3, KeysetVersion: 5, PointerSequence: 8}) {
+		t.Fatalf("a rollback pointer must set the sequence: %+v", got)
+	}
+	got = patchtrust.Advance(patchtrust.State{}, ks, &patchtrust.Pointer{Sequence: 12})
+	if got != (patchtrust.State{RootEpoch: 2, KeysetVersion: 4, PointerSequence: 12}) {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// The state record is engine/patch's (test_trust.cpp pins the same bytes), and the file store refuses
+// anything but one valid record: a reset ratchet would accept rolled-back pointers.
+func TestFileStateStore(t *testing.T) {
+	rec := patchtrust.EncodeState(patchtrust.State{RootEpoch: 3, KeysetVersion: 9, PointerSequence: 1 << 40})
+	if got := hex.EncodeToString(rec[:]); got != "4854525300000000030000000900000000000000000000000001000047ae02f5" {
+		t.Fatalf("record %s", got)
+	}
+	for i := range rec {
+		bad := rec
+		bad[i] ^= 0x10
+		if _, err := patchtrust.DecodeState(bad[:]); err == nil {
+			t.Fatalf("a record with byte %d changed decoded", i)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "sub", "state.bin")
+	s := patchtrust.FileStateStore{Path: path}
+	if st, err := s.Load(); err != nil || st != (patchtrust.State{}) {
+		t.Fatalf("missing file: %+v %v", st, err)
+	}
+	want := patchtrust.State{RootEpoch: 2, KeysetVersion: 7, PointerSequence: 1 << 40}
+	if err := s.Save(want); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := s.Load(); err != nil || st != want {
+		t.Fatalf("%+v %v", st, err)
+	}
+	good, _ := os.ReadFile(path)
+	for name, b := range map[string][]byte{
+		"empty":           nil,
+		"truncated":       good[:31],
+		"trailing byte":   append(bytes.Clone(good), '\n'),
+		"a second record": append(bytes.Clone(good), good...),
+		"JSON":            []byte(`{"rootEpoch":1,"keysetVersion":2,"pointerSequence":3}`),
+	} {
+		if err := os.WriteFile(path, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Load(); err == nil {
+			t.Fatalf("state file (%s) loaded", name)
+		}
+	}
+}
+
+// cdn_hosts: https:// with an authority, or http:// on exactly a loopback authority. Userinfo is refused,
+// since "http://localhost:1@evil.example/" names the host after the '@'.
+func TestCDNHosts(t *testing.T) {
+	for _, h := range []string{"http://localhost", "http://127.0.0.1:7700/cdn", "http://[::1]:8080/", "http://localhost/"} {
+		if !patchtrust.IsLoopbackURL(h) {
+			t.Errorf("%s is loopback", h)
+		}
+	}
+	for _, h := range []string{"http://localhost:1@evil.example/cdn", "http://127.0.0.1:80@203.0.113.9/",
+		"http://localhost.evil.example", "http://localhost:80x/", "http://localhost:", "http://127.0.0.1:123456/",
+		"http://localhost?x", "http://localhost#x", "http://localhost/a@b", "https://localhost", "http://cdn.example",
+		"HTTP://localhost", "http://[::1]x"} {
+		if patchtrust.IsLoopbackURL(h) {
+			t.Errorf("%s is not loopback", h)
+		}
+	}
+	p := testPointer()
+	for _, h := range []string{"https://cdn.example:443/x", "https://a", "http://localhost", "http://[::1]:8080/"} {
+		p.CDNHosts = []string{h}
+		if err := p.Validate(); err != nil {
+			t.Errorf("%s: %v", h, err)
+		}
+	}
+	for _, h := range []string{"https://cdn.example@evil.example", "https:///cdn", "https://", "https://?x",
+		"http://localhost:1@evil.example/cdn", "ftp://localhost"} {
+		p.CDNHosts = []string{h}
+		if err := p.Validate(); err == nil {
+			t.Errorf("%s validated", h)
+		}
+	}
+}
+
+// VerifyChunk checks the length before the hash: a short chunk is chunk-corrupt, not chunk-hash.
+func TestVerifyChunk(t *testing.T) {
+	raw := []byte("some chunk bytes")
+	c := manifest.Chunk{Hash: cdc.Sum(raw), RawSize: uint32(len(raw))}
+	if err := patchtrust.VerifyChunk(c, raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := patchtrust.VerifyChunk(c, raw[:len(raw)-1]); patchtrust.CheckOf(err) != patchtrust.CheckChunkCorrupt {
+		t.Errorf("short chunk: %v", err)
+	}
+	flipped := bytes.Clone(raw)
+	flipped[0] ^= 1
+	if err := patchtrust.VerifyChunk(c, flipped); patchtrust.CheckOf(err) != patchtrust.CheckChunkHash {
+		t.Errorf("changed chunk: %v", err)
+	}
+}
+
+// Package trusttest's keys are public; only test files may import it (README "Test-only and dev keys").
+// IsTestOnlyKey refuses its roots in a verifier anyway; this keeps the signer side out of non-test code.
+// Likewise only test files may set Options.AllowTestKeys, the opt-in that lets a verifier accept those roots:
+// a non-test file that names the field in a composite literal or assigns it, or that writes an Options
+// literal without field names, fails. A best-effort check against accidents (a value set through a pointer
+// or reflection is not seen); engine/patch's lint_patch_test_keys does the same for TrustOptions::allowTestKeys.
+func TestTrustTestImportedOnlyByTests(t *testing.T) {
+	root := filepath.Join("..", "..")
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		t.Fatalf("not the module root: %v", err)
+	}
+	const pkg = "github.com/PageMastr/scifi-test/services/pkg/patchtrust/trusttest"
+	self := filepath.Join(root, "pkg", "patchtrust", "trusttest")
+	files, reads := 0, 0
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir() && (d.Name() == "testdata" || d.Name() == "vendor" || path == self):
+			return filepath.SkipDir
+		case d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go"):
+			return nil
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		files++
+		for _, imp := range f.Imports {
+			if strings.Trim(imp.Path.Value, "`\"") == pkg {
+				t.Errorf("%s imports %s; only _test.go files may", path, pkg)
+			}
+		}
+		reads += allowTestKeysSetters(t, fset, f)
+		return nil
+	})
+	if err != nil || files < 50 {
+		t.Fatalf("walked %d files: %v", files, err)
+	}
+	if reads == 0 {
+		t.Fatal("found no read of AllowTestKeys: the walk no longer sees verify.go")
+	}
+}
+
+// allowTestKeysSetters reports every place f sets Options.AllowTestKeys and returns how many times f reads it.
+func allowTestKeysSetters(t *testing.T, fset *token.FileSet, f *ast.File) int {
+	const field = "AllowTestKeys"
+	isOptions := func(e ast.Expr) bool {
+		switch x := e.(type) {
+		case *ast.Ident:
+			return x.Name == "Options" && f.Name.Name == "patchtrust"
+		case *ast.SelectorExpr:
+			id, ok := x.X.(*ast.Ident)
+			return ok && id.Name == "patchtrust" && x.Sel.Name == "Options"
+		}
+		return false
+	}
+	reads := 0
+	setters := map[ast.Node]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.KeyValueExpr:
+			if id, ok := x.Key.(*ast.Ident); ok && id.Name == field {
+				t.Errorf("%s: sets %s; only _test.go files may", fset.Position(x.Pos()), field)
+			}
+		case *ast.CompositeLit:
+			if isOptions(x.Type) {
+				for _, e := range x.Elts {
+					if _, keyed := e.(*ast.KeyValueExpr); !keyed {
+						t.Errorf("%s: an Options literal without field names; only _test.go files may set %s",
+							fset.Position(x.Pos()), field)
+					}
+				}
+			}
+		case *ast.AssignStmt:
+			for _, l := range x.Lhs {
+				if sel, ok := l.(*ast.SelectorExpr); ok && sel.Sel.Name == field {
+					setters[sel] = true
+					t.Errorf("%s: assigns %s; only _test.go files may", fset.Position(sel.Pos()), field)
+				}
+			}
+		case *ast.SelectorExpr:
+			if x.Sel.Name == field && !setters[x] {
+				reads++
+			}
+		}
+		return true
+	})
+	return reads
+}
+
+func TestSignManifest(t *testing.T) {
+	m := &manifest.Manifest{Header: manifest.Header{ProductID: "sample-game", Platform: "win64", BuildID: "b1",
+		Sequence: 1, CreatedAt: 5000, KeyID: patchtrust.Fingerprint(pubOf("manifest-a"))}}
+	file, err := m.Marshal(manifest.WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := patchtrust.SignManifest(file, trusttest.Key("news-a")); err == nil {
+		t.Fatal("signed with a key other than the header's keyId")
+	}
+	if err := patchtrust.SignManifest(file[:100], trusttest.Key("manifest-a")); err == nil {
+		t.Fatal("signed a truncated file")
+	}
+	if err := patchtrust.SignManifest(file, trusttest.Key("manifest-a")); err != nil {
+		t.Fatal(err)
+	}
+	info, err := manifest.ParseHeader(file, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := pubOf("manifest-a")
+	if !ed25519.Verify(p[:], file[:manifest.SignedBytes], info.Header.Signature[:]) {
+		t.Fatal("the signature does not cover bytes [0, 256)")
+	}
+	before := info.HeaderHash
+	if err := patchtrust.SignManifest(file, trusttest.Key("manifest-a")); err != nil || headerHashOf(t, file) != before {
+		t.Fatal("signing changed the manifest's identity")
+	}
+}
+
+func headerHashOf(t *testing.T, file []byte) cdc.Hash {
+	info, err := manifest.ParseHeader(file, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.HeaderHash
+}
+
+func TestCheckOf(t *testing.T) {
+	err := error(&patchtrust.Error{Check: patchtrust.CheckPointerExpired, Detail: "x"})
+	if patchtrust.CheckOf(err) != patchtrust.CheckPointerExpired || !errors.Is(err, patchtrust.ErrRejected) ||
+		err.Error() != "pointer-expired: x" || patchtrust.CheckOf(errors.New("io")) != "" {
+		t.Fatal("Error")
+	}
+}
+
+// fuzzSeeds are the shared vectors' documents: the CDN's, the variants and the syntax cases.
+func fuzzSeeds(f *testing.F, suffix string) {
+	_ = filepath.WalkDir(vectorsDir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, suffix) && !strings.HasSuffix(p, "cases.json") &&
+			!strings.HasSuffix(p, "syntax.json") {
+			if b, err := os.ReadFile(p); err == nil {
+				f.Add(b)
+			}
+		}
+		return nil
+	})
+}
+
+func fuzzVerifier(t *testing.T) *patchtrust.Verifier {
+	v, err := patchtrust.NewVerifier(patchtrust.Target{ProductID: "vector-game", Channel: "live", Platform: "win64"},
+		patchtrust.RootPair{Epoch: 1, Current: pubOf("root-1"), Next: pubOf("root-2")},
+		patchtrust.Options{AllowTestKeys: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// FuzzParseKeyset: the parser never panics, a keyset that parses is valid and re-marshals to the exact input
+// (one encoding per keyset), and verification returns a rejection or a keyset. The seeds (the shared
+// vectors) run in every go test.
+func FuzzParseKeyset(f *testing.F) {
+	fuzzSeeds(f, ".json")
+	f.Fuzz(func(t *testing.T, b []byte) {
+		ks, err := patchtrust.ParseKeyset(b)
+		if err == nil {
+			out, err := ks.Marshal()
+			if err != nil || !bytes.Equal(out, b) {
+				t.Fatalf("a parsed keyset re-marshals differently: %v\n%s\n%s", err, b, out)
+			}
+		}
+		got, err := fuzzVerifier(t).VerifyKeyset(b, patchtrust.State{})
+		if (err == nil) == (got == nil) || (err != nil && !errors.Is(err, patchtrust.ErrRejected)) {
+			t.Fatalf("VerifyKeyset: %v", err)
+		}
+	})
+}
+
+// FuzzParsePointer: as FuzzParseKeyset, for pointers, verified against the vectors' keyset.
+func FuzzParsePointer(f *testing.F) {
+	fuzzSeeds(f, ".json")
+	ksBytes, err := os.ReadFile(filepath.Join(vectorsDir, "cdn", "keys", "vector-game", "keyset.json"))
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Fuzz(func(t *testing.T, b []byte) {
+		p, err := patchtrust.ParsePointer(b)
+		if err == nil {
+			out, err := p.Marshal()
+			if err != nil || !bytes.Equal(out, b) {
+				t.Fatalf("a parsed pointer re-marshals differently: %v\n%s\n%s", err, b, out)
+			}
+		}
+		v := fuzzVerifier(t)
+		ks, err := v.VerifyKeyset(ksBytes, patchtrust.State{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := v.VerifyPointer(b, ks, 1790000000, patchtrust.State{})
+		if (err == nil) == (got == nil) || (err != nil && !errors.Is(err, patchtrust.ErrRejected)) {
+			t.Fatalf("VerifyPointer: %v", err)
+		}
+	})
+}
+
+// FuzzVerifyManifestHeader: the manifest checks never panic on hostile .hman bytes.
+func FuzzVerifyManifestHeader(f *testing.F) {
+	fuzzSeeds(f, ".hman")
+	ksBytes, err := os.ReadFile(filepath.Join(vectorsDir, "cdn", "keys", "vector-game", "keyset.json"))
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Fuzz(func(t *testing.T, b []byte) {
+		v := fuzzVerifier(t)
+		ks, err := v.VerifyKeyset(ksBytes, patchtrust.State{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := manifest.ParseHeader(b, 0)
+		ref := patchtrust.ManifestRef{BuildID: info.Header.BuildID, ManifestHash: info.HeaderHash,
+			CompatEpoch: info.Header.CompatEpoch}
+		if _, err2 := v.VerifyManifest(b, ks, ref, 1790000000); err == nil && err2 != nil &&
+			!errors.Is(err2, patchtrust.ErrRejected) {
+			t.Fatalf("VerifyManifest: %v", err2)
+		}
+	})
+}

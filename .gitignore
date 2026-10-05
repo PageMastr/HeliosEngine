@@ -17,3 +17,6 @@ node_modules/
 /tools/prebuilt/slang/
 /tools/prebuilt/cache/
 *.lock.jsonc.writing/
+
+# helios-patch and other dev tools write here (05 §5); dev keys hold private seeds
+helios-data/

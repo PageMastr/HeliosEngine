@@ -223,6 +223,13 @@ Result<void> validateManifest(const Manifest& manifest);
 /// a Windows device name (README "Paths"). Thread-safe.
 bool isValidManifestPath(std::string_view path) noexcept;
 
+/// True for a product ID: ^[a-z][a-z0-9-]{2,31}$ (08 §2.10.1). Thread-safe.
+bool isValidProductId(std::string_view s) noexcept;
+/// True for a platform name: ^[a-z][a-z0-9_-]{1,31}$. Thread-safe.
+bool isValidPlatform(std::string_view s) noexcept;
+/// True for a build ID, a CDN path segment: ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$. Thread-safe.
+bool isValidBuildId(std::string_view s) noexcept;
+
 /// The canonical body of a valid manifest (what bodyHash covers). InvalidArgument/LimitExceeded if invalid.
 Result<std::vector<u8>> encodeManifestBody(const Manifest& manifest);
 

@@ -1,0 +1,2 @@
+helios_runtime_link_group_modules|0000000000004000|   T  |              FUNC|0000000000000008|     |.text
+_ZN6helios7records13kClientDbFileE|0000000000004100|   u  |            OBJECT|0000000000000008|     |.data.rel.ro

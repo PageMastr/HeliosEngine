@@ -4,10 +4,11 @@
 #
 #   cmake -DCOMPILE_COMMANDS=<build>/compile_commands.json -DLEVELS=<build>/helios_generated/isa_levels.txt
 #         -DALLOWLIST=<src>/cmake/isa_allowlist.cmake [-DOBJDUMP=objdump] [-DNM=nm] [-DREADELF=readelf]
-#         [-DIMAGES_FILE=<gated executables>] [-DBASE_IMAGES_FILE=<base executables>] [-DSKIP_OBJECTS=ON]
-#         [-DREQUIRE_GATE=ON] -P isa_audit.cmake
+#         [-DIMAGES_FILE=<gated executables>] [-DSHARED_IMAGES_FILE=<shared libraries they load>]
+#         [-DBASE_IMAGES_FILE=<base executables>] [-DSKIP_OBJECTS=ON] [-DREQUIRE_GATE=ON] -P isa_audit.cmake
 #   cmake -DMODE=object     -DOBJECT=<file.o>  -DALLOWLIST=... -DOBJDUMP=... -DNM=... -P isa_audit.cmake
 #   cmake -DMODE=image      -DIMAGE=<exe>      -DALLOWLIST=... -DREADELF=... -DNM=... -P isa_audit.cmake
+#   cmake -DMODE=shared_image -DIMAGE=<lib.so> -DALLOWLIST=... -DREADELF=... -P isa_audit.cmake
 #   cmake -DMODE=base_image -DIMAGE=<exe>      -DALLOWLIST=... -DOBJDUMP=... -P isa_audit.cmake
 #   cmake -DMODE=base_sources -DSOURCE_DIRS=<dir>[|<dir>...] -DALLOWLIST=... -P isa_audit.cmake
 #
@@ -33,7 +34,10 @@
 #     instruction; no weak, COMDAT/unique or IFUNC symbol; only the listed exports; every undefined
 #     symbol on HELIOS_ISA_GATE_ALLOWED_IMPORTS, so no __stack_chk_*, __security_cookie or __asan_*.
 #  3. (ELF part, until WP-0.2r part 2 adds the rest) Gated ELF executables: .preinit_array holds
-#     exactly one entry, the gate, and no R_X86_64_IRELATIVE relocation exists.
+#     exactly one entry, the gate, and no R_X86_64_IRELATIVE relocation exists. The shared libraries a
+#     gated executable loads at start-up (in a modular dev build the link-group libraries, SDL3 and
+#     tp_imgui: SHARED_IMAGES_FILE) have no R_X86_64_IRELATIVE relocation either, because the dynamic
+#     linker relocates them before it runs .preinit_array (ADR-0.6c §3 item 6).
 #  4. Base images after linking (GNU binutils): every instruction above x86-64-v1 is mapped to its
 #     symbol, and every such symbol must be on HELIOS_ISA_SELF_DISPATCH_SYMBOLS. TZCNT's encoding is
 #     accepted as BSF: GCC and Clang emit `rep bsf` for count-trailing-zeros at x86-64-v1 (see below),
@@ -415,6 +419,24 @@ function(_isa_check_image img)
   set(_isa_image_errors "${errs}" PARENT_SCOPE)
 endfunction()
 
+# 3, shared libraries a gated executable loads (ELF): no IFUNC relocation. ld.so relocates every object of
+# the start-up set before it runs the executable's .preinit_array, so an IFUNC resolver in a group library
+# (modular dev builds) would run before the CPU gate, as one in the executable would.
+function(_isa_check_shared_image img)
+  set(errs "")
+  if(NOT EXISTS "${img}")
+    set(_isa_shared_errors "${img}: shared library not built" PARENT_SCOPE)
+    return()
+  endif()
+  execute_process(COMMAND "${READELF}" -W -r "${img}" OUTPUT_VARIABLE relocs RESULT_VARIABLE rc)
+  if(NOT rc EQUAL 0)
+    list(APPEND errs "${img}: readelf -r failed")
+  elseif(relocs MATCHES "R_X86_64_IRELATIVE")
+    list(APPEND errs "${img}: R_X86_64_IRELATIVE relocation in a shared library that gated executables load (an IFUNC resolver would run before the CPU gate)")
+  endif()
+  set(_isa_shared_errors "${errs}" PARENT_SCOPE)
+endfunction()
+
 # ---------------------------------------------------------------------------------------------
 # 4. Base images: every instruction above x86-64-v1 belongs to a listed self-dispatching symbol.
 #    Catches intrinsics, target attributes and COMDAT picks at link time (02 §1.1).
@@ -582,6 +604,19 @@ if(MODE STREQUAL "image")
     message(FATAL_ERROR "ISA audit failed:\n  ${text}\n")
   endif()
   message(STATUS "ISA audit: '${IMAGE}' starts with the CPU gate")
+  return()
+endif()
+
+if(MODE STREQUAL "shared_image")
+  if(NOT READELF)
+    message(FATAL_ERROR "isa_audit: MODE=shared_image needs READELF")
+  endif()
+  _isa_check_shared_image("${IMAGE}")
+  if(_isa_shared_errors)
+    string(REPLACE ";" "\n  " text "${_isa_shared_errors}")
+    message(FATAL_ERROR "ISA audit failed:\n  ${text}\n")
+  endif()
+  message(STATUS "ISA audit: '${IMAGE}' has no IFUNC relocation")
   return()
 endif()
 
@@ -840,6 +875,21 @@ if(IMAGES_FILE AND EXISTS "${IMAGES_FILE}" AND READELF AND NOT SKIP_OBJECTS)
   endforeach()
 endif()
 
+set(sharedImageCount 0)
+if(SHARED_IMAGES_FILE AND EXISTS "${SHARED_IMAGES_FILE}" AND READELF AND NOT SKIP_OBJECTS)
+  file(STRINGS "${SHARED_IMAGES_FILE}" sharedImages)
+  foreach(img IN LISTS sharedImages)
+    if(img STREQUAL "" OR img MATCHES "\\.dll$")
+      continue()
+    endif()
+    math(EXPR sharedImageCount "${sharedImageCount} + 1")
+    _isa_check_shared_image("${img}")
+    foreach(e IN LISTS _isa_shared_errors)
+      _violation("${e}")
+    endforeach()
+  endforeach()
+endif()
+
 # ---------------------------------------------------------------------------------------------
 # 4. Base images (GNU binutils; COFF images and PDBs are WP-0.2r part 2's)
 # ---------------------------------------------------------------------------------------------
@@ -867,4 +917,5 @@ if(violations)
   message(FATAL_ERROR "ISA audit failed (${n} violation(s); rules in docs/plan/02-engine-runtime.md §1.1, lists in cmake/isa_allowlist.cmake):\n  ${text}\n")
 endif()
 message(STATUS "ISA audit passed: ${entries} units (${levelCounts_avx2} avx2, ${levelCounts_base} base, ${gateCount} CPU-gate), "
-               "${imageCount} gated executables, ${baseImageCount} base images")
+               "${imageCount} gated executables, ${sharedImageCount} shared libraries they load, "
+               "${baseImageCount} base images")

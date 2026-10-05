@@ -5,6 +5,7 @@
 | `HeliosModule.cmake` | `helios_declare_module()`, `helios_module()`, `helios_executable()` (ROLE, ISA level, CPU gate), `helios_test()`, the warning flags; schedules `helios_finalize_build()` |
 | `HeliosLayering.cmake` | the configure-time module-graph checks (02 §1.1 layers, peers, cycles, HEADLESS, EDITOR_ONLY, roles) and `helios_finalize_build()` |
 | `HeliosIsa.cmake` | the ISA levels (below), the CPU gate's level and `helios_cpu_gate()` |
+| `HeliosModular.cmake` | the dev link model (`HELIOS_MODULAR`, ADR-016, 02 §1.4): the three link-group shared libraries, their export headers, self-contained images (`docs/adr/ADR-0.6c-link-model-spike.md`) |
 | `isa_allowlist.cmake` | the ISA audit's lists: the gate's exports and imports, the self-dispatching symbols base images may contain |
 | `pre_main_allowlist.cmake` | the attributed pre-`main` hooks of avx2 images (mimalloc, Tracy, Helios initializers) and the ELF gate entry |
 | `HeliosSchema.cmake`, `HeliosShaders.cmake`, `HeliosWindows.cmake` | schema code generation, Slang shaders, the Windows manifest |
@@ -43,6 +44,13 @@ Helios builds **whole images at one ISA level**; no list grants a target or a fi
   `engine/`, or with a level other than `avx2` or `base` (the explicit level is for the audit's fixtures);
   `CPU_GATE` on a base image; a `HELIOS_ISA_LEVEL` set on anything but an image or a gate object library;
   `helios_cpu_gate_target()` on anything but an object library.
+- **Modular dev builds** (`HELIOS_MODULAR=ON`, `HeliosModular.cmake`). The same levels: the link-group libraries,
+  the module object libraries in them, `SDL3` and `tp_imgui` are `avx2`; the gate's object libraries keep `gate`
+  inside `helios_runtime`. A base image links `.base` copies there too and never a group: `helios::<module>`
+  names the module's consumer interface, which links its group, so the base image's links to it are replaced
+  by the module's copy, and configure fails if the image still reaches a shared library built here. The
+  `isa_*` layering fixtures run in both flavours (`lint_layering_modular_isa_*`), and audit check 3 rejects
+  IFUNC relocations in the shared libraries gated executables load (ADR-0.6c §3.1).
 - **Self-dispatch.** Code that checks CPUID itself stays allowed: in `base` images only in the symbols that
   `isa_allowlist.cmake` lists (audit check 4: zstd's BMI2 functions today), in `avx2` images anywhere (pcg's
   kernel selection). Check 4 reads TZCNT's encoding as BSF, because GCC and Clang emit `rep bsf` for
@@ -56,8 +64,9 @@ The audit itself is `tools/lint/isa_audit.cmake` (see `tools/lint/README.md`).
 
 ## Plan conformance
 
-Plan-Rev: 13
+Plan-Rev: 14
 
 `HeliosIsa.cmake`, `isa_allowlist.cmake` and `pre_main_allowlist.cmake` follow 02 §1.1 at plan revision 13
-(WP-0.2r part 1). The gate's placement and exports are WP-0.5r's (09 §5.10.4 (b)); the other helpers predate
-this README and are described by their own headers.
+(WP-0.2r part 1), and at 14 in modular builds (WP-0.6c part 1: 02 §1.1 *Which image*, 02 §1.4). The gate's
+placement and exports are WP-0.5r's (09 §5.10.4 (b)); the other helpers predate this README and are described
+by their own headers.

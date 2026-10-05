@@ -136,6 +136,12 @@ function(_helios_resolve_link_item item out)
   if(aliased)
     set(name "${aliased}")
   endif()
+  # Modular builds (cmake/HeliosModular.cmake): helios::<module> names the module's consumer interface,
+  # which stands for the module itself, so the graph is the same in both link flavours.
+  get_target_property(apiOf "${name}" HELIOS_API_OF)
+  if(apiOf)
+    set(name "${apiOf}")
+  endif()
   set(${out} "${name}" PARENT_SCOPE)
 endfunction()
 
@@ -454,6 +460,9 @@ function(helios_check_module_graph)
     endif()
   endforeach()
 
+  # --- Modular builds: module objects only inside their group library ---------------------------
+  helios_modular_check_direct_objects(errors)
+
   if(errors)
     list(REMOVE_DUPLICATES errors)
     list(LENGTH errors count)
@@ -467,6 +476,7 @@ endfunction()
 
 function(helios_finalize_build)
   helios_check_module_graph()
+  helios_modular_finalize()
   # Repository lints (licences, IP names, ISA audit) as CTests. Only for the Helios tree itself; the
   # fixture projects under tools/lint/tests include this file too.
   if(HELIOS_BUILD_TESTS AND EXISTS "${CMAKE_SOURCE_DIR}/tools/lint/lint_tests.cmake"

@@ -1,0 +1,4 @@
+format elf
+group helios_runtime
+group helios_client
+thirdparty helios_runtime Luau.VM

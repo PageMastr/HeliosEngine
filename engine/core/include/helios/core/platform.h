@@ -121,9 +121,9 @@
 #define HELIOS_CACHE_LINE_SIZE 64
 
 // ---------------------------------------------------------------------------------------------
-// Symbol visibility. Engine modules are static libraries, so HELIOS_CORE_API is empty unless a
-// module is explicitly built shared. Plugins (hot-reloadable game DLLs) export C entry points with
-// HELIOS_PLUGIN_EXPORT.
+// Symbol visibility. Engine modules export through their link group's macro, HELIOS_RUNTIME_API,
+// HELIOS_CLIENT_API or HELIOS_EDITOR_API (generated helios/<group>_api.h; empty in shipping builds,
+// ADR-016). Plugins (hot-reloadable game DLLs) export C entry points with HELIOS_PLUGIN_EXPORT.
 // ---------------------------------------------------------------------------------------------
 #if defined(HELIOS_PLATFORM_WINDOWS)
 #define HELIOS_API_EXPORT __declspec(dllexport)
@@ -131,16 +131,6 @@
 #else
 #define HELIOS_API_EXPORT __attribute__((visibility("default")))
 #define HELIOS_API_IMPORT
-#endif
-
-#if defined(HELIOS_CORE_SHARED)
-#if defined(HELIOS_CORE_BUILDING)
-#define HELIOS_CORE_API HELIOS_API_EXPORT
-#else
-#define HELIOS_CORE_API HELIOS_API_IMPORT
-#endif
-#else
-#define HELIOS_CORE_API
 #endif
 
 /// Declares an unmangled, exported function for DynamicLibrary::symbol() lookup.

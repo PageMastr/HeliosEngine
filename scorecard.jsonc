@@ -147,7 +147,7 @@
         {"ci_job": "Windows cross-build (MinGW-w64)"}
       ],
       "gaps": [
-        {"clause": "The modular windows-msvc-dev job (the eighth PR job) does not exist yet", "state": "unmeasured", "owner": "WP-0.6c"}
+        {"clause": "The modular windows-msvc-dev job (the eighth PR job, \"Windows (MSVC, modular dev)\", added by WP-0.6c part 1) has not yet run green on main; list it under tests once it has", "state": "unmeasured", "owner": "WP-0.6c"}
       ]
     },
     {

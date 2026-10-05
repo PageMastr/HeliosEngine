@@ -11,6 +11,10 @@
 #include "helios/rhi/format.h"
 #include "rhi_internal.h"
 
+namespace helios {
+HELIOS_LOG_CHANNEL_DEFINE(LogRhi, "RHI");
+} // namespace helios
+
 namespace helios::rhi {
 
 std::string_view backendName(Backend backend) noexcept {

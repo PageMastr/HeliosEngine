@@ -9,6 +9,14 @@
 #include "helios/core/time.h"
 #include "platform/os.h"
 
+namespace helios {
+HELIOS_LOG_CHANNEL_DEFINE(LogGeneral, "General");
+HELIOS_LOG_CHANNEL_DEFINE(LogCore, "Core");
+HELIOS_LOG_CHANNEL_DEFINE(LogJobs, "Jobs");
+HELIOS_LOG_CHANNEL_DEFINE(LogFs, "FileSystem");
+HELIOS_LOG_CHANNEL_DEFINE(LogMemory, "Memory");
+} // namespace helios
+
 namespace helios::log {
 
 namespace detail {

@@ -1,8 +1,18 @@
 cmake_minimum_required(VERSION 3.28)
 cmake_policy(SET CMP0141 NEW)  # CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
-# Static CRT everywhere so the client/launcher run on a clean Windows install with no VC++ redist,
-# and /Z7 (embedded debug info) so compiler caches can cache MSVC builds. Must precede project().
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+# Link model (ADR-016, 02 §1.4). OFF, the shipping flavour: every module is linked statically into each
+# image. ON, the dev flavour: the modules form three shared libraries, one per link group
+# (cmake/HeliosModular.cmake). Declared before project() because it picks the MSVC runtime.
+option(HELIOS_MODULAR "Dev link model: engine modules as three shared link-group libraries, /MD (ADR-016)" OFF)
+# Static CRT for shipping images so the client/launcher run on a clean Windows install with no VC++
+# redist; /MD for every image of a modular dev build, third-party libraries included, so all images
+# share one CRT heap (ADR-016). /Z7 (embedded debug info) so compiler caches can cache MSVC builds.
+# Must precede project().
+if(HELIOS_MODULAR)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+else()
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
 project(Helios VERSION 0.1.0 LANGUAGES C CXX)
 
@@ -37,7 +47,10 @@ if(MSVC)  # true for cl and clang-cl
   add_compile_options(/utf-8 /Zc:__cplusplus /Zc:inline /EHsc /bigobj
                       $<$<CXX_COMPILER_ID:MSVC>:/Zc:preprocessor>)
   add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
-  add_link_options($<$<CONFIG:Release,RelWithDebInfo>:/OPT:REF> $<$<CONFIG:Release,RelWithDebInfo>:/OPT:ICF>)
+  # Shipping links fold and strip (02 §1.4); the dev link flags are in cmake/HeliosModular.cmake.
+  if(NOT HELIOS_MODULAR)
+    add_link_options($<$<CONFIG:Release,RelWithDebInfo>:/OPT:REF> $<$<CONFIG:Release,RelWithDebInfo>:/OPT:ICF>)
+  endif()
 endif()
 
 if(HELIOS_SANITIZE)
@@ -61,6 +74,9 @@ find_package(Threads REQUIRED)
 # Third-party (vendored, see third_party/MANIFEST.md)
 # ---------------------------------------------------------------------------------------------
 add_subdirectory(third_party)
+# Modular builds: everything after the vendored libraries (modules, tools, tests) is compiled with hidden
+# visibility; the link-group libraries define their exports (cmake/HeliosModular.cmake).
+helios_modular_after_third_party()
 
 if(HELIOS_BUILD_TESTS)
   enable_testing()

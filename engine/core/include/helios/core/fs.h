@@ -57,8 +57,10 @@ Result<void> createDirectories(const Path& path);
 Result<void> remove(const Path& path);
 /// Recursively removes; returns the number of entries removed (0 if missing).
 Result<u64> removeAll(const Path& path);
-/// Renames, atomically replacing an existing target file, and persists the rename (POSIX: fsyncs the
-/// target's directory; Windows: MOVEFILE_WRITE_THROUGH).
+/// Renames, atomically replacing an existing target file, and persists the rename where the OS can: POSIX
+/// fsyncs the target's directory; Windows moves to a new name with MOVEFILE_WRITE_THROUGH, but replaces an
+/// existing target with ReplaceFileW, which has no working write-through flag, so that rename may not be
+/// persisted when this returns.
 Result<void> rename(const Path& from, const Path& to);
 /// rename() without persisting it: as atomic for readers, but a crash may undo it. For caches, whose
 /// entries are cheap to lose and whose writers should not wait for the file system's journal.

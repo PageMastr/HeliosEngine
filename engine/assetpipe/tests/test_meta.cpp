@@ -223,6 +223,47 @@ TEST_CASE("meta: sidecar operations refuse paths that are not UTF-8 or leave no 
     }
 }
 
+TEST_CASE("meta: every source name the path rule accepts can get a sidecar, be saved and be renamed") {
+    // The sidecar writers' temporary names do not grow with the source's name: core's atomic write would
+    // name its temp "<name>.meta.tmp-<GUID>", past 255 bytes from a 210-byte source name on.
+    TempDir dir;
+    const ImporterRegistry r = makeRegistry();
+    for (const usize len : {usize(206), usize(207), usize(209), usize(210), usize(230), kMaxSourceNameBytes}) {
+        CAPTURE(len);
+        const std::string name = std::string(len - 4, static_cast<char>('a' + len % 26)) + ".png";
+        REQUIRE(name.size() == len);
+        REQUIRE(checkProjectPath(name));
+        // Windows refuses a path beyond MAX_PATH unless long paths are enabled; such a source cannot exist.
+        if (!fs::writeTextFile(dir.path / fs::pathFromUtf8(name), "x", fs::WriteMode::Direct)) {
+            MESSAGE("skipped: this file system refuses a " << len << "-byte name in " << dir.path.string());
+            continue;
+        }
+        const auto made = ensureMeta(dir.path, name, newMeta(), r);
+        REQUIRE(made);
+        AssetMeta meta = made->meta;
+        meta.labels = {"long"};
+        CHECK(saveMeta(dir.path, name, meta, r));
+        CHECK(loadMeta(dir.path, name, r).value() == meta);
+        // A case-only rename goes through temporary names; then a move into a directory.
+        std::string upper = name;
+        upper[0] = static_cast<char>(upper[0] - 'a' + 'A');
+        REQUIRE(moveAsset(dir.path, name, upper, r));
+        CHECK(loadMeta(dir.path, upper, r).value() == meta);
+        REQUIRE(moveAsset(dir.path, upper, "moved/" + upper, r));
+        CHECK(loadMeta(dir.path, "moved/" + upper, r).value() == meta);
+    }
+    // No temporary file is left behind, and the scan finds only valid assets.
+    fs::ListOptions all;
+    all.recursive = true;
+    all.includeDirectories = false;
+    const std::vector<fs::DirEntry> listing = fs::listDirectory(dir.path, all).value();
+    for (const fs::DirEntry& e : listing) {
+        CAPTURE(e.relativePath);
+        CHECK((e.relativePath.ends_with(".png") || e.relativePath.ends_with(".png.meta")));
+    }
+    CHECK(scanMetas(dir.path, r).value().problems.empty());
+}
+
 TEST_CASE("meta: every string a sidecar holds is UTF-8, so a written sidecar always loads") {
     TempDir dir;
     const ImporterRegistry r = makeRegistry();
@@ -582,6 +623,66 @@ TEST_CASE("meta: saveMeta never changes a GUID and skips identical rewrites") {
     writeText(dir.path, "a.png.meta", R"({"guid": ")" + meta.guid.toString() + R"(", "licence": "?"})");
     CHECK(saveMeta(dir.path, "a.png", meta, r));
     CHECK(loadMeta(dir.path, "a.png", r).value() == meta);
+}
+
+TEST_CASE("meta: saveMeta only updates a sidecar, so it never mints or reuses a GUID") {
+    TempDir dir;
+    const ImporterRegistry r = makeRegistry();
+    writeText(dir.path, "a.png", "png");
+    writeText(dir.path, "b.png", "png"); // a copy, not imported yet
+    const AssetMeta a = ensureMeta(dir.path, "a.png", newMeta(), r).value().meta;
+    const std::string sidecar = readText(dir.path, "a.png.meta");
+
+    // The copy's sidecar is ensureMeta's to create, with a GUID of its own.
+    const auto copied = saveMeta(dir.path, "b.png", a, r);
+    REQUIRE(!copied);
+    CHECK(copied.error().code == ErrorCode::NotFound);
+    CHECK(copied.error().message.find("ensureMeta") != std::string::npos);
+    CHECK(!fileExists(dir.path, "b.png.meta"));
+    // No sidecar for a source that does not exist.
+    CHECK(saveMeta(dir.path, "ghost.png", a, r).error().code == ErrorCode::NotFound);
+    CHECK(!fileExists(dir.path, "ghost.png.meta"));
+    // Another spelling of a.png: a second file with a second GUID on Linux, a.png itself on Windows. Both
+    // refuse it (with a.png's GUID too), so both platforms agree.
+    AssetMeta other = a;
+    other.guid = Guid::generate();
+    CHECK(saveMeta(dir.path, "A.png", other, r).error().code == ErrorCode::NotFound);
+    AssetMeta relabelled = a;
+    relabelled.labels = {"edited"};
+    CHECK(saveMeta(dir.path, "A.png", relabelled, r).error().code == ErrorCode::NotFound);
+    writeText(dir.path, "Art/c.png", "png");
+    const AssetMeta c = ensureMeta(dir.path, "Art/c.png", newMeta(), r).value().meta;
+    CHECK(saveMeta(dir.path, "art/c.png", c, r).error().code == ErrorCode::NotFound);
+    // A sidecar spelled in another case than its source is not updated under the source's spelling.
+    writeText(dir.path, "d.png", "png");
+    writeText(dir.path, "D.PNG.meta", writeMeta(sampleMeta(), r).value());
+    AssetMeta d = sampleMeta();
+    d.labels = {"x"};
+    CHECK(saveMeta(dir.path, "d.png", d, r).error().code == ErrorCode::NotFound);
+    REQUIRE(fs::remove(dir.path / "D.PNG.meta"));
+    // An importer that does not claim the source's extension is refused, as ensureMeta refuses it.
+    AssetMeta wrongImporter = a;
+    wrongImporter.importer = "font";
+    wrongImporter.importerVersion = 1;
+    wrongImporter.settings = "{}";
+    CHECK(saveMeta(dir.path, "a.png", wrongImporter, r).error().code == ErrorCode::InvalidArgument);
+    CHECK(readText(dir.path, "a.png.meta") == sidecar);
+    // A sidecar whose source is gone (an orphan, which scanMetas() reports) is not updated either.
+    REQUIRE(fs::rename(dir.path / "a.png", dir.path / "moved-away.bin"));
+    CHECK(saveMeta(dir.path, "a.png", relabelled, r).error().code == ErrorCode::NotFound);
+    CHECK(readText(dir.path, "a.png.meta") == sidecar);
+    REQUIRE(fs::rename(dir.path / "moved-away.bin", dir.path / "a.png"));
+    CHECK(saveMeta(dir.path, "a.png", relabelled, r));
+    CHECK(loadMeta(dir.path, "a.png", r).value() == relabelled);
+
+    // Nothing above created a sidecar: the scan finds two assets with two GUIDs, and b.png and d.png
+    // still without one.
+    const MetaScan scan = scanMetas(dir.path, r).value();
+    CHECK(scan.assets.size() == 2);
+    REQUIRE(scan.problems.size() == 2);
+    CHECK(scan.problems[0].path == "b.png");
+    CHECK(scan.problems[1].path == "d.png");
+    for (const MetaProblem& p : scan.problems) CHECK(p.code == ErrorCode::NotFound);
 }
 
 TEST_CASE("meta: moves and renames keep the GUID (the GUID follows the file)") {

@@ -74,7 +74,9 @@ Result<u64> fileSeek(NativeFile file, i64 offset, fs::SeekOrigin origin);
 Result<u64> fileSize(NativeFile file);
 Result<void> fileSync(NativeFile file);
 /// Atomically replaces `target` with `source` (same volume). Target may or may not exist. `durable`
-/// also persists the rename (POSIX: fsync of the target's directory; Win32: MOVEFILE_WRITE_THROUGH).
+/// also persists the rename where the OS can (POSIX: fsync of the target's directory; Win32:
+/// MOVEFILE_WRITE_THROUGH for a new target; an existing one is replaced with ReplaceFileW, whose
+/// REPLACEFILE_WRITE_THROUGH is documented as unsupported, so that rename may not be persisted on return).
 Result<void> atomicReplace(const std::filesystem::path& source, const std::filesystem::path& target,
                            bool durable = true);
 

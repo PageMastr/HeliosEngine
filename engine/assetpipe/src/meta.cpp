@@ -487,16 +487,38 @@ std::string joinRel(std::string_view dir, std::string_view name) {
     return std::string(dir) + "/" + std::string(name);
 }
 
-/// A temporary sibling name for the two-step rename of a case-only change.
-std::string movingName(std::string_view path) {
-    return std::string(path) + ".moving-" + Guid::generate().toString();
+/// A temporary name next to `rel` (a project path): "." + a fresh GUID + `suffix`. Its length does not
+/// depend on `rel`'s file name (41 to 44 bytes with the suffixes below), so every source name
+/// checkSourcePath() accepts leaves room for it; core's fs::writeTextFile names its temp "<name>.tmp-<GUID>",
+/// 41 bytes longer than the target, which a 210-byte source's sidecar would push past 255. Hidden, so a temp
+/// that a crash leaves behind is skipped by scanMetas().
+std::string tempNameNear(std::string_view rel, std::string_view suffix) {
+    return joinRel(parentOf(rel), "." + Guid::generate().toString() + std::string(suffix));
+}
+
+/// Writes a sidecar like fs::writeTextFile's atomic mode (temp file, flushed, renamed over the target and
+/// the rename persisted), through tempNameNear().
+Result<void> writeSidecar(const fs::Path& root, std::string_view metaRel, std::string_view text) {
+    const fs::Path temp = absolute(root, tempNameNear(metaRel, ".tmp"));
+    Result<void> written = [&]() -> Result<void> {
+        HELIOS_TRY_ASSIGN(fs::File file, fs::File::open(temp, fs::OpenMode::Write));
+        HELIOS_TRY(file.write(text.data(), text.size()));
+        return file.sync();
+    }(); // closed here: Windows renames no open file
+    if (written) written = fs::rename(temp, absolute(root, metaRel));
+    if (!written) {
+        if (fs::exists(temp)) (void)fs::remove(temp);
+        return prefixed(std::format("writing {}", shown(metaRel)), written.error());
+    }
+    return {};
 }
 
 Result<void> renameRel(const fs::Path& root, std::string_view from, std::string_view to, bool viaTemp) {
     const fs::Path a = absolute(root, from);
     const fs::Path b = absolute(root, to);
     if (!viaTemp) return fs::rename(a, b);
-    const fs::Path tmp = absolute(root, movingName(to));
+    // The two-step rename of a case-only change.
+    const fs::Path tmp = absolute(root, tempNameNear(to, ".moving"));
     HELIOS_TRY(fs::rename(a, tmp));
     if (auto r = fs::rename(tmp, b); !r) {
         (void)fs::rename(tmp, a);
@@ -554,6 +576,15 @@ std::vector<std::string> caseVariants(const fs::Path& root, std::string_view pat
         start = slash + 1;
     }
     return current;
+}
+
+/// Whether `rel` (a checked project path) is a file spelled exactly so in every component. Where names
+/// ignore case (Windows) fs::isFile() also finds another spelling; asking the listings too gives the same
+/// answer on both platforms.
+bool isFileAsSpelled(const fs::Path& root, std::string_view rel) {
+    if (!fs::isFile(absolute(root, rel))) return false;
+    const std::vector<std::string> variants = caseVariants(root, rel);
+    return std::find(variants.begin(), variants.end(), rel) != variants.end();
 }
 
 } // namespace
@@ -708,24 +739,37 @@ Result<void> saveMeta(const fs::Path& root, std::string_view path, const AssetMe
                       const ImporterRegistry& importers) {
     HELIOS_TRY(checkSourcePath(path));
     HELIOS_TRY_ASSIGN(const std::string text, writeMeta(meta, importers));
+    // Only an update: a new sidecar mints an identity, which is ensureMeta's alone (with its checks: the
+    // importer claims the file, and no other spelling of the sidecar or of a directory exists). Both files
+    // must exist exactly as spelled, so that another spelling (one file on Windows, two on Linux) is
+    // refused on both platforms.
     const std::string metaRel = metaPathFor(path);
-    const fs::Path metaAbs = absolute(root, metaRel);
-    if (fs::exists(metaAbs)) {
-        HELIOS_TRY_ASSIGN(const std::string existing, readSidecar(metaAbs));
-        if (existing == text) return {};
-        const std::optional<Guid> old = peekGuid(existing);
-        if (!old) {
-            return makeError(ErrorCode::InvalidState,
-                             "{}: the existing sidecar has no readable GUID, so saving could "
-                             "change it; repair or remove it first",
-                             shown(metaRel));
-        }
-        if (*old != meta.guid) {
-            return makeError(ErrorCode::InvalidState, "{}: its GUID is {}, not {}; a GUID never changes",
-                             shown(metaRel), *old, meta.guid);
-        }
+    if (!isFileAsSpelled(root, path))
+        return makeError(ErrorCode::NotFound, "{}: no such source file (spelled so)", shown(path));
+    if (!isFileAsSpelled(root, metaRel)) {
+        return makeError(ErrorCode::NotFound,
+                         "{} has no sidecar {} to update; ensureMeta creates a sidecar, with a new GUID",
+                         shown(path), shown(metaRel));
     }
-    return fs::writeTextFile(metaAbs, text);
+    if (!importsFile(*importers.find(meta.importer), path)) {
+        return makeError(ErrorCode::InvalidArgument, "{}: importer '{}' does not import this extension",
+                         shown(path), meta.importer);
+    }
+    const fs::Path metaAbs = absolute(root, metaRel);
+    HELIOS_TRY_ASSIGN(const std::string existing, readSidecar(metaAbs));
+    if (existing == text) return {};
+    const std::optional<Guid> old = peekGuid(existing);
+    if (!old) {
+        return makeError(ErrorCode::InvalidState,
+                         "{}: the existing sidecar has no readable GUID, so saving could "
+                         "change it; repair or remove it first",
+                         shown(metaRel));
+    }
+    if (*old != meta.guid) {
+        return makeError(ErrorCode::InvalidState, "{}: its GUID is {}, not {}; a GUID never changes",
+                         shown(metaRel), *old, meta.guid);
+    }
+    return writeSidecar(root, metaRel, text);
 }
 
 Result<EnsuredMeta> ensureMeta(const fs::Path& root, std::string_view path, const NewMeta& init,
@@ -776,7 +820,7 @@ Result<EnsuredMeta> ensureMeta(const fs::Path& root, std::string_view path, cons
     meta.provenance = init.provenance;
     auto text = writeMeta(meta, importers);
     if (!text) return prefixed(metaRel, text.error());
-    HELIOS_TRY(fs::writeTextFile(absolute(root, metaRel), *text));
+    HELIOS_TRY(writeSidecar(root, metaRel, *text));
     return EnsuredMeta{std::move(meta), true};
 }
 

@@ -29,10 +29,13 @@
 // checked by checkProjectPath(): valid UTF-8, no '\', no "." or ".." or empty component, no component above
 // 255 bytes, no character Windows forbids in a name (<>:"|?* and control characters), and no component that
 // engine/core's fs::isNonPortableComponent rejects (device names such as CON or nul.png, names ending in '.'
-// or ' '). A source's file name is at most kMaxSourceNameBytes, so that its sidecar's name fits. Two paths
-// that differ only in ASCII case name one file on Windows: scanMetas() reports them, moveAsset() refuses a
-// target that a different file (or directory spelling) already holds in another case, and ensureMeta()
-// refuses a path whose directories exist in another spelling.
+// or ' '). A source's file name is at most kMaxSourceNameBytes, so that its sidecar's name fits; the
+// writers' temporary files have short names of their own (".<GUID>.tmp", ".<GUID>.moving"), so every such
+// name can get a sidecar. Two paths that differ only in ASCII case name one file on Windows: scanMetas()
+// reports them, moveAsset() refuses a target that a different file (or directory spelling) already holds in
+// another case, ensureMeta() refuses a path whose directories exist in another spelling, and saveMeta()
+// takes only the exact spelling. Case is folded for ASCII only: NTFS also folds other letters ("Ä" and
+// "ä"), which these checks do not see (a gap, see the README).
 //
 // Threading: the free functions are stateless and may run concurrently, except that the sidecar writers
 // (ensureMeta, saveMeta, moveAsset) assume one writer per project (helios-assetd, 02 §6.1); two
@@ -143,8 +146,12 @@ std::string metaPathFor(std::string_view sourcePath);
 /// failing the rules above, including a source name too long to have a sidecar).
 Result<AssetMeta> loadMeta(const fs::Path& root, std::string_view path, const ImporterRegistry& importers);
 
-/// Writes the sidecar of `root`/`path` atomically (temp file + rename), only when its bytes change.
-/// InvalidState when a sidecar with another GUID is already there: a GUID never changes.
+/// Updates the existing sidecar of `root`/`path` atomically (a flushed temp file renamed over it), only when
+/// its bytes change. It never creates one: that mints a GUID, which is ensureMeta()'s alone. NotFound when
+/// the source or its sidecar does not exist spelled exactly so (another ASCII-case spelling is one file on
+/// Windows and two on Linux, so it is refused on both); InvalidArgument when `meta`'s importer does not
+/// import the source's extension; InvalidState when the sidecar's GUID differs from `meta.guid` or cannot be
+/// read: a GUID never changes.
 Result<void> saveMeta(const fs::Path& root, std::string_view path, const AssetMeta& meta,
                       const ImporterRegistry& importers);
 

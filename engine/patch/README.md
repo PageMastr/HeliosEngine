@@ -498,8 +498,10 @@ cmake --preset linux-clang -B build/fuzz -DHELIOS_BUILD_GRAPHICS=OFF -DHELIOS_BU
   "-DCMAKE_CXX_FLAGS=-fsanitize=fuzzer-no-link,address,undefined"
 cmake --build build/fuzz --target patch_fuzz_manifest_reader patch_fuzz_trust_parser
 build/fuzz/bin/patch_fuzz_manifest_reader -max_total_time=600 -rss_limit_mb=2048 -malloc_limit_mb=512 corpus-copy/
-build/fuzz/bin/patch_fuzz_trust_parser -max_total_time=600 -max_len=70000 -rss_limit_mb=2048 -malloc_limit_mb=512 \
-  trust-copy/   # -max_len: libFuzzer's default (4096 here) never reaches the 64 KiB keyset or 16 KiB pointer bound
+# -max_len: libFuzzer's default (4096 here) never reaches the 64 KiB keyset or 16 KiB pointer bound;
+# -len_control=0 starts at that length instead of growing towards it
+build/fuzz/bin/patch_fuzz_trust_parser -max_total_time=600 -max_len=70000 -len_control=0 -rss_limit_mb=2048 \
+  -malloc_limit_mb=512 trust-copy/
 cd services && go test ./pkg/manifest -run '^$' -fuzz FuzzParse -fuzztime 5m
 go test ./pkg/patchtrust -run '^$' -fuzz '^FuzzParseKeyset$' -fuzztime 5m   # and FuzzParsePointer, FuzzVerifyManifestHeader
 ```
@@ -521,6 +523,17 @@ units; peak RSS 521 MB) with no finding, and `patch_tests` (its 32 non-`perf:` c
 sanitizer build. Go, one worker, 5 minutes each:
 `FuzzParseKeyset` ran 2,379,149 inputs (corpus 37 → 65), `FuzzParsePointer` 1,473,096 (39 → 52) and
 `FuzzVerifyManifestHeader` 1,381,666 (13 → 20), with no failure.
+
+After review round 1 (2026-10-05, load average 5–7; the same sanitizer flags, the 11 committed seeds):
+`patch_fuzz_trust_parser -max_len=70000` ran 5,567,555 inputs in 631 seconds (about 8,800 per second) and
+reached 1,769 edges (3,431 features; corpus 11 → 582 units; peak RSS 551 MB). Its length limit grew to 47,050
+bytes, past the pointer bound but not the keyset's, so a second run continued from that corpus with
+`-len_control=0`: 1,747,946 inputs in 181 seconds, 1,778 edges (3,467 features), inputs up to 65,708 bytes.
+Neither found anything, and `patch_tests` (its 33 non-`perf:` cases) passed twice in the same build. Go, one
+worker, 5 minutes each: `FuzzParseKeyset` 2,130,359 inputs (corpus 75 → 77) and `FuzzParsePointer` 868,510 and
+1,188,216 (65 → 73), with no failure. `FuzzVerifyManifestHeader` ran 3,002 inputs (62 → 66) with Go's default
+minimization, which spends up to a minute on each new input, then 115,162 (66 → 119) with
+`-fuzzminimizetime=5s`; no failure.
 
 ## Gaps (v0)
 

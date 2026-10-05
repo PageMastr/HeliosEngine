@@ -278,6 +278,11 @@ func (v *Verifier) VerifyPointer(b []byte, ks *Keyset, now uint64, st State) (*P
 // payload.
 func (v *Verifier) VerifyManifestHeader(file []byte, ks *Keyset, ref ManifestRef, now uint64) (manifest.HeaderInfo,
 	error) {
+	return verifyManifestHeader(v.target, file, ks, ref, now)
+}
+
+func verifyManifestHeader(t Target, file []byte, ks *Keyset, ref ManifestRef, now uint64) (manifest.HeaderInfo,
+	error) {
 	info, err := manifest.ParseHeader(file, 0)
 	if err != nil {
 		return info, reject(CheckManifestMalformed, "%v", err)
@@ -303,11 +308,11 @@ func (v *Verifier) VerifyManifestHeader(file []byte, ks *Keyset, ref ManifestRef
 			MaxClockSkew, now)
 	}
 	switch {
-	case h.ProductID != v.target.ProductID:
-		return info, reject(CheckManifestProduct, "manifest of %q, expected %q", h.ProductID, v.target.ProductID)
-	case h.Platform != v.target.Platform:
+	case h.ProductID != t.ProductID:
+		return info, reject(CheckManifestProduct, "manifest of %q, expected %q", h.ProductID, t.ProductID)
+	case h.Platform != t.Platform:
 		return info, reject(CheckManifestPlatform, "manifest of platform %q, expected %q", h.Platform,
-			v.target.Platform)
+			t.Platform)
 	case h.BuildID != ref.BuildID:
 		return info, reject(CheckManifestBuild, "manifest of build %q, the pointer names %q", h.BuildID, ref.BuildID)
 	case h.CompatEpoch != ref.CompatEpoch:
@@ -321,7 +326,23 @@ func (v *Verifier) VerifyManifestHeader(file []byte, ks *Keyset, ref ManifestRef
 
 // VerifyManifest runs VerifyManifestHeader, then decodes and validates the whole manifest.
 func (v *Verifier) VerifyManifest(file []byte, ks *Keyset, ref ManifestRef, now uint64) (*manifest.Manifest, error) {
-	if _, err := v.VerifyManifestHeader(file, ks, ref, now); err != nil {
+	return verifyManifest(v.target, file, ks, ref, now)
+}
+
+// VerifyManifestWithKeyset runs VerifyManifest's checks for target t against a keyset the caller already
+// trusts, without a root pair: a publisher re-pointing a manifest it wrote, under its own signing directory's
+// keyset. It never checks the keyset itself, so an install must use a Verifier, which checks the keyset against
+// the root pair first.
+func VerifyManifestWithKeyset(t Target, file []byte, ks *Keyset, ref ManifestRef, now uint64) (*manifest.Manifest,
+	error) {
+	if err := t.Validate(); err != nil {
+		return nil, err
+	}
+	return verifyManifest(t, file, ks, ref, now)
+}
+
+func verifyManifest(t Target, file []byte, ks *Keyset, ref ManifestRef, now uint64) (*manifest.Manifest, error) {
+	if _, err := verifyManifestHeader(t, file, ks, ref, now); err != nil {
 		return nil, err
 	}
 	m, err := manifest.Parse(file, 0)

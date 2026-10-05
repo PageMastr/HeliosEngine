@@ -565,6 +565,54 @@ func TestPublishRepairsChunkObjects(t *testing.T) {
 	}
 }
 
+// A republish re-points an existing manifest only if it passes an install's checks: one whose payload or
+// signature was damaged is refused with a pointer to --build-id (it is immutable, and a derived build ID would
+// name it again on every republish), and the build publishes under another build ID.
+func TestPublishRefusesDamagedManifest(t *testing.T) {
+	target := patchtrust.Target{ProductID: "sample-game", Channel: "dev", Platform: "win64"}
+	keys, v, _ := devSetup(t, target)
+	build := t.TempDir()
+	writeFiles(t, build, map[string][]byte{"bin/game": cdctest.Random(6, 100<<10), "data": cdctest.Random(7, 50<<10)})
+	ctx := context.Background()
+	for _, damage := range []struct {
+		name string
+		at   func(file []byte) int
+	}{
+		{"payload", func(file []byte) int { return len(file) - 40 }},
+		{"signature", func([]byte) int { return 300 }},
+	} {
+		cdn := t.TempDir()
+		o := patchcdn.PublishOptions{CDNRoot: cdn, BuildDir: build, Target: target, Now: t0}
+		r1, err := patchcdn.Publish(ctx, o, keys)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mpath := filepath.Join(cdn, filepath.FromSlash(patchcdn.ManifestPath(target.ProductID, r1.BuildID,
+			target.Platform)))
+		file, err := os.ReadFile(mpath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file[damage.at(file)] ^= 0x40
+		if err := os.WriteFile(mpath, file, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		o.Now = t0.Add(time.Hour)
+		if _, err := patchcdn.Publish(ctx, o, keys); err == nil || !strings.Contains(err.Error(), "--build-id") {
+			t.Fatalf("%s: republished over a damaged manifest: %v", damage.name, err)
+		}
+		o.BuildID = "rebuild-1"
+		r2, err := patchcdn.Publish(ctx, o, keys)
+		if err != nil || r2.BuildID != "rebuild-1" || !r2.ManifestWritten || r2.Sequence != 2 {
+			t.Fatalf("%s: under a new build ID: %+v %v", damage.name, r2, err)
+		}
+		now := uint64(o.Now.Unix()) + 60
+		if _, err := patchcdn.Verify(ctx, patchcdn.DirSource{Root: cdn}, v, now, &patchcdn.MemoryStateStore{}); err != nil {
+			t.Fatalf("%s: %v", damage.name, err)
+		}
+	}
+}
+
 // Dev key directories ignore themselves in git, wherever they are, before any seed is written; a directory
 // made without the file gets it on the next load.
 func TestDevKeysAreGitIgnored(t *testing.T) {

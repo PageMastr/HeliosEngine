@@ -149,7 +149,7 @@ func Publish(ctx context.Context, o PublishOptions, keys *Keys) (*PublishResult,
 		seq = prev.Sequence + 1
 	}
 	mpath := filepath.Join(o.CDNRoot, filepath.FromSlash(ManifestPath(t.ProductID, m.Header.BuildID, t.Platform)))
-	res.ManifestHash, res.ManifestWritten, err = writeManifest(mpath, m, body, seq, keys)
+	res.ManifestHash, res.ManifestWritten, err = writeManifest(mpath, t, m, body, seq, now, keys)
 	if err != nil {
 		return nil, err
 	}
@@ -253,8 +253,12 @@ func readPointer(root string, t patchtrust.Target) (*patchtrust.Pointer, error) 
 }
 
 // writeManifest writes the signed manifest unless the build is already published with the same body and
-// compat epoch, signed by a manifest key of the current keyset; then it returns the existing one's hash.
-func writeManifest(path string, m *manifest.Manifest, body []byte, seq uint64, keys *Keys) (cdc.Hash, bool, error) {
+// compat epoch, signed by a manifest key of the current keyset; then it returns the existing one's hash, once
+// the existing file passes every check an install runs on it (patchtrust.VerifyManifestWithKeyset). A damaged
+// one (payload, signature) is refused, not re-pointed: manifests are immutable, and a derived build ID would
+// name it again on every republish, so the build needs another --build-id.
+func writeManifest(path string, t patchtrust.Target, m *manifest.Manifest, body []byte, seq, now uint64,
+	keys *Keys) (cdc.Hash, bool, error) {
 	if old, err := os.ReadFile(path); err == nil {
 		info, err := manifest.ParseHeader(old, 0)
 		if err != nil {
@@ -267,6 +271,12 @@ func writeManifest(path string, m *manifest.Manifest, body []byte, seq uint64, k
 		if key := keys.Keyset.Key(patchtrust.KeyID(info.Header.KeyID)); key == nil || key.Role != patchtrust.RoleManifest {
 			return cdc.Hash{}, false, fmt.Errorf("patchcdn: build %s was signed by a key the keyset no longer "+
 				"lists; publish it under a new build ID", m.Header.BuildID)
+		}
+		ref := patchtrust.ManifestRef{BuildID: m.Header.BuildID, ManifestHash: info.HeaderHash,
+			CompatEpoch: m.Header.CompatEpoch}
+		if _, err := patchtrust.VerifyManifestWithKeyset(t, old, keys.Keyset, ref, now); err != nil {
+			return cdc.Hash{}, false, fmt.Errorf("patchcdn: build %s is already published, but %s does not verify "+
+				"(%w); manifests are immutable, so publish the build with another --build-id", m.Header.BuildID, path, err)
 		}
 		return info.HeaderHash, false, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {

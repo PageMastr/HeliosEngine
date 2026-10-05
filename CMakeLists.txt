@@ -53,6 +53,9 @@ endif()
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(HeliosModule)
+# Found here, not only in the modules that link it: an imported target is visible only in and below the
+# directory that finds it, and the base copies of cmake/HeliosIsa.cmake live in this directory.
+find_package(Threads REQUIRED)
 
 # ---------------------------------------------------------------------------------------------
 # Third-party (vendored, see third_party/MANIFEST.md)

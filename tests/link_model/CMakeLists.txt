@@ -3,7 +3,8 @@
 #
 #   link_model_tests     the test executable: the group libraries export their entry points, and a plugin
 #                        image built against them shares the engine's registries, heaps and CRT heap.
-#   link_model_probe     that plugin: a game-like image that links helios::core (helios_runtime) and keeps
+#   link_model_probe     that plugin: a game-like image that links helios::core and helios::ecs (both in
+#                        helios_runtime), uses the ECS's typed API on a World the executable owns, and keeps
 #                        the symbol audit's game rules (tools/lint/symbol_audit.cmake). WP-0.6c part 2
 #                        replaces it with the Probe game module and the reload loader.
 #   link_model_bad_game  a game-like image that breaks the audit's game rules on purpose (a static
@@ -14,7 +15,7 @@ if(NOT HELIOS_MODULAR OR NOT HELIOS_BUILD_TESTS)
 endif()
 
 add_library(link_model_probe SHARED ${CMAKE_CURRENT_SOURCE_DIR}/probe.cpp)
-target_link_libraries(link_model_probe PRIVATE helios::core)
+target_link_libraries(link_model_probe PRIVATE helios::core helios::ecs)
 set_target_properties(link_model_probe PROPERTIES FOLDER tests)
 helios_apply_warnings(link_model_probe)
 
@@ -29,7 +30,7 @@ endif()
 
 helios_test(link_model_tests
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_main.cpp ${CMAKE_CURRENT_SOURCE_DIR}/test_link_model.cpp
-  DEPS helios::core)
+  DEPS helios::core helios::ecs)
 add_dependencies(link_model_tests link_model_probe)
 target_compile_definitions(link_model_tests PRIVATE HELIOS_LINK_MODEL_PROBE_PATH="$<TARGET_FILE:link_model_probe>")
 # The other groups exist only in builds with graphics (client) and with editor modules (editor).

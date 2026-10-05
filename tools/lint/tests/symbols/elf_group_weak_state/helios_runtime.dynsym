@@ -1,0 +1,7 @@
+helios_runtime_link_group_modules|0000000000004000|   T  |              FUNC|0000000000000008|     |.text
+_ZN6helios3pcg6LogPcgE|0000000000004400|   u  |            OBJECT|0000000000000010|     |.bss
+_ZN3JPH11CharacterID7sNextIDE|0000000000004500|   u  |            OBJECT|0000000000000004|     |.data
+LogPcg|0000000000004600|   u  |            OBJECT|0000000000000010|     |.bss
+_ZNSt6vectorIiSaIiEE17_M_realloc_insertIJiEEEvN9__gnu_cxx17__normal_iteratorIPiS1_EEDpOT_|0000000000004700|   W  |              FUNC|0000000000000008|     |.text
+_ZTSN3JPH5ShapeE|0000000000004800|   V  |            OBJECT|0000000000000008|     |.rodata
+_ZTVN3JPH5ShapeE|0000000000004900|   V  |            OBJECT|0000000000000008|     |.data.rel.ro

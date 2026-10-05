@@ -1,15 +1,21 @@
 // link_model_probe: a game-like plugin image for the link-model tests (ADR-016, 02 §1.4, WP-0.6c part 1).
-// It links helios::core, which in a modular build means importing from helios_runtime, and registers
-// into the engine's registries through the engine's own functions. It owns no engine state, so it keeps
-// the symbol audit's game rules (tools/lint/symbol_audit.cmake, R4-R6). Entry points are C functions,
-// resolved with DynamicLibrary; every one may be called from any thread.
+// It links helios::core and helios::ecs, which in a modular build means importing from helios_runtime, and
+// registers into the engine's registries through the engine's own functions. It owns no engine state, so
+// it keeps the symbol audit's game rules (tools/lint/symbol_audit.cmake, R4-R6). Entry points are C
+// functions, resolved with DynamicLibrary; each may be called from any thread unless its comment says
+// otherwise.
 #include "helios/core/cvar.h"
 #include "helios/core/memory.h"
 #include "helios/core/platform.h"
+#include "helios/ecs/command_buffer.h"
+#include "helios/ecs/world.h"
 #include "helios/runtime_api.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
+
+#include "probe_types.h"
 
 namespace {
 
@@ -49,4 +55,31 @@ HELIOS_PLUGIN_EXPORT void* helios_link_model_probe_alloc(unsigned bytes) {
 /// The address of helios_runtime's module list as this image sees it (one runtime image: one address).
 HELIOS_PLUGIN_EXPORT const char* helios_link_model_probe_runtime_modules() {
     return helios_runtime_link_group_modules();
+}
+
+/// Typed ECS access across images, on a World the caller created (its constructor ran in helios_runtime):
+/// the built-in components, a type the caller registered (HostCounter) and one this image registers
+/// (ProbeCounter), written with World::set<T> and with a typed CommandBuffer. Returns 1, or a negative
+/// step number at the first check that fails. Same thread as the World (World's threading rules).
+HELIOS_PLUGIN_EXPORT int helios_link_model_probe_ecs(helios::ecs::World* world, std::uint64_t entity,
+                                                     unsigned value) {
+    using namespace helios::ecs;
+    using helios::link_model::HostCounter;
+    using helios::link_model::ProbeCounter;
+    if (world->id<NetIdentity>() == 0 || world->id<NetIdentity>() != world->netIdentityId()) return -1;
+    if (world->id<RepDirty>() == 0 || world->id<RepDirty>() != world->repDirtyId()) return -2;
+    if (world->id<FrameRef>() == 0 || world->id<DockRef>() == 0) return -3;
+    const Entity e{entity};
+    const HostCounter* host = world->get<HostCounter>(e);
+    if (world->id<HostCounter>() == 0 || host == nullptr || host->value != value) return -4;
+    if (world->id<ProbeCounter>() == 0) world->registerComponent<ProbeCounter>();
+    world->set(e, ProbeCounter{value});
+    const ProbeCounter* back = world->get<ProbeCounter>(e);
+    if (back == nullptr || back->value != value) return -5;
+    CommandBuffer commands(world);
+    commands.set(e, HostCounter{value + 1});
+    world->apply(commands);
+    host = world->get<HostCounter>(e);
+    if (host == nullptr || host->value != value + 1) return -6;
+    return 1;
 }

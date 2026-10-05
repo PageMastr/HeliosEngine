@@ -4,6 +4,7 @@
 // A plugin that carried its own engine (the rejected alternative (a) of ADR-016) fails each case.
 #include <doctest/doctest.h>
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -11,7 +12,11 @@
 #include "helios/core/cvar.h"
 #include "helios/core/dynlib.h"
 #include "helios/core/memory.h"
+#include "helios/ecs/types.h"
+#include "helios/ecs/world.h"
 #include "helios/runtime_api.h"
+
+#include "probe_types.h"
 
 #ifndef HELIOS_LINK_MODEL_PROBE_PATH
 #error "HELIOS_LINK_MODEL_PROBE_PATH must be defined by the build"
@@ -123,6 +128,43 @@ TEST_CASE("link model: memory crosses the image boundary") {
         helios::alignedFree(p);
         CHECK(helios::memoryTagStats(tag).liveBytes == before.liveBytes);
     }
+}
+
+TEST_CASE("link model: built-in component ids resolve from another image") {
+    // The World's constructor runs in helios_runtime and binds the built-ins there; this image looks
+    // them up with its own copy of the header templates (02 §1.4: no per-image caches of global state).
+    helios::ecs::World world;
+    CHECK(world.id<helios::ecs::NetIdentity>() != 0);
+    CHECK(world.id<helios::ecs::RepDirty>() != 0);
+    CHECK(world.id<helios::ecs::NetIdentity>() == world.netIdentityId());
+    CHECK(world.id<helios::ecs::RepDirty>() == world.repDirtyId());
+    CHECK(world.id<helios::ecs::FrameRef>() != 0);
+    CHECK(world.id<helios::ecs::DockRef>() != 0);
+}
+
+TEST_CASE("link model: a plugin image reads and writes components of a World the executable created") {
+    auto lib = DynamicLibrary::loadUtf8(HELIOS_LINK_MODEL_PROBE_PATH);
+    REQUIRE_MESSAGE(lib, (lib ? "" : lib.error().toString()));
+    using EcsFn = int (*)(helios::ecs::World*, std::uint64_t, unsigned);
+    auto ecs = lib->function<EcsFn>("helios_link_model_probe_ecs");
+    REQUIRE(ecs != nullptr);
+
+    using helios::link_model::HostCounter;
+    using helios::link_model::ProbeCounter;
+    helios::ecs::World world;
+    const helios::ecs::ComponentId hostId = world.registerComponent<HostCounter>();
+    REQUIRE(hostId != 0);
+    const helios::ecs::Entity e = world.spawn();
+    world.set(e, HostCounter{41});
+    CHECK(ecs(&world, e.id, 41) == 1);
+    // The plugin registered ProbeCounter and set it; this image finds it with its own type key.
+    CHECK(world.id<ProbeCounter>() != 0);
+    const ProbeCounter* probe = world.get<ProbeCounter>(e);
+    REQUIRE(probe != nullptr);
+    CHECK(probe->value == 41);
+    const HostCounter* host = world.get<HostCounter>(e);
+    REQUIRE(host != nullptr);
+    CHECK(host->value == 42);
 }
 
 } // namespace

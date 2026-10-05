@@ -382,9 +382,40 @@ function(_helios_all_targets out)
   set(${out} "${found}" PARENT_SCOPE)
 endfunction()
 
+# The targets whose objects or archives one LINK_LIBRARIES item links, aliases resolved: the item itself,
+# or what a generator expression wraps ($<BUILD_INTERFACE:x>, $<LINK_ONLY:x>, $<IF:c,x,y>, $<cond:x>, ...),
+# as _helios_resolve_link_item reads them. Unlike that function it keeps helios::<module> interfaces as
+# they are, and $<COMPILE_ONLY:x> counts as nothing, because it links no objects.
+function(_helios_modular_linked_targets item out)
+  set(result "")
+  if(item MATCHES "^\\$<")
+    _helios_split_genex("${item}" g)
+    set(candidates "")
+    if(g_head MATCHES "^(LINK_LIBRARY|LINK_GROUP|IF)$")
+      _helios_split_top_commas("${g_body}" candidates)
+      list(POP_FRONT candidates) # the feature name, or the condition
+    elseif(g_head MATCHES "^(LINK_ONLY|BUILD_INTERFACE|BUILD_LOCAL_INTERFACE|TARGET_NAME_IF_EXISTS|1)$"
+           OR g_head MATCHES "^\\$<")
+      set(candidates "${g_body}")
+    endif()
+    foreach(c IN LISTS candidates)
+      _helios_modular_linked_targets("${c}" r)
+      list(APPEND result ${r})
+    endforeach()
+  elseif(NOT item MATCHES "^::@" AND TARGET "${item}")
+    get_target_property(aliased "${item}" ALIASED_TARGET)
+    if(aliased)
+      set(item "${aliased}")
+    endif()
+    set(result "${item}")
+  endif()
+  set(${out} "${result}" PARENT_SCOPE)
+endfunction()
+
 # Modular rule for the layering check (HeliosLayering.cmake): only a group library or a self-contained
-# image may link a module's OBJECT library directly; anything else would carry a second copy of its code
-# and state beside the group's. Appends "helios layering: ..." messages to <errorsVar>.
+# image may link a module's OBJECT library directly, also through a generator expression; anything else
+# would carry a second copy of its code and state beside the group's. Appends "helios layering: ..."
+# messages to <errorsVar>.
 function(helios_modular_check_direct_objects errorsVar)
   if(NOT HELIOS_MODULAR)
     return()
@@ -406,16 +437,13 @@ function(helios_modular_check_direct_objects errorsVar)
     if(NOT ll)
       continue()
     endif()
-    foreach(item IN LISTS ll)
-      if(TARGET "${item}")
-        get_target_property(aliased "${item}" ALIASED_TARGET)
-        if(aliased)
-          set(item "${aliased}")
-        endif()
+    foreach(entry IN LISTS ll)
+      _helios_modular_linked_targets("${entry}" linked)
+      foreach(item IN LISTS linked)
         if(item IN_LIST modules)
-          list(APPEND errors "helios layering: '${tgt}' links the module object library '${item}' directly; in a modular build that copies the module into a second image (link helios::<module>, or declare the image with helios_self_contained)")
+          list(APPEND errors "helios layering: '${tgt}' links the module object library '${item}' directly: in a modular build that copies the module into a second image (link helios::<module>, or declare the image with helios_self_contained)")
         endif()
-      endif()
+      endforeach()
     endforeach()
   endforeach()
   set(${errorsVar} "${errors}" PARENT_SCOPE)

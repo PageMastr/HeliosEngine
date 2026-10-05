@@ -90,8 +90,13 @@ if(HELIOS_BUILD_GRAPHICS)
     # (docs/adr/ADR-0.6c-link-model-spike.md).
     add_library(tp_imgui SHARED ${TP_IMGUI_SOURCES})
     if(WIN32)
+      # IMGUI_API covers ImGui and ImGuizmo.h (which uses IMGUI_API when it is defined); data such as
+      # GImGui needs its dllimport. ImPlot (IMPLOT_API is empty) and ImSequencer, ImCurveEdit, ImGradient
+      # and GraphEditor (no export macro) are exported by the export-all scan, as on ELF, where the
+      # library has default visibility.
       target_compile_definitions(tp_imgui PRIVATE "IMGUI_API=__declspec(dllexport)"
                                           INTERFACE "IMGUI_API=__declspec(dllimport)")
+      set_target_properties(tp_imgui PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
     endif()
   else()
     add_library(tp_imgui STATIC ${TP_IMGUI_SOURCES} ${TP}/imgui/backends/imgui_impl_vulkan.cpp)

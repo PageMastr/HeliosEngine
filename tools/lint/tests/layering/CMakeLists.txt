@@ -175,6 +175,11 @@ if(CASE STREQUAL "direct_objects")
   # Modular builds (HELIOS_MODULAR=ON): the module's object library instead of helios::core would put a
   # second copy of core's code and state into the tool, beside helios_runtime's.
   target_link_libraries(fx-cook PRIVATE helios_core)
+elseif(CASE STREQUAL "direct_objects_genex")
+  # The same, wrapped in generator expressions: the rule looks through them ($<COMPILE_ONLY:...> links no
+  # objects and stays allowed).
+  target_link_libraries(fx-cook PRIVATE "$<COMPILE_ONLY:helios_core>"
+    "$<$<CONFIG:Debug>:$<BUILD_INTERFACE:helios_core>>")
 endif()
 
 # Runs after helios_finalize_build (deferred calls run in scheduling order), so it is only reached

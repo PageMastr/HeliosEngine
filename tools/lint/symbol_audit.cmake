@@ -22,24 +22,33 @@
 # .tdata*, .tbss*, but not .data.rel.ro* (vtables, typeinfo and constants that hold pointers live there).
 #
 # ELF images (nm):
-#   R1  a group exports only Helios code: every strong exported definition is in namespace helios (or a
-#       helios_* namespace, such as generated shader tables) or is a C symbol named helios_*, or comes from
-#       a third-party library the group exports by design (role thirdparty). Other third-party archives are
-#       linked in hidden (--exclude-libs), so anything else means third-party or global-namespace code was
-#       compiled into the group's own objects.
+#   R1  a group exports only Helios code: every strong exported definition, and every exported mutable
+#       datum (weak and GNU-unique ones included: inline and template statics), is in namespace helios (or
+#       a helios_* namespace, such as generated shader tables) or is a C symbol named helios_*, or comes
+#       from a third-party library the group exports by design (role thirdparty). Other third-party
+#       archives are linked in hidden (--exclude-libs), so anything else means third-party or
+#       global-namespace code or state was compiled into the group's own objects. Weak functions (header
+#       inlines and template instantiations, the STL's included) are stateless copies and pass.
 #   R2  each third-party library with process state (the policy's singleton markers) is defined in at most
 #       one image: two copies of mimalloc, flecs, Jolt, Luau, Tracy, SDL3, ImGui, volk or netcode split
 #       their state (02 §1.4 "Singletons").
-#   R3  a consumer or game image has no copy of mutable Helios data that a group defines (a header-defined
-#       inline or template static, a function-local static of an inline function): on Windows every image
-#       has its own (02 §1.4 "No per-image caches of global state"). Data that an executable imports from
-#       a group by copy relocation (in both images' dynamic symbol tables) is one instance, not a copy.
+#   R3  no image has a copy of mutable Helios data that a group defines (a header-defined inline or
+#       template static, a function-local static of an inline function): on Windows every image has its
+#       own (02 §1.4 "No per-image caches of global state"). That covers consumer and game images and a
+#       second group: two groups export such a datum with default visibility, so on Linux the dynamic
+#       linker binds both to one instance and the split shows only on Windows. Data that an executable
+#       imports from a group by copy relocation (in both images' dynamic symbol tables) is one instance,
+#       not a copy.
 #   R4  a game image defines nothing from flecs, Jolt, Luau, mimalloc or Tracy;
 #   R5  a game image defines no mutable data in namespace helios (it imports engine state, never owns it);
 #   R6  a game image has no strong definition of a function that a group exports (it imports engine code).
 # PE images (dumpbin /exports; a linked image has no symbol table, so R2-R6 run on the ELF build):
 #   P1  every undecorated (C) name a group exports is helios_* or one of the CRT and STL header inlines the
-#       policy lists (HELIOS_SYMBOL_PE_TOOLCHAIN), and a group exports something.
+#       policy lists (HELIOS_SYMBOL_PE_TOOLCHAIN), and a group exports something. P1 skips every decorated
+#       (C++) name, so third-party C++ compiled into a module's own objects is invisible here (VMA's
+#       implementation TU in rhi was such a case); R1 on the ELF build is the check for it.
+# R2-R6 run only where an ELF modular build runs the audit: locally (linux-dev) until WP-0.6c part 2 adds
+# linux-dev to the nightly tier. The windows-msvc-dev PR job runs P1 and the fixtures.
 # A finding that matches the policy's HELIOS_SYMBOL_KNOWN_FINDINGS (rule, owner, regex) is printed as known
 # and does not fail the audit; every other finding does. Exits non-zero with one line per finding.
 
@@ -298,8 +307,15 @@ if(format STREQUAL "elf")
         endif()
       elseif(DEFINED TP_${name}_${k})
         math(EXPR exportedThirdParty "${exportedThirdParty} + 1")
-      elseif(c MATCHES "^[BDGRST]$" AND NOT s IN_LIST HELIOS_SYMBOL_LINKER_DEFINED)
-        _fail(R1 "${s}" "R1 ${name} exports '${s}' (${c}), which is not Helios code: a group exports only Helios objects, and third-party archives stay hidden (02 §1.4)")
+      elseif(NOT s IN_LIST HELIOS_SYMBOL_LINKER_DEFINED)
+        _is_mutable_data("${c}" "${sec}" mutable)
+        if(c MATCHES "^[BDGRST]$")
+          _fail(R1 "${s}" "R1 ${name} exports '${s}' (${c}), which is not Helios code: a group exports only Helios objects, and third-party archives stay hidden (02 §1.4)")
+        elseif(mutable)
+          # A weak or unique datum: an inline or template static that a third-party or global-namespace
+          # header put into the group's own objects. It is state, so it must not be exported.
+          _fail(R1 "${s}" "R1 ${name} exports '${s}' (${c}, ${sec}), mutable data that is not Helios code: a group exports no third-party or global-namespace state (02 §1.4)")
+        endif()
       endif()
     endforeach()
     if(exported EQUAL 0)
@@ -358,7 +374,9 @@ if(format STREQUAL "elf")
       if(mutable AND s MATCHES "${HELIOS_SYMBOL_OWNED_REGEX}" AND NOT s MATCHES "^_ZGV"
          AND NOT s MATCHES "_GLOBAL__N_")
         string(MD5 k "${s}")
-        if(role STREQUAL "group")
+        if(role STREQUAL "group" AND DEFINED DATA_${k} AND NOT DATA_${k} STREQUAL name)
+          _fail(R3 "${s}" "R3 group ${name} also defines '${s}' (${c}, ${sec}), which ${DATA_${k}} defines: Linux binds both to one instance, but on Windows each DLL keeps its own (02 §1.4, no per-image caches of global state)")
+        elseif(role STREQUAL "group")
           set(DATA_${k} "${name}")
         elseif(k IN_LIST imported)
           # Imported through a copy relocation (see above): one instance per process.

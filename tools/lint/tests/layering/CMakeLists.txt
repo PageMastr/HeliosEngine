@@ -182,6 +182,69 @@ elseif(CASE STREQUAL "direct_objects_genex")
     "$<$<CONFIG:Debug>:$<BUILD_INTERFACE:helios_core>>")
 endif()
 
+# ISA levels (02 §1.1, cmake/HeliosIsa.cmake; WP-0.2r). A base image (launcher, bootstrap) links the base
+# copies of core and its libraries; linking anything built only at avx2 stops configure.
+add_library(tp_jolt STATIC ${src}) # stands in for Jolt: an avx2-only third-party library
+if(CASE STREQUAL "isa_base_ok")
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} DEPS helios::core)
+elseif(CASE STREQUAL "isa_base_links_jolt")
+  # 09 §2 WP-0.2r's seeded fixture: a base image that links tp_jolt.
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} DEPS helios::core tp_jolt)
+elseif(CASE STREQUAL "isa_base_links_physics")
+  # Through a helper that is not a module: the path names it.
+  target_link_libraries(fx_helper INTERFACE helios::physics)
+  helios_executable(fx-bootstrap ROLE bootstrap SOURCES ${src} DEPS helios::core fx_helper)
+elseif(CASE STREQUAL "isa_fixture_base")
+  # The fixtures-only override: a tool image at base, outside apps/ and engine/.
+  helios_executable(fx-isa-fixture ROLE tool ISA base SOURCES ${src} DEPS helios::core)
+elseif(CASE STREQUAL "isa_override_in_apps")
+  add_subdirectory(apps/isa) # helios_executable(... ISA base) where real images live
+elseif(CASE STREQUAL "isa_avx2_links_copy")
+  # An avx2 image that names a base copy (a target only once the copies exist) would mix levels.
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} DEPS helios::core)
+  target_link_libraries(fx-client PRIVATE helios_core.base)
+elseif(CASE STREQUAL "isa_interface_options")
+  # tp_jolt's options before WP-0.2r, on its interface: every consumer inherited them.
+  target_compile_options(tp_jolt INTERFACE -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c) # conformance:allow CONF-11 the configure check's seeded fixture (09 §5.10.3)
+elseif(CASE STREQUAL "isa_override_elsewhere")
+  # The ISA override from a listfile outside tools/lint/ (one written into the build tree), where neither
+  # apps/ nor engine/ is in the path: still not a fixture.
+  file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/isa_elsewhere.cmake
+       "helios_executable(fx-isa-elsewhere ROLE tool ISA base SOURCES \"${src}\" DEPS helios::core)\n")
+  include(${CMAKE_CURRENT_BINARY_DIR}/isa_elsewhere.cmake)
+elseif(CASE STREQUAL "isa_invalid_value")
+  helios_executable(fx-isa-fixture ROLE tool ISA sse4 SOURCES ${src} DEPS helios::core)
+elseif(CASE STREQUAL "isa_cpu_gate_on_base")
+  # The gate guards avx2 images; a launcher must start on any x86-64 CPU.
+  helios_executable(fx-launcher ROLE launcher CPU_GATE SOURCES ${src} DEPS helios::core)
+elseif(CASE STREQUAL "isa_level_on_library")
+  # A library takes its image's level; setting one on it by hand would bypass the propagation.
+  set_target_properties(helios_math PROPERTIES HELIOS_ISA_LEVEL base)
+elseif(CASE STREQUAL "isa_gate_target_not_object")
+  # The gate's units must be an object library: an archive member holding only them could be dropped.
+  add_library(fx_gate STATIC ${src})
+  helios_cpu_gate_target(fx_gate)
+elseif(CASE STREQUAL "isa_base_root_links_jolt")
+  # A base module that links tp_jolt does not make tp_jolt base-eligible (HELIOS_ISA_BASE_DENY).
+  target_link_libraries(helios_core PRIVATE tp_jolt)
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} DEPS helios::core)
+elseif(CASE STREQUAL "isa_base_target_objects")
+  # Objects of an avx2 object library in the base image's own sources, not linked: no copy replaces them.
+  add_library(fx_kernels OBJECT ${src})
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} $<TARGET_OBJECTS:fx_kernels> DEPS helios::core)
+elseif(CASE STREQUAL "isa_generated_source")
+  # A relative source generated at build time does not exist at configure time; the copy must still look
+  # for it in the build directory, as CMake does.
+  add_custom_command(OUTPUT fx_generated.cpp COMMAND ${CMAKE_COMMAND} -E touch fx_generated.cpp)
+  target_sources(helios_core PRIVATE fx_generated.cpp)
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} DEPS helios::core)
+  function(_fx_print_copy_sources)
+    get_target_property(copySources helios_core.base SOURCES)
+    message(STATUS "FX_COPY_SOURCES: ${copySources}")
+  endfunction()
+  cmake_language(DEFER CALL _fx_print_copy_sources)
+endif()
+
 # Runs after helios_finalize_build (deferred calls run in scheduling order), so it is only reached
 # when the checks passed. Stop before generation: the dummy sources have no enabled language.
 cmake_language(DEFER CALL message STATUS "HELIOS_FIXTURE_CONFIGURE_OK")

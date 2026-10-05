@@ -4,7 +4,10 @@
 # CMakeLists.txt, when every target exists. It:
 #   1. checks the module graph (layers, peers, cycles, HELIOS_MODULE_ORDER, HEADLESS, EDITOR_ONLY);
 #   2. checks the executables' roles (no EDITOR_ONLY in client/server images, HEADLESS-only servers);
-#   3. registers the repository lints in tools/lint (licences, IP names, ISA audit) as CTests.
+#   3. registers the repository lints in tools/lint (licences, IP names, ISA audit) as CTests, which
+#      may add the ISA audit's fixture targets;
+#   4. applies the ISA levels to every target (helios_isa_finalize, cmake/HeliosIsa.cmake), last, so
+#      that it sees every target, the fixtures' included.
 # Violations are collected and reported together in one FATAL_ERROR whose lines start with
 # "helios layering:" (the fixture tests in tools/lint/tests/layering match on that text).
 
@@ -480,4 +483,5 @@ function(helios_finalize_build)
      AND EXISTS "${CMAKE_SOURCE_DIR}/engine/CMakeLists.txt")
     include("${CMAKE_SOURCE_DIR}/tools/lint/lint_tests.cmake")
   endif()
+  helios_isa_finalize()
 endfunction()

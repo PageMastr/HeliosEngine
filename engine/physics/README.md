@@ -115,9 +115,10 @@ step concurrently. `PhysicsRuntime` construction and shape creation are thread-s
   is harmless today because the patch only sorts freshly collected contacts, but when WP-1.5 restores
   characters for rollback, restored contacts must not be re-sorted by stable key without first
   re-reading B's layer and key from the body.
-- **ISA allowlist.** Jolt's headers select AVX2 paths inline, so every `helios_physics` TU is compiled
-  with `tp_jolt`'s AVX2 flags. Until WP-0.2r moves to whole-image ISA levels, `lint_isa_audit` reports
-  them unless `helios_physics` joins `HELIOS_ISA_AVX2_TARGETS` in `cmake/isa_allowlist.cmake`.
+- **ISA level.** Jolt's headers select AVX2 paths inline, so every `helios_physics` TU needs AVX2. Since
+  WP-0.2r it gets it from its image's `avx2` level (02 §1.1, `cmake/HeliosIsa.cmake`), like every module:
+  `tp_jolt` exports only its `JPH_USE_*` defines, and a `base` image (launcher, bootstrap) that links
+  `physics` fails configure.
 - Phase 1 and later: the multi-grid `PhysicsWorld`, bubble merge/split and grid transfer (with `world`),
   body tables and `CreateBodyWithID` restores for replay keyframes, the `SingleBodyPredictor`,
   `CharacterVirtual` inner bodies, vehicles (Phase 2), and RT-03's full scope (1,000 bodies,

@@ -249,6 +249,48 @@ function(helios_self_contained target)
   endif()
 endfunction()
 
+# Windows: a target whose objects carry their own copy of module code (a self-contained image, a base
+# image of cmake/HeliosIsa.cmake and its `.base` copies) defines what the API headers declare, so it must not
+# dllimport that data. Each HELIOS_<GROUP>_BUILDING makes the macros dllexport instead (on ELF they expand
+# to the same visibility attribute either way). No-op in shipping builds and on ELF; once per target.
+function(helios_modular_defines_own_copy target)
+  if(NOT HELIOS_MODULAR OR NOT WIN32)
+    return()
+  endif()
+  get_target_property(done ${target} HELIOS_MODULAR_OWN_COPY)
+  if(done)
+    return()
+  endif()
+  foreach(group IN LISTS HELIOS_LINK_GROUPS)
+    string(TOUPPER "${group}" G)
+    target_compile_definitions(${target} PRIVATE HELIOS_${G}_BUILDING)
+  endforeach()
+  set_target_properties(${target} PROPERTIES HELIOS_MODULAR_OWN_COPY ON)
+endfunction()
+
+# The object libraries that are not modules and that a module links directly (today the CPU gate's probe,
+# helios_core_cpugate, a `gate`-level object library: cmake/HeliosIsa.cmake). A STATIC module archives their
+# objects, but an OBJECT module passes on only their usage requirements, so the group library or the
+# self-contained image that takes the module's objects links them as well.
+function(_helios_modular_object_deps target out)
+  set(result "")
+  get_target_property(ll ${target} LINK_LIBRARIES)
+  if(ll)
+    foreach(item IN LISTS ll)
+      _helios_modular_linked_targets("${item}" linked)
+      foreach(t IN LISTS linked)
+        get_target_property(type ${t} TYPE)
+        get_target_property(m ${t} HELIOS_MODULE_NAME)
+        if(type STREQUAL "OBJECT_LIBRARY" AND NOT m)
+          list(APPEND result ${t})
+        endif()
+      endforeach()
+    endforeach()
+  endif()
+  list(REMOVE_DUPLICATES result)
+  set(${out} "${result}" PARENT_SCOPE)
+endfunction()
+
 # Links into a self-contained image the object libraries of every module it reaches (helios_finalize_build
 # runs after every target exists, so the closure is complete).
 function(_helios_modular_link_self_contained target)
@@ -273,18 +315,18 @@ function(_helios_modular_link_self_contained target)
       endif()
     endforeach()
   endwhile()
-  # The objects themselves, with their third-party libraries ($<LINK_ONLY:...> usage of each OBJECT library).
-  if(modules)
-    target_link_libraries(${target} PRIVATE ${modules})
+  # The objects themselves, with their third-party libraries ($<LINK_ONLY:...> usage of each OBJECT library),
+  # and the non-module object libraries those modules link (the CPU gate's probe).
+  set(objects "")
+  foreach(m IN LISTS modules)
+    _helios_modular_object_deps(${m} objs)
+    list(APPEND objects ${objs})
+  endforeach()
+  list(REMOVE_DUPLICATES objects)
+  if(modules OR objects)
+    target_link_libraries(${target} PRIVATE ${modules} ${objects})
   endif()
-  # Windows: its sources define what they declare, so no dllimport of data the image itself carries (the
-  # macros expand to the same visibility attribute either way on ELF).
-  if(WIN32)
-    foreach(group IN LISTS HELIOS_LINK_GROUPS)
-      string(TOUPPER "${group}" G)
-      target_compile_definitions(${target} PRIVATE HELIOS_${G}_BUILDING)
-    endforeach()
-  endif()
+  helios_modular_defines_own_copy(${target})
   # A gated Windows image normally gets the CPU-gate hook from helios_runtime.dll (helios_cpu_gate); this
   # one loads no group, so it links the hook itself, as a shipping image does.
   get_target_property(gateInRuntime ${target} HELIOS_CPU_GATE_IN_RUNTIME)
@@ -341,6 +383,25 @@ extern \"C\" const char* helios_${group}_link_group_modules(void) {
           target_link_libraries(helios_${group} INTERFACE helios_${depGroup})
           set_property(TARGET helios_${group} APPEND PROPERTY HELIOS_PASSED_GROUPS ${depGroup})
         endif()
+      endif()
+    endforeach()
+  endforeach()
+
+  # The non-module object libraries the modules link (the CPU gate's probe) go into the module's group with
+  # it. They keep their own ISA level (the probe's is `gate`, cmake/HeliosIsa.cmake), and their symbols get
+  # default visibility like module code, because gated ELF executables call the probe in the group.
+  foreach(m IN LISTS moduleTargets)
+    get_target_property(group ${m} HELIOS_LINK_GROUP)
+    if(NOT group)
+      continue()
+    endif()
+    _helios_modular_object_deps(${m} objs)
+    get_property(linkedObjs TARGET helios_${group} PROPERTY HELIOS_GROUP_OBJECT_DEPS)
+    foreach(o IN LISTS objs)
+      if(NOT o IN_LIST linkedObjs)
+        target_link_libraries(helios_${group} PRIVATE ${o})
+        set_target_properties(${o} PROPERTIES C_VISIBILITY_PRESET default CXX_VISIBILITY_PRESET default)
+        set_property(TARGET helios_${group} APPEND PROPERTY HELIOS_GROUP_OBJECT_DEPS ${o})
       endif()
     endforeach()
   endforeach()

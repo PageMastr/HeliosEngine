@@ -23,19 +23,26 @@
 #   may not add a flag or a peer the row lacks (like a contradicting LAYER, that fails configure).
 #   PEERS in the call is for a module without a row, which then passes LAYER too.
 #
-# helios_executable(<name> [ROLE <role>] [CPU_GATE|NO_CPU_GATE] SOURCES ... DEPS ...)
+# helios_executable(<name> [ROLE <role>] [ISA avx2|base] [CPU_GATE|NO_CPU_GATE] SOURCES ... DEPS ...)
 #   ROLE is one of client launcher bootstrap bot cell gateway voice editor tool sample bench. When
 #   omitted it is inferred from the directory (apps/client -> client, apps/cellserver -> cell,
 #   apps/tools/* -> tool, apps/samples -> sample, engine/*/bench -> bench, ...); a directory with no
 #   known role and no ROLE is a configure error, so every executable gets a role check. Client and server
 #   roles may not link EDITOR_ONLY modules; cell/gateway/voice/bot may link only HEADLESS modules.
+#   The role also picks the image's ISA level (02 §1.1, cmake/HeliosIsa.cmake): launcher and bootstrap
+#   are `base` (x86-64-v1) and link `.base` copies of their modules; every other role is `avx2`, and so
+#   is everything it links. ISA overrides the role's level for the ISA audit's fixtures only: it is a
+#   configure error outside tools/lint/ (the calling listfile) and under apps/ and engine/, where the real
+#   images live.
 #   Windows executables get the Helios manifest (helios_windows_manifest). The CPU gate (a
-#   pre-initializer that refuses CPUs without AVX2, 02 §1.1 / 08 §2.2) is linked into every AVX2
-#   image role (client cell gateway voice editor bot tool) unless NO_CPU_GATE; CPU_GATE forces it.
-#   (Modular Windows builds carry the gate in helios_runtime.dll instead; see helios_cpu_gate.)
+#   pre-initializer that refuses CPUs without AVX2, 02 §1.1 / 08 §2.2) is linked into every avx2 image of
+#   a gate role (client cell gateway voice editor bot tool) unless NO_CPU_GATE; CPU_GATE forces it into
+#   any avx2 image. A base image never carries it. (Modular Windows builds carry the gate in
+#   helios_runtime.dll instead; see helios_cpu_gate.)
 #
 # helios_test(<name> SOURCES ... DEPS ...)
-#   Declares a doctest executable registered with CTest.
+#   Declares a doctest executable registered with CTest. Tests link runtime modules, so they are avx2
+#   images (02 §1.1), like every target that is not a base image, a base copy or a gate object library.
 #
 # Configure-time checks (run once, deferred to the end of the top-level CMakeLists.txt): a module
 # depends only on lower layers or listed peers; the module graph is acyclic; HELIOS_MODULE_ORDER lists
@@ -59,6 +66,7 @@ set_property(GLOBAL PROPERTY HELIOS_GRAPHICS_THIRD_PARTY
 set_property(GLOBAL PROPERTY HELIOS_ROLES_NO_EDITOR_ONLY client launcher bootstrap bot cell gateway voice)
 set_property(GLOBAL PROPERTY HELIOS_ROLES_HEADLESS_ONLY bot cell gateway voice)
 set_property(GLOBAL PROPERTY HELIOS_ROLES_CPU_GATE client cell gateway voice editor bot tool)
+set_property(GLOBAL PROPERTY HELIOS_ROLES_ISA_BASE launcher bootstrap)
 
 function(helios_apply_warnings target)
   if(MSVC)
@@ -223,7 +231,7 @@ function(_helios_infer_role out)
 endfunction()
 
 function(helios_executable name)
-  cmake_parse_arguments(E "CPU_GATE;NO_CPU_GATE" "ROLE" "SOURCES;DEPS" ${ARGN})
+  cmake_parse_arguments(E "CPU_GATE;NO_CPU_GATE" "ROLE;ISA" "SOURCES;DEPS" ${ARGN})
   set(role "${E_ROLE}")
   if(role STREQUAL "")
     _helios_infer_role(role)
@@ -238,13 +246,38 @@ function(helios_executable name)
   elseif(NOT role IN_LIST knownRoles)
     message(FATAL_ERROR "helios_executable(${name}): unknown ROLE '${role}' (one of: ${knownRoles})")
   endif()
+  get_property(baseRoles GLOBAL PROPERTY HELIOS_ROLES_ISA_BASE)
+  set(level avx2)
+  if(role IN_LIST baseRoles)
+    set(level base)
+  endif()
+  if(DEFINED E_ISA)
+    file(RELATIVE_PATH rel "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
+    # The audit's fixtures live in tools/lint (lint_tests.cmake and the layering fixture project); the
+    # listfile that calls helios_executable() must be there.
+    set(fixtureDir "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tools/lint")
+    cmake_path(IS_PREFIX fixtureDir "${CMAKE_CURRENT_LIST_FILE}" NORMALIZE inFixtures)
+    if(NOT E_ISA MATCHES "^(avx2|base)$")
+      message(FATAL_ERROR "helios_executable(${name}): ISA is avx2 or base, not '${E_ISA}'")
+    elseif(rel MATCHES "^(apps|engine)(/|$)")
+      message(FATAL_ERROR "helios_executable(${name}): ISA is for the ISA audit's fixtures only; the level of an "
+                          "image under '${rel}/' comes from its ROLE (${role}: ${level}; 02 §1.1)")
+    elseif(NOT inFixtures)
+      message(FATAL_ERROR "helios_executable(${name}): ISA is for the ISA audit's fixtures only, which are declared "
+                          "under tools/lint/, not in ${CMAKE_CURRENT_LIST_FILE}; the level of an image comes from "
+                          "its ROLE (${role}: ${level}; 02 §1.1)")
+    endif()
+    set(level ${E_ISA})
+  endif()
   add_executable(${name} ${E_SOURCES})
   target_link_libraries(${name} PRIVATE ${E_DEPS})
-  set_target_properties(${name} PROPERTIES FOLDER apps HELIOS_APP_ROLE "${role}")
+  set_target_properties(${name} PROPERTIES FOLDER apps HELIOS_APP_ROLE "${role}" HELIOS_ISA_LEVEL ${level})
   helios_apply_warnings(${name})
   helios_windows_manifest(${name})
   get_property(gateRoles GLOBAL PROPERTY HELIOS_ROLES_CPU_GATE)
-  if(E_CPU_GATE OR (role IN_LIST gateRoles AND NOT E_NO_CPU_GATE))
+  if(E_CPU_GATE AND NOT level STREQUAL "avx2")
+    message(FATAL_ERROR "helios_executable(${name}): CPU_GATE on a ${level} image (the gate guards avx2 images)")
+  elseif(level STREQUAL "avx2" AND (E_CPU_GATE OR (role IN_LIST gateRoles AND NOT E_NO_CPU_GATE)))
     helios_cpu_gate(${name})
   endif()
   set_property(GLOBAL APPEND PROPERTY HELIOS_APP_TARGETS ${name})

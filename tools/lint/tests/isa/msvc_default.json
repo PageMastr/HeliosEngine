@@ -73,8 +73,8 @@
   },
   {
     "directory": "C:\\b",
-    "command": "C:\\VS\\cl.exe /nologo /TP /W4 /arch:AVX2 /fp:precise /Fothird_party\\CMakeFiles\\helios_core.base.dir\\engine\\core\\src\\log.cpp.obj /c C:\\src\\engine\\core\\src\\log.cpp",
-    "file": "C:\\src\\engine\\core\\src\\log.cpp",
-    "output": "third_party\\CMakeFiles\\helios_core.base.dir\\engine\\core\\src\\log.cpp.obj"
+    "command": "C:\\VS\\cl.exe /nologo /TP /W4 /fp:precise /Fothird_party\\CMakeFiles\\helios_world.dir\\engine\\world\\src\\world.cpp.obj /c C:\\src\\engine\\world\\src\\world.cpp",
+    "file": "C:\\src\\engine\\world\\src\\world.cpp",
+    "output": "third_party\\CMakeFiles\\helios_world.dir\\engine\\world\\src\\world.cpp.obj"
   }
 ]

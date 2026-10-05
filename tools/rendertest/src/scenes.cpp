@@ -198,21 +198,25 @@ public:
         }
         const rhi::PipelineH pso = m_pso;
         const std::array<rhi::BindlessIndex, 4> samplers = m_samplers;
+        const std::array<u32, 2> target{m_info.width, m_info.height};
         graph.addPass<Data>(
             "Quads", PassFlags::Raster,
             [&](RgBuilder& b, Data& data) {
                 for (u32 t = 0; t < 4; ++t) data.textures[t] = b.read(imported[t]);
                 b.colorAttachment(output, 0, rhi::LoadOp::Clear, {0.12f, 0.12f, 0.12f, 1.0f});
             },
-            [samplers, pso](const Data& data, RgContext& ctx) {
+            [samplers, pso, target](const Data& data, RgContext& ctx) {
                 struct Push {
                     u32 textures[8];
                     u32 samplers[8];
+                    u32 target[2];  ///< the output's size: quads.slang maps its whole-pixel layout with it
                 } push{};
                 for (u32 q = 0; q < 8; ++q) {
                     push.textures[q] = ctx.srv(data.textures[q % 4]);
                     push.samplers[q] = samplers[(q / 2 + q) % 4];
                 }
+                push.target[0] = target[0];
+                push.target[1] = target[1];
                 ctx.cmd().bindPipeline(pso);
                 ctx.cmd().pushConstants(push);
                 ctx.cmd().draw(6, 8);
@@ -267,7 +271,6 @@ private:
         return texels;
     }
 
-    // 320 x 180 is also hard-wired in quads.slang, which places the quads on whole pixels.
     SceneInfo m_info{"bindless", "Eight quads sampling four bindless textures through four bindless samplers (RC-1)", 320,
                      180, 0.01, 0.5f, 0};
     rhi::PipelineH m_pso;

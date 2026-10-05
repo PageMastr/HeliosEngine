@@ -2,8 +2,9 @@
 // bindless sampler (indices vary per instance -> NonUniformResourceIndex).
 //
 // Driver-independent by construction: every quad is 64 x 64 pixels at an integer pixel origin of the
-// 320 x 180 output, and the fragment shader derives its texture coordinate from the pixel centre
-// (SV_Position, exact) instead of an interpolated attribute. A 16-texel texture spans 32 pixels, so
+// output (whose size comes in the push constants), and the fragment shader derives its texture
+// coordinate from the pixel centre (SV_Position, exact) instead of an interpolated attribute, so the
+// guarantee holds at any output size. A 16-texel texture spans 32 pixels, so
 // every pixel centre samples a quarter of the way into a texel, never on a texel edge. The first
 // layout sampled some nearest-filtered pixels exactly on texel edges, where the texel a driver picks
 // depends on its interpolation and texel-coordinate precision (implementation-defined): NVIDIA's
@@ -14,11 +15,11 @@ import core.bindless;
 struct Push {
     uint textures[8];
     uint samplers[8];
+    uint2 target;  // the output's size in pixels
 };
 [[vk::push_constant]] ConstantBuffer<Push> gPush;
 
-static const float2 kTarget = float2(320.0, 180.0);  // the scene's output size (scenes.cpp)
-static const float kQuad = 64.0;                     // pixels per quad side
+static const float kQuad = 64.0;  // pixels per quad side
 
 /// Top-left pixel of quad `q` in a 4 x 2 grid: integers, so quad edges fall between pixel centres.
 float2 quadOrigin(uint q) {
@@ -37,7 +38,8 @@ VSOut vsMain(uint vertexId : SV_VertexID, uint instance : SV_InstanceID) {
     const float2 pixel = quadOrigin(instance) + corners[vertexId] * kQuad;
     VSOut o;
     // Pixel (0, 0) is the top-left corner; clip space is +Y up (the RHI flips the viewport).
-    o.position = float4(pixel.x / kTarget.x * 2.0 - 1.0, 1.0 - pixel.y / kTarget.y * 2.0, 0.0, 1.0);
+    const float2 target = float2(gPush.target);
+    o.position = float4(pixel.x / target.x * 2.0 - 1.0, 1.0 - pixel.y / target.y * 2.0, 0.0, 1.0);
     o.quad = instance;
     return o;
 }

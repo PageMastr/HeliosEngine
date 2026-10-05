@@ -95,7 +95,7 @@ std::string_view autoBatchApi() {
 }
 
 /// Encrypted HTP packets (netcode + reliable + channels) per core: server and client in one
-/// thread over UDP loopback, 100-byte EVENT_U messages, one per packet.
+/// thread over UDP loopback, 700-byte EVENT_U messages, one per packet (≈ 730-byte datagrams).
 StackResult runStackPps(f64 seconds) {
     StackResult r;
     struct Counter final : IEndpointHandler {

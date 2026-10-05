@@ -59,8 +59,8 @@ Result<assetpipe::ImporterRegistry> contentTypes();
 ProjectFile checkProjectFile(const fs::Path& projectRoot, std::vector<Finding>& findings);
 
 struct ContentStats {
-    usize files = 0;     ///< Content documents seen (sidecars and allowed hidden files not counted).
-    usize withMeta = 0;  ///< Of those, the ones with a valid sidecar.
+    usize files = 0;    ///< Content documents seen (sidecars and allowed hidden files not counted).
+    usize withMeta = 0; ///< Of those, the ones with a valid sidecar.
     usize containers = 0;
     usize entities = 0;
 };

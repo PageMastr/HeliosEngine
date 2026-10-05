@@ -27,12 +27,13 @@ constexpr u64 kProjectVersion = 0;
 /// Project files, containers and entities are small; a larger one is refused before it is parsed.
 constexpr u64 kMaxDocumentBytes = 1 * kMiB;
 /// Build targets that enable gems (02 §1.3), sorted.
-constexpr std::string_view kTargets[] = {"cellserver", "client", "editor", "gateway", "launcher", "tools", "voice"};
+constexpr std::string_view kTargets[] = {"cellserver", "client", "editor", "gateway",
+                                         "launcher", "tools", "voice"};
 /// URI schemes a product may not register (08 §2.10.1), besides `helios-*` and `ms-*`.
 constexpr std::string_view kReservedSchemes[] = {"com.epicgames.launcher", "data", "discord", "file", "ftp",
                                                  "helios", "http", "https", "javascript", "mailto", "steam"};
-/// Frame kinds a zone's root frame or a container's parent frame may have (02 §5.1: galaxy → system → body →
-/// grid → interior; a zone simulates one system at most, since f64 covers a single system).
+/// Frame kinds a zone's root frame or a container's parent frame may have (02 §5.1: galaxy, system, body,
+/// grid, interior; a zone simulates one system at most, since f64 covers a single system).
 constexpr std::string_view kZoneFrameKinds[] = {"system", "body", "grid"};
 constexpr std::string_view kParentFrameKinds[] = {"system", "body", "grid", "interior"};
 
@@ -48,8 +49,9 @@ bool contains(const Range& range, std::string_view s) {
 /// `[a-z][a-z0-9<extra>]*`, `minLen`..`maxLen` characters.
 bool isIdent(std::string_view s, usize minLen, usize maxLen, std::string_view extra) {
     if (s.size() < minLen || s.size() > maxLen || !isLower(s[0])) return false;
-    return std::all_of(s.begin() + 1, s.end(),
-                       [&](char c) { return isLower(c) || isDigit(c) || extra.find(c) != std::string_view::npos; });
+    return std::all_of(s.begin() + 1, s.end(), [&](char c) {
+        return isLower(c) || isDigit(c) || extra.find(c) != std::string_view::npos;
+    });
 }
 
 /// MAJOR.MINOR.PATCH without leading zeros (semver 2.0.0 §2). Pre-release and build tags are not used yet.
@@ -108,7 +110,8 @@ struct Report {
     std::string file;
     std::vector<Finding>* out;
     void operator()(std::string_view where, std::string message) const {
-        out->push_back(Finding{file, where.empty() ? std::move(message) : std::format("{}: {}", where, message)});
+        out->push_back(
+            Finding{file, where.empty() ? std::move(message) : std::format("{}: {}", where, message)});
     }
 };
 
@@ -117,21 +120,23 @@ std::string join(std::string_view where, std::string_view key) {
 }
 
 /// Reports every key of `obj` not in `known`, and every key that appears twice (yyjson keeps both).
-void checkKeys(JsonValue obj, std::string_view where, std::initializer_list<std::string_view> known, const Report& r) {
+void checkKeys(JsonValue obj, std::string_view where, std::initializer_list<std::string_view> known,
+               const Report& r) {
     std::set<std::string_view> seen;
     for (const refl::JsonMember& m : obj.members()) {
         if (!seen.insert(m.key).second) {
             r(join(where, m.key), "duplicate key");
         } else if (!contains(known, m.key)) {
-            r(join(where, m.key), "unknown key (this version of helios-cook does not check it, so it fails closed)");
+            r(join(where, m.key),
+              "unknown key (this version of helios-cook does not check it, so it fails closed)");
         }
     }
 }
 
 /// The member `key` of object `obj` with JSON type `type` (and its JSON path), or an invalid value after
 /// reporting it missing (when `required`) or of the wrong type.
-JsonValue member(JsonValue obj, std::string_view where, std::string_view key, refl::JsonType type, bool required,
-                 const Report& r) {
+JsonValue member(JsonValue obj, std::string_view where, std::string_view key, refl::JsonType type,
+                 bool required, const Report& r) {
     const JsonValue v = obj.get(key);
     if (!v.isValid()) {
         if (required) r(join(where, key), "missing");
@@ -146,7 +151,8 @@ JsonValue member(JsonValue obj, std::string_view where, std::string_view key, re
 
 Result<std::string> readSmallText(const fs::Path& path, u64 size) {
     if (size > kMaxDocumentBytes)
-        return makeError(ErrorCode::LimitExceeded, "{} bytes is above the {}-byte limit", size, kMaxDocumentBytes);
+        return makeError(ErrorCode::LimitExceeded, "{} bytes is above the {}-byte limit", size,
+                         kMaxDocumentBytes);
     return fs::readTextFile(path);
 }
 
@@ -158,7 +164,8 @@ void checkGems(const fs::Path& projectRoot, JsonValue gems, const Report& r) {
     for (const refl::JsonMember& t : gems.members()) {
         const std::string where = join("gems", t.key);
         if (!contains(kTargets, t.key)) {
-            r(where, "not a build target (02 §1.3: cellserver, client, editor, gateway, launcher, tools, voice)");
+            r(where,
+              "not a build target (02 §1.3: cellserver, client, editor, gateway, launcher, tools, voice)");
             continue;
         }
         if (!t.value.isArray()) {
@@ -199,7 +206,8 @@ void checkSchemas(const fs::Path& projectRoot, JsonValue schemas, const Report& 
         opts.extension = ".hschema";
         const auto files = fs::listDirectory(projectRoot / "schemas" / fs::pathFromUtf8(name), opts);
         if (!files || files->empty())
-            r("schemas.native", std::format("package '{}' has no .hschema files in schemas/{}/ (02 §3.8)", name, name));
+            r("schemas.native",
+              std::format("package '{}' has no .hschema files in schemas/{}/ (02 §3.8)", name, name));
     }
 }
 
@@ -247,7 +255,8 @@ std::vector<ZoneDecl> checkZones(JsonValue zones, const Report& r) {
         if (const JsonValue v = member(z, where, "name", refl::JsonType::String, true, r); v.isValid()) {
             d.name = std::string(v.asString());
             if (!isIdent(d.name, 1, 32, "_")) {
-                r(join(where, "name"), "a zone name is 1-32 characters of [a-z0-9_] that start with a letter");
+                r(join(where, "name"),
+                  "a zone name is 1-32 characters of [a-z0-9_] that start with a letter");
                 ok = false;
             } else if (!names.insert(d.name).second) {
                 r(join(where, "name"), std::format("zone '{}' is declared twice", d.name));
@@ -277,7 +286,8 @@ std::vector<ZoneDecl> checkZones(JsonValue zones, const Report& r) {
         if (const JsonValue v = member(z, where, "frame", refl::JsonType::String, true, r); v.isValid()) {
             d.frame = std::string(v.asString());
             if (!isFrameRef(d.frame, kZoneFrameKinds))
-                r(join(where, "frame"), "a zone's root frame is \"system:<name>\", \"body:<name>\" or \"grid:<name>\" (02 §5.1)");
+                r(join(where, "frame"),
+                  "a zone's root frame is \"system:<name>\", \"body:<name>\" or \"grid:<name>\" (02 §5.1)");
         }
         if (ok) out.push_back(std::move(d));
     }
@@ -287,45 +297,56 @@ std::vector<ZoneDecl> checkZones(JsonValue zones, const Report& r) {
 void checkProduct(JsonValue product, const Report& r) {
     constexpr std::string_view kWhere = "product";
     checkKeys(product, kWhere, {"productId", "displayName", "installName", "uriScheme", "version"}, r);
-    if (const JsonValue v = member(product, kWhere, "productId", refl::JsonType::String, true, r); v.isValid()) {
+    if (const JsonValue v = member(product, kWhere, "productId", refl::JsonType::String, true, r);
+        v.isValid()) {
         const std::string_view id = v.asString();
         if (!isIdent(id, 3, 32, "-"))
             r("product.productId", "a product id matches ^[a-z][a-z0-9-]{2,31}$ (08 §2.10.1)");
         else if (id.starts_with("helios"))
-            r("product.productId", "ids that start with 'helios' are the engine's own products (08 §2.10.1)");
+            r("product.productId",
+              "ids that start with 'helios' are the engine's own products (08 §2.10.1)");
     }
-    if (const JsonValue v = member(product, kWhere, "displayName", refl::JsonType::Object, true, r); v.isValid()) {
+    if (const JsonValue v = member(product, kWhere, "displayName", refl::JsonType::Object, true, r);
+        v.isValid()) {
         if (v.size() == 0) r("product.displayName", "needs one entry per shipped language, at least one");
         for (const refl::JsonMember& m : v.members()) {
             const std::string where = join("product.displayName", m.key);
             const bool tag = m.key.size() >= 2 && m.key.size() <= 35 &&
-                             std::all_of(m.key.begin(), m.key.end(), [](char c) { return isAlpha(c) || isDigit(c) || c == '-'; }) &&
+                             std::all_of(m.key.begin(), m.key.end(),
+                                         [](char c) { return isAlpha(c) || isDigit(c) || c == '-'; }) &&
                              isLower(m.key[0]) && isLower(m.key[1]);
             if (!tag) r(where, "not a language tag (BCP 47, e.g. \"en\", \"pt-BR\")");
-            if (!m.value.isString() || m.value.asString().empty()) r(where, "a display name is a non-empty string");
+            if (!m.value.isString() || m.value.asString().empty())
+                r(where, "a display name is a non-empty string");
         }
     }
-    if (const JsonValue v = member(product, kWhere, "installName", refl::JsonType::String, true, r); v.isValid()) {
+    if (const JsonValue v = member(product, kWhere, "installName", refl::JsonType::String, true, r);
+        v.isValid()) {
         const std::string_view name = v.asString();
-        const bool form = name.size() >= 3 && name.size() <= 24 && isAlpha(name[0]) &&
-                          std::all_of(name.begin(), name.end(), [](char c) { return isAlpha(c) || isDigit(c); });
+        const bool form =
+            name.size() >= 3 && name.size() <= 24 && isAlpha(name[0]) &&
+            std::all_of(name.begin(), name.end(), [](char c) { return isAlpha(c) || isDigit(c); });
         std::string lower(name);
         for (char& c : lower) c = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
         if (!form)
             r("product.installName", "an install name matches ^[A-Za-z][A-Za-z0-9]{2,23}$ (08 §2.10.1)");
         else if (lower.starts_with("helios"))
-            r("product.installName", "names that start with 'helios' are the engine's own products (08 §2.10.1)");
+            r("product.installName",
+              "names that start with 'helios' are the engine's own products (08 §2.10.1)");
         else if (fs::isNonPortableComponent(name))
             r("product.installName", "a Windows reserved device name (08 §2.10.1)");
     }
-    if (const JsonValue v = member(product, kWhere, "uriScheme", refl::JsonType::String, true, r); v.isValid()) {
+    if (const JsonValue v = member(product, kWhere, "uriScheme", refl::JsonType::String, true, r);
+        v.isValid()) {
         const std::string_view s = v.asString();
         if (!isIdent(s, 1, 64, "+.-"))
-            r("product.uriScheme", "a URI scheme is lower case and matches RFC 3986's ALPHA *( ALPHA / DIGIT / \"+\" / \"-\" / \".\" )");
+            r("product.uriScheme", "a URI scheme is lower case and matches RFC 3986's ALPHA *( ALPHA / DIGIT "
+                                   "/ \"+\" / \"-\" / \".\" )");
         else if (contains(kReservedSchemes, s) || s.starts_with("helios-") || s.starts_with("ms-"))
             r("product.uriScheme", std::format("'{}' is reserved (08 §2.10.1)", s));
     }
-    if (const JsonValue v = member(product, kWhere, "version", refl::JsonType::String, true, r); v.isValid()) {
+    if (const JsonValue v = member(product, kWhere, "version", refl::JsonType::String, true, r);
+        v.isValid()) {
         if (!isSemver(v.asString())) r("product.version", "expected MAJOR.MINOR.PATCH");
     }
 }
@@ -369,36 +390,43 @@ void checkContainer(const Doc& d, std::string_view zone, const std::map<std::str
     if (const JsonValue v = member(root, "", "$container", refl::JsonType::String, true, r); v.isValid()) {
         const std::string_view text = v.asString();
         if (text.starts_with("guid:")) guid = canonicalGuid(text.substr(5));
-        if (!guid) r("$container", "expected \"guid:<GUID>\" with the GUID in canonical lower case (02 §5.6)");
+        if (!guid)
+            r("$container", "expected \"guid:<GUID>\" with the GUID in canonical lower case (02 §5.6)");
     }
     const std::string_view file = std::string_view(d.rel).substr(d.rel.rfind('/') + 1);
     const std::string_view stem = file.substr(0, file.size() - std::string_view(".hcont").size());
     if (const JsonValue v = member(root, "", "name", refl::JsonType::String, true, r); v.isValid()) {
-        if (v.asString() != stem) r("name", std::format("'{}' differs from the file name's '{}'", v.asString(), stem));
+        if (v.asString() != stem)
+            r("name", std::format("'{}' differs from the file name's '{}'", v.asString(), stem));
     }
     if (const JsonValue frame = member(root, "", "frame", refl::JsonType::Object, true, r); frame.isValid()) {
-        if (const JsonValue v = member(frame, "frame", "parent", refl::JsonType::String, true, r); v.isValid()) {
+        if (const JsonValue v = member(frame, "frame", "parent", refl::JsonType::String, true, r);
+            v.isValid()) {
             if (!isFrameRef(v.asString(), kParentFrameKinds))
-                r("frame.parent", "expected \"<kind>:<name>\" with kind system, body, grid or interior (02 §5.1)");
+                r("frame.parent",
+                  "expected \"<kind>:<name>\" with kind system, body, grid or interior (02 §5.1)");
         }
     }
     if (const JsonValue s = member(root, "", "streaming", refl::JsonType::Object, true, r); s.isValid()) {
         if (const JsonValue v = member(s, "streaming", "group", refl::JsonType::String, true, r);
             v.isValid() && !zone.empty() && v.asString() != std::format("zone.{}", zone)) {
-            r("streaming.group", std::format("'{}' is not its zone's group, 'zone.{}' (02 §5.5-5.6)", v.asString(), zone));
+            r("streaming.group",
+              std::format("'{}' is not its zone's group, 'zone.{}' (02 §5.5-5.6)", v.asString(), zone));
         }
     }
     if (const auto m = metaGuids.find(d.rel); guid && m != metaGuids.end() && m->second != *guid)
-        r("", std::format("its sidecar's GUID {} differs from $container {}: one document, one identity", m->second, *guid));
+        r("", std::format("its sidecar's GUID {} differs from $container {}: one document, one identity",
+                          m->second, *guid));
 }
 
 /// `<dir>/<container>.entities/<GUID>.hent` next to `<dir>/<container>.hcont` (02 §5.6, OFPA).
-void checkEntity(const Doc& d, const std::set<std::string>& docs, const std::map<std::string, Guid>& metaGuids,
-                 const Report& r) {
+void checkEntity(const Doc& d, const std::set<std::string>& docs,
+                 const std::map<std::string, Guid>& metaGuids, const Report& r) {
     const usize slash = d.rel.rfind('/');
     const std::string_view file = std::string_view(d.rel).substr(slash + 1);
     const std::string_view stem = file.substr(0, file.size() - std::string_view(".hent").size());
-    const std::string_view dir = slash == std::string::npos ? std::string_view() : std::string_view(d.rel).substr(0, slash);
+    const std::string_view dir =
+        slash == std::string::npos ? std::string_view() : std::string_view(d.rel).substr(0, slash);
     constexpr std::string_view kEntities = ".entities";
     const usize dirSlash = dir.rfind('/');
     const std::string_view dirName = dirSlash == std::string_view::npos ? dir : dir.substr(dirSlash + 1);
@@ -412,11 +440,14 @@ void checkEntity(const Doc& d, const std::set<std::string>& docs, const std::map
     if (!guid) r("", "an entity's file name is its GUID in canonical lower case, then .hent (02 §5.6)");
     const auto doc = parseDoc(d, r);
     if (!doc) return;
-    if (const JsonValue v = member(doc->root(), "", "$entity", refl::JsonType::String, true, r); v.isValid()) {
-        if (v.asString() != stem) r("$entity", std::format("'{}' differs from the file name's GUID '{}'", v.asString(), stem));
+    if (const JsonValue v = member(doc->root(), "", "$entity", refl::JsonType::String, true, r);
+        v.isValid()) {
+        if (v.asString() != stem)
+            r("$entity", std::format("'{}' differs from the file name's GUID '{}'", v.asString(), stem));
     }
     if (const auto m = metaGuids.find(d.rel); guid && m != metaGuids.end() && m->second != *guid)
-        r("", std::format("its sidecar's GUID {} differs from the entity's {}: one document, one identity", m->second, *guid));
+        r("", std::format("its sidecar's GUID {} differs from the entity's {}: one document, one identity",
+                          m->second, *guid));
 }
 
 } // namespace
@@ -455,13 +486,16 @@ ProjectFile checkProjectFile(const fs::Path& projectRoot, std::vector<Finding>& 
         r("", std::format("expected an object, got {}", root.typeName()));
         return project;
     }
-    checkKeys(root, "", {"$project", "engineVersion", "gems", "channels", "schemas", "contentRoots", "zones", "product"}, r);
+    checkKeys(
+        root, "",
+        {"$project", "engineVersion", "gems", "channels", "schemas", "contentRoots", "zones", "product"}, r);
     if (const JsonValue v = member(root, "", "$project", refl::JsonType::Number, true, r); v.isValid()) {
         u64 version = 0;
         if (!v.getU64(version))
             r("$project", "expected a format version");
         else if (version > kProjectVersion)
-            r("$project", std::format("format version {} is newer than this build's ({})", version, kProjectVersion));
+            r("$project",
+              std::format("format version {} is newer than this build's ({})", version, kProjectVersion));
     }
     if (const JsonValue v = member(root, "", "engineVersion", refl::JsonType::String, true, r); v.isValid()) {
         if (!isSemver(v.asString())) r("engineVersion", "expected MAJOR.MINOR.PATCH (09 §2.7.2)");
@@ -520,10 +554,13 @@ ContentStats checkContent(const fs::Path& projectRoot, const ProjectFile& projec
                 if (parts[i].empty() || parts[i][0] != '.') continue;
                 skip = true;
                 if (i + 1 == parts.size() && parts[i] == ".gitattributes") break; // git settings, not content
-                const std::string prefix(std::string_view(rel).substr(0, static_cast<usize>(parts[i].data() - rel.data()) + parts[i].size()));
+                const std::string prefix(std::string_view(rel).substr(
+                    0, static_cast<usize>(parts[i].data() - rel.data()) + parts[i].size()));
                 if (hidden.insert(prefix).second) {
-                    report(prefix, "hidden, so the provenance scan skips it while the cook can still read it: content "
-                                   "may not hide (rename or remove it)");
+                    report(
+                        prefix,
+                        "hidden, so the provenance scan skips it while the cook can still read it: content "
+                        "may not hide (rename or remove it)");
                 }
             }
             if (skip) continue;
@@ -531,9 +568,10 @@ ContentStats checkContent(const fs::Path& projectRoot, const ProjectFile& projec
             ++stats.files;
             if (!types.forFile(rel)) {
                 const std::string ext = lowerExtension(rel);
-                report(rel, std::format("not a content document type the cook knows ({}): no importer claims it, so "
-                                        "it can carry no provenance (01 §5.2)",
-                                        ext.empty() ? "no extension" : ext));
+                report(rel, std::format(
+                                "not a content document type the cook knows ({}): no importer claims it, so "
+                                "it can carry no provenance (01 §5.2)",
+                                ext.empty() ? "no extension" : ext));
                 continue;
             }
             docs.push_back(Doc{rel, e.path, e.size});
@@ -571,17 +609,22 @@ ContentStats checkContent(const fs::Path& projectRoot, const ProjectFile& projec
                 } else if (!zones.contains(parts[1])) {
                     if (unknownZones.insert(std::string(parts[1])).second)
                         report(std::format("zones/{}", parts[1]),
-                               "not a zone of helios.project.jsonc: a zone folder holds one declared zone's spatial "
+                               "not a zone of helios.project.jsonc: a zone folder holds one declared zone's "
+                               "spatial "
                                "documents (07 §1.8.2)");
                 } else {
                     zone = parts[1];
                 }
                 if (!spatial && parts.size() >= 3)
-                    report(d.rel, std::format("a {} document in a zone folder: only spatial documents (.hcont, .hent) "
-                                              "live under zones/<zone>/ (07 §1.8.2 collab.scope)", ext));
+                    report(
+                        d.rel,
+                        std::format("a {} document in a zone folder: only spatial documents (.hcont, .hent) "
+                                    "live under zones/<zone>/ (07 §1.8.2 collab.scope)",
+                                    ext));
             } else if (spatial) {
-                report(d.rel, "a spatial document outside zones/<zone>/: containers and their entities live in "
-                              "their zone's folder (07 §1.8.2 collab.scope)");
+                report(d.rel,
+                       "a spatial document outside zones/<zone>/: containers and their entities live in "
+                       "their zone's folder (07 §1.8.2 collab.scope)");
             }
             if (ext == ".hrec" && parts[0] != "records")
                 report(d.rel, "a record outside records/<table>/, which the records cook never reads");

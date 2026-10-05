@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <format>
 #include <string>
+#include <tuple>
 
 #include "helios/core/cmdline.h"
 #include "helios/core/fs.h"
@@ -86,17 +87,18 @@ int cmdRecords(const CommandLine& cl) {
 }
 
 int cmdCheck(const CommandLine& cl) {
-    const fs::Path root = cl.value("project-root") ? fs::pathFromUtf8(*cl.value("project-root")) : std::filesystem::current_path();
+    const auto rootArg = cl.value("project-root");
+    const fs::Path root = rootArg ? fs::pathFromUtf8(*rootArg) : std::filesystem::current_path();
     auto types = cook::contentTypes();
     if (!types) return fail(kFailed, std::format("content types: {}", types.error()));
     std::vector<cook::Finding> findings;
     const cook::ProjectFile project = cook::checkProjectFile(root, findings);
     const cook::ContentStats st = cook::checkContent(root, project, *types, findings);
-    std::sort(findings.begin(), findings.end(), [](const cook::Finding& a, const cook::Finding& b) {
-        return a.path != b.path ? a.path < b.path : a.message < b.message;
-    });
+    const auto key = [](const cook::Finding& f) { return std::tie(f.path, f.message); };
+    std::sort(findings.begin(), findings.end(),
+              [&](const auto& a, const auto& b) { return key(a) < key(b); });
     findings.erase(std::unique(findings.begin(), findings.end(),
-                               [](const cook::Finding& a, const cook::Finding& b) { return a.path == b.path && a.message == b.message; }),
+                               [&](const auto& a, const auto& b) { return key(a) == key(b); }),
                    findings.end());
     if (!findings.empty()) {
         std::string text;
@@ -105,12 +107,12 @@ int cmdCheck(const CommandLine& cl) {
         return fail(kCookErrors, std::format("{} finding(s)", findings.size()));
     }
     if (!cl.has("quiet")) {
-        std::fputs(std::format("helios.project.jsonc: {} content root(s), {} zone(s); {} content files, {} with provenance; "
-                               "{} container(s), {} entit{}\n",
-                               project.contentRoots.size(), project.zones.size(), st.files, st.withMeta, st.containers,
-                               st.entities, st.entities == 1 ? "y" : "ies")
-                       .c_str(),
-                   stdout);
+        const std::string text = std::format(
+            "helios.project.jsonc: {} content root(s), {} zone(s); {} content files, {} with provenance; "
+            "{} container(s), {} entit{}\n",
+            project.contentRoots.size(), project.zones.size(), st.files, st.withMeta, st.containers,
+            st.entities, st.entities == 1 ? "y" : "ies");
+        std::fputs(text.c_str(), stdout);
     }
     return kOk;
 }

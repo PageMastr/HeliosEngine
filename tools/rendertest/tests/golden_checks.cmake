@@ -6,9 +6,11 @@
 # none exists for a scene that no longer does.
 # Inputs: -DGOLDEN_DIR=<golden root> -DSCENES=<a,b,...> [-DSELF_TEST=<scratch dir>]
 #   SELF_TEST also checks this script and import_goldens.cmake on synthetic inputs first: a valid
-#   hardware result imports and passes; a changed or unrecorded PNG fails; results that were not
-#   validated, ran on a software adapter, rendered differently twice or have no ꟻLIP scores do not
-#   import.
+#   hardware result imports (also with a multi-line REASON) and passes; a changed or unrecorded PNG, a
+#   set without PROVENANCE.json and one whose PROVENANCE.json names another driver fail; results that
+#   were not validated, ran on a software adapter, rendered differently twice, were filed under the
+#   lavapipe set, have no ꟻLIP scores or failed before their comparison do not import, each for its
+#   own reason.
 
 cmake_minimum_required(VERSION 3.28)  # policies for -P (IN_LIST, string(JSON))
 if(NOT GOLDEN_DIR OR NOT SCENES)
@@ -101,15 +103,22 @@ if(SELF_TEST)
   "renderedTwiceIdentical": true, "validation": true, "differentPixels": 10, "milliseconds": 1
 }
 ]=])
+  # run_import(<pass|fail> <what> [<reason>]): imports the result as triangle; on fail, `import_error`
+  # holds the importer's message.
   function(run_import expect what)
+    set(reason self-test)
+    if(ARGC GREATER 2)
+      set(reason "${ARGV2}")
+    endif()
     execute_process(COMMAND "${CMAKE_COMMAND}" "-DRESULTS=${results}" -DSCENES=triangle "-DGOLDEN_DIR=${golden}"
-                            -DSOURCE=self-test "-DREASON=self-test" -P "${CMAKE_CURRENT_LIST_DIR}/../import_goldens.cmake"
+                            -DSOURCE=self-test "-DREASON=${reason}" -P "${CMAKE_CURRENT_LIST_DIR}/../import_goldens.cmake"
                     RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
     if((expect STREQUAL "pass") AND NOT rc EQUAL 0)
       message(FATAL_ERROR "self-test: importing ${what} failed:\n${out}\n${err}")
     elseif((expect STREQUAL "fail") AND rc EQUAL 0)
       message(FATAL_ERROR "self-test: importing ${what} must fail, got:\n${out}\n${err}")
     endif()
+    set(import_error "${err}" PARENT_SCOPE)
   endfunction()
   function(run_check expect what)
     execute_process(COMMAND "${CMAKE_COMMAND}" "-DGOLDEN_DIR=${golden}" -DSCENES=triangle
@@ -121,18 +130,29 @@ if(SELF_TEST)
       message(FATAL_ERROR "self-test: the check accepted ${what}")
     endif()
   endfunction()
-  foreach(bad "\"validation\": true|\"validation\": false|a result the layer did not validate"
-              "Example GPU|llvmpipe (LLVM 19.1.7, 256 bits)|a result from a software adapter"
-              "\"renderedTwiceIdentical\": true|\"renderedTwiceIdentical\": false|a result whose two renders differ"
-              "\"driverKey\": \"vulkan-example\"|\"driverKey\": \"vulkan-llvmpipe\"|a result filed under the lavapipe set"
-              "\"meanFlip\": 0.02, ||a result without its ꟻLIP scores")
+  # <from>|<to>|<what>|<the importer's reason>: each change alone makes the result unimportable.
+  foreach(bad "\"validation\": true|\"validation\": false|a result the layer did not validate|not validated"
+              "Example GPU|llvmpipe (LLVM 19.1.7, 256 bits)|a result from a software adapter|is not a hardware GPU"
+              "\"renderedTwiceIdentical\": true|\"renderedTwiceIdentical\": false|a result whose two renders differ|renders differed"
+              "\"driverKey\": \"vulkan-example\"|\"driverKey\": \"vulkan-llvmpipe\"|a result filed under the lavapipe set|not a hardware golden set"
+              "\"meanFlip\": 0.02, ||a result without its ꟻLIP scores|has no ꟻLIP scores"
+              "ꟻLIP mean 0.02000 (limit 0.01) max 0.6000 (limit 0.5)|2 Khronos validation error(s)|a result that failed before its comparison|failed before its comparison")
     string(REPLACE "|" ";" parts "${bad}")
     list(GET parts 0 from)
     list(GET parts 1 to)
     list(GET parts 2 what)
+    list(GET parts 3 why)
     string(REPLACE "${from}" "${to}" broken "${result}")
+    if(broken STREQUAL result)
+      message(FATAL_ERROR "self-test: '${from}' is not in the synthetic result")
+    endif()
     file(WRITE "${results}/vulkan/triangle.json" "${broken}")
     run_import(fail "${what}")
+    string(REGEX REPLACE "[ \t\r\n]+" " " flat "${import_error}")  # message() wraps long lines
+    string(FIND "${flat}" "${why}" at)
+    if(at EQUAL -1)
+      message(FATAL_ERROR "self-test: importing ${what} must fail with '${why}', got:\n${import_error}")
+    endif()
     if(EXISTS "${golden}/vulkan-example")
       message(FATAL_ERROR "self-test: refusing to import ${what} still wrote ${golden}/vulkan-example")
     endif()
@@ -142,11 +162,23 @@ if(SELF_TEST)
   run_check(pass "an imported hardware golden")
   file(APPEND "${golden}/vulkan-example/triangle.png" "changed")
   run_check(fail "a hardware golden changed after its import")
-  run_import(pass "the same result again")
+  # A reason over several lines, with a tab, quotes and a backslash, is written as valid JSON (control
+  # characters escaped: CMake's string(JSON) re-escapes what set_text passes through) and reads back as given.
+  set(reason "NVIDIA rounds \"x\" differently:\n\tsee C:\\runs\\1\nend")
+  run_import(pass "the same result again, with a multi-line reason" "${reason}")
+  file(READ "${golden}/vulkan-example/PROVENANCE.json" provenance)
+  string(JSON recorded ERROR_VARIABLE bad GET "${provenance}" scenes triangle reason)
+  string(FIND "${provenance}" [["NVIDIA rounds \"x\" differently:\n\tsee C:\\runs\\1\nend"]] escaped)
+  if(bad OR NOT recorded STREQUAL reason OR escaped EQUAL -1)
+    message(FATAL_ERROR "self-test: the multi-line reason did not survive the import (${bad}):\n${provenance}")
+  endif()
   run_check(pass "a re-imported hardware golden")
   file(WRITE "${golden}/vulkan-example/mips.png" "unrecorded")
   run_check(fail "a hardware golden that PROVENANCE.json does not list")
-  file(REMOVE "${golden}/vulkan-example/mips.png" "${golden}/vulkan-example/PROVENANCE.json")
+  file(REMOVE "${golden}/vulkan-example/mips.png")
+  file(RENAME "${golden}/vulkan-example" "${golden}/vulkan-other")
+  run_check(fail "a hardware golden set whose PROVENANCE.json names another driver")
+  file(REMOVE "${golden}/vulkan-other/PROVENANCE.json")
   run_check(fail "a hardware golden set without PROVENANCE.json")
   message(STATUS "self-test passed")
 endif()

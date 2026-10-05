@@ -10,6 +10,7 @@ nothing but Go. The same code runs against real PostgreSQL, NATS and Valkey via 
 | Identity/Auth (05 §1.1) | `internal/identity`, `pkg/pii` | accounts with `Handle#1234` tags; direct PII and GM free text stored in PostgreSQL only encrypted under a per-account DEK wrapped by the subject KEK: e-mail addresses (found by a keyed blind index), client IPs (on refresh tokens and in a login history, both kept 90 days) and ban reasons; audit rows hold only pseudonymous IDs (05 §1.17, §6.6, below). Per-IP rate-limit buckets in Valkey are still keyed by the raw IP and expire with their window; argon2id (m=64 MiB, t=3, p=1 behind a 2×GOMAXPROCS semaphore that sheds load after 5 s), EdDSA JWTs (10 min) + JWKS, rotating refresh-token families with reuse detection (rotation and revocation serialized per family), one-time launch codes bound to the launcher's family, bans that kick the live session, per-IP/per-account GCRA rate limits, hash-chained append-only audit log |
 | Session & connect tokens (05 §1.3, 04 §2.3–2.4) | `internal/session`, `pkg/connecttoken` | netcode 1.02 connect tokens (XChaCha20-Poly1305, byte-exact with vendored netcode 1.4.8), 1–4 gateway addresses picked by free slots on the newest shard key (old-key gateways drain), random 63-bit session IDs, `sess:<id>` + `session_epoch` in Valkey, reconnect tickets sealed for gateways over NATS and redeemed over HTTPS with an epoch CAS |
 | Orchestrator / world directory (05 §1.4) | `internal/orchestrator` | one leader per shard anchored in PostgreSQL (`orch_leader`, 10 s lease, term-fenced writes, standby takeover), process registry (failure domain `fd{az, rack, host}` and server build stored at registration; 1 Hz heartbeat over NATS reporting the regions held with their generations; 12 s liveness TTL, per-name epochs), time-prefixed ID blocks (`id_alloc`, `AllocateIdBlocks`), v0 zone placement (one cell per zone, one region per zone) under `region_lease` generations allocated in PostgreSQL, `ResolveZone`, KV projection `DIRECTORY`, local process supervision with backoff |
+| Patch manifests (05 §1.19, §7) | `pkg/cdc`, `pkg/manifest` | FastCDC (min 16 / normal 64 / max 256 KiB) with BLAKE2b-256 chunk IDs, and the `.hman` v0 manifest reader, writer and builder, byte-identical with `engine/patch` (shared vectors below; the format is specified in [engine/patch/README.md](../engine/patch/README.md)). The manifest service, signing and `helios-patch publish` are WP-0.16 part 2 |
 | Platform | `internal/platform` | config (defaults < TOML < `HELIOS_*` env < flags), slog, OpenTelemetry hooks, `/healthz` `/readyz`, Prometheus `/metrics`, HTTP(S) servers with graceful shutdown |
 
 ## Run it
@@ -290,7 +291,22 @@ go test -run 'TestConformance/holder_rule' ./internal/orchestrator/   # CONF-03'
   (CONF-03) keeps the control plane unreachable for 60 s (no responders, timeouts, `unavailable` answers) and
   requires the Agent to keep every region, then to drop exactly the region whose generation rose. A shorter
   outage would not be CONF-03 evidence, so `-short` skips it; CI's Go jobs run without `-short`.
-- Fuzzing: `go test -fuzz FuzzParse ./pkg/connecttoken/`.
+- **Patch vectors** (WP-0.16), shared with `engine/patch`'s doctest suite: `fastcdc.json` (the gear table and
+  every chunk of 18 generated inputs, three of them crafted around the mask switch; `go test ./pkg/cdc -run
+  TestUpdateVectors -update` rewrites it) and `hman/` (a build description, `pipeline.hman` that both writers
+  must reproduce byte for byte, a zstd copy written by each language that both must read, `deep-paths.hman`
+  (the deepest paths the limits allow), 57 hostile edits with the error kind both readers return and the check
+  each breaks, and name and path-collision rules; `go test ./pkg/manifest -run TestUpdateGoldens -update`
+  rewrites the Go-written files, and `HELIOS_PATCH_UPDATE_VECTORS=1` makes `patch_tests` rewrite
+  `pipeline.cpp-zstd.hman`).
+- Timing: `TestPerfChunking` (pkg/cdc) and `TestPerfManifest` and `TestPerfDeepPaths` (pkg/manifest) assert four
+  times each budget's time in a normal run and the budgets themselves with `HELIOS_PERF=1`; `TestPerfDeepPaths`
+  also holds the deep-paths read to twice one of paths four directories deep of the same size, and reads the
+  same deep paths with their collision keys in random order against their own budget (engine/patch/README.md
+  "Performance").
+  `BenchmarkParse`, `BenchmarkMarshal` and `BenchmarkParseDeepPaths` measure the manifest paths.
+- Fuzzing: `go test -fuzz FuzzParse ./pkg/connecttoken/`, `go test -fuzz FuzzParse ./pkg/manifest/` and
+  `go test -fuzz FuzzChunker ./pkg/cdc/` (every `go test` runs their seeds).
 
 ## Layout
 
@@ -309,6 +325,8 @@ pkg/authn/                 EdDSA JWT issue/verify, JWKS, bearer middleware
 pkg/ratelimit/             GCRA buckets in Valkey (one Lua script)
 pkg/rpc/                   Connect-style JSON over HTTP, JSON request/reply over NATS, error codes
 pkg/pii/                   DEKs, KEK wrapping, field sealing (XChaCha20-Poly1305) and blind indexes (05 §6.6)
+pkg/cdc/                   FastCDC + BLAKE2b-256 chunk IDs (cdctest/: the shared vectors' input generator)
+pkg/manifest/              .hman v0 manifests: reader, writer, builder (05 §7)
 pkg/idgen/ pkg/keyring/ pkg/clock/ pkg/testkit/
 migrations/<service>/      goose migrations for svc_<service>, embedded (plus Go steps in migrations.go)
 deploy/                    docker-compose.yml, Dockerfile, helios.example.toml
@@ -331,7 +349,9 @@ Written to draft v1 (plan revision 1), reworked to revision 2's lease and ID des
 WP-0.15r (09 §5.10.4 (a)): the `svc_identity` and `svc_orch` schema names, e-mail as `email_ct` and
 `email_bidx`, client IPs as `client_ip_ct` and ban reasons as `ban_reason_ct` under per-account DEKs, audit
 rows without IPs or GM text (row format 2), `region_lease`, `fd` and `serverBuild` in registration, and held
-regions in heartbeats. No delta is open. Revisions 4–6 added none (§5.10.4 (a), (c)).
+regions in heartbeats. No delta is open. Revisions 4–6 added none (§5.10.4 (a), (c)). `pkg/cdc` and
+`pkg/manifest` (WP-0.16 part 1) were written for revision 13; engine/patch/README.md records their conformance
+and deviations.
 
 Deviations, all Phase 0:
 - **05 §3.3 (expand/contract).** No release had shipped, so the schema rename is a single in-place step and

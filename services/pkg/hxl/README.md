@@ -38,9 +38,9 @@ Open items against 06 §1.2's tooling, each with a proposed owner (the Director 
 
 | Rule | Open item | Proposed owner |
 |---|---|---|
-| 2 | The `det` constants are typed hex literals copied from `engine/math/src/det_exp.cpp` by hand and pinned by `TestConstantsMatchCpp`; there is no `helios-tool hxl-gen-consts` | The tools WP that creates `helios-tool` (WP-0.7b or later) |
+| 2 | The `det` constants are typed hex literals copied from `engine/math/src/det_exp.cpp` by hand and pinned by `TestConstantsMatchCpp`; there is no `helios-tool hxl-gen-consts` | A later tools WP (`helios-tool` exists since WP-0.18, #40, without `hxl-gen-consts`) |
 | 5 | `hxlfloat` is a standard-library analyzer that runs as a unit test (`TestHXLPackagesClean`, so every `go test ./...` enforces it) and through `go run`, not a `go/analysis` pass under `go vet -vettool`; there is no pre-commit hook | WP-0.1 (CI and hooks) |
-| 6 | `hxl.CheckGOAMD64` exists, but `helios-backend` does not call it and log the level at start (05 §8) | The backend WP that owns `services/cmd/helios-backend` (WP-0.15r) |
+| 6 | `hxl.CheckGOAMD64` exists, but `helios-backend` does not call it and log the level at start (05 §8) | A later backend WP that owns `services/cmd/helios-backend` (WP-0.15r merged as #8 without it) |
 
 ## GP-1 coverage
 

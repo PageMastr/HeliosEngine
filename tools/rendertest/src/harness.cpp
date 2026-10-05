@@ -144,11 +144,6 @@ std::string htmlEscape(std::string_view s) {
 
 std::string_view backendName(Backend backend) noexcept { return backend == Backend::Vulkan ? "vulkan" : "null"; }
 
-bool isLayerValidationError(const rhi::ValidationMessage& m) noexcept {
-    return m.severity == rhi::ValidationMessage::Severity::Error && m.source == rhi::ValidationMessage::Source::Api &&
-           m.validation && (!m.id.empty() || m.idNumber != 0);
-}
-
 Result<std::unique_ptr<rhi::Device>> createTestDevice(Backend backend, bool validation, bool requireValidation,
                                                       bool validationFromEnvironment) {
     rhi::DeviceDesc desc;
@@ -179,10 +174,10 @@ Result<ValidationSelfTest> runValidationSelfTest() {
     desc.onMessage = [messages](const rhi::ValidationMessage& m) {
         // The layer's own reports, told apart by structure, not by text (the text format changed
         // between layer versions: 1.3.275 starts with "Validation Error: [ VUID ]", the SDK the
-        // first win-gpu run used does not): an error from the debug messenger, of the validation
-        // type, with a message ID. The RHI's own reports have Source::Rhi.
+        // first win-gpu run used does not): ValidationMessage::isLayerError (rhi_tests checks it on
+        // the CPU). The RHI's own reports have Source::Rhi.
         std::lock_guard lock(messages->mutex);
-        if (isLayerValidationError(m)) {
+        if (m.isLayerError()) {
             const std::string id = m.id.empty() ? std::to_string(m.idNumber) : m.id;
             messages->layer.push_back(m.text.find(id) != std::string::npos ? m.text : std::format("[{}] {}", id, m.text));
         } else if (m.severity == rhi::ValidationMessage::Severity::Error && messages->firstOther.empty()) {

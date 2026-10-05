@@ -92,12 +92,20 @@ rhi::TimelinePoint done = device->submit(rhi::Queue::Graphics, {&cmd, 1}).value(
   The layer's reports must also reach the device: without the `VK_EXT_debug_utils` messenger (the
   extension unavailable or masked off with `capsMask`/`HELIOS_RHI_CAPS_MASK`) nothing would count them,
   so validation does not count as active then either.
+  So the cap means "in the call chain and wired to the messenger", not "reports errors": a layer
+  settings file (`vk_layer_settings.txt`, registered under `HK{LM,CU}\SOFTWARE\Khronos\Vulkan\Settings`
+  by Vulkan Configurator, or found through `VK_LAYER_SETTINGS_PATH` or the working directory) or
+  `VK_KHRONOS_VALIDATION_*` variables can mute its reports (`report_flags`, `message_id_filter`,
+  disabled checks) while it stays in the chain and still answers the tool query. Only a seeded error
+  shows that it reports: WP-0.12's `helios-rendertest --validation-self-test` (`rendertest.validation-layer`).
   `Caps::validationLayer` names the layer, its versions and the tool that answered, so tests can log
-  what checked them (WP-0.12's `helios-rendertest --validation-self-test`).
+  what checked them.
 * `ValidationMessage` says where a message came from (`Source::Rhi` for the RHI's own checks,
   `Source::Api` for the debug messenger) and, for the latter, whether it is a validation report and its
   message ID (`id` = `pMessageIdName`, `idNumber`). Tell layer reports apart by these fields, never by
   the text: layer 1.3.275 starts its text with "Validation Error: [ VUID ]", the 2026 SDKs do not.
+  `ValidationMessage::isLayerError()` is that test for errors (the loader's own "Loader Message"s
+  excluded).
   `DeviceDesc::validationFromEnvironment = false` makes a device ignore `HELIOS_RHI_VALIDATION` (a probe
   that must run without the layer whatever the environment says).
   RHI misuse that would be undefined behavior in the driver is reported the same way and the

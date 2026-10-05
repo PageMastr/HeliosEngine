@@ -79,11 +79,6 @@ struct ValidationSelfTest {
 };
 Result<ValidationSelfTest> runValidationSelfTest();
 
-/// True for an error the Khronos layer (or another layer) reported through the debug messenger:
-/// Source::Api, the validation message type, and a message ID (name or number). Decided by the
-/// message's fields, never its text, whose format differs between layer versions. Pure.
-bool isLayerValidationError(const rhi::ValidationMessage& message) noexcept;
-
 /// Runs one scene on `device`: init, render twice, compare with the golden (or update it), write
 /// artifacts and `<out>/<backend>/<scene>.json`.
 SceneResult runScene(Scene& scene, rhi::Device& device, const RunOptions& options);

@@ -395,6 +395,7 @@ TEST_CASE("gpu: validation-layer reports are identified by their fields, not the
         CHECK(seen->errors[0].source == ValidationMessage::Source::Rhi);
         CHECK_FALSE(seen->errors[0].validation);
         CHECK(seen->errors[0].id.empty());
+        CHECK_FALSE(seen->errors[0].isLayerError());
         seen->errors.clear();
     }
     REQUIRE(dev->submit(Queue::Graphics, {&ended, 1}).ok());
@@ -421,6 +422,7 @@ TEST_CASE("gpu: validation-layer reports are identified by their fields, not the
     CHECK(m.validation);
     CHECK_MESSAGE(m.id.starts_with("VUID-"), m.id);
     CHECK(m.idNumber != 0);
+    CHECK(m.isLayerError());
 }
 
 TEST_CASE("gpu: required validation fails when the layer's reports cannot reach the RHI") {

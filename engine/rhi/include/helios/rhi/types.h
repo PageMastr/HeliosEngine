@@ -497,6 +497,14 @@ struct ValidationMessage {
     /// Api only: messageIdNumber (the Khronos layer's hash of `id`); 0 when not given.
     i32 idNumber = 0;
     std::string text;
+
+    /// True for an error a validation layer (Khronos validation) reported: Source::Api, the validation
+    /// type and a message ID (name or number), but not the loader's own messages, which reach the
+    /// messenger with the ID "Loader Message". Decided by the fields, never by `text`. Pure; any thread.
+    bool isLayerError() const noexcept {
+        return severity == Severity::Error && source == Source::Api && validation &&
+               (!id.empty() || idNumber != 0) && id != "Loader Message";
+    }
 };
 
 /// Everything known when the GPU was lost (03 §1.5); passed to DeviceDesc::onDeviceLost.

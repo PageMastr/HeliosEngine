@@ -6,8 +6,8 @@
 // passed in this process, in every build configuration: a dropped or misplaced gate hook therefore fails the
 // first smoke test on an AVX2 machine ("CPU gate did not run") instead of shipping unnoticed.
 //
-// Threading: platformInit() runs once, on the main thread, before any other engine call. checkCpuGateVerdict()
-// is pure and callable from any thread.
+// Threading: platformInit() runs once, on the main thread, before any other engine call.
+// checkCpuGateVerdict() is pure and callable from any thread.
 
 #include "helios/core/cpu.h"
 #include "helios/core/result.h"

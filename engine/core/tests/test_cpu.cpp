@@ -1,13 +1,15 @@
 #include <doctest/doctest.h>
 
 #include <string>
+#include <vector>
 
 #include "helios/core/cpu.h"
 #include "helios/core/fs.h"
+#include "helios/core/platform_init.h"
 #include "helios/core/process.h"
 
-#ifndef HELIOS_CPUGATE_CHILD_PATH
-#error "HELIOS_CPUGATE_CHILD_PATH must be defined by the build"
+#if !defined(HELIOS_CPUGATE_CHILD_PATH) || !defined(HELIOS_CPUGATE_CHILD_NOHOOK_PATH)
+#error "HELIOS_CPUGATE_CHILD_PATH and HELIOS_CPUGATE_CHILD_NOHOOK_PATH must be defined by the build"
 #endif
 
 using namespace helios;
@@ -247,6 +249,87 @@ TEST_CASE("cpu gate: the pre-initializer runs before C++ static initialization")
         CHECK(ran->exitCode == kCpuGateExitCode);
     }
 }
+
+TEST_CASE("cpu gate: platformInit's verdict check") {
+    CHECK(core::checkCpuGateVerdict(CpuGateVerdict::Pass).ok());
+    const Result<void> notRun = core::checkCpuGateVerdict(CpuGateVerdict::NotRun);
+    REQUIRE(!notRun.ok());
+    CHECK(notRun.error().code == ErrorCode::InvalidState);
+    CHECK(notRun.error().message.starts_with("CPU gate did not run"));
+    const Result<void> failed = core::checkCpuGateVerdict(CpuGateVerdict::Fail);
+    REQUIRE(!failed.ok());
+    CHECK(failed.error().message.starts_with("CPU gate did not run"));
+}
+
+TEST_CASE("cpu gate: the hook records a passing verdict, and platformInit() stops an image without one") {
+    // 02 §1.1 "Proof that it ran". The gated child passed core::platformInit() (it reached main's output
+    // above, and again here); the same source without the hook ("a build with the hook dropped") must stop in
+    // platformInit() with "CPU gate did not run", after C++ static initialization and before main's work.
+    if (!cpuGate().supported) return; // the gate itself refuses first
+    ProcessDesc live;
+    live.executable = fs::pathFromUtf8(HELIOS_CPUGATE_CHILD_PATH);
+    Result<ProcessOutput> ran = runProcess(live);
+    REQUIRE(ran.ok());
+    CHECK(ran->exitCode == 0);
+    CHECK(contains(ran->out, "main reached: CPU supported"));
+    CHECK(!contains(ran->err, "CPU gate did not run"));
+
+    ProcessDesc dropped;
+    dropped.executable = fs::pathFromUtf8(HELIOS_CPUGATE_CHILD_NOHOOK_PATH);
+    Result<ProcessOutput> stopped = runProcess(dropped);
+    REQUIRE(stopped.ok());
+    CHECK(stopped->exitCode == core::kPlatformInitExitCode);
+    CHECK(linesOf(stopped->out) == std::vector<std::string>{"static-init"});
+    CHECK(contains(stopped->err, "Helios: CPU gate did not run"));
+}
+
+#if defined(_WIN32)
+TEST_CASE("cpu gate: Windows: the gate is the first TLS callback, ahead of .CRT$XLB") {
+    // 02 §1.1 "Windows: the first TLS callback". The child's own callback sits in .CRT$XLB, mimalloc's slot:
+    // the gate's verdict must already read pass when the loader calls it. With the gate in the old .CRT$XIB
+    // slot (a C initializer, run from the entry point after every TLS callback) it would read not-run. The
+    // child without a gate shows that the callback runs and reads not-run there.
+    if (!cpuGate().supported) return;
+    ProcessDesc d;
+    d.executable = fs::pathFromUtf8(HELIOS_CPUGATE_CHILD_PATH);
+    d.args = {"--xlb-verdict"};
+    Result<ProcessOutput> r = runProcess(d);
+    REQUIRE(r.ok());
+    CHECK(r->exitCode == 0);
+    CHECK(linesOf(r->out) == std::vector<std::string>{"static-init", "xlb-verdict: pass"});
+
+    d.executable = fs::pathFromUtf8(HELIOS_CPUGATE_CHILD_NOHOOK_PATH);
+    r = runProcess(d);
+    REQUIRE(r.ok());
+    CHECK(linesOf(r->out) == std::vector<std::string>{"static-init", "xlb-verdict: not-run"});
+
+    // The section order in the linked image: the gate's .CRT$XLA0 slot is AddressOfCallBacks[0].
+    d.executable = fs::pathFromUtf8(HELIOS_CPUGATE_CHILD_PATH);
+    d.args = {"--tls-order"};
+    r = runProcess(d);
+    REQUIRE(r.ok());
+    const std::vector<std::string> lines = linesOf(r->out);
+    REQUIRE(lines.size() == 2);
+    if (lines[1] == "tls-order: in-runtime-dll") {
+        MESSAGE("modular build: the gate's TLS slot is in helios_runtime.dll, not in the child");
+    } else {
+        CHECK(lines[1] == "tls-order: first");
+    }
+}
+
+TEST_CASE("cpu gate: Windows: a refused WINDOWS_GUI image exits 78 without a dialog when silent") {
+    // The GUI child carries the Sandy Bridge hook. A dialog would block it until the suite's timeout, so a
+    // prompt exit with 78 and the message on stderr shows that the silent switch skipped it.
+    ProcessDesc d;
+    d.executable = fs::pathFromUtf8(HELIOS_CPUGATE_CHILD_SNB_GUI_PATH);
+    d.environment = {{"HELIOS_CPU_GATE_SILENT", "1"}};
+    Result<ProcessOutput> r = runProcess(d);
+    REQUIRE(r.ok());
+    CHECK(r->exitCode == kCpuGateExitCode);
+    CHECK(r->out.empty());
+    CHECK(contains(r->err, "Helios requires an AVX2 CPU (Intel Haswell / AMD Excavator or newer)."));
+}
+#endif
 
 TEST_CASE("cpu gate: illegal-instruction backstop") {
     if (!cpuGate().supported) return; // the gate itself refuses first

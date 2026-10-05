@@ -21,13 +21,16 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-$exports = @('helios_cpu_gate_run', 'helios_cpu_gate_crt_entry')
+# Mirrors HELIOS_ISA_GATE_EXPORTS and HELIOS_ISA_GATE_ALLOWED_IMPORTS in cmake/isa_allowlist.cmake (02 §1.1).
+$exports = @('helios_cpu_gate_run', 'helios_cpu_gate_verdict', 'helios_cpu_gate_tls_entry')
 $imports = @(
     'helios_cpu_gate_run',
-    '__imp_GetStdHandle', '__imp_WriteFile', '__imp_LoadLibraryExW', '__imp_GetProcAddress',
-    '__imp_ExitProcess', '__imp_AddVectoredExceptionHandler',
-    'GetStdHandle', 'WriteFile', 'LoadLibraryExW', 'GetProcAddress', 'ExitProcess', 'AddVectoredExceptionHandler',
-    '__chkstk')  # no __security_cookie / __security_check_cookie: the gate TUs build with /GS-
+    '__imp_GetStdHandle', '__imp_WriteFile', '__imp_GetModuleHandleW', '__imp_GetEnvironmentVariableW',
+    '__imp_LoadLibraryExW', '__imp_GetProcAddress', '__imp_GetCurrentProcess', '__imp_TerminateProcess',
+    '__imp_AddVectoredExceptionHandler',
+    'GetStdHandle', 'WriteFile', 'GetModuleHandleW', 'GetEnvironmentVariableW', 'LoadLibraryExW', 'GetProcAddress',
+    'GetCurrentProcess', 'TerminateProcess', 'AddVectoredExceptionHandler',
+    '__chkstk')  # no __security_cookie / __security_check_cookie (/GS-), no _RTC_* (no /RTC), no ExitProcess
 $forbidden = '^(v[a-z0-9]+|andn|bextr|blsi|blsmsk|blsr|bzhi|pdep|pext|rorx|sarx|shlx|shrx|mulx|lzcnt|tzcnt|popcnt|movbe|cmpxchg16b|crc32|pshufb|palignr|phadd[wd]|phaddsw|phsub[wd]|phsubsw|pmaddubsw|pmulhrsw|psign[bwd]|pabs[bwd]|ptest|pblendw|pblendvb|blendps|blendpd|blendvps|blendvpd|round[sp][sd]|pminsb|pminsd|pminuw|pminud|pmaxsb|pmaxsd|pmaxuw|pmaxud|pmulld|pmuldq|pinsr[bdq]|pextr[bdq]|pcmpeqq|pcmpgtq|packusdw|pmov[sz]x[a-z]+|dpp[sd]|insertps|extractps|mpsadbw|phminposuw|pcmp[ei]str[im]|movntdqa|hadd[sp][sd]|hsub[sp][sd]|addsub[sp][sd]|movddup|movshdup|movsldup|lddqu|fisttp|k(mov|and|andn|or|xor|xnor|not|ortest|test|shiftl|shiftr|unpck|add)[bwdq]+|aes[a-z0-9]*|pclmul[a-z]*|sha1[a-z0-9]*|sha256[a-z0-9]*|adcx|adox|rdrand|rdseed|prefetchw|xsave[a-z0-9]*|xrstor[a-z0-9]*)$'
 # Prefixes dumpbin prints as separate words ("lock cmpxchg16b ...").
 $prefixes = @('lock', 'rep', 'repe', 'repne', 'repz', 'repnz', 'xacquire', 'xrelease', 'notrack', 'bnd')

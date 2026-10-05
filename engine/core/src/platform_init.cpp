@@ -13,14 +13,13 @@ Result<void> checkCpuGateVerdict(CpuGateVerdict verdict) {
     switch (verdict) {
     case CpuGateVerdict::Pass: return {};
     case CpuGateVerdict::Fail:
-        return Error{ErrorCode::InvalidState,
-                     "CPU gate did not run to completion: its pre-initializer refused this CPU but the process "
-                     "continued (02 §1.1)"};
+        return Error{ErrorCode::InvalidState, "CPU gate did not run to completion: its pre-initializer "
+                                              "refused this CPU but the process continued (02 §1.1)"};
     case CpuGateVerdict::NotRun: break;
     }
     return Error{ErrorCode::InvalidState,
-                 "CPU gate did not run: this executable carries no CPU-gate pre-initializer, or it ran too late "
-                 "(link the image with helios_executable() and a gate role; 02 §1.1)"};
+                 "CPU gate did not run: this executable carries no CPU-gate pre-initializer, or it ran too "
+                 "late (link the image with helios_executable() and a gate role; 02 §1.1)"};
 }
 
 void platformInit() noexcept {

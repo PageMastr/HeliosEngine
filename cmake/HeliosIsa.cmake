@@ -13,7 +13,11 @@
 #         libraries in HELIOS_ISA_BASE_THIRD_PARTY and the libraries those link, and only once a base image
 #         is configured. Configure fails when a base image links anything else (physics, pcg, tp_jolt, ...).
 #   gate  The CPU gate's C objects inside every avx2 image (helios_cpu_gate_target()): the base flags plus
-#         the gate-object rules (no stack protector, no sanitizer instrumentation; 02 §1.1).
+#         the gate-object rules (no stack protector or /GS cookie, no sanitizer instrumentation; 02 §1.1).
+#         Two more rules live outside this file because CMake has no per-target switch for them: MSVC's
+#         /RTC1 (CMake's Debug default) is removed from engine/core's C flags, whose only C units are the
+#         gate's, and MSVC's /fsanitize=address is added to every target but the gate's (top-level
+#         CMakeLists.txt). Audit check 1 rejects a gate unit that still carries either.
 #
 # Both link flavours (ADR-016, cmake/HeliosModular.cmake). In a modular dev build (HELIOS_MODULAR=ON) the
 # link-group libraries helios_runtime, helios_client and helios_editor, the module object libraries inside
@@ -36,13 +40,16 @@
 # helios_cpu_gate_target(<target>)
 #   Marks <target>, an OBJECT library that holds only CPU-gate C units, as the `gate` level.
 #
-# helios_cpu_gate(<target>)
+# _helios_cpu_gate(<target>)  (internal: only helios_executable() calls it, for gated images)
 #   Links the CPU-gate pre-initializer (engine/core/src/platform/*/cpu_gate_hook.c) into an avx2
-#   executable: it runs before any C++ initializer (.preinit_array on ELF; on Windows the hook's section
-#   is WP-0.5r's), prints the "requires an AVX2 CPU" message and exits with code 78 on unsupported CPUs.
+#   executable: it runs before any other code of the image (ELF: the single .preinit_array entry; Windows:
+#   the first TLS callback, .CRT$XLA0), records the verdict that core::platformInit() checks, and on an
+#   unsupported CPU prints the "requires an AVX2 CPU" message and exits with code 78 (02 §1.1).
 #   In a modular Windows build (HELIOS_MODULAR=ON) the hook lives in helios_runtime.dll (02 §1.1 "Which
 #   image"; helios_modular_finalize in cmake/HeliosModular.cmake), and the executable gets a forced import
 #   of the gate probe instead, so the loader always initializes that DLL before any code of the executable.
+#   That also gates every other process that loads helios_runtime.dll (tests, samples, benches, a modular
+#   launcher; ADR-0.6c §3 item 7). On Linux only gated executables carry the hook, so the role decides.
 #
 # helios_isa_finalize()
 #   The configure-time propagation, run once by helios_finalize_build() after every target exists:
@@ -130,9 +137,9 @@ function(helios_cpu_gate_target target)
   set_target_properties(${target} PROPERTIES HELIOS_ISA_LEVEL gate)
 endfunction()
 
-function(helios_cpu_gate target)
+function(_helios_cpu_gate target)
   if(NOT TARGET helios_core_cpugate_hook)
-    message(FATAL_ERROR "helios_cpu_gate(${target}): engine/core must be configured first "
+    message(FATAL_ERROR "helios_executable(${target}): engine/core must be configured before a gated image "
                         "(target helios_core_cpugate_hook is missing)")
   endif()
   if(HELIOS_MODULAR AND MSVC)

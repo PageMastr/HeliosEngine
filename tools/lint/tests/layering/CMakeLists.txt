@@ -153,21 +153,24 @@ elseif(CASE STREQUAL "bridge_cycle")
   target_link_libraries(helios_app PRIVATE helios::ecs)
 endif()
 
-# Executables. CPU gate off: the fixture has no engine/core hook target.
+# Executables. Every avx2 image of a gate role links the CPU gate's hook object library (helios_executable;
+# WP-0.5r: no opt-out); this stands in for engine/core's.
+add_library(helios_core_cpugate_hook OBJECT ${src})
+helios_cpu_gate_target(helios_core_cpugate_hook)
 if(CASE STREQUAL "editor_only_client")
-  helios_executable(fx-client ROLE client NO_CPU_GATE SOURCES ${src} DEPS helios::presentation helios::toolsfw)
+  helios_executable(fx-client ROLE client SOURCES ${src} DEPS helios::presentation helios::toolsfw)
 else()
-  helios_executable(fx-client ROLE client NO_CPU_GATE SOURCES ${src} DEPS helios::presentation)
+  helios_executable(fx-client ROLE client SOURCES ${src} DEPS helios::presentation)
 endif()
 if(CASE STREQUAL "editor_only_server")
-  helios_executable(fx-cell ROLE cell NO_CPU_GATE SOURCES ${src} DEPS helios::world helios::assetpipe)
+  helios_executable(fx-cell ROLE cell SOURCES ${src} DEPS helios::world helios::assetpipe)
 elseif(CASE STREQUAL "server_graphics")
-  helios_executable(fx-cell ROLE cell NO_CPU_GATE SOURCES ${src} DEPS helios::world helios::presentation)
+  helios_executable(fx-cell ROLE cell SOURCES ${src} DEPS helios::world helios::presentation)
 else()
-  helios_executable(fx-cell ROLE cell NO_CPU_GATE SOURCES ${src} DEPS helios::world)
+  helios_executable(fx-cell ROLE cell SOURCES ${src} DEPS helios::world)
 endif()
 if(CASE STREQUAL "editor_only_gateway")
-  helios_executable(fx-gateway ROLE gateway NO_CPU_GATE SOURCES ${src} DEPS helios::net helios::assetpipe)
+  helios_executable(fx-gateway ROLE gateway SOURCES ${src} DEPS helios::net helios::assetpipe)
 endif()
 if(CASE STREQUAL "plain_executable")
   add_subdirectory(apps/rogue) # add_executable() under apps/, outside every role check
@@ -175,7 +178,7 @@ elseif(CASE STREQUAL "unknown_role")
   add_subdirectory(apps/zonehost) # helios_executable() without ROLE where no role can be inferred
 endif()
 # Tools may link editor-only modules.
-helios_executable(fx-cook ROLE tool NO_CPU_GATE SOURCES ${src} DEPS helios::assetpipe)
+helios_executable(fx-cook ROLE tool SOURCES ${src} DEPS helios::assetpipe)
 if(CASE STREQUAL "direct_objects")
   # Modular builds (HELIOS_MODULAR=ON): the module's object library instead of helios::core would put a
   # second copy of core's code and state into the tool, beside helios_runtime's.
@@ -219,6 +222,9 @@ elseif(CASE STREQUAL "isa_override_elsewhere")
   include(${CMAKE_CURRENT_BINARY_DIR}/isa_elsewhere.cmake)
 elseif(CASE STREQUAL "isa_invalid_value")
   helios_executable(fx-isa-fixture ROLE tool ISA sse4 SOURCES ${src} DEPS helios::core)
+elseif(CASE STREQUAL "isa_no_cpu_gate_on_avx2")
+  # WP-0.5r: an avx2 image of a gate role cannot opt out of the CPU gate (02 §1.1).
+  helios_executable(fx-bot ROLE bot NO_CPU_GATE SOURCES ${src} DEPS helios::world)
 elseif(CASE STREQUAL "isa_cpu_gate_on_base")
   # The gate guards avx2 images; a launcher must start on any x86-64 CPU.
   helios_executable(fx-launcher ROLE launcher CPU_GATE SOURCES ${src} DEPS helios::core)

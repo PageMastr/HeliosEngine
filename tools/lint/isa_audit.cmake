@@ -27,7 +27,9 @@
 #       (x86-64) and -mtune=generic, because their default -march is the toolchain's (x86-64-v2 on
 #       RHEL 9, for one); x64 MSVC and clang-cl have no base flags;
 #     - gate units also end with the stack protector off (-fno-stack-protector, or /GS- with cl and
-#       clang-cl) and no sanitizer still enabled (-fno-sanitize=all after any -fsanitize=);
+#       clang-cl), no sanitizer still enabled (-fno-sanitize=all after any -fsanitize=), no MSVC run-time
+#       checks (/RTC*) and no coverage instrumentation (--coverage, -fprofile-arcs,
+#       -fprofile-instr-generate, -fcoverage-mapping, -fsanitize-coverage=, unless negated later);
 #     - the CPU gate's sources are compiled only in gate-level targets;
 #     - no unit uses -march=native, fast-math or FP contraction (determinism across compilers, 02 §7.1).
 #  2. The gate objects (GNU binutils): no VEX/EVEX, BMI, LZCNT/TZCNT, POPCNT, MOVBE, CMPXCHG16B or SSE3+
@@ -116,6 +118,8 @@ function(_isa_eval_flags tokens family out)
   set(contractOff OFF)
   set(stackOff OFF)
   set(sanitize "")
+  set(rtc "")
+  set(coverage "")
   set(aboveV1 "")
   set(named "")
   foreach(t IN LISTS tokens)
@@ -154,6 +158,14 @@ function(_isa_eval_flags tokens family out)
       list(APPEND sanitize "${t}")
     elseif(t MATCHES "^-fno-sanitize=all$")
       set(sanitize "")
+    elseif(t MATCHES "^[-/]RTC[1csu]+$")
+      # MSVC's run-time checks (CMake's Debug default /RTC1): there is no option that turns them off again.
+      list(APPEND rtc "${t}")
+    elseif(t MATCHES "^(--coverage|-fprofile-arcs|-fprofile-instr-generate(=.*)?|-fprofile-generate(=.*)?|-fcoverage-mapping|-fsanitize-coverage=.+|[-/]fsanitize-coverage=.+)$")
+      list(APPEND coverage "${t}")
+    elseif(t MATCHES "^-fno-(profile-arcs|profile-instr-generate|profile-generate|coverage-mapping)$")
+      # The last word wins; a negation clears what came before it (GCC and Clang).
+      set(coverage "")
     elseif(t MATCHES "^[-/]arch:(.+)$")
       set(msvcArch "${CMAKE_MATCH_1}")
     elseif(t MATCHES "^-m(no-)?(avx512[a-z0-9]*|avx10[.0-9a-z-]*)$")
@@ -233,6 +245,8 @@ function(_isa_eval_flags tokens family out)
   set(${out}_contractoff ${contractOff} PARENT_SCOPE)
   set(${out}_stackoff ${stackOff} PARENT_SCOPE)
   set(${out}_sanitize "${sanitize}" PARENT_SCOPE)
+  set(${out}_rtc "${rtc}" PARENT_SCOPE)
+  set(${out}_coverage "${coverage}" PARENT_SCOPE)
   set(${out}_abovev1 "${aboveV1}" PARENT_SCOPE)
   set(${out}_named "${named}" PARENT_SCOPE)
 endfunction()
@@ -814,6 +828,14 @@ macro(_isa_flush_entry)
       if(level STREQUAL "gate" AND f_sanitize)
         string(REPLACE ";" " " text "${f_sanitize}")
         _violation("${unit}: CPU-gate unit built with sanitizer instrumentation (${text}), whose runtime does not exist yet when the gate runs (02 §1.1)")
+      endif()
+      if(level STREQUAL "gate" AND f_rtc)
+        string(REPLACE ";" " " text "${f_rtc}")
+        _violation("${unit}: CPU-gate unit built with MSVC run-time checks (${text}), which call the CRT before it exists (02 §1.1)")
+      endif()
+      if(level STREQUAL "gate" AND f_coverage)
+        string(REPLACE ";" " " text "${f_coverage}")
+        _violation("${unit}: CPU-gate unit built with coverage instrumentation (${text}), whose runtime does not exist yet when the gate runs (02 §1.1)")
       endif()
       if(level STREQUAL "gate" AND NOT SKIP_OBJECTS)
         set(obj "${outN}")

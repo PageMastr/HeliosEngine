@@ -147,7 +147,9 @@ if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
       "gate_default|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: baseline unit .CPU gate. built without its level set .missing: -march=x86-64, -mtune=generic."
       "gate_protector|ISA audit failed .1 violation.*cpu_gate_hook.c .helios_core_cpugate_hook.: baseline unit .CPU gate. built without its level set .missing: -fno-stack-protector."
       "msvc_gate_gs|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: baseline unit .CPU gate. built without its level set .missing: /GS-."
-      "gate_sanitize|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: CPU-gate unit built with sanitizer instrumentation .-fsanitize=address.")
+      "gate_sanitize|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: CPU-gate unit built with sanitizer instrumentation .-fsanitize=address."
+      "gate_rtc|ISA audit failed .1 violation.*cpu_gate_hook.c .helios_core_cpugate_hook.: CPU-gate unit built with MSVC run-time checks ./RTC1."
+      "gate_coverage|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: CPU-gate unit built with coverage instrumentation .--coverage.")
     string(REPLACE "|" ";" parts "${case}")
     list(GET parts 0 fixture)
     list(GET parts 1 expect)
@@ -738,8 +740,8 @@ helios_lint_test(lint_run_lints_status_python
 # image levels of cmake/HeliosIsa.cmake: base copies (a generated source included), and the configure
 # errors for a base image that links an avx2 library (tp_jolt, physics, tp_jolt through core) or compiles
 # in an avx2 object library's objects, an ISA override outside the fixtures or with an unknown level,
-# CPU_GATE on a base image, a level set by hand on a library, a gate target that is not an object library,
-# and ISA options on a library's interface.
+# CPU_GATE on a base image, NO_CPU_GATE on an avx2 image (WP-0.5r), a level set by hand on a library, a gate
+# target that is not an object library, and ISA options on a library's interface.
 # ---------------------------------------------------------------------------------------------
 # The fixture declares LANGUAGES NONE and stops right after the checks, so no compiler is probed;
 # the generator is passed through only so CMake does not go looking for a default one.
@@ -791,6 +793,7 @@ foreach(case
     "isa_override_elsewhere|helios_executable.fx-isa-elsewhere.: ISA is for the ISA audit's[ \n]+fixtures[ \n]+only.*isa_elsewhere.cmake"
     "isa_invalid_value|helios_executable.fx-isa-fixture.: ISA is avx2 or base, not 'sse4'"
     "isa_cpu_gate_on_base|helios_executable.fx-launcher.: CPU_GATE on a base image"
+    "isa_no_cpu_gate_on_avx2|helios_executable.fx-bot.: NO_CPU_GATE on an avx2 image"
     "isa_level_on_library|helios isa: 'helios_math' has HELIOS_ISA_LEVEL 'base', which only helios_executable.. .avx2, base. and helios_cpu_gate_target.. .gate. set"
     "isa_gate_target_not_object|helios_cpu_gate_target.fx_gate.: the CPU gate's units live in[ \n]+OBJECT[ \n]+libraries"
     "isa_base_root_links_jolt|helios isa: base image 'fx-launcher' links 'tp_jolt', which is built only at avx2: fx-launcher -> helios_core -> tp_jolt"

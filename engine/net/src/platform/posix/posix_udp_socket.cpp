@@ -1,5 +1,7 @@
 // POSIX (Linux, macOS, other Unix) implementation of UdpSocket. Linux batches with
-// sendmmsg/recvmmsg; other systems loop sendto/recvmsg.
+// sendmmsg/recvmmsg (UdpBatchApi::MultiMessage); other systems, and Linux sockets opened with
+// UdpBatchApi::Message (the fallback tests force), loop sendto/recvmsg. Registered I/O is Windows-only,
+// so a request for it falls back to Message here.
 
 #include "helios/net/udp_socket.h"
 
@@ -15,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <utility>
 
 #include "platform/net_os.h"
@@ -64,6 +67,16 @@ Address fromSockaddr(const sockaddr_storage& ss) noexcept {
 
 bool isWouldBlock(int e) noexcept { return e == EAGAIN || e == EWOULDBLOCK || e == ENOBUFS; }
 
+/// The batch API a request gets on this platform: Auto and MultiMessage use sendmmsg/recvmmsg where
+/// Linux provides them; everything else (Registered, MultiMessage elsewhere) falls back to Message.
+UdpBatchApi resolveBatchApi(UdpBatchApi requested) noexcept {
+#if defined(__linux__)
+    if (requested == UdpBatchApi::Auto || requested == UdpBatchApi::MultiMessage) return UdpBatchApi::MultiMessage;
+#endif
+    (void)requested;
+    return UdpBatchApi::Message;
+}
+
 /// Sets a socket buffer size, retrying with the privileged *BUFFORCE option when the kernel cap
 /// (rmem_max/wmem_max) clamps the request. Returns the size the kernel reports.
 u32 setBufferSize(int fd, int option, int forceOption, u32 requested) noexcept {
@@ -104,6 +117,7 @@ Result<UdpSocket> UdpSocket::open(const UdpSocketConfig& config) {
     }
     UdpSocket sock;
     sock.m_handle = fd;
+    sock.m_batchApi = resolveBatchApi(config.batchApi);
 
     (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
     if (family == AddressFamily::IPv6) {
@@ -155,9 +169,11 @@ Result<UdpSocket> UdpSocket::open(const UdpSocketConfig& config) {
     return sock;
 }
 
+// m_platform stays null on POSIX: there is no per-socket state beyond the descriptor.
 UdpSocket::UdpSocket(UdpSocket&& other) noexcept
     : m_handle(std::exchange(other.m_handle, kInvalidHandle)), m_local(other.m_local),
-      m_sendBuffer(other.m_sendBuffer), m_receiveBuffer(other.m_receiveBuffer), m_stats(other.m_stats) {}
+      m_sendBuffer(other.m_sendBuffer), m_receiveBuffer(other.m_receiveBuffer), m_batchApi(other.m_batchApi),
+      m_stats(other.m_stats) {}
 
 UdpSocket& UdpSocket::operator=(UdpSocket&& other) noexcept {
     if (this != &other) {
@@ -166,6 +182,7 @@ UdpSocket& UdpSocket::operator=(UdpSocket&& other) noexcept {
         m_local = other.m_local;
         m_sendBuffer = other.m_sendBuffer;
         m_receiveBuffer = other.m_receiveBuffer;
+        m_batchApi = other.m_batchApi;
         m_stats = other.m_stats;
     }
     return *this;
@@ -212,6 +229,12 @@ usize UdpSocket::sendBatch(std::span<const OutDatagram> datagrams) noexcept {
     if (!isOpen()) return 0;
     usize sent = 0;
 #if defined(__linux__)
+    if (m_batchApi != UdpBatchApi::MultiMessage) {
+        for (const OutDatagram& d : datagrams) {
+            if (sendTo(d.to, d.data)) ++sent;
+        }
+        return sent;
+    }
     std::array<mmsghdr, kMaxBatch> hdrs;
     std::array<iovec, kMaxBatch> iovs;
     std::array<sockaddr_storage, kMaxBatch> addrs;
@@ -301,6 +324,7 @@ usize UdpSocket::receiveFrom(Address& from, std::span<u8> buffer) noexcept {
 usize UdpSocket::receiveBatch(std::span<InDatagram> slots) noexcept {
     if (!isOpen() || slots.empty()) return 0;
 #if defined(__linux__)
+    if (m_batchApi != UdpBatchApi::MultiMessage) return receiveEach(slots);
     usize filled = 0;
     std::array<mmsghdr, kMaxBatch> hdrs;
     std::array<iovec, kMaxBatch> iovs;
@@ -349,6 +373,11 @@ usize UdpSocket::receiveBatch(std::span<InDatagram> slots) noexcept {
     }
     return filled;
 #else
+    return receiveEach(slots);
+#endif
+}
+
+usize UdpSocket::receiveEach(std::span<InDatagram> slots) noexcept {
     usize filled = 0;
     while (filled < slots.size()) {
         InDatagram& s = slots[filled];
@@ -358,7 +387,6 @@ usize UdpSocket::receiveBatch(std::span<InDatagram> slots) noexcept {
         ++filled;
     }
     return filled;
-#endif
 }
 
 namespace os {
@@ -366,6 +394,38 @@ f64 threadCpuSeconds() noexcept {
     timespec ts{};
     if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0) return 0.0;
     return static_cast<f64>(ts.tv_sec) + static_cast<f64>(ts.tv_nsec) * 1e-9;
+}
+
+MachineCpuTimes machineCpuTimes() noexcept {
+    MachineCpuTimes t;
+#if defined(__linux__)
+    // The first line of /proc/stat: "cpu  user nice system idle iowait irq softirq steal guest guest_nice",
+    // in USER_HZ ticks summed over every CPU (guest time is already inside user and nice).
+    const int fd = ::open("/proc/stat", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return t;
+    char text[512];
+    const ssize_t n = ::read(fd, text, sizeof(text) - 1);
+    ::close(fd);
+    if (n <= 4) return t;
+    text[n] = '\0';
+    if (std::strncmp(text, "cpu ", 4) != 0) return t;
+    unsigned long long field[7] = {};
+    char* p = text + 4;
+    for (unsigned long long& f : field) {
+        char* end = nullptr;
+        f = std::strtoull(p, &end, 10);
+        if (end == p) return t;
+        p = end;
+    }
+    const long hz = ::sysconf(_SC_CLK_TCK);
+    const long cpus = ::sysconf(_SC_NPROCESSORS_ONLN);
+    if (hz <= 0 || cpus <= 0) return t;
+    const unsigned long long busy = field[0] + field[1] + field[2] + field[5] + field[6];
+    t.busySeconds = static_cast<f64>(busy) / static_cast<f64>(hz);
+    t.cpus = static_cast<u32>(cpus);
+    t.ok = true;
+#endif
+    return t;
 }
 } // namespace os
 

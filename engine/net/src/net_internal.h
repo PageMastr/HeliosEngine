@@ -40,6 +40,22 @@ private:
     bool m_ok;
 };
 
+/// Test hooks for UdpSocket's choice of batch API (Windows Registered I/O; no effect elsewhere). While
+/// forceRegisteredIoUnavailable(true) is in force, open() treats RIO as absent, as on a provider without it;
+/// while forceRegisteredIoSetUpFailure(true) is, setting up a RIO socket fails after its registered region
+/// and completion queues exist, as when RIORegisterBuffer or the queues are refused, so open() releases them
+/// and re-opens a plain socket on the same address. Thread-safe (atomics); tests set a hook around open()
+/// and clear it after.
+void forceRegisteredIoUnavailable(bool force) noexcept;
+void forceRegisteredIoSetUpFailure(bool force) noexcept;
+bool registeredIoUnavailableForced() noexcept;
+bool registeredIoSetUpFailureForced() noexcept;
+/// True for the first fallback from Registered I/O in the process, which is logged as a warning (a server on
+/// the slower path matters for NS-0.2 and NS-0.7); later ones are logged at debug level. Thread-safe.
+/// resetRegisteredIoFallbackWarning() is a test hook that makes the next fallback the first again.
+bool firstRegisteredIoFallback() noexcept;
+void resetRegisteredIoFallbackWarning() noexcept;
+
 /// Signed distance a - b on the 16-bit sequence circle.
 constexpr i32 seqDiff(u16 a, u16 b) noexcept { return static_cast<i16>(static_cast<u16>(a - b)); }
 constexpr bool seqGreater(u16 a, u16 b) noexcept { return seqDiff(a, b) > 0; }

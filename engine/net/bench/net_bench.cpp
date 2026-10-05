@@ -17,8 +17,15 @@
 //                                   docs/evidence/ns-0.2-owner-approval-2026-09-30.md); hosted Windows, a
 //                                   local or a lab run gates everything. Exit code 2 for an unknown
 //                                   --advisory name.
+//
+// The socket and stack runs also print a "cross-check" line: the whole machine's CPU per datagram or packet
+// beside the measuring thread's, with the background load measured on either side of the run subtracted, and
+// a warning when more than 25 % of the work ran outside the thread on an otherwise idle host
+// (bench::machineCrossCheck). It reports what a per-thread figure cannot see; no gate reads it.
 
+#include <algorithm>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "helios/core/log.h"
@@ -33,11 +40,34 @@ using namespace helios::net;
 
 namespace {
 
+/// The machine's busy CPU around one measured run (bench::machineCrossCheck): sampled when the run starts and
+/// ends, with the background load measured while the bench sleeps just before and just after it.
+struct MachineWindow {
+    os::MachineCpuTimes start;
+    os::MachineCpuTimes end;
+    f64 backgroundBefore = -1.0; ///< busy cores without the run; negative when unavailable
+    f64 backgroundAfter = -1.0;
+};
+
+/// Busy cores of the whole machine over `millis` while this thread sleeps; negative when unavailable.
+f64 backgroundCores(u32 millis) {
+    const os::MachineCpuTimes a = os::machineCpuTimes();
+    const f64 t0 = monotonicSeconds();
+    sleepMillis(millis);
+    const os::MachineCpuTimes b = os::machineCpuTimes();
+    const f64 wall = monotonicSeconds() - t0;
+    if (!a.ok || !b.ok || wall <= 0.0) return -1.0;
+    return std::max(0.0, (b.busySeconds - a.busySeconds) / wall);
+}
+
+constexpr u32 kBackgroundMillis = 500;
+
 struct SocketResult {
     u64 sent = 0;
     u64 received = 0;
     f64 cpuSeconds = 0.0;
     f64 wallSeconds = 0.0;
+    MachineWindow machine;
     f64 ppsPerCore() const { return cpuSeconds > 0 ? static_cast<f64>(received) / cpuSeconds : 0.0; }
 };
 
@@ -55,6 +85,8 @@ SocketResult runSocketPps(u64 total) {
     const auto refill = [&] {
         for (usize i = 0; i < kBatch; ++i) slots[i].buffer = std::span<u8>(arena.data() + i * 2048, 2048);
     };
+    r.machine.backgroundBefore = backgroundCores(kBackgroundMillis);
+    r.machine.start = os::machineCpuTimes();
     const f64 cpu0 = os::threadCpuSeconds();
     const f64 t0 = monotonicSeconds();
     while (r.sent < total) {
@@ -73,6 +105,8 @@ SocketResult runSocketPps(u64 total) {
     }
     r.cpuSeconds = os::threadCpuSeconds() - cpu0;
     r.wallSeconds = monotonicSeconds() - t0;
+    r.machine.end = os::machineCpuTimes();
+    r.machine.backgroundAfter = backgroundCores(kBackgroundMillis);
     return r;
 }
 
@@ -80,13 +114,27 @@ struct StackResult {
     u64 sent = 0;
     u64 packets = 0;
     f64 cpuSeconds = 0.0;
+    f64 wallSeconds = 0.0;
+    MachineWindow machine;
     f64 ppsPerCore() const { return cpuSeconds > 0 ? static_cast<f64>(packets) / cpuSeconds : 0.0; }
+    f64 microsPerPacket() const { return packets > 0 ? cpuSeconds * 1e6 / static_cast<f64>(packets) : 0.0; }
 };
 
+/// The batch API the bench's sockets get (they all ask for Auto, as SocketTransport does by default).
+std::string_view autoBatchApi() {
+    UdpSocketConfig c;
+    c.bindAddress = Address::loopbackV4(0);
+    auto s = UdpSocket::open(c);
+    return s ? udpBatchApiName(s.value().batchApi()) : std::string_view("unavailable");
+}
+
 /// Encrypted HTP packets (netcode + reliable + channels) per core: server and client in one
-/// thread over UDP loopback, 100-byte EVENT_U messages, one per packet.
+/// thread over UDP loopback, 700-byte EVENT_U messages, one per packet (≈ 730-byte datagrams).
 StackResult runStackPps(f64 seconds) {
     StackResult r;
+    // Measured before the endpoints exist: an idle session between the handshake and the run would change
+    // what the run measures.
+    r.machine.backgroundBefore = backgroundCores(kBackgroundMillis);
     struct Counter final : IEndpointHandler {
         u64 messages = 0;
         std::vector<SessionHandle> sessions;
@@ -121,6 +169,8 @@ StackResult runStackPps(f64 seconds) {
     }
     if (se.sessions.empty()) return r;
     const std::vector<u8> msg(700, 1); // one message per packet
+    r.machine.start = os::machineCpuTimes();
+    const f64 wall0 = monotonicSeconds();
     const f64 cpu0 = os::threadCpuSeconds();
     const f64 end = monotonicSeconds() + seconds;
     while (monotonicSeconds() < end) {
@@ -144,8 +194,40 @@ StackResult runStackPps(f64 seconds) {
         server->update(now, se);
     }
     r.cpuSeconds = os::threadCpuSeconds() - cpu0;
+    r.wallSeconds = monotonicSeconds() - wall0;
+    r.machine.end = os::machineCpuTimes();
     r.packets = ce.messages;
+    r.machine.backgroundAfter = backgroundCores(kBackgroundMillis);
     return r;
+}
+
+/// Prints the machine cross-check of one run (bench::machineCrossCheck) after its result line, and warns
+/// when it flags the run. It reports; it never changes a gate's verdict.
+void reportCrossCheck(std::string_view what, std::string_view unit, u64 units, f64 threadCpuSeconds,
+                      f64 wallSeconds, const MachineWindow& m) {
+    if (!m.start.ok || !m.end.ok || m.backgroundBefore < 0.0 || m.backgroundAfter < 0.0 || units == 0) {
+        HELIOS_LOG_INFO("{} cross-check: no machine-wide CPU counter on this OS", what);
+        return;
+    }
+    // The larger of the two background samples is subtracted, so a load that changed during the run is not
+    // mistaken for the run's own work.
+    const bench::MachineCrossCheck c =
+        bench::machineCrossCheck(threadCpuSeconds, m.end.busySeconds - m.start.busySeconds, wallSeconds,
+                                 std::max(m.backgroundBefore, m.backgroundAfter), m.end.cpus);
+    const f64 perUnit = 1e6 / static_cast<f64>(units);
+    const std::string_view idle =
+        c.valid ? "" : "; not meaningful: the host is not idle (background above a quarter of the CPUs)";
+    HELIOS_LOG_INFO("{} cross-check: the machine spent {:.2f} us of CPU per {} against the thread's {:.2f} us "
+                    "({:+.1f} % outside the thread; all {} CPUs, background {:.2f} cores before and {:.2f} "
+                    "after subtracted){}",
+                    what, c.machineCpuSeconds * perUnit, unit, threadCpuSeconds * perUnit, c.offThreadPercent,
+                    m.end.cpus, m.backgroundBefore, m.backgroundAfter, idle);
+    if (c.flagged) {
+        HELIOS_LOG_WARN("{} cross-check: {:.0f} % more CPU per {} ran outside the measuring thread than in it "
+                        "(limit {:.0f} %), so its per-core rate overstates what one core does; the gate still "
+                        "uses the thread's figure",
+                        what, c.offThreadPercent, unit, bench::kOffThreadLimitPercent);
+    }
 }
 
 void report(const bench::TrunkGateResult& r, f64 seconds) {
@@ -195,8 +277,10 @@ int main(int argc, char** argv) {
     if (all || gate || has("--socket")) {
         const u64 count = static_cast<u64>(number("--socket", 0, 1'000'000));
         const SocketResult s = runSocketPps(count);
-        HELIOS_LOG_INFO("NS-0.2 socket: {}/{} datagrams, {:.0f} pps per core ({:.1f} ms CPU, {:.1f} ms wall)", s.received,
-                        s.sent, s.ppsPerCore(), s.cpuSeconds * 1e3, s.wallSeconds * 1e3);
+        HELIOS_LOG_INFO("NS-0.2 socket: {}/{} datagrams, {:.0f} pps per core ({:.1f} ms CPU, {:.1f} ms wall, batch API "
+                        "{})",
+                        s.received, s.sent, s.ppsPerCore(), s.cpuSeconds * 1e3, s.wallSeconds * 1e3, autoBatchApi());
+        reportCrossCheck("NS-0.2 socket", "datagram", s.received, s.cpuSeconds, s.wallSeconds, s.machine);
         if (gate && (s.received != s.sent || s.ppsPerCore() < bench::kNs02PerCore)) {
             HELIOS_LOG_ERROR("NS-0.2 FAILED: needs 100k pps per core without loss");
             ok = false;
@@ -204,9 +288,15 @@ int main(int argc, char** argv) {
     }
     if (all || gate || has("--stack")) {
         const StackResult s = runStackPps(number("--stack", 0, gate ? 10.0 : 2.0));
+        // CPU well below wall means the thread was preempted. Wall time cannot show work the OS does for the
+        // thread elsewhere (the loop never sleeps or blocks, so the thread accrues CPU at the wall rate either
+        // way); the machine-wide cross-check that follows does.
         HELIOS_LOG_INFO("NS-0.2 HTP stack: {}/{} encrypted packets delivered, {:.0f} packets per core (send + receive, "
-                        "1 thread)",
-                        s.packets, s.sent, s.ppsPerCore());
+                        "1 thread): {:.2f} us of CPU per packet against a budget of {:.0f} ({:.2f} s CPU, {:.2f} s wall, "
+                        "batch API {})",
+                        s.packets, s.sent, s.ppsPerCore(), s.microsPerPacket(), bench::kNs02BudgetMicrosPerPacket,
+                        s.cpuSeconds, s.wallSeconds, autoBatchApi());
+        reportCrossCheck("NS-0.2 HTP stack", "packet", s.packets, s.cpuSeconds, s.wallSeconds, s.machine);
         const bench::Ns02Verdict verdict =
             bench::ns02StackVerdict(s.sent, s.packets, s.ppsPerCore(), stackAdvisory);
         if (gate && verdict == bench::Ns02Verdict::Fail) {

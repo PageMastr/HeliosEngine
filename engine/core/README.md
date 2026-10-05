@@ -20,8 +20,8 @@ and `src/platform/posix/` behind the internal interface `src/platform/os.h`.
 | `time.h` | Monotonic clock, `Stopwatch`, sleeps, `DilatableClock` (fixed-step game clock with time dilation) |
 | `thread.h` | `Thread` (named, pinnable), `SpinLock`, `Semaphore`, `ManualResetEvent`, lock aliases |
 | `jobs.h` | `JobSystem` (work stealing, priorities, helping waits), `Counter`, `parallelFor`, `TaskGraph`, `BackgroundPool` |
-| `fs.h` | Whole-file I/O (atomic replace), `File`, `MappedFile`, directory listing, `FileWatcher` |
-| `vfs.h` | `Vfs` mount table (`/content`, `/cache`, `/saved`), layered priorities, sandboxed paths, `IMountProvider` |
+| `fs.h` | Whole-file I/O (atomic replace), `File`, `MappedFile`, directory listing, last write time (get and set), `rename` and the cache variant `renameNoSync`, `FileWatcher` |
+| `vfs.h` | `Vfs` mount table (`/content`, `/cache`, `/saved`), layered priorities, sandboxed paths, `IMountProvider`, `isNonPortableComponent` |
 | `dynlib.h` | `DynamicLibrary` (LoadLibraryExW / dlopen) |
 | `cvar.h` | Console variables (`HELIOS_CVAR`), commands, `execute("set r.vsync 0")`, flags, callbacks |
 | `cmdline.h` | `-key=value`, `--flag`, positionals; MSVC-CRT-exact Windows command-line splitting |
@@ -183,7 +183,8 @@ ninja -C build/core helios_core core_tests && ctest --test-dir build/core -R cor
   the time of the call.
 * `DirectoryMount` rejects path components Win32 would not treat as plain names (DOS devices such
   as `con` / `nul.json`, names ending in `.` or space) on every platform, so content resolves the
-  same on Windows and Linux.
+  same on Windows and Linux. The rule is public as `fs::isNonPortableComponent`, so other path checks
+  (engine/assetpipe's `.meta` paths) share it.
 * Windows crash handling covers SEH exceptions (unhandled-exception filter) and every `abort()`
   (failed asserts, `HELIOS_LOG_FATAL`, `std::terminate` on any thread) through a process-wide
   SIGABRT hook; MSVC pure-call / invalid-parameter failures are hooked too. `__fastfail` paths

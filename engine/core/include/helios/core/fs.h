@@ -50,13 +50,21 @@ bool isFile(const Path& path) noexcept;
 bool isDirectory(const Path& path) noexcept;
 Result<u64> fileSize(const Path& path);
 Result<std::filesystem::file_time_type> lastWriteTime(const Path& path);
+/// Sets a file's last write time (caches that evict least recently used entries refresh it on a hit).
+Result<void> setLastWriteTime(const Path& path, std::filesystem::file_time_type time);
 Result<void> createDirectories(const Path& path);
 /// Removes a file or an empty directory. Removing a missing path is an error (NotFound).
 Result<void> remove(const Path& path);
 /// Recursively removes; returns the number of entries removed (0 if missing).
 Result<u64> removeAll(const Path& path);
-/// Renames, atomically replacing an existing target file.
+/// Renames, atomically replacing an existing target file, and persists the rename where the OS can: POSIX
+/// fsyncs the target's directory; Windows moves to a new name with MOVEFILE_WRITE_THROUGH, but replaces an
+/// existing target with ReplaceFileW, which has no working write-through flag, so that rename may not be
+/// persisted when this returns.
 Result<void> rename(const Path& from, const Path& to);
+/// rename() without persisting it: as atomic for readers, but a crash may undo it. For caches, whose
+/// entries are cheap to lose and whose writers should not wait for the file system's journal.
+Result<void> renameNoSync(const Path& from, const Path& to);
 /// Absolute path of the running executable.
 Result<Path> executablePath();
 /// Creates a new uniquely named directory under the system temp directory.

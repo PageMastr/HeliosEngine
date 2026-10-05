@@ -1,0 +1,147 @@
+{
+ "comment": "Identifier and path validity shared by Go pkg/manifest (ValidPath, header checks) and C++ engine/patch (isValidManifestPath, validateManifest). Segments are 1..255 bytes (ext4's NAME_MAX; NTFS allows 255 UTF-16 units). Both suites also check a 1024-byte path of 255-byte segments (valid), a 1025-byte one (invalid) and 255- and 256-byte segments first, inside and last in a path.",
+ "paths": {
+  "valid": [
+   "a",
+   "bin/Client.exe",
+   "content/zones/zone-0042.hpak",
+   ".config/x",
+   "a+b/c_d-e.f",
+   "x/con1/y",
+   "comx.txt",
+   "lpt10",
+   "conn",
+   "CONSOLE.txt",
+   "a.b.c",
+   "A/B/C",
+   "_",
+   "-",
+   "..a",
+   "a..b",
+   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "x/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/y"
+  ],
+  "invalid": [
+   "",
+   "/abs",
+   "a/",
+   "a//b",
+   "./a",
+   "a/./b",
+   "../a",
+   "a/..",
+   "..",
+   ".",
+   "a.",
+   "a/b./c",
+   "a b",
+   "a\\b",
+   "C:/x",
+   "con",
+   "CON.txt",
+   "x/aux.tar.gz",
+   "nul",
+   "Nul.x",
+   "prn",
+   "com1",
+   "LPT9.log",
+   "com0",
+   "lpt0",
+   "a/COM5/b",
+   "caf\u00e9",
+   "a\u0000b",
+   "a*b",
+   "a?b",
+   "a:b",
+   "a\"b",
+   "a<b",
+   "a>b",
+   "a|b",
+   "a\tb",
+   "a\nb",
+   "a~b",
+   "a%b",
+   "a#b",
+   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "x/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/y"
+  ]
+ },
+ "productIds": {
+  "valid": [
+   "abc",
+   "sample-game",
+   "a12",
+   "a-b-c",
+   "abcdefghijklmnopqrstuvwxyz012345"
+  ],
+  "invalid": [
+   "",
+   "ab",
+   "Abc",
+   "1abc",
+   "-abc",
+   "ab_c",
+   "ab.c",
+   "abcdefghijklmnopqrstuvwxyz0123456",
+   "ab c"
+  ]
+ },
+ "platforms": {
+  "valid": [
+   "win64",
+   "linux64",
+   "ab",
+   "a_b-c",
+   "abcdefghijklmnopqrstuvwxyz012345"
+  ],
+  "invalid": [
+   "",
+   "a",
+   "Win64",
+   "1win",
+   "_x",
+   "win.64",
+   "abcdefghijklmnopqrstuvwxyz0123456"
+  ]
+ },
+ "buildIds": {
+  "valid": [
+   "1",
+   "2026.10.04-r1",
+   "A_b.C-d",
+   "0123456789012345678901234567890123456789012345678901234567890123"
+  ],
+  "invalid": [
+   "",
+   ".a",
+   "-a",
+   "_a",
+   "a/b",
+   "a b",
+   "a:b",
+   "01234567890123456789012345678901234567890123456789012345678901234"
+  ]
+ },
+ "pathSets": {
+  "comment": "Whole path lists (each sorted by bytes) that validateManifest / Manifest.Validate must accept or reject as zero-size files: no two paths equal ignoring ASCII case, no file that is also a directory of another file (ignoring case). The invalid sets name the check (a message substring).",
+  "valid": [
+   ["a-b/c", "a/b"],
+   ["A/x", "a/y"],
+   ["a.b/c", "a/b", "a_b"],
+   ["a", "a-b", "a.b", "a_b", "ab"],
+   ["a/b-c", "a/b/c", "a/bc"],
+   ["X/y", "x-y", "xy"]
+  ],
+  "invalid": [
+   {"paths": ["a", "a/b"], "rule": "is a file and also a directory of"},
+   {"paths": ["a", "a-b", "a/b"], "rule": "is a file and also a directory of"},
+   {"paths": ["A/b", "a"], "rule": "is a file and also a directory of"},
+   {"paths": ["a/B/c", "a/b"], "rule": "is a file and also a directory of"},
+   {"paths": ["a/b", "a/b-c", "a/b.d/e", "a/b/c"], "rule": "is a file and also a directory of"},
+   {"paths": ["X/y/z", "x/Y"], "rule": "is a file and also a directory of"},
+   {"paths": ["Docs/a", "docs/a"], "rule": "differ only in case"},
+   {"paths": ["A", "B", "a"], "rule": "differ only in case"},
+   {"paths": ["a/B", "a/b", "a/b-"], "rule": "differ only in case"}
+  ]
+ }
+}

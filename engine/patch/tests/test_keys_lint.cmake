@@ -6,8 +6,8 @@
 #   engine/patch/tests/                         the tests, and this lint's fixtures
 #   engine/patch/fuzz/                          the fuzz targets
 # fails, with path:line, comments included. Go's twin is TestTrustTestImportedOnlyByTests (services/pkg/patchtrust),
-# which does the same for Options.AllowTestKeys. A lint run that finds no allowed use at all fails too (the scan
-# no longer sees the declaration). Threat model: a best-effort textual check against accidental use; a name
+# which does the same for Options.AllowTestKeys. A run that does not find the declaration in trust.h fails too
+# (the scan no longer sees the tree it should). Threat model: a best-effort textual check against accidental use; a name
 # built by token pasting, or a file with an extension the scan does not take (.cpp .cc .cxx .cppm .ixx .h .hh
 # .hpp .hxx .inl .inc .ipp), is not seen; review is the backstop, and TrustVerifier::create still refuses the
 # test-only roots without the option.
@@ -35,6 +35,7 @@ list(SORT files)
 
 set(findings "")
 set(allowed 0)
+set(declared FALSE)
 foreach(f IN LISTS files)
   file(RELATIVE_PATH rel "${SOURCE_DIR}" "${f}")
   if(rel MATCHES "^tools/prebuilt/")
@@ -44,6 +45,9 @@ foreach(f IN LISTS files)
   string(FIND "${text}" "allowTestKeys" at)
   if(at EQUAL -1)
     continue()
+  endif()
+  if(rel STREQUAL "engine/patch/include/helios/patch/trust.h")
+    set(declared TRUE)
   endif()
   if(rel MATCHES "^engine/patch/(tests|fuzz)/" OR rel STREQUAL "engine/patch/include/helios/patch/trust.h" OR
      rel STREQUAL "engine/patch/src/trust.cpp")
@@ -72,8 +76,8 @@ if(findings)
   message(FATAL_ERROR "patch test-keys lint: ${n} finding(s) (only the patch tests and fuzz targets may set "
                       "TrustOptions::allowTestKeys):\n  ${text}")
 endif()
-if(allowed EQUAL 0)
-  message(FATAL_ERROR "patch test-keys lint: no file declares or uses allowTestKeys where it may "
-                      "(engine/patch/include/helios/patch/trust.h); the scan is broken")
+if(NOT declared)
+  message(FATAL_ERROR "patch test-keys lint: the scan is broken:\n"
+                      "  engine/patch/include/helios/patch/trust.h does not declare allowTestKeys")
 endif()
 message(STATUS "patch test-keys lint: allowTestKeys appears only in its ${allowed} allowed file(s)")

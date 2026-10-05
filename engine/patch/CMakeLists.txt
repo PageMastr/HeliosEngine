@@ -41,7 +41,7 @@ if(HELIOS_BUILD_TESTS)
            COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${_patchKeysFixtures}/clean -P ${_patchKeysLint})
   set(_patchKeysTests lint_patch_test_keys lint_patch_test_keys_fixture_clean)
   foreach(_case "outside|2 finding.*apps/launcher/src/main.cpp:4: allowTestKeys outside.*tools/patchcheck/check.h:3: allowTestKeys outside"
-                "none|no file declares or uses allowTestKeys where it may")
+                "none|trust.h does not declare allowTestKeys")
     string(REPLACE "|" ";" _parts "${_case}")
     list(GET _parts 0 _fixture)
     list(GET _parts 1 _expect)

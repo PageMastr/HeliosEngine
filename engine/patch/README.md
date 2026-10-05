@@ -329,6 +329,10 @@ somehow carried a test root would verify nothing. Tests check both lists against
 publish signs only the `dev` channel with them, for loopback CDN hosts only. Real roots stay offline and real
 subkeys come from Vault/KMS (08 §2.10.3, `helios-tool product init`, a later WP).
 
+**No secret is compared.** The verifiers hold public keys only; signatures are checked by Ed25519 itself, and the
+values compared byte for byte (hashes, key IDs, public keys, identifiers) are public, so no comparison needs to be
+constant-time. The private seeds (Go's signer, the dev key files) are used only through `crypto/ed25519`.
+
 ## The CDN layout and read path
 
 ```

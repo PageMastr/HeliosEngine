@@ -206,6 +206,7 @@ func TestPublishRefusals(t *testing.T) {
 		},
 		"another product":   func(o *patchcdn.PublishOptions) { o.Target.ProductID = "other-game" },
 		"no clock":          func(o *patchcdn.PublishOptions) { o.Now = time.Time{} },
+		"a bad build ID":    func(o *patchcdn.PublishOptions) { o.BuildID = "../escape" },
 		"a lifetime of 8 d": func(o *patchcdn.PublishOptions) { o.Lifetime = 8 * 24 * time.Hour },
 		"the key expired":   func(o *patchcdn.PublishOptions) { o.Now = t0.Add(patchcdn.DevKeyLifetime) },
 		"a bad path":        func(o *patchcdn.PublishOptions) { writeFiles(t, o.BuildDir, map[string][]byte{"CON.txt": nil}) },

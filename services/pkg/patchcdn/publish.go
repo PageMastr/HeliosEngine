@@ -83,6 +83,8 @@ func Publish(ctx context.Context, o PublishOptions, keys *Keys) (*PublishResult,
 	switch {
 	case o.Now.Unix() <= 0:
 		return nil, errors.New("patchcdn: publish needs a clock")
+	case o.BuildID != "" && !manifest.ValidBuildID(o.BuildID):
+		return nil, fmt.Errorf("patchcdn: %q is not a build ID", o.BuildID)
 	case o.Lifetime < time.Minute || o.Lifetime > patchtrust.MaxPointerLifetime*time.Second:
 		return nil, fmt.Errorf("patchcdn: pointer lifetime %v is outside 1m..7d", o.Lifetime)
 	case keys.Keyset.ProductID != t.ProductID:

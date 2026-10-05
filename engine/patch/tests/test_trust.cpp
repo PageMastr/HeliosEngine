@@ -285,11 +285,11 @@ TEST_CASE("trust: every single-byte change of a signed byte is rejected") {
         const usize n = art == 2 ? hman::kHeaderSize : doc.size();
         for (usize i = 0; i < n; ++i) {
             for (const u8 x : {u8(0x01), u8(0x20), u8(0x80)}) {
-                doc[i] ^= x;
+                doc[i] = static_cast<u8>(doc[i] ^ x);
                 MemoryTrustStateStore store(v.state);
                 const Result<VerifiedChannel> r =
                     verifyChannel(overlayFetch(base, v.target), verifier, v.now, store);
-                doc[i] ^= x;
+                doc[i] = static_cast<u8>(doc[i] ^ x);
                 CAPTURE(art);
                 CAPTURE(i);
                 REQUIRE_FALSE(r.ok());
@@ -363,7 +363,7 @@ TEST_CASE("trust: ratchet state record, file store and advance") {
     CHECK(*decodeTrustState(rec) == s);
     for (usize i = 0; i < rec.size(); ++i) {
         auto bad = rec;
-        bad[i] ^= 0x10;
+        bad[i] = static_cast<u8>(bad[i] ^ 0x10);
         CHECK_FALSE(decodeTrustState(bad).ok());
     }
     CHECK_FALSE(decodeTrustState(std::span<const u8>(rec.data(), 31)).ok());

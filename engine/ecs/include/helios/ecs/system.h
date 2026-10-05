@@ -150,7 +150,7 @@ public:
 private:
     template <class T>
     ComponentId idOf() const {
-        return componentIdForKey(*m_world, kTypeKey<T>);
+        return componentIdForKey(*m_world, typeKey<T>());
     }
     World* m_world;
     SystemDesc m_desc;

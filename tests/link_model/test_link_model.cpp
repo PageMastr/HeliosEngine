@@ -26,6 +26,11 @@ namespace {
 
 using helios::DynamicLibrary;
 
+/// Prints the same name as link_model_probe's Cooldown, a type of another layout in another image.
+struct Cooldown {
+    helios::u32 ticks = 0;
+};
+
 bool hasWord(std::string_view list, std::string_view word) {
     std::string_view rest = list;
     while (!rest.empty()) {
@@ -165,6 +170,24 @@ TEST_CASE("link model: a plugin image reads and writes components of a World the
     const HostCounter* host = world.get<HostCounter>(e);
     REQUIRE(host != nullptr);
     CHECK(host->value == 42);
+}
+
+TEST_CASE("link model: a plugin's type in an unnamed namespace never reaches a component of this image") {
+    // Both images print "(anonymous namespace)::Cooldown" (or their compiler's spelling of it); a type key
+    // built from that name alone would hand the plugin this image's smaller component.
+    auto lib = DynamicLibrary::loadUtf8(HELIOS_LINK_MODEL_PROBE_PATH);
+    REQUIRE_MESSAGE(lib, (lib ? "" : lib.error().toString()));
+    using PrivateFn = int (*)(const helios::ecs::World*, std::uint64_t);
+    auto privateType = lib->function<PrivateFn>("helios_link_model_probe_private_type");
+    REQUIRE(privateType != nullptr);
+
+    helios::ecs::World world;
+    REQUIRE(world.registerComponent<Cooldown>(helios::ecs::ComponentFlags::None, "link_model.Cooldown") != 0);
+    const helios::ecs::Entity e = world.spawn();
+    world.set(e, Cooldown{5});
+    CHECK(privateType(&world, e.id) == 1);
+    REQUIRE(world.get<Cooldown>(e) != nullptr);
+    CHECK(world.get<Cooldown>(e)->ticks == 5);
 }
 
 } // namespace

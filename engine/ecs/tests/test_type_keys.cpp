@@ -1,52 +1,159 @@
-// Type keys (kTypeKey; 02 §1.4, WP-0.6c): the World's C++ type -> component table is keyed by a
-// compile-time hash of the type's name, so an image finds a type that any other image bound; nothing per
-// image caches it. Two distinct types with one qualified name share a key, and a World binds only the
-// first.
+// Type keys (helios/ecs/type_key.h; 02 §1.4, WP-0.6c): the World's C++ type -> component table is keyed by
+// typeKey<T>(). A type in a named namespace has a name key that every image and every supported compiler
+// derives alike (its canonical name, size and alignment); every other type has a per-image key, so two
+// types that print the same name never reach each other's component.
 
 #include <doctest/doctest.h>
 
+#include <atomic>
+#include <string_view>
 #include <utility>
 
-#include "helios/core/platform.h"
+#include "helios/core/assert.h"
+#include "helios/core/hash.h"
+#include "helios/ecs/type_key.h"
 #include "helios/ecs/world.h"
 #include "test_types.h"
 #include "type_key_clash.h"
+
+namespace ecs_test {
+
+struct KeyOuter {
+    struct Inner {
+        helios::u32 value = 0;
+    };
+};
+enum class KeyKind : helios::u8 { A, B };
+union KeyUnion {
+    helios::u32 bits;
+    float value;
+};
+template <class A, class B>
+struct KeyPair {
+    A a{};
+    B b{};
+};
+template <helios::u32 N>
+struct KeyNumbered {
+    helios::u32 value = N;
+};
+
+} // namespace ecs_test
 
 namespace {
 
 using namespace helios;
 using namespace helios::ecs;
+namespace tk = helios::ecs::detail;
+using tk::canonicalNameEquals;
+using tk::isPerImageTypeName;
+using tk::typeNameFromSignature;
+
+// ---------------------------------------------------------------------------------------------
+// Each compiler's spelling, as literal strings, so every compiler checks every format.
+// ---------------------------------------------------------------------------------------------
+
+static_assert(typeNameFromSignature("constexpr const char* helios::ecs::detail::signatureNaming() "
+                                    "[with T = helios::ecs::NetIdentity]") == "helios::ecs::NetIdentity"); // GCC
+static_assert(typeNameFromSignature("constexpr const char* f() [with T = ns::A; X = int]") == "ns::A");
+static_assert(typeNameFromSignature("const char *helios::ecs::detail::signatureNaming() "
+                                    "[T = helios::ecs::NetIdentity]") == "helios::ecs::NetIdentity"); // Clang
+static_assert(typeNameFromSignature("const char *__cdecl helios::ecs::detail::signatureNaming<struct "
+                                    "helios::ecs::NetIdentity>(void) noexcept") ==
+              "struct helios::ecs::NetIdentity"); // MSVC
+
+static_assert(canonicalNameEquals("struct helios::ecs::NetIdentity", "helios::ecs::NetIdentity"));
+static_assert(canonicalNameEquals("enum ns::Kind", "ns::Kind"));
+static_assert(canonicalNameEquals("union ns::U", "ns::U"));
+static_assert(canonicalNameEquals("struct ns::Pair<struct ns::A,enum ns::Kind>", "ns::Pair<ns::A,ns::Kind>"));
+static_assert(canonicalNameEquals("ns::Pair<ns::A, ns::Kind>", "ns::Pair<ns::A,ns::Kind>"));
+static_assert(canonicalNameEquals("class std::vector<int,class std::allocator<int> >",
+                                  "std::vector<int,std::allocator<int>>"));
+static_assert(canonicalNameEquals("ns::Pair<const char *, unsigned int>", "ns::Pair<const char*,unsigned int>"));
+static_assert(canonicalNameEquals("const struct ns::A", "const ns::A"));
+// A word that only starts like a class-key stays.
+static_assert(canonicalNameEquals("ns::classic::structure", "ns::classic::structure"));
+static_assert(!canonicalNameEquals("ns::A", "ns::AB"));
+static_assert(tk::canonicalNameHash("struct helios::ecs::NetIdentity") == fnv1a64("helios::ecs::NetIdentity"));
+
+// Keyed per image, as each compiler prints the type.
+static_assert(isPerImageTypeName("(anonymous namespace)::Cooldown"));                    // Clang
+static_assert(isPerImageTypeName("{anonymous}::Cooldown"));                              // GCC
+static_assert(isPerImageTypeName("struct `anonymous namespace'::Cooldown"));             // MSVC
+static_assert(isPerImageTypeName("game::f()::Local"));                                   // GCC local class
+static_assert(isPerImageTypeName("struct `void __cdecl game::f(void)'::`2'::Local"));    // MSVC local class
+static_assert(isPerImageTypeName("Local"));                // Clang local class, and the global namespace
+static_assert(isPerImageTypeName("struct Global"));
+static_assert(isPerImageTypeName("Box<helios::ecs::NetIdentity>")); // a global-namespace template
+static_assert(isPerImageTypeName("ns::Box<(anonymous namespace)::Cooldown>"));
+static_assert(isPerImageTypeName("(lambda at a.cpp:1:2)"));
+static_assert(isPerImageTypeName("<lambda()>"));
+static_assert(isPerImageTypeName("class <lambda_1>"));
+// Keyed by name.
+static_assert(!isPerImageTypeName("helios::ecs::NetIdentity"));
+static_assert(!isPerImageTypeName("struct helios::ecs::NetIdentity"));
+static_assert(!isPerImageTypeName("ns::Box<int>"));
+static_assert(!isPerImageTypeName("ns::Outer::Inner"));
+
+// ---------------------------------------------------------------------------------------------
+// This compiler's keys. A name key is the same on every compiler: its canonical name is pinned here.
+// ---------------------------------------------------------------------------------------------
+
+static_assert(tk::kKeyedByName<NetIdentity>);
+static_assert(tk::kCanonicalNameHash<NetIdentity> == fnv1a64("helios::ecs::NetIdentity"));
+static_assert(tk::kNameTypeKey<NetIdentity> ==
+              tk::nameTypeKey(fnv1a64("helios::ecs::NetIdentity"), sizeof(NetIdentity), alignof(NetIdentity)));
+static_assert(tk::kCanonicalNameHash<RepDirty> == fnv1a64("helios::ecs::RepDirty"));
+static_assert(tk::kCanonicalNameHash<ecs_test::Position> == fnv1a64("ecs_test::Position"));
+static_assert(tk::kCanonicalNameHash<ecs_test::KeyOuter::Inner> == fnv1a64("ecs_test::KeyOuter::Inner"));
+static_assert(tk::kCanonicalNameHash<ecs_test::KeyKind> == fnv1a64("ecs_test::KeyKind"));
+static_assert(tk::kCanonicalNameHash<ecs_test::KeyUnion> == fnv1a64("ecs_test::KeyUnion"));
+// A template of class and enum types also matches on GCC, Clang and MSVC (guaranteed only within one compiler).
+static_assert(tk::kCanonicalNameHash<ecs_test::KeyPair<ecs_test::Position, ecs_test::KeyKind>> ==
+              fnv1a64("ecs_test::KeyPair<ecs_test::Position,ecs_test::KeyKind>"));
+static_assert(tk::kNameTypeKey<NetIdentity> % 2 == 1); // name keys are odd, per-image keys even
+static_assert(tk::kNameTypeKey<ecs_test::Position> != tk::kNameTypeKey<ecs_test::Velocity>);
+static_assert(tk::kNameTypeKey<NetIdentity> != tk::kNameTypeKey<RepDirty>);
+static_assert(tk::kNameTypeKey<ecs_test::KeyNumbered<1>> != tk::kNameTypeKey<ecs_test::KeyNumbered<2>>);
+// The layout is part of a name key: one name, another size, another key.
+static_assert(tk::nameTypeKey(fnv1a64("ns::A"), 4, 4) != tk::nameTypeKey(fnv1a64("ns::A"), 16, 8));
+
+struct Cooldown {
+    u32 ticks = 0;
+};
 
 struct KeyClash {
     u32 value = 0;
 };
 
-template <u32 N>
-struct Numbered {
-    u32 value = N;
-};
+static_assert(!tk::kKeyedByName<Cooldown>);
+static_assert(!tk::kKeyedByName<KeyClash>);
+static_assert(!tk::kKeyedByName<GlobalKeyed>);
 
-static_assert(kTypeKey<ecs_test::Position> != 0);
-static_assert(kTypeKey<const ecs_test::Position> == kTypeKey<ecs_test::Position>);
-static_assert(kTypeKey<ecs_test::Position> != kTypeKey<ecs_test::Velocity>);
-static_assert(kTypeKey<NetIdentity> != kTypeKey<RepDirty>);
-static_assert(kTypeKey<Numbered<1>> != kTypeKey<Numbered<2>>);
+std::atomic<u32> g_verifyFailures{0};
+
+AssertAction countVerifyFailures(const AssertInfo& info) {
+    if (std::string_view(info.kind) == "VERIFY") g_verifyFailures.fetch_add(1);
+    return AssertAction::Continue;
+}
 
 TEST_CASE("ecs type keys: the built-ins are bound by key") {
     World world;
     CHECK(world.id<NetIdentity>() == world.netIdentityId());
-    CHECK(world.idForKey(kTypeKey<NetIdentity>) == world.netIdentityId());
-    CHECK(world.idForKey(kTypeKey<RepDirty>) == world.repDirtyId());
+    CHECK(world.idForKey(typeKey<NetIdentity>()) == world.netIdentityId());
+    CHECK(world.idForKey(typeKey<RepDirty>()) == world.repDirtyId());
     CHECK(world.id<FrameRef>() != 0);
     CHECK(world.id<DockRef>() != 0);
     CHECK(world.id<KeyClash>() == 0);
     CHECK(world.replicationBit<KeyClash>() == 0);
+    CHECK(typeKey<const ecs_test::Position>() == typeKey<ecs_test::Position>());
+    CHECK(typeKey<const KeyClash>() == typeKey<KeyClash>());
 }
 
 template <u32... N>
 void registerAndCheck(World& world, std::integer_sequence<u32, N...>) {
-    const ComponentId ids[] = {world.registerComponent<Numbered<N>>()...};
-    const ComponentId found[] = {world.id<Numbered<N>>()...};
+    const ComponentId ids[] = {world.registerComponent<ecs_test::KeyNumbered<N>>()...};
+    const ComponentId found[] = {world.id<ecs_test::KeyNumbered<N>>()...};
     for (usize i = 0; i < sizeof...(N); ++i) {
         CAPTURE(i);
         CHECK(ids[i] != 0);
@@ -63,36 +170,118 @@ TEST_CASE("ecs type keys: many types in one world keep their ids as the table gr
     registerAndCheck(world, std::make_integer_sequence<u32, 70>{});
     CHECK(world.id<NetIdentity>() == world.netIdentityId());
     // Registering a type again is idempotent and keeps its binding.
-    const ComponentId again = world.registerComponent<Numbered<3>>();
-    CHECK(again == world.id<Numbered<3>>());
+    const ComponentId again = world.registerComponent<ecs_test::KeyNumbered<3>>();
+    CHECK(again == world.id<ecs_test::KeyNumbered<3>>());
 }
 
-TEST_CASE("ecs type keys: two types with one qualified name, and a world binds only the first") {
+TEST_CASE("ecs type keys: an unregistered type never resolves to another type's component") {
+    // test_type_keys_other.cpp's Cooldown prints this Cooldown's name, but it is another, larger type.
+    World world;
+    REQUIRE(world.registerComponent<Cooldown>() != 0);
+    const Entity e = world.spawn();
+    world.set(e, Cooldown{5});
+    CHECK(ecs_test::otherCooldownId(world) == 0);
+    CHECK(ecs_test::otherCooldownGet(world, e) == nullptr);
+    CHECK_FALSE(ecs_test::otherCooldownHas(world, e));
+    CHECK(ecs_test::otherCooldownStarted(world, e) == ~u64(0));
+
+    // Registered too, each type keeps its own component.
+    const ComponentId other = ecs_test::otherCooldownRegisterAndSet(world, e, 7, 9);
+    REQUIRE(other != 0);
+    CHECK(other != world.id<Cooldown>());
+    CHECK(ecs_test::otherCooldownId(world) == other);
+    CHECK(ecs_test::otherCooldownStarted(world, e) == 7);
+    REQUIRE(world.get<Cooldown>(e) != nullptr);
+    CHECK(world.get<Cooldown>(e)->ticks == 5);
+}
+
+TEST_CASE("ecs type keys: two types with one printed name bind to their own components") {
     World world;
     const Result<ComponentId> a = world.registerComponent(componentDescOf<KeyClash>("ecs_test.KeyClashA"));
     const Result<ComponentId> b = world.registerComponent(componentDescOf<KeyClash>("ecs_test.KeyClashB"));
     REQUIRE(a.hasValue());
     REQUIRE(b.hasValue());
+    CHECK(ecs_test::otherKeyClashKey() != typeKey<KeyClash>());
     REQUIRE(world.bindType<KeyClash>(*a).hasValue());
     CHECK(world.bindType<KeyClash>(*a).hasValue()); // the same binding again is fine
-    const Result<void> other = ecs_test::bindOtherKeyClash(world, *b);
-#if !defined(HELIOS_COMPILER_MSVC)
-    // GCC and Clang name both types "(anonymous namespace)::KeyClash"; MSVC's spelling is checked by the
-    // branch below either way.
-    CHECK(ecs_test::otherKeyClashKey() == kTypeKey<KeyClash>);
-#endif
-    if (ecs_test::otherKeyClashKey() == kTypeKey<KeyClash>) {
-        REQUIRE_FALSE(other.hasValue());
-        CHECK(other.errorCode() == ErrorCode::AlreadyExists);
-        CHECK(world.id<KeyClash>() == *a); // the first binding stands
-    } else {
-        CHECK(other.hasValue());
-    }
+    CHECK(ecs_test::bindOtherKeyClash(world, *b).hasValue());
+    CHECK(world.id<KeyClash>() == *a);
+    CHECK(ecs_test::otherKeyClashId(world) == *b);
     // A component bound to one type cannot be bound to another.
-    const Result<void> twice = world.bindType<Numbered<7>>(*a);
+    const Result<void> twice = world.bindType<ecs_test::KeyNumbered<7>>(*a);
     REQUIRE_FALSE(twice.hasValue());
     CHECK(twice.errorCode() == ErrorCode::AlreadyExists);
-    CHECK(world.id<Numbered<7>>() == 0);
+    CHECK(world.id<ecs_test::KeyNumbered<7>>() == 0);
+}
+
+// Two local classes with one name. Clang prints both as "Local", like a global-namespace type.
+u32 useLocalA(World& world, Entity e, u32 value) {
+    struct Local {
+        u32 value = 0;
+    };
+    static_assert(!tk::kKeyedByName<Local>);
+    if (world.id<Local>() == 0) world.registerComponent<Local>(ComponentFlags::None, "ecs_test.LocalA");
+    if (value != 0) world.set(e, Local{value});
+    const Local* local = world.get<Local>(e);
+    return local ? local->value : 0;
+}
+
+u32 useLocalB(World& world, Entity e, u32 value) {
+    struct Local {
+        u32 value = 0;
+    };
+    static_assert(!tk::kKeyedByName<Local>);
+    if (world.id<Local>() == 0) world.registerComponent<Local>(ComponentFlags::None, "ecs_test.LocalB");
+    if (value != 0) world.set(e, Local{value});
+    const Local* local = world.get<Local>(e);
+    return local ? local->value : 0;
+}
+
+TEST_CASE("ecs type keys: local classes with one name keep their own components") {
+    World world;
+    const Entity e = world.spawn();
+    CHECK(useLocalA(world, e, 1) == 1);
+    CHECK(useLocalB(world, e, 2) == 2);
+    CHECK(useLocalA(world, e, 0) == 1);
+    CHECK(useLocalB(world, e, 0) == 2);
+    CHECK(world.findComponent("ecs_test.LocalA") != nullptr);
+    CHECK(world.findComponent("ecs_test.LocalB") != nullptr);
+}
+
+TEST_CASE("ecs type keys: a global-namespace type has one per-image key in every translation unit") {
+    const TypeKey key = typeKey<GlobalKeyed>();
+    CHECK(key != 0);
+    CHECK(key % 2 == 0);
+    CHECK(ecs_test::otherGlobalKeyedKey() == key);
+    CHECK(typeKey<GlobalKeyed>() == key); // drawn once
+    World world;
+    const ComponentId id = world.registerComponent<GlobalKeyed>();
+    REQUIRE(id != 0);
+    CHECK(world.idForKey(ecs_test::otherGlobalKeyedKey()) == id);
+}
+
+TEST_CASE("ecs type keys: registerComponent<T> returns 0 when T cannot be bound") {
+    World world;
+    const ComponentId taken =
+        world.registerComponent<ecs_test::KeyNumbered<100>>(ComponentFlags::None, "ecs_test.Taken");
+    REQUIRE(taken != 0);
+    const AssertHandler previous = setAssertHandler(countVerifyFailures);
+    g_verifyFailures = 0;
+    // The name resolves to a component of the same layout that another C++ type is bound to.
+    const ComponentId sameName =
+        world.registerComponent<ecs_test::KeyNumbered<101>>(ComponentFlags::None, "ecs_test.Taken");
+    const u32 failuresAfterName = g_verifyFailures.load();
+    // T is already bound to another component.
+    const ComponentId sameType =
+        world.registerComponent<ecs_test::KeyNumbered<100>>(ComponentFlags::None, "ecs_test.TakenAgain");
+    const u32 failuresAfterType = g_verifyFailures.load();
+    setAssertHandler(previous);
+    CHECK(sameName == 0);
+    CHECK(failuresAfterName == 1);
+    CHECK(world.id<ecs_test::KeyNumbered<101>>() == 0);
+    CHECK(sameType == 0);
+    CHECK(failuresAfterType == 2);
+    CHECK(world.id<ecs_test::KeyNumbered<100>>() == taken); // the first binding stands
 }
 
 } // namespace

@@ -225,15 +225,18 @@ World::World(const WorldDesc& desc)
     m_impl->sparseRecords.info = ecs_get_world_info(m_flecs);
     ecs_set_ctx(m_flecs, this, nullptr);
 
-    // Built-in components. Identity and dirty state are never copied from prefabs.
+    // Built-in components. Identity and dirty state are never copied from prefabs. Name-keyed, so every image
+    // finds them, whichever compiler built it (helios/ecs/type_key.h).
+    static_assert(detail::kKeyedByName<NetIdentity> && detail::kKeyedByName<RepDirty> &&
+                  detail::kKeyedByName<FrameRef> && detail::kKeyedByName<DockRef>);
     m_netIdentityId = *registerComponent(componentDescOf<NetIdentity>("helios.NetIdentity", ComponentFlags::DontInherit));
-    HELIOS_VERIFY(bindTypeKey(kTypeKey<NetIdentity>, m_netIdentityId).hasValue());
+    HELIOS_VERIFY(bindTypeKey(typeKey<NetIdentity>(), m_netIdentityId).hasValue());
     m_repDirtyId = *registerComponent(componentDescOf<RepDirty>("helios.RepDirty", ComponentFlags::DontInherit));
-    HELIOS_VERIFY(bindTypeKey(kTypeKey<RepDirty>, m_repDirtyId).hasValue());
+    HELIOS_VERIFY(bindTypeKey(typeKey<RepDirty>(), m_repDirtyId).hasValue());
     m_frameRefId = *registerComponent(componentDescOf<FrameRef>("helios.FrameRef", ComponentFlags::DontInherit));
-    HELIOS_VERIFY(bindTypeKey(kTypeKey<FrameRef>, m_frameRefId).hasValue());
+    HELIOS_VERIFY(bindTypeKey(typeKey<FrameRef>(), m_frameRefId).hasValue());
     m_dockRefId = *registerComponent(componentDescOf<DockRef>("helios.DockRef", ComponentFlags::DontInherit));
-    HELIOS_VERIFY(bindTypeKey(kTypeKey<DockRef>, m_dockRefId).hasValue());
+    HELIOS_VERIFY(bindTypeKey(typeKey<DockRef>(), m_dockRefId).hasValue());
 
     // Relationships (SPIKES.md §2 explains the storage choices).
     auto makeRelation = [&](const char* name, bool dontFragment) {
@@ -287,10 +290,10 @@ Result<void> World::bindTypeKey(TypeKey key, ComponentId cid) {
     }
     if (const TypeBinding* b = findType(key); b && b->id != cid) {
         const u64 other = m_impl->indexById.find(b->id);
-        HELIOS_LOG_ERROR(LogEcs, "component '{}': a C++ type with the same name is already bound to '{}'",
-                         info.name, other != 0 ? std::string_view(m_impl->components[other - 1].name)
-                                               : std::string_view("?"));
-        return Error{ErrorCode::AlreadyExists, "bindType: a C++ type with this name is bound to another component"};
+        // The same C++ type registered under a second name, or another type with its key (type_key.h).
+        HELIOS_LOG_ERROR(LogEcs, "component '{}': its C++ type key is already bound to '{}'", info.name,
+                         other != 0 ? std::string_view(m_impl->components[other - 1].name) : std::string_view("?"));
+        return Error{ErrorCode::AlreadyExists, "bindType: the C++ type's key is bound to another component"};
     }
     // Keep the table at most half full: every probe sequence then ends at an empty slot.
     if ((m_typeCount + 1) * 2 > m_typeTable.size()) {

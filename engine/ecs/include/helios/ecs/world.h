@@ -171,20 +171,25 @@ public:
     /// Runtime registration (reflection/schema path). Idempotent per name: re-registering an
     /// existing name with the same size/alignment returns the existing id; a mismatch is an error.
     Result<ComponentId> registerComponent(const ComponentDesc& desc);
-    /// Template registration: builds the descriptor with componentDescOf<T>() and binds T's type key.
+    /// Template registration: builds the descriptor with componentDescOf<T>() and binds T's type key
+    /// (typeKey<T>()). Returns 0 and reports a HELIOS_VERIFY failure, in every build, if the registration
+    /// fails or T cannot be bound: the component (an existing one of that name) is bound to another C++
+    /// type, or T's key is bound to another component (helios/ecs/type_key.h). The component may then
+    /// exist, but typed access through T finds nothing.
     template <class T>
     ComponentId registerComponent(ComponentFlags flags = ComponentFlags::None, std::string_view name = {});
-    /// Binds C++ type T (its kTypeKey) to an already registered component (e.g. registered at runtime
+    /// Binds C++ type T (its typeKey<T>()) to an already registered component (e.g. registered at runtime
     /// by name). Fails, changing nothing, if the size or alignment differs, if `id` is bound to another
-    /// type, or if T's key is bound to another component (a second type with T's qualified name).
+    /// type, or if T's key is bound to another component (helios/ecs/type_key.h says when two types can
+    /// share a key).
     template <class T>
     Result<void> bindType(ComponentId id);
 
-    /// Id of registered type T (0 if unregistered). Any image finds a type that any image bound
-    /// (kTypeKey). Lock-free; callable from systems.
+    /// Id of registered type T (0 if unregistered). Any image finds a type in a named namespace that any
+    /// image bound; other types are keyed per image (typeKey<T>()). Lock-free; callable from systems.
     template <class T>
     ComponentId id() const noexcept {
-        return idForKey(kTypeKey<T>);
+        return idForKey(typeKey<T>());
     }
     /// Id bound to a type key (0 if none). Lock-free; callable from systems.
     ComponentId idForKey(TypeKey key) const noexcept {
@@ -194,7 +199,7 @@ public:
     /// RepDirty::componentMask bit of replicated type T (0 if T is not replicated). O(1).
     template <class T>
     u64 replicationBit() const noexcept {
-        const TypeBinding* b = findType(kTypeKey<T>);
+        const TypeBinding* b = findType(typeKey<T>());
         return b ? b->replBit : 0;
     }
     /// Registered component `id`, or nullptr (pairs, unregistered ids). O(1): a direct array for ids
@@ -457,8 +462,10 @@ ComponentId World::registerComponent(ComponentFlags flags, std::string_view name
     Result<ComponentId> r = registerComponent(componentDescOf<T>(name, flags));
     HELIOS_VERIFY(r.hasValue(), "registerComponent<T> failed");
     if (!r.hasValue()) return 0;
-    const Result<void> bound = bindTypeKey(kTypeKey<T>, *r);
-    HELIOS_ASSERT(bound.hasValue(), "registerComponent<T>: the C++ type was not bound (see the log)");
+    const Result<void> bound = bindTypeKey(typeKey<T>(), *r);
+    // Fail closed: an id that T's typed access would not reach must not look like success.
+    HELIOS_VERIFY(bound.hasValue(), "registerComponent<T>: the C++ type was not bound (see the log)");
+    if (!bound.hasValue()) return 0;
     return *r;
 }
 
@@ -469,7 +476,7 @@ Result<void> World::bindType(ComponentId cid) {
     const u32 size = std::is_empty_v<T> ? 0u : static_cast<u32>(sizeof(T));
     if (info->size != size) return Error{ErrorCode::InvalidArgument, "bindType: size mismatch"};
     if (size != 0 && info->alignment < alignof(T)) return Error{ErrorCode::InvalidArgument, "bindType: alignment mismatch"};
-    return bindTypeKey(kTypeKey<T>, cid);
+    return bindTypeKey(typeKey<T>(), cid);
 }
 
 template <class T>

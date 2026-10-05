@@ -31,7 +31,6 @@
 // Threading: keys are constants or are drawn once per type under the C++ static-initialization guard;
 // every function here may be called from any thread.
 
-#include <cstddef>
 #include <string_view>
 #include <type_traits>
 

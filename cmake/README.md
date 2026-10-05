@@ -1,0 +1,51 @@
+# cmake — Helios build helpers
+
+| File | What it holds |
+|---|---|
+| `HeliosModule.cmake` | `helios_declare_module()`, `helios_module()`, `helios_executable()` (ROLE, ISA level, CPU gate), `helios_test()`, the warning flags; schedules `helios_finalize_build()` |
+| `HeliosLayering.cmake` | the configure-time module-graph checks (02 §1.1 layers, peers, cycles, HEADLESS, EDITOR_ONLY, roles) and `helios_finalize_build()` |
+| `HeliosIsa.cmake` | the ISA levels (below), the CPU gate's level and `helios_cpu_gate()` |
+| `isa_allowlist.cmake` | the ISA audit's lists: the gate's exports and imports, the self-dispatching symbols base images may contain |
+| `pre_main_allowlist.cmake` | the attributed pre-`main` hooks of avx2 images (mimalloc, Tracy, Helios initializers) and the ELF gate entry |
+| `HeliosSchema.cmake`, `HeliosShaders.cmake`, `HeliosWindows.cmake` | schema code generation, Slang shaders, the Windows manifest |
+| `toolchains/` | the MinGW cross toolchain file (`cross-mingw` preset) |
+
+## ISA levels (02 §1.1, ADR-011 amendment; WP-0.2r)
+
+Helios builds **whole images at one ISA level**; no list grants a target or a file flags of its own.
+
+| Level | Flags (GCC/Clang · MSVC · clang-cl) | Built at it |
+|---|---|---|
+| `avx2` | `-mavx2 -mbmi -mbmi2 -mlzcnt -mpopcnt -mf16c -mno-fma -mfpmath=sse -ffp-contract=off` · `/arch:AVX2 /fp:precise` · the MSVC set plus `-mbmi -mbmi2 -mlzcnt -mpopcnt -mf16c -mno-fma /clang:-ffp-contract=off` | every image of a role other than launcher and bootstrap (client, cell, gateway, voice, editor, bot, tool, sample, bench), the tests, and every library they link: every target not listed below |
+| `base` (x86-64-v1) | `-march=x86-64 -mtune=generic` and every extension above it off by name · nothing (`/arch:SSE2` is the default) | the launcher and the bootstrap (ROLE `launcher`, `bootstrap`), and the `.base` copies of what they link |
+| `gate` | the `base` set plus `-fno-stack-protector -fno-sanitize=all` · `/GS-` | the CPU gate's object libraries (`helios_cpu_gate_target()`): `helios_core_cpugate`, `helios_core_cpugate_hook` and the test hook `core_cpugate_hook_snb` |
+
+- **How a level is applied.** `helios_isa_finalize()` runs at the end of configure, when every target exists. It
+  gives every target its level with `helios_apply_isa_level()`, the one function that puts ISA flags on a
+  target (CONF-11 exempts it by name), as PRIVATE options, so no consumer inherits them. The levels go to
+  `<build>/helios_generated/isa_levels.txt`, which audit check 1 reads.
+- **Base images and `.base` copies.** A base image's link closure is replaced by `<target>.base` copies (OBJECT
+  libraries, the plan's `<module>@base`; CMake target names cannot contain `@`), compiled at `base`. Copies
+  exist only once a base image is configured, and only for `HELIOS_ISA_BASE_MODULES` (`core`, `app`, `ui`,
+  `text`, `loc`, `patch`, `crash`: `core` and `patch` exist today; `app` and `ui` arrive with the launcher,
+  WP-0.17, `text` and `loc` with the UI runtime, `crash` in Phase 2), `HELIOS_ISA_BASE_THIRD_PARTY` (08 §2.1.1's
+  SDL3, RmlUi, FreeType, HarfBuzz, SheenBidi, libunibreak, zstd, Monocypher, yyjson, sentry-native) and what
+  those link. The audit's `lint_isa_fixture_base` image builds `helios_core.base`, `helios_patch.base` and the
+  copies of mimalloc, Monocypher, zstd and the header-only libraries on every toolchain.
+- **Configure errors** (`helios isa:` lines, fixtures `lint_layering_isa_*`): a base image whose closure
+  reaches any other library (`physics`, `pcg`, `tp_jolt`, ...), with the path to it; an ISA option on a
+  library's `INTERFACE_COMPILE_OPTIONS` (consumers would inherit it: `tp_jolt` exports only its `JPH_USE_*`
+  defines); `helios_executable(… ISA …)` under `apps/` or `engine/` (the explicit level is for the audit's
+  fixtures); a `HELIOS_ISA_LEVEL` set on anything but an image or a gate object library.
+- **Self-dispatch.** Code that checks CPUID itself stays allowed: in `base` images only in the symbols that
+  `isa_allowlist.cmake` lists (audit check 4), in `avx2` images anywhere (pcg's kernel selection).
+
+The audit itself is `tools/lint/isa_audit.cmake` (see `tools/lint/README.md`).
+
+## Plan conformance
+
+Plan-Rev: 13
+
+`HeliosIsa.cmake`, `isa_allowlist.cmake` and `pre_main_allowlist.cmake` follow 02 §1.1 at plan revision 13
+(WP-0.2r part 1). The gate's placement and exports are WP-0.5r's (09 §5.10.4 (b)); the other helpers predate
+this README and are described by their own headers.

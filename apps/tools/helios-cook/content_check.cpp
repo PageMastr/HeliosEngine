@@ -545,7 +545,13 @@ ContentStats checkContent(const fs::Path& projectRoot, const ProjectFile& projec
             findings.push_back(Finding{rootRel, scan.error().message});
             continue;
         }
-        for (const assetpipe::MetaProblem& p : scan->problems) report(p.path, p.message);
+        for (const assetpipe::MetaProblem& p : scan->problems) {
+            // parseMeta names the sidecar first; the finding's path already does.
+            std::string_view message = p.message;
+            if (message.starts_with(p.path) && message.substr(p.path.size()).starts_with(": "))
+                message.remove_prefix(p.path.size() + 2);
+            report(p.path, std::string(message));
+        }
         std::map<std::string, Guid> metaGuids;
         for (const assetpipe::ScannedAsset& a : scan->assets) metaGuids.emplace(a.path, a.meta.guid);
         stats.withMeta += scan->assets.size();

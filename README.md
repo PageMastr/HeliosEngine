@@ -71,6 +71,8 @@ services/      Go backend module (cmd/helios-backend, cmd/helios-patch, internal
 tools/         schemac (schema compiler), shaderc, rendertest, lint, conformance, scorecard and status,
                milestone validation, CI, prebuilt-tool and vendoring scripts
 schemas/       *.hschema data definitions
+content/       the reference game's content: records, zones, provenance sidecars (content/README.md)
+helios.project.jsonc   the reference game's project file (content roots, zones, product)
 shaders/       Slang shaders
 third_party/   vendored dependencies (pinned, permissive licences; see MANIFEST.md)
 docs/          master plan, research, ADRs
@@ -98,6 +100,7 @@ docs/          master plan, research, ADRs
 | `engine/patch`, `services/pkg/cdc`, `services/pkg/manifest`, `services/pkg/patchtrust`, `services/pkg/patchcdn`, `services/cmd/helios-patch` | Patch pipeline: FastCDC chunking with BLAKE2b-256 IDs, the `.hman` manifest, the Ed25519 trust chain (root-signed keysets, signed pointers, ratchets) and a local CDN with `helios-patch publish` and `verify`, in C++ and Go with shared vectors | Done for Phase 0 (WP-0.16); the launcher's install side is WP-0.17 |
 | `engine/toolsfw`, `apps/tools/helios-tool` | ToolsFramework: documents over reflected data, command bus, property-path transactions with undo/redo, crash-recovery journal, JSON-RPC remote control, Luau automation; the headless CLI | Done for Phase 0 (WP-0.18) |
 | `engine/editorui`, `apps/editor`, `apps/tools/helios-uitest` | Editor: ImGui docking shell on the Helios RHI, property grid, themes and DPI scaling; the UI test driver with ꟻLIP goldens | Done for Phase 0 (WP-0.18); multi-viewport tear-offs are still due |
+| `content/`, `helios.project.jsonc` | The reference game's skeleton (01 §4.2): the project file, a ship hull record, the Phase 1 zone with its outpost container stub, a provenance sidecar per file; `helios-cook check` validates them | Skeleton (WP-0.20) |
 | Client, launcher, asset importers (meshes, textures) and `helios-assetd`, animation, audio, game UI | — | Not started (see roadmap) |
 
 ## Building on Windows

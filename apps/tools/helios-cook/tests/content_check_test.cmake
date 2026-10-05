@@ -1,7 +1,8 @@
 # Seeded violations for `helios-cook check` and the records cook (WP-0.20; 09 §2.1 "Records compile;
-# 100 % provenance"). Copies SOURCE's helios.project.jsonc and content/ into WORK, seeds one violation
-# (CASE) and runs helios-cook: every case but `valid` must fail (non-zero exit) with its diagnostic, and
-# `valid`, the unchanged copy, must pass both verbs, so no case passes because the copy itself is broken.
+# 100 % provenance"). Copies SOURCE's helios.project.jsonc, content/ and schemas/ (which the project file's
+# schemas.native names) into WORK, seeds one violation (CASE) and runs helios-cook: every case but `valid`
+# must fail (non-zero exit) with its diagnostic, and `valid`, the unchanged copy, must pass both verbs, so
+# no case passes because the copy itself is broken.
 # The cases find their targets by pattern (the first file of a kind), so they follow the content as it
 # grows, and name no content (the IP-name lint keeps reference names out of apps/).
 #
@@ -18,7 +19,7 @@ endforeach()
 file(REMOVE_RECURSE "${WORK}")
 file(MAKE_DIRECTORY "${WORK}")
 file(COPY "${SOURCE}/helios.project.jsonc" DESTINATION "${WORK}")
-file(COPY "${SOURCE}/content" DESTINATION "${WORK}")
+file(COPY "${SOURCE}/content" "${SOURCE}/schemas" DESTINATION "${WORK}")
 set(project "${WORK}/helios.project.jsonc")
 
 # The first file (in sorted order) under WORK/content matching `glob`, skipping hidden paths.

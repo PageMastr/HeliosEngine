@@ -459,7 +459,7 @@
       "title": "Client cooks contain no server-only data",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Client cooks contain no `server_only` data (CI; R08-ED-P0-01)",
-      "notes": "Measured on sample records (engine/records, 02 §3.3 and §6.5): the records cook refuses a client layout that keeps a server-only field, embeds a server-only type or references a server-only record without @opaque (and the reverse direction for the server cook); records_tests and the lint_records_sec4 CTests search the raw bytes of both cooks for planted server-only sentinels, each of which must be in the server cook and in no client cook (the fixture test scans the server cook as a client cook and must fail); lint_records_sec4_nested plants them in server {} fields of structs nested in shared data (keyed lists merged and appended through $parent, an optional, a struct field, a map value, a plain list). Accepted trade-off: a withheld tag keeps its slot, parent, depth, subtree range, audience and declared flag in the client cook (TagIndex agreement needs the slots), so a client can count server-only tags and see where they sort; only their names are withheld",
+      "notes": "Measured on sample records (engine/records, 02 §3.3 and §6.5): the records cook refuses a client layout that keeps a server-only field, embeds a server-only type or references a server-only record without @opaque (and the reverse direction for the server cook); records_tests and the lint_records_sec4 CTests search the raw bytes of both cooks for planted server-only sentinels, each of which must be in the server cook and in no client cook (the fixture test scans the server cook as a client cook and must fail); lint_records_sec4_nested plants them in server {} fields of structs nested in shared data (keyed lists merged and appended through $parent, an optional, a struct field, a map value, a plain list); lint_records_sec4_content runs the same search over the reference game's own records (content/, WP-0.20: the reference ship hull's server-only aiHints keys). Accepted trade-off: a withheld tag keeps its slot, parent, depth, subtree range, audience and declared flag in the client cook (TagIndex agreement needs the slots), so a client can count server-only tags and see where they sort; only their names are withheld",
       "status": "partial",
       "tests": [
         {"doctest": "records_tests", "case": "AAA-SEC-4: the client cook of the test records holds no server-only field, record, tag name or sentinel"},
@@ -471,10 +471,10 @@
         {"ctest": "lint_records_sec4"},
         {"ctest": "lint_records_sec4_m0_sample"},
         {"ctest": "lint_records_sec4_fixture_leak"},
-        {"ctest": "lint_records_sec4_nested"}
+        {"ctest": "lint_records_sec4_nested"},
+        {"ctest": "lint_records_sec4_content"}
       ],
       "gaps": [
-        {"clause": "The game's own records: CI cooks only sample records, because the reference project's content/ does not exist yet; its client cook must run the same checks", "state": "unmeasured", "owner": "WP-0.20"},
         {"clause": "Client paks: only records are cooked so far; 02 §6.5's server-side asset data (collision, hitboxes, server{} records packed per zone) reaches paks with the zone cook, which must lint both directions too", "state": "unmeasured", "owner": "WP-2.1"}
       ]
     }

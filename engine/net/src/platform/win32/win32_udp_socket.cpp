@@ -1,12 +1,14 @@
 // Win32 (MSVC, clang-cl, MinGW-w64) implementation of UdpSocket over Winsock2 (04 §2.6).
 //
 // Batches use Registered I/O (RIO, Windows 8 and later; UdpBatchApi::Registered) when the provider
-// offers it. Each socket registers one buffer region of 2 KB slots (128 for receives, 256 for sends,
-// each with room for its peer address), keeps every receive slot posted, and polls its two completion
-// queues from the owner thread (no event, no completion port). Requests are queued with RIO_MSG_DEFER
-// and committed once per batch, so a batch of sends, or of re-posted receives, costs one kernel entry
-// and reading completions costs none. A receive copies the datagram out of its slot into the caller's
-// buffer (recvfrom makes the same copy in the kernel); a send copies it into a slot.
+// offers it. Each socket registers one buffer region of 2 KB slots, each with room for its peer address:
+// receive slots, all kept posted, and send slots, sized from the requested receive and send buffer sizes
+// (a RIO socket keeps no buffer of its own; see slotsFor()). It polls its two completion queues from the
+// owner thread (no event, no completion port). Requests are queued with RIO_MSG_DEFER and committed once
+// per batch, so a batch of sends, or of re-posted receives, costs one kernel entry and reading completions
+// costs none. A receive copies the datagram out of its slot into the caller's buffer (recvfrom makes the
+// same copy in the kernel); a send copies it into a slot. A RIO socket refuses FIONBIO, so nothing but its
+// queues touches it.
 //
 // Where RIO is unavailable, or UdpSocketConfig::batchApi asks for UdpBatchApi::Message (the fallback
 // tests force), every datagram takes one WSASendMsg/WSARecvMsg call on the non-blocking socket (recvfrom
@@ -168,13 +170,22 @@ static_assert(rio::kGetMultipleExtensionFunctionPointer == SIO_GET_MULTIPLE_EXTE
 #endif
 
 // Registered I/O slots: one datagram (kSlotBytes) plus its peer address (a SOCKADDR_INET) each. Receive
-// slots come first and send slots after them, in one registered region per socket (≈ 0.8 MB).
+// slots come first and send slots after them, in one registered region per socket. A RIO socket keeps no
+// buffer of its own: a datagram that arrives while every receive slot is completed but not yet re-posted
+// is dropped (Windows CI: 128 posted receives held 128 of a 400-datagram burst). So the posted receives
+// are the socket's receive buffer, and the send slots its send buffer: each count follows the
+// SO_RCVBUF/SO_SNDBUF request (8 MB: 3,971 slots; 32 MB for trunks: the 16,384 cap), and the region,
+// locked in memory by RIORegisterBuffer, is about the two buffer sizes together.
 constexpr ULONG kSlotBytes = 2048;
 constexpr ULONG kAddressBytes = 64; // >= sizeof(SOCKADDR_INET); keeps every slot 64-byte aligned
 constexpr ULONG kSlotStride = kSlotBytes + kAddressBytes;
-constexpr u32 kReceiveSlots = 128;
-constexpr u32 kSendSlots = 256;
-constexpr ULONG kRegionBytes = kSlotStride * (kReceiveSlots + kSendSlots);
+constexpr u32 kMinSlots = 128;
+constexpr u32 kMaxSlots = 16384;
+
+/// Slots that hold `bufferBytes` of datagrams, within [kMinSlots, kMaxSlots].
+constexpr u32 slotsFor(u32 bufferBytes) noexcept {
+    return std::clamp<u32>(bufferBytes / kSlotStride, kMinSlots, kMaxSlots);
+}
 /// Completions read per RIODequeueCompletion call.
 constexpr ULONG kDequeueBatch = 64;
 static_assert(sizeof(SOCKADDR_INET) <= kAddressBytes);
@@ -294,15 +305,18 @@ struct UdpSocket::PlatformState {
 
     // Registered I/O (UdpBatchApi::Registered only).
     rio::FunctionTable api{};
-    u8* region = nullptr; // kRegionBytes from VirtualAlloc: receive slots, then send slots
+    u8* region = nullptr; // regionBytes from VirtualAlloc: receive slots, then send slots
+    ULONG regionBytes = 0;
+    u32 receiveSlots = 0;
+    u32 sendSlots = 0;
     rio::BufferId bufferId = nullptr;
     rio::Cq receiveCq = nullptr;
     rio::Cq sendCq = nullptr;
     rio::Rq requestQueue = nullptr;
-    std::array<u16, kSendSlots> freeSend{}; // send slots not in flight (indices 0..kSendSlots-1)
+    u32* freeSend = nullptr; // send slots not in flight (indices 0..sendSlots-1)
     u32 freeSendCount = 0;
-    u32 deferredSends = 0;                  // posted with RIO_MSG_DEFER and not committed yet
-    std::array<u16, kReceiveSlots> unposted{}; // receive slots whose re-post failed (retried later)
+    u32 deferredSends = 0;   // posted with RIO_MSG_DEFER and not committed yet
+    u32* unposted = nullptr; // receive slots whose re-post failed (retried by the next receive)
     u32 unpostedCount = 0;
 
     u8* slotData(u32 slot) noexcept { return region + static_cast<usize>(slot) * kSlotStride; }
@@ -315,7 +329,7 @@ struct UdpSocket::PlatformState {
                         static_cast<ULONG>(sizeof(SOCKADDR_INET))};
     }
 
-    /// Queues receive slot `slot` (0..kReceiveSlots-1) with RIO_MSG_DEFER; commitReceives() submits it.
+    /// Queues receive slot `slot` (0..receiveSlots-1) with RIO_MSG_DEFER; commitReceives() submits it.
     bool postReceive(u32 slot) noexcept {
         rio::Buf data = dataBuf(slot, kSlotBytes);
         rio::Buf address = addressBuf(slot);
@@ -343,7 +357,7 @@ struct UdpSocket::PlatformState {
             for (ULONG k = 0; k < n; ++k) {
                 const auto index = static_cast<u32>(done[k].requestContext);
                 if (done[k].status != 0) ++stats.sendErrors;
-                if (index < kSendSlots && freeSendCount < kSendSlots) freeSend[freeSendCount++] = static_cast<u16>(index);
+                if (index < sendSlots && freeSendCount < sendSlots) freeSend[freeSendCount++] = index;
             }
             if (n < kDequeueBatch) return;
         }
@@ -356,10 +370,15 @@ struct UdpSocket::PlatformState {
         if (sendCq) api.closeCompletionQueue(sendCq);
         if (bufferId && bufferId != rio::invalidBufferId()) api.deregisterBuffer(bufferId);
         if (region) VirtualFree(region, 0, MEM_RELEASE);
+        delete[] freeSend;
+        delete[] unposted;
         receiveCq = sendCq = nullptr;
         requestQueue = nullptr;
         bufferId = nullptr;
         region = nullptr;
+        freeSend = unposted = nullptr;
+        regionBytes = 0;
+        receiveSlots = sendSlots = 0;
         freeSendCount = unpostedCount = deferredSends = 0;
     }
 
@@ -367,21 +386,28 @@ struct UdpSocket::PlatformState {
     /// receive slot. False leaves nothing allocated, and the socket uses the Message API. Once the
     /// request queue exists the socket stays on Registered I/O: it cannot be detached from the queue,
     /// so a receive slot that cannot be posted now is retried by the next receive.
-    bool setUpRegistered(SOCKET s) noexcept {
+    bool setUpRegistered(SOCKET s, u32 receiveBufferBytes, u32 sendBufferBytes) noexcept {
         if (!loadRioTable(s, api)) return false;
-        region = static_cast<u8*>(VirtualAlloc(nullptr, kRegionBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
-        if (region) bufferId = api.registerBuffer(reinterpret_cast<PCHAR>(region), kRegionBytes);
-        if (bufferId && bufferId != rio::invalidBufferId()) receiveCq = api.createCompletionQueue(kReceiveSlots, nullptr);
-        if (receiveCq) sendCq = api.createCompletionQueue(kSendSlots, nullptr);
-        if (sendCq) requestQueue = api.createRequestQueue(s, kReceiveSlots, 1, kSendSlots, 1, receiveCq, sendCq, nullptr);
+        receiveSlots = slotsFor(receiveBufferBytes);
+        sendSlots = slotsFor(sendBufferBytes);
+        regionBytes = kSlotStride * (receiveSlots + sendSlots);
+        freeSend = new (std::nothrow) u32[sendSlots];
+        unposted = new (std::nothrow) u32[receiveSlots];
+        if (freeSend && unposted) {
+            region = static_cast<u8*>(VirtualAlloc(nullptr, regionBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+        }
+        if (region) bufferId = api.registerBuffer(reinterpret_cast<PCHAR>(region), regionBytes);
+        if (bufferId && bufferId != rio::invalidBufferId()) receiveCq = api.createCompletionQueue(receiveSlots, nullptr);
+        if (receiveCq) sendCq = api.createCompletionQueue(sendSlots, nullptr);
+        if (sendCq) requestQueue = api.createRequestQueue(s, receiveSlots, 1, sendSlots, 1, receiveCq, sendCq, nullptr);
         if (!requestQueue) {
             releaseRegistered();
             return false;
         }
-        for (u32 i = 0; i < kSendSlots; ++i) freeSend[i] = static_cast<u16>(kSendSlots - 1 - i);
-        freeSendCount = kSendSlots;
-        for (u32 i = 0; i < kReceiveSlots; ++i) {
-            if (!postReceive(i)) unposted[unpostedCount++] = static_cast<u16>(i);
+        for (u32 i = 0; i < sendSlots; ++i) freeSend[i] = sendSlots - 1 - i;
+        freeSendCount = sendSlots;
+        for (u32 i = 0; i < receiveSlots; ++i) {
+            if (!postReceive(i)) unposted[unpostedCount++] = i;
         }
         (void)commitReceives();
         return true;
@@ -411,7 +437,7 @@ struct UdpSocket::PlatformState {
             if (freeSendCount == 0) return SendOutcome::Full;
         }
         const u32 index = freeSend[--freeSendCount];
-        const u32 slot = kReceiveSlots + index;
+        const u32 slot = receiveSlots + index;
         if (!data.empty()) std::memcpy(slotData(slot), data.data(), data.size());
         std::memset(slotAddress(slot), 0, sizeof(SOCKADDR_INET));
         std::memcpy(slotAddress(slot), &to, std::min<usize>(static_cast<usize>(toLength), sizeof(SOCKADDR_INET)));
@@ -419,7 +445,7 @@ struct UdpSocket::PlatformState {
         rio::Buf address = addressBuf(slot);
         if (!api.sendEx(requestQueue, &payload, 1, nullptr, &address, nullptr, nullptr, rio::kMsgDefer,
                         reinterpret_cast<PVOID>(static_cast<std::uintptr_t>(index)))) {
-            freeSend[freeSendCount++] = static_cast<u16>(index);
+            freeSend[freeSendCount++] = index;
             return isWouldBlock(WSAGetLastError()) ? SendOutcome::Full : SendOutcome::Failed;
         }
         ++deferredSends;
@@ -442,7 +468,7 @@ struct UdpSocket::PlatformState {
         const ULONGLONG end = GetTickCount64() + 20;
         for (;;) {
             reapSends(stats);
-            if (freeSendCount >= kSendSlots || deferredSends > 0 || GetTickCount64() > end) return;
+            if (freeSendCount >= sendSlots || deferredSends > 0 || GetTickCount64() > end) return;
             (void)SwitchToThread();
         }
     }
@@ -530,7 +556,7 @@ Result<UdpSocket> UdpSocket::open(const UdpSocketConfig& config) {
         sock.m_local = fromSockaddr(bound, /*unmap=*/false);
 
         if (registered) {
-            if (!sock.m_platform->setUpRegistered(s)) {
+            if (!sock.m_platform->setUpRegistered(s, config.receiveBufferBytes, config.sendBufferBytes)) {
                 rioFailed = true;
                 return makeError(ErrorCode::Unsupported, "UdpSocket {}: Registered I/O set-up failed ({})",
                                  sock.m_local, WSAGetLastError());
@@ -757,7 +783,7 @@ usize UdpSocket::receiveBatch(std::span<InDatagram> slots) noexcept {
         for (ULONG k = 0; k < n; ++k) {
             const rio::Completion& c = done[k];
             const auto slot = static_cast<u32>(c.requestContext);
-            if (slot >= kReceiveSlots) {
+            if (slot >= p.receiveSlots) {
                 ++m_stats.receiveErrors;
                 continue;
             }
@@ -782,7 +808,7 @@ usize UdpSocket::receiveBatch(std::span<InDatagram> slots) noexcept {
                 }
             }
             if (p.postReceive(slot)) ++reposted;
-            else p.unposted[p.unpostedCount++] = static_cast<u16>(slot);
+            else p.unposted[p.unpostedCount++] = slot;
         }
         if (reposted > 0) {
             ++m_stats.receiveSyscalls;

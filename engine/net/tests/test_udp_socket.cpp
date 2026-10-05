@@ -348,14 +348,16 @@ TEST_SUITE("net.udp") {
                 CAPTURE(udpBatchApiName(receiverApi));
                 UdpSocket tx = openLoopbackWith(senderApi);
                 UdpSocket rx = openLoopbackWith(receiverApi);
-                // 400 datagrams in one call: more than Registered I/O's 256 send slots and 128 posted
-                // receives, and more than one sendmmsg batch of 64. They are small so that a receive
-                // buffer capped by rmem_max (unprivileged Linux runners) still holds them all.
+                // 400 datagrams in one call, more than one sendmmsg batch of 64, received only after the
+                // whole burst is out: the receive buffer must hold them all. A RIO socket buffers nothing
+                // beyond its posted receives (128 of 400 arrived before they followed the 8 MB buffer
+                // size), so this checks that its slots do. Small, so that a buffer capped by rmem_max
+                // (unprivileged Linux runners) holds them too.
                 std::vector<u8> payload(16, 0x33);
                 std::vector<OutDatagram> out(400, OutDatagram{rx.localAddress(), payload});
                 const usize sent = tx.sendBatch(out);
                 CHECK(sent + tx.stats().sendWouldBlock == 400);
-                CHECK(sent >= 256); // at least the slots that were free
+                CHECK(sent >= 128); // at least the slots that were free
                 CHECK(tx.stats().sendErrors == 0);
                 const auto got = receiveAll(rx, sent);
                 CHECK(got.size() == sent);
@@ -388,6 +390,23 @@ TEST_SUITE("net.udp") {
         REQUIRE(back.size() == 1);
         CHECK(back[0].size() == 2047);
         CHECK(rio.stats().truncated == 1);
+    }
+
+    TEST_CASE("batch APIs: Registered I/O sizes its slots from the buffer sizes; a full send queue would-block") {
+        // 64 KB buffers give the minimum of 128 slots each way. A 400-datagram burst then fills the send
+        // slots: what does not fit is refused as would-block (counted, not lost silently), as a full
+        // socket buffer refuses it.
+        UdpSocket tx = openLoopback(64u * 1024, UdpBatchApi::Registered);
+        UdpSocket rx = openLoopbackWith(UdpBatchApi::Registered);
+        REQUIRE(tx.batchApi() == UdpBatchApi::Registered);
+        std::vector<u8> payload(16, 0x55);
+        std::vector<OutDatagram> out(400, OutDatagram{rx.localAddress(), payload});
+        const usize sent = tx.sendBatch(out);
+        MESSAGE("RIO with 128 send slots: " << sent << " of 400 sent, " << tx.stats().sendWouldBlock << " would-block");
+        CHECK(sent >= 128);
+        CHECK(sent + tx.stats().sendWouldBlock == 400);
+        CHECK(tx.stats().sendErrors == 0);
+        CHECK(receiveAll(rx, sent).size() == sent);
     }
 #endif
 

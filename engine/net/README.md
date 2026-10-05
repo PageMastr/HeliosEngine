@@ -198,7 +198,7 @@ thread-safe. Handlers run inside `update()` on the updating thread and may call 
 | `net.endpoint` | token handshake + session info, NS-0.1, 16 clients × all channels under 10 % loss/reorder/dup, timeouts + reconnect, graceful disconnects, stale handles, token validation (protocol, key, address, expiry, full, reuse, junk), pre-filter, malformed authenticated peer, server and client handler re-entrancy (send/disconnect from callbacks), real UDP loopback, keyed pre-filter buckets (a precomputed colliding source cannot starve a victim), IPv6 /64 rate limiting, NetSim timing of flush()-time sends, NAT-rebinding reconnect via `findSession` + `disconnect` |
 | `net.connect_token` | round trip, tamper detection, **Go golden vectors** (`services/testdata/vectors`): public + private parts byte-exact, a Go-issued token completes the handshake, an expired one is refused |
 | `net.trunk` | profile, 256 KB CONTROL + 200 KB BULK under loss, coalescing, 2,000-packet bursts with acks, short NS-0.7 run with full 1,200 B datagrams |
-| `net.udp` | loopback send/receive, batches, truncation, IPv6/dual-stack (skipped when the OS lacks IPv6), 32 MB buffers, bind errors, SocketTransport batching, NS-0.2; **batch APIs**: what Auto and each forced API resolve to (Registered on Windows, MultiMessage on Linux, Message otherwise), the same semantics under every API (nothing pending, empty batches, an unreachable destination skipped and counted, partial batches, sender addresses, truncation through receiveBatch and receiveFrom, byte counters), interop between APIs with a 400-datagram burst (more than RIO's 256 send slots and 128 posted receives), SocketTransport over every API, and on Windows RIO's 2 KB slot limits |
+| `net.udp` | loopback send/receive, batches, truncation, IPv6/dual-stack (skipped when the OS lacks IPv6), 32 MB buffers, bind errors, SocketTransport batching, NS-0.2; **batch APIs**: what Auto and each forced API resolve to (Registered on Windows, MultiMessage on Linux, Message otherwise), the same semantics under every API (nothing pending, empty batches, an unreachable destination skipped and counted, partial batches, sender addresses, truncation through receiveBatch and receiveFrom, byte counters), interop between APIs with a 400-datagram burst received only after it is all sent, SocketTransport over every API, and on Windows RIO's 2 KB slot limits and a send queue sized from a 64 KB buffer (would-block counted) |
 | `net.netcode_patches` | `0001-write-bytes-memcpy`: bytes and pointer advance unchanged for 0–1,200 bytes and negative counts; `perf:` a 1,200 B payload in ≤ 0.5 µs (1.28 µs unpatched, 0.018 µs patched here) |
 | `net.netcode_crypto` | the bundled libsodium (owner decision 2026-10-05): its CPU probe sees AVX2 and ChaCha20 dispatches to the AVX2 kernel (observed by swapping a spy into each kernel's table for one call); every compiled kernel (reference, SSSE3, AVX2) matches RFC 8439 §2.4.2 and the reference kernel at 17 lengths around the block sizes; `sodium_memzero` clears exactly its range; `perf:` it wipes 64 KB at least 4× faster than a volatile byte loop (1.4 µs against 27 µs here). Without `HAVE_AVX_ASM` the first case fails (SSSE3 dispatched), without `HAVE_EXPLICIT_BZERO` the `perf:` one does |
 
@@ -285,9 +285,11 @@ the hosted Windows nightly and the owner's `win-gpu` runner.
 
 * The Win32 batch path (Registered I/O, and the WSASendMsg/WSARecvMsg fallback) is compiled with MinGW
   here and runs only on the Windows CI runners and the owner's `win-gpu` runner. Registered I/O copies
-  each datagram through a registered 2 KB slot (128 receives posted, 256 sends in flight per socket,
-  ≈ 0.8 MB of locked memory), so it refuses sends of 2,048 bytes or more and drops larger datagrams as
-  truncated; HTP datagrams are at most 1,300 bytes. The fallback polls a non-blocking socket rather than
+  each datagram through a registered 2 KB slot, so it refuses sends of 2,048 bytes or more and drops larger
+  datagrams as truncated; HTP datagrams are at most 1,300 bytes. A RIO socket buffers nothing beyond its
+  posted receives (Windows CI: 128 posted receives took 128 of a 400-datagram burst), so the receive and
+  send slot counts follow `receiveBufferBytes`/`sendBufferBytes` (128–16,384 each), and the region is that
+  much locked memory per socket: ≈ 17 MB at the 8 MB defaults, ≈ 67 MB for a 32 MB trunk socket. The fallback polls a non-blocking socket rather than
   using IOCP: 04 §2.6's IOCP + `WSARecvMsg` fallback belongs to the Phase 2 trunk IO threads, which block
   between bursts.
 * MSVC builds run the bundled libsodium's portable donna32 Poly1305 (no `__int128`); see "NS-0.2 per-packet

@@ -36,10 +36,12 @@ enum class UdpBatchApi : u8 {
     /// The fastest the platform offers: Registered on Windows, MultiMessage on Linux, else Message.
     Auto,
     /// Windows Registered I/O (Windows 8 and later): datagrams are copied through registered 2 KB
-    /// slots (128 receives posted, 256 sends in flight) and completions are polled, so a batch costs
-    /// one kernel entry. Datagrams of 2,048 bytes or more are refused on send and dropped as truncated
-    /// on receive (HTP datagrams are at most 1,300 bytes). A send counts as sent once it is posted; a
-    /// failure its completion reports later is counted in sendErrors.
+    /// slots and completions are polled, so a batch costs one kernel entry. A RIO socket buffers
+    /// nothing beyond its posted receives, so the receive and send slot counts follow
+    /// receiveBufferBytes and sendBufferBytes (128 to 16,384 slots each; the region they take is
+    /// locked in memory). Datagrams of 2,048 bytes or more are refused on send and dropped as
+    /// truncated on receive (HTP datagrams are at most 1,300 bytes). A send counts as sent once it is
+    /// posted; a failure its completion reports later is counted in sendErrors.
     Registered,
     /// Linux sendmmsg/recvmmsg: one system call per batch of up to 64 datagrams.
     MultiMessage,

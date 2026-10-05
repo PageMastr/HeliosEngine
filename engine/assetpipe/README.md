@@ -301,6 +301,10 @@ CTest replay (the corpus plus its mutations) aborts on the re-encoding property,
 - **Batch import.** Each sidecar writer lists the directories on its path (see Performance), so importing n
   files into one directory one call at a time lists O(n²) entries. `helios-assetd`'s import queue should
   list each directory once per batch.
+- **Leftover temporary files.** A crash during a sidecar write leaves a hidden `.<GUID>.tmp` next to it, and
+  one inside a case-only `moveAsset` can leave the file or its sidecar under a hidden `.<GUID>.moving` name.
+  The scan skips hidden files, so it reports only the other half (a missing or an orphan sidecar); nothing
+  cleans the leftovers up yet (a job for `helios-assetd`'s startup check).
 - **Single writer.** Sidecar creation assumes one writer per project (02 §6.1: `helios-assetd`). Two
   processes creating the same sidecar at once can each mint a GUID, and the last rename wins (core has no
   exclusive create).

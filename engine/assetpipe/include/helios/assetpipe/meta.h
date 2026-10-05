@@ -181,13 +181,14 @@ Result<EnsuredMeta> ensureMeta(const fs::Path& root, std::string_view path, cons
 
 /// GUID-stable move or rename: moves `root`/`from` and its sidecar to `to` (creating directories); the
 /// sidecar is moved, not rewritten, so the GUID follows the file. A case-only rename goes through a
-/// temporary name. Refused (nothing moved): a path failing the rules above, a source without a valid
+/// hidden temporary name next to the file (".<GUID>.moving"). Refused (nothing moved): a path failing the rules above, a source without a valid
 /// sidecar, a target that another file (or sidecar) holds in any ASCII case of any of its components, or
 /// whose directory exists only in another spelling (AlreadyExists), or a target extension its importer
 /// does not claim. Where Linux holds two spellings of one Windows directory, a move from one into the
 /// other is allowed: it merges them. If the sidecar cannot follow, the source is moved back; a crash
 /// between the two renames leaves a source without a sidecar and an orphan sidecar, which scanMetas()
-/// reports.
+/// reports. A crash inside a case-only rename can also leave the file or its sidecar under its hidden
+/// temporary name, which the scan skips (it reports the other half as missing or orphaned).
 Result<void> moveAsset(const fs::Path& root, std::string_view from, std::string_view to,
                        const ImporterRegistry& importers);
 

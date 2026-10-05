@@ -1,0 +1,393 @@
+{
+ "comment": "Documents Go pkg/patchtrust and C++ engine/patch must both refuse to parse (keyset-malformed, pointer-malformed): cdn/'s keyset or pointer with bytes [at, at+delete) replaced by put (or putHex), then padded with spaces to padTo bytes. Regenerate with go test ./pkg/patchcdn -run TestUpdateTrustVectors -update.",
+ "keyset": [
+  {
+   "name": "empty",
+   "at": 0,
+   "delete": 904
+  },
+  {
+   "name": "whitespace after the opening brace",
+   "at": 1,
+   "delete": 0,
+   "put": " "
+  },
+  {
+   "name": "trailing newline",
+   "at": 904,
+   "delete": 0,
+   "putHex": "0a"
+  },
+  {
+   "name": "trailing object",
+   "at": 904,
+   "delete": 0,
+   "put": "{}"
+  },
+  {
+   "name": "truncated",
+   "at": 903,
+   "delete": 1
+  },
+  {
+   "name": "byte-order mark",
+   "at": 0,
+   "delete": 0,
+   "putHex": "efbbbf"
+  },
+  {
+   "name": "uppercase hex",
+   "at": 763,
+   "delete": 1,
+   "put": "D"
+  },
+  {
+   "name": "escaped character",
+   "at": 728,
+   "delete": 1,
+   "put": "\\u0076"
+  },
+  {
+   "name": "non-ASCII byte",
+   "at": 729,
+   "delete": 1,
+   "putHex": "c3a9"
+  },
+  {
+   "name": "null value",
+   "at": 727,
+   "delete": 13,
+   "put": "null"
+  },
+  {
+   "name": "leading zero",
+   "at": 902,
+   "delete": 0,
+   "put": "0"
+  },
+  {
+   "name": "negative number",
+   "at": 902,
+   "delete": 0,
+   "put": "-"
+  },
+  {
+   "name": "fraction",
+   "at": 903,
+   "delete": 0,
+   "put": ".0"
+  },
+  {
+   "name": "exponent",
+   "at": 903,
+   "delete": 0,
+   "put": "e0"
+  },
+  {
+   "name": "integer 2^53",
+   "at": 902,
+   "delete": 1,
+   "put": "9007199254740992"
+  },
+  {
+   "name": "integer 2^64",
+   "at": 902,
+   "delete": 1,
+   "put": "18446744073709551616"
+  },
+  {
+   "name": "string number",
+   "at": 902,
+   "delete": 1,
+   "put": "\"3\""
+  },
+  {
+   "name": "version zero",
+   "at": 902,
+   "delete": 1,
+   "put": "0"
+  },
+  {
+   "name": "members out of order",
+   "at": 716,
+   "delete": 38,
+   "put": "rootEpoch\":1,\"productId\":\"vector-game\""
+  },
+  {
+   "name": "duplicate member",
+   "at": 903,
+   "delete": 0,
+   "put": ",\"version\":3"
+  },
+  {
+   "name": "unknown member",
+   "at": 903,
+   "delete": 0,
+   "put": ",\"zzz\":1"
+  },
+  {
+   "name": "missing member",
+   "at": 891,
+   "delete": 12
+  },
+  {
+   "name": "root epoch zero",
+   "at": 753,
+   "delete": 1,
+   "put": "0"
+  },
+  {
+   "name": "root epoch 2^32-1",
+   "at": 753,
+   "delete": 1,
+   "put": "4294967295"
+  },
+  {
+   "name": "root epoch 2^32",
+   "at": 753,
+   "delete": 1,
+   "put": "4294967296"
+  },
+  {
+   "name": "product ID uppercase",
+   "at": 728,
+   "delete": 1,
+   "put": "V"
+  },
+  {
+   "name": "role uppercase",
+   "at": 176,
+   "delete": 1,
+   "put": "M"
+  },
+  {
+   "name": "short public key",
+   "at": 102,
+   "delete": 2
+  },
+  {
+   "name": "no keys",
+   "at": 9,
+   "delete": 704
+  },
+  {
+   "name": "keys out of order",
+   "at": 16,
+   "delete": 328,
+   "put": "7c2c6d88ae362421943c94dfdb444a91\",\"notAfter\":1781360000,\"notBefore\":1772720000,\"pub\":\"2998f0b0e2c35506bf4321c94b64acdb882f65013b63b7f4f51a2d467cbb6b61\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb"
+  },
+  {
+   "name": "duplicate key",
+   "at": 194,
+   "delete": 0,
+   "put": "63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\""
+  },
+  {
+   "name": "65 keys",
+   "at": 194,
+   "delete": 517,
+   "put": "63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest\"},{\"id\":\"63f00e164ad1a328cdf4a629a95d7fac\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"a21025b45338a1ff0f498489b508e4ab25e2fa26df707d8afaddff050361d9bb\",\"role\":\"manifest"
+  },
+  {
+   "name": "key ID not the key's fingerprint",
+   "at": 16,
+   "delete": 1,
+   "put": "7"
+  },
+  {
+   "name": "empty validity window",
+   "at": 86,
+   "delete": 5,
+   "put": "97776"
+  },
+  {
+   "name": "oversize",
+   "at": 904,
+   "delete": 0,
+   "padTo": 65537
+  }
+ ],
+ "pointer": [
+  {
+   "name": "empty",
+   "at": 0,
+   "delete": 754
+  },
+  {
+   "name": "whitespace after the opening brace",
+   "at": 1,
+   "delete": 0,
+   "put": " "
+  },
+  {
+   "name": "trailing newline",
+   "at": 754,
+   "delete": 0,
+   "putHex": "0a"
+  },
+  {
+   "name": "trailing object",
+   "at": 754,
+   "delete": 0,
+   "put": "{}"
+  },
+  {
+   "name": "truncated",
+   "at": 753,
+   "delete": 1
+  },
+  {
+   "name": "byte-order mark",
+   "at": 0,
+   "delete": 0,
+   "putHex": "efbbbf"
+  },
+  {
+   "name": "uppercase hex",
+   "at": 601,
+   "delete": 1,
+   "put": "D"
+  },
+  {
+   "name": "escaped character",
+   "at": 533,
+   "delete": 1,
+   "put": "\\u0076"
+  },
+  {
+   "name": "non-ASCII byte",
+   "at": 534,
+   "delete": 1,
+   "putHex": "c3a9"
+  },
+  {
+   "name": "null value",
+   "at": 532,
+   "delete": 13,
+   "put": "null"
+  },
+  {
+   "name": "leading zero",
+   "at": 592,
+   "delete": 0,
+   "put": "0"
+  },
+  {
+   "name": "sequence zero",
+   "at": 592,
+   "delete": 1,
+   "put": "0"
+  },
+  {
+   "name": "boolean as number",
+   "at": 557,
+   "delete": 5,
+   "put": "0"
+  },
+  {
+   "name": "rollout above 100",
+   "at": 579,
+   "delete": 1,
+   "put": "1"
+  },
+  {
+   "name": "compat epoch 2^32",
+   "at": 145,
+   "delete": 0,
+   "put": "294967296"
+  },
+  {
+   "name": "members out of order",
+   "at": 502,
+   "delete": 42,
+   "put": "roduct_id\":\"vector-game\",\"platform\":\"win64"
+  },
+  {
+   "name": "next out of order",
+   "at": 339,
+   "delete": 179,
+   "put": "platform\":\"win64\",\"next\":{\"available_at\":1790604800,\"build_id\":\"2026.09.28-r1\",\"compat_epoch\":5,\"manifest_hash\":\"0100526f40b24ddb87e0fec024bc4428fdf8a63e410aa20b591631aca74ace07\"}"
+  },
+  {
+   "name": "empty next",
+   "at": 346,
+   "delete": 152
+  },
+  {
+   "name": "next missing a member",
+   "at": 347,
+   "delete": 12,
+   "put": "x"
+  },
+  {
+   "name": "channel uppercase",
+   "at": 123,
+   "delete": 1,
+   "put": "L"
+  },
+  {
+   "name": "channel one letter",
+   "at": 124,
+   "delete": 3
+  },
+  {
+   "name": "platform uppercase",
+   "at": 512,
+   "delete": 1,
+   "put": "W"
+  },
+  {
+   "name": "build ID starting with a dash",
+   "at": 13,
+   "delete": 1,
+   "put": "-"
+  },
+  {
+   "name": "http host off loopback",
+   "at": 46,
+   "delete": 1
+  },
+  {
+   "name": "loopback name as a prefix",
+   "at": 46,
+   "delete": 8,
+   "put": "://localhost"
+  },
+  {
+   "name": "host with a space",
+   "at": 54,
+   "delete": 1,
+   "put": " "
+  },
+  {
+   "name": "17 hosts",
+   "at": 50,
+   "delete": 0,
+   "put": "x.example\",\"https://x.example\",\"https://x.example\",\"https://x.example\",\"https://x.example\",\"https://x.example\",\"https://x.example\",\"https://x.example\",\"https://x.example\",\"https://x.example\",\"https://x.example\",\"https://x.example\",\"https://x.example\",\"https://x.example\",\"https://x.example\",\"https://"
+  },
+  {
+   "name": "version with five parts",
+   "at": 336,
+   "delete": 0,
+   "put": ".0.0"
+  },
+  {
+   "name": "version with a letter",
+   "at": 308,
+   "delete": 0,
+   "put": "v"
+  },
+  {
+   "name": "key ID too long",
+   "at": 177,
+   "delete": 0,
+   "put": "00"
+  },
+  {
+   "name": "oversize",
+   "at": 754,
+   "delete": 0,
+   "padTo": 16385
+  }
+ ]
+}

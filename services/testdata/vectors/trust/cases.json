@@ -1,0 +1,424 @@
+{
+ "comment": "Shared CL-14 vectors (engine/patch/README.md, Shared vectors): Go pkg/patchcdn and C++ engine/patch verify each case against the CDN tree in cdn/ with the case's replacements and edits (keyset, pointer, manifest and chunk files in this directory; edits overwrite, or insert, the hex bytes at an offset of the artefact), the root pair, now and the ratchet state (state, or the case's), and must accept it (check \"\", ending with wantState) or reject it with exactly check. The keys are test-only (package trusttest); verifiers refuse their roots unless a test allows them. Regenerate with go test ./pkg/patchcdn -run TestUpdateTrustVectors -update.",
+ "product": "vector-game",
+ "channel": "live",
+ "platform": "win64",
+ "roots": {
+  "epoch": 1,
+  "current": "157c930ac055ce5cbc6dc770910d6f6a1a816776e3e5c6460cdea0002bb76ccf",
+  "next": "724fc80638768e34218d5f9877627890b4caa0a6ab2a7894f573f6ede14bae7a"
+ },
+ "now": 1790000000,
+ "state": {
+  "rootEpoch": 1,
+  "keysetVersion": 3,
+  "pointerSequence": 6
+ },
+ "cases": [
+  {
+   "name": "valid",
+   "check": "",
+   "wantState": {
+    "rootEpoch": 1,
+    "keysetVersion": 3,
+    "pointerSequence": 7
+   }
+  },
+  {
+   "name": "valid-fresh-install",
+   "check": "",
+   "state": {
+    "rootEpoch": 0,
+    "keysetVersion": 0,
+    "pointerSequence": 0
+   },
+   "wantState": {
+    "rootEpoch": 1,
+    "keysetVersion": 3,
+    "pointerSequence": 7
+   }
+  },
+  {
+   "name": "valid-same-sequence",
+   "check": "",
+   "state": {
+    "rootEpoch": 1,
+    "keysetVersion": 3,
+    "pointerSequence": 7
+   },
+   "wantState": {
+    "rootEpoch": 1,
+    "keysetVersion": 3,
+    "pointerSequence": 7
+   }
+  },
+  {
+   "name": "rollback-honoured",
+   "check": "",
+   "state": {
+    "rootEpoch": 1,
+    "keysetVersion": 3,
+    "pointerSequence": 9
+   },
+   "pointer": "pointer-rollback.json",
+   "wantState": {
+    "rootEpoch": 1,
+    "keysetVersion": 3,
+    "pointerSequence": 5
+   }
+  },
+  {
+   "name": "rollback-flag-at-higher-sequence",
+   "check": "",
+   "pointer": "pointer-rollback-higher.json",
+   "wantState": {
+    "rootEpoch": 1,
+    "keysetVersion": 3,
+    "pointerSequence": 8
+   }
+  },
+  {
+   "name": "root-rotation",
+   "check": "",
+   "keyset": "keyset-next-root.json",
+   "wantState": {
+    "rootEpoch": 2,
+    "keysetVersion": 4,
+    "pointerSequence": 7
+   }
+  },
+  {
+   "name": "root-rotation-after-ratchet",
+   "check": "",
+   "state": {
+    "rootEpoch": 2,
+    "keysetVersion": 4,
+    "pointerSequence": 7
+   },
+   "keyset": "keyset-next-root.json",
+   "wantState": {
+    "rootEpoch": 2,
+    "keysetVersion": 4,
+    "pointerSequence": 7
+   }
+  },
+  {
+   "name": "pointer-without-next-or-hosts",
+   "check": "",
+   "pointer": "pointer-minimal.json",
+   "wantState": {
+    "rootEpoch": 1,
+    "keysetVersion": 3,
+    "pointerSequence": 7
+   }
+  },
+  {
+   "name": "pointer-signed-at-key-start",
+   "check": "",
+   "now": 1782227600,
+   "pointer": "pointer-key-start.json",
+   "wantState": {
+    "rootEpoch": 1,
+    "keysetVersion": 3,
+    "pointerSequence": 7
+   }
+  },
+  {
+   "name": "keyset-tampered",
+   "check": "keyset-signature",
+   "edits": [
+    {
+     "artefact": "keyset",
+     "at": 902,
+     "hex": "39"
+    }
+   ]
+  },
+  {
+   "name": "keyset-noncanonical",
+   "check": "keyset-malformed",
+   "edits": [
+    {
+     "artefact": "keyset",
+     "at": 1,
+     "hex": "20",
+     "insert": true
+    }
+   ]
+  },
+  {
+   "name": "keyset-unknown-root",
+   "check": "keyset-signature",
+   "keyset": "keyset-unknown-root.json"
+  },
+  {
+   "name": "keyset-next-root-claims-current",
+   "check": "keyset-signature",
+   "keyset": "keyset-root2-epoch1.json"
+  },
+  {
+   "name": "keyset-root-epoch-unknown",
+   "check": "keyset-root",
+   "keyset": "keyset-epoch3.json"
+  },
+  {
+   "name": "keyset-ratcheted-root",
+   "check": "keyset-root-ratchet",
+   "state": {
+    "rootEpoch": 2,
+    "keysetVersion": 3,
+    "pointerSequence": 6
+   }
+  },
+  {
+   "name": "keyset-wrong-product",
+   "check": "keyset-product",
+   "keyset": "keyset-other-product.json"
+  },
+  {
+   "name": "keyset-version-below-ratchet",
+   "check": "keyset-version",
+   "state": {
+    "rootEpoch": 1,
+    "keysetVersion": 4,
+    "pointerSequence": 6
+   }
+  },
+  {
+   "name": "pointer-tampered",
+   "check": "pointer-signature",
+   "edits": [
+    {
+     "artefact": "pointer",
+     "at": 333,
+     "hex": "33"
+    }
+   ]
+  },
+  {
+   "name": "pointer-noncanonical",
+   "check": "pointer-malformed",
+   "edits": [
+    {
+     "artefact": "pointer",
+     "at": 601,
+     "hex": "41"
+    }
+   ]
+  },
+  {
+   "name": "pointer-revoked-subkey",
+   "check": "pointer-key-unknown",
+   "keyset": "keyset-revoked.json"
+  },
+  {
+   "name": "pointer-unknown-subkey",
+   "check": "pointer-key-unknown",
+   "pointer": "pointer-unknown-key.json"
+  },
+  {
+   "name": "pointer-news-key",
+   "check": "pointer-key-role",
+   "pointer": "pointer-news-key.json"
+  },
+  {
+   "name": "pointer-unknown-role-key",
+   "check": "pointer-key-role",
+   "pointer": "pointer-store-key.json"
+  },
+  {
+   "name": "pointer-subkey-outside-window",
+   "check": "pointer-key-window",
+   "pointer": "pointer-old-key.json"
+  },
+  {
+   "name": "pointer-signed-before-key",
+   "check": "pointer-key-window",
+   "pointer": "pointer-before-key.json"
+  },
+  {
+   "name": "pointer-lifetime-over-7-days",
+   "check": "pointer-lifetime",
+   "pointer": "pointer-long-lifetime.json"
+  },
+  {
+   "name": "pointer-expires-before-signing",
+   "check": "pointer-lifetime",
+   "pointer": "pointer-expires-first.json"
+  },
+  {
+   "name": "pointer-wrong-product",
+   "check": "pointer-product",
+   "pointer": "pointer-other-product.json"
+  },
+  {
+   "name": "pointer-wrong-channel",
+   "check": "pointer-channel",
+   "pointer": "pointer-other-channel.json"
+  },
+  {
+   "name": "pointer-wrong-platform",
+   "check": "pointer-platform",
+   "pointer": "pointer-other-platform.json"
+  },
+  {
+   "name": "pointer-expired",
+   "check": "pointer-expired",
+   "pointer": "pointer-expired.json"
+  },
+  {
+   "name": "pointer-expires-now",
+   "check": "pointer-expired",
+   "pointer": "pointer-expires-now.json"
+  },
+  {
+   "name": "pointer-rolled-back",
+   "check": "pointer-sequence",
+   "pointer": "pointer-sequence-5.json"
+  },
+  {
+   "name": "pointer-replayed-after-rollback",
+   "check": "pointer-sequence",
+   "state": {
+    "rootEpoch": 1,
+    "keysetVersion": 3,
+    "pointerSequence": 8
+   }
+  },
+  {
+   "name": "manifest-tampered-payload",
+   "check": "manifest-body",
+   "edits": [
+    {
+     "artefact": "manifest",
+     "at": 701,
+     "hex": "57"
+    }
+   ]
+  },
+  {
+   "name": "manifest-tampered-header",
+   "check": "manifest-malformed",
+   "edits": [
+    {
+     "artefact": "manifest",
+     "at": 40,
+     "hex": "05"
+    }
+   ]
+  },
+  {
+   "name": "manifest-tampered-header-resealed",
+   "check": "manifest-hash",
+   "manifest": "manifest-resealed.hman"
+  },
+  {
+   "name": "manifest-swapped",
+   "check": "manifest-hash",
+   "manifest": "manifest-swapped.hman"
+  },
+  {
+   "name": "manifest-tampered-signature",
+   "check": "manifest-signature",
+   "edits": [
+    {
+     "artefact": "manifest",
+     "at": 300,
+     "hex": "9e"
+    }
+   ]
+  },
+  {
+   "name": "manifest-unknown-subkey",
+   "check": "manifest-key-unknown",
+   "pointer": "manifest-unknown-subkey-pointer.json",
+   "manifest": "manifest-unknown-subkey.hman"
+  },
+  {
+   "name": "manifest-news-key",
+   "check": "manifest-key-role",
+   "pointer": "manifest-news-key-pointer.json",
+   "manifest": "manifest-news-key.hman"
+  },
+  {
+   "name": "manifest-subkey-outside-window",
+   "check": "manifest-key-window",
+   "pointer": "manifest-subkey-outside-window-pointer.json",
+   "manifest": "manifest-subkey-outside-window.hman"
+  },
+  {
+   "name": "manifest-wrong-product",
+   "check": "manifest-product",
+   "pointer": "manifest-wrong-product-pointer.json",
+   "manifest": "manifest-wrong-product.hman"
+  },
+  {
+   "name": "manifest-wrong-platform",
+   "check": "manifest-platform",
+   "pointer": "manifest-wrong-platform-pointer.json",
+   "manifest": "manifest-wrong-platform.hman"
+  },
+  {
+   "name": "manifest-wrong-build",
+   "check": "manifest-build",
+   "pointer": "manifest-wrong-build-pointer.json",
+   "manifest": "manifest-wrong-build.hman"
+  },
+  {
+   "name": "manifest-wrong-compat-epoch",
+   "check": "manifest-compat-epoch",
+   "pointer": "manifest-wrong-compat-epoch-pointer.json",
+   "manifest": "manifest-wrong-compat-epoch.hman"
+  },
+  {
+   "name": "manifest-expired",
+   "check": "manifest-expired",
+   "pointer": "manifest-expired-pointer.json",
+   "manifest": "manifest-expired.hman"
+  },
+  {
+   "name": "manifest-expires-later",
+   "check": "",
+   "pointer": "manifest-expires-later-pointer.json",
+   "manifest": "manifest-expires-later.hman",
+   "wantState": {
+    "rootEpoch": 1,
+    "keysetVersion": 3,
+    "pointerSequence": 7
+   }
+  },
+  {
+   "name": "chunk-substituted",
+   "check": "chunk-hash",
+   "chunks": {
+    "132be2bbb1b99220cf57c38ec32cb80e2ff5edffff7bff8efea9ae588f98d9e9": "chunk-substituted.zst"
+   }
+  },
+  {
+   "name": "chunk-tampered",
+   "check": "chunk-corrupt",
+   "edits": [
+    {
+     "artefact": "chunk",
+     "chunk": "132be2bbb1b99220cf57c38ec32cb80e2ff5edffff7bff8efea9ae588f98d9e9",
+     "at": 100,
+     "hex": "ff"
+    }
+   ]
+  },
+  {
+   "name": "chunk-oversize",
+   "check": "chunk-corrupt",
+   "chunks": {
+    "132be2bbb1b99220cf57c38ec32cb80e2ff5edffff7bff8efea9ae588f98d9e9": "chunk-oversize.zst"
+   }
+  },
+  {
+   "name": "chunk-missing",
+   "check": "chunk-missing",
+   "chunks": {
+    "132be2bbb1b99220cf57c38ec32cb80e2ff5edffff7bff8efea9ae588f98d9e9": ""
+   }
+  }
+ ]
+}

@@ -103,4 +103,4 @@ func FetchChunk(ctx context.Context, src Source, c manifest.Chunk) ([]byte, erro
 type MemoryStateStore struct{ State patchtrust.State }
 
 func (m *MemoryStateStore) Load() (patchtrust.State, error) { return m.State, nil }
-func (m *MemoryStateStore) Save(s patchtrust.State) error  { m.State = s; return nil }
+func (m *MemoryStateStore) Save(s patchtrust.State) error   { m.State = s; return nil }

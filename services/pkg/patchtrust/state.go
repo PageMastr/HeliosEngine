@@ -23,12 +23,6 @@ type StateStore interface {
 // FileStateStore keeps State as a small JSON file, replaced atomically.
 type FileStateStore struct{ Path string }
 
-type stateFile struct {
-	RootEpoch       uint32 `json:"rootEpoch"`
-	KeysetVersion   uint64 `json:"keysetVersion"`
-	PointerSequence uint64 `json:"pointerSequence"`
-}
-
 // Load returns the zero State when the file does not exist. A file that does not parse is an error, never
 // a reset: a reset ratchet would accept a rolled-back pointer.
 func (s FileStateStore) Load() (State, error) {
@@ -39,16 +33,16 @@ func (s FileStateStore) Load() (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	var f stateFile
-	if err := json.Unmarshal(b, &f); err != nil {
+	var st State
+	if err := json.Unmarshal(b, &st); err != nil {
 		return State{}, fmt.Errorf("patchtrust: state %s: %w", s.Path, err)
 	}
-	return State(f), nil
+	return st, nil
 }
 
 // Save writes the state to a temporary file in the same directory and renames it over the old one.
 func (s FileStateStore) Save(st State) error {
-	b, _ := json.Marshal(stateFile(st))
+	b, _ := json.Marshal(st)
 	return WriteFileAtomic(s.Path, append(b, '\n'), 0o644)
 }
 

@@ -96,9 +96,9 @@ type Target struct {
 // State holds the ratchets an install persists (08 §2.5: install.db keeps them; WP-0.17). The zero
 // State is a fresh install's.
 type State struct {
-	RootEpoch       uint32 // the highest root epoch accepted
-	KeysetVersion   uint64 // the highest keyset version accepted
-	PointerSequence uint64 // the last accepted pointer's sequence (a rollback pointer lowers it)
+	RootEpoch       uint32 `json:"rootEpoch"`       // the highest root epoch accepted
+	KeysetVersion   uint64 `json:"keysetVersion"`   // the highest keyset version accepted
+	PointerSequence uint64 `json:"pointerSequence"` // the last accepted pointer's (a rollback pointer lowers it)
 }
 
 // Advance returns the state after accepting this keyset and pointer.

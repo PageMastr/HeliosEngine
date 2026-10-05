@@ -500,7 +500,11 @@ ran 977,340 and 848,423 inputs in two first runs (5.5 and 5.3 minutes) and 1,189
 (two workers, 21 new interesting inputs), and `FuzzChunker` 22,345 inputs in 90 seconds, with no failure; on the
 loaded VM the Go fuzzer ran in bursts of about 20,000 inputs per second between pauses.
 
-Part 2 (2026-10-05, load average 5–8): CPP_TRUST_FUZZ_TBD Go, one worker, 5 minutes each:
+Part 2 (2026-10-05, load average 5–8): `patch_fuzz_trust_parser` (Clang 18.1.3, ASan and UBSan with
+`-fno-sanitize-recover=undefined`, one process, `-malloc_limit_mb=512`, the 11 committed seeds) ran 7,330,229
+inputs in 11 minutes (about 11,100 per second) and reached 1,704 coverage edges (3,374 features; corpus 11 → 574
+units; peak RSS 521 MB) with no finding, and `patch_tests` (its 32 non-`perf:` cases) passed twice in the same
+sanitizer build. Go, one worker, 5 minutes each:
 `FuzzParseKeyset` ran 2,379,149 inputs (corpus 37 → 65), `FuzzParsePointer` 1,473,096 (39 → 52) and
 `FuzzVerifyManifestHeader` 1,381,666 (13 → 20), with no failure.
 

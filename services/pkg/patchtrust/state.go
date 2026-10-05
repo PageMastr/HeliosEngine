@@ -1,6 +1,7 @@
 package patchtrust
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/binary"
 	"encoding/json"
@@ -33,11 +34,18 @@ func (s FileStateStore) Load() (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	var st State
-	if err := json.Unmarshal(b, &st); err != nil {
-		return State{}, fmt.Errorf("patchtrust: state %s: %w", s.Path, err)
+	// Every field must be present: "{}" would otherwise load as a fresh install's state.
+	var f struct {
+		RootEpoch       *uint32 `json:"rootEpoch"`
+		KeysetVersion   *uint64 `json:"keysetVersion"`
+		PointerSequence *uint64 `json:"pointerSequence"`
 	}
-	return st, nil
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&f); err != nil || f.RootEpoch == nil || f.KeysetVersion == nil || f.PointerSequence == nil {
+		return State{}, fmt.Errorf("patchtrust: state %s is not a complete state record (%v)", s.Path, err)
+	}
+	return State{RootEpoch: *f.RootEpoch, KeysetVersion: *f.KeysetVersion, PointerSequence: *f.PointerSequence}, nil
 }
 
 // Save writes the state to a temporary file in the same directory and renames it over the old one.

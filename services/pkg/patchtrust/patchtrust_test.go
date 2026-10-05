@@ -214,11 +214,14 @@ func TestFileStateStore(t *testing.T) {
 	if st, err := s.Load(); err != nil || st != want {
 		t.Fatalf("%+v %v", st, err)
 	}
-	if err := os.WriteFile(path, []byte("{"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Load(); err == nil {
-		t.Fatal("a corrupt state file loaded (a reset ratchet accepts rolled-back pointers)")
+	for _, bad := range []string{"{", "{}", `{"rootEpoch":1,"keysetVersion":2}`, `{"rootEpoch":1,"keysetVersion":2,` +
+		`"pointerSequence":3,"x":1}`, `{"rootEpoch":-1,"keysetVersion":2,"pointerSequence":3}`} {
+		if err := os.WriteFile(path, []byte(bad), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Load(); err == nil {
+			t.Fatalf("state file %s loaded (a reset ratchet accepts rolled-back pointers)", bad)
+		}
 	}
 }
 

@@ -705,7 +705,7 @@ func (o *overlay) Fetch(ctx context.Context, path string, limit int64) ([]byte, 
 	return b, nil
 }
 
-func readVector(t *testing.T, name string) []byte {
+func readVector(t testing.TB, name string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(trustDir, name))
 	if err != nil {
@@ -714,7 +714,7 @@ func readVector(t *testing.T, name string) []byte {
 	return b
 }
 
-func loadVectors(t *testing.T) (vectorFile, *patchtrust.Verifier) {
+func loadVectors(t testing.TB) (vectorFile, *patchtrust.Verifier) {
 	var vf vectorFile
 	if err := json.Unmarshal(readVector(t, "cases.json"), &vf); err != nil {
 		t.Fatal(err)
@@ -737,7 +737,7 @@ func loadVectors(t *testing.T) (vectorFile, *patchtrust.Verifier) {
 }
 
 // caseSource assembles a case's artefacts.
-func caseSource(t *testing.T, c vectorCase) *overlay {
+func caseSource(t testing.TB, c vectorCase) *overlay {
 	cdn := patchcdn.DirSource{Root: filepath.Join(trustDir, "cdn")}
 	o := &overlay{base: cdn, chunks: map[string][]byte{}}
 	load := func(file, path string) []byte {
@@ -925,6 +925,26 @@ func TestEveryByteTampered(t *testing.T) {
 					t.Fatalf("%s byte %d ^ %#x: %v", art, i, x, err)
 				}
 			}
+		}
+	}
+}
+
+// BenchmarkVerifyChain: the per-launch cost before any chunk, keyset, pointer and manifest header (three
+// Ed25519 verifications and the canonical parses) of the shared vectors.
+func BenchmarkVerifyChain(b *testing.B) {
+	vf, v := loadVectors(b)
+	o := caseSource(b, vectorCase{})
+	for i := 0; i < b.N; i++ {
+		ks, err := v.VerifyKeyset(o.keyset, vf.State)
+		if err != nil {
+			b.Fatal(err)
+		}
+		p, err := v.VerifyPointer(o.pointer, ks, vf.Now, vf.State)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, err := v.VerifyManifestHeader(o.manifest, ks, p.ManifestRef, vf.Now); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

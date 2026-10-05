@@ -640,11 +640,11 @@ foreach(case
     "isa_avx2_links_copy|helios isa: 'fx-client' .avx2. links the base copy 'helios_core.base': only base images link base copies"
     "isa_override_in_apps|helios_executable.fx-isa-app.: ISA is for the ISA audit's fixtures only.*'apps/isa/'"
     "isa_interface_options|helios isa: 'tp_jolt' carries ISA compile options on its interface .-mavx2 -mbmi -mpopcnt -mlzcnt -mf16c."
-    "isa_override_elsewhere|helios_executable.fx-isa-elsewhere.: ISA is for the ISA audit's fixtures only.*isa_elsewhere.cmake"
+    "isa_override_elsewhere|helios_executable.fx-isa-elsewhere.: ISA is for the ISA audit's[ \n]+fixtures[ \n]+only.*isa_elsewhere.cmake"
     "isa_invalid_value|helios_executable.fx-isa-fixture.: ISA is avx2 or base, not 'sse4'"
     "isa_cpu_gate_on_base|helios_executable.fx-launcher.: CPU_GATE on a base image"
     "isa_level_on_library|helios isa: 'helios_math' has HELIOS_ISA_LEVEL 'base', which only helios_executable.. .avx2, base. and helios_cpu_gate_target.. .gate. set"
-    "isa_gate_target_not_object|helios_cpu_gate_target.fx_gate.: the CPU gate's units live in OBJECT libraries"
+    "isa_gate_target_not_object|helios_cpu_gate_target.fx_gate.: the CPU gate's units live in[ \n]+OBJECT[ \n]+libraries"
     "isa_base_root_links_jolt|helios isa: base image 'fx-launcher' links 'tp_jolt', which is built only at avx2: fx-launcher -> helios_core -> tp_jolt"
     "isa_base_target_objects|helios isa: base image 'fx-launcher' compiles in the objects of 'fx_kernels' .*, which is built only at avx2"
     "isa_generated_source|FX_COPY_SOURCES: [^\n]*/layering/isa_generated_source/fx_generated.cpp.*HELIOS_FIXTURE_CONFIGURE_OK")

@@ -62,6 +62,7 @@ if(HELIOS_BUILD_TESTS)
       project_content_root_nested
       project_zone_not_object project_zone_unknown_key project_zone_name project_zone_twice project_zone_frame
       project_zone_id project_zone_id_zero project_zone_id_large project_tick_rate
+      project_tick_rate_zero
       project_product_unknown_key project_product_id project_product_id_form project_display_name
       project_display_name_tag project_display_name_empty project_install_name project_install_name_form
       project_install_name_prefix project_reserved_scheme project_uri_scheme_form project_scheme_helios_prefix

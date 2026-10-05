@@ -67,17 +67,20 @@ const char* verdictName(int v) {
 // The callback slot, in mimalloc's .CRT$XLB (02 §1.1's table: after the gate's .CRT$XLA0, before the CRT's
 // .CRT$XLC). _tls_used is pulled in here too: with the gate in helios_runtime.dll, or with no gate, nothing
 // else would give this executable a TLS directory.
+// The extern declaration gives the const definition external linkage, so /INCLUDE can name it.
+extern "C" const PIMAGE_TLS_CALLBACK helios_cpugate_child_xlb_entry;
 #if defined(_MSC_VER)
 #pragma comment(linker, "/INCLUDE:_tls_used")
 #pragma comment(linker, "/INCLUDE:helios_cpugate_child_xlb_entry")
 #pragma const_seg(".CRT$XLB")
-extern "C" const PIMAGE_TLS_CALLBACK helios_cpugate_child_xlb_entry;
-extern "C" const PIMAGE_TLS_CALLBACK helios_cpugate_child_xlb_entry = xlbCallback;
+extern "C" {
+const PIMAGE_TLS_CALLBACK helios_cpugate_child_xlb_entry = xlbCallback;
+}
 #pragma const_seg()
 #else
-extern "C" const PIMAGE_TLS_CALLBACK helios_cpugate_child_xlb_entry;
-extern "C" __attribute__((section(".CRT$XLB"), used)) const PIMAGE_TLS_CALLBACK
-    helios_cpugate_child_xlb_entry = xlbCallback;
+extern "C" {
+__attribute__((section(".CRT$XLB"), used)) const PIMAGE_TLS_CALLBACK helios_cpugate_child_xlb_entry = xlbCallback;
+}
 #endif
 
 #if defined(HELIOS_CPUGATE_CHILD_HOOK_IN_IMAGE)

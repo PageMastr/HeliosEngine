@@ -467,70 +467,78 @@ Result<UdpSocket> UdpSocket::open(const UdpSocketConfig& config) {
     if (!ensureWinsock()) return Error{ErrorCode::Unsupported, "UdpSocket: WSAStartup failed"};
     const AddressFamily family = config.bindAddress.family();
     if (family == AddressFamily::None) return Error{ErrorCode::InvalidArgument, "UdpSocket: invalid bind address"};
-    const bool registered =
-        (config.batchApi == UdpBatchApi::Auto || config.batchApi == UdpBatchApi::Registered) && registeredIoAvailable();
-    const SOCKET s = WSASocketW(family == AddressFamily::IPv6 ? AF_INET6 : AF_INET, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0,
-                                WSA_FLAG_NO_HANDLE_INHERIT | (registered ? WSA_FLAG_REGISTERED_IO : 0));
-    if (s == INVALID_SOCKET) {
-        const int e = WSAGetLastError();
-        return makeError(e == WSAEAFNOSUPPORT ? ErrorCode::Unsupported : ErrorCode::IoError,
-                         "UdpSocket: socket() failed ({})", e);
-    }
-    UdpSocket sock;
-    sock.m_handle = static_cast<std::intptr_t>(s);
-    sock.m_platform = new (std::nothrow) PlatformState();
-    if (!sock.m_platform) return Error{ErrorCode::OutOfMemory, "UdpSocket: out of memory"};
 
-    (void)SetHandleInformation(reinterpret_cast<HANDLE>(s), HANDLE_FLAG_INHERIT, 0);
-    if (family == AddressFamily::IPv6) {
-        const DWORD v6only = config.dualStack ? 0 : 1;
-        if (setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<const char*>(&v6only), sizeof(v6only)) != 0) {
-            return makeError(ErrorCode::IoError, "UdpSocket: IPV6_V6ONLY failed ({})", WSAGetLastError());
+    // One attempt at a socket. A Registered I/O socket (WSA_FLAG_REGISTERED_IO) refuses FIONBIO
+    // (WSAEOPNOTSUPP): its requests never block, but a plain call on it would, so it is used only once its
+    // queues exist. When they cannot be set up, `rioFailed` is set and open() starts over with a plain
+    // non-blocking socket for the Message API.
+    bool rioFailed = false;
+    const auto attempt = [&](bool registered) -> Result<UdpSocket> {
+        const SOCKET s = WSASocketW(family == AddressFamily::IPv6 ? AF_INET6 : AF_INET, SOCK_DGRAM, IPPROTO_UDP,
+                                    nullptr, 0, WSA_FLAG_NO_HANDLE_INHERIT | (registered ? WSA_FLAG_REGISTERED_IO : 0));
+        if (s == INVALID_SOCKET) {
+            const int e = WSAGetLastError();
+            return makeError(e == WSAEAFNOSUPPORT ? ErrorCode::Unsupported : ErrorCode::IoError,
+                             "UdpSocket: socket() failed ({})", e);
         }
-    }
-    if (config.reuseAddress) {
-        const BOOL one = TRUE;
-        (void)setsockopt(s, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&one), sizeof(one));
-    }
-    // An ICMP port-unreachable for one peer must not make receives fail for all others.
-    {
-        BOOL newBehavior = FALSE;
-        DWORD bytesReturned = 0;
-        (void)WSAIoctl(s, SIO_UDP_CONNRESET, &newBehavior, sizeof(newBehavior), nullptr, 0, &bytesReturned,
-                       nullptr, nullptr);
-    }
-    sock.m_sendBuffer = setBufferSize(s, SO_SNDBUF, config.sendBufferBytes);
-    sock.m_receiveBuffer = setBufferSize(s, SO_RCVBUF, config.receiveBufferBytes);
+        UdpSocket sock;
+        sock.m_handle = static_cast<std::intptr_t>(s);
+        sock.m_platform = new (std::nothrow) PlatformState();
+        if (!sock.m_platform) return Error{ErrorCode::OutOfMemory, "UdpSocket: out of memory"};
 
-    u_long nonBlocking = 1;
-    if (ioctlsocket(s, FIONBIO, &nonBlocking) != 0) {
-        return makeError(ErrorCode::IoError, "UdpSocket: FIONBIO failed ({})", WSAGetLastError());
-    }
+        (void)SetHandleInformation(reinterpret_cast<HANDLE>(s), HANDLE_FLAG_INHERIT, 0);
+        if (family == AddressFamily::IPv6) {
+            const DWORD v6only = config.dualStack ? 0 : 1;
+            if (setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<const char*>(&v6only), sizeof(v6only)) !=
+                0) {
+                return makeError(ErrorCode::IoError, "UdpSocket: IPV6_V6ONLY failed ({})", WSAGetLastError());
+            }
+        }
+        if (config.reuseAddress) {
+            const BOOL one = TRUE;
+            (void)setsockopt(s, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&one), sizeof(one));
+        }
+        // An ICMP port-unreachable for one peer must not make receives fail for all others.
+        {
+            BOOL newBehavior = FALSE;
+            DWORD bytesReturned = 0;
+            (void)WSAIoctl(s, SIO_UDP_CONNRESET, &newBehavior, sizeof(newBehavior), nullptr, 0, &bytesReturned,
+                           nullptr, nullptr);
+        }
+        sock.m_sendBuffer = setBufferSize(s, SO_SNDBUF, config.sendBufferBytes);
+        sock.m_receiveBuffer = setBufferSize(s, SO_RCVBUF, config.receiveBufferBytes);
 
-    sockaddr_storage ss{};
-    const int len = toSockaddr(config.bindAddress, family, ss);
-    if (::bind(s, reinterpret_cast<const sockaddr*>(&ss), len) != 0) {
-        const int e = WSAGetLastError();
-        return makeError(e == WSAEADDRINUSE ? ErrorCode::AlreadyExists : ErrorCode::IoError,
-                         "UdpSocket: bind {} failed ({})", config.bindAddress, e);
-    }
-    sockaddr_storage bound{};
-    int boundLen = sizeof(bound);
-    if (getsockname(s, reinterpret_cast<sockaddr*>(&bound), &boundLen) != 0) {
-        return makeError(ErrorCode::IoError, "UdpSocket: getsockname failed ({})", WSAGetLastError());
-    }
-    sock.m_local = fromSockaddr(bound, /*unmap=*/false);
+        if (!registered) {
+            u_long nonBlocking = 1;
+            if (ioctlsocket(s, FIONBIO, &nonBlocking) != 0) {
+                return makeError(ErrorCode::IoError, "UdpSocket: FIONBIO failed ({})", WSAGetLastError());
+            }
+        }
 
-    sock.m_batchApi = UdpBatchApi::Message;
-    if (registered) {
-        if (sock.m_platform->setUpRegistered(s)) {
+        sockaddr_storage ss{};
+        const int len = toSockaddr(config.bindAddress, family, ss);
+        if (::bind(s, reinterpret_cast<const sockaddr*>(&ss), len) != 0) {
+            const int e = WSAGetLastError();
+            return makeError(e == WSAEADDRINUSE ? ErrorCode::AlreadyExists : ErrorCode::IoError,
+                             "UdpSocket: bind {} failed ({})", config.bindAddress, e);
+        }
+        sockaddr_storage bound{};
+        int boundLen = sizeof(bound);
+        if (getsockname(s, reinterpret_cast<sockaddr*>(&bound), &boundLen) != 0) {
+            return makeError(ErrorCode::IoError, "UdpSocket: getsockname failed ({})", WSAGetLastError());
+        }
+        sock.m_local = fromSockaddr(bound, /*unmap=*/false);
+
+        if (registered) {
+            if (!sock.m_platform->setUpRegistered(s)) {
+                rioFailed = true;
+                return makeError(ErrorCode::Unsupported, "UdpSocket {}: Registered I/O set-up failed ({})",
+                                 sock.m_local, WSAGetLastError());
+            }
             sock.m_batchApi = UdpBatchApi::Registered;
-        } else {
-            HELIOS_LOG_DEBUG(LogNet, "UdpSocket {}: Registered I/O set-up failed ({}); using WSASendMsg/WSARecvMsg",
-                             sock.m_local, WSAGetLastError());
+            return sock;
         }
-    }
-    {
+        sock.m_batchApi = UdpBatchApi::Message;
         GUID id = WSAID_WSARECVMSG;
         DWORD bytes = 0;
         LPFN_WSARECVMSG fn = nullptr;
@@ -538,8 +546,16 @@ Result<UdpSocket> UdpSocket::open(const UdpSocketConfig& config) {
                      nullptr) == 0) {
             sock.m_platform->recvMsg = fn;
         }
+        return sock;
+    };
+
+    if ((config.batchApi == UdpBatchApi::Auto || config.batchApi == UdpBatchApi::Registered) &&
+        registeredIoAvailable()) {
+        Result<UdpSocket> r = attempt(true);
+        if (r || !rioFailed) return r;
+        HELIOS_LOG_DEBUG(LogNet, "{}; using WSASendMsg/WSARecvMsg", r.error());
     }
-    return sock;
+    return attempt(false);
 }
 
 UdpSocket::UdpSocket(UdpSocket&& other) noexcept

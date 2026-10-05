@@ -67,12 +67,12 @@ else()
 endif()
 
 # What a base image may link (02 §1.1's `base` row (a); 08 §2.1.1's launcher closure). Modules by name:
-# core, app, ui, text, loc, patch and crash, of which core and patch exist today; the others get copies
-# once the WPs that create them land (app and ui's SDL_Renderer backend with the launcher, WP-0.17; ui,
-# text and loc with WP-1.6, 02 §7.5–7.6; crash in Phase 2). Third-party libraries by target name, where
-# they exist:
-# SDL3, RmlUi, FreeType, HarfBuzz, SheenBidi, libunibreak, zstd, Monocypher, yyjson and sentry-native.
-# The libraries these link (mimalloc, say) get copies too.
+# core, app, ui, text, loc, patch and crash, of which core and patch exist today. The others get copies
+# once they exist: app is named by WP-0.11's row but is not in the tree yet (the launcher, WP-0.17, is the
+# first base image to need it); ui, text and loc come with WP-1.6 (02 §7.5–7.6), and the launcher links ui
+# from WP-1.21 (RmlUi on SDL_Renderer); crash comes in Phase 2. Third-party libraries by target name, where
+# they exist: SDL3, RmlUi, FreeType, HarfBuzz, SheenBidi, libunibreak, zstd, Monocypher, yyjson and
+# sentry-native. The libraries these link (mimalloc, say) get copies too.
 set(HELIOS_ISA_BASE_MODULES core app ui text loc patch crash)
 set(HELIOS_ISA_BASE_THIRD_PARTY SDL3-static tp_rmlui tp_freetype tp_harfbuzz tp_sheenbidi tp_libunibreak tp_zstd
                                 tp_monocypher tp_yyjson tp_sentry)

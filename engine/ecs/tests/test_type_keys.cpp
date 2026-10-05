@@ -10,12 +10,7 @@
 #include "helios/core/platform.h"
 #include "helios/ecs/world.h"
 #include "test_types.h"
-
-namespace ecs_test {
-// test_type_keys_other.cpp: binds that file's unnamed-namespace KeyClash to `id`, and returns its key.
-helios::Result<void> bindOtherKeyClash(helios::ecs::World& world, helios::ecs::ComponentId id);
-helios::ecs::TypeKey otherKeyClashKey() noexcept;
-} // namespace ecs_test
+#include "type_key_clash.h"
 
 namespace {
 

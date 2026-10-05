@@ -2,6 +2,8 @@
 // qualified name as that file's KeyClash, so the two share a type key on compilers that print unnamed
 // namespaces alike (GCC, Clang).
 
+#include "type_key_clash.h"
+
 #include "helios/ecs/world.h"
 
 namespace {

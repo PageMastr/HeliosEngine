@@ -550,6 +550,13 @@ worker, 5 minutes each: `FuzzParseKeyset` 2,130,359 inputs (corpus 75 → 77) an
 minimization, which spends up to a minute on each new input, then 115,162 (66 → 119) with
 `-fuzzminimizetime=5s`; no failure.
 
+After review round 2 (2026-10-05, load average 3–4; the small-order key check is new in the keyset validation;
+the same sanitizer flags, the 11 committed seeds): `patch_fuzz_trust_parser -max_len=70000 -len_control=0` ran
+3,539,675 inputs in 361 seconds (about 9,800 per second) and reached 1,748 edges (3,343 features; corpus 11 → 549
+units; peak RSS 481 MB) with no finding, and `patch_tests` (its 35 non-`perf:` cases) passed twice in the same
+build. Go, one worker, 3 minutes each while a GCC build ran (`-fuzzminimizetime=5s`): `FuzzParseKeyset` 763,744
+inputs, `FuzzParsePointer` 56,666 and `FuzzVerifyManifestHeader` 129,751, with no failure.
+
 ## Gaps (v0)
 
 - **Packing and patches.** The format holds the pack index (05 §7: chunks under 32 KiB in ~8 MiB packs) and

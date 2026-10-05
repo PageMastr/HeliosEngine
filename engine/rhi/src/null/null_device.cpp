@@ -765,7 +765,9 @@ public:
         }
         m_errorCount.fetch_add(1, std::memory_order_relaxed);
         HELIOS_LOG_WARN(LogRhi, "[Null RHI] {}", message);
-        if (m_desc.onMessage) m_desc.onMessage(ValidationMessage{ValidationMessage::Severity::Error, std::move(message)});
+        if (m_desc.onMessage) {
+            m_desc.onMessage(ValidationMessage{.severity = ValidationMessage::Severity::Error, .text = std::move(message)});
+        }
     }
     void reportLocked(std::string message) { report(std::move(message)); }  // m_messageMutex is separate
 

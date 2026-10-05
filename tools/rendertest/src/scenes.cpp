@@ -58,7 +58,8 @@ struct PatternPush {
     u32 target, width, height, variant;
 };
 struct BlitPush {
-    u32 source, samplerIndex, mipCount, pad;
+    u32 source, samplerIndex, mipCount;
+    u32 extent;  ///< psMips: output width | height << 16
 };
 struct BlurPush {
     u32 source, target, width, height;
@@ -197,21 +198,25 @@ public:
         }
         const rhi::PipelineH pso = m_pso;
         const std::array<rhi::BindlessIndex, 4> samplers = m_samplers;
+        const std::array<u32, 2> target{m_info.width, m_info.height};
         graph.addPass<Data>(
             "Quads", PassFlags::Raster,
             [&](RgBuilder& b, Data& data) {
                 for (u32 t = 0; t < 4; ++t) data.textures[t] = b.read(imported[t]);
                 b.colorAttachment(output, 0, rhi::LoadOp::Clear, {0.12f, 0.12f, 0.12f, 1.0f});
             },
-            [samplers, pso](const Data& data, RgContext& ctx) {
+            [samplers, pso, target](const Data& data, RgContext& ctx) {
                 struct Push {
                     u32 textures[8];
                     u32 samplers[8];
+                    u32 target[2];  ///< the output's size: quads.slang maps its whole-pixel layout with it
                 } push{};
                 for (u32 q = 0; q < 8; ++q) {
                     push.textures[q] = ctx.srv(data.textures[q % 4]);
                     push.samplers[q] = samplers[(q / 2 + q) % 4];
                 }
+                push.target[0] = target[0];
+                push.target[1] = target[1];
                 ctx.cmd().bindPipeline(pso);
                 ctx.cmd().pushConstants(push);
                 ctx.cmd().draw(6, 8);
@@ -492,15 +497,16 @@ public:
         struct ViewData {
             RgTexture chain;
         };
+        const u32 extent = m_info.width | (m_info.height << 16);
         graph.addPass<ViewData>(
             "View", PassFlags::Raster,
             [&](RgBuilder& b, ViewData& data) {
                 data.chain = b.read(chain);
                 b.colorAttachment(output, 0, rhi::LoadOp::DontCare);
             },
-            [view, sampler](const ViewData& data, RgContext& ctx) {
+            [view, sampler, extent](const ViewData& data, RgContext& ctx) {
                 ctx.cmd().bindPipeline(view);
-                ctx.cmd().pushConstants(BlitPush{ctx.srv(data.chain), sampler, kMips, 0});
+                ctx.cmd().pushConstants(BlitPush{ctx.srv(data.chain), sampler, kMips, extent});
                 ctx.cmd().draw(3);
             });
     }

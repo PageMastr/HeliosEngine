@@ -252,18 +252,23 @@ endfunction()
 # Windows: a target whose objects carry their own copy of module code (a self-contained image, a base
 # image of cmake/HeliosIsa.cmake and its `.base` copies) defines what the API headers declare, so it must not
 # dllimport that data. Each HELIOS_<GROUP>_BUILDING makes the macros dllexport instead (on ELF they expand
-# to the same visibility attribute either way). No-op in shipping builds and on ELF; once per target.
+# to the same visibility attribute either way). No-op in shipping builds, on ELF and for an INTERFACE library
+# (it compiles nothing; its consumers get their own definitions); once per target.
 function(helios_modular_defines_own_copy target)
   if(NOT HELIOS_MODULAR OR NOT WIN32)
     return()
   endif()
+  get_target_property(type ${target} TYPE)
   get_target_property(done ${target} HELIOS_MODULAR_OWN_COPY)
-  if(done)
+  if(done OR type STREQUAL "INTERFACE_LIBRARY")
     return()
   endif()
+  get_target_property(defs ${target} COMPILE_DEFINITIONS)
   foreach(group IN LISTS HELIOS_LINK_GROUPS)
     string(TOUPPER "${group}" G)
-    target_compile_definitions(${target} PRIVATE HELIOS_${G}_BUILDING)
+    if(NOT "HELIOS_${G}_BUILDING" IN_LIST defs)
+      target_compile_definitions(${target} PRIVATE HELIOS_${G}_BUILDING)
+    endif()
   endforeach()
   set_target_properties(${target} PROPERTIES HELIOS_MODULAR_OWN_COPY ON)
 endfunction()

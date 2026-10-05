@@ -11,6 +11,11 @@ if(NOT HELIOS_SOURCE_DIR)
   message(FATAL_ERROR "pass -DHELIOS_SOURCE_DIR=<repository root>")
 endif()
 set(HELIOS_BUILD_TESTS OFF)
+if(HELIOS_FIXTURE_CASE STREQUAL "isa_base_windows")
+  # The Windows branches of the modular ISA integration (cmake/HeliosModular.cmake,
+  # helios_modular_defines_own_copy) on any host: the fixture compiles nothing.
+  set(WIN32 ON)
+endif()
 list(APPEND CMAKE_MODULE_PATH ${HELIOS_SOURCE_DIR}/cmake)
 include(HeliosModule)
 
@@ -224,6 +229,16 @@ elseif(CASE STREQUAL "isa_gate_target_not_object")
   # The gate's units must be an object library: an archive member holding only them could be dropped.
   add_library(fx_gate STATIC ${src})
   helios_cpu_gate_target(fx_gate)
+elseif(CASE STREQUAL "isa_base_windows")
+  # Modular Windows builds: the base image and its object copies define the HELIOS_<GROUP>_API data they
+  # carry (no dllimport); an INTERFACE copy (tp_yyjson.base) compiles nothing and gets no definitions.
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} DEPS helios::core)
+  function(_fx_print_own_copy_definitions)
+    get_target_property(imageDefs fx-launcher COMPILE_DEFINITIONS)
+    get_target_property(copyDefs helios_core.base COMPILE_DEFINITIONS)
+    message(STATUS "FX_OWN_COPY: fx-launcher=${imageDefs} helios_core.base=${copyDefs}")
+  endfunction()
+  cmake_language(DEFER CALL _fx_print_own_copy_definitions)
 elseif(CASE STREQUAL "isa_base_root_links_jolt")
   # A base module that links tp_jolt does not make tp_jolt base-eligible (HELIOS_ISA_BASE_DENY).
   target_link_libraries(helios_core PRIVATE tp_jolt)

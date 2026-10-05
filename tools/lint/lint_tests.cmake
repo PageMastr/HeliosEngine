@@ -798,7 +798,9 @@ foreach(case
     "isa_generated_source|FX_COPY_SOURCES: [^\n]*/layering/isa_generated_source/fx_generated.cpp.*HELIOS_FIXTURE_CONFIGURE_OK"
     # Modular builds only (HELIOS_MODULAR=ON): an image that links a module's object library directly.
     "modular:direct_objects|'fx-cook' links the module object library 'helios_core' directly"
-    "modular:direct_objects_genex|layering check failed .1 violation.*'fx-cook' links the module object library 'helios_core' directly")
+    "modular:direct_objects_genex|layering check failed .1 violation.*'fx-cook' links the module object library 'helios_core' directly"
+    # Modular builds only, with WIN32 set: the base image and its copies get HELIOS_<GROUP>_BUILDING.
+    "modular:isa_base_windows|Helios ISA levels: 1 base image.s.: fx-launcher .helios_core.base, tp_yyjson.base..*FX_OWN_COPY: fx-launcher=HELIOS_RUNTIME_BUILDING.HELIOS_CLIENT_BUILDING.HELIOS_EDITOR_BUILDING helios_core.base=HELIOS_RUNTIME_BUILDING.HELIOS_CLIENT_BUILDING.HELIOS_EDITOR_BUILDING\n.*HELIOS_FIXTURE_CONFIGURE_OK")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)
   list(GET parts 1 expect)

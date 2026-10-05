@@ -22,7 +22,8 @@ python3 tools/status/snapshot.py report --inventory inventory.json   # Markdown 
 
 Hidden directories and `__pycache__` are not modules. Directories without a README must be named but
 need no `Plan-Rev`. Modules the row names that are not in the tree (work in progress on other branches)
-are reported as a note, as is a row that is not in the generated form. A missing §8.1 or PLAN-REV, or a
+are reported as a note (a named directory that is not a module, such as `content`, counts as in the tree
+when it exists), as is a row that is not in the generated form. A missing §8.1 or PLAN-REV, or a
 PLAN-REV that does not start with a number, is an error (exit 2), not a stale status (exit 1).
 
 `check_status.cmake` looks for Python 3.10+ in every `PATH` directory for each name in turn (Windows:

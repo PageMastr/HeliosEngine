@@ -145,11 +145,13 @@ go run ./cmd/helios-patch verify --product sample-game --channel dev --platform 
   `--cdn-host`, `--rollout-pct`, `--lifetime` up to 7 days), so a reader never sees a pointer to objects that are
   not there. Republishing an identical build writes nothing; the pointer is re-signed with the next sequence once
   it is past half its lifetime. Manifests and chunks are immutable: a build ID already published with other
-  content is refused. A chunk object already on the CDN is decoded and compared with the chunk, and rewritten if it
+  content is refused, and so is one whose manifest no longer passes the checks an install runs (a damaged payload
+  or signature; publish it under another `--build-id`), instead of being re-pointed. A chunk object already on the CDN is decoded and compared with the chunk, and rewritten if it
   does not match (a torn copy is repaired instead of being signed into another manifest). The CDN's keyset is
   never replaced by a lower version, a lower root epoch or other bytes of the same version (that would undo
   revocations and fail installs that ratcheted past it), and when the signing directory has a `roots.json`
-  (dev directories do) the keyset must verify against it.
+  (dev directories do) the keyset must verify against it. A `roots.json` with a zero or other small-order key is
+  refused (`verify` too): anyone could sign a keyset under one.
 - **Keys.** `--channel dev` without `--keys` creates throwaway dev keys on first use in
   `helios-data/keys/patch/<product>/` (`roots.json`, the public root pair; `root-keys.json` and
   `manifest-key.json`, the private seeds, mode 0600 and marked `"dev": true`; `keyset.json`, signed by the dev
@@ -343,9 +345,10 @@ go test -run 'TestConformance/holder_rule' ./internal/orchestrator/   # CONF-03'
   rewrites the Go-written files, and `HELIOS_PATCH_UPDATE_VECTORS=1` makes `patch_tests` rewrite
   `pipeline.cpp-zstd.hman`).
 - **Trust vectors** (WP-0.16 part 2), shared with `patch_tests`: `trust/` holds a CDN tree published by
-  `Publish` with test-only keys, 52 cases (`cases.json`: 10 accepted, 42 rejected, each naming the one check it
-  fails, together covering all 32 checks) and 66 non-canonical keysets and pointers both parsers refuse
-  (`syntax.json`); `go test ./pkg/patchcdn -run TestUpdateTrustVectors -update` rewrites them. The keys are
+  `Publish` with test-only keys, 64 cases (`cases.json`: 13 accepted, 51 rejected, each naming the one check it
+  fails, together covering all 34 checks) and 76 keysets and pointers both parsers refuse (`syntax.json`: 38
+  keysets, 38 pointers; non-canonical encodings, invalid content such as a small-order subkey, and size limits);
+  `go test ./pkg/patchcdn -run TestUpdateTrustVectors -update` rewrites them. The keys are
   derived from public seeds (`pkg/patchtrust/trusttest`, imported by tests only), and both verifiers refuse their
   roots unless a test allows them. `TestEveryByteTampered` changes every byte of the keyset, the pointer and the
   manifest header three ways and requires a rejection each time.

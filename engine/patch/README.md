@@ -203,6 +203,16 @@ header's `keyId`, and what a keyset entry's `id` must equal. Subkey roles are 08
 and manifests), `news` and `addons`; a keyset may list other roles (a later phase's) and keeps verifying, but only
 a `manifest` key signs pointers and manifests.
 
+**No small-order key.** Neither Monocypher's `crypto_ed25519_check` nor Go's `ed25519.Verify` refuses a public
+key of small order, and under one they accept the signature R = identity, S = 0, which nobody made, for every
+message whose challenge is a multiple of the point's order: one message in four for the all-zero key, which is
+what a value-initialized `PublicKey` holds (`RootPair`'s default `next`). `isWeakPublicKey` (Go:
+`IsWeakPublicKey`) lists the eight small-order points' encodings with the sign bit cleared, the non-canonical p
+and p + 1 included (libsodium's `has_small_order` list); `TrustVerifier::create` (Go: `NewVerifier`,
+`RootPair.Validate`, `LoadRoots`) refuses a root pair with one, and the keyset parsers refuse such a subkey
+(`keyset-malformed`). Both test suites show each listed encoding forging that signature, so the list cannot
+silently go stale.
+
 ### Canonical JSON
 
 Keysets and pointers are JSON that admits exactly one encoding per document, so the bytes on the CDN are the bytes
@@ -230,7 +240,7 @@ never verifies as another.
 
 | Member | Rule |
 |---|---|
-| `keys` | 1–64 subkeys sorted by `id`, unique; `id` = fingerprint of `pub`; `role` `^[a-z][a-z0-9-]{0,31}$`; the key may sign from `notBefore` (unix seconds) until before `notAfter` > `notBefore` |
+| `keys` | 1–64 subkeys sorted by `id`, unique; `id` = fingerprint of `pub`; `pub` not of small order; `role` `^[a-z][a-z0-9-]{0,31}$`; the key may sign from `notBefore` (unix seconds) until before `notAfter` > `notBefore` |
 | `productId` | the product (08 §2.10.1's pattern) |
 | `rootEpoch` | 1..2^32−2: which root signed it. The product block's pair has an epoch E: `current` signs keysets of epoch E, the pre-committed `next` those of E + 1 |
 | `version` | 1..2^53−1; only grows |
@@ -330,7 +340,12 @@ only by `_test.go` files, which `TestTrustTestImportedOnlyByTests` checks over e
 the C++ tests derive them with Monocypher). Their roots (`root-1`, `root-2`, `root-x`) are
 listed in `isTestOnlyKey` (Go: `IsTestOnlyKey`), and `TrustVerifier::create` (Go: `NewVerifier`) refuses a root
 pair that contains one unless `TrustOptions::allowTestKeys` is set, which only tests do; so a product build that
-somehow carried a test root would verify nothing. Tests check both lists against the derivation.
+somehow carried a test root would verify nothing. Tests check both lists against the derivation. "Only tests" is
+checked: the CTest `lint_patch_test_keys` (`tests/test_keys_lint.cmake`, label `lint`, with seeded fixtures) fails
+on `allowTestKeys` in any C++ file of `engine/`, `apps/` or `tools/` outside `trust.h`, `trust.cpp`, `tests/` and
+`fuzz/`, and `TestTrustTestImportedOnlyByTests` fails on a non-test Go file that sets `Options.AllowTestKeys` (or
+writes an `Options` literal without field names). Both are textual or syntactic checks against accidents, not
+against code built to hide the name.
 
 **Dev keys** for `helios-patch publish --channel dev` are generated from the OS CSPRNG at first use into
 `helios-data/keys/patch/<product>/` (05 §5's `keys\`; mode 0600 for the private files, marked `"dev": true`), and
@@ -376,8 +391,8 @@ and writes the layout (`helios-patch publish`, [services/README.md](../../servic
 | `hman/names.json` | Valid and invalid paths (among them 255- and 256-byte segments), product IDs, platforms and build IDs, and whole path lists that must pass or fail the collision rules (the invalid ones with the check they fail) | by hand |
 
 | `trust/cdn/` | A CDN tree in the 05 §7 layout, made by Go's `Publish` with the test-only keys: product `vector-game`, channel `live`, platform `win64`; keyset v3 of root epoch 1 (`manifest-a`, `manifest-old` whose validity ended 100 days before now, `news-a`, and `store-a` of a role no check knows); build `2026.09.21-r1` (an executable chunk stored raw, a pak whose repeated unit dedups, a text file, an empty file); a pointer of sequence 7 with `next` | `go test ./pkg/patchcdn -run TestUpdateTrustVectors -update` |
-| `trust/cases.json` | 61 cases over that tree: the root pair, now (1,790,000,000) and the stored state, then per case replacement keyset, pointer, manifest and chunk files (in `trust/`, signed by the test-only keys), byte edits (overwrite or insert), a case's own state or now, and either the check it must fail or, if accepted, the state afterwards. 12 are accepted (a fresh install, an equal sequence, a rollback pointer below and above the stored sequence, a keyset of the next root before and after the ratchet moved, a pointer without `next` or hosts, a pointer and manifest signed at their key's `notBefore`, a manifest that expires later, a pointer and a manifest signed exactly 1 hour ahead of now); 49 are rejected, and every check of the table above is the one some case fails. Among them: a pointer and a manifest signed 1 hour and 1 second ahead, the current key signing 80 days ahead, and a pre-staged next-quarter key (`keyset-prestaged.json`) signing before its window opens; and two chunk objects that only one check catches, the chunk's own bytes in another encoding (`chunk-reencoded`: only the stored size differs) and a frame of the stored size that decodes to 2 bytes too few (`chunk-short`) | as above |
-| `trust/syntax.json` | 73 documents (35 keysets, 38 pointers) both parsers must refuse: the CDN's keyset or pointer with one splice (`at`, `delete`, `put` or `putHex`, then `padTo` spaces): whitespace, a BOM, a trailing newline, truncation, member order, duplicate, unknown and missing members, escapes, non-ASCII, `null`, leading zeros, signs, fractions, exponents, 2^53 and 2^64, uppercase hex, short keys, unsorted, repeated and 65 keys, a key ID that is not the fingerprint, an empty validity window, out-of-range epochs, rollout, compat epochs and sequences, bad channels, platforms, build IDs, versions and hosts (among them userinfo after a loopback name or address, a non-numeric or six-digit port, a query, an `https://` without a host), an empty or misplaced `next`, and documents one byte over the size limits | as above |
+| `trust/cases.json` | 64 cases over that tree: the root pair, now (1,790,000,000) and the stored state, then per case replacement keyset, pointer, manifest and chunk files (in `trust/`, signed by the test-only keys), byte edits (overwrite or insert), a case's own state or now, and either the check it must fail or, if accepted, the state afterwards. 13 are accepted (a fresh install, an equal sequence, a rollback pointer below and above the stored sequence, a keyset of the next root before and after the ratchet moved, a pointer without `next` or hosts, a pointer and manifest signed at their key's `notBefore`, a pointer and manifest signed in the last second before their key's `notAfter`, a manifest that expires later, a pointer and a manifest signed exactly 1 hour ahead of now); 51 are rejected, and every check of the table above is the one some case fails. Among them: a pointer and a manifest signed exactly at their key's `notAfter` (both window edges are pinned), a pointer and a manifest signed 1 hour and 1 second ahead, the current key signing 80 days ahead, and a pre-staged next-quarter key (`keyset-prestaged.json`) signing before its window opens; and two chunk objects that only one check catches, the chunk's own bytes in another encoding (`chunk-reencoded`: only the stored size differs) and a frame of the stored size that decodes to 2 bytes too few (`chunk-short`) | as above |
+| `trust/syntax.json` | 76 documents (38 keysets, 38 pointers) both parsers must refuse: the CDN's keyset or pointer with one splice (`at`, `delete`, `put` or `putHex`, then `padTo` spaces): whitespace, a BOM, a trailing newline, truncation, member order, duplicate, unknown and missing members, escapes, non-ASCII, `null`, leading zeros, signs, fractions, exponents, 2^53 and 2^64, uppercase hex, short keys, unsorted, repeated and 65 keys, a key ID that is not the fingerprint, an empty validity window, three small-order subkeys (zero, the identity, an order-8 point with the sign bit set) with matching IDs, out-of-range epochs, rollout, compat epochs and sequences, bad channels, platforms, build IDs, versions and hosts (among them userinfo after a loopback name or address, a non-numeric or six-digit port, a query, an `https://` without a host), an empty or misplaced `next`, and documents one byte over the size limits | as above |
 
 Inputs come from a seeded generator (`services/pkg/cdc/cdctest`, mirrored in `tests/patch_test_util.h`): `random`
 (SplitMix64 outputs as little-endian bytes), `zero`, `repeat` (a random unit repeated) and `insert`, each
@@ -410,7 +425,7 @@ optionally followed by `edits` (bytes written at offsets: the crafted inputs).
   a placement or patch naming an unknown chunk, pack or file, or a chunk placed twice fails with
   `InvalidArgument`.
 - **Trust documents.** The keyset and pointer parsers read at most 64 KiB and 16 KiB, never recurse, allocate at
-  most one string per member, and stop at the first byte that is not the canonical encoding; `syntax.json` pins 73
+  most one string per member, and stop at the first byte that is not the canonical encoding; `syntax.json` pins 76
   refusals in both languages, and every single-byte change of the vectors' keyset, pointer and manifest header
   (three changes per byte) is rejected by both (`patch_tests`, Go's `TestEveryByteTampered`).
 - **Threading.** Everything is a value type or a pure function; a `StreamChunker`, `Blake2b256` or
@@ -621,6 +636,9 @@ plan leaves open:
   pre-staged subkey cannot sign before its window. One hour is this PR's choice, not the plan's: an install whose
   clock lags by more refuses each freshly signed pointer until its clock catches up (the launcher should say so).
   Changing it is one constant per language and a regeneration of the vectors.
+- **Small-order keys (review round 2).** The plan names Ed25519 but not which public keys are acceptable. Both
+  verifiers refuse the eight small-order encodings as roots and as subkeys (above), since neither Monocypher nor
+  Go's `crypto/ed25519` does; this needs no new dependency and changes no valid document.
 - **Dev keys** live in `helios-data/keys/patch/<product>/` (05 §5's `keys\` holds the dev "manifest Ed25519"
   keys), not 08 §2.10.3's `<project>/.helios/devkeys/`, which belongs to `helios-tool product init --dev` (a
   later WP, with project files). Like 08's, they are git-ignored (the directory's own `.gitignore` and the

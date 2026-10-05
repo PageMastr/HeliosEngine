@@ -11,7 +11,9 @@
 #include "helios/core/types.h"
 
 // netcode.c defines its serialisation helpers with external linkage but does not declare them in netcode.h.
+// helios-lint: outside-anon-namespace begin (C declaration of a function netcode.c defines)
 extern "C" void netcode_write_bytes(uint8_t** p, uint8_t* byte_array, int num_bytes);
+// helios-lint: outside-anon-namespace end
 
 using namespace helios;
 

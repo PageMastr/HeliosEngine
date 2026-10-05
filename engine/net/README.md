@@ -186,7 +186,7 @@ thread-safe. Handlers run inside `update()` on the updating thread and may call 
 
 ## Tests, fuzzers, gates
 
-`net_tests` (doctest, 92 test cases on Linux, 93 on Windows; `ctest -R net_`):
+`net_tests` (doctest, 96 test cases on Linux, 4 of them `perf:`; 97 on Windows; `ctest -R net_`):
 
 | Suite | Covers |
 |---|---|
@@ -200,6 +200,7 @@ thread-safe. Handlers run inside `update()` on the updating thread and may call 
 | `net.trunk` | profile, 256 KB CONTROL + 200 KB BULK under loss, coalescing, 2,000-packet bursts with acks, short NS-0.7 run with full 1,200 B datagrams |
 | `net.udp` | loopback send/receive, batches, truncation, IPv6/dual-stack (skipped when the OS lacks IPv6), 32 MB buffers, bind errors, SocketTransport batching, NS-0.2; **batch APIs**: what Auto and each forced API resolve to (Registered on Windows, MultiMessage on Linux, Message otherwise), the same semantics under every API (nothing pending, empty batches, an unreachable destination skipped and counted, partial batches, sender addresses, truncation through receiveBatch and receiveFrom, byte counters), interop between APIs with a 400-datagram burst (more than RIO's 256 send slots and 128 posted receives), SocketTransport over every API, and on Windows RIO's 2 KB slot limits |
 | `net.netcode_patches` | `0001-write-bytes-memcpy`: bytes and pointer advance unchanged for 0–1,200 bytes and negative counts; `perf:` a 1,200 B payload in ≤ 0.5 µs (1.28 µs unpatched, 0.018 µs patched here) |
+| `net.netcode_crypto` | the bundled libsodium (owner decision 2026-10-05): its CPU probe sees AVX2 and ChaCha20 dispatches to the AVX2 kernel (observed by swapping a spy into each kernel's table for one call); every compiled kernel (reference, SSSE3, AVX2) matches RFC 8439 §2.4.2 and the reference kernel at 17 lengths around the block sizes; `sodium_memzero` clears exactly its range; `perf:` it wipes 64 KB at least 4× faster than a volatile byte loop (1.4 µs against 27 µs here). Without `HAVE_AVX_ASM` the first case fails (SSSE3 dispatched), without `HAVE_EXPLICIT_BZERO` the `perf:` one does |
 
 **Fuzz targets** (`fuzz/`, `net_fuzz` target): `packet_parser` (HTP framing; property:
 canonical re-serialisation), `connection_receive` (reliable headers, fragment reassembly, parser,
@@ -236,46 +237,48 @@ without the flag, as do local runs and fixed hardware.
 
 NS-0.2's 100k packets per core is a CPU budget of **≤ 10 µs per encrypted packet, send and receive
 together, on one core** (`bench::kNs02BudgetMicrosPerPacket`; `net_bench --stack` prints the measured µs
-per packet beside it). The win-gpu runner (AMD Ryzen 5 5500, Windows 11) measured 12.1–12.2 µs (82,842 and
-82,134 packets per core on 2026-10-04/05) against 6.2 µs for a raw datagram, so the Windows socket path and
-the stack's own work both had to shrink.
+per packet beside it, with the wall time as a cross-check). The win-gpu runner (AMD Ryzen 5 5500, Windows 11)
+measured 12.1–12.2 µs (82,842 and 82,134 packets per core, 2026-10-04/05) against 6.2 µs for a raw datagram,
+so both the Windows socket path and the stack's own work had to shrink.
 
 Where a packet's CPU goes (`perf record -e cpu-clock` of `net_bench --stack 8`, GCC 13 RelWithDebInfo, this
-container; the bench sends 700-byte EVENT_U messages, one per ≈ 730-byte datagram, and the same thread
-receives them):
+container; 700-byte EVENT_U messages, one per ≈ 730-byte datagram, received on the same thread):
 
-| Component | main (aa80a1d) | with patch 0001 |
+| Component | main (aa80a1d) | WP-0.13r |
 |---|---|---|
-| ChaCha20 (SSSE3 kernel), encrypt + decrypt | 24.7 % | 32.3 % |
-| Poly1305 (SSE2) and the AEAD wrappers | 10.1 % | 11.5 % |
-| `sodium_memzero` (a volatile byte loop on Linux) | 12.0 % | 8.2 % |
-| `netcode_write_bytes` (one call per payload byte) | 11.5 % | 0.2 % |
-| netcode, other (framing, queues; replay protection 0.04 %) | 2.7 % | 3.1 % |
-| reliable (acks, sequence buffers) | 3.5 % | 3.7 % |
-| Helios (channels, packing, transport, socket wrappers, allocation tracking) | 5.7 % | 6.5 % |
-| libc copies and allocations, mimalloc | 1.8 % | 2.0 % |
-| Kernel: `sendmmsg` with loopback delivery (≈ 21 %), `recvmmsg` (≈ 5 %), page faults | 28.2 % | 32.7 % |
-| The bench harness (loop, clock reads, handler) | 0.2 % | 0.1 % |
+| ChaCha20, encrypt + decrypt | 24.7 % (SSSE3 kernel) | 30.6 % (AVX2 kernel) |
+| Poly1305 (SSE2) and the AEAD wrappers | 10.1 % | 13.7 % |
+| `sodium_memzero` | 12.0 % (volatile byte loop) | 0.2 % (`explicit_bzero`) |
+| `netcode_write_bytes` | 11.5 % (a call per payload byte) | 0.2 % (patch 0001) |
+| netcode, other (framing, queues; replay protection 0.04 %) | 2.7 % | 3.4 % |
+| reliable (acks, sequence buffers) | 3.5 % | 4.2 % |
+| Helios (channels, packing, transport, socket wrappers, allocation tracking) | 5.7 % | 7.2 % |
+| libc copies and allocations, mimalloc | 1.8 % | 2.6 % |
+| Kernel: `sendmmsg` with loopback delivery (≈ 21 % on main), `recvmmsg` (≈ 5 %), page faults | 28.2 % | 37.7 % |
+| The bench harness (loop, clock reads, handler) | 0.2 % | 0.2 % |
 
-Helios' own code is about 6 % and allocations about 1 % (mimalloc plus the "Net" tag accounting), so the
-cuts are in vendored code: **netcode patch `0001-write-bytes-memcpy`** (third_party/MANIFEST.md, "Patches")
-removes the byte loop, @@AFTER_SUMMARY@@
+Helios' own code is about 6 % and allocations about 1 % (mimalloc plus the "Net" tag accounting), with no
+Helios function above 0.6 %, so the cuts are in vendored code, each a reviewed vendoring change:
+- **netcode patch `0001-write-bytes-memcpy`** (third_party/MANIFEST.md, "Patches"): `netcode_write_bytes`
+  copied every payload byte through a function call;
+- **the bundled libsodium's own faster settings**, by the repository owner's decision of 2026-10-05
+  ([`docs/evidence/netcode-crypto-owner-decision-2026-10-05.md`](../../docs/evidence/netcode-crypto-owner-decision-2026-10-05.md)):
+  `tp_netcode` is compiled with `HAVE_AVX_ASM` (GCC/Clang, x86-64), without which the library's CPU probe
+  never read XCR0, never saw AVX2 and kept the SSSE3 ChaCha20, and `HAVE_EXPLICIT_BZERO` (glibc), without
+  which `sodium_memzero` stored one byte at a time. No vendored source changes; `net.netcode_crypto` shows the
+  probe, the dispatch and that every compiled ChaCha20 kernel matches RFC 8439.
 
-Crypto is now half of a packet. The bundled libsodium subset compiles ChaCha20 (reference, SSSE3, AVX2) and
-Poly1305 (donna, SSE2) and picks one at run time; it is not the reference ChaCha20 alone. Under GCC and
-Clang, however, its CPU probe reads XCR0 only when `HAVE__XGETBV` or `HAVE_AVX_ASM` is defined, which the
-amalgamation never does, so it never reports AVX and keeps the SSSE3 ChaCha20 on AVX2 hardware, and on Linux
-`sodium_memzero` falls back to a volatile byte loop because `HAVE_EXPLICIT_BZERO` is not defined. MSVC builds
-(the Windows nightly, win-gpu) should, by the code, select the AVX2 ChaCha20 (`/arch:AVX2` defines `__AVX2__`
-and the probe reads XCR0 with `_xgetbv`) and wipe with `SecureZeroMemory` (not observed on Windows), but they
-have no `__int128`, so Poly1305 runs the portable donna32 code there. Defining `HAVE_AVX_ASM` and
-`HAVE_EXPLICIT_BZERO` for `tp_netcode` (no source edit) measured 164k against 132k packets per core here (5
-interleaved runs, medians), and forcing donna32 cost 0.6 µs per packet. That is a change to how the crypto
-library runs, so it is a **proposal awaiting the owner's decision** (WP-0.13r's PR), not part of this code.
+@@AFTER_SUMMARY@@
+
+Not changed: MSVC builds compile neither the donna64 nor the SSE2 Poly1305 (no `__int128`) and run the
+portable donna32 kernel, which costs about 0.6 µs more per packet here (forced donna32: 149k against 164k
+packets per core); that would need a source patch or another Windows compiler.
 
 **Windows.** `UdpSocket` now batches with Registered I/O (04 §2.6): one kernel entry per batch of sends or
-re-posted receives instead of one `sendto`/`recvfrom` per datagram, and no kernel entry to read completions.
-Windows numbers come only from the hosted Windows nightly and the owner's `win-gpu` runner.
+re-posted receives instead of one `sendto`/`recvfrom` per datagram, and none to read completions. MSVC builds
+should, by the code, already select the AVX2 ChaCha20 (`/arch:AVX2` and `_xgetbv`) and wipe with
+`SecureZeroMemory`, so on Windows the cuts are the socket path and patch 0001. Windows numbers come only from
+the hosted Windows nightly and the owner's `win-gpu` runner.
 
 ## Known limitations
 
@@ -286,10 +289,8 @@ Windows numbers come only from the hosted Windows nightly and the owner's `win-g
   truncated; HTP datagrams are at most 1,300 bytes. The fallback polls a non-blocking socket rather than
   using IOCP: 04 §2.6's IOCP + `WSARecvMsg` fallback belongs to the Phase 2 trunk IO threads, which block
   between bursts.
-* The bundled libsodium subset never selects its AVX2 ChaCha20 under GCC/Clang (its CPU probe needs
-  `HAVE_AVX_ASM` to read XCR0) and wipes secrets with a volatile byte loop on Linux (no
-  `HAVE_EXPLICIT_BZERO`); both cost NS-0.2 headroom and are a proposal awaiting an owner decision, not a
-  change (see "NS-0.2 per-packet budget" below).
+* MSVC builds run the bundled libsodium's portable donna32 Poly1305 (no `__int128`); see "NS-0.2 per-packet
+  budget".
 * IPv6 sockets are exercised only where the OS provides them (this container has no IPv6);
   IPv6 addressing is covered through VirtualNetwork and the Go vectors.
 * A peer can disturb reassembly of its *own* fragmented packets (e.g. by sending bogus fragments

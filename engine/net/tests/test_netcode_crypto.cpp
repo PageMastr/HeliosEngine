@@ -20,6 +20,7 @@
 
 // Declared here because sodium.h is private to tp_netcode. The layout is sodium.h's
 // crypto_stream_chacha20_implementation.
+// helios-lint: outside-anon-namespace begin (C declarations of libsodium functions and tables defined in tp_netcode)
 extern "C" {
 struct crypto_stream_chacha20_implementation {
     int (*stream)(unsigned char* c, unsigned long long clen, const unsigned char* n, const unsigned char* k);
@@ -48,6 +49,7 @@ extern "C" crypto_stream_chacha20_implementation crypto_stream_chacha20_dolbeau_
 extern "C" crypto_stream_chacha20_implementation crypto_stream_chacha20_dolbeau_avx2_implementation;
 #endif
 #endif
+// helios-lint: outside-anon-namespace end
 
 using namespace helios;
 

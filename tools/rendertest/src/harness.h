@@ -41,6 +41,10 @@ struct SceneResult {
     std::string message;
     std::string adapter;  ///< Adapter and driver (Vulkan).
     std::string goldenKey;  ///< Golden set used ("vulkan-llvmpipe", "null").
+    /// Vulkan: the device's own golden set ("vulkan-nvidia"), also when goldenKey fell back to the
+    /// lavapipe set; import_goldens.cmake files hardware goldens under it.
+    std::string driverKey;
+    std::string validationLayer;  ///< Vulkan: Caps::validationLayer (empty when not validated).
     f64 meanFlip = 0.0;
     f64 maxFlip = 0.0;
     f64 maxMeanFlip = 0.0;  ///< Thresholds applied.
@@ -70,7 +74,7 @@ Result<std::unique_ptr<rhi::Device>> createTestDevice(Backend backend, bool vali
 /// validationErrorCount() (what fails a golden) did not count it.
 struct ValidationSelfTest {
     std::string layer;    ///< Caps::validationLayer.
-    std::string message;  ///< First "Validation Error: [ ... ]" message, trimmed.
+    std::string message;  ///< First layer error as "[<message ID>] <text>", trimmed.
     u64 errors = 0;
 };
 Result<ValidationSelfTest> runValidationSelfTest();

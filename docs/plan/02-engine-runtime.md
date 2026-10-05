@@ -452,16 +452,16 @@ draws ImGui through the RHI, and the backend would carry a second copy of volk (
   namespace, a local class, a closure, in the global namespace, where Clang also prints local classes, or a
   specialization with such a type among its template arguments) has a per-image key, never shared with another
   type. The exception is Clang and clang-cl, which print a local class without its function and so give a name
-  key to a type named through one: a class nested in a local class (`Local::Inner`) or a pointer to a member
-  of one (`int Local::*`), also as a template argument; two such types with one name and one layout share that
-  key (`helios/ecs/type_key.h`). A component that crosses images is therefore declared in a named namespace,
-  with template arguments from named namespaces, and one that crosses images built by different compilers is
-  neither a template specialization (nor nested in one) nor declared in an inline namespace. Components and
-  other types that a reloadable module uses through the typed ECS API are declared in a named namespace too: a
-  per-image key is a template static (`perImageTypeKey<T>()::key`), which the game-image rules below forbid,
-  and every reload would draw it anew while the component stays bound to the old key. flecs, Jolt and Luau
-  headers never reach game code, which §1.1's "no third-party types in public headers" rule already
-  guarantees.
+  key to a type named through one: a class or enum nested in a local class (`Local::Inner`) or a pointer to a
+  member of one (`int Local::*`), also as a template argument; two such types with one name and one layout
+  share that key (`helios/ecs/type_key.h`). A component that crosses images is therefore declared in a named
+  namespace, with template arguments from named namespaces, and one that crosses images built by different
+  compilers is neither a template specialization (nor nested in one) nor declared in an inline namespace.
+  Components and other types that a reloadable module uses through the typed ECS API are declared in a named
+  namespace too: a per-image key is a template static (`perImageTypeKey<T>()::key`), which the game-image
+  rules below forbid, and every reload would draw it anew while the component stays bound to the old key.
+  flecs, Jolt and Luau headers never reach game code, which §1.1's "no third-party types in public headers"
+  rule already guarantees.
 - **Tracy.** The runtime group compiles the Tracy client with `TRACY_EXPORTS`, and game modules build with
   `TRACY_IMPORTS`. `HELIOS_PROFILE_ZONE` in a reloadable module expands to Tracy's transient zones, which copy
   their source-location strings, so the profiler never holds a pointer into an unloaded image.

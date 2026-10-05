@@ -34,9 +34,9 @@
 // What a key cannot tell apart:
 //   * Two distinct name-keyed types with one canonical name and one layout. In a correct program that
 //     happens only on Clang and clang-cl, which print a local class without its enclosing function:
-//       - a type named through a local class: a class nested in one ("Local::Inner", itself a local class)
-//         or a pointer to a member of one ("int Local::*"), the same text for a local class "Local" of any
-//         function and for a global-namespace "Local", as the type itself or in a template argument
+//       - a type named through a local class: a class or enum nested in one ("Local::Inner", a local class
+//         too) or a pointer to a member of one ("int Local::*"), the same text for a local class "Local" of
+//         any function and for a global-namespace "Local", as the type itself or in a template argument
 //         ("ns::Box<Local::Inner>", "ns::Box<int Local::*>");
 //       - a type in an inline namespace and a type of the same name declared in the enclosing namespace
 //         itself, used by translation units that never see both (each prints "ns::T").

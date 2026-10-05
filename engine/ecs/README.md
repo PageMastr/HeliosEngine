@@ -106,11 +106,11 @@ clang-cl print `ns::Box<Local>` for every function's `Local`). Two types that pr
 never share a key, and an unregistered one resolves to no component; declare a component that crosses images,
 and its template arguments, in named namespaces. A reloadable game module keys no type per image (02 §1.4;
 symbol audit R5). Name keys clash only for two types with one canonical name and one layout, which in a
-correct program happens only on Clang and clang-cl: a type named through a local class (a class nested in one,
-`Local::Inner`, or a pointer to a member of one, `int Local::*`, also as template arguments), or a type in an
-inline namespace beside a same-named type of the enclosing namespace, in translation units that see only one
-of them. Typed access through the second type reaches the first's component, of the same size and alignment. A
-64-bit collision of two name keys could also join types of different layouts. Either way
+correct program happens only on Clang and clang-cl: a type named through a local class (a class or enum nested
+in one, `Local::Inner`, or a pointer to a member of one, `int Local::*`, also as template arguments), or a
+type in an inline namespace beside a same-named type of the enclosing namespace, in translation units that see
+only one of them. Typed access through the second type reaches the first's component, of the same size and
+alignment. A 64-bit collision of two name keys could also join types of different layouts. Either way
 `registerComponent<T>`/`bindType<T>` refuse to bind the second type (`AlreadyExists`).
 `registerComponent<T>` returns 0 after a `HELIOS_VERIFY` failure whenever T cannot be bound.
 Component names must not resolve to an existing flecs entity (builtins, relations, named frames or

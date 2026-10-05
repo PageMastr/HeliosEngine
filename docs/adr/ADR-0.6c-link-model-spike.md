@@ -303,8 +303,8 @@ What the first modular builds of the tree showed (GCC and Clang on Linux; MSVC t
    second, unregistered type reached the first's component, past its end when the second was larger, a change
    to shipping behaviour; now each has its own key, as on main. What remains: two name-keyed types with one
    canonical name and one layout, which in a correct program happens only on Clang and clang-cl. They print a
-   local class without its function, so a type named through one is name-keyed: a class nested in a local
-   class (`Local::Inner`, itself a local class) or a pointer to a member of one (`int Local::*`), also as
+   local class without its function, so a type named through one is name-keyed: a class or enum nested in a
+   local class (`Local::Inner`, a local class too) or a pointer to a member of one (`int Local::*`), also as
    template arguments. They also print a type in an inline namespace like a same-named type of the enclosing
    namespace, in translation units that see only one of them. Typed access through the second type reaches the
    first's same-sized component. A 64-bit collision of two name keys (name, size and alignment hashed

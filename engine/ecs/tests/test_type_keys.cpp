@@ -287,10 +287,12 @@ u32 useLocalA(World& world, Entity e, u32 value) {
         struct Inner {
             u32 value = 0;
         };
+        enum class Kind : u8 { A };
         u32 value = 0;
     };
     static_assert(!tk::kKeyedByName<Local>);
     static_assert(tk::kKeyedByName<Local::Inner> == kLocalMembersKeyedByName);
+    static_assert(tk::kKeyedByName<Local::Kind> == kLocalMembersKeyedByName);
     static_assert(tk::kKeyedByName<ecs_test::KeyPair<u32 Local::*, u32>> == kLocalMembersKeyedByName);
     if (world.id<Local>() == 0) world.registerComponent<Local>(ComponentFlags::None, "ecs_test.LocalA");
     if (value != 0) world.set(e, Local{value});

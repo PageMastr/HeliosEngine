@@ -224,7 +224,8 @@ What the first modular builds of the tree showed (GCC and Clang on Linux; MSVC t
    needed, and `WINDOWS_EXPORT_ALL_SYMBOLS` works over linked object libraries (CMake's Ninja generator
    passes their objects to its export scan). Two things showed up only on Windows: the CRT's and STL's
    header inlines with C linkage in the export tables (P1 above), and one function-address comparison
-   across images (§2). 307 of 308 tests passed on the first run.
+   across images (§2). 307 of 308 tests passed on the first run, and all 308 (plus the 11 symbol-audit
+   tests) after that fix.
 10. **Not verified here.** MSVC is built and tested only by the `windows-msvc-dev` CI job, including the DLL
    search at test time (every image is written to `bin/`).
 

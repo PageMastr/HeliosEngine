@@ -26,8 +26,8 @@ std::atomic<bool> g_registeredIoFallbackWarned{false};
 
 void forceRegisteredIoUnavailable(bool force) noexcept { g_registeredIoUnavailable.store(force); }
 void forceRegisteredIoSetUpFailure(bool force) noexcept { g_registeredIoSetUpFailure.store(force); }
-bool registeredIoUnavailableForced() noexcept { return g_registeredIoUnavailable.load(std::memory_order_relaxed); }
-bool registeredIoSetUpFailureForced() noexcept { return g_registeredIoSetUpFailure.load(std::memory_order_relaxed); }
+bool registeredIoUnavailableForced() noexcept { return g_registeredIoUnavailable.load(); }
+bool registeredIoSetUpFailureForced() noexcept { return g_registeredIoSetUpFailure.load(); }
 bool firstRegisteredIoFallback() noexcept { return !g_registeredIoFallbackWarned.exchange(true); }
 void resetRegisteredIoFallbackWarning() noexcept { g_registeredIoFallbackWarned.store(false); }
 } // namespace detail

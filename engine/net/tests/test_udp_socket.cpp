@@ -400,11 +400,11 @@ TEST_SUITE("net.udp") {
     TEST_CASE("batch APIs: Registered I/O sizes its slots from the buffer sizes (send slots capped at 2,048) and "
               "commits a burst larger than its send slots in slot-sized steps") {
         // A RIO socket reports its slot capacity (slots x 2,048 B) as its buffer sizes. Receive slots follow
-        // the receive buffer up to 16,384; send slots follow the send buffer up to 2,048, so a 32 MB trunk
-        // socket locks 38.9 MB rather than 69 MB.
+        // the receive buffer (32 MB / 2,112 B per slot = 15,887) up to 16,384; send slots follow the send buffer
+        // up to 2,048, so a 32 MB trunk socket locks 37.9 MB rather than 67.1 MB.
         const UdpSocket trunk = openLoopback(32u * 1024 * 1024, UdpBatchApi::Registered);
         REQUIRE(trunk.batchApi() == UdpBatchApi::Registered);
-        CHECK(trunk.receiveBufferBytes() == 16384u * 2048);
+        CHECK(trunk.receiveBufferBytes() == 15887u * 2048);
         CHECK(trunk.sendBufferBytes() == 2048u * 2048);
         const UdpSocket defaults = openLoopbackWith(UdpBatchApi::Registered);
         CHECK(defaults.receiveBufferBytes() == 3971u * 2048); // 8 MB / (2,048 B + 64 B of address)
@@ -454,7 +454,7 @@ TEST_SUITE("net.udp") {
         });
         log::addSink(sink);
         log::setChannelLevel("Net", log::Level::Debug);
-        detail::resetRegisteredIoFallbackWarning();
+        net::detail::resetRegisteredIoFallbackWarning();
 
         // A message each way, and nothing pending returns at once (the plain socket is non-blocking).
         const auto checkRoundTrip = [](UdpSocket& s) {
@@ -477,9 +477,9 @@ TEST_SUITE("net.udp") {
         // 1. The provider offers no Registered I/O.
         UdpSocketConfig auto0;
         auto0.bindAddress = Address::loopbackV4(0);
-        detail::forceRegisteredIoUnavailable(true);
+        net::detail::forceRegisteredIoUnavailable(true);
         auto unavailable = UdpSocket::open(auto0);
-        detail::forceRegisteredIoUnavailable(false);
+        net::detail::forceRegisteredIoUnavailable(false);
         REQUIRE(unavailable);
         CHECK(unavailable.value().batchApi() == fallback);
         checkRoundTrip(unavailable.value());
@@ -491,12 +491,12 @@ TEST_SUITE("net.udp") {
             UdpSocket probe = openLoopbackWith(UdpBatchApi::Message);
             const u16 port = probe.localAddress().port();
             probe.close();
-            detail::forceRegisteredIoSetUpFailure(true);
+            net::detail::forceRegisteredIoSetUpFailure(true);
             UdpSocketConfig c;
             c.bindAddress = Address::loopbackV4(port);
             c.batchApi = requested;
             auto s = UdpSocket::open(c);
-            detail::forceRegisteredIoSetUpFailure(false);
+            net::detail::forceRegisteredIoSetUpFailure(false);
             REQUIRE(s);
             CHECK(s.value().batchApi() == (requested == UdpBatchApi::Auto ? fallback : UdpBatchApi::Message));
             CHECK(s.value().localAddress().port() == port);

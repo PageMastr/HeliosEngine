@@ -1,28 +1,28 @@
 // Win32 (MSVC, clang-cl, MinGW-w64) implementation of UdpSocket over Winsock2 (04 §2.6).
 //
-// Batches use Registered I/O (RIO, Windows 8 and later; UdpBatchApi::Registered) when the provider
-// offers it. Each socket registers one buffer region of 2 KB slots, each with room for its peer address:
-// receive slots, all kept posted, and send slots, sized from the requested receive and send buffer sizes
-// (a RIO socket keeps no buffer of its own; see slotsFor()), the send slots at most 2,048. It polls its two
-// completion queues from the owner thread (no event, no completion port). Requests are queued with RIO_MSG_DEFER and committed once
-// per batch, so a batch of sends, or of re-posted receives, costs one kernel entry and reading completions
-// costs none. A receive copies the datagram out of its slot into the caller's buffer (recvfrom makes the
-// same copy in the kernel); a send copies it into a slot. A RIO socket refuses FIONBIO, so nothing but its
-// queues touches it.
+// Batches use Registered I/O (RIO, Windows 8 and later; UdpBatchApi::Registered) when the provider offers it.
+// Each socket registers one buffer region of 2 KB slots, each with room for its peer address: receive slots,
+// all kept posted, and send slots, sized from the requested receive and send buffer sizes (a RIO socket keeps
+// no buffer of its own; see slotsFor()), the send slots at most 2,048. It polls its two completion queues
+// from the owner thread (no event, no completion port). Requests are queued with RIO_MSG_DEFER and committed
+// once per batch, so a batch of sends, or of re-posted receives, costs one kernel entry and reading
+// completions costs none. A receive copies the datagram out of its slot into the caller's buffer (recvfrom
+// makes the same copy in the kernel); a send copies it into a slot. A RIO socket refuses FIONBIO, so nothing
+// but its queues touches it.
 //
-// Where RIO is unavailable, where its set-up fails (open() then closes the RIO socket and binds a plain
-// one to the same address; the first fallback in a process is logged as a warning), or where
+// Where RIO is unavailable, where its set-up fails (open() then closes the RIO socket and binds a plain one
+// to the same address; the first fallback in a process is logged as a warning), or where
 // UdpSocketConfig::batchApi asks for UdpBatchApi::Message, every datagram takes one WSASendMsg/WSARecvMsg
-// call on the non-blocking socket (recvfrom if the provider has no WSARecvMsg). The tests force each of
-// these paths (UdpBatchApi::Message and the detail::forceRegisteredIo* hooks in net_internal.h). 04 §2.6 names IOCP with WSARecvMsg as the fallback of the trunk IO
-// threads, which block between bursts (Phase 2); a socket that its owner polls, as here, needs no
-// completion port.
+// call on the non-blocking socket (recvfrom if the provider has no WSARecvMsg). The tests force each of these
+// paths (UdpBatchApi::Message and the detail::forceRegisteredIo* hooks in net_internal.h). 04 §2.6 names IOCP
+// with WSARecvMsg as the fallback of the trunk IO threads, which block between bursts (Phase 2); a socket
+// that its owner polls, as here, needs no completion port.
 //
-// Both APIs keep SIO_UDP_CONNRESET off, the requested buffer sizes, IPv6 dual-stack and the semantics of
-// the POSIX sendmmsg/recvmmsg path (partial batches, full buffers counted and skipped, truncated
-// datagrams dropped). The RIO declarations are written out from the documented ABI instead of taken
-// from <mswsock.h>, because MinGW-w64 11 declares none; where the Windows SDK declares them, the
-// static_asserts below check this copy against it.
+// Both APIs keep SIO_UDP_CONNRESET off, the requested buffer sizes, IPv6 dual-stack and the semantics of the
+// POSIX sendmmsg/recvmmsg path (partial batches, full buffers counted and skipped, truncated datagrams
+// dropped). The RIO declarations are written out from the documented ABI instead of taken from <mswsock.h>,
+// because MinGW-w64 11 declares none; where the Windows SDK declares them, the static_asserts below check
+// this copy against it.
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -177,11 +177,11 @@ static_assert(rio::kGetMultipleExtensionFunctionPointer == SIO_GET_MULTIPLE_EXTE
 // buffer of its own: a datagram that arrives while every receive slot is completed but not yet re-posted
 // is dropped (Windows CI: 128 posted receives held 128 of a 400-datagram burst). So the posted receives
 // are the socket's receive buffer, and the send slots its send buffer: each count follows the
-// SO_RCVBUF/SO_SNDBUF request (8 MB: 3,971 slots; 32 MB for trunks: 16,384 receive slots), counting
+// SO_RCVBUF/SO_SNDBUF request (8 MB: 3,971 slots; 32 MB for trunks: 15,887 receive slots), counting
 // full-size datagrams (a slot holds one datagram of any size, where a plain socket's buffer holds many
 // more small ones). Sends complete within microseconds, so send slots stop at 2,048. The region, locked
 // in memory by RIORegisterBuffer, is then (3,971 + 2,048) x 2,112 B = 12.7 MB per socket at the 8 MB
-// defaults and (16,384 + 2,048) x 2,112 B = 38.9 MB per 32 MB trunk socket.
+// defaults and (15,887 + 2,048) x 2,112 B = 37.9 MB per 32 MB trunk socket.
 constexpr ULONG kSlotBytes = 2048;
 constexpr ULONG kAddressBytes = 64; // >= sizeof(SOCKADDR_INET); keeps every slot 64-byte aligned
 constexpr ULONG kSlotStride = kSlotBytes + kAddressBytes;
@@ -193,7 +193,7 @@ constexpr u32 kMaxSendSlots = 2048;
 constexpr u32 slotsFor(u32 bufferBytes, u32 maxSlots) noexcept {
     return std::clamp<u32>(bufferBytes / kSlotStride, kMinSlots, maxSlots);
 }
-static_assert(slotsFor(8u << 20, kMaxReceiveSlots) == 3971 && slotsFor(32u << 20, kMaxReceiveSlots) == 16384);
+static_assert(slotsFor(8u << 20, kMaxReceiveSlots) == 3971 && slotsFor(32u << 20, kMaxReceiveSlots) == 15887);
 static_assert(slotsFor(8u << 20, kMaxSendSlots) == 2048 && slotsFor(64u << 10, kMaxSendSlots) == kMinSlots);
 /// Completions read per RIODequeueCompletion call.
 constexpr ULONG kDequeueBatch = 64;

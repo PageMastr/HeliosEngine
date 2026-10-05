@@ -187,7 +187,8 @@ thread-safe. Handlers run inside `update()` on the updating thread and may call 
 
 ## Tests, fuzzers, gates
 
-`net_tests` (doctest, 96 test cases on Linux, 4 of them `perf:`; 97 on Windows; `ctest -R net_`):
+`net_tests` (doctest, 99 test cases on Linux, 4 of them `perf:`; 101 on Windows, which adds two Registered I/O
+cases; `ctest -R net_`):
 
 | Suite | Covers |
 |---|---|
@@ -198,9 +199,9 @@ thread-safe. Handlers run inside `update()` on the updating thread and may call 
 | `net.connection` | reliable-ordered exactly-once in-order under 10 % loss + reorder + duplication (both directions), EVENT_U at-most-once, LATEST monotonic, INPUT redundancy, STATE notify invariants, BULK 256 KB, 16 KB CONTROL fragmentation, WouldBlock/TooLarge, window-bytes flow control, reorder-buffer pinning defence, malicious fragments, malformed strikes, budget cap and state budget, 2 ms pacing, AIMD against a 128 kbit/s bottleneck and recovery, RTT/min RTT/jitter/loss stats, ack-only, VOICE, STATE expiry, inbound policing (120 pps; 64 kbit/s game + separate 40 kbit/s VOICE); every arrival order within a 1,024 window and a reversed 16,384 window at O(log n) per message; one gateway packet per tick with reliable acks still ≤ 10 ms; client RTT/loss detection unaffected by tick-paced acks; 60 pps upstream cap at 144 Hz; memory an authenticated peer can pin |
 | `net.endpoint` | token handshake + session info, NS-0.1, 16 clients × all channels under 10 % loss/reorder/dup, timeouts + reconnect, graceful disconnects, stale handles, token validation (protocol, key, address, expiry, full, reuse, junk), pre-filter, malformed authenticated peer, server and client handler re-entrancy (send/disconnect from callbacks), real UDP loopback, keyed pre-filter buckets (a precomputed colliding source cannot starve a victim), IPv6 /64 rate limiting, NetSim timing of flush()-time sends, NAT-rebinding reconnect via `findSession` + `disconnect` |
 | `net.connect_token` | round trip, tamper detection, **Go golden vectors** (`services/testdata/vectors`): public + private parts byte-exact, a Go-issued token completes the handshake, an expired one is refused |
-| `net.bench` | NS-0.2's gate verdict (`bench/ns02_gate.h`): the stack rate gates unless `--advisory ns02-stack`, and only the rate can be advisory; a stack that failed is never also reported as not gated |
+| `net.bench` | NS-0.2's gate verdict (`bench/ns02_gate.h`): the stack rate gates unless `--advisory ns02-stack`, and only the rate can be advisory; a stack that failed is never also reported as not gated. The machine-wide cross-check (`bench::machineCrossCheck`): work outside the measuring thread is reported and flagged above 25 %, preemption is not, and a busy host makes it invalid rather than flagged; `os::machineCpuTimes()` sees a second thread's CPU that the measuring thread's counter does not |
 | `net.trunk` | profile, 256 KB CONTROL + 200 KB BULK under loss, coalescing, 2,000-packet bursts with acks, short NS-0.7 run with full 1,200 B datagrams |
-| `net.udp` | loopback send/receive, batches, truncation, IPv6/dual-stack (skipped when the OS lacks IPv6), 32 MB buffers, bind errors, SocketTransport batching, NS-0.2; **batch APIs**: what Auto and each forced API resolve to (Registered on Windows, MultiMessage on Linux, Message otherwise), the same semantics under every API (nothing pending, empty batches, an unreachable destination skipped and counted, partial batches, sender addresses, truncation through receiveBatch and receiveFrom, byte counters), interop between APIs with a 400-datagram burst received only after it is all sent, SocketTransport over every API, and on Windows RIO's 2 KB slot limits and a send queue sized from a 64 KB buffer (would-block counted) |
+| `net.udp` | loopback send/receive, batches, truncation, IPv6/dual-stack (skipped when the OS lacks IPv6), 32 MB buffers, bind errors, SocketTransport batching, NS-0.2; **batch APIs**: what Auto and each forced API resolve to (Registered on Windows, MultiMessage on Linux, Message otherwise), the same semantics under every API (nothing pending, empty batches, an unreachable destination skipped and counted, partial batches, sender addresses, truncation through receiveBatch and receiveFrom, byte counters), interop between APIs with a 400-datagram burst received only after it is all sent, SocketTransport over every API; the fallback when Registered I/O is unavailable or its set-up fails, forced by test hooks (`detail::forceRegisteredIo*` in `src/net_internal.h`; Windows: Message on the same fixed port, non-blocking, a round trip each way, one warning per process naming the failing step and its error code; elsewhere the hooks change nothing); and on Windows RIO's 2 KB slot limits and its slot counts (reported as buffer sizes: 15,887 receive and 2,048 send slots for 32 MB, 128 each for 64 KB, where a 400-datagram burst is committed in steps of at most 128, would-block counted) |
 | `net.netcode_patches` | `0001-write-bytes-memcpy`: bytes and pointer advance unchanged for 0–1,200 bytes and negative counts; `perf:` a 1,200 B payload in ≤ 0.5 µs (1.28 µs unpatched, 0.018 µs patched here) |
 | `net.netcode_crypto` | the bundled libsodium (owner decision 2026-10-05): its CPU probe sees AVX2 and ChaCha20 dispatches to the AVX2 kernel (observed by swapping a spy into each kernel's table for one call); every compiled kernel (reference, SSSE3, AVX2) matches RFC 8439 §2.4.2 and the reference kernel at 17 lengths around the block sizes; `sodium_memzero` clears exactly its range; `perf:` it wipes 64 KB at least 4× faster than a volatile byte loop (1.4 µs against 27 µs here). Without `HAVE_AVX_ASM` the first case fails (SSSE3 dispatched), without `HAVE_EXPLICIT_BZERO` the `perf:` one does |
 
@@ -239,7 +240,16 @@ without the flag, as do local runs and fixed hardware.
 
 NS-0.2's 100k packets per core is a CPU budget of **≤ 10 µs per encrypted packet, send and receive
 together, on one core** (`bench::kNs02BudgetMicrosPerPacket`; `net_bench --stack` prints the measured µs
-per packet beside it, with the wall time as a cross-check). The win-gpu runner (AMD Ryzen 5 5500, Windows 11)
+per packet beside it). The gate counts the measuring thread's CPU. Its wall time shows only preemption: the
+loop never sleeps or blocks, so the thread accrues CPU at the wall-clock rate even if the OS does part of
+each packet's work elsewhere. So `net_bench --socket` and `--stack` also print a **cross-check** line: the
+whole machine's busy CPU per datagram or packet over the run (`GetSystemTimes` on Windows, `/proc/stat` on
+Linux), less the background load measured for 0.5 s on either side of it, beside the thread's figure. It
+warns when the machine spent more than 25 % more than the thread (`bench::kOffThreadLimitPercent`), as it
+would if Registered I/O completed sends or receives on other CPUs, and says the figure means nothing when
+the background exceeds a quarter of the CPUs. It never changes a verdict: whether NS-0.2 should count that
+work is the owner's call (see the PR). In this container (background ≈ 2 of 4 CPUs) it reads −3 % to −12 %
+and "not meaningful"; the hosted Windows nightly and `win-gpu` give the first readings that count. The win-gpu runner (AMD Ryzen 5 5500, Windows 11)
 measured 12.1–12.2 µs (82,842 and 82,134 packets per core, 2026-10-04/05) against 6.2 µs for a raw datagram,
 so both the Windows socket path and the stack's own work had to shrink.
 
@@ -289,11 +299,21 @@ the hosted Windows nightly and the owner's `win-gpu` runner.
   here and runs only on the Windows CI runners and the owner's `win-gpu` runner. Registered I/O copies
   each datagram through a registered 2 KB slot, so it refuses sends of 2,048 bytes or more and drops larger
   datagrams as truncated; HTP datagrams are at most 1,300 bytes. A RIO socket buffers nothing beyond its
-  posted receives (Windows CI: 128 posted receives took 128 of a 400-datagram burst), so the receive and
-  send slot counts follow `receiveBufferBytes`/`sendBufferBytes` (128–16,384 each), and the region is that
-  much locked memory per socket: ≈ 17 MB at the 8 MB defaults, ≈ 67 MB for a 32 MB trunk socket. The
-  fallback polls a non-blocking socket rather than using IOCP: 04 §2.6's IOCP + `WSARecvMsg` fallback
-  belongs to the Phase 2 trunk IO threads, which block between bursts.
+  posted receives (Windows CI: 128 posted receives took 128 of a 400-datagram burst), so the receive slot
+  count follows `receiveBufferBytes` (128–16,384) and the send slot count `sendBufferBytes` (128–2,048;
+  sends complete within microseconds), and `receiveBufferBytes()`/`sendBufferBytes()` report that slot
+  capacity, not `SO_RCVBUF`/`SO_SNDBUF` (so NS-0.7's `rcvbuf` figure on Windows is the receive slots).
+  The slot counts assume full 2 KB datagrams: a RIO socket holds 3,971 queued datagrams of any size at the
+  8 MB default, where a plain 8 MB socket holds tens of thousands of 100-byte ones. The region is locked
+  memory: (3,971 + 2,048) × 2,112 B ≈ 12.7 MB per socket at the 8 MB defaults and (15,887 + 2,048) × 2,112 B
+  ≈ 37.9 MB per 32 MB trunk socket (67.1 MB before send slots were capped). Today's gateway opens one trunk
+  socket per cell (`GatewayServer::openTrunk`), so a Windows gateway locks ≈ 37.9 MB per cell it serves; 04 §2.6's trunk
+  budget (4 trunk IO threads per gateway box, each with one 32 MB socket: "4 × 32 MB of kernel socket
+  buffers") would be ≈ 152 MB locked under RIO. When RIO is unavailable or its set-up fails (for example,
+  `RIORegisterBuffer` refusing that much locked memory), `open()` falls back to the per-datagram path and
+  logs it once per process as a warning. That fallback polls a non-blocking socket rather than using
+  IOCP: 04 §2.6's IOCP + `WSARecvMsg` fallback belongs to the Phase 2 trunk IO threads, which block
+  between bursts.
 * MSVC builds run the bundled libsodium's portable donna32 Poly1305 (no `__int128`); see "NS-0.2 per-packet
   budget".
 * IPv6 sockets are exercised only where the OS provides them (this container has no IPv6);
@@ -326,5 +346,8 @@ Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09
 on 2026-10-03: the approval adds `net_bench --advisory ns02-stack` and changes nothing in `helios_net`.
 Re-checked at revision 13 on 2026-10-05 (WP-0.13r): revision 13 changes 02 §5.5–5.6 and 07 §1.7.1 only.
 WP-0.13r implements 04 §2.6's Windows batch I/O (Registered I/O with a polled completion queue per
-socket); its fallback is a polled non-blocking socket with `WSARecvMsg`/`WSASendMsg` instead of IOCP (see
-Known limitations). No conformance delta is open; see §5.10.4 (c) there.
+socket). **One declared deviation from 04 §2.6:** the fallback where RIO is unavailable is a polled
+non-blocking socket with `WSARecvMsg`/`WSASendMsg`, not IOCP + `WSARecvMsg` (the WP-0.13r brief allows either;
+reason under Known limitations; recorded in PR #62's description and 09 §8.1's WP-0.13 row). It is not a
+conformance delta in 09 §5.10's sense (no plan text is superseded by code that keeps an older decision); no
+such delta is open (§5.10.4 (c)).

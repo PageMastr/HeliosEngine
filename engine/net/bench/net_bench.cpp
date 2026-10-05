@@ -132,6 +132,9 @@ std::string_view autoBatchApi() {
 /// thread over UDP loopback, 700-byte EVENT_U messages, one per packet (≈ 730-byte datagrams).
 StackResult runStackPps(f64 seconds) {
     StackResult r;
+    // Measured before the endpoints exist: an idle session between the handshake and the run would change
+    // what the run measures.
+    r.machine.backgroundBefore = backgroundCores(kBackgroundMillis);
     struct Counter final : IEndpointHandler {
         u64 messages = 0;
         std::vector<SessionHandle> sessions;
@@ -166,8 +169,6 @@ StackResult runStackPps(f64 seconds) {
     }
     if (se.sessions.empty()) return r;
     const std::vector<u8> msg(700, 1); // one message per packet
-    // Idle, the session costs nothing measurable: keep-alives at 10 Hz.
-    r.machine.backgroundBefore = backgroundCores(kBackgroundMillis);
     r.machine.start = os::machineCpuTimes();
     const f64 wall0 = monotonicSeconds();
     const f64 cpu0 = os::threadCpuSeconds();
@@ -214,12 +215,13 @@ void reportCrossCheck(std::string_view what, std::string_view unit, u64 units, f
         bench::machineCrossCheck(threadCpuSeconds, m.end.busySeconds - m.start.busySeconds, wallSeconds,
                                  std::max(m.backgroundBefore, m.backgroundAfter), m.end.cpus);
     const f64 perUnit = 1e6 / static_cast<f64>(units);
+    const std::string_view idle =
+        c.valid ? "" : "; not meaningful: the host is not idle (background above a quarter of the CPUs)";
     HELIOS_LOG_INFO("{} cross-check: the machine spent {:.2f} us of CPU per {} against the thread's {:.2f} us "
-                    "({:+.1f} % outside the thread; all {} CPUs, background {:.2f} cores before and {:.2f} after "
-                    "subtracted){}",
+                    "({:+.1f} % outside the thread; all {} CPUs, background {:.2f} cores before and {:.2f} "
+                    "after subtracted){}",
                     what, c.machineCpuSeconds * perUnit, unit, threadCpuSeconds * perUnit, c.offThreadPercent,
-                    m.end.cpus, m.backgroundBefore, m.backgroundAfter,
-                    c.valid ? "" : "; not meaningful: the host is not idle (background above a quarter of the CPUs)");
+                    m.end.cpus, m.backgroundBefore, m.backgroundAfter, idle);
     if (c.flagged) {
         HELIOS_LOG_WARN("{} cross-check: {:.0f} % more CPU per {} ran outside the measuring thread than in it "
                         "(limit {:.0f} %), so its per-core rate overstates what one core does; the gate still "

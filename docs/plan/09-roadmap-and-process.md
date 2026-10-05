@@ -1382,7 +1382,8 @@ fired-risks row from the hosted nightlies of 2026-09-27 to 2026-10-03, and added
 row. WP-0.4's repository-side PR (#46) added the WP-0.4 row the same day, and later WP PRs updated their own rows. On
 2026-10-05 the documentation audit (owner request) brought the rows' merge state, fixes and `win-gpu` results up
 to `main` at f5f2729 (the WP-0.1 and WP-0.6 rows are left to open PR #59, which rewrites them); test counts it
-did not change are still those of 1425608. Everything else is the 2026-09-27 refresh.
+did not change are those of each row's last update (1425608 for the 2026-09-27 rows). Everything else is the
+2026-09-27 refresh.
 
 Terms:
 - **Merged (#n):** landed on `main` from reviewed PR #n as one squash commit (§5.2a), which the post-merge

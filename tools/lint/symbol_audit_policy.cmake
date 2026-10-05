@@ -54,6 +54,11 @@ set(HELIOS_SYMBOL_LINKER_DEFINED _init _fini __bss_start _edata _end __end__ __d
 #   its own copy: two TypeInfo addresses for one type, and a TypeInfo that lives in a game module dies with
 #   it on unload. 02 §1.4 requires them to come from the registry (one image); WP-0.6c part 2 moves them
 #   there before the Probe module registers reflected types.
+#   Jolt's inline static CharacterID::sNextID is instantiated in engine/physics's own objects, which keep
+#   default visibility until WP-0.6c part 2 moves module code to -fvisibility=hidden with explicit exports
+#   (02 §1.4, "Exports"), so helios_runtime exports it. Jolt lives only in helios_runtime, so it is still
+#   one instance; the explicit exports hide it.
 set(HELIOS_SYMBOL_KNOWN_FINDINGS
+  "R1|WP-0.6c part 2|^_ZN3JPH11CharacterID7sNextIDE$"
   "R3|WP-0.6c part 2|^_ZZN6helios4refl6TypeOfI.*E3getEvE[0-9]+(info|name)(B[0-9]+[A-Za-z0-9_]+)?$"
   "R5|WP-0.6c part 2|^_ZZN6helios4refl6TypeOfI.*E3getEvE[0-9]+(info|name)(B[0-9]+[A-Za-z0-9_]+)?$")

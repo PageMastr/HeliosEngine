@@ -139,7 +139,7 @@ foreach(case
     "elf_singleton|R2 SDL3 is in two images, helios_client and rhi_tests .'SDL_Init'."
     "elf_duplicate_state|failed .1 finding.*R3 ecs_tests has its own copy of '_ZZN6helios3ecs11componentIdINS0_8PositionEEEjvE2id' .b, .bss., which helios_runtime defines"
     "elf_group_duplicate_state|failed .1 finding.*R3 group helios_client also defines '_ZZN6helios3ecs8typeSlotINS0_11NetIdentityEEEjvE4slot' .u, .bss., which helios_runtime defines"
-    "elf_group_weak_state|failed .2 finding.*R1 helios_runtime exports '_ZN3JPH11CharacterID7sNextIDE' .u, .data., mutable data that is not Helios code.*R1 helios_runtime exports 'LogPcg' .u, .bss."
+    "elf_group_weak_state|failed .2 finding.*R1 helios_runtime exports '_ZN3JPH9Character7sNextIDE' .u, .data., mutable data that is not Helios code.*R1 helios_runtime exports 'LogPcg' .u, .bss."
     "elf_game|failed .4 finding.*R6 game image game_bad has its own strong definition of '_ZN6helios3log5write.*R4 game image game_bad defines 'mi_malloc' from mimalloc.*R5 game image game_bad defines Helios data '_ZN6helios5probe8g_countsE' .B..*R4 game image game_bad defines '_Z12lua_pushnilP9lua_State' from Luau"
     "elf_client_luau|failed .1 finding.*R1 helios_client exports '_Z12lua_pushnilP9lua_State' .T."
     "pe_c_export|failed .2 finding.*P1 helios_runtime exports 'mi_malloc', a C name that is not helios_.*P1 helios_runtime exports 'yyjson_read_opts'"

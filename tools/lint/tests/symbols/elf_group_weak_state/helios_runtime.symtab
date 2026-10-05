@@ -1,4 +1,4 @@
 helios_runtime_link_group_modules|0000000000004000|   T  |              FUNC|0000000000000008|     |.text
 _ZN6helios3pcg6LogPcgE|0000000000004400|   u  |            OBJECT|0000000000000010|     |.bss
-_ZN3JPH11CharacterID7sNextIDE|0000000000004500|   u  |            OBJECT|0000000000000004|     |.data
+_ZN3JPH9Character7sNextIDE|0000000000004500|   u  |            OBJECT|0000000000000004|     |.data
 LogPcg|0000000000004600|   u  |            OBJECT|0000000000000010|     |.bss

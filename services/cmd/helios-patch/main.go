@@ -182,10 +182,16 @@ func publish(ctx context.Context, fs *flag.FlagSet, args []string, t *patchtrust
 	if err != nil {
 		return err
 	}
+	unless := func(done bool, note string) string {
+		if done {
+			return ""
+		}
+		return note
+	}
 	fmt.Fprintf(stdout, "published %s/%s/%s build %s: %d files, %d chunks (%d written, %d bytes), manifest %s%s, "+
 		"pointer sequence %d%s\n", t.ProductID, t.Channel, t.Platform, res.BuildID, res.Files, res.Chunks,
-		res.ChunksWritten, res.BytesWritten, res.ManifestHash, map[bool]string{false: " (already published)"}[res.ManifestWritten],
-		res.Sequence, map[bool]string{false: " (unchanged)"}[res.PointerWritten])
+		res.ChunksWritten, res.BytesWritten, res.ManifestHash, unless(res.ManifestWritten, " (already published)"),
+		res.Sequence, unless(res.PointerWritten, " (unchanged)"))
 	return nil
 }
 

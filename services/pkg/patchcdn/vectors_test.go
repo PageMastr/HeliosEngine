@@ -352,8 +352,8 @@ func TestUpdateTrustVectors(t *testing.T) {
 	oversize, _ := patchcdn.EncodeChunk(cdctest.Random(98, int(big.RawSize)+1))
 	mfOff := len(mfile) - 40 // a byte inside the zstd payload
 
-	nextMf, nextPf := manifestCase("manifest-swapped", "manifest-a", func(h *manifest.Header) { h.CreatedAt-- })
-	_ = nextPf
+	// Another validly signed manifest of the same build (signed a second earlier): only its hash differs.
+	swapped := write("manifest-swapped.hman", signedManifest(t, m, "manifest-a", func(h *manifest.Header) { h.CreatedAt-- }))
 	var cases []vectorCase
 	add := func(c vectorCase) { cases = append(cases, c) }
 	ok := func(name string, state, want *patchtrust.State, c vectorCase) {
@@ -451,7 +451,7 @@ func TestUpdateTrustVectors(t *testing.T) {
 	copy(resealed[manifest.SignedBytes:], h[:])
 	bad("manifest-tampered-header-resealed", patchtrust.CheckManifestHash, vectorCase{
 		Manifest: write("manifest-resealed.hman", resealed)})
-	bad("manifest-swapped", patchtrust.CheckManifestHash, vectorCase{Manifest: nextMf})
+	bad("manifest-swapped", patchtrust.CheckManifestHash, vectorCase{Manifest: swapped})
 	bad("manifest-tampered-signature", patchtrust.CheckManifestSignature, vectorCase{Edits: []vectorEdit{{
 		Artefact: "manifest", At: 300, Hex: hex.EncodeToString([]byte{mfile[300] ^ 1})}}})
 	for _, mc := range []struct {

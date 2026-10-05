@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -388,6 +389,56 @@ func TestRepositoryMap(t *testing.T) {
 	}
 }
 
+// TestSARIF pins how findings reach code scanning: a failing finding is an error; a suppressed or
+// known-failing one is a note with its suppression (code scanning ignores SARIF suppressions, so an
+// error there would fail a PR that touches a reviewed line), and each carries its fingerprint.
+func TestSARIF(t *testing.T) {
+	type result struct {
+		RuleID       string `json:"ruleId"`
+		Level        string `json:"level"`
+		Suppressions []struct {
+			Kind string `json:"kind"`
+		} `json:"suppressions"`
+		PartialFingerprints map[string]string `json:"partialFingerprints"`
+	}
+	for _, c := range []struct{ fixture, want string }{
+		{"suppression_ok", "note:inSource note:inSource"},
+		{"known_ok", "note:external note:external"},
+		{"known_scope", "note:external error:"},
+	} {
+		res, err := Run(Options{Root: filepath.Join("..", "..", "testdata", "framework", c.fixture), Rules: []string{"CONF-10"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sb strings.Builder
+		if err := res.WriteSARIF(&sb); err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Runs []struct {
+				Results []result `json:"results"`
+			} `json:"runs"`
+		}
+		if err := json.Unmarshal([]byte(sb.String()), &doc); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, r := range doc.Runs[0].Results {
+			kind := ""
+			if len(r.Suppressions) > 0 {
+				kind = r.Suppressions[0].Kind
+			}
+			got = append(got, r.Level+":"+kind)
+			if !fingerprintRE.MatchString(r.PartialFingerprints["heliosConformance/v1"]) {
+				t.Errorf("%s: result without a fingerprint: %+v", c.fixture, r)
+			}
+		}
+		if strings.Join(got, " ") != c.want {
+			t.Errorf("%s: got %q, want %q", c.fixture, strings.Join(got, " "), c.want)
+		}
+	}
+}
+
 // TestSQLStatementsGooseAndLexing: the splitter skips what goose and PostgreSQL skip (goose's
 // annotation spellings, dollar tags with digits, E-string escapes, multi-line strings, nested comments,
 // quoted identifiers, '$' inside identifiers), so DDL that never runs cannot change the net schema.
@@ -469,6 +520,61 @@ func TestPIIReportOrder(t *testing.T) {
 			t.Fatalf("column %s is missing or out of name order:\n%s", col, first)
 		}
 		last = at
+	}
+}
+
+// TestCMakeCommands: parentheses inside quoted arguments, bracket arguments and comments, and escaped
+// ones do not count toward a command's end, so they cannot swallow the commands after them; a command
+// still open at the end of the file is returned and reported as open.
+func TestCMakeCommands(t *testing.T) {
+	for _, c := range []struct {
+		src  string
+		want []string // name@line
+		open int
+	}{
+		{"message(STATUS \"ISA (avx2\")\nadd_compile_options(-mavx2)", []string{"message@1", "add_compile_options@2"}, 0},
+		{"string(REGEX REPLACE \"\\\\(.*\" \"\" s \"${v}\")\nx()", []string{"string@1", "x@2"}, 0},
+		{"string(APPEND l \"|R\\\"[^()]*\\\\(\")\nx()", []string{"string@1", "x@2"}, 0},
+		{"set(a \"multi\nline ( \\\" string\")\nx()", []string{"set@1", "x@3"}, 0},
+		{"set(a [=[ ( ]] ]=])\nx()", []string{"set@1", "x@2"}, 0},
+		{"#[[ (\n]] x()\ny()", []string{"x@2", "y@3"}, 0},
+		{"#[[\nx(\n]]\ny()", []string{"y@4"}, 0},
+		{"set(a \\()\nx() # comment (\ny( # (\n)", []string{"set@1", "x@2", "y@3"}, 0},
+		{"if(a) x() endif()", []string{"if@1", "x@1", "endif@1"}, 0},
+		{"set(a \"#\" b) # c(\nx()", []string{"set@1", "x@2"}, 0},
+		{"ok()\nmessage(\"never closed\"\nx()", []string{"ok@1", "message@2"}, 2},
+	} {
+		cmds, open := cmakeCommands(strings.Split(c.src, "\n"))
+		var got []string
+		for _, cmd := range cmds {
+			got = append(got, fmt.Sprintf("%s@%d", cmd.name, cmd.line))
+		}
+		if strings.Join(got, " ") != strings.Join(c.want, " ") || open != c.open {
+			t.Errorf("%q:\n got  %v (open %d)\n want %v (open %d)", c.src, got, open, c.want, c.open)
+		}
+	}
+}
+
+// TestISAEnvRefOnce: an ISA level computed from $ENV{} is named once in its finding, in a grant and when
+// passed to a wrapper (engine/clang/CMakeLists.txt:15-16 of the CONF-11 bad fixture).
+func TestISAEnvRefOnce(t *testing.T) {
+	res, err := Run(Options{Root: filepath.Join("..", "..", "testdata", "CONF-11", "bad"), Rules: []string{"CONF-11"},
+		Strict: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, f := range res.Findings {
+		if f.Path != "engine/clang/CMakeLists.txt" || f.Line < 15 || f.Line > 16 {
+			continue
+		}
+		seen++
+		if n := strings.Count(f.Message, "$ENV{HELIOS_ARCH}"); n != 1 {
+			t.Errorf("%s:%d names $ENV{HELIOS_ARCH} %d times: %s", f.Path, f.Line, n, f.Message)
+		}
+	}
+	if seen != 2 {
+		t.Errorf("want 2 findings on engine/clang/CMakeLists.txt:15-16, got %d", seen)
 	}
 }
 

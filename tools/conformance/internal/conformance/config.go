@@ -1,6 +1,8 @@
 package conformance
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -20,17 +22,28 @@ type MapEntry struct {
 	line  int
 }
 
-// Known is a known-failing record (tools/conformance/known_failing.jsonc): findings of Rule under
-// Paths are reported but do not fail the run, because rework WP Owner has them in scope (§5.10.2 D3).
-// A record that matches no finding fails the run, so a closed gap cannot stay listed.
+// Known is a known-failing record (tools/conformance/known_failing.jsonc): the findings it pins are
+// reported but do not fail the run, because rework WP Owner has them in scope (§5.10.2 D3). A record
+// pins each finding by its fingerprint, so a new finding of the same rule in the same file (a new grant
+// next to an old one, or an old line that gains a flag) still fails. A pinned finding that is no longer
+// reported fails the run too, so a closed gap cannot stay listed.
 type Known struct {
-	Rule   string   `json:"rule"`
-	Owner  string   `json:"owner"`
-	Anchor string   `json:"anchor"`
-	Reason string   `json:"reason"`
-	Paths  []string `json:"paths"`
-	line   int
-	hits   int
+	Rule     string        `json:"rule"`
+	Owner    string        `json:"owner"`
+	Anchor   string        `json:"anchor"`
+	Reason   string        `json:"reason"`
+	Findings []*KnownEntry `json:"findings"`
+	line     int
+	hits     int
+}
+
+// KnownEntry is one finding a record pins: its file and fingerprint (Finding.Fingerprint; the CLI's
+// -fingerprints flag prints them). Each entry covers one finding.
+type KnownEntry struct {
+	Path        string `json:"path"`
+	Fingerprint string `json:"fingerprint"`
+	line        int
+	used        bool
 }
 
 // stripJSONC removes // and /* */ comments and trailing commas outside strings, keeping line breaks
@@ -166,21 +179,45 @@ func loadKnown(file, rel string) ([]*Known, []Finding) {
 	}
 	var good []*Known
 	var bad []Finding
+	entries := 0
 	for i, k := range doc.KnownFailing {
 		k.line = lineOf(file, `"rule"`, i)
+		valid := true
+		for _, e := range k.Findings {
+			e.line = lineOf(file, `"fingerprint"`, entries)
+			entries++
+			if e.Path == "" || strings.ContainsAny(e.Path, `*?[\`) || strings.HasPrefix(e.Path, "/") ||
+				!fingerprintRE.MatchString(e.Fingerprint) {
+				valid = false
+				bad = append(bad, Finding{Rule: ToolRule, Path: rel, Line: e.line, Message: fmt.Sprintf(
+					"record %d (%s): each finding needs a relative file path (no globs) and a %d-hex fingerprint",
+					i+1, k.Rule, fingerprintLen)})
+			}
+		}
 		switch {
 		case Lookup(k.Rule) == nil:
 			bad = append(bad, Finding{Rule: ToolRule, Path: rel, Line: k.line,
 				Message: fmt.Sprintf("record %d: unknown rule %q", i+1, k.Rule)})
-		case !ownerRE.MatchString(k.Owner) || k.Anchor == "" || k.Reason == "" || len(k.Paths) == 0:
+		case !ownerRE.MatchString(k.Owner) || k.Anchor == "" || k.Reason == "" || len(k.Findings) == 0:
 			bad = append(bad, Finding{Rule: ToolRule, Path: rel, Line: k.line,
-				Message: fmt.Sprintf("record %d (%s): needs an owner WP (WP-<n>.<m>…), an anchor, a reason and paths",
-					i+1, k.Rule)})
-		default:
+				Message: fmt.Sprintf("record %d (%s): needs an owner WP (WP-<n>.<m>…), an anchor, a reason and "+
+					"the findings it pins", i+1, k.Rule)})
+		case valid:
 			good = append(good, k) // an invalid record covers nothing
 		}
 	}
 	return good, bad
+}
+
+const fingerprintLen = 16
+
+var fingerprintRE = regexp.MustCompile(fmt.Sprintf(`^[0-9a-f]{%d}$`, fingerprintLen))
+
+// fingerprint identifies a finding without its line number, so it survives edits elsewhere in the file:
+// the rule, the file, the message and the finding's source line with surrounding whitespace trimmed.
+func fingerprint(rule, path, message, source string) string {
+	h := sha256.Sum256([]byte(rule + "\x00" + path + "\x00" + message + "\x00" + strings.TrimSpace(source)))
+	return hex.EncodeToString(h[:])[:fingerprintLen]
 }
 
 // scorecardExit is the scorecard item that carries each known-failing record's gap (README).

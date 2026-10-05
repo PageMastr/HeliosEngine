@@ -1,11 +1,46 @@
 // Known-failing CONF findings (docs/plan/09-roadmap-and-process.md §5.10.2 D3; tools/conformance/README.md).
 //
-// Each record names a rule, the paths where it fails today, the rework WP that owns the fix (`owner`),
-// the §5.10.4 row that records it (`anchor`) and why. helios-conformance reports those findings as
-// "known failing, owned by <WP>" (SARIF: an external suppression) and does not fail on them. A record
-// that matches no finding fails the run, so the rework WP that closes a gap removes its record and the
-// scorecard gap (scorecard.jsonc, EXIT-0.conformance) in the same PR. `-strict` ignores this file.
-// Adding a record is a Director decision (D3), made in the same round as the rework WP it names.
+// Each record names a rule, the rework WP that owns the fix (`owner`), the §5.10.4 row that records it
+// (`anchor`), why, and the findings it pins: one {path, fingerprint} entry per finding. A fingerprint hashes
+// the rule, the file, the message and the finding's trimmed source line (`-fingerprints` prints it), so a
+// new finding of the same rule in the same file, or a pinned line that changes, still fails the run.
+// helios-conformance reports the pinned findings as "known failing, owned by <WP>" (SARIF: an external
+// suppression) and does not fail on them. An entry that matches no finding fails the run, so the rework WP
+// that closes a gap removes its entries, the record and the scorecard gap (scorecard.jsonc,
+// EXIT-0.conformance) in the same PR. `-strict` ignores this file. Adding a record is a Director decision
+// (D3), made in the same round as the rework WP it names.
 {
-  "known_failing": []
+  "known_failing": [
+    {
+      "rule": "CONF-11", "owner": "WP-0.2r", "anchor": "09 §5.10.4 (b)",
+      "reason": "The in-tree ISA code was written to the per-file AVX2 allowlist that the ADR-011 amendment retired: HELIOS_ISA_AVX2_TARGETS, HELIOS_ISA_AVX2_SOURCE_PATTERNS and helios_avx2_sources() (and their users in the ISA audit and pcg), and tp_jolt's PUBLIC ISA options. WP-0.2r replaces them with whole-image levels (09 §2 WP-0.2r items 1-5); the audit's own disassembly fixture carries a conformance:allow instead",
+      "findings": [
+        {"path": "cmake/HeliosIsa.cmake", "fingerprint": "b595f906bd38c6db"},        // function(helios_avx2_sources …)
+        {"path": "cmake/HeliosIsa.cmake", "fingerprint": "743a2f7807ad14f3"},        // set_source_files_properties(… "${flags}")
+        {"path": "cmake/isa_allowlist.cmake", "fingerprint": "31d604d16cdf76f7"},    // set(HELIOS_ISA_AVX2_TARGETS …)
+        {"path": "cmake/isa_allowlist.cmake", "fingerprint": "4c017a0679eb238a"},    // set(HELIOS_ISA_AVX2_SOURCE_PATTERNS …)
+        {"path": "engine/pcg/CMakeLists.txt", "fingerprint": "0de2af9bd2bec9a4"},    // helios_avx2_sources(helios_pcg …)
+        {"path": "third_party/CMakeLists.txt", "fingerprint": "76df5658ca641d89"},   // tp_jolt PUBLIC /arch:AVX2 (MSVC)
+        {"path": "third_party/CMakeLists.txt", "fingerprint": "f5b04b4007f48c94"},   // tp_jolt PUBLIC /arch:AVX2 -mbmi … (clang-cl)
+        {"path": "third_party/CMakeLists.txt", "fingerprint": "4f0492e506b0011f"},   // tp_jolt PUBLIC -mavx2 -mbmi … (GCC, Clang)
+        {"path": "tools/lint/isa_audit.cmake", "fingerprint": "034b5b50109d741f"},   // HELIOS_ISA_AVX2_SOURCE_PATTERNS
+        {"path": "tools/lint/isa_audit.cmake", "fingerprint": "70fb752eb6d896bf"},   // HELIOS_ISA_AVX2_TARGETS
+        {"path": "tools/lint/isa_audit.cmake", "fingerprint": "6a01ec7a97810cd7"}    // HELIOS_ISA_AVX2_TARGETS
+      ]
+    },
+    {
+      "rule": "CONF-12", "owner": "WP-0.5r", "anchor": "09 §5.10.4 (b)",
+      "reason": "The Windows gate sits in .CRT$XIB, ends with ExitProcess, exports helios_cpu_gate_crt_entry, and has neither /INCLUDE:_tls_used nor helios_cpu_gate_tls_entry. WP-0.5r moves it to .CRT$XLA0 with TerminateProcess(…, 78) and the three exports",
+      "findings": [
+        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "fe5a30b23865ecba"},   // no /INCLUDE:_tls_used
+        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "2b7de110ee0c9187"},   // no /INCLUDE:helios_cpu_gate_tls_entry
+        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "fe2731053a37dac3"},   // ExitProcess
+        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "fe2731053a37dac3"},   // ExitProcess (second call)
+        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "6d072e8abe5acd3a"},   // #pragma section(".CRT$XIB")
+        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "a48bfb6e143ed3e7"},   // __declspec(allocate(".CRT$XIB")) (MSVC)
+        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "10e5bc1974245f8f"},   // external helios_cpu_gate_crt_entry
+        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "34ff752452db202d"}    // section(".CRT$XIB") (MinGW)
+      ]
+    }
+  ]
 }

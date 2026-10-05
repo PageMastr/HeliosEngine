@@ -1,6 +1,10 @@
 {
   "known_failing": [
-    {"rule": "CONF-10", "owner": "WP-9.9r", "anchor": "09 §5.10.4 (z)", "reason": "fixture", "paths": ["engine/x/**"]},
-    {"rule": "CONF-10", "owner": "WP-9.8r", "anchor": "09 §5.10.4 (y)", "reason": "fixed already", "paths": ["engine/y/**"]}
+    {"rule": "CONF-10", "owner": "WP-9.9r", "anchor": "09 §5.10.4 (z)", "reason": "fixture", "findings": [
+      {"path": "engine/x/a.cpp", "fingerprint": "3e07f400cceffc24"},
+      {"path": "engine/gone/b.cpp", "fingerprint": "0123456789abcdef"},
+    ]},
+    {"rule": "CONF-10", "owner": "WP-9.8r", "anchor": "09 §5.10.4 (y)", "reason": "fixed already",
+     "findings": [{"path": "engine/y/c.cpp", "fingerprint": "fedcba9876543210"}]}
   ]
 }

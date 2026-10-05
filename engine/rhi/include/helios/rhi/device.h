@@ -45,7 +45,8 @@ struct DeviceDesc {
     Backend backend = Backend::Vulkan;
     std::string_view appName = "Helios";
     /// Enable Khronos validation when the layer is installed (env HELIOS_RHI_VALIDATION=1 forces
-    /// on, =0 off). requireValidation fails creation when the layer is missing.
+    /// on, =0 off). requireValidation fails creation unless the layer is in the instance's call chain
+    /// and its reports reach this device (CapBit::ValidationLayer).
     bool validation = false;
     bool requireValidation = false;
     /// false: HELIOS_RHI_VALIDATION does not override `validation`, for a device that must run

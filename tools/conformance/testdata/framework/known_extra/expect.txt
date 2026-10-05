@@ -1,0 +1,7 @@
+#! -rules CONF-10
+# A record covers exactly the findings it pins: a third copy of a pinned line, a new finding in a listed
+# file, and a pinned line that an edit changed all fail, and the edited line's old entry is stale.
+engine/x/a.cpp:3: CONF-10
+engine/x/a.cpp:4: CONF-10
+engine/x/c.cpp:2: CONF-10
+tools/conformance/known_failing.jsonc:7: conformance

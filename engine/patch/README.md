@@ -232,10 +232,11 @@ Measured on the shared, loaded 4-vCPU dev VM (load average 3–5), GCC 13 RelWit
 | Read a 50 GB install's manifest (20k files, 700k chunks, 52.6 MB body): BLAKE2b, decode, validate | ≤ 400 ms | 114–122 ms | 103–125 ms |
 | Write it (codec 0) | ≤ 400 ms | 153–171 ms | 130–154 ms |
 | Read `deep-paths.hman` (64 MiB of paths 508 directories deep, a 72 MB body, zstd), whose collision keys arrive sorted | ≤ 400 ms | 315–325 ms | 300–354 ms |
-| Read the same paths with their collision keys in random order (the first 16 directories named `a` or `A` by a random permutation, so the check sorts 65,536 keys of 1 KiB); C++ also asserts at most twice the sorted-key read | ≤ 800 ms | 384–475 ms ¹ | 449–470 ms ¹ |
+| Read the same paths with their collision keys in random order (the first 16 directories named `a` or `A` by a random permutation, so the check sorts 65,536 keys of 1 KiB); C++ also asserts at most twice the sorted-key read | ≤ 800 ms | 384–475 ms ¹ | 432–572 ms ¹ |
 
-¹ Measured 2026-10-05 (load average 5–7), when the sorted-key read took 305–395 ms (C++) and 302–371 ms (Go).
-Out of order the sort costs C++ (libstdc++ `std::sort`) about 50–150 ms here; the round-2 review measured 145 ms
+¹ Measured 2026-10-05 with GCC 13 (Clang 18: 399–467 ms) and Go, load average 5–9 (Go's 572 ms ran beside
+pkg/cdc's timing test), when the sorted-key reads took 299–395 ms (C++) and 302–394 ms (Go). Out of order the
+sort costs C++ (libstdc++ `std::sort`) about 50–150 ms here; the round-2 review measured 145 ms
 for the sort alone, and a 463 ms read, with only the first directory's case alternating (294 ms in order). At
 the file-count limit reads are slower still, and no budget is stated for them: 2^20 files of 64-byte paths took
 C++ 661 ms in order and 848 ms with three case bits shuffled here; the review measured C++ 638 ms in order and

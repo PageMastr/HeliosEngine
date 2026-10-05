@@ -73,6 +73,9 @@ inline constexpr u32 kMaxPacks = 1u << 20;
 inline constexpr u32 kMaxPatches = 1u << 20;
 inline constexpr u32 kMaxStringBytes = 64 * 1024 * 1024;
 inline constexpr u32 kMaxPathBytes = 1024;
+/// A path segment's limit: NAME_MAX on ext4 is 255 bytes and NTFS allows 255 UTF-16 units (paths are
+/// ASCII), so every valid path can be installed on both.
+inline constexpr u32 kMaxSegmentBytes = 255;
 inline constexpr u64 kMaxPackSize = 1 * kGiB;
 inline constexpr u64 kMaxPatchSize = u64(1) << 40;
 inline constexpr u8 kMaxTier = 2;
@@ -215,7 +218,9 @@ struct Manifest {
 /// holding their chunks, patch targets. Fails with LimitExceeded for a limit and InvalidArgument otherwise.
 Result<void> validateManifest(const Manifest& manifest);
 
-/// True if `path` is a valid manifest path on its own (no ordering or collision checks).
+/// True if `path` is a valid manifest path on its own (no ordering or collision checks): 1..1024 bytes of
+/// '/'-separated segments of 1..255 bytes of [A-Za-z0-9._+-], none "." or "..", none ending in '.', none
+/// a Windows device name (README "Paths"). Thread-safe.
 bool isValidManifestPath(std::string_view path) noexcept;
 
 /// The canonical body of a valid manifest (what bodyHash covers). InvalidArgument/LimitExceeded if invalid.

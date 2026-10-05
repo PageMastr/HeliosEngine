@@ -104,7 +104,9 @@ ManifestWriteOptions rawOptions() {
     return o;
 }
 
-/// Applies a shared hostile case (services/testdata/vectors/hman/hostile.json) to the golden.
+/// Applies a shared hostile case (services/testdata/vectors/hman/hostile.json) to a golden: the new size
+/// first, then the edits in order (each overwrites, or with "insert" inserts, bytes at its offset into the
+/// bytes as the previous edits left them).
 std::vector<u8> applyHostile(std::vector<u8> b, yyjson_val* c) {
     if (const u64 size = test::getU64(c, "size"); size != 0) b.resize(static_cast<usize>(size), 0);
     usize idx, max;
@@ -112,8 +114,14 @@ std::vector<u8> applyHostile(std::vector<u8> b, yyjson_val* c) {
     yyjson_arr_foreach(test::get(c, "edits"), idx, max, e) {
         const std::vector<u8> bytes = test::fromHex(test::getStr(e, "hex"));
         const usize at = static_cast<usize>(test::getU64(e, "at"));
-        REQUIRE(at + bytes.size() <= b.size());
-        std::copy(bytes.begin(), bytes.end(), b.begin() + static_cast<std::ptrdiff_t>(at));
+        const auto pos = b.begin() + static_cast<std::ptrdiff_t>(at);
+        if (yyjson_get_bool(test::get(e, "insert"))) {
+            REQUIRE(at <= b.size());
+            b.insert(pos, bytes.begin(), bytes.end());
+        } else {
+            REQUIRE(at + bytes.size() <= b.size());
+            std::copy(bytes.begin(), bytes.end(), pos);
+        }
     }
     const std::string reseal = test::getStr(c, "reseal");
     if (reseal == "all") {
@@ -192,21 +200,24 @@ TEST_CASE("manifest: the shared deep-paths.hman (written by Go) reads back to th
 
 TEST_CASE("manifest: the shared hostile cases fail the same check with the same error kind as in Go") {
     const test::Json j = test::loadJson(hmanDir() / "hostile.json");
-    const std::vector<u8> golden = test::readBytes(hmanDir() / "pipeline.hman");
-    yyjson_val* cases = test::get(j.root(), "cases");
-    REQUIRE(yyjson_arr_size(cases) >= 50);
-    usize idx, max;
-    yyjson_val* c;
-    yyjson_arr_foreach(cases, idx, max, c) {
-        const std::string name = test::getStr(c, "name");
-        const std::string rule = test::getStr(c, "rule"); // a message substring: the one check it breaks
-        CAPTURE(name);
-        CAPTURE(rule);
-        const Result<Manifest> m = readManifest(applyHostile(golden, c));
-        REQUIRE(!m.ok());
-        CHECK(test::errorKind(m.errorCode()) == test::getStr(c, "expect"));
-        const bool breaksItsRule = !rule.empty() && m.error().message.find(rule) != std::string::npos;
-        CHECK_MESSAGE(breaksItsRule, m.error().message);
+    REQUIRE(yyjson_arr_size(test::get(j.root(), "cases")) >= 50);
+    REQUIRE(yyjson_arr_size(test::get(j.root(), "zstdCases")) >= 1);
+    for (const auto& [list, goldenName] : {std::pair{"cases", "pipeline.hman"},
+                                           std::pair{"zstdCases", "pipeline.go-zstd.hman"}}) {
+        const std::vector<u8> golden = test::readBytes(hmanDir() / goldenName);
+        usize idx, max;
+        yyjson_val* c;
+        yyjson_arr_foreach(test::get(j.root(), list), idx, max, c) {
+            const std::string name = test::getStr(c, "name");
+            const std::string rule = test::getStr(c, "rule"); // a message substring: the one check it breaks
+            CAPTURE(name);
+            CAPTURE(rule);
+            const Result<Manifest> m = readManifest(applyHostile(golden, c));
+            REQUIRE(!m.ok());
+            CHECK(test::errorKind(m.errorCode()) == test::getStr(c, "expect"));
+            const bool breaksItsRule = !rule.empty() && m.error().message.find(rule) != std::string::npos;
+            CHECK_MESSAGE(breaksItsRule, m.error().message);
+        }
     }
 }
 
@@ -225,8 +236,18 @@ TEST_CASE("manifest: the shared identifier and path vectors") {
     yyjson_val* paths = test::get(root, "paths");
     for (const std::string& p : list(paths, "valid")) CHECK_MESSAGE(isValidManifestPath(p), p);
     for (const std::string& p : list(paths, "invalid")) CHECK_MESSAGE(!isValidManifestPath(p), p);
-    CHECK(isValidManifestPath(std::string(hman::kMaxPathBytes, 'a')));
-    CHECK_FALSE(isValidManifestPath(std::string(hman::kMaxPathBytes + 1, 'a')));
+    // The longest path (255-byte segments), one byte more, and the longest segment first, inside and last.
+    std::string longest;
+    for (int i = 0; i < 3; ++i) longest += std::string(hman::kMaxSegmentBytes, 'a') + "/";
+    longest += std::string(254, 'a') + "/b";
+    REQUIRE(longest.size() == hman::kMaxPathBytes);
+    CHECK(isValidManifestPath(longest));
+    CHECK_FALSE(isValidManifestPath(longest + "b"));
+    for (const usize n : {usize{hman::kMaxSegmentBytes}, usize{hman::kMaxSegmentBytes} + 1}) {
+        const std::string seg(n, 's');
+        for (const std::string& p : {seg + "/x", "x/" + seg + "/y", "x/" + seg})
+            CHECK_MESSAGE(isValidManifestPath(p) == (n <= hman::kMaxSegmentBytes), p);
+    }
 
     const ManifestHeader base = pipeline().header;
     const auto check = [&](const char* key, std::string ManifestHeader::*field) {
@@ -427,10 +448,26 @@ TEST_CASE("manifest: the builder refuses what the format cannot hold") {
     CHECK(fails([&](ManifestBuilder& x) { x.placeChunk(file.chunks[0].hash, other, 0, 10); }) ==
           ErrorCode::InvalidArgument);
     CHECK(fails([&](ManifestBuilder& x) { x.setStoredSize(other, 10); }) == ErrorCode::InvalidArgument);
-    CHECK(fails([&](ManifestBuilder& x) {
-              x.setStoredSize(file.chunks[0].hash, 10);
-              x.setStoredSize(file.chunks[0].hash, 11);
-          }) == ErrorCode::InvalidArgument);
+    // These fail with their own message (no other check), as in Go's TestBuilderRefusals.
+    const auto failsWith = [&](std::string_view rule, auto&& setup) {
+        ManifestBuilder x(h);
+        REQUIRE(x.addFile(input("a")).ok());
+        setup(x);
+        const Result<Manifest> m = x.build();
+        REQUIRE(!m.ok());
+        CHECK(m.errorCode() == ErrorCode::InvalidArgument);
+        CHECK_MESSAGE(m.error().message.find(rule) != std::string::npos, m.error().message);
+    };
+    failsWith("is placed twice", [&](ManifestBuilder& x) {
+        x.setStoredSize(file.chunks[0].hash, 10);
+        x.setStoredSize(file.chunks[0].hash, 11);
+    });
+    failsWith("is placed twice", [&](ManifestBuilder& x) {
+        x.addPack(other, 100);
+        x.placeChunk(file.chunks[0].hash, other, 0, 10);
+        x.setStoredSize(file.chunks[0].hash, 11);
+    });
+    failsWith("holds no chunk", [&](ManifestBuilder& x) { x.addPack(other, 100); });
     CHECK(fails([&](ManifestBuilder& x) { x.addPatch("missing", other, other, 3); }) ==
           ErrorCode::InvalidArgument);
     CHECK(fails([&](ManifestBuilder& x) { REQUIRE(x.addFile(input("A/b")).ok()); }) ==
@@ -439,8 +476,6 @@ TEST_CASE("manifest: the builder refuses what the format cannot hold") {
               REQUIRE(x.addFile(input("docs/readme")).ok());
               REQUIRE(x.addFile(input("Docs/readme")).ok());
           }) == ErrorCode::InvalidArgument);
-    CHECK(fails([&](ManifestBuilder& x) { x.addPack(other, 100); }) ==
-          ErrorCode::InvalidArgument); // holds no chunk
     CHECK(fails([&](ManifestBuilder& x) {
               ManifestFileInput bad = input("b");
               bad.content.chunks[0].size -= 1;
@@ -479,6 +514,24 @@ TEST_CASE("manifest: an empty build and a round trip through both codecs") {
         CHECK(*back == empty);
     }
     CHECK(readManifestFile(hmanDir() / "missing.hman").errorCode() == ErrorCode::NotFound);
+}
+
+TEST_CASE("manifest: a trailing skippable frame may pad a zstd payload up to its bound, as in Go") {
+    // The bound is bodySize + bodySize/128 + 4096; one byte more is hostile.json's zstd case.
+    const std::vector<u8> z = test::readBytes(hmanDir() / "pipeline.go-zstd.hman");
+    const u64 bodySize = loadLE<u64>(z.data() + 48);
+    const u64 bound = bodySize + bodySize / 128 + 4096;
+    REQUIRE(bound >= z.size() - hman::kHeaderSize + 8);
+    std::vector<u8> b = z;
+    b.resize(static_cast<usize>(hman::kHeaderSize + bound), 0);
+    storeLE<u32>(b.data() + z.size(), 0x184D2A50u);
+    storeLE<u32>(b.data() + z.size() + 4, static_cast<u32>(b.size() - z.size() - 8));
+    storeLE<u64>(b.data() + 56, bound);
+    const Hash256 h = blake2b256(std::span<const u8>(b).first(hman::kSignedBytes));
+    std::copy(h.bytes.begin(), h.bytes.end(), b.begin() + hman::kHeaderHashOffset);
+    const Result<Manifest> m = readManifest(b);
+    REQUIRE_MESSAGE(m.ok(), m.error().toString());
+    CHECK(*m == pipeline());
 }
 
 TEST_CASE("manifest: a skippable zstd frame before the payload's frames is allowed, as in Go") {

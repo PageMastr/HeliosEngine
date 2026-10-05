@@ -157,11 +157,12 @@ func pipeline(t testing.TB) *manifest.Manifest {
 }
 
 // pathsManifest returns n zero-size files with 1024-byte paths: prefix + "f%07d", where the prefix is "a/"
-// 508 times when deep (508 directory levels: the deepest paths the limits allow) and 1016 bytes of "a"
-// otherwise. With n = 65536 the paths fill the 64 MiB path limit: deep-paths.hman, the worst case for the
-// path-collision check (engine/patch/README.md "Validation"). The C++ tests build the same manifest.
+// 508 times when deep (508 directory levels: the deepest paths the limits allow) and otherwise four
+// directories of the longest names (255, 255, 255 and 247 bytes of "a"). With n = 65536 the paths fill the
+// 64 MiB path limit: deep-paths.hman, the worst case for the path-collision check (engine/patch/README.md
+// "Validation"). The C++ tests build the same manifest.
 func pathsManifest(n int, deep bool) *manifest.Manifest {
-	prefix := strings.Repeat("a", 1016)
+	prefix := strings.Repeat(strings.Repeat("a", manifest.MaxSegmentBytes)+"/", 3) + strings.Repeat("a", 247) + "/"
 	if deep {
 		prefix = strings.Repeat("a/", 508)
 	}
@@ -206,13 +207,15 @@ func errorKind(err error) string {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Shared hostile cases: edits of pipeline.hman, each expected to fail with one error kind in both
-// languages. Offsets are absolute; -update computes them from the golden's layout.
+// Shared hostile cases: edits of pipeline.hman ("cases") and of pipeline.go-zstd.hman ("zstdCases"),
+// each expected to fail one check with one error kind in both languages. Offsets are absolute; -update
+// computes them from the goldens' layout.
 // ---------------------------------------------------------------------------------------------
 
 type hostileEdit struct {
-	At  int    `json:"at"`
-	Hex string `json:"hex"`
+	At     int    `json:"at"`
+	Hex    string `json:"hex"`
+	Insert bool   `json:"insert,omitempty"` // insert the bytes at At instead of overwriting
 }
 
 type hostileCase struct {
@@ -235,7 +238,8 @@ func le64(v uint64) string {
 	return hex.EncodeToString(b)
 }
 
-// applyHostile applies a case to a copy of golden (codec none).
+// applyHostile applies a case to a copy of golden: the new size first, then the edits in order, each at
+// an offset into the bytes as the previous edits left them. Reseal "all" needs codec none.
 func applyHostile(golden []byte, c hostileCase) []byte {
 	b := append([]byte(nil), golden...)
 	if c.Size != 0 {
@@ -247,7 +251,11 @@ func applyHostile(golden []byte, c hostileCase) []byte {
 	}
 	for _, e := range c.Edits {
 		v, _ := hex.DecodeString(e.Hex)
-		copy(b[e.At:], v)
+		if e.Insert {
+			b = slices.Insert(b, e.At, v...)
+		} else {
+			copy(b[e.At:], v)
+		}
 	}
 	if c.Reseal == "all" {
 		payload := b[manifest.HeaderSize:]
@@ -279,6 +287,9 @@ func hostileCases(t *testing.T, golden []byte, m *manifest.Manifest) []hostileCa
 	patches := packs + 40*P
 	patch := func(i int) int { return patches + 80*i }
 	stringsAt := patches + 80*len(m.Patches)
+	stringBytes := len(golden) - stringsAt
+	// Body-header fields (README "Body"): the ref, pack and path-byte counts.
+	refCount, packCount, stringBytesAt := body+8, body+12, body+20
 	looseChunk, packedChunk := -1, -1
 	for i, c := range m.Chunks {
 		if c.Pack == manifest.NoPack && looseChunk < 0 {
@@ -312,7 +323,9 @@ func hostileCases(t *testing.T, golden []byte, m *manifest.Manifest) []hostileCa
 			break
 		}
 	}
-	if looseChunk < 0 || packedChunk < 0 || soloFile < 0 || selfPatch < 0 || F < 2 {
+	ffs := strings.Repeat("ff", 32) // an ID after every pack's
+	if looseChunk < 0 || packedChunk < 0 || soloFile < 0 || selfPatch < 0 || F < 2 ||
+		hex.EncodeToString(m.Packs[P-1].Hash[:]) == ffs {
 		t.Fatal("the pipeline vector lost the features the hostile cases need")
 	}
 	e := func(at int, hexs string) []hostileEdit { return []hostileEdit{{At: at, Hex: hexs}} }
@@ -347,6 +360,8 @@ func hostileCases(t *testing.T, golden []byte, m *manifest.Manifest) []hostileCa
 		{"reserved body header", e(body+24, "01"), 0, all, "corrupt", "reserved body-header bytes"},
 		{"path offset out of order", e(file(1), le32(1)), 0, all, "corrupt", "file 1: path offset 1"},
 		{"path length zero", e(file(0)+4, le32(0)), 0, all, "corrupt", "file 0: path length 0"},
+		{"path byte of no file", []hostileEdit{{At: stringBytesAt, Hex: le32(uint32(stringBytes + 1))},
+			{At: len(golden), Hex: "61"}}, len(golden) + 1, all, "corrupt", "1 path bytes are not any file's path"},
 		{"file size disagrees with its chunks", e(file(1)+8, le64(m.Files[1].Size+1)), 0, all, "corrupt",
 			fmt.Sprintf("its size is %d", m.Files[1].Size+1)},
 		{"first ref out of order", e(file(1)+48, le32(m.Files[1].FirstRef+1)), 0, all, "corrupt",
@@ -361,6 +376,9 @@ func hostileCases(t *testing.T, golden []byte, m *manifest.Manifest) []hostileCa
 		{"reserved ref word", e(refs+4, "01"), 0, all, "corrupt", "ref 0: reserved bytes"},
 		{"ref offset wrong", e(refs+16+8, le64(m.Refs[1].Offset+1)), 0, all, "corrupt",
 			fmt.Sprintf("ref 1: offset %d is not %d", m.Refs[1].Offset+1, m.Refs[1].Offset)},
+		{"ref after the last file's, to chunk 0xFFFFFFFF", []hostileEdit{{At: refCount, Hex: le32(uint32(R + 1))},
+			{At: chunks, Hex: le32(0xFFFFFFFF) + le32(0) + le64(0), Insert: true}}, 0, all, "corrupt",
+			"1 refs belong to no file"},
 		{"chunk raw size zero", solo(0), 0, all, "corrupt", fmt.Sprintf("chunk %d: raw size 0 is out of range", soloChunk)},
 		{"chunk raw size above max", solo(cdc.MaxSize + 1), 0, all, "corrupt",
 			fmt.Sprintf("chunk %d: raw size %d is out of range", soloChunk, cdc.MaxSize+1)},
@@ -377,6 +395,8 @@ func hostileCases(t *testing.T, golden []byte, m *manifest.Manifest) []hostileCa
 		{"pack of size zero, which no chunk fits", e(packs+32, le64(0)), 0, all, "corrupt", "do not fit pack 0 (0 bytes)"},
 		{"pack size above max", e(packs+32, le64(manifest.MaxPackSize+1)), 0, all, "corrupt",
 			fmt.Sprintf("pack 0: size %d is out of range", manifest.MaxPackSize+1)},
+		{"pack that holds no chunk", []hostileEdit{{At: packCount, Hex: le32(uint32(P + 1))},
+			{At: patches, Hex: ffs + le64(1), Insert: true}}, 0, all, "corrupt", fmt.Sprintf("pack %s holds no chunk", ffs)},
 		{"patch of a missing file", e(patch(0), le32(uint32(F))), 0, all, "corrupt", fmt.Sprintf("patch 0: file %d does not exist", F)},
 		{"reserved patch word", e(patch(0)+4, "01"), 0, all, "corrupt", "patch 0: reserved bytes"},
 		{"patches out of order", e(patch(0)+8, strings.Repeat("ff", 32)), 0, all, "corrupt", "patch 1: not sorted"},
@@ -385,6 +405,25 @@ func hostileCases(t *testing.T, golden []byte, m *manifest.Manifest) []hostileCa
 		{"patch size zero", e(patch(0)+72, le64(0)), 0, all, "corrupt", "patch 0: size 0 is out of range"},
 		{"patch size above max", e(patch(0)+72, le64(manifest.MaxPatchSize+1)), 0, all, "corrupt",
 			fmt.Sprintf("patch 0: size %d is out of range", manifest.MaxPatchSize+1)},
+	}
+}
+
+// hostileZstdCases derives the shared cases on pipeline.go-zstd.hman (codec 1, so reseal "header" only).
+func hostileZstdCases(t *testing.T, z []byte) []hostileCase {
+	bodySize := binary.LittleEndian.Uint64(z[48:])
+	// The readers' cap on a zstd payload: bodySize + bodySize/128 + 4096 (README "zstd payloads"). One byte
+	// more, as a skippable frame (RFC 8878 §3.1.2: magic 0x184D2A50, a u32 size, then that many bytes)
+	// after the real one, which the decoders would otherwise skip.
+	over := bodySize + bodySize/128 + 4096 + 1
+	pad := int(over) - (len(z) - manifest.HeaderSize)
+	if pad < 8 {
+		t.Fatal("the zstd golden's payload is too close to its bound for a skippable frame")
+	}
+	frame := le32(0x184D2A50) + le32(uint32(pad-8))
+	return []hostileCase{
+		{"zstd payload above its bound (a trailing skippable frame)", []hostileEdit{{At: 56, Hex: le64(over)},
+			{At: len(z), Hex: frame}}, manifest.HeaderSize + int(over), "header", "corrupt",
+			fmt.Sprintf("payloadSize %d does not fit bodySize %d", over, bodySize)},
 	}
 }
 
@@ -414,20 +453,25 @@ func TestUpdateGoldens(t *testing.T) {
 	if err := os.WriteFile(goldenPath("deep-paths.hman"), deep, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cases := hostileCases(t, raw, m)
 	var b strings.Builder
-	b.WriteString("{\"comment\": \"Edits of pipeline.hman that Go pkg/manifest and C++ engine/patch must both reject with the " +
-		"given error kind (reseal: none, header = headerHash recomputed, all = payload and body sizes, bodyHash and headerHash " +
-		"recomputed). Regenerate with go test ./pkg/manifest -run TestUpdateGoldens -update.\",\n\"cases\": [\n")
-	for i, c := range cases {
-		line, _ := json.Marshal(c)
-		sep := ","
-		if i == len(cases)-1 {
-			sep = ""
+	b.WriteString("{\"comment\": \"Edits that Go pkg/manifest and C++ engine/patch must both reject with the given error " +
+		"kind, failing the check whose message contains rule: cases edit pipeline.hman, zstdCases pipeline.go-zstd.hman. " +
+		"size (if set) resizes the file first (new bytes are zero); then each edit, in order, overwrites the bytes at at, or " +
+		"inserts them there if insert is set. reseal: none; header = headerHash recomputed; all = payloadSize and bodySize " +
+		"set to the payload's length, bodyHash and headerHash recomputed (codec none only). " +
+		"Regenerate with go test ./pkg/manifest -run TestUpdateGoldens -update.\",\n")
+	for k, cases := range [][]hostileCase{hostileCases(t, raw, m), hostileZstdCases(t, z)} {
+		fmt.Fprintf(&b, "%q: [\n", []string{"cases", "zstdCases"}[k])
+		for i, c := range cases {
+			line, _ := json.Marshal(c)
+			sep := ","
+			if i == len(cases)-1 {
+				sep = ""
+			}
+			fmt.Fprintf(&b, "%s%s\n", line, sep)
 		}
-		fmt.Fprintf(&b, "%s%s\n", line, sep)
+		b.WriteString([]string{"],\n", "]}\n"}[k])
 	}
-	b.WriteString("]}\n")
 	if err := os.WriteFile(goldenPath("hostile.json"), []byte(b.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -506,32 +550,40 @@ func equalManifests(a, b *manifest.Manifest) bool {
 		slices.Equal(a.Chunks, b.Chunks) && slices.Equal(a.Packs, b.Packs) && slices.Equal(a.Patches, b.Patches)
 }
 
+type hostileFile struct {
+	Cases     []hostileCase `json:"cases"`
+	ZstdCases []hostileCase `json:"zstdCases"`
+}
+
 func TestSharedHostileCases(t *testing.T) {
-	var f struct {
-		Cases []hostileCase `json:"cases"`
-	}
+	var f hostileFile
 	readJSON(t, "hostile.json", &f)
-	golden := readGolden(t, "pipeline.hman")
-	if len(f.Cases) < 50 {
-		t.Fatalf("only %d hostile cases", len(f.Cases))
+	golden, z := readGolden(t, "pipeline.hman"), readGolden(t, "pipeline.go-zstd.hman")
+	if len(f.Cases) < 50 || len(f.ZstdCases) < 1 {
+		t.Fatalf("only %d + %d hostile cases", len(f.Cases), len(f.ZstdCases))
 	}
-	for _, c := range f.Cases {
-		_, err := manifest.Parse(applyHostile(golden, c), 0)
-		if got := errorKind(err); got != c.Expect {
-			t.Errorf("%s: %s, want %s (%v)", c.Name, got, c.Expect, err)
-		} else if c.Rule == "" || !strings.Contains(err.Error(), c.Rule) {
-			t.Errorf("%s: failed another check than %q: %v", c.Name, c.Rule, err)
+	// The cases still match the goldens' layout (so a regenerated golden needs regenerated cases).
+	for _, set := range []struct {
+		name      string
+		base      []byte
+		got, want []hostileCase
+	}{{"cases", golden, f.Cases, hostileCases(t, golden, pipeline(t))}, {"zstdCases", z, f.ZstdCases, hostileZstdCases(t, z)}} {
+		for _, c := range set.got {
+			_, err := manifest.Parse(applyHostile(set.base, c), 0)
+			if got := errorKind(err); got != c.Expect {
+				t.Errorf("%s: %s, want %s (%v)", c.Name, got, c.Expect, err)
+			} else if c.Rule == "" || !strings.Contains(err.Error(), c.Rule) {
+				t.Errorf("%s: failed another check than %q: %v", c.Name, c.Rule, err)
+			}
 		}
-	}
-	// The cases still match the golden's layout (so a regenerated golden needs regenerated cases).
-	if want := hostileCases(t, golden, pipeline(t)); len(want) != len(f.Cases) {
-		t.Fatalf("hostile.json has %d cases, the generator %d: run -update", len(f.Cases), len(want))
-	} else {
-		for i := range want {
-			a, _ := json.Marshal(want[i])
-			b, _ := json.Marshal(f.Cases[i])
+		if len(set.want) != len(set.got) {
+			t.Fatalf("hostile.json has %d %s, the generator %d: run -update", len(set.got), set.name, len(set.want))
+		}
+		for i := range set.want {
+			a, _ := json.Marshal(set.want[i])
+			b, _ := json.Marshal(set.got[i])
 			if !bytes.Equal(a, b) {
-				t.Fatalf("hostile.json case %d differs from the generator: run -update", i)
+				t.Fatalf("hostile.json %s[%d] differs from the generator: run -update", set.name, i)
 			}
 		}
 	}
@@ -557,12 +609,28 @@ func TestSharedNames(t *testing.T) {
 		} `json:"pathSets"`
 	}
 	readJSON(t, "names.json", &raw)
-	for _, p := range append(raw.Paths.Valid, strings.Repeat("a", manifest.MaxPathBytes)) {
+	// The longest path (255-byte segments), one byte more, and the longest segment first, inside and last.
+	longest := strings.Repeat(strings.Repeat("a", manifest.MaxSegmentBytes)+"/", 3) + strings.Repeat("a", 254) + "/b"
+	valid, invalid := append(raw.Paths.Valid, longest), append(raw.Paths.Invalid, longest+"b")
+	for _, n := range []int{manifest.MaxSegmentBytes, manifest.MaxSegmentBytes + 1} {
+		seg := strings.Repeat("s", n)
+		for _, p := range []string{seg + "/x", "x/" + seg + "/y", "x/" + seg} {
+			if n <= manifest.MaxSegmentBytes {
+				valid = append(valid, p)
+			} else {
+				invalid = append(invalid, p)
+			}
+		}
+	}
+	if len(longest) != manifest.MaxPathBytes {
+		t.Fatalf("the longest path has %d bytes", len(longest))
+	}
+	for _, p := range valid {
 		if !manifest.ValidPath(p) {
 			t.Errorf("path %q should be valid", p)
 		}
 	}
-	for _, p := range append(raw.Paths.Invalid, strings.Repeat("a", manifest.MaxPathBytes+1)) {
+	for _, p := range invalid {
 		if manifest.ValidPath(p) {
 			t.Errorf("path %q should be invalid", p)
 		}
@@ -810,6 +878,24 @@ func TestBuilderRefusals(t *testing.T) {
 	if _, err := b.Build(); err == nil {
 		t.Error("a stored size for an unknown chunk built")
 	}
+	refuses := func(what, rule string, setup func(b *manifest.Builder)) { // with this message: no other check
+		b := manifest.NewBuilder(h)
+		_ = add(b, "a")
+		setup(b)
+		if _, err := b.Build(); err == nil || !strings.Contains(err.Error(), rule) {
+			t.Errorf("%s: %v, want an error containing %q", what, err, rule)
+		}
+	}
+	refuses("a pack that holds no chunk built", "holds no chunk", func(b *manifest.Builder) { b.AddPack(cdc.Hash{1}, 100) })
+	refuses("one chunk's stored size set twice built", "is placed twice", func(b *manifest.Builder) {
+		b.SetStoredSize(content[0].Hash, 10)
+		b.SetStoredSize(content[0].Hash, 11)
+	})
+	refuses("one chunk placed in a pack and given a loose stored size built", "is placed twice", func(b *manifest.Builder) {
+		b.AddPack(cdc.Hash{1}, 100)
+		b.PlaceChunk(content[0].Hash, cdc.Hash{1}, 0, 10)
+		b.SetStoredSize(content[0].Hash, 11)
+	})
 	b = manifest.NewBuilder(h)
 	_ = add(b, "a")
 	b.AddPatch("missing", cdc.Hash{1}, cdc.Hash{2}, 3)
@@ -876,13 +962,16 @@ func FuzzParse(f *testing.F) {
 	if b, err := pathsManifest(64, true).Marshal(manifest.WriteOptions{Codec: manifest.CodecZstd, ZstdLevel: 3}); err == nil {
 		f.Add(b)
 	}
-	var hf struct {
-		Cases []hostileCase `json:"cases"`
-	}
+	var hf hostileFile
 	if raw, err := os.ReadFile(goldenPath("hostile.json")); err == nil && json.Unmarshal(raw, &hf) == nil {
 		if golden, err := os.ReadFile(goldenPath("pipeline.hman")); err == nil {
 			for _, c := range hf.Cases {
 				f.Add(applyHostile(golden, c))
+			}
+		}
+		if z, err := os.ReadFile(goldenPath("pipeline.go-zstd.hman")); err == nil {
+			for _, c := range hf.ZstdCases {
+				f.Add(applyHostile(z, c))
 			}
 		}
 	}
@@ -942,6 +1031,24 @@ func reseal(in []byte) []byte {
 	h = cdc.Sum(b[:manifest.SignedBytes])
 	copy(b[256:288], h[:])
 	return b
+}
+
+// A trailing skippable frame may pad a zstd payload up to its bound, bodySize + bodySize/128 + 4096, in
+// both languages; one byte more is hostile.json's zstd case.
+func TestZstdPayloadAtItsBound(t *testing.T) {
+	z := readGolden(t, "pipeline.go-zstd.hman")
+	bodySize := binary.LittleEndian.Uint64(z[48:])
+	bound := bodySize + bodySize/128 + 4096
+	b := append(append([]byte(nil), z...), make([]byte, manifest.HeaderSize+int(bound)-len(z))...)
+	binary.LittleEndian.PutUint32(b[len(z):], 0x184D2A50)
+	binary.LittleEndian.PutUint32(b[len(z)+4:], uint32(len(b)-len(z)-8))
+	binary.LittleEndian.PutUint64(b[56:], bound)
+	h := cdc.Sum(b[:manifest.SignedBytes])
+	copy(b[256:288], h[:])
+	m, err := manifest.Parse(b, 0)
+	if err != nil || !equalManifests(m, pipeline(t)) {
+		t.Fatalf("a payload of exactly its bound: %v", err)
+	}
 }
 
 // A skippable zstd frame before the payload's frames is allowed (RFC 8878), in both languages.

@@ -75,6 +75,10 @@ const (
 	maxZstdWindow         = 1 << 25 // readers refuse frames needing a larger window (32 MiB)
 )
 
+// MaxSegmentBytes bounds each path segment: NAME_MAX on ext4 is 255 bytes, and NTFS allows 255 UTF-16
+// units (paths are ASCII), so every valid path can be installed on both.
+const MaxSegmentBytes = 255
+
 // Codec says how the payload is stored.
 type Codec uint8
 
@@ -263,15 +267,17 @@ var pathByte = func() (t [256]bool) {
 	return t
 }()
 
-// segmentEnds reports whether path[start:end], a run of path bytes, is a valid segment: not empty, not
+// segmentEnds reports whether path[start:end], a run of path bytes, is a valid segment: 1..255 bytes, not
 // ending in '.' (so not "." or ".."), not a device name.
 func segmentEnds(path string, start, end int) bool {
-	return end > start && path[end-1] != '.' && (end-start < 3 || !windowsDeviceName(path[start:end]))
+	return end > start && end-start <= MaxSegmentBytes && path[end-1] != '.' &&
+		(end-start < 3 || !windowsDeviceName(path[start:end]))
 }
 
 // ValidPath reports whether path is a valid manifest path on its own (no ordering or collision checks):
-// 1..1024 bytes of '/'-separated segments of [A-Za-z0-9._+-], none empty, "." or "..", none ending in '.',
-// none a Windows device name. One pass over the bytes, no allocation: readers run it on every path.
+// 1..1024 bytes of '/'-separated segments of 1..255 bytes of [A-Za-z0-9._+-], none "." or "..", none
+// ending in '.', none a Windows device name. One pass over the bytes, no allocation: readers run it on
+// every path.
 func ValidPath(path string) bool {
 	if len(path) == 0 || len(path) > MaxPathBytes {
 		return false

@@ -348,10 +348,10 @@ bool patchLess(const ManifestPatch& a, const ManifestPatch& b) noexcept {
 bool isValidManifestPath(std::string_view path) noexcept {
     // One pass over the bytes, no allocation: readers run this on every path (up to 64 MiB of them).
     if (path.empty() || path.size() > kMaxPathBytes) return false;
-    // path[start, end), a run of path bytes, is a segment: not empty, not ending in '.' (so not "." or
+    // path[start, end), a run of path bytes, is a segment: 1..255 bytes, not ending in '.' (so not "." or
     // ".."), not a device name.
     const auto segmentEnds = [path](usize start, usize end) {
-        return end > start && path[end - 1] != '.' &&
+        return end > start && end - start <= kMaxSegmentBytes && path[end - 1] != '.' &&
                (end - start < 3 || !windowsDeviceName(path.substr(start, end - start)));
     };
     usize start = 0;

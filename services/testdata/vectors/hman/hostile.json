@@ -1,4 +1,4 @@
-{"comment": "Edits of pipeline.hman that Go pkg/manifest and C++ engine/patch must both reject with the given error kind (reseal: none, header = headerHash recomputed, all = payload and body sizes, bodyHash and headerHash recomputed). Regenerate with go test ./pkg/manifest -run TestUpdateGoldens -update.",
+{"comment": "Edits that Go pkg/manifest and C++ engine/patch must both reject with the given error kind, failing the check whose message contains rule: cases edit pipeline.hman, zstdCases pipeline.go-zstd.hman. size (if set) resizes the file first (new bytes are zero); then each edit, in order, overwrites the bytes at at, or inserts them there if insert is set. reseal: none; header = headerHash recomputed; all = payloadSize and bodySize set to the payload's length, bodyHash and headerHash recomputed (codec none only). Regenerate with go test ./pkg/manifest -run TestUpdateGoldens -update.",
 "cases": [
 {"name":"bad magic","edits":[{"at":0,"hex":"00"}],"reseal":"none","expect":"corrupt","rule":"not a .hman file"},
 {"name":"version 1","edits":[{"at":4,"hex":"0100"}],"reseal":"header","expect":"version","rule":".hman version 1"},
@@ -25,6 +25,7 @@
 {"name":"reserved body header","edits":[{"at":376,"hex":"01"}],"reseal":"all","expect":"corrupt","rule":"reserved body-header bytes"},
 {"name":"path offset out of order","edits":[{"at":464,"hex":"01000000"}],"reseal":"all","expect":"corrupt","rule":"file 1: path offset 1"},
 {"name":"path length zero","edits":[{"at":388,"hex":"00000000"}],"reseal":"all","expect":"corrupt","rule":"file 0: path length 0"},
+{"name":"path byte of no file","edits":[{"at":372,"hex":"a2000000"},{"at":4441,"hex":"61"}],"size":4442,"reseal":"all","expect":"corrupt","rule":"1 path bytes are not any file's path"},
 {"name":"file size disagrees with its chunks","edits":[{"at":472,"hex":"214e000000000000"}],"reseal":"all","expect":"corrupt","rule":"its size is 20001"},
 {"name":"first ref out of order","edits":[{"at":512,"hex":"0b000000"}],"reseal":"all","expect":"corrupt","rule":"first ref 11"},
 {"name":"tier 3","edits":[{"at":452,"hex":"03"}],"reseal":"all","expect":"corrupt","rule":"tier 3"},
@@ -36,6 +37,7 @@
 {"name":"ref to a missing chunk","edits":[{"at":1024,"hex":"26000000"}],"reseal":"all","expect":"corrupt","rule":"chunk 38 does not exist"},
 {"name":"reserved ref word","edits":[{"at":1028,"hex":"01"}],"reseal":"all","expect":"corrupt","rule":"ref 0: reserved bytes"},
 {"name":"ref offset wrong","edits":[{"at":1048,"hex":"de32010000000000"}],"reseal":"all","expect":"corrupt","rule":"ref 1: offset 78558 is not 78557"},
+{"name":"ref after the last file's, to chunk 0xFFFFFFFF","edits":[{"at":360,"hex":"3b000000"},{"at":1952,"hex":"ffffffff000000000000000000000000","insert":true}],"reseal":"all","expect":"corrupt","rule":"1 refs belong to no file"},
 {"name":"chunk raw size zero","edits":[{"at":2824,"hex":"00000000"},{"at":472,"hex":"0000000000000000"}],"reseal":"all","expect":"corrupt","rule":"chunk 15: raw size 0 is out of range"},
 {"name":"chunk raw size above max","edits":[{"at":2824,"hex":"01000400"},{"at":472,"hex":"0100040000000000"}],"reseal":"all","expect":"corrupt","rule":"chunk 15: raw size 262145 is out of range"},
 {"name":"chunk stored size above max","edits":[{"at":1988,"hex":"01100400"}],"reseal":"all","expect":"corrupt","rule":"stored size 266241 is out of range"},
@@ -47,10 +49,14 @@
 {"name":"packed chunk past its pack","edits":[{"at":2840,"hex":"0000800000000000"}],"reseal":"all","expect":"corrupt","rule":"stored bytes at 8388608 do not fit pack"},
 {"name":"pack of size zero, which no chunk fits","edits":[{"at":4112,"hex":"0000000000000000"}],"reseal":"all","expect":"corrupt","rule":"do not fit pack 0 (0 bytes)"},
 {"name":"pack size above max","edits":[{"at":4112,"hex":"0100004000000000"}],"reseal":"all","expect":"corrupt","rule":"pack 0: size 1073741825 is out of range"},
+{"name":"pack that holds no chunk","edits":[{"at":364,"hex":"02000000"},{"at":4120,"hex":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0100000000000000","insert":true}],"reseal":"all","expect":"corrupt","rule":"pack ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff holds no chunk"},
 {"name":"patch of a missing file","edits":[{"at":4120,"hex":"08000000"}],"reseal":"all","expect":"corrupt","rule":"patch 0: file 8 does not exist"},
 {"name":"reserved patch word","edits":[{"at":4124,"hex":"01"}],"reseal":"all","expect":"corrupt","rule":"patch 0: reserved bytes"},
 {"name":"patches out of order","edits":[{"at":4128,"hex":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}],"reseal":"all","expect":"corrupt","rule":"patch 1: not sorted"},
 {"name":"patch onto itself","edits":[{"at":4208,"hex":"d93ba48ee5b2e61999c78c93ca1846544adb404fddac0512cdb43aed5305c1ad"}],"reseal":"all","expect":"corrupt","rule":"patch 1: it patches"},
 {"name":"patch size zero","edits":[{"at":4192,"hex":"0000000000000000"}],"reseal":"all","expect":"corrupt","rule":"patch 0: size 0 is out of range"},
 {"name":"patch size above max","edits":[{"at":4192,"hex":"0100000000010000"}],"reseal":"all","expect":"corrupt","rule":"patch 0: size 1099511627777 is out of range"}
+],
+"zstdCases": [
+{"name":"zstd payload above its bound (a trailing skippable frame)","edits":[{"at":56,"hex":"1920000000000000"},{"at":2559,"hex":"502a4d1872170000"}],"size":8569,"reseal":"header","expect":"corrupt","rule":"payloadSize 8217 does not fit bodySize 4089"}
 ]}

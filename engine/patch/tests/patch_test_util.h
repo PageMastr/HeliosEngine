@@ -116,7 +116,8 @@ inline std::vector<u8> readBytes(const fs::Path& path) {
 }
 
 /// n zero-size files with 1024-byte paths, prefix + "f%07u": the prefix is "a/" 508 times when `deep` (508
-/// directory levels, the deepest paths the limits allow) and 1016 bytes of "a" otherwise. As Go's
+/// directory levels, the deepest paths the limits allow) and otherwise four directories of the longest
+/// names (255, 255, 255 and 247 bytes of "a"). As Go's
 /// pathsManifest (services/pkg/manifest); with kDeepPathFiles files the paths fill the 64 MiB path limit:
 /// deep-paths.hman, the worst case for the path-collision check.
 inline Manifest pathsManifest(u32 n, bool deep) {
@@ -124,7 +125,7 @@ inline Manifest pathsManifest(u32 n, bool deep) {
     if (deep)
         for (int i = 0; i < 508; ++i) prefix += "a/";
     else
-        prefix.assign(1016, 'a');
+        for (const usize n : {255, 255, 255, 247}) prefix += std::string(n, 'a') + "/";
     Manifest m;
     m.header.productId = "sample-game";
     m.header.platform = "win64";

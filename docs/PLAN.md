@@ -1152,7 +1152,10 @@ exception: it is a SHA-256-pinned prebuilt that configure fetches through
 | `docs/PLAN.md` (this file) | Entry point and summary |
 | [`plan/README.md`](plan/README.md) | Section index and the **phase vocabulary** used everywhere |
 | [`plan/00-decisions.md`](plan/00-decisions.md) | Binding architecture decisions (ADR-001…016, with ADR-001a) |
-| [`adr/`](adr/) | Decision records opened by the build loop: [ADR-004a](adr/ADR-004a-ecs-rt01-structural-ops.md), ECS structural ops against RT-01 (open) |
+| [`adr/`](adr/) | Decision records opened by the build loop: [ADR-004a](adr/ADR-004a-ecs-rt01-structural-ops.md), ECS structural ops against RT-01 (open); [ADR-0.9c](adr/ADR-0.9c-hnoise-throughput.md), the hnoise throughput spike (red, F3); [ADR-0.18](adr/ADR-0.18-imgui-test-engine-licence.md), Dear ImGui Test Engine not used |
+| [`runbooks/`](runbooks/win-gpu-runner.md) | Operating procedures: the owner's self-hosted `win-gpu` runner |
+| [`evidence/`](evidence/) | Owner decisions and approvals, quoted verbatim |
+| [`concept/`](concept/README.md) | Concept-art references (editor first) with provenance sidecars; the plan wins where they differ |
 | [`plan/01-vision-and-scope.md`](plan/01-vision-and-scope.md) … [`plan/09-roadmap-and-process.md`](plan/09-roadmap-and-process.md) | The ten plan sections (§6 above) |
 | [`plan/CONSISTENCY.md`](plan/CONSISTENCY.md) | Log of every cross-section consistency fix, plus the out-of-scope follow-ups |
 | [`plan/_integration-notes.md`](plan/_integration-notes.md) | Cross-section issues raised by section authors (all resolved) |

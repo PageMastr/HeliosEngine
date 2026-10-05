@@ -20,8 +20,9 @@ Leaf module (C++20 standard library only; no dependency on `engine/core`). CMake
 | `spherical.h` | cube ↔ sphere mappings, planet quadtree tiles, lat/long, great circles, surface frames |
 | `all.h` | umbrella include (tools/tests) |
 
-Header-only except `src/` (noise, packing, deterministic trig, cube-sphere, colour tables), which
-is out of line so its floating-point code generation is pinned in one place. The headers are
+Header-only except `src/` (noise, packing, deterministic trig and `det::exp/ln/pow/asinh`, fixed-point
+division and square roots, cube-sphere, colour tables), which is out of line so its floating-point
+code generation is pinned in one place. The headers are
 immune to `<windows.h>` `min`/`max` macros (they `push_macro`/`#undef`/`pop_macro` them), and
 `HELIOS_MATH_ASSERT` (default: `assert`) can be redefined, e.g. to `HELIOS_ASSERT`, since this
 module cannot depend on `engine/core`.
@@ -126,7 +127,8 @@ Deterministic procedural generation (ADR-006) and quantize-on-both-sides network
   asinh ≤ 0.500 ulp; exp/pow results in the subnormal range ≤ 0.75 ulp (one extra rounding).
   Special values follow C99 Annex F (std:: semantics); `pow` is exact for y = 1, 2, −1, 0.5.
   Golden FNV-1a hashes of ~95k outputs pin the bits (GCC 13 and Clang 18 identical; MSVC and
-  clang-cl are checked by CI). Cost on a 2.8 GHz x86-64: exp ~35 ns, ln ~50 ns, asinh ~85 ns,
+  clang-cl are checked by CI). Cost measured 2026-09-25 on a 2.8 GHz x86-64 (no benchmark in the tree):
+  exp ~35 ns, ln ~50 ns, asinh ~85 ns,
   pow ~120 ns (budget ≤ 150 ns per call; std:: versions are 6–17 ns but not reproducible).
 * Fixed point (`fixed.h`) is integer-only and therefore bit-exact everywhere: `Q16`, `Q32`, `Fixed64`
   wrap on +/−, round-to-nearest (ties up) on ×, round-to-nearest (ties away) and saturate on ÷;

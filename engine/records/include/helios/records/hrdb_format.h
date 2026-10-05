@@ -35,7 +35,8 @@
 //
 // Values are encoded by their cooked layout (layout.h). The header's layoutHash covers the format
 // version, the audience and every record type's cooked layout, so a database cooked against another
-// schema is refused (VersionMismatch) rather than misread; it is also what keys the DDC (02 §3.4).
+// schema is refused (VersionMismatch) rather than misread; it is meant to be part of the records' DDC
+// key (02 §3.4).
 //
 // Threading: everything here is a pure function or a constant.
 

@@ -13,8 +13,8 @@ Windows is the primary platform for development and play. Linux is fully support
 OS for dedicated servers.
 
 > **Status: Phase 0 (Foundations).** The master plan is complete and independently reviewed. The
-> foundation modules below are implemented, adversarially reviewed and tested. The game client, editor and
-> launcher applications do not exist yet: they are scheduled for Phase 0–1 in the
+> foundation modules below are implemented, adversarially reviewed and tested. The game client and launcher
+> do not exist yet, and the editor is a Phase 0 shell (`apps/editor`): they are scheduled for Phase 0–1 in the
 > [roadmap](docs/plan/09-roadmap-and-process.md). Helios is far from the AAA bar today; the plan says what
 > reaching it takes.
 
@@ -65,9 +65,11 @@ tools/production) against the goal above over five review/revise rounds, finishi
 
 ```
 engine/        engine modules (engine/<module>/include/helios/<module>, src/, tests/)
-apps/          executables: cellserver, gateway, samples (client, editor, launcher to come)
-services/      Go backend module (cmd/helios-backend, internal/, pkg/)
-tools/         schemac (schema compiler), shaderc, rendertest, lint, CI and vendoring scripts
+apps/          executables: cellserver, gateway, editor, tools (helios-tool, helios-cook, helios-uitest),
+               samples (rhi_triangle); the client and launcher are still to come (WP-0.17)
+services/      Go backend module (cmd/helios-backend, cmd/helios-patch, internal/, pkg/)
+tools/         schemac (schema compiler), shaderc, rendertest, lint, conformance, scorecard and status,
+               milestone validation, CI, prebuilt-tool and vendoring scripts
 schemas/       *.hschema data definitions
 shaders/       Slang shaders
 third_party/   vendored dependencies (pinned, permissive licences; see MANIFEST.md)
@@ -81,22 +83,22 @@ docs/          master plan, research, ADRs
 | `engine/core` | Platform layer, memory, jobs, files/VFS, cvars, crash handling, process spawn, CPU gate | Done for Phase 0 |
 | `engine/math` | f32/f64 math, reference frames, packing, deterministic transcendentals and noise, fixed point | Done for Phase 0 |
 | `tools/schemac`, `engine/reflect` | `.hschema` compiler (C++ and Go emitters) and runtime reflection | Done for Phase 0 |
-| `engine/ecs` | flecs integration, entity IDs, relationships, dirty tracking | Done; the RT-01 benchmark fails its structural-ops budget ([SPIKES.md](engine/ecs/SPIKES.md)) |
+| `engine/ecs` | flecs integration, entity IDs, relationships, dirty tracking | Done; WP-1.1a brought the 9k structural ops under their 1.5 ms budget on the dev VM, and RT-01's structural clause stays open under [ADR-004a](docs/adr/ADR-004a-ecs-rt01-structural-ops.md) until M2 on SERVER at the Phase 1 gate ([SPIKES.md](engine/ecs/SPIKES.md)) |
 | `engine/rhi` | Vulkan 1.3 RHI + Null backend | Done for Phase 0 |
 | `engine/render`, `tools/shaderc`, `tools/rendertest` | Render graph v0, shader compiler, golden-image testing | Done for Phase 0 |
 | `engine/net` | Encrypted UDP transport (netcode + reliable), channels, NetSim | Done for Phase 0 |
-| `engine/script` | Luau host: sandbox, fuel budgets, scheduler | Done; two budget items need a Luau patch |
+| `engine/script` | Luau host: sandbox, fuel budgets, scheduler | Done for Phase 0 (with WP-0.10r's vendored Luau fuel patches) |
 | `engine/server`, `engine/authority`, `apps/cellserver`, `apps/gateway` | Cell and gateway skeletons: epoch-fenced authority, handoff, TiDi, gateway routing | Done for Phase 0 |
-| `engine/gameplay`, `engine/hxl` | Gameplay kernel and HXL formulas | In progress |
+| `engine/gameplay`, `engine/hxl` | Gameplay kernel and HXL formulas | Done for Phase 0 (WP-0.19); GP-1's `linux/arm64` corpus run is still due |
 | `services/` | Go backend skeleton: identity, sessions, connect tokens, orchestrator | Done for Phase 0 |
-| `engine/physics` | Jolt integration: one physics grid, handle-keyed bodies and shapes, deterministic queries, character mover | Done for Phase 0; the Jolt `stable-order` patch is still due |
+| `engine/physics` | Jolt integration: one physics grid, handle-keyed bodies and shapes, deterministic queries, character mover | Done for Phase 0 (with the vendored Jolt `stable-order` patch) |
 | `engine/pcg` | Fixed-point `hnoise` (scalar, SSE4.2, AVX2 and a bit-exact GPU twin) and the terrain-graph VM | Done for Phase 0; the throughput spike came out red (F3), see [ADR-0.9c](docs/adr/ADR-0.9c-hnoise-throughput.md) |
 | `engine/asset`, `engine/assetpipe` | Asset ids and handles with frame-boundary swaps; `.hpak` v0 paks: the reader (block verification, re-fetch hook, overlay mounts) and the writer; `.meta` sidecars (GUID, importer, settings, provenance and licence), the DDC key and the local DDC store | v0 (WP-0.8 parts 1 and 3 of 3) |
 | `engine/records`, `apps/tools/helios-cook` | Record cook (`.hrec` with `$parent` inheritance → `records.client.hrdb` / `records.server.hrdb`, AAA-SEC-4 split, tag table, HXL bytecode) and the zero-copy, fully validated `.hrdb` loader | v0 (WP-0.8 part 2 of 3) |
 | `engine/patch`, `services/pkg/cdc`, `services/pkg/manifest`, `services/pkg/patchtrust`, `services/pkg/patchcdn`, `services/cmd/helios-patch` | Patch pipeline: FastCDC chunking with BLAKE2b-256 IDs, the `.hman` manifest, the Ed25519 trust chain (root-signed keysets, signed pointers, ratchets) and a local CDN with `helios-patch publish` and `verify`, in C++ and Go with shared vectors | Done for Phase 0 (WP-0.16); the launcher's install side is WP-0.17 |
 | `engine/toolsfw`, `apps/tools/helios-tool` | ToolsFramework: documents over reflected data, command bus, property-path transactions with undo/redo, crash-recovery journal, JSON-RPC remote control, Luau automation; the headless CLI | Done for Phase 0 (WP-0.18) |
 | `engine/editorui`, `apps/editor`, `apps/tools/helios-uitest` | Editor: ImGui docking shell on the Helios RHI, property grid, themes and DPI scaling; the UI test driver with ꟻLIP goldens | Done for Phase 0 (WP-0.18); multi-viewport tear-offs are still due |
-| Client, launcher, asset import and cook, animation, audio, game UI | — | Not started (see roadmap) |
+| Client, launcher, asset importers (meshes, textures) and `helios-assetd`, animation, audio, game UI | — | Not started (see roadmap) |
 
 ## Building on Windows
 
@@ -142,20 +144,25 @@ cmake --build --preset linux-gcc
 ctest --preset linux-gcc          # GPU tests run on any Vulkan driver, including Mesa lavapipe
 ```
 
+- `linux-bench` builds the headless Release benchmarks with asserts off (`ecs_bench`, RT-01).
 - `linux-headless` builds only the dedicated servers and tools.
 - `cross-mingw` cross-compiles the Windows code paths as a portability check.
 
 ## Continuous integration
 
-Every push runs [CI](.github/workflows/ci.yml) on these jobs:
+Every pull request, and every push to `main`, runs [CI](.github/workflows/ci.yml) on these jobs:
 - Windows MSVC: VS 2026 primary and the VS 2022 (MSVC 14.44) floor;
 - Windows clang-cl;
 - Linux GCC and Linux Clang, with software-Vulkan GPU tests;
 - a headless server build;
 - a MinGW cross-build;
-- Go tests on Windows and Linux, plus a PostgreSQL-backed integration suite.
+- Go tests on Windows and Linux, plus a PostgreSQL-backed integration suite;
+- the plan-conformance lint (`tools/conformance`).
 
-A [nightly workflow](.github/workflows/nightly.yml) adds sanitizers and full Visual Studio solution builds.
+An independent [merge-policy](.github/workflows/merge-policy.yml) check audits every push to `main`. A
+[nightly workflow](.github/workflows/nightly.yml) adds sanitizers, full Visual Studio solution builds, the serial
+`perf` timing gates, 1 h libFuzzer runs and the scorecard report. [win-gpu](.github/workflows/win-gpu.yml) runs
+the GPU tests on a real GPU daily ([runbook](docs/runbooks/win-gpu-runner.md)).
 
 ## Contributing
 
@@ -227,7 +234,8 @@ contributions also follow the extra rules in the next section.
 - **CI must be green on every job:**
   - Windows MSVC (primary and the VS 2022 floor) and Windows clang-cl;
   - Linux GCC and Clang, the headless build, and the MinGW cross-build;
-  - Go on Windows and Linux.
+  - Go on Windows and Linux, and the Go integration suite;
+  - the conformance lint.
 
   Do not skip, disable or loosen a failing test or lint to get green. Fix the cause, or explain in the PR
   why the test is wrong.

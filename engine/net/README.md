@@ -14,6 +14,7 @@ L0  udp_socket.h   UdpSocket: Winsock2 / BSD, IPv4 + dual-stack IPv6, non-blocki
     transport.h    IDatagramTransport; SocketTransport (batched socket); VirtualNetwork (in-process)
     netsim.h       NetSim: latency, jitter, Bernoulli + Gilbert-Elliott loss, duplication,
                    reordering, bandwidth cap; profiles lan/good/mobile/awful
+    address.h      Address: IPv4/IPv6 endpoints, strict parser/formatter (RFC 5952), mapped-address handling
 L1  endpoint.h     Server / Client: netcode instances over any transport (override_send_and_receive),
                    Helios allocators ("Net" memory tag) and logging, L0 pre-filter, session handles
     connect_token.h  mint (netcode API), parse public part, open private part (netcode's AEAD)
@@ -165,7 +166,7 @@ predate the server's start by more than that (netcode's nonce-reuse guard).
 would answer a challenge up to 100 ms late. `ClientConfig::fastHandshake` (default on) advances the
 netcode client's clock by 100 ms when the challenge arrives and updates it again, so the response
 leaves immediately: the server completes the handshake 1.5 RTT after the first request and the
-client learns it at 2 RTT (measured: 75.6 ms / 100.7 ms at 50 ms RTT, 0.1 ms simulation step;
+client learns it at 2 RTT (measured 2026-09-25: 75.6 ms / 100.7 ms at 50 ms RTT, 0.1 ms simulation step;
 125 ms without the adjustment). A one-line upstream netcode change (reset `last_packet_send_time`
 on the challenge) would make this unnecessary.
 
@@ -197,6 +198,7 @@ thread-safe. Handlers run inside `update()` on the updating thread and may call 
 | `net.connection` | reliable-ordered exactly-once in-order under 10 % loss + reorder + duplication (both directions), EVENT_U at-most-once, LATEST monotonic, INPUT redundancy, STATE notify invariants, BULK 256 KB, 16 KB CONTROL fragmentation, WouldBlock/TooLarge, window-bytes flow control, reorder-buffer pinning defence, malicious fragments, malformed strikes, budget cap and state budget, 2 ms pacing, AIMD against a 128 kbit/s bottleneck and recovery, RTT/min RTT/jitter/loss stats, ack-only, VOICE, STATE expiry, inbound policing (120 pps; 64 kbit/s game + separate 40 kbit/s VOICE); every arrival order within a 1,024 window and a reversed 16,384 window at O(log n) per message; one gateway packet per tick with reliable acks still ≤ 10 ms; client RTT/loss detection unaffected by tick-paced acks; 60 pps upstream cap at 144 Hz; memory an authenticated peer can pin |
 | `net.endpoint` | token handshake + session info, NS-0.1, 16 clients × all channels under 10 % loss/reorder/dup, timeouts + reconnect, graceful disconnects, stale handles, token validation (protocol, key, address, expiry, full, reuse, junk), pre-filter, malformed authenticated peer, server and client handler re-entrancy (send/disconnect from callbacks), real UDP loopback, keyed pre-filter buckets (a precomputed colliding source cannot starve a victim), IPv6 /64 rate limiting, NetSim timing of flush()-time sends, NAT-rebinding reconnect via `findSession` + `disconnect` |
 | `net.connect_token` | round trip, tamper detection, **Go golden vectors** (`services/testdata/vectors`): public + private parts byte-exact, a Go-issued token completes the handshake, an expired one is refused |
+| `net.bench` | NS-0.2's gate verdict (`bench/ns02_gate.h`): the stack rate gates unless `--advisory ns02-stack`, and only the rate can be advisory; a stack that failed is never also reported as not gated |
 | `net.trunk` | profile, 256 KB CONTROL + 200 KB BULK under loss, coalescing, 2,000-packet bursts with acks, short NS-0.7 run with full 1,200 B datagrams |
 | `net.udp` | loopback send/receive, batches, truncation, IPv6/dual-stack (skipped when the OS lacks IPv6), 32 MB buffers, bind errors, SocketTransport batching, NS-0.2; **batch APIs**: what Auto and each forced API resolve to (Registered on Windows, MultiMessage on Linux, Message otherwise), the same semantics under every API (nothing pending, empty batches, an unreachable destination skipped and counted, partial batches, sender addresses, truncation through receiveBatch and receiveFrom, byte counters), interop between APIs with a 400-datagram burst received only after it is all sent, SocketTransport over every API, and on Windows RIO's 2 KB slot limits and a send queue sized from a 64 KB buffer (would-block counted) |
 | `net.netcode_patches` | `0001-write-bytes-memcpy`: bytes and pointer advance unchanged for 0–1,200 bytes and negative counts; `perf:` a 1,200 B payload in ≤ 0.5 µs (1.28 µs unpatched, 0.018 µs patched here) |
@@ -226,7 +228,7 @@ advisory one. Hosted Windows is not covered (its stack measured below 100k on 2 
 2026-10-03, and the owner has not confirmed the approval for it), so its nightly step runs `net_bench --gate`
 without the flag, as do local runs and fixed hardware.
 
-| Criterion | Measurement (this container, GCC 13 RelWithDebInfo, shared 4-core VM) |
+| Criterion | Measurement (WP-0.13, 2026-09-25; this container, GCC 13 RelWithDebInfo, shared 4-core VM) |
 |---|---|
 | NS-0.1 handshake 1.5 RTT | server 75.6 ms, client 100.7 ms at 50 ms RTT (`net.endpoint`) |
 | NS-0.2 loopback 100k pps/core without loss | passes on hosted Linux on the owner's approval (above); gated at both levels by `net_bench --gate`. Medians of five 10-minute gate runs on 2026-10-05 (WP-0.13r): **170k encrypted HTP packets/s per core** through the full stack with both endpoints on one core, 5.9 µs per packet (156,803–174,430; every packet delivered; load average 2.7–6.7), against 113,516 (104,734–119,751, load 0.6–2.7) on main the same day; and ≈ 540k datagrams/s per core at L0 (send + receive on one core, 1,000,000/1,000,000; also `net.udp`), 474k on main the same day, a path WP-0.13r does not change on Linux |

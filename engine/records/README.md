@@ -113,7 +113,8 @@ by-value chain that reached them closes, so any of the types may be laid out fir
 by value (directly or through a struct, optional, array or variant) is refused. The layout hash covers the format version, the audience
 and the cooked layout of every record type, computed the same way by the cooker and the loader whatever
 order they build layouts in, so a database cooked against another schema fails with `VersionMismatch`
-("recook") instead of being misread; it is what keys the DDC (02 §3.4).
+("recook") instead of being misread; it is meant to be part of the records' DDC key (02 §3.4) once the records cook
+goes through the DDC.
 
 **Validation.** `RecordDb::open*()` checks the header, both XXH3-64 checksums, every table, and every
 record's value against its layout: spans in bounds, aligned and forward; bools 0 or 1; declared enum values
@@ -132,7 +133,7 @@ out of every toolchain (GCC and Clang locally; MSVC and clang-cl run the same te
 
 ## Budgets (measured by `records_tests_perf`, label `perf`)
 
-| What | Budget | Source | Measured (GCC 13, RelWithDebInfo, shared 4-vCPU dev VM) |
+| What | Budget | Source | Measured (GCC 13, RelWithDebInfo, shared 4-vCPU dev VM, for #54, 2026-10-04) |
 |---|---|---|---|
 | Cook | ≤ 600 ms per 1,000 records | AAA-CNT-5: 100k records compile in ≤ 60 s | 41.4 ms per 1,000 (20,100 records with every encoding, 10 % inheriting) |
 | Open (map + full validation) | ≤ 20 µs per record | AAA-CNT-5: 100k records load in ≤ 2 s (02 §5.7) | 2.00 µs per record |
@@ -188,7 +189,8 @@ and decode. Regenerate the seeds after a format or test-schema change with
   pair apart.
 - Localization keys (02 §3.5 `records` row "loc keys") are cooked as text; no string-table extraction.
 - `@authoring` types are not stripped (no record type uses them yet); field `@version` upgrade hooks.
-- Part 3 of WP-0.8: `.meta` sidecars, the DDC key and the local DDC store.
+- The DDC: `.meta` sidecars, the DDC key and the local DDC store are WP-0.8 part 3's, in engine/assetpipe (#57); the
+  records cook does not go through the DDC yet.
 
 ## Plan conformance
 

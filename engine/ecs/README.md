@@ -184,7 +184,7 @@ counters, and optional batched tag accounting.
 
 ## Tests and benchmark
 
-`ecs_tests` (doctest, 107 cases) covers: block-id layout against the shared Go golden vectors,
+`ecs_tests` (doctest) covers: block-id layout against the shared Go golden vectors,
 the AllocateIdBlocks rule, minting (order, refill at half use, retirement, stalls, failed and async
 sources, concurrency, determinism, restarts, never id 0); U64Map fuzz vs `std::unordered_map`; NetHandle FIFO/reuse delay/
 generations/content slots; registry maps; TaggedHeap accounting, pooling, the mimalloc recycling
@@ -255,8 +255,9 @@ SPIKES.md §3 (Phase 0) and §5 (WP-1.1a).
   which avoids it in the World. Components created directly through flecs do not get this, and
   `test_bulk_paths.cpp` pins the upstream behaviour.
 * Toggles move one entity at a time: flecs 4.1.6 has no public bulk move (SPIKES.md §5.6).
-* No schema compiler yet: replicated components are hand-written with `_dirty` +
-  `kReplicatedFields`; the runtime descriptor path is ready for reflection `TypeInfo`.
+* No generated registration yet: helios-schemac emits `_dirty` + `kReplicatedFields` for replicated
+  components (the template path), but there is no generated `registerComponents(World&)` and no
+  reflection `TypeInfo` → `ComponentDesc` bridge; the runtime descriptor path is ready for one.
 * `UpdatePolicy::ByUpdateLod` (Phase 2) and `EntityBudgetDef` caps are not implemented.
 * Queries touching Sparse or DontFragment components iterate one entity per chunk (flecs needs
   per-entity field access for them); keep them out of hot iteration.
@@ -266,9 +267,10 @@ SPIKES.md §3 (Phase 0) and §5 (WP-1.1a).
   materialized at the group's first spawn, i.e. before later non-spawn commands of that buffer.
 * `dockedAt()` with `DockStorage::Field` prunes its reverse index lazily (on dock and on host
   destruction); it must not run concurrently with structural changes.
-* The orchestrator's AllocateIdBlocks client (the production `IdBlockSource`) does not exist yet;
-  cells use `LocalIdBlockSource`, whose ids are unique across processes only if each shard's row
-  value is persisted (`idLastPrefix`) and a shard is served by one source.
+* Cells with an orchestrator take their blocks from `server::OrchestratorIdBlockSource` (engine/server,
+  WP-0.14). Worlds without one (static-zone cells, tests, tools) use `LocalIdBlockSource`, whose ids are
+  unique across processes only if each shard's row value is persisted (`idLastPrefix`) and one source
+  serves each shard.
 * Deleting a prefab silently strips `IsA` and its inherited components from live instances (flecs
   cleanup); no structural event is logged for that.
 

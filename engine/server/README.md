@@ -54,7 +54,7 @@ The tick's wall time goes to the TiDi controller (see `engine/authority/README.m
 is scheduled two ticks ahead and announced to every session on CONTROL (`TimeDilation{tick, d}`),
 and every `TickState` carries the current `d`. **NS-0.6** (empty-zone tick < 0.5 ms) is a test: the
 median and p90 of 400 ticks of an empty zone (flecs world, eight ECS stages, graph bookkeeping) are
-≈ 1–2 µs on this container's GCC 13 RelWithDebInfo build.
+≈ 1–2 µs on this container's GCC 13 RelWithDebInfo build (measured 2026-09-25).
 
 ## Wire protocols
 
@@ -140,8 +140,8 @@ name = "dev-sandbox"
 id = 1002
 name = "tallis"
 
-# Optional: let the backend start and supervise both servers (it passes HELIOS_NATS_URL,
-# HELIOS_NATS_USER/PASSWORD, HELIOS_NETCODE_KEYS, HELIOS_PROTOCOL_ID, HELIOS_TOKEN_LIFETIME).
+# Optional: let the backend start and supervise both servers (it passes HELIOS_SHARD,
+# HELIOS_NATS_URL, HELIOS_NATS_USER/PASSWORD, HELIOS_NETCODE_KEYS, HELIOS_PROTOCOL_ID, HELIOS_TOKEN_LIFETIME).
 [[orchestrator.spawn]]
 name = "cell-a"
 exe = "../build/windows-msvc-release/bin/helios-cell.exe"
@@ -192,7 +192,7 @@ evicts the first probe (`kicked: superseded`) at once.
 
 ## Tests
 
-`server_tests` (doctest, 64 cases: 63 in the main entry, ≈ 1.5 s, where the cross-host case is a no-op; one `perf:`): wire contracts against Go's own JSON and user-data
+`server_tests` (doctest, 64 cases: 63 in the main entry, ≈ 1.5 s (measured for #16, 2026-09-26), where the cross-host case is a no-op; one `perf:`): wire contracts against Go's own JSON and user-data
 bytes, keyrings, base64, RFC 3339, trunk and client codecs incl. 20k random inputs; tick-graph
 ordering (stage order, `after`, parallel hooks after tick hooks and before the next stage, cycles
 and invalid edges rejected), budgets and overruns; zone attach / echo / tick state / detach,
@@ -242,7 +242,7 @@ lifetimes) runs against a real `helios-backend` when `HELIOS_NATS_URL` (and `HEL
 
 * **NS-0.6** empty-zone tick < 0.5 ms: `perf: NS-0.6 …` gates the p99 of 2,000 ticks, both the
   tick graph's time and `ZoneHost::runDue()`'s wall time, on the serial perf run (≈ 1.4 µs p99 and
-  ≈ 25 µs max on this container's GCC 13 RelWithDebInfo build); `server.zonehost: NS-0.6 …` checks
+  ≈ 25 µs max on this container's GCC 13 RelWithDebInfo build, measured for #16, 2026-09-26); `server.zonehost: NS-0.6 …` checks
   the median and p90 on every run, Windows included (the Windows jobs run no perf label).
 * **CONF-03** holder rule for the C++ cell host: `conformance/holder_rule: …` runs 15 s each of no
   responders, timeouts, `unavailable` and a dead bus, back to back on the simulated clock (≈ 0.3 s

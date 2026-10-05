@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **Recorded, outcome RED (F3 trigger) on the CPU clause; GPU clause unconfirmed.** Measured 2026-09-25 in the development container. The CPU clause fails by about 6× on the only CPU measured. The GPU clause was measured only on lavapipe, which 03 §5.5a counts as a CI budget figure, never a performance claim. The **MIN confirmation (GTX 1660 S, RX 5600 XT, Ryzen 5 3600) is still due before WP-1.8 starts**, and the Phase 0 exit records this spike as "pending its MIN confirmation" (09 §2.1) |
+| **Status** | **Recorded, outcome RED (F3 trigger) on the CPU clause; GPU clause unconfirmed.** Measured 2026-09-25 in the development container. The CPU clause fails by about 6× in the development container (and by about 3.3× on the owner's Ryzen 5 5500: 1.670 ms per tile, win-gpu run 37328633862, 2026-10-05). The GPU clause was measured on lavapipe, which 03 §5.5a counts as a CI budget figure, never a performance claim, and on the owner's RTX 3050 (win-gpu runs since 2026-10-04), neither of them MIN hardware. The **MIN confirmation (GTX 1660 S, RX 5600 XT, Ryzen 5 3600) is still due before WP-1.8 starts**, and the Phase 0 exit records this spike as "pending its MIN confirmation" (09 §2.1) |
 | **Decides** | The WP-0.9c outcome of [03 §5.5a](../plan/03-rendering.md#55a-terrain-generation-throughput-32-bit-twin-cost-model-spike-fallbacks): green, amber (F2) or red (F3) |
 | **Arms** | Risk **K5b** ([09 §7](../plan/09-roadmap-and-process.md#7-risk-register)): its trigger is "spike below green" |
 | **Owner** | Render lead (03 §5.5a), with the runtime lead for the CPU VM (02 §5.8) |

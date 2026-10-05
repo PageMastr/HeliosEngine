@@ -256,7 +256,8 @@ ninja -C build/script helios_script script_tests && ./build/script/bin/script_te
 
 ## Known limitations (Phase 0)
 
-* **Metering cost** (perf workload, interpreter, dev container, GCC 13 and Clang 18, RelWithDebInfo;
+* **Metering cost** (measured 2026-09-26: perf workload, interpreter, dev container, GCC 13 and Clang 18,
+  RelWithDebInfo;
   budget ≤ 10 %, asserted by the `perf:` case in optimized builds). The Helios host, reading the clock
   every 64 fuel as on cells, runs ≈ 2–8 % slower than unmetered plain Luau, where calling the host at
   every safepoint cost ≈ 25–28 % before `fuel-counter`. In plain Luau on the patched VM, a callback

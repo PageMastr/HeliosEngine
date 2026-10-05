@@ -613,8 +613,7 @@ ContentStats checkContent(const fs::Path& projectRoot, const ProjectFile& projec
                     if (unknownZones.insert(std::string(parts[1])).second)
                         report(std::format("zones/{}", parts[1]),
                                "not a zone of helios.project.jsonc: a zone folder holds one declared zone's "
-                               "spatial "
-                               "documents (07 §1.8.2)");
+                               "spatial documents (07 §1.8.2)");
                 } else {
                     zone = parts[1];
                 }

@@ -173,8 +173,10 @@ baseline callers. So Helios builds **whole images at one level** and audits the 
       other Helios group and executable imports it directly or through another group, except the
       self-contained images that carry their own copy of the modules (the build-time tool `helios-schemac`,
       `ecs_bench`, and white-box tests such as `ecs_tests`, `script_tests`, `net_tests` and the `net_fuzz_*`
-      targets; ADR-0.6c), none of which is gated. The DLL's first TLS callback is therefore the first
-      Helios-compiled code to run in a gated process. Check 3 verifies both import facts. The two third-party
+      targets; ADR-0.6c) and the `base` images, which link `.base` copies of their modules (the launcher, the
+      bootstrap and the ISA audit's base fixtures; ADR-0.6c §3.1); none of these is gated. The DLL's first TLS
+      callback is therefore the first Helios-compiled code to run in a gated process. Check 3 verifies both
+      import facts. The two third-party
       images of a modular build, `SDL3` and `tp_imgui` (§1.4), import no Helios image: `SDL3` imports only OS
       and runtime DLLs, and `tp_imgui` those and `SDL3`. The loader may therefore initialize them first.
       `tp_imgui` also carries `editorui`'s ImGui item hooks, Helios code with no initializer that runs only

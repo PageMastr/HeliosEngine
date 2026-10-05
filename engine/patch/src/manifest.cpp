@@ -345,6 +345,10 @@ bool patchLess(const ManifestPatch& a, const ManifestPatch& b) noexcept {
 // Validation
 // ---------------------------------------------------------------------------------------------
 
+bool isValidProductId(std::string_view s) noexcept { return validProductId(s); }
+bool isValidPlatform(std::string_view s) noexcept { return validPlatform(s); }
+bool isValidBuildId(std::string_view s) noexcept { return validBuildId(s); }
+
 bool isValidManifestPath(std::string_view path) noexcept {
     // One pass over the bytes, no allocation: readers run this on every path (up to 64 MiB of them).
     if (path.empty() || path.size() > kMaxPathBytes) return false;

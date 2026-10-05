@@ -229,7 +229,7 @@ without the flag, as do local runs and fixed hardware.
 | Criterion | Measurement (this container, GCC 13 RelWithDebInfo, shared 4-core VM) |
 |---|---|
 | NS-0.1 handshake 1.5 RTT | server 75.6 ms, client 100.7 ms at 50 ms RTT (`net.endpoint`) |
-| NS-0.2 loopback 100k pps/core without loss | passes on hosted Linux on the owner's approval (above); gated at both levels by `net_bench --gate`: ≈ 480k datagrams/s per core at L0 (send + receive on one core, 1,000,000/1,000,000; also `net.udp`), and 117k encrypted HTP packets/s per core through the full stack with both endpoints on one core (1,162,752/1,162,752 delivered, 10 s, load average 3.5) |
+| NS-0.2 loopback 100k pps/core without loss | passes on hosted Linux on the owner's approval (above); gated at both levels by `net_bench --gate`. Medians of five 10-minute gate runs on 2026-10-05 (WP-0.13r): **170k encrypted HTP packets/s per core** through the full stack with both endpoints on one core, 5.9 µs per packet (156,803–174,430; every packet delivered; load average 2.7–6.7), against 113,516 (104,734–119,751, load 0.6–2.7) on main the same day; and ≈ 540k datagrams/s per core at L0 (send + receive on one core, 1,000,000/1,000,000; also `net.udp`), 474k on main the same day, a path WP-0.13r does not change on Linux |
 | NS-0.4 fuzzers 1 h clean | harnesses + seeds + CTest smoke; long runs under ASan/UBSan clean (see WP report); the 1 h libFuzzer nightly needs Clang's compiler-rt (absent in this container) |
 | NS-0.7 trunk 20k pps × 1,200 B, < 0.1 % drops, ≤ 1 core | `net_bench --gate`, 600 s, full datagrams (1,188 B STATE payload → 1,200 B netcode payload): 11,999,999 of 11,999,999 delivered (20,000 pps, 190.1 Mbit/s payload, 199.7 Mbit/s wire), 0 drops, cell thread 0.26 cores, gateway thread 0.29 cores; `net.trunk` repeats it for 1 s on every test run |
 
@@ -268,7 +268,8 @@ Helios function above 0.6 %, so the cuts are in vendored code, each a reviewed v
   which `sodium_memzero` stored one byte at a time. No vendored source changes; `net.netcode_crypto` shows the
   probe, the dispatch and that every compiled ChaCha20 kernel matches RFC 8439.
 
-@@AFTER_SUMMARY@@
+Together they take the stack from a median of 113,516 to 169,653 packets per core in this container, 8.8 to
+5.9 µs per packet (five 10-minute `net_bench --gate` runs each; the NS-0.2 row of the table above).
 
 Not changed: MSVC builds compile neither the donna64 nor the SSE2 Poly1305 (no `__int128`) and run the
 portable donna32 kernel, which costs about 0.6 µs more per packet here (forced donna32: 149k against 164k

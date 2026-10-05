@@ -87,8 +87,9 @@ Regenerating the corpus: `HELIOS_UPDATE_HNOISE_CORPUS=1 pcg_tests -tc="corpus:*"
 
 ## Deviations from the plan text
 
-- CPUID-checked kernel selection (02 §5.8 says no CPUID is needed once whole images are `avx2`; that
-  arrives with WP-0.2r).
+- CPUID-checked kernel selection: 02 §5.8 says no CPUID is needed once whole images are `avx2`. They
+  have been since WP-0.2r part 1, but `src/kernel.cpp` still checks `cpuGate()` and falls back to the
+  widest supported kernel.
 - Phase 0 node set only: no dedicated crater, terrace, cellular, erosion or region nodes yet; the
   reference graph approximates those shapes with the Phase 0 nodes.
 - The GPU twin interprets bytecode per sample (uniform control flow across a dispatch) rather than
@@ -103,4 +104,4 @@ Plan-Rev: 6
 
 Written to plan revision 6 (02 §5.8; 03 §5.5a; 09 §2.1 WP-0.9 and WP-0.9c) on 2026-09-25,
 ahead of its round (it needs WP-0.2r), under `docs/plan/09-roadmap-and-process.md` §5.10.2 D7. The
-open deviations are listed in this README; the module still needs its row in 09 §8.1.
+open deviations are listed in this README; its status is in 09 §8.1's WP-0.9 row.

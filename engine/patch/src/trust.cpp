@@ -293,6 +293,7 @@ Result<void> validateKeyset(const Keyset& k) {
             return invalid("key {}: the ID is not the fingerprint of its public key", id);
         if (i > 0 && !(k.keys[i - 1].id < key.id))
             return invalid("key {}: keys are not sorted by ID or repeat", id);
+        if (isWeakPublicKey(key.pub)) return invalid("key {}: the public key has small order", id);
         if (!validRole(key.role)) return invalid("key {}: role \"{}\" is not a role name", id, key.role);
         if (key.notBefore >= key.notAfter || key.notAfter > kMaxJsonInt)
             return invalid("key {}: validity [{}, {}) is empty or above {}", id, key.notBefore, key.notAfter,
@@ -350,6 +351,23 @@ KeyId keyFingerprint(const PublicKey& pub) noexcept {
     KeyId id;
     std::copy_n(h.bytes.begin(), id.size(), id.begin());
     return id;
+}
+
+bool isWeakPublicKey(const PublicKey& pub) noexcept {
+    // Go's patchtrust.smallOrderKeys; both tests check each entry forges the identity signature.
+    static constexpr std::string_view kSmallOrder[] = {
+        "0000000000000000000000000000000000000000000000000000000000000000", // y = 0, order 4
+        "0100000000000000000000000000000000000000000000000000000000000000", // the identity
+        "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05", // order 8
+        "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a", // order 8
+        "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p - 1, order 2
+        "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p (= 0), order 4
+        "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p + 1 (= 1)
+    };
+    PublicKey cleared = pub;
+    cleared[kPublicKeySize - 1] &= 0x7F;
+    const std::string hex = hexOf(cleared);
+    return std::find(std::begin(kSmallOrder), std::end(kSmallOrder), hex) != std::end(kSmallOrder);
 }
 
 bool isTestOnlyKey(const PublicKey& pub) noexcept {
@@ -677,6 +695,9 @@ Result<TrustVerifier> TrustVerifier::create(TrustTarget target, const RootPair& 
                          0xFFFFFFFEu);
     if (roots.current == roots.next)
         return Error{ErrorCode::InvalidArgument, "the current and next roots are the same key"};
+    if (isWeakPublicKey(roots.current) || isWeakPublicKey(roots.next))
+        return Error{ErrorCode::InvalidArgument,
+                     "a root key has small order (zero, the identity or another torsion point)"};
     if (!options.allowTestKeys && (isTestOnlyKey(roots.current) || isTestOnlyKey(roots.next)))
         return Error{ErrorCode::InvalidArgument, "the root pair contains a test-only key"};
     return TrustVerifier(std::move(target), roots);

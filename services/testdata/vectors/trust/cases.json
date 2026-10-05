@@ -125,6 +125,18 @@
    }
   },
   {
+   "name": "signed-in-the-last-second-of-its-key",
+   "check": "",
+   "now": 1781360000,
+   "pointer": "pointer-key-last-second.json",
+   "manifest": "manifest-key-last-second.hman",
+   "wantState": {
+    "rootEpoch": 1,
+    "keysetVersion": 3,
+    "pointerSequence": 7
+   }
+  },
+  {
    "name": "pointer-signed-at-clock-skew-limit",
    "check": "",
    "pointer": "pointer-skew-limit.json",
@@ -246,6 +258,13 @@
    "name": "pointer-signed-before-key",
    "check": "pointer-key-window",
    "pointer": "pointer-before-key.json"
+  },
+  {
+   "name": "pointer-signed-at-key-end",
+   "check": "pointer-key-window",
+   "now": 1781360000,
+   "pointer": "pointer-key-end.json",
+   "manifest": "manifest-key-last-second.hman"
   },
   {
    "name": "pointer-signed-past-clock-skew",
@@ -402,6 +421,13 @@
    "check": "manifest-expired",
    "pointer": "manifest-expired-pointer.json",
    "manifest": "manifest-expired.hman"
+  },
+  {
+   "name": "manifest-created-at-key-end",
+   "check": "manifest-key-window",
+   "now": 1781360000,
+   "pointer": "manifest-key-end-pointer.json",
+   "manifest": "manifest-key-end.hman"
   },
   {
    "name": "manifest-expires-later",

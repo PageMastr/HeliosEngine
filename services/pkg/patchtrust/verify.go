@@ -88,6 +88,22 @@ type RootPair struct {
 	Next    PublicKey
 }
 
+// Validate checks the pair: an epoch in 1..2^32-2, two different keys, and neither of small order
+// (IsWeakPublicKey). A zero Next, for a pair whose next root is not yet chosen, is one: with it anyone could
+// sign a keyset of epoch Epoch+1 that verifies about one time in four, so a pair must always name a real next
+// root.
+func (rp RootPair) Validate() error {
+	switch {
+	case rp.Epoch == 0 || rp.Epoch == ^uint32(0):
+		return fmt.Errorf("patchtrust: root epoch %d is outside 1..%d", rp.Epoch, ^uint32(0)-1)
+	case rp.Current == rp.Next:
+		return errors.New("patchtrust: the current and next roots are the same key")
+	case IsWeakPublicKey(rp.Current) || IsWeakPublicKey(rp.Next):
+		return errors.New("patchtrust: a root key has small order (zero, the identity or another torsion point)")
+	}
+	return nil
+}
+
 // Target is what an install verifies for: its product, channel and platform.
 type Target struct {
 	ProductID string
@@ -137,17 +153,16 @@ type Verifier struct {
 	roots  RootPair
 }
 
-// NewVerifier checks the target's identifiers and the root pair.
+// NewVerifier checks the target's identifiers and the root pair (RootPair.Validate, and no test-only root
+// unless opts allow it).
 func NewVerifier(t Target, roots RootPair, opts Options) (*Verifier, error) {
 	if err := t.Validate(); err != nil {
 		return nil, err
 	}
-	switch {
-	case roots.Epoch == 0 || roots.Epoch == ^uint32(0):
-		return nil, fmt.Errorf("patchtrust: root epoch %d is outside 1..%d", roots.Epoch, ^uint32(0)-1)
-	case roots.Current == roots.Next:
-		return nil, errors.New("patchtrust: the current and next roots are the same key")
-	case !opts.AllowTestKeys && (IsTestOnlyKey(roots.Current) || IsTestOnlyKey(roots.Next)):
+	if err := roots.Validate(); err != nil {
+		return nil, err
+	}
+	if !opts.AllowTestKeys && (IsTestOnlyKey(roots.Current) || IsTestOnlyKey(roots.Next)) {
 		return nil, errors.New("patchtrust: the root pair contains a test-only key")
 	}
 	return &Verifier{target: t, roots: roots}, nil

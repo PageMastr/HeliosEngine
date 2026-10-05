@@ -201,6 +201,24 @@
    "put": "97776"
   },
   {
+   "name": "small-order subkey: zero",
+   "at": 16,
+   "delete": 695,
+   "put": "89eb0d6a8a691dae2cd15ed0369931ce\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"role\":\"manifest"
+  },
+  {
+   "name": "small-order subkey: the identity",
+   "at": 16,
+   "delete": 695,
+   "put": "afbc1c053c2f278e3cbd4409c1c094f1\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"0100000000000000000000000000000000000000000000000000000000000000\",\"role\":\"manifest"
+  },
+  {
+   "name": "small-order subkey: order 8, sign bit set",
+   "at": 16,
+   "delete": 695,
+   "put": "8f5a6fdcfef8989fb88312cbc956ccc5\",\"notAfter\":1797776000,\"notBefore\":1782224000,\"pub\":\"c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa\",\"role\":\"manifest"
+  },
+  {
    "name": "oversize",
    "at": 904,
    "delete": 0,

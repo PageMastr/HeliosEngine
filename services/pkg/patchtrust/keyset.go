@@ -65,6 +65,39 @@ func Fingerprint(pub PublicKey) KeyID {
 	return id
 }
 
+// smallOrderKeys are the encodings, with the sign bit cleared, of the eight points of small order on
+// edwards25519: y = 0 (order 4), 1 (order 1), the two order-8 y values, p-1 (order 2), and the
+// non-canonical p (= 0) and p+1 (= 1) that Go and Monocypher also decode (libsodium's has_small_order list).
+var smallOrderKeys = [...]PublicKey{
+	{},
+	{0x01},
+	{0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0, 0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98, 0xf0,
+		0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39, 0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53, 0xfc, 0x05},
+	{0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f, 0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67, 0x0f,
+		0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6, 0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac, 0x03, 0x7a},
+	{0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+	{0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+	{0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+}
+
+// IsWeakPublicKey reports whether pub encodes a point of small order (1, 2, 4 or 8), in either sign.
+// crypto/ed25519 and Monocypher accept such a key, and with it the signature R = identity, S = 0, which
+// nobody made, for every message whose challenge is a multiple of the point's order (one in four for the
+// all-zero key, a zero-valued PublicKey). The verifiers refuse such keys as roots and as subkeys. Keys are
+// public, so the comparison need not be constant-time.
+func IsWeakPublicKey(pub PublicKey) bool {
+	pub[PublicKeySize-1] &= 0x7f
+	for i := range smallOrderKeys {
+		if pub == smallOrderKeys[i] {
+			return true
+		}
+	}
+	return false
+}
+
 // PublicKeyOf returns the public half of an Ed25519 private key.
 func PublicKeyOf(priv ed25519.PrivateKey) PublicKey {
 	var pub PublicKey
@@ -110,7 +143,8 @@ func validRole(s string) bool {
 }
 
 // Validate checks the keyset's own rules (not its signature): identifiers, ranges, 1..MaxKeys keys sorted by
-// ID without duplicates, each ID the fingerprint of its key, NotBefore < NotAfter.
+// ID without duplicates, each ID the fingerprint of its key, no key of small order (IsWeakPublicKey: anyone
+// could sign under one), NotBefore < NotAfter.
 func (k *Keyset) Validate() error {
 	switch {
 	case !manifest.ValidProductID(k.ProductID):
@@ -129,6 +163,8 @@ func (k *Keyset) Validate() error {
 			return fmt.Errorf("key %x: the ID is not the fingerprint of its public key", key.ID)
 		case i > 0 && bytes.Compare(k.Keys[i-1].ID[:], key.ID[:]) >= 0:
 			return fmt.Errorf("key %x: keys are not sorted by ID or repeat", key.ID)
+		case IsWeakPublicKey(key.Pub):
+			return fmt.Errorf("key %x: the public key has small order", key.ID)
 		case !validRole(key.Role):
 			return fmt.Errorf("key %x: role %q is not a role name", key.ID, key.Role)
 		case key.NotBefore >= key.NotAfter || key.NotAfter > MaxInt:

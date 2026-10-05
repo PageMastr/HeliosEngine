@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -416,6 +417,15 @@ func TestUpdateTrustVectors(t *testing.T) {
 			func(p *patchtrust.Pointer) {
 				p.SignedAt, p.Expires, p.ManifestHash = vT0-90*vDay, vT0-90*vDay+7*vDay, headerHash(t, keyStart)
 			})})
+	// The other edge of a key's window: manifest-old's notAfter is the first second it may no longer sign. A pointer
+	// and a manifest signed in the second before verify then; signed at notAfter, each fails its window check.
+	oldEnd := uint64(vT0 - 100*vDay)
+	lastSecond := signedManifest(t, m, "manifest-old", func(h *manifest.Header) { h.CreatedAt = oldEnd - 1 })
+	lastSecondFile := write("manifest-key-last-second.hman", lastSecond)
+	ok("signed-in-the-last-second-of-its-key", nil, st(1, 3, 7), vectorCase{Now: oldEnd, Manifest: lastSecondFile,
+		Pointer: pointer("pointer-key-last-second.json", "manifest-old", func(p *patchtrust.Pointer) {
+			p.SignedAt, p.Expires, p.ManifestHash = oldEnd-1, oldEnd-1+7*vDay, headerHash(t, lastSecond)
+		})})
 	ok("pointer-signed-at-clock-skew-limit", nil, st(1, 3, 7), vectorCase{Pointer: pointer("pointer-skew-limit.json",
 		"manifest-a", func(p *patchtrust.Pointer) {
 			p.SignedAt, p.Expires = vT0+patchtrust.MaxClockSkew, vT0+patchtrust.MaxClockSkew+6*vDay
@@ -459,6 +469,10 @@ func TestUpdateTrustVectors(t *testing.T) {
 	bad("pointer-signed-before-key", patchtrust.CheckPointerKeyWindow, vectorCase{Pointer: pointer(
 		"pointer-before-key.json", "manifest-a", func(p *patchtrust.Pointer) {
 			p.SignedAt, p.Expires = vT0-90*vDay-1, vT0+vDay
+		})})
+	bad("pointer-signed-at-key-end", patchtrust.CheckPointerKeyWindow, vectorCase{Now: oldEnd, Manifest: lastSecondFile,
+		Pointer: pointer("pointer-key-end.json", "manifest-old", func(p *patchtrust.Pointer) {
+			p.SignedAt, p.Expires, p.ManifestHash = oldEnd, oldEnd+7*vDay, headerHash(t, lastSecond)
 		})})
 	bad("pointer-signed-past-clock-skew", patchtrust.CheckPointerFuture, vectorCase{Pointer: pointer(
 		"pointer-past-skew.json", "manifest-a", func(p *patchtrust.Pointer) {
@@ -530,6 +544,12 @@ func TestUpdateTrustVectors(t *testing.T) {
 		mf, pf := manifestCase(mc.name, mc.signer, mc.mod)
 		bad(mc.name, mc.check, vectorCase{Manifest: mf, Pointer: pf})
 	}
+	keyEnd := signedManifest(t, m, "manifest-old", func(h *manifest.Header) { h.CreatedAt = oldEnd })
+	bad("manifest-created-at-key-end", patchtrust.CheckManifestKeyWindow, vectorCase{Now: oldEnd,
+		Manifest: write("manifest-key-end.hman", keyEnd), Pointer: pointer("manifest-key-end-pointer.json", "manifest-old",
+			func(p *patchtrust.Pointer) {
+				p.SignedAt, p.Expires, p.ManifestHash = oldEnd-1, oldEnd-1+7*vDay, headerHash(t, keyEnd)
+			})})
 	ok("manifest-expires-later", nil, st(1, 3, 7), func() vectorCase {
 		mf, pf := manifestCase("manifest-expires-later", "manifest-a", func(h *manifest.Header) { h.ExpiresAt = vT0 + 1 })
 		return vectorCase{Manifest: mf, Pointer: pf}
@@ -726,6 +746,23 @@ func syntaxCases(t *testing.T, ks, ptr []byte) syntaxFile {
 	nbEnd := nb + bytes.IndexByte(o[nb:], ',')
 	emptyWindow := append(append(slices.Clone(o[:nb]), o[na:na+bytes.IndexByte(o[na:], ',')]...), o[nbEnd:]...)
 	k("empty validity window", keys(emptyWindow, objs[1], objs[2], objs[3]))
+	// A subkey of small order, as the only key, with its own fingerprint as ID: anyone could sign under it.
+	for _, w := range []struct{ name, pub string }{
+		{"small-order subkey: zero", strings.Repeat("0", 64)},
+		{"small-order subkey: the identity", "01" + strings.Repeat("0", 62)},
+		{"small-order subkey: order 8, sign bit set", "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa"},
+	} {
+		var pk patchtrust.PublicKey
+		if b, err := hex.DecodeString(w.pub); err != nil || len(b) != len(pk) {
+			t.Fatalf("%s: %v", w.name, err)
+		} else {
+			copy(pk[:], b)
+		}
+		id := patchtrust.Fingerprint(pk)
+		obj := regexp.MustCompile(`"id":"[0-9a-f]+"`).ReplaceAll(objs[0], []byte(`"id":"`+hex.EncodeToString(id[:])+`"`))
+		obj = regexp.MustCompile(`"pub":"[0-9a-f]+"`).ReplaceAll(obj, []byte(`"pub":"`+w.pub+`"`))
+		k(w.name, keys(obj))
+	}
 	sf.Keyset = append(sf.Keyset, syntaxCase{Name: "oversize", At: len(ks), PadTo: patchtrust.MaxKeysetSize + 1})
 
 	p := func(name string, doc []byte) {

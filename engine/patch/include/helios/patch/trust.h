@@ -64,6 +64,14 @@ using KeyId = std::array<u8, kKeyIdSize>;         ///< The first 16 bytes of BLA
 /// A public key's ID (its fingerprint): the first 16 bytes of its BLAKE2b-256.
 KeyId keyFingerprint(const PublicKey& pub) noexcept;
 
+/// True if `pub` encodes a point of small order (1, 2, 4 or 8) in either sign: the all-zero key, the
+/// identity, the two order-8 points, p - 1, and the non-canonical p and p + 1 (libsodium's has_small_order
+/// list, compared with the sign bit cleared). Monocypher and Go accept such a key, and with it the signature
+/// R = identity, S = 0, which nobody made, for every message whose challenge is a multiple of the point's
+/// order (one in four for the all-zero key, a value-initialized PublicKey). TrustVerifier::create refuses
+/// such a root and parseKeyset such a subkey.
+bool isWeakPublicKey(const PublicKey& pub) noexcept;
+
 /// True for the test-only roots of the shared vectors (Go: package trusttest; seeds
 /// BLAKE2b-256("helios test-only key: root-1" / "root-2" / "root-x"), public by construction).
 /// TrustVerifier::create refuses a root pair containing one unless TrustOptions::allowTestKeys is set.
@@ -194,6 +202,8 @@ std::optional<TrustCheck> trustCheckOf(const Error& error) noexcept;
 
 /// A product's root public keys: `current` signs keysets of root epoch `epoch`, the pre-committed `next`
 /// those of epoch + 1. In product builds they come from the stamped product block (08 §2.10.4, later).
+/// Both keys start all-zero, a small-order point (isWeakPublicKey) that TrustVerifier::create refuses: a
+/// pair must name a real next root, or anyone could sign a keyset of epoch + 1.
 struct RootPair {
     u32 epoch = 0; ///< 1..2^32-2.
     PublicKey current{};
@@ -272,8 +282,8 @@ struct TrustOptions {
 /// after create(); every method is const and thread-safe.
 class TrustVerifier {
 public:
-    /// Checks the target's identifiers and the root pair (epoch range, distinct keys, no test-only key
-    /// unless options allow it). InvalidArgument otherwise.
+    /// Checks the target's identifiers and the root pair (epoch range, distinct keys, neither of small order,
+    /// no test-only key unless options allow it). InvalidArgument otherwise.
     static Result<TrustVerifier> create(TrustTarget target, const RootPair& roots,
                                         const TrustOptions& options = {});
 

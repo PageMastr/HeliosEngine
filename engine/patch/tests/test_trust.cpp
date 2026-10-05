@@ -352,6 +352,79 @@ TEST_CASE("trust: the test-only roots are refused unless a test allows them") {
     CHECK_FALSE(TrustVerifier::create(v.target, rp).ok());
 }
 
+/// The small-order encodings (Go: smallOrder in patchtrust_test.go; libsodium's has_small_order list).
+constexpr const char* kSmallOrder[] = {
+    "0000000000000000000000000000000000000000000000000000000000000000", // y = 0, order 4
+    "0100000000000000000000000000000000000000000000000000000000000000", // the identity, order 1
+    "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05", // order 8
+    "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a", // order 8
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p - 1, order 2
+    "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p (non-canonical 0), order 4
+    "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p + 1 (non-canonical 1), order 1
+};
+
+/// R = the identity, S = 0: nobody made it, yet a small-order key verifies it whenever the challenge is a
+/// multiple of the key's order.
+Signature identitySignature() {
+    Signature sig{};
+    sig[0] = 1;
+    return sig;
+}
+
+bool forges(const PublicKey& pub, std::span<const u8> message) {
+    const Signature sig = identitySignature();
+    return crypto_ed25519_check(sig.data(), pub.data(), message.data(), message.size()) == 0;
+}
+
+TEST_CASE("trust: small-order keys are weak in either sign, and Monocypher accepts a forgery under each") {
+    for (const char* hex : kSmallOrder) {
+        CAPTURE(hex);
+        PublicKey k = keyFromHex(hex);
+        bool forged = false;
+        for (u8 i = 0; i < 64 && !forged; ++i) forged = forges(k, std::span<const u8>(&i, 1));
+        CHECK(forged);
+        CHECK(isWeakPublicKey(k));
+        k[31] = static_cast<u8>(k[31] | 0x80);
+        CHECK(isWeakPublicKey(k));
+    }
+    for (const char* n : {"root-1", "root-2", "manifest-a", "news-a"}) CHECK_FALSE(isWeakPublicKey(testKey(n)));
+    PublicKey near = keyFromHex(kSmallOrder[2]);
+    near[0] ^= 1;
+    CHECK_FALSE(isWeakPublicKey(near));
+}
+
+TEST_CASE("trust: a root pair with a small-order key is refused, the default next root included") {
+    const Vectors v = loadVectors();
+    // The hazard: for about one keyset version in four, the identity signature verifies under the zero key.
+    Keyset ks;
+    ks.productId = v.target.productId;
+    ks.rootEpoch = 2;
+    ks.keys.push_back({keyFingerprint(testKey("manifest-a")), "manifest", testKey("manifest-a"), 1, 2});
+    bool forged = false;
+    for (ks.version = 100; ks.version < 164 && !forged; ++ks.version)
+        forged = forges(PublicKey{}, keysetSignedMessage(ks));
+    CHECK(forged);
+
+    TrustOptions o;
+    o.allowTestKeys = true;
+    RootPair rp; // as a caller that sets the epoch and the current root only gets it: next is all zero
+    rp.epoch = 1;
+    rp.current = testKey("some product root");
+    CHECK_FALSE(TrustVerifier::create(v.target, rp).ok());
+    CHECK_FALSE(TrustVerifier::create(v.target, rp, o).ok());
+    for (const char* hex : kSmallOrder) {
+        CAPTURE(hex);
+        rp.current = testKey("some product root");
+        rp.next = keyFromHex(hex);
+        CHECK(TrustVerifier::create(v.target, rp, o).errorCode() == ErrorCode::InvalidArgument);
+        std::swap(rp.current, rp.next);
+        CHECK(TrustVerifier::create(v.target, rp, o).errorCode() == ErrorCode::InvalidArgument);
+    }
+    rp.current = testKey("some product root");
+    rp.next = testKey("another product root");
+    CHECK(TrustVerifier::create(v.target, rp).ok());
+}
+
 TEST_CASE("trust: ratchet state record, file store and advance") {
     TrustState s;
     s.rootEpoch = 3;

@@ -83,6 +83,121 @@ func TestTestOnlyRoots(t *testing.T) {
 	}
 }
 
+// smallOrder are the encodings IsWeakPublicKey must refuse (libsodium's has_small_order list).
+var smallOrder = []string{
+	"0000000000000000000000000000000000000000000000000000000000000000", // y = 0, order 4
+	"0100000000000000000000000000000000000000000000000000000000000000", // the identity, order 1
+	"26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05", // order 8
+	"c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a", // order 8
+	"ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p-1, order 2
+	"edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p (non-canonical 0), order 4
+	"eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p+1 (non-canonical 1), order 1
+}
+
+func keyOfHex(t *testing.T, s string) patchtrust.PublicKey {
+	t.Helper()
+	var k patchtrust.PublicKey
+	if b, err := hex.DecodeString(s); err != nil || len(b) != len(k) {
+		t.Fatalf("%s: %v", s, err)
+	} else {
+		copy(k[:], b)
+	}
+	return k
+}
+
+// identitySig is R = the identity, S = 0: no key made it, yet a small-order key verifies it whenever the
+// challenge is a multiple of the key's order.
+var identitySig = append([]byte{1}, make([]byte, 63)...)
+
+// The small-order encodings are weak in either sign and every one is a real hazard: crypto/ed25519 accepts
+// the identity signature under it for some message. Real keys are not weak.
+func TestWeakPublicKeys(t *testing.T) {
+	for _, s := range smallOrder {
+		k := keyOfHex(t, s)
+		forged := false
+		for i := 0; i < 64 && !forged; i++ {
+			forged = ed25519.Verify(k[:], []byte{byte(i)}, identitySig)
+		}
+		if !forged {
+			t.Errorf("%s: no forgery in 64 messages (not a small-order point to Go?)", s)
+		}
+		for _, sign := range []byte{0, 0x80} {
+			k[31] = k[31]&0x7f | sign
+			if !patchtrust.IsWeakPublicKey(k) {
+				t.Errorf("%x is not weak", k)
+			}
+		}
+	}
+	for _, n := range []string{"root-1", "root-2", "manifest-a", "news-a"} {
+		if patchtrust.IsWeakPublicKey(pubOf(n)) {
+			t.Errorf("%s is weak", n)
+		}
+	}
+	// One byte away from a weak key is not weak.
+	k := keyOfHex(t, smallOrder[2])
+	k[0] ^= 1
+	if patchtrust.IsWeakPublicKey(k) {
+		t.Error("a neighbour of an order-8 encoding is weak")
+	}
+}
+
+// A root pair with a zero or other small-order key is refused (RootPair.Validate, NewVerifier): with a zero
+// next root, anyone could sign a keyset of the next epoch. The forgery is real: for one keyset version in
+// about four, crypto/ed25519 accepts the identity signature under the zero key.
+func TestSmallOrderRootsRefused(t *testing.T) {
+	target := patchtrust.Target{ProductID: "sample-game", Channel: "live", Platform: "win64"}
+	_, priv, _ := ed25519.GenerateKey(nil)
+	good := patchtrust.PublicKeyOf(priv)
+	ks := testKeyset()
+	ks.RootEpoch = 2
+	forged := false
+	for v := uint64(100); v < 164 && !forged; v++ {
+		ks.Version = v
+		forged = ed25519.Verify(make([]byte, 32), ks.SignedMessage(), identitySig)
+	}
+	if !forged {
+		t.Fatal("no keyset version in 64 verifies under the zero key")
+	}
+	for _, s := range smallOrder {
+		weak := keyOfHex(t, s)
+		for _, rp := range []patchtrust.RootPair{
+			{Epoch: 1, Current: good, Next: weak},
+			{Epoch: 1, Current: weak, Next: good},
+		} {
+			if err := rp.Validate(); err == nil {
+				t.Errorf("Validate accepted %x / %x", rp.Current, rp.Next)
+			}
+			if _, err := patchtrust.NewVerifier(target, rp, patchtrust.Options{AllowTestKeys: true}); err == nil {
+				t.Errorf("NewVerifier accepted %x / %x", rp.Current, rp.Next)
+			}
+		}
+	}
+	// The zero value's Next, as a pair whose next root was never set gets it.
+	if _, err := patchtrust.NewVerifier(target, patchtrust.RootPair{Epoch: 1, Current: good}, patchtrust.Options{}); err == nil {
+		t.Error("NewVerifier accepted a pair without a next root")
+	}
+	if err := (patchtrust.RootPair{Epoch: 1, Current: good, Next: pubOf("root-2")}).Validate(); err != nil {
+		t.Errorf("a real pair: %v", err)
+	}
+}
+
+// A keyset subkey of small order is refused by Validate, so neither Sign nor ParseKeyset accepts it (the
+// shared syntax vectors pin the parsers).
+func TestSmallOrderSubkeyRefused(t *testing.T) {
+	for _, s := range smallOrder {
+		ks := testKeyset()
+		weak := keyOfHex(t, s)
+		ks.Keys = []patchtrust.KeysetKey{{ID: patchtrust.Fingerprint(weak), Role: patchtrust.RoleManifest, Pub: weak,
+			NotBefore: 1000, NotAfter: 2000}}
+		if err := ks.Validate(); err == nil || !strings.Contains(err.Error(), "small order") {
+			t.Errorf("%s: %v", s, err)
+		}
+		if err := ks.Sign(trusttest.Key("root-1")); err == nil {
+			t.Errorf("%s: signed", s)
+		}
+	}
+}
+
 func TestKeysetRoundTrip(t *testing.T) {
 	ks := testKeyset()
 	if err := ks.Sign(trusttest.Key("root-1")); err != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -474,6 +475,48 @@ func TestPublishChecksKeysetAgainstRoots(t *testing.T) {
 	if _, err := patchcdn.Publish(context.Background(), o, &forged); patchtrust.CheckOf(err) !=
 		patchtrust.CheckKeysetSignature {
 		t.Fatalf("published a keyset the roots did not sign: %v", err)
+	}
+}
+
+// LoadRoots refuses a roots.json whose pair RootPair.Validate refuses: a zero or other small-order key (with a
+// zero next root anyone could sign a keyset of the next epoch), the same key twice, epoch 0.
+func TestLoadRootsRefusesWeakPairs(t *testing.T) {
+	target := patchtrust.Target{ProductID: "sample-game", Channel: "dev", Platform: "win64"}
+	_, _, dir := devSetup(t, target)
+	path := filepath.Join(dir, "roots.json")
+	good, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f patchcdn.RootsFile
+	if err := json.Unmarshal(good, &f); err != nil {
+		t.Fatal(err)
+	}
+	zero, identity := strings.Repeat("0", 64), "01"+strings.Repeat("0", 62)
+	for name, mod := range map[string]func(*patchcdn.RootsFile){
+		"zero next":     func(r *patchcdn.RootsFile) { r.Next = zero },
+		"zero current":  func(r *patchcdn.RootsFile) { r.Current = zero },
+		"identity next": func(r *patchcdn.RootsFile) { r.Next = identity },
+		"order-8 current": func(r *patchcdn.RootsFile) {
+			r.Current = "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"
+		},
+		"sign bit set": func(r *patchcdn.RootsFile) { r.Next = strings.Repeat("0", 62) + "80" },
+		"the same key": func(r *patchcdn.RootsFile) { r.Next = r.Current },
+		"epoch zero":   func(r *patchcdn.RootsFile) { r.Epoch = 0 },
+	} {
+		r := f
+		mod(&r)
+		b, _ := json.Marshal(r)
+		p := filepath.Join(t.TempDir(), "roots.json")
+		if err := os.WriteFile(p, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := patchcdn.LoadRoots(p); err == nil {
+			t.Errorf("%s: loaded", name)
+		}
+	}
+	if _, _, err := patchcdn.LoadRoots(path); err != nil {
+		t.Fatal(err)
 	}
 }
 

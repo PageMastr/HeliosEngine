@@ -80,7 +80,8 @@ func decodeHex(s string, n int) ([]byte, error) {
 	return b, nil
 }
 
-// LoadRoots reads roots.json.
+// LoadRoots reads roots.json and checks the pair (patchtrust.RootPair.Validate: among others, no zero or
+// other small-order key).
 func LoadRoots(path string) (string, patchtrust.RootPair, error) {
 	var f RootsFile
 	b, err := os.ReadFile(path)
@@ -98,6 +99,9 @@ func LoadRoots(path string) (string, patchtrust.RootPair, error) {
 	}
 	copy(rp.Current[:], cur)
 	copy(rp.Next[:], next)
+	if err := rp.Validate(); err != nil {
+		return "", rp, fmt.Errorf("patchcdn: roots %s: %w", path, err)
+	}
 	return f.ProductID, rp, nil
 }
 

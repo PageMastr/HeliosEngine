@@ -80,6 +80,20 @@ TEST_CASE("fs: whole-file write/read, atomic replace and errors") {
     CHECK(lastWriteTime(file));
 }
 
+TEST_CASE("fs: setLastWriteTime moves a file's last write time both ways") {
+    TempDir tmp;
+    const Path file = tmp.path / "stamp.txt";
+    REQUIRE(writeTextFile(file, "x"));
+    const auto now = std::filesystem::file_time_type::clock::now();
+    REQUIRE(setLastWriteTime(file, now - std::chrono::hours(48)));
+    const auto old = lastWriteTime(file).value();
+    CHECK(old < now - std::chrono::hours(47));
+    REQUIRE(setLastWriteTime(file, now));
+    CHECK(lastWriteTime(file).value() > old);
+    CHECK(readTextFile(file).value() == "x");
+    CHECK(setLastWriteTime(tmp.path / "missing.txt", now).error().code == ErrorCode::NotFound);
+}
+
 TEST_CASE("fs: readFile is exact for any size and does not trust the reported size") {
     TempDir tmp;
     for (usize size : {usize(0), usize(1), usize(4095), usize(4096), usize(4097), usize(65'539)}) {
@@ -226,6 +240,15 @@ TEST_CASE("fs: directory listing, rename and removal") {
     REQUIRE(fs::rename(tmp.path / "root.txt", tmp.path / "a" / "one.json")); // replaces the target
     CHECK(readTextFile(tmp.path / "a" / "one.json").value() == "r");
     CHECK(!fs::exists(tmp.path / "root.txt"));
+    // The cache variant: the same rename and replacement, without persisting the directory entry.
+    REQUIRE(writeTextFile(tmp.path / "cache.tmp", "c"));
+    REQUIRE(fs::renameNoSync(tmp.path / "cache.tmp", tmp.path / "a" / "one.json")); // replaces the target
+    CHECK(readTextFile(tmp.path / "a" / "one.json").value() == "c");
+    REQUIRE(fs::renameNoSync(tmp.path / "a" / "one.json", tmp.path / "a" / "moved.json")); // no target
+    CHECK(readTextFile(tmp.path / "a" / "moved.json").value() == "c");
+    CHECK(!fs::exists(tmp.path / "cache.tmp"));
+    CHECK(fs::renameNoSync(tmp.path / "missing", tmp.path / "x").error().code == ErrorCode::NotFound);
+    REQUIRE(fs::rename(tmp.path / "a" / "moved.json", tmp.path / "a" / "one.json"));
     CHECK(fs::remove(tmp.path / "a" / "one.json"));
     CHECK(fs::remove(tmp.path / "a" / "one.json").error().code == ErrorCode::NotFound);
     CHECK(removeAll(tmp.path / "a").value() == 4);

@@ -87,10 +87,12 @@ Result<void> fileSync(NativeFile file) {
     return {};
 }
 
-Result<void> atomicReplace(const std::filesystem::path& source, const std::filesystem::path& target) {
+Result<void> atomicReplace(const std::filesystem::path& source, const std::filesystem::path& target,
+                           bool durable) {
     if (::rename(source.c_str(), target.c_str()) != 0) {
         return lastError(std::format("rename '{}' -> '{}'", source.string(), target.string()));
     }
+    if (!durable) return {};
     // Persist the directory entry too (best effort) so the replacement survives power loss.
     const std::filesystem::path parent = target.has_parent_path() ? target.parent_path() : std::filesystem::path(".");
     const int dirFd = ::open(parent.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);

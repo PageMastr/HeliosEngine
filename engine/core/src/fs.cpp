@@ -150,6 +150,13 @@ Result<std::filesystem::file_time_type> lastWriteTime(const Path& path) {
     return time;
 }
 
+Result<void> setLastWriteTime(const Path& path, std::filesystem::file_time_type time) {
+    std::error_code ec;
+    std::filesystem::last_write_time(path, time, ec);
+    if (ec) return fsError(ec, "last_write_time", path);
+    return {};
+}
+
 Result<void> createDirectories(const Path& path) {
     std::error_code ec;
     std::filesystem::create_directories(path, ec);
@@ -174,6 +181,8 @@ Result<u64> removeAll(const Path& path) {
 }
 
 Result<void> rename(const Path& from, const Path& to) { return os::atomicReplace(from, to); }
+
+Result<void> renameNoSync(const Path& from, const Path& to) { return os::atomicReplace(from, to, false); }
 
 Result<Path> executablePath() { return os::executablePath(); }
 

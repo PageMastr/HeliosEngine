@@ -238,20 +238,22 @@ without the flag, as do local runs and fixed hardware.
 
 ### NS-0.2 per-packet budget (WP-0.13r)
 
-NS-0.2's 100k packets per core is a CPU budget of **≤ 10 µs per encrypted packet, send and receive
-together, on one core** (`bench::kNs02BudgetMicrosPerPacket`; `net_bench --stack` prints the measured µs
-per packet beside it). The gate counts the measuring thread's CPU. Its wall time shows only preemption: the
-loop never sleeps or blocks, so the thread accrues CPU at the wall-clock rate even if the OS does part of
-each packet's work elsewhere. So `net_bench --socket` and `--stack` also print a **cross-check** line: the
-whole machine's busy CPU per datagram or packet over the run (`GetSystemTimes` on Windows, `/proc/stat` on
-Linux), less the background load measured for 0.5 s on either side of it, beside the thread's figure. It
-warns when the machine spent more than 25 % more than the thread (`bench::kOffThreadLimitPercent`), as it
-would if Registered I/O completed sends or receives on other CPUs, and says the figure means nothing when
-the background exceeds a quarter of the CPUs. It never changes a verdict: whether NS-0.2 should count that
-work is the owner's call (see the PR). In this container (background ≈ 2 of 4 CPUs) it reads −3 % to −12 %
-and "not meaningful"; the hosted Windows nightly and `win-gpu` give the first readings that count. The win-gpu runner (AMD Ryzen 5 5500, Windows 11)
-measured 12.1–12.2 µs (82,842 and 82,134 packets per core, 2026-10-04/05) against 6.2 µs for a raw datagram,
-so both the Windows socket path and the stack's own work had to shrink.
+NS-0.2's 100k packets per core is a CPU budget of **≤ 10 µs per encrypted packet, send and receive together,
+on one core** (`bench::kNs02BudgetMicrosPerPacket`; `net_bench --stack` prints the measured µs per packet
+beside it). The gate counts the measuring thread's CPU. Its wall time shows only preemption: the loop never
+sleeps or blocks, so the thread accrues CPU at the wall-clock rate even if the OS does part of each packet's
+work elsewhere. So `net_bench --socket` and `--stack` also print a **cross-check** line: the whole machine's
+busy CPU per datagram or packet over the run (`GetSystemTimes` on Windows, `/proc/stat` on Linux), less the
+background load measured for 0.5 s on either side of it, beside the thread's figure. It warns when the machine
+spent more than 25 % more than the thread (`bench::kOffThreadLimitPercent`), as it would if Registered I/O
+completed sends or receives on other CPUs, and says the figure means nothing when the background exceeds a
+quarter of the CPUs. It never changes a verdict: whether NS-0.2 should count that work is the owner's call
+(see the PR). In this container, on Linux, all the work is on the thread: at idle moments (background ≤ 0.08
+cores) it read −6.8 % to +3.1 % for raw datagrams and −6.2 % to +1.4 % for the stack (2026-10-05, GCC; Clang
++0.7 %), and under load (background ≈ 2 of 4 CPUs) it says "not meaningful". The Windows readings come from
+the hosted Windows nightly and `win-gpu`. The win-gpu runner (AMD Ryzen 5 5500, Windows 11) measured 12.1–12.2
+µs (82,842 and 82,134 packets per core, 2026-10-04/05) against 6.2 µs for a raw datagram, so both the Windows
+socket path and the stack's own work had to shrink.
 
 Where a packet's CPU goes (`perf record -e cpu-clock` of `net_bench --stack 8`, GCC 13 RelWithDebInfo, this
 container; 700-byte EVENT_U messages, one per ≈ 730-byte datagram, received on the same thread):

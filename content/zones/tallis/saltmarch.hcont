@@ -1,0 +1,28 @@
+{
+  "$container": "guid:2cbb8b7e-52b7-4256-b882-c3f86c469db1",
+  "name": "saltmarch",
+  "frame": {
+    "parent": "body:harrow",
+    "anchor": {
+      "lat": 12.4,
+      "lon": -33.1,
+      "alt": 0
+    },
+    "heading": 90
+  },
+  "bounds": {
+    "center": [0, 0, 0],
+    "radius": 1800
+  },
+  "streaming": {
+    "loadRadius": 6000,
+    "hlodRadius": 40000,
+    "group": "zone.tallis",
+    "server": "bubble"
+  },
+  "children": [],
+  "layers": ["base"],
+  "budgets": {
+    "entities": 4000
+  }
+}

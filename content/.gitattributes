@@ -1,0 +1,2 @@
+# Content is canonical JSONC text compared byte for byte (07 §1.7): keep LF on Windows checkouts.
+* text eol=lf

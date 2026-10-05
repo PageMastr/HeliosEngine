@@ -4,9 +4,10 @@
 #
 # Fails on:
 #  * a reference-content name (Cinder Reach: Kestrel, Harrow, Tallis, ...) outside the content
-#    directories (HELIOS_IP_CONTENT_DIRS: content/ and docs/concept/);
+#    directories (HELIOS_IP_CONTENT_DIRS: content/ and docs/concept/) and the content files at the top
+#    (HELIOS_IP_CONTENT_FILES: the reference game's helios.project.jsonc);
 #  * an in-universe name from another franchise (Star Wars, EVE, Destiny, Star Citizen) anywhere;
-#  * a franchise title ("Star Wars", "EVE Online", ...) inside the content directories.
+#  * a franchise title ("Star Wars", "EVE Online", ...) inside the content directories and files.
 # Word and identifier-word matches (camelCase, snake_case, UPPER_CASE, paths) in text files;
 # findings are reported as path:line: name.
 
@@ -164,6 +165,9 @@ foreach(rel IN LISTS files)
       set(inContent ON)
     endif()
   endforeach()
+  if(rel IN_LIST HELIOS_IP_CONTENT_FILES)
+    set(inContent ON)
+  endif()
   if(NOT inContent)
     foreach(name IN LISTS HELIOS_IP_REFERENCE_NAMES)
       _ip_reference_needles("${name}" needles)

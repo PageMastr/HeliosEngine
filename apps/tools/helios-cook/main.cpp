@@ -1,8 +1,10 @@
-// helios-cook: the cook CLI (07 §1.10 names it beside helios-tool and helios-assetd). v0 (WP-0.8) has one
-// verb, `records`: `.hrec` sources → records.client.hrdb + records.server.hrdb (engine/records). It
-// links the sample record types only, like helios-tool, until projects register their own (07 §1.10).
-// See README.md.
+// helios-cook: the cook CLI (07 §1.10 names it beside helios-tool and helios-assetd). v0 has two verbs:
+// `records` (WP-0.8): `.hrec` sources → records.client.hrdb + records.server.hrdb (engine/records); and
+// `check` (WP-0.20): the project file, and the provenance and layout of the content it names
+// (content_check.h). It links the sample record types only, like helios-tool, until projects register
+// their own (07 §1.10). See README.md.
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <format>
@@ -16,6 +18,8 @@
 #include "helios/records/cook.h"
 #include "helios/toolsfw/samples.h"
 
+#include "content_check.h"
+
 using namespace helios;
 
 namespace {
@@ -28,15 +32,20 @@ Verbs
   records    cook records/<table>/**/*.hrec into records.client.hrdb and records.server.hrdb
              (02 §3.3: $parent inheritance, reference, tag and formula checks, the client/server
              split with its AAA-SEC-4 rules)
+  check      validate helios.project.jsonc and every file under its content roots: provenance
+             (a valid .meta sidecar each; 01 §5.2) and layout (zones, containers, entities; 07 §1.8.2)
 
 Options
-  --project-root=<dir>   project with records/<table>/*.hrec (default: current directory)
-  --out=<dir>            output directory (default: <project-root>/cooked)
+  --project-root=<dir>   records: a content root, the directory with records/<table>/*.hrec;
+                         check: the project, the directory with helios.project.jsonc
+                         (default for both: current directory)
+  --out=<dir>            records: output directory (default: <project-root>/cooked)
   --quiet                print errors only
   --log-level=<level>    trace|debug|info|warn|error (default warn)
   --version, --help
 
-Exit codes: 0 ok, 1 the cook found errors (listed on stderr), 2 usage error, 3 I/O or setup failure.
+Exit codes: 0 ok, 1 the cook or the check found errors (listed on stderr), 2 usage error, 3 I/O or
+setup failure.
 )";
 
 constexpr int kOk = 0;
@@ -76,6 +85,36 @@ int cmdRecords(const CommandLine& cl) {
     return kOk;
 }
 
+int cmdCheck(const CommandLine& cl) {
+    const fs::Path root = cl.value("project-root") ? fs::pathFromUtf8(*cl.value("project-root")) : std::filesystem::current_path();
+    auto types = cook::contentTypes();
+    if (!types) return fail(kFailed, std::format("content types: {}", types.error()));
+    std::vector<cook::Finding> findings;
+    const cook::ProjectFile project = cook::checkProjectFile(root, findings);
+    const cook::ContentStats st = cook::checkContent(root, project, *types, findings);
+    std::sort(findings.begin(), findings.end(), [](const cook::Finding& a, const cook::Finding& b) {
+        return a.path != b.path ? a.path < b.path : a.message < b.message;
+    });
+    findings.erase(std::unique(findings.begin(), findings.end(),
+                               [](const cook::Finding& a, const cook::Finding& b) { return a.path == b.path && a.message == b.message; }),
+                   findings.end());
+    if (!findings.empty()) {
+        std::string text;
+        for (const cook::Finding& f : findings) text += std::format("{}: {}\n", f.path, f.message);
+        std::fputs(text.c_str(), stderr);
+        return fail(kCookErrors, std::format("{} finding(s)", findings.size()));
+    }
+    if (!cl.has("quiet")) {
+        std::fputs(std::format("helios.project.jsonc: {} content root(s), {} zone(s); {} content files, {} with provenance; "
+                               "{} container(s), {} entit{}\n",
+                               project.contentRoots.size(), project.zones.size(), st.files, st.withMeta, st.containers,
+                               st.entities, st.entities == 1 ? "y" : "ies")
+                       .c_str(),
+                   stdout);
+    }
+    return kOk;
+}
+
 int run(const CommandLine& cl) {
     if (cl.has("version")) {
         std::printf("helios-cook %s\n", version::kString);
@@ -96,6 +135,7 @@ int run(const CommandLine& cl) {
     if (auto r = tf::samples::registerSampleTypes(); !r) return fail(kFailed, std::format("sample types: {}", r.error()));
     const std::string& verb = cl.positional()[0];
     if (verb == "records") return cmdRecords(cl);
+    if (verb == "check") return cmdCheck(cl);
     return fail(kUsageError, std::format("unknown verb '{}' (--help lists them)", verb));
 }
 

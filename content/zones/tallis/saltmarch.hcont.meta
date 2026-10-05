@@ -1,0 +1,12 @@
+{
+  "$meta": 0,
+  "guid": "2cbb8b7e-52b7-4256-b882-c3f86c469db1",
+  "importer": "hcont",
+  "importerVersion": 1,
+  "provenance": {
+    "origin": "original",
+    "author": "Claude Code (Claude Opus 5.5), agent-authored",
+    "licence": "MIT",
+    "notes": "Written for this repository in WP-0.20: original text with no third-party material."
+  }
+}

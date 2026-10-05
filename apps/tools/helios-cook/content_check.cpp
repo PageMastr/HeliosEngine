@@ -434,7 +434,10 @@ void checkEntity(const Doc& d, const std::set<std::string>& docs,
         r("", "an entity sits in its container's <name>.entities/ folder (02 §5.6)");
     } else {
         const std::string container = std::format("{}.hcont", dir.substr(0, dir.size() - kEntities.size()));
-        if (!docs.contains(container)) r("", std::format("its container {} does not exist", container));
+        if (!docs.contains(container)) {
+            r("", std::format("its container {} does not exist next to its folder",
+                              std::string_view(container).substr(container.rfind('/') + 1)));
+        }
     }
     const std::optional<Guid> guid = canonicalGuid(stem);
     if (!guid) r("", "an entity's file name is its GUID in canonical lower case, then .hent (02 §5.6)");

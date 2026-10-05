@@ -40,7 +40,8 @@ Options
   --project-root=<dir>   records: a content root, the directory with records/<table>/*.hrec;
                          check: the project, the directory with helios.project.jsonc
                          (default for both: current directory)
-  --out=<dir>            records: output directory (default: <project-root>/cooked)
+  --out=<dir>            records: output directory (default: <project-root>/.cooked, which
+                         .gitignore keeps out of git for content/ and the check skips)
   --quiet                print errors only
   --log-level=<level>    trace|debug|info|warn|error (default warn)
   --version, --help
@@ -61,7 +62,7 @@ int fail(int code, const std::string& message) {
 
 int cmdRecords(const CommandLine& cl) {
     const fs::Path root = cl.value("project-root") ? fs::pathFromUtf8(*cl.value("project-root")) : std::filesystem::current_path();
-    const fs::Path outDir = cl.value("out") ? fs::pathFromUtf8(*cl.value("out")) : root / "cooked";
+    const fs::Path outDir = cl.value("out") ? fs::pathFromUtf8(*cl.value("out")) : root / ".cooked";
     auto sources = records::collectSources(root, refl::TypeRegistry::global());
     if (!sources) return fail(kCookErrors, std::format("{}", sources.error().message));
     std::vector<records::CookDiagnostic> diags;

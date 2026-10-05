@@ -32,9 +32,9 @@ if(HELIOS_BUILD_TESTS)
   # `check` on the repository's helios.project.jsonc and content/; lint_content_records_cook cooks content/'s
   # records; lint_content_records_canonical has helios-tool confirm they are in the canonical form the editor
   # writes; lint_records_sec4_content searches the cook for the server-only aiHints keys of the reference
-  # ship (AAA-SEC-4 on the game's own records). The fixture cases copy the project file and content/ into the
-  # build tree, seed one violation each (tests/content_check_test.cmake lists them) and must fail with it;
-  # the `valid` case copies them unchanged and must pass.
+  # ship (AAA-SEC-4 on the game's own records). The fixture cases copy the project file, content/ and schemas/
+  # into the build tree, seed one violation each (tests/content_check_test.cmake lists them) and must fail
+  # with it; `valid` copies them unchanged and must pass, and `cook_then_check` passes after a default cook.
   add_test(NAME lint_content_check COMMAND helios-cook check --project-root=${PROJECT_SOURCE_DIR})
   add_test(NAME lint_content_records_cook
     COMMAND helios-cook records --project-root=${PROJECT_SOURCE_DIR}/content --out=${CMAKE_CURRENT_BINARY_DIR}/content_cook)
@@ -43,9 +43,15 @@ if(HELIOS_BUILD_TESTS)
   add_test(NAME lint_records_sec4_content
     COMMAND ${CMAKE_COMMAND} -DCOOK=$<TARGET_FILE:helios-cook> -DPROJECT=${PROJECT_SOURCE_DIR}/content
             -DWORK=${CMAKE_CURRENT_BINARY_DIR}/sec4_content "-DSENTINELS=breakOffHealth;strafeRange" -P ${_sec4})
-  set(_contentCases valid missing_sidecar bad_licence ai_without_record unknown_type hidden_file undeclared_zone
-      spatial_outside_zone global_in_zone container_group container_identity entity_name project_unknown_key
-      project_tick_rate project_reserved_scheme broken_record)
+  set(_contentCases valid cook_then_check
+      missing_sidecar bad_licence ai_without_record unknown_type hidden_file hidden_directory
+      undeclared_zone spatial_outside_zone global_in_zone record_outside_records
+      container_guid_form container_name container_frame_parent container_group container_identity
+      entity_name entity_outside_folder entity_without_container
+      project_missing project_version project_unknown_key project_duplicate_key project_engine_version
+      project_gem project_native_package project_content_root project_zone_frame project_zone_id
+      project_tick_rate project_product_id project_install_name project_display_name project_reserved_scheme
+      broken_record)
   set(_contentTests lint_content_check lint_content_records_cook lint_content_records_canonical lint_records_sec4_content)
   foreach(case IN LISTS _contentCases)
     add_test(NAME lint_content_check_fixture_${case}

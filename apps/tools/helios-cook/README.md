@@ -11,7 +11,8 @@ helios-cook check   [--project-root=<project>] [--quiet] [--log-level=<level>]
 `records` reads every `records/<table>/**/*.hrec` under `--project-root`, here a content root such as the
 repository's `content/` (typed by the record type with that `@table`), resolves `$parent` inheritance,
 checks references, tags, formulas and the client/server split (AAA-SEC-4), and writes `records.client.hrdb`
-and `records.server.hrdb` to `--out` (default `<project-root>/cooked`). The rules are
+and `records.server.hrdb` to `--out` (default `<project-root>/.cooked`, which `.gitignore` keeps out of git
+for `content/` and `check` skips; before WP-0.20 it was `cooked`, inside the content tree). The rules are
 [engine/records](../../../engine/records/README.md)'s. Errors are listed on stderr, sorted by file, and
 nothing is written.
 
@@ -65,7 +66,7 @@ The reference project (WP-0.20; 09 §2.1, "Records compile; 100 % provenance"), 
 | `lint_content_check` | `check` on the repository's `helios.project.jsonc` and `content/` |
 | `lint_content_records_cook` | `records` on `content/`: the records compile |
 | `lint_content_records_canonical` | `helios-tool --project-root=content fmt --check`: the records are in the canonical form the editor writes |
-| `lint_content_check_fixture_<case>` | `tests/content_check_test.cmake` copies the project file, `content/` and `schemas/` into the build tree, seeds one violation and must see the verb fail with its diagnostic: `missing_sidecar`, `bad_licence`, `ai_without_record`, `unknown_type`, `hidden_file`, `undeclared_zone`, `spatial_outside_zone`, `global_in_zone`, `container_group`, `container_identity`, `entity_name`, `project_unknown_key`, `project_tick_rate`, `project_reserved_scheme` (`check`) and `broken_record` (`records`). `valid`, the unchanged copy, must pass both verbs. The cases pick their targets by pattern (the first file of a kind), so they follow the content as it grows |
+| `lint_content_check_fixture_<case>` | `tests/content_check_test.cmake` copies the project file, `content/` and `schemas/` into the build tree, seeds one violation and must see the verb fail with its diagnostic. 34 cases, one or more per rule: provenance (`missing_sidecar`, `bad_licence`, `ai_without_record`, `unknown_type`, `hidden_file`, `hidden_directory`), layout (`undeclared_zone`, `spatial_outside_zone`, `global_in_zone`, `record_outside_records`), containers (`container_guid_form`, `container_name`, `container_frame_parent`, `container_group`, `container_identity`), entities (`entity_name`, `entity_outside_folder`, `entity_without_container`), the project file (`project_missing`, `project_version`, `project_unknown_key`, `project_duplicate_key`, `project_engine_version`, `project_gem`, `project_native_package`, `project_content_root`, `project_zone_frame`, `project_zone_id`, `project_tick_rate`, `project_product_id`, `project_install_name`, `project_display_name`, `project_reserved_scheme`) and the records cook (`broken_record`). Two must pass: `valid`, the unchanged copy, through both verbs, and `cook_then_check`, a `records` run to its default output followed by `check`. The cases pick their targets by pattern (the first file of a kind), so they follow the content as it grows |
 
 ## Plan conformance
 

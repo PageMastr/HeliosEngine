@@ -15,14 +15,48 @@ using namespace helios::net;
 
 namespace {
 
-UdpSocket openLoopback(u32 bufferBytes = 8u * 1024 * 1024) {
+UdpSocket openLoopback(u32 bufferBytes = 8u * 1024 * 1024, UdpBatchApi api = UdpBatchApi::Auto) {
     UdpSocketConfig c;
     c.bindAddress = Address::loopbackV4(0);
     c.sendBufferBytes = bufferBytes;
     c.receiveBufferBytes = bufferBytes;
+    c.batchApi = api;
     auto s = UdpSocket::open(c);
     REQUIRE(s);
     return std::move(s).value();
+}
+
+UdpSocket openLoopbackWith(UdpBatchApi api) { return openLoopback(8u * 1024 * 1024, api); }
+
+/// What each request resolves to on this platform (04 §2.6): the fastest API it offers for Auto, the
+/// API itself where the OS has it, Message otherwise.
+UdpBatchApi expectedApi(UdpBatchApi requested) {
+#if defined(_WIN32)
+    if (requested == UdpBatchApi::Auto || requested == UdpBatchApi::Registered) return UdpBatchApi::Registered;
+#elif defined(__linux__)
+    if (requested == UdpBatchApi::Auto || requested == UdpBatchApi::MultiMessage) return UdpBatchApi::MultiMessage;
+#endif
+    (void)requested;
+    return UdpBatchApi::Message;
+}
+
+constexpr UdpBatchApi kAllApis[] = {UdpBatchApi::Auto, UdpBatchApi::Registered, UdpBatchApi::MultiMessage,
+                                    UdpBatchApi::Message};
+
+/// Receives with receiveBatch() into 64 slots of `slotBytes` until `count` datagrams arrived or
+/// `timeout` passed; returns the datagrams' payloads in arrival order.
+std::vector<std::vector<u8>> receiveAll(UdpSocket& s, usize count, usize slotBytes = 2048, f64 timeout = 2.0) {
+    std::vector<u8> arena(64 * slotBytes);
+    std::vector<InDatagram> slots(64);
+    std::vector<std::vector<u8>> got;
+    const f64 end = monotonicSeconds() + timeout;
+    while (got.size() < count && monotonicSeconds() < end) {
+        for (usize i = 0; i < slots.size(); ++i) slots[i].buffer = std::span<u8>(arena.data() + i * slotBytes, slotBytes);
+        const usize n = s.receiveBatch(slots);
+        for (usize i = 0; i < n; ++i) got.emplace_back(slots[i].buffer.begin(), slots[i].buffer.begin() + slots[i].size);
+        if (n == 0) sleepMillis(1);
+    }
+    return got;
 }
 
 /// Receives until `count` datagrams arrived or `timeout` seconds passed.
@@ -194,6 +228,198 @@ TEST_SUITE("net.udp") {
             }
         }
         CHECK(got == 40);
+    }
+
+    TEST_CASE("batch APIs: Auto picks the platform's fastest and an API the OS lacks falls back to Message") {
+        for (const UdpBatchApi requested : kAllApis) {
+            CAPTURE(udpBatchApiName(requested));
+            UdpSocket s = openLoopbackWith(requested);
+            CHECK(s.batchApi() != UdpBatchApi::Auto);
+            CHECK(s.batchApi() == expectedApi(requested));
+            MESSAGE(udpBatchApiName(requested) << " -> " << udpBatchApiName(s.batchApi()));
+        }
+        // Moving a socket keeps its API (and, with Registered I/O, its queues and buffers).
+        UdpSocket a = openLoopbackWith(UdpBatchApi::Auto);
+        const UdpBatchApi api = a.batchApi();
+        UdpSocket b = std::move(a);
+        CHECK(b.batchApi() == api);
+        UdpSocket c = openLoopbackWith(UdpBatchApi::Message);
+        c = std::move(b);
+        CHECK(c.batchApi() == api);
+        const u8 x[] = {9};
+        UdpSocket r = openLoopbackWith(UdpBatchApi::Message);
+        REQUIRE(c.sendTo(r.localAddress(), x));
+        CHECK(receiveAll(r, 1).size() == 1);
+        CHECK(udpBatchApiName(UdpBatchApi::Registered) == "registered");
+        CHECK(udpBatchApiName(UdpBatchApi::MultiMessage) == "multi-message");
+    }
+
+    TEST_CASE("batch APIs: every API has the same batch semantics") {
+        for (const UdpBatchApi requested : kAllApis) {
+            CAPTURE(udpBatchApiName(requested));
+            UdpSocket a = openLoopbackWith(requested);
+            UdpSocket b = openLoopbackWith(requested);
+            CAPTURE(udpBatchApiName(a.batchApi()));
+            std::vector<u8> slot(2048);
+            Address from;
+            // Nothing pending: both receive calls return at once with nothing.
+            InDatagram one;
+            one.buffer = slot;
+            CHECK(b.receiveBatch(std::span<InDatagram>(&one, 1)) == 0);
+            CHECK(b.receiveFrom(from, slot) == 0);
+            CHECK(b.receiveBatch({}) == 0);
+            CHECK(a.sendBatch({}) == 0);
+
+            // A batch with a destination this socket cannot reach (IPv6 from an IPv4 socket): it is
+            // skipped and counted, and the rest go out.
+            std::vector<std::vector<u8>> payloads(100);
+            std::vector<OutDatagram> out;
+            for (usize i = 0; i < payloads.size(); ++i) {
+                payloads[i].assign(10 + i * 7, static_cast<u8>(i));
+                out.push_back(OutDatagram{b.localAddress(), payloads[i]});
+            }
+            const std::vector<u8> stray{1, 2, 3};
+            out.insert(out.begin() + 50, OutDatagram{Address::loopbackV6(b.localAddress().port()), stray});
+            CHECK(a.sendBatch(out) == 100);
+            CHECK(a.stats().sendErrors == 1);
+            CHECK(a.stats().datagramsSent == 100);
+            CHECK(a.stats().sendSyscalls >= 1);
+            CHECK(a.sendTo(Address::loopbackV6(b.localAddress().port()), stray).errorCode() ==
+                  ErrorCode::InvalidArgument);
+
+            // Received in partial batches (64 + 36), each datagram whole and from the sender.
+            const auto got = receiveAll(b, 100);
+            REQUIRE(got.size() == 100);
+            std::vector<bool> seen(100, false);
+            for (const auto& g : got) {
+                REQUIRE(g.size() >= 10);
+                const usize idx = (g.size() - 10) / 7;
+                REQUIRE(idx < 100);
+                CHECK(g == payloads[idx]);
+                seen[idx] = true;
+            }
+            for (bool x : seen) CHECK(x);
+            CHECK(b.stats().datagramsReceived == 100);
+            u64 bytes = 0;
+            for (const auto& p : payloads) bytes += p.size();
+            CHECK(b.stats().bytesReceived == bytes);
+            CHECK(a.stats().bytesSent == bytes);
+
+            // The addresses come back as the sender's.
+            const u8 hello[] = {42, 43};
+            REQUIRE(a.sendTo(b.localAddress(), hello));
+            usize n = 0;
+            for (int i = 0; i < 1000 && n == 0; ++i) {
+                n = b.receiveFrom(from, slot);
+                if (n == 0) sleepMillis(1);
+            }
+            CHECK(n == 2);
+            CHECK(from == a.localAddress());
+
+            // A datagram larger than the slot it lands in is dropped and counted, never cut, and the
+            // next one still arrives, whether it comes through receiveBatch or receiveFrom.
+            const std::vector<u8> big(1500, 0xAB);
+            const u8 small[] = {7};
+            REQUIRE(a.sendTo(b.localAddress(), big));
+            REQUIRE(a.sendTo(b.localAddress(), small));
+            const auto afterBig = receiveAll(b, 1, /*slotBytes=*/100);
+            REQUIRE(afterBig.size() == 1);
+            CHECK(afterBig[0] == std::vector<u8>{7});
+            CHECK(b.stats().truncated == 1);
+            REQUIRE(a.sendTo(b.localAddress(), big));
+            REQUIRE(a.sendTo(b.localAddress(), small));
+            std::vector<u8> tiny(100);
+            n = 0;
+            for (int i = 0; i < 1000 && n == 0; ++i) {
+                n = b.receiveFrom(from, tiny);
+                if (n == 0) sleepMillis(1);
+            }
+            CHECK(n == 1);
+            CHECK(tiny[0] == 7);
+            CHECK(b.stats().truncated == 2);
+            CHECK(b.stats().receiveErrors == 0);
+        }
+    }
+
+    TEST_CASE("batch APIs: interoperate, and a burst larger than the in-flight limits is accounted for") {
+        for (const UdpBatchApi senderApi : kAllApis) {
+            for (const UdpBatchApi receiverApi : {UdpBatchApi::Auto, UdpBatchApi::Message}) {
+                CAPTURE(udpBatchApiName(senderApi));
+                CAPTURE(udpBatchApiName(receiverApi));
+                UdpSocket tx = openLoopbackWith(senderApi);
+                UdpSocket rx = openLoopbackWith(receiverApi);
+                // 400 datagrams in one call: more than Registered I/O's 256 send slots and 128 posted
+                // receives, and more than one sendmmsg batch of 64. They are small so that a receive
+                // buffer capped by rmem_max (unprivileged Linux runners) still holds them all.
+                std::vector<u8> payload(16, 0x33);
+                std::vector<OutDatagram> out(400, OutDatagram{rx.localAddress(), payload});
+                const usize sent = tx.sendBatch(out);
+                CHECK(sent + tx.stats().sendWouldBlock == 400);
+                CHECK(sent >= 256); // at least the slots that were free
+                CHECK(tx.stats().sendErrors == 0);
+                const auto got = receiveAll(rx, sent);
+                CHECK(got.size() == sent);
+                CHECK(rx.stats().datagramsReceived == sent);
+            }
+        }
+    }
+
+#if defined(_WIN32)
+    TEST_CASE("batch APIs: Registered I/O refuses datagrams that do not fit its 2 KB slots") {
+        UdpSocket rio = openLoopbackWith(UdpBatchApi::Registered);
+        UdpSocket msg = openLoopbackWith(UdpBatchApi::Message);
+        REQUIRE(rio.batchApi() == UdpBatchApi::Registered);
+        const std::vector<u8> fits(2047, 0x11);
+        const std::vector<u8> tooBig(2048, 0x22);
+        CHECK(rio.sendTo(msg.localAddress(), fits));
+        CHECK(rio.sendTo(msg.localAddress(), tooBig).errorCode() == ErrorCode::InvalidArgument);
+        const std::vector<OutDatagram> batch{{msg.localAddress(), tooBig}, {msg.localAddress(), fits}};
+        CHECK(rio.sendBatch(batch) == 1);
+        CHECK(rio.stats().sendErrors == 2);
+        const auto got = receiveAll(msg, 2, /*slotBytes=*/4096);
+        REQUIRE(got.size() == 2);
+        CHECK(got[0].size() == 2047);
+        // The other way: a 3,000-byte datagram does not fit a receive slot, so it is counted as truncated
+        // even though the caller's buffer would hold it; the next one arrives.
+        const std::vector<u8> large(3000, 0x44);
+        REQUIRE(msg.sendTo(rio.localAddress(), large));
+        REQUIRE(msg.sendTo(rio.localAddress(), fits));
+        const auto back = receiveAll(rio, 1, /*slotBytes=*/4096);
+        REQUIRE(back.size() == 1);
+        CHECK(back[0].size() == 2047);
+        CHECK(rio.stats().truncated == 1);
+    }
+#endif
+
+    TEST_CASE("SocketTransport runs over every batch API") {
+        for (const UdpBatchApi requested : kAllApis) {
+            CAPTURE(udpBatchApiName(requested));
+            SocketTransportConfig c;
+            c.socket.bindAddress = Address::loopbackV4(0);
+            c.socket.batchApi = requested;
+            c.batchSize = 16;
+            auto a = SocketTransport::open(c).value();
+            auto b = SocketTransport::open(c).value();
+            CHECK(a->socket().batchApi() == expectedApi(requested));
+            for (u32 i = 0; i < 200; ++i) {
+                const u8 d[] = {static_cast<u8>(i), static_cast<u8>(i >> 8)};
+                a->send(b->localAddress(), d);
+            }
+            a->flush();
+            u8 buf[8];
+            Address from;
+            usize got = 0;
+            const f64 end = monotonicSeconds() + 2.0;
+            while (got < 200 && monotonicSeconds() < end) {
+                if (b->receive(from, buf) == 2) {
+                    CHECK(from == a->localAddress());
+                    ++got;
+                } else {
+                    sleepMillis(1);
+                }
+            }
+            CHECK(got == 200);
+        }
     }
 
     TEST_CASE("perf: NS-0.2: loopback 100k pps per core without loss") {

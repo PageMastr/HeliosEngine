@@ -26,7 +26,11 @@
 #
 # Cases 1-4 and 6 change what the loader loads through environment variables, so cases 1-3 first check
 # that the variables take effect (`--print-probe`: the RHI reports Khronos validation active only when
-# the layer is in the call chain); cases 4 and 6 (VK_LAYER_PATH, like case 2) run when case 2's did. The
+# the layer is in the call chain); cases 4 and 6 (VK_LAYER_PATH, like case 2) run when case 2's did. A
+# case is "not checked" only when the loader's own log (VK_LOADER_DEBUG=all) confirms the RHI's verdict:
+# it inserted VK_LAYER_KHRONOS_validation into the instance, or it uses a loader settings file (which may
+# also silence its log); otherwise the RHI's call-chain check itself would be wrong, and the script fails
+# on every platform. The
 # Windows loader ignores VK_LOADER_LAYERS_DISABLE, VK_LAYER_PATH and VK_ADD_LAYER_PATH in a high-integrity
 # process (an elevated one, or most likely a service such as the win-gpu runner: the SERVICE group grants
 # SeImpersonatePrivilege, which raises the token to High; the job prints the level), and a loader settings
@@ -97,23 +101,90 @@ function(probe_validation out_var request)
   set(probe_output "${out}${err}" PARENT_SCOPE)
 endfunction()
 
+# The loader's own account of a verdict "active" under the current environment, for a default device with
+# HELIOS_RHI_VALIDATION=1: sets <out_var> to why the layer is in the call chain in the loader's words (the
+# variables in ARGN it ignores, the loader settings file or override layer it uses), or to "" when its log
+# shows neither the layer inserted into the instance nor a settings file. `loader_log` keeps the evidence.
+function(loader_confirms out_var)
+  set(saved "$ENV{HELIOS_RHI_VALIDATION}")
+  set(saved_debug "$ENV{VK_LOADER_DEBUG}")
+  set(ENV{HELIOS_RHI_VALIDATION} 1)
+  set(ENV{VK_LOADER_DEBUG} all)
+  execute_process(COMMAND "${RENDERTEST}" --print-probe RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+  unset(ENV{HELIOS_RHI_VALIDATION})
+  unset(ENV{VK_LOADER_DEBUG})
+  if(NOT saved STREQUAL "")
+    set(ENV{HELIOS_RHI_VALIDATION} "${saved}")
+  endif()
+  if(NOT saved_debug STREQUAL "")
+    set(ENV{VK_LOADER_DEBUG} "${saved_debug}")
+  endif()
+  set(log "${out}${err}")
+  set(inserted FALSE)
+  if(log MATCHES "Insert instance layer \"VK_LAYER_KHRONOS_validation\"")
+    set(inserted TRUE)
+  endif()
+  set(why "")
+  foreach(variable IN LISTS ARGN)
+    if(log MATCHES "elevated permissions\\. Environment variable ${variable} will be ignored")
+      list(APPEND why "it ignores ${variable} in this elevated (high-integrity) process")
+    endif()
+  endforeach()
+  set(settings FALSE)
+  if(log MATCHES "Using layer configurations found in loader settings from ([^\n]*)")
+    set(settings TRUE)
+    list(APPEND why "it uses the loader settings file ${CMAKE_MATCH_1}")
+  endif()
+  if(log MATCHES "Using the (global )?override layer")
+    list(APPEND why "it uses Vulkan Configurator's override layer")
+  endif()
+  if(inserted)
+    set(text "the loader inserted the layer into the instance")
+  else()
+    set(text "the loader's log does not show the layer, but a loader settings file can force it on and mute that log")
+  endif()
+  if(why)
+    list(JOIN why "; " reasons)
+    string(APPEND text " (${reasons})")
+  endif()
+  if(NOT inserted AND NOT settings)
+    set(text "")
+  endif()
+  set(${out_var} "${text}" PARENT_SCOPE)
+  set(lines "Insert instance layer \"VK_LAYER_KHRONOS_validation\"|loader settings from|override layer")
+  foreach(variable IN LISTS ARGN)
+    string(APPEND lines "|Environment variable ${variable} will be ignored")
+  endforeach()
+  string(REGEX MATCHALL "[^\n]*(${lines})[^\n]*" evidence "${log}")
+  list(REMOVE_DUPLICATES evidence)
+  list(JOIN evidence "\n  " evidence)
+  set(loader_log "  ${evidence}" PARENT_SCOPE)
+endfunction()
+
 # A case the environment cannot set up (see the header): fails on Linux, a NOTE on Windows. Appends
-# to `not_checked` in the caller.
+# to `not_checked` in the caller. (A function: a macro would re-read `why`, whose loader lines hold
+# Windows paths, as CMake code.)
 set(not_checked "")
-macro(cannot_check what why)
+function(cannot_check what why)
   if(NOT CMAKE_HOST_WIN32)
     message(FATAL_ERROR "${what}: ${why}\n${probe_output}")
   endif()
   message(STATUS "NOTE: not checked (${what}): ${why}")
-  string(APPEND not_checked "\n  - ${what}")
-endmacro()
+  set(not_checked "${not_checked}\n  - ${what}" PARENT_SCOPE)
+endfunction()
 
-# Whether the environment set up for a case takes the layer away. Sets `run` to TRUE when the case
-# can be exercised.
+# Whether the environment set up for a case takes the layer away (ARGN: the variables it sets). Sets
+# `run` to TRUE when the case can be exercised. A verdict "active" the loader does not confirm fails.
 macro(environment_takes_effect what)
   probe_validation(state 1)
   if(state STREQUAL "active")
-    cannot_check("${what}" "the loader kept Khronos validation in the call chain (the layer reported itself as a validation tool): it ignores these variables in a high-integrity process (elevated, or a Windows service), or a loader settings file forces the layer on")
+    loader_confirms(confirmed ${ARGN})
+    if(NOT confirmed)
+      message(FATAL_ERROR "${what}: the RHI reports Khronos validation in the call chain, but the loader's log "
+                          "(VK_LOADER_DEBUG=all) neither inserts VK_LAYER_KHRONOS_validation into the instance "
+                          "nor uses a loader settings file: the RHI's call-chain check is wrong\n${probe_output}")
+    endif()
+    cannot_check("${what}" "${confirmed}; the layer reported itself as a validation tool\n${loader_log}")
     set(run FALSE)
   else()
     set(run TRUE)
@@ -121,7 +192,7 @@ macro(environment_takes_effect what)
 endmacro()
 
 # 1. Hidden layer, with and without a usable adapter (the latter fails on the adapter either way).
-environment_takes_effect("the layer hidden by the loader (VK_LOADER_LAYERS_DISABLE)")
+environment_takes_effect("the layer hidden by the loader (VK_LOADER_LAYERS_DISABLE)" VK_LOADER_LAYERS_DISABLE)
 if(run)
   expect_layer_failure("the layer hidden by the loader")
 endif()
@@ -148,7 +219,7 @@ file(WRITE "${broken}/VkLayer_khronos_validation.json" [=[{
 set(saved_add "$ENV{VK_ADD_LAYER_PATH}")
 unset(ENV{VK_ADD_LAYER_PATH})
 set(ENV{VK_LAYER_PATH} "${broken}")
-environment_takes_effect("a broken layer manifest on VK_LAYER_PATH")
+environment_takes_effect("a broken layer manifest on VK_LAYER_PATH" VK_LAYER_PATH)
 set(layer_path_works ${run})  # cases 4 and 6 rely on VK_LAYER_PATH too
 if(run)
   set(ENV{HELIOS_RHI_VALIDATION} 1)
@@ -165,8 +236,14 @@ endif()
 if(LAYER)
   probe_validation(unrequested 0)
   if(unrequested STREQUAL "active")
+    loader_confirms(confirmed)
+    if(NOT confirmed)
+      message(FATAL_ERROR "the RHI reports Khronos validation on a device that did not request it, but the "
+                          "loader's log (VK_LOADER_DEBUG=all) neither inserts VK_LAYER_KHRONOS_validation nor "
+                          "uses a loader settings file: the RHI's call-chain check is wrong\n${probe_output}")
+    endif()
     cannot_check("HELIOS_RHI_VALIDATION=1 leaves the probe device unvalidated"
-                 "the loader puts Khronos validation into every instance without a request (a loader settings file with the layer \"on\")")
+                 "the loader puts Khronos validation into every instance without a request (${confirmed})\n${loader_log}")
   else()
     set(ENV{HELIOS_RHI_VALIDATION} 1)
     execute_process(COMMAND "${RENDERTEST}" --print-probe RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)

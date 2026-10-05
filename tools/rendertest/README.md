@@ -131,7 +131,11 @@ Windows loader ignores `VK_LOADER_LAYERS_DISABLE`, `VK_LAYER_PATH` and `VK_ADD_L
 High integrity or above (elevated, or most likely a service such as the `win-gpu` runner), and a loader settings file
 can force the layer on. Where the RHI still finds the layer in the call chain, the case cannot be set up:
 on Windows the check prints `NOTE: not checked` with the reason (the `win-gpu` job turns each into a warning on
-the run), on Linux it fails, so CI runs every case.
+the run), on Linux it fails, so CI runs every case. The NOTE needs the loader's own confirmation: under
+`VK_LOADER_DEBUG=all` its log must show `VK_LAYER_KHRONOS_validation` inserted into the instance (or a loader
+settings file in use), and the NOTE quotes those lines and the variables the loader says it ignores; an RHI
+verdict the loader does not confirm fails on every platform, so a broken call-chain check cannot hide behind
+a NOTE.
 The first `win-gpu` run failed case 1 ("validated" despite `VK_LOADER_LAYERS_DISABLE`); the likely cause is
 that High-integrity rule, which the job's diagnostics step now shows (integrity level, loader settings). Without the layer at
 configure time, the scenes run with `--validation` (unvalidated), `rendertest.validation-layer`

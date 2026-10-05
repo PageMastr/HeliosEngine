@@ -743,9 +743,12 @@ installer may have added a folder to the `PATH` since the last audit).
   adapters" prints the level), so the check cannot hide the layer from the job and says which cases it skipped. A
   loader settings file or an override layer written by Vulkan Configurator (listed in the same step) has the same
   effect for layers it switches on. Validation itself is unaffected: the RHI reports it active only when the layer
-  reported itself from the call chain. Only a settings file or layer registered under `HKLM`, or, in a process below
-  High integrity, under `helios-ci`'s own `HKCU`, applies to the job: the loader reads no `HKCU` entries at High
-  integrity. Nothing to change on the PC for this; it is recorded so the warning is not mistaken for a failure.
+  reported itself from the call chain, and the check skips a case only when the loader's own log confirms that (it
+  inserted the layer into the instance, or it uses a settings file) and prints those loader lines in the step's log;
+  a verdict the loader's log does not confirm fails the test. Only a settings file or layer registered under
+  `HKLM`, or, in a process below High integrity, under `helios-ci`'s own `HKCU`, applies to the job: the loader reads
+  no `HKCU` entries at High integrity. Nothing to change on the PC for this; it is recorded so the warning is not
+  mistaken for a failure.
 
 ## Rotate or remove
 

@@ -15,7 +15,7 @@ helios-shaderc --help
 
 | Option | Meaning |
 |---|---|
-| `-o <file>` | SPIR-V output |
+| `-o <file>`, `--output <file>` | SPIR-V output |
 | `--hsr <file>` / `--no-hsr` | reflection blob (default: the output with extension `.hsr`) |
 | `--jsonc <file>` | JSONC rendering of the reflection (review, diffs) |
 | `--depfile <file>` | Makefile-style dependencies: the source and every imported module (Ninja/Make) |
@@ -25,6 +25,7 @@ helios-shaderc --help
 | `--validate auto\|on\|off` | run `spirv-val --target-env vulkan1.3 --scalar-block-layout` (the module goes through stdin); `auto` (default) skips it with a note when the tool is missing, `on` fails |
 | `--spirv-val <path>` | validator executable (default `$HELIOS_SPIRV_VAL`, else `spirv-val` on `PATH`) |
 | `--slang-root <dir>` | Slang release (default `$HELIOS_SLANG_ROOT`, the tool's directory, then the pinned release it was configured with) |
+| `-q`, `--quiet` / `--version` | no progress output / print the tool's and the loaded Slang's versions and exit |
 
 Exit codes: 0 success, 1 compile/validation/I-O failure (an output rejected by `spirv-val` is
 deleted so builds never treat it as up to date), 2 usage error. Modules whose push constants exceed

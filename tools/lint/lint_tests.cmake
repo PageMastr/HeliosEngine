@@ -795,7 +795,8 @@ foreach(case
     "isa_gate_target_not_object|helios_cpu_gate_target.fx_gate.: the CPU gate's units live in[ \n]+OBJECT[ \n]+libraries"
     "isa_base_root_links_jolt|helios isa: base image 'fx-launcher' links 'tp_jolt', which is built only at avx2: fx-launcher -> helios_core -> tp_jolt"
     "isa_base_target_objects|helios isa: base image 'fx-launcher' compiles in the objects of 'fx_kernels' .*, which is built only at avx2"
-    "isa_generated_source|FX_COPY_SOURCES: [^\n]*/layering/isa_generated_source/fx_generated.cpp.*HELIOS_FIXTURE_CONFIGURE_OK"
+    # The fixture's build directory is <flavour>_<case> (shipping_ or modular_).
+    "isa_generated_source|FX_COPY_SOURCES: [^\n]*/layering/[a-z]+_isa_generated_source/fx_generated.cpp.*HELIOS_FIXTURE_CONFIGURE_OK"
     # Modular builds only (HELIOS_MODULAR=ON): an image that links a module's object library directly.
     "modular:direct_objects|'fx-cook' links the module object library 'helios_core' directly"
     "modular:direct_objects_genex|layering check failed .1 violation.*'fx-cook' links the module object library 'helios_core' directly"

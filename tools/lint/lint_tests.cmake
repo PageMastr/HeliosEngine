@@ -604,6 +604,7 @@ foreach(case
     "isa_fixture_base|Helios ISA levels: 1 base image.s.: fx-isa-fixture .helios_core.base, tp_yyjson.base..*HELIOS_FIXTURE_CONFIGURE_OK"
     "isa_base_links_jolt|ISA level check failed .1 violation.*helios isa: base image 'fx-launcher' links 'tp_jolt', which is built only at avx2: fx-launcher -> tp_jolt"
     "isa_base_links_physics|helios isa: base image 'fx-bootstrap' links 'helios_physics', which is built only at avx2: fx-bootstrap -> fx_helper -> helios_physics"
+    "isa_avx2_links_copy|helios isa: 'fx-client' .avx2. links the base copy 'helios_core.base': only base images link base copies"
     "isa_override_in_apps|helios_executable.fx-isa-app.: ISA is for the ISA audit's fixtures only.*'apps/isa/'"
     "isa_interface_options|helios isa: 'tp_jolt' carries ISA compile options on its interface .-mavx2 -mbmi -mpopcnt -mlzcnt -mf16c.")
   string(REPLACE "|" ";" parts "${case}")

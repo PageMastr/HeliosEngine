@@ -188,6 +188,10 @@ elseif(CASE STREQUAL "isa_fixture_base")
   helios_executable(fx-isa-fixture ROLE tool ISA base SOURCES ${src} DEPS helios::core)
 elseif(CASE STREQUAL "isa_override_in_apps")
   add_subdirectory(apps/isa) # helios_executable(... ISA base) where real images live
+elseif(CASE STREQUAL "isa_avx2_links_copy")
+  # An avx2 image that names a base copy (a target only once the copies exist) would mix levels.
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} DEPS helios::core)
+  target_link_libraries(fx-client PRIVATE helios_core.base)
 elseif(CASE STREQUAL "isa_interface_options")
   # tp_jolt's options before WP-0.2r, on its interface: every consumer inherited them.
   target_compile_options(tp_jolt INTERFACE -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c) # conformance:allow CONF-11 the configure check's seeded fixture (09 §5.10.3)

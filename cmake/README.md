@@ -38,7 +38,9 @@ Helios builds **whole images at one ISA level**; no list grants a target or a fi
   defines); `helios_executable(… ISA …)` under `apps/` or `engine/` (the explicit level is for the audit's
   fixtures); a `HELIOS_ISA_LEVEL` set on anything but an image or a gate object library.
 - **Self-dispatch.** Code that checks CPUID itself stays allowed: in `base` images only in the symbols that
-  `isa_allowlist.cmake` lists (audit check 4), in `avx2` images anywhere (pcg's kernel selection).
+  `isa_allowlist.cmake` lists (audit check 4: zstd's BMI2 functions today), in `avx2` images anywhere (pcg's
+  kernel selection). Check 4 reads TZCNT's encoding as BSF, because GCC and Clang emit `rep bsf` for
+  count-trailing-zeros at x86-64-v1 and CPUs without BMI1 execute it as BSF.
 
 The audit itself is `tools/lint/isa_audit.cmake` (see `tools/lint/README.md`).
 

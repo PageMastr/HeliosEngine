@@ -27,13 +27,27 @@ set(HELIOS_ISA_GATE_ALLOWED_IMPORTS
 # Self-dispatching third-party functions that may contain instructions above x86-64-v1 in `base` images,
 # because they check CPUID themselves before running them (audit check 4, 02 §1.1 "Self-dispatching
 # third-party code"). Matched by symbol, with compiler clone suffixes (.constprop.0, .isra.0, .part.0,
-# .cold) ignored. zstd's DYNAMIC_BMI2 Huffman and sequence decoders are the known case on the launcher's
-# patch path (08 §2); BLAKE2b's SIMD compressors and SDL3's blitters join when the launcher links them.
+# .cold) ignored. zstd is the known case on the launcher's patch path (08 §2): with DYNAMIC_BMI2 (every
+# x86-64 build without -mbmi2) these functions carry BMI2_TARGET_ATTRIBUTE ("lzcnt,bmi,bmi2") and are
+# called only when ZSTD_cpuid() reported BMI2 (the bmi2 argument or HUF_flags_bmi2). BLAKE2b's SIMD
+# compressors and SDL3's blitters join when the launcher links them.
 set(HELIOS_ISA_SELF_DISPATCH_SYMBOLS
+  # Decompression (lib/decompress, lib/common).
   HUF_decompress4X1_usingDTable_internal_bmi2
   HUF_decompress4X2_usingDTable_internal_bmi2
   HUF_decompress1X1_usingDTable_internal_bmi2
   HUF_decompress1X2_usingDTable_internal_bmi2
+  HUF_decompress4X1_usingDTable_internal_fast
+  HUF_decompress4X2_usingDTable_internal_fast
+  HUF_decompress4X1_usingDTable_internal_fast_c_loop
+  HUF_decompress4X2_usingDTable_internal_fast_c_loop
+  HUF_readStats_body_bmi2
+  FSE_readNCount_body_bmi2
+  FSE_decompress_wksp_body_bmi2
+  ZSTD_buildFSETable_body_bmi2
   ZSTD_decompressSequences_bmi2
   ZSTD_decompressSequencesLong_bmi2
-  ZSTD_decompressSequencesSplitLitBuffer_bmi2)
+  ZSTD_decompressSequencesSplitLitBuffer_bmi2
+  # Compression (lib/compress): a base image links all of zstd's objects.
+  HUF_compress1X_usingCTable_internal_bmi2
+  ZSTD_encodeSequences_bmi2)

@@ -30,7 +30,8 @@
 #  3. (ELF part, until WP-0.2r part 2 adds the rest) Gated ELF executables: .preinit_array holds
 #     exactly one entry, the gate, and no R_X86_64_IRELATIVE relocation exists.
 #  4. Base images after linking (GNU binutils): every instruction above x86-64-v1 is mapped to its
-#     symbol, and every such symbol must be on HELIOS_ISA_SELF_DISPATCH_SYMBOLS.
+#     symbol, and every such symbol must be on HELIOS_ISA_SELF_DISPATCH_SYMBOLS. TZCNT's encoding is
+#     accepted as BSF: GCC and Clang emit `rep bsf` for count-trailing-zeros at x86-64-v1 (see below).
 # MSVC and clang-cl: check 1 runs on the Ninja generators' compile_commands.json. Checks 2 to 4 on COFF
 # images and PDBs (dumpbin, llvm-pdbutil) are `helios-tool isa-audit`'s, WP-0.2r part 2; until then
 # tools/ci/msvc_gate_audit.ps1 runs check 2 with dumpbin.
@@ -61,7 +62,7 @@ set(_ISA_FEATURES avx avx2 fma bmi bmi2 f16c lzcnt avx512)
 set(_ISA_AVX2_REQUIRED avx2 bmi bmi2 lzcnt popcnt f16c)
 # -m extensions an avx2 unit may name: the set itself and what AVX2 hardware implies below it.
 set(_ISA_AVX2_NAMED avx2 avx bmi bmi2 lzcnt popcnt f16c sse sse2 sse3 ssse3 sse4 sse4.1 sse4.2 mmx)
-# -march values at or below x86-64-v2 (no AVX), with the features above x86-64-v1 they imply. Anything
+# -march values at or below x86-64-v2 (no AVX), and those of them that imply POPCNT (x86-64-v2). Anything
 # else (haswell, znver2, x86-64-v3, native, ...) counts as enabling every AVX-class feature.
 set(_ISA_BASE_ARCHES x86-64 x86-64-v1 x86-64-v2 nehalem westmere core2 penryn k8 k8-sse3 amdfam10 btver1
                      silvermont goldmont goldmont-plus tremont i686 pentium4 nocona generic)
@@ -86,8 +87,9 @@ endfunction()
 # Evaluates a command's tokens. Sets <out>_<feature> (ON/OFF) for _ISA_FEATURES and popcnt, and
 # <out>_march (and <out>_marchtoken, the option as given), <out>_msvcarch, <out>_fastmath,
 # <out>_contract, <out>_contractoff (an explicit -ffp-contract=off), <out>_abovev1 (every option that
-# enables something above x86-64-v1) and <out>_named (the positive -m extension options). Explicit -m options win over -march's implied set whatever
-# their order (GCC and Clang); among explicit options the last one wins.
+# enables something above x86-64-v1) and <out>_named (the positive -m extension options). Explicit -m
+# options win over -march's implied set whatever their order (GCC and Clang); among explicit options the
+# last one wins.
 function(_isa_eval_flags tokens family out)
   foreach(f IN LISTS _ISA_FEATURES ITEMS popcnt)
     set(explicit_${f} "")
@@ -229,9 +231,9 @@ string(JOIN "|" _ISA_FORBIDDEN_ALT ${_ISA_FORBIDDEN_MNEMONICS})
 set(_ISA_PREFIX_WORDS lock rep repz repnz repe repne data16 data32 addr32 addr16 cs ds es ss fs gs notrack bnd
                       xacquire xrelease rex rex.w)
 
-# Disassembles `file` and sets <out>_hits to "<symbol>|<instruction>" for every instruction above
-# x86-64-v1 (symbol: the enclosing `<symbol>:` label), <out>_count to the number of instructions and
-# <out>_error to a failure message or "".
+# Disassembles `file` and sets <out>_hits to "<symbol>|<mnemonic>|<instruction>" for every instruction
+# above x86-64-v1 (symbol: the enclosing `<symbol>:` label; mnemonic: prefixes skipped), <out>_count to the
+# number of instructions and <out>_error to a failure message or "".
 function(_isa_disassemble file out)
   set(${out}_hits "" PARENT_SCOPE)
   set(${out}_count 0 PARENT_SCOPE)
@@ -263,7 +265,7 @@ function(_isa_disassemble file out)
       if(mn MATCHES "^(${_ISA_FORBIDDEN_ALT})$" OR ops MATCHES "(^|[^a-z0-9_])([yz]mm[0-9]|k[1-7]([^a-z0-9_]|$))")
         string(STRIP "${line}" shown)
         string(REPLACE "|" "/" shown "${shown}")
-        list(APPEND hits "${sym}|${shown}")
+        list(APPEND hits "${sym}|${mn}|${shown}")
       endif()
     elseif(line MATCHES "^[0-9a-f]+ <(.+)>:$")
       set(sym "${CMAKE_MATCH_1}")
@@ -289,7 +291,8 @@ function(_isa_check_object obj label)
         list(APPEND errs "${label}: no instructions disassembled from '${obj}' (unexpected objdump output)")
       endif()
       foreach(hit IN LISTS d_hits)
-        string(REGEX REPLACE "^[^|]*\\|" "" shown "${hit}")
+        string(REGEX MATCH "^[^|]*\\|[^|]*\\|(.*)$" fields "${hit}")
+        set(shown "${CMAKE_MATCH_1}")
         list(APPEND errs "${label}: instruction not allowed at the x86-64-v1 baseline (VEX/EVEX, BMI, LZCNT, POPCNT, SSE3+): ${shown}")
       endforeach()
     endif()
@@ -406,12 +409,23 @@ function(_isa_check_base_image img)
     list(APPEND errs "${img}: no instructions disassembled (unexpected objdump output)")
   endif()
   # One entry per symbol: its name, its number of such instructions and the first one (parallel lists).
+  # TZCNT's encoding is the exception: GCC and Clang emit it (`rep bsf`) for count-trailing-zeros at
+  # x86-64-v1 with -mtune=generic, only where the operand cannot be zero, and a CPU without BMI1
+  # executes it as BSF with the same result. It is counted, not reported. LZCNT has no such idiom.
   set(symbols "")
   set(counts "")
   set(firsts "")
+  set(repBsf 0)
   foreach(hit IN LISTS d_hits)
-    string(REGEX MATCH "^[^|]*" sym "${hit}")
-    string(REGEX REPLACE "^[^|]*\\|" "" shown "${hit}")
+    # (string(REGEX REPLACE) would apply a ^ anchor at every match, so the fields are captured.)
+    string(REGEX MATCH "^([^|]*)\\|([^|]*)\\|(.*)$" fields "${hit}")
+    set(sym "${CMAKE_MATCH_1}")
+    set(mn "${CMAKE_MATCH_2}")
+    set(shown "${CMAKE_MATCH_3}")
+    if(mn STREQUAL "tzcnt")
+      math(EXPR repBsf "${repBsf} + 1")
+      continue()
+    endif()
     if(sym STREQUAL "")
       set(sym "<no symbol>")
     endif()
@@ -449,6 +463,7 @@ function(_isa_check_base_image img)
   endif()
   set(_isa_base_errors "${errs}" PARENT_SCOPE)
   set(_isa_base_listed "${listed}" PARENT_SCOPE)
+  set(_isa_base_repbsf ${repBsf} PARENT_SCOPE)
 endfunction()
 
 if(MODE STREQUAL "image")
@@ -484,7 +499,8 @@ if(MODE STREQUAL "base_image")
     message(FATAL_ERROR "ISA audit failed:\n  ${text}\n")
   endif()
   list(LENGTH _isa_base_listed n)
-  message(STATUS "ISA audit: base image '${IMAGE}' is x86-64-v1 outside ${n} listed self-dispatching symbol(s)")
+  message(STATUS "ISA audit: base image '${IMAGE}' is x86-64-v1 outside ${n} listed self-dispatching symbol(s) "
+                 "(${_isa_base_repbsf} TZCNT-encoded BSF accepted)")
   return()
 endif()
 

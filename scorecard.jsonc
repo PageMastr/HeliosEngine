@@ -596,6 +596,20 @@
       "gaps": [{"clause": "A process record, kept by the Director in 09 §8.1", "state": "unmeasured", "owner": "Director"}]
     },
     {
+      "id": "EXIT-0.reference-content", "phase": 0, "source": "09 §2.1", "owner": "WP-0.20",
+      "title": "Reference-content records compile; 100 % provenance",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Records compile; 100 % provenance (WP-0.20's acceptance, for the reference game's content/)",
+      "notes": "09 §5.3 DoD item 8 registers every acceptance criterion; WP-0.20 completes M0 (09 §8.2), so its acceptance sits with the Phase 0 exit items. lint_content_records_cook cooks content/'s records with helios-cook records (the records compile), and lint_content_records_canonical has helios-tool confirm their canonical form. lint_content_check runs helios-cook check on helios.project.jsonc and content/: every file is a known document type with a valid .meta sidecar (engine/assetpipe's scanMetas: GUID, provenance, an allowed licence), which is the 100 %, plus the project file and layout rules. The lint_content_check_fixture_* cases seed one violation each (at least one per rule, a broken record among them) and must fail with its diagnostic; valid, cook_then_check and ignored_cache must pass. AAA-SEC-4's lint_records_sec4_content covers the same cook's client/server split",
+      "status": "measured",
+      "tests": [
+        {"ctest": "lint_content_check"},
+        {"ctest": "lint_content_records_cook"},
+        {"ctest": "lint_content_records_canonical"},
+        {"ctest": "lint_content_check_fixture_*"}
+      ]
+    },
+    {
       "id": "EXIT-0.auditors", "phase": 0, "source": "09 §5.7", "owner": "Director",
       "title": "Two independent auditors score the phase exit at 9/10 or more",
       "class": "M", "platforms": ["any"],

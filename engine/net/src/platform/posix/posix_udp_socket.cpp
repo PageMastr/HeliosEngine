@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <utility>
 
 #include "platform/net_os.h"
@@ -393,6 +394,38 @@ f64 threadCpuSeconds() noexcept {
     timespec ts{};
     if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0) return 0.0;
     return static_cast<f64>(ts.tv_sec) + static_cast<f64>(ts.tv_nsec) * 1e-9;
+}
+
+MachineCpuTimes machineCpuTimes() noexcept {
+    MachineCpuTimes t;
+#if defined(__linux__)
+    // The first line of /proc/stat: "cpu  user nice system idle iowait irq softirq steal guest guest_nice",
+    // in USER_HZ ticks summed over every CPU (guest time is already inside user and nice).
+    const int fd = ::open("/proc/stat", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return t;
+    char text[512];
+    const ssize_t n = ::read(fd, text, sizeof(text) - 1);
+    ::close(fd);
+    if (n <= 4) return t;
+    text[n] = '\0';
+    if (std::strncmp(text, "cpu ", 4) != 0) return t;
+    unsigned long long field[7] = {};
+    char* p = text + 4;
+    for (unsigned long long& f : field) {
+        char* end = nullptr;
+        f = std::strtoull(p, &end, 10);
+        if (end == p) return t;
+        p = end;
+    }
+    const long hz = ::sysconf(_SC_CLK_TCK);
+    const long cpus = ::sysconf(_SC_NPROCESSORS_ONLN);
+    if (hz <= 0 || cpus <= 0) return t;
+    const unsigned long long busy = field[0] + field[1] + field[2] + field[5] + field[6];
+    t.busySeconds = static_cast<f64>(busy) / static_cast<f64>(hz);
+    t.cpus = static_cast<u32>(cpus);
+    t.ok = true;
+#endif
+    return t;
 }
 } // namespace os
 

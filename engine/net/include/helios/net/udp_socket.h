@@ -37,11 +37,14 @@ enum class UdpBatchApi : u8 {
     Auto,
     /// Windows Registered I/O (Windows 8 and later): datagrams are copied through registered 2 KB
     /// slots and completions are polled, so a batch costs one kernel entry. A RIO socket buffers
-    /// nothing beyond its posted receives, so the receive and send slot counts follow
-    /// receiveBufferBytes and sendBufferBytes (128 to 16,384 slots each; the region they take is
-    /// locked in memory). Datagrams of 2,048 bytes or more are refused on send and dropped as
-    /// truncated on receive (HTP datagrams are at most 1,300 bytes). A send counts as sent once it is
-    /// posted; a failure its completion reports later is counted in sendErrors.
+    /// nothing beyond its posted receives, so the receive slot count follows receiveBufferBytes (128 to
+    /// 16,384 slots) and the send slot count sendBufferBytes (128 to 2,048: sends complete within
+    /// microseconds); the region they take is locked in memory. A slot holds one datagram of any size,
+    /// so the slots hold that many datagrams, not that many bytes of small ones. Datagrams of 2,048
+    /// bytes or more are refused on send and dropped as truncated on receive (HTP datagrams are at most
+    /// 1,300 bytes). A send counts as sent once it is posted; a failure its completion reports later is
+    /// counted in sendErrors. When RIO is unavailable or its set-up fails, open() falls back to Message
+    /// (logged once per process at warning level).
     Registered,
     /// Linux sendmmsg/recvmmsg: one system call per batch of up to 64 datagrams.
     MultiMessage,
@@ -50,7 +53,8 @@ enum class UdpBatchApi : u8 {
     Message,
 };
 
-/// "auto", "registered", "multi-message" or "message" (logs and bench output).
+/// "auto", "registered", "multi-message" or "message" (logs and bench output). A pure function of its
+/// argument, returning a static string: safe from any thread.
 std::string_view udpBatchApiName(UdpBatchApi api) noexcept;
 
 struct UdpSocketConfig {
@@ -132,7 +136,9 @@ public:
 
     /// The bound address (with the actual port when bound to port 0).
     const Address& localAddress() const noexcept { return m_local; }
-    /// Buffer sizes the OS actually granted (may be below the request, see the header comment).
+    /// Buffer sizes the OS actually granted (may be below the request, see the header comment). A
+    /// Registered I/O socket does not use SO_SNDBUF/SO_RCVBUF, so it reports its slot capacity instead
+    /// (slots × 2,048 bytes).
     u32 sendBufferBytes() const noexcept { return m_sendBuffer; }
     u32 receiveBufferBytes() const noexcept { return m_receiveBuffer; }
     AddressFamily family() const noexcept { return m_local.family(); }

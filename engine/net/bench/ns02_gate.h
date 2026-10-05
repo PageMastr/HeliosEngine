@@ -16,6 +16,38 @@ inline constexpr f64 kNs02PerCore = 100'000.0;
 /// whole encrypted stack (netcode's AEAD, reliable, HTP channels, the transport and its system calls).
 inline constexpr f64 kNs02BudgetMicrosPerPacket = 1e6 / kNs02PerCore;
 
+/// Cross-check of a per-thread CPU figure against the whole machine. A thread's CPU time misses work the OS
+/// does for it elsewhere: interrupts, deferred procedure calls, system threads completing its I/O on other
+/// CPUs. Wall time cannot show that: the bench loops never sleep or block, so their thread accrues CPU at the
+/// wall-clock rate whether or not such work exists, and CPU below wall shows only preemption. The machine's
+/// busy CPU over the run, less the background load measured on either side of it, does include that work;
+/// its excess over the thread's CPU is reported, and a run is flagged (a warning, not a gate) when the excess
+/// is above kOffThreadLimitPercent of the thread's CPU on a host idle enough for the figure to mean anything.
+inline constexpr f64 kOffThreadLimitPercent = 25.0;
+/// The background load the cross-check accepts: at most a quarter of the logical CPUs busy without the run.
+inline constexpr f64 kCrossCheckIdleFraction = 0.25;
+
+struct MachineCrossCheck {
+    bool valid = false;          ///< both samples available and the host idle enough
+    f64 machineCpuSeconds = 0.0; ///< the machine's busy CPU during the run, background removed
+    f64 offThreadPercent = 0.0;  ///< (machine - thread) / thread x 100; around 0 when all work is on the thread
+    bool flagged = false;        ///< valid and offThreadPercent above kOffThreadLimitPercent
+};
+
+/// The cross-check of one run: `threadCpuSeconds` of the measuring thread, `machineBusySeconds` of every CPU
+/// over the same `wallSeconds`, and `backgroundCores` busy without the run (measured just before and after
+/// it), on a machine of `cpus` logical CPUs. Pure: safe from any thread.
+constexpr MachineCrossCheck machineCrossCheck(f64 threadCpuSeconds, f64 machineBusySeconds, f64 wallSeconds,
+                                              f64 backgroundCores, u32 cpus) {
+    MachineCrossCheck c;
+    if (cpus == 0 || threadCpuSeconds <= 0.0 || wallSeconds <= 0.0 || backgroundCores < 0.0) return c;
+    c.machineCpuSeconds = machineBusySeconds - backgroundCores * wallSeconds;
+    c.offThreadPercent = (c.machineCpuSeconds - threadCpuSeconds) * 100.0 / threadCpuSeconds;
+    c.valid = backgroundCores <= kCrossCheckIdleFraction * static_cast<f64>(cpus);
+    c.flagged = c.valid && c.offThreadPercent > kOffThreadLimitPercent;
+    return c;
+}
+
 /// The only threshold `net_bench --advisory` accepts: the encrypted-stack rate on hosted runners.
 inline constexpr std::string_view kNs02StackAdvisoryName = "ns02-stack";
 

@@ -102,13 +102,14 @@ function(probe_validation out_var request)
 endfunction()
 
 # The loader's own account of a verdict "active" under the current environment, for a default device with
-# HELIOS_RHI_VALIDATION=1: sets <out_var> to why the layer is in the call chain in the loader's words (the
-# variables in ARGN it ignores, the loader settings file or override layer it uses), or to "" when its log
-# shows neither the layer inserted into the instance nor a settings file. `loader_log` keeps the evidence.
-function(loader_confirms out_var)
+# HELIOS_RHI_VALIDATION set to `request` (0: the layer is not requested, so an inserted one came unasked):
+# sets <out_var> to why the layer is in the call chain in the loader's words (the variables in ARGN it
+# ignores, the loader settings file or override layer it uses), or to "" when its log shows neither the
+# layer inserted into an instance nor a settings file. `loader_log` keeps the evidence.
+function(loader_confirms out_var request)
   set(saved "$ENV{HELIOS_RHI_VALIDATION}")
   set(saved_debug "$ENV{VK_LOADER_DEBUG}")
-  set(ENV{HELIOS_RHI_VALIDATION} 1)
+  set(ENV{HELIOS_RHI_VALIDATION} ${request})
   set(ENV{VK_LOADER_DEBUG} all)
   execute_process(COMMAND "${RENDERTEST}" --print-probe RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
   unset(ENV{HELIOS_RHI_VALIDATION})
@@ -178,7 +179,7 @@ endfunction()
 macro(environment_takes_effect what)
   probe_validation(state 1)
   if(state STREQUAL "active")
-    loader_confirms(confirmed ${ARGN})
+    loader_confirms(confirmed 1 ${ARGN})
     if(NOT confirmed)
       message(FATAL_ERROR "${what}: the RHI reports Khronos validation in the call chain, but the loader's log "
                           "(VK_LOADER_DEBUG=all) neither inserts VK_LAYER_KHRONOS_validation into the instance "
@@ -236,7 +237,7 @@ endif()
 if(LAYER)
   probe_validation(unrequested 0)
   if(unrequested STREQUAL "active")
-    loader_confirms(confirmed)
+    loader_confirms(confirmed 0)
     if(NOT confirmed)
       message(FATAL_ERROR "the RHI reports Khronos validation on a device that did not request it, but the "
                           "loader's log (VK_LOADER_DEBUG=all) neither inserts VK_LAYER_KHRONOS_validation nor "

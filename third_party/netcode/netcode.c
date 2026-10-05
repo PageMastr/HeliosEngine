@@ -974,10 +974,13 @@ void netcode_write_uint64( uint8_t ** p, uint64_t value )
 
 void netcode_write_bytes( uint8_t ** p, uint8_t * byte_array, int num_bytes )
 {
-    int i;
-    for ( i = 0; i < num_bytes; i++ )
+    // Helios patch write-bytes-memcpy: one memcpy instead of one netcode_write_uint8 call per byte. Every
+    // payload packet passes through here before it is encrypted, and the byte loop cost 11 % of NS-0.2's
+    // encrypted-stack CPU per packet (WP-0.13r profile, GCC, -fPIC: the per-byte call is not inlined).
+    if ( num_bytes > 0 )
     {
-        netcode_write_uint8( p, byte_array[i] );
+        memcpy( *p, byte_array, (size_t) num_bytes );
+        *p += num_bytes;
     }
 }
 

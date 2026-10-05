@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **Part 1 of 2 recorded (2026-10-04).** The modular dev build exists: `HELIOS_MODULAR`, the three link-group shared libraries with generated `HELIOS_*_API` headers, `/MD` for every image of a modular MSVC build, the `windows-msvc-dev` and `linux-dev` presets, the symbol audit and the `windows-msvc-dev` PR job. **RT-18 is unmeasured**: the reload loader, the `Probe` game module and the 100-reload soak are part 2. ADR-016 stands; nothing here reopens it. Two decisions differ from the letter of 02 §1.4 and are recorded below: what a group exports (§2) and where SDL3 and Dear ImGui live (§5) |
+| **Status** | **Part 1 of 2 recorded (2026-10-04).** The modular dev build exists: `HELIOS_MODULAR`, the three link-group shared libraries with generated `HELIOS_*_API` headers, `/MD` for every image of a modular MSVC build, the `windows-msvc-dev` and `linux-dev` presets, the symbol audit and the `windows-msvc-dev` PR job. **RT-18 is unmeasured**: the reload loader, the `Probe` game module and the 100-reload soak are part 2. ADR-016 stands; nothing here reopens it. Two decisions departed from the earlier letter of 02 §1.4: what a group exports (§2) and where SDL3 and Dear ImGui live (§5, finding 7). This PR amends 02 §1.4 (the export policy until part 2, the Linux row, the third-party images) and 02 §1.1 ("Which image") to match, and gives the export tightening to part 2 |
 | **Decides** | How [ADR-016](../plan/00-decisions.md#adr-016-dev-versus-shipping-link-model-game-module-hot-reload) and [02 §1.4](../plan/02-engine-runtime.md#14-link-model-and-game-module-hot-reload-adr-016) are built: what each group exports, how consumers link, which images carry their own copy of the engine, where the CPU gate lives in a modular build, which toolchains build the dev flavour |
 | **Gates** | RT-18 (02 §8.2), and through it RT-14 and AAA-ITR-5. Part 1 delivers RT-18's prerequisites (the modular link model and the symbol audit) |
 | **Owner** | Runtime lead. Work package WP-0.6c ([09 §2](../plan/09-roadmap-and-process.md), WP-0.6 (c)) |
@@ -90,14 +90,16 @@ in `cmake/HeliosModular.cmake`). The audit accepts exactly what the Luau.VM arch
 includes Luau's `FFlag`/`FInt` globals, which also have to be one copy. Every other vendored library stays
 hidden in its group.
 
-**Why not `-fvisibility=hidden` with an annotation on every exported declaration now.** 02 §1.4 and the
-brief ask for it. It means annotating every exported class and function in the 171 public headers of
+**Why not `-fvisibility=hidden` with an annotation on every exported declaration now.** The earlier text of
+02 §1.4 and the brief asked for it. It means annotating every exported class and function in the 171 public headers of
 every module, plus the internal headers that white-box tests include. On MSVC a `dllexport` class also
 defines every special member, including implicitly declared copy constructors of classes with move-only
 members (C2280), and raises C4251 for every STL member. Neither can be checked without MSVC, and the edit
 would touch every module's headers while other work packages change them. The export-everything rule cannot
 miss an export, and the audit keeps third-party code out of the export tables. Tightening to explicit
-exports, module by module, is follow-up work once part 2 shows which symbols game modules import.
+exports, module by module, follows once part 2 shows which symbols game modules import. 02 §1.4 (*Exports*
+and the Linux row of the flavour table) now states this policy and names WP-0.6c part 2 as the owner of the
+tightening.
 
 **Data that crosses an image boundary.** On Windows, data needs `dllimport` on the consumer side, so every
 variable that code outside its group reads carries the group macro. A scan of the GCC modular build (each
@@ -149,6 +151,17 @@ The PE format allows 65,535 exports per image, so the largest group uses about 1
    executable's copy in the first case.
 5. `helios_cpu_gate()` stays internal to `cmake/HeliosIsa.cmake` and keeps both branches; the
    self-contained branch is in `cmake/HeliosModular.cmake`.
+6. **IFUNCs in the group libraries.** The ISA audit bans `R_X86_64_IRELATIVE` relocations in gated
+   executables, because an IFUNC resolver runs at relocation time, before `.preinit_array`. In a modular ELF
+   build the engine code sits in `libhelios_*.so` (and SDL3 and ImGui in their own libraries), which the
+   dynamic linker also relocates before the gate. None has an IRELATIVE relocation today (`readelf -r` on
+   the GCC and Clang modular builds); WP-0.5r adds the group and third-party libraries to the image check.
+7. **Which processes are gated.** In a modular Windows build the hook runs in every process that loads
+   `helios_runtime.dll`, including images whose role is `NO_CPU_GATE` or baseline: tests, samples and the
+   future launcher, whose refusal screen 02 §1.1 wants reachable on an old CPU. Shipping launchers are
+   monolithic, so that screen is unaffected; a modular launcher stops at the gate like any gated image.
+   On Linux only gated executables carry the hook (`.preinit_array`), so the role still decides there.
+   WP-0.5r records this in the gate's role rules.
 
 ## 4. The symbol audit
 
@@ -157,25 +170,32 @@ ELF: `nm`; PE: `dumpbin /exports`, because a linked PE image has no symbol table
 
 | Rule | What fails |
 |---|---|
-| R1 | A group exports a strong definition outside namespace `helios` and the `helios_` C prefix |
+| R1 | A group exports a strong definition, or mutable data of any binding (weak and GNU-unique inline and template statics included), outside namespace `helios` and the `helios_` C prefix |
 | R2 | A third-party library with process state (mimalloc, flecs, Jolt, Luau, Tracy, SDL3, Dear ImGui, volk, netcode) is defined in two images |
-| R3 | A consumer image has its own copy of mutable `helios` data that a group defines (02 §1.4, "No per-image caches of global state"). Data that an executable imports by copy relocation is in both images' dynamic symbol tables and is one instance, not a copy |
+| R3 | A consumer image, or a second group, has its own copy of mutable `helios` data that a group defines (02 §1.4, "No per-image caches of global state"). Two groups export such data with default visibility, so Linux binds both to one instance and only Windows splits it: the audit compares the groups' symbol tables. Data that an executable imports by copy relocation is in both images' dynamic symbol tables and is one instance, not a copy |
 | R4–R6 | A game image defines anything from flecs, Jolt, Luau, mimalloc or Tracy; defines mutable `helios` data; or carries a global strong copy of an exported engine function |
 | P1 | A group's export table has an undecorated name that is not `helios_*`, or no exports at all. The C names that MSVC's CRT and STL headers define inline or as `selectany` data (`fprintf`, `snprintf`, `__local_stdio_printf_options`, `__std_*`, `_Avx2WmemEnabledWeakValue`, …) are accepted: every object that uses them has a copy, and each image still calls its own over the one `/MD` CRT (policy `HELIOS_SYMBOL_PE_TOOLCHAIN`) |
 
 02 §1.4 has no rule against STL types in signatures across the boundary: every image shares one CRT heap,
 so STL objects may cross it (`link_model_tests` checks this), and the audit has no such rule either.
 
-Fixtures: recorded `nm` and `dumpbin` listings (`tools/lint/tests/symbols/`) run in every build; ELF modular
-builds also build `link_model_bad_game`, which breaks R4–R6 on purpose. `link_model_probe` is the passing game
-image.
+Fixtures: recorded `nm` and `dumpbin` listings (`tools/lint/tests/symbols/`, 12 cases, 9 of them seeded
+failures, including `elf_group_duplicate_state` and `elf_group_weak_state`) run in every build; ELF modular
+builds also build `link_model_bad_game`, which breaks R4–R6 on purpose. `link_model_probe` is the passing
+game image.
+
+**Where each rule runs.** R1–R6 need an ELF modular build. No CI job runs one yet: `windows-msvc-dev` runs P1
+and the recorded fixtures, and `linux-dev` joins the nightly tier with part 2 (§6). Until then R1–R6 run
+locally, in every `linux-dev` build (`ctest -L lint`).
 
 **Limits, for part 2.** R6 sees only global definitions in a linked image: a hidden strong copy and a hidden
 inline instantiation look the same there. Part 2 audits the game module's object files (`nm`, `dumpbin
 /symbols`), where the two differ. The consumer and game rules run on ELF only; on Windows they need the game
 module's objects too. P1 checks undecorated names only: `WINDOWS_EXPORT_ALL_SYMBOLS` also exports the
 inline and template instantiations that the group's objects contain (STL ones included). Those are stateless
-copies of header code, and R3's ELF run covers the stateful ones.
+copies of header code, and R3's ELF run covers the stateful ones. Because P1 skips every decorated name,
+third-party C++ compiled into a module's own objects (finding 4's VMA case) is invisible on PE; R1 on the
+ELF build is the check for it.
 
 ## 5. Findings
 
@@ -228,6 +248,25 @@ What the first modular builds of the tree showed (GCC and Clang on Linux; MSVC t
    tests) after that fix.
 10. **Not verified here.** MSVC is built and tested only by the `windows-msvc-dev` CI job, including the DLL
    search at test time (every image is written to `bin/`).
+11. **ECS type ids were a per-image cache** (found in review). `World::id<T>()`, `replicationBit<T>()`,
+   `registerComponent<T>()`, `bindType<T>()`, `CommandBuffer` and `SystemBuilder` indexed a per-World table by
+   `typeSlot<T>()`, a number drawn into a function-local static of a header template. Each image outside
+   `helios_runtime` had its own static, drew its own number, and found nothing that `helios_runtime` had
+   bound: `world.id<NetIdentity>()` returned 0 in `link_model_tests`. No test crossed the boundary, because
+   `ecs_tests` and `ecs_bench` are self-contained and no other image instantiated `typeSlot`. The table is now
+   keyed by `ecs::kTypeKey<T>`, a compile-time FNV-1a hash of the type's name, which every image computes
+   alike; nothing per image holds state, and a reloaded game module finds its components under the same
+   key. Two distinct types with one qualified name (unnamed namespaces of different translation units)
+   share a key, and a World binds only the first. `link_model_tests` checks the built-ins from the
+   executable and lets `link_model_probe` read and write components of a World the executable created
+   (typed `set`/`get` and a typed `CommandBuffer`); `ecs_tests` covers the table and the clash.
+12. **State that two groups define, and third-party state in the exports.** The first audit compared only
+   consumers with groups. A header-defined static instantiated in two groups is one instance on Linux and
+   two on Windows, so R3 now compares groups with each other (none exists today). R1 also checked only
+   strong definitions; weak and unique data passed. `helios_runtime` exported a global-namespace log channel
+   (`LogPcg`, now in `helios::pcg`) and Jolt's inline static `CharacterID::sNextID`, which `engine/physics`'s
+   objects instantiate with default visibility. Jolt lives only in `helios_runtime`, so that is still one
+   instance; it is a known finding of R1, owned by part 2's explicit exports, which hide it.
 
 ## 6. Part 2
 
@@ -236,4 +275,10 @@ measurements: 100 reloads on 10k entities, the values checksum, memory tags back
 image, ASan on both toolchains, the 20-reload PR smoke test (the `windows-msvc-dev` job carries a TODO for
 it) and the edit-to-reload time on DEV. It also adds `-fno-gnu-unique` for GCC game modules, switches the IDE
 presets (`windows-vs2026`, `windows-vs2022`) to `HELIOS_MODULAR=ON` (ADR-001a rule 5) once the modular MSVC
-build is proven in CI, and adds `linux-dev` to the nightly tier (02 §8.3).
+build is proven in CI, and adds `linux-dev` to the nightly tier (02 §8.3), which runs the audit's ELF rules
+in CI. Two more items belong to part 2:
+- **Explicit exports** (02 §1.4, *Exports*): module code moves to `-fvisibility=hidden`, and every
+  declaration another image uses carries its group's macro, starting with the API game modules import; the
+  export-all scan goes away on MSVC.
+- **Tracy across images** (02 §1.4, *Tracy*): `TRACY_EXPORTS` for the runtime group and `TRACY_IMPORTS` for
+  game modules. No module links Tracy yet, so part 1 builds neither.

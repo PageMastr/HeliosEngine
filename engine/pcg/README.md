@@ -59,12 +59,12 @@ share a lattice cell, a coherent path hashes the cell once with scalar code (and
 instead of hashing per lane; results are bit-identical. The kernel TUs hold integer code only (CTest
 `pcg_lint_kernels`) and no inline function that could leak into other TUs.
 
-**Selection** (`kernel.h`): `initializePcgModule()` reads the `pcg.kernel` CVar (default `avx2`) and
-logs `pcg.kernel=<name>`. The choice is also checked against CPUID (`core::cpuGate()`; the AVX2 kernel
-needs the full `Avx2Image` feature set) and falls back to the widest supported kernel with a warning, a
-runtime self-dispatch that 02 §1.1 allows. Since WP-0.2r every pcg TU, the three kernels included, is
-built at its image's `avx2` level (02 §1.1, `cmake/HeliosIsa.cmake`): no kernel has flags of its own,
-and a `base` image (launcher, bootstrap) that links `pcg` fails configure.
+**Selection** (`kernel.h`): `initializePcgModule()` reads the `pcg.kernel` CVar (default `avx2`) and logs
+`pcg.kernel=<name>`. The choice is also checked against CPUID (`core::cpuGate()`; the AVX2 kernel needs
+the full `Avx2Image` feature set) and falls back to the widest supported kernel with a warning, a
+deviation from 02 §5.8 ([below](#deviations-from-the-plan-text)). Since WP-0.2r every pcg TU, the three
+kernels included, is built at its image's `avx2` level (02 §1.1, `cmake/HeliosIsa.cmake`): no kernel has
+flags of its own, and a `base` image (launcher, bootstrap) that links `pcg` fails configure.
 
 ## GPU twin (`shaders/pcg/`)
 

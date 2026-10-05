@@ -10,8 +10,8 @@
 // Selection: initializePcgModule() (called explicitly by the host at start-up, or lazily by the
 // first TileEvaluator) reads the `pcg.kernel` CVar (default "avx2") and stores one kernel table.
 // Whole images build at the avx2 ISA level (WP-0.2r), but the choice is still checked against CPUID
-// (core::cpuGate()), a runtime self-dispatch that 02 §1.1 allows: a kernel the CPU cannot run falls
-// back to the widest one it can, with a warning. The chosen kernel is logged
+// (core::cpuGate()), a deviation from 02 §5.8 listed in the module README: a kernel the CPU cannot
+// run falls back to the widest one it can, with a warning. The chosen kernel is logged
 // as "pcg.kernel=<name>" (WP-0.9c, RC-13, RT-20 and the RT-04 bench assert it).
 //
 // Threading: selection functions are thread-safe; the active kernel is read atomically.

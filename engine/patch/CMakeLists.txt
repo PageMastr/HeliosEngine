@@ -29,6 +29,38 @@ if(TARGET patch_tests)
   set_tests_properties(patch_tests PROPERTIES TIMEOUT 600)
 endif()
 
+# lint_patch_test_keys (label lint): TrustOptions::allowTestKeys, the opt-in that lets a verifier accept the
+# shared vectors' test-only roots, appears only in trust.h, trust.cpp, tests/ and fuzz/ (tests/test_keys_lint.cmake;
+# Go's TestTrustTestImportedOnlyByTests does the same for Options.AllowTestKeys). Seeded fixtures must fail with
+# their message (tools/lint/expect_fail.cmake), so a lint that stops matching fails too.
+if(HELIOS_BUILD_TESTS)
+  set(_patchKeysLint ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_keys_lint.cmake)
+  set(_patchKeysFixtures ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_keys_lint)
+  add_test(NAME lint_patch_test_keys COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR} -P ${_patchKeysLint})
+  add_test(NAME lint_patch_test_keys_fixture_clean
+           COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${_patchKeysFixtures}/clean -P ${_patchKeysLint})
+  set(_patchKeysTests lint_patch_test_keys lint_patch_test_keys_fixture_clean)
+  foreach(_case "outside|2 finding.*apps/launcher/src/main.cpp:4: allowTestKeys outside.*tools/patchcheck/check.h:3: allowTestKeys outside"
+                "none|no file declares or uses allowTestKeys where it may")
+    string(REPLACE "|" ";" _parts "${_case}")
+    list(GET _parts 0 _fixture)
+    list(GET _parts 1 _expect)
+    add_test(NAME lint_patch_test_keys_fixture_${_fixture}
+             COMMAND ${CMAKE_COMMAND} "-DEXPECT=${_expect}" -DNARGS=4 -DARG0=${CMAKE_COMMAND}
+                     -DARG1=-DSOURCE_DIR=${_patchKeysFixtures}/${_fixture} -DARG2=-P -DARG3=${_patchKeysLint}
+                     -P ${PROJECT_SOURCE_DIR}/tools/lint/expect_fail.cmake)
+    list(APPEND _patchKeysTests lint_patch_test_keys_fixture_${_fixture})
+  endforeach()
+  set_tests_properties(${_patchKeysTests} PROPERTIES LABELS lint TIMEOUT 300)
+  unset(_patchKeysLint)
+  unset(_patchKeysFixtures)
+  unset(_patchKeysTests)
+  unset(_case)
+  unset(_parts)
+  unset(_fixture)
+  unset(_expect)
+endif()
+
 # ---------------------------------------------------------------------------------------------
 # Fuzz targets (02 §8.3 and 09 §6: manifests are among the fuzzed readers; CL-14 asks for fuzzed parsers):
 # the .hman reader, and the keyset and pointer parsers with the trust checks behind them. libFuzzer entry

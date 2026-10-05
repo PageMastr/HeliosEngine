@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -413,6 +414,10 @@ func TestVerifyChunk(t *testing.T) {
 
 // Package trusttest's keys are public; only test files may import it (README "Test-only and dev keys").
 // IsTestOnlyKey refuses its roots in a verifier anyway; this keeps the signer side out of non-test code.
+// Likewise only test files may set Options.AllowTestKeys, the opt-in that lets a verifier accept those roots:
+// a non-test file that names the field in a composite literal or assigns it, or that writes an Options
+// literal without field names, fails. A best-effort check against accidents (a value set through a pointer
+// or reflection is not seen); engine/patch's lint_patch_test_keys does the same for TrustOptions::allowTestKeys.
 func TestTrustTestImportedOnlyByTests(t *testing.T) {
 	root := filepath.Join("..", "..")
 	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
@@ -420,7 +425,7 @@ func TestTrustTestImportedOnlyByTests(t *testing.T) {
 	}
 	const pkg = "github.com/PageMastr/scifi-test/services/pkg/patchtrust/trusttest"
 	self := filepath.Join(root, "pkg", "patchtrust", "trusttest")
-	files := 0
+	files, reads := 0, 0
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		switch {
 		case err != nil:
@@ -430,7 +435,8 @@ func TestTrustTestImportedOnlyByTests(t *testing.T) {
 		case d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go"):
 			return nil
 		}
-		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		if err != nil {
 			return err
 		}
@@ -440,11 +446,62 @@ func TestTrustTestImportedOnlyByTests(t *testing.T) {
 				t.Errorf("%s imports %s; only _test.go files may", path, pkg)
 			}
 		}
+		reads += allowTestKeysSetters(t, fset, f)
 		return nil
 	})
 	if err != nil || files < 50 {
 		t.Fatalf("walked %d files: %v", files, err)
 	}
+	if reads == 0 {
+		t.Fatal("found no read of AllowTestKeys: the walk no longer sees verify.go")
+	}
+}
+
+// allowTestKeysSetters reports every place f sets Options.AllowTestKeys and returns how many times f reads it.
+func allowTestKeysSetters(t *testing.T, fset *token.FileSet, f *ast.File) int {
+	const field = "AllowTestKeys"
+	isOptions := func(e ast.Expr) bool {
+		switch x := e.(type) {
+		case *ast.Ident:
+			return x.Name == "Options" && f.Name.Name == "patchtrust"
+		case *ast.SelectorExpr:
+			id, ok := x.X.(*ast.Ident)
+			return ok && id.Name == "patchtrust" && x.Sel.Name == "Options"
+		}
+		return false
+	}
+	reads := 0
+	setters := map[ast.Node]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.KeyValueExpr:
+			if id, ok := x.Key.(*ast.Ident); ok && id.Name == field {
+				t.Errorf("%s: sets %s; only _test.go files may", fset.Position(x.Pos()), field)
+			}
+		case *ast.CompositeLit:
+			if isOptions(x.Type) {
+				for _, e := range x.Elts {
+					if _, keyed := e.(*ast.KeyValueExpr); !keyed {
+						t.Errorf("%s: an Options literal without field names; only _test.go files may set %s",
+							fset.Position(x.Pos()), field)
+					}
+				}
+			}
+		case *ast.AssignStmt:
+			for _, l := range x.Lhs {
+				if sel, ok := l.(*ast.SelectorExpr); ok && sel.Sel.Name == field {
+					setters[sel] = true
+					t.Errorf("%s: assigns %s; only _test.go files may", fset.Position(sel.Pos()), field)
+				}
+			}
+		case *ast.SelectorExpr:
+			if x.Sel.Name == field && !setters[x] {
+				reads++
+			}
+		}
+		return true
+	})
+	return reads
 }
 
 func TestSignManifest(t *testing.T) {

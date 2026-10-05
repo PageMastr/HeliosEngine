@@ -15,6 +15,15 @@
 #   gate  The CPU gate's C objects inside every avx2 image (helios_cpu_gate_target()): the base flags plus
 #         the gate-object rules (no stack protector, no sanitizer instrumentation; 02 §1.1).
 #
+# Both link flavours (ADR-016, cmake/HeliosModular.cmake). In a modular dev build (HELIOS_MODULAR=ON) the
+# link-group libraries helios_runtime, helios_client and helios_editor, the module object libraries inside
+# them and the third-party shared libraries SDL3 and tp_imgui are avx2 like every other library; the gate's
+# object libraries keep the gate level inside helios_runtime (the probe, and on Windows the hook). A base
+# image never imports a group library: there helios::<module> names the module's consumer interface, which
+# links the group, so the image's links to it are replaced by the module's `.base` copy, and configure fails
+# if its link line still reaches any shared library built here (all of them are avx2). On Windows the base
+# image and its copies define the HELIOS_<GROUP>_API data themselves (helios_modular_defines_own_copy).
+#
 # HELIOS_ISA_AVX2, HELIOS_ISA_BASE
 #   02 §1.1's level sets for this compiler. Only helios_apply_isa_level() puts them on a target: CONF-11
 #   exempts that function by name and reports every other use.
@@ -31,11 +40,15 @@
 #   Links the CPU-gate pre-initializer (engine/core/src/platform/*/cpu_gate_hook.c) into an avx2
 #   executable: it runs before any C++ initializer (.preinit_array on ELF; on Windows the hook's section
 #   is WP-0.5r's), prints the "requires an AVX2 CPU" message and exits with code 78 on unsupported CPUs.
+#   In a modular Windows build (HELIOS_MODULAR=ON) the hook lives in helios_runtime.dll (02 §1.1 "Which
+#   image"; helios_modular_finalize in cmake/HeliosModular.cmake), and the executable gets a forced import
+#   of the gate probe instead, so the loader always initializes that DLL before any code of the executable.
 #
 # helios_isa_finalize()
 #   The configure-time propagation, run once by helios_finalize_build() after every target exists:
 #   1. no target's INTERFACE_COMPILE_OPTIONS carries an ISA option (a consumer would inherit it);
-#   2. each base image's link closure is checked, then replaced by `.base` copies;
+#   2. each base image's link closure is checked, then replaced by `.base` copies (in a modular build its
+#      link line must then reach no shared library: no group, SDL3 or tp_imgui);
 #   3. every target gets its level, and helios_generated/isa_levels.txt records "<target> <level>" for
 #      tools/lint/isa_audit.cmake (audit check 1).
 #   Violations stop configure with "helios isa:" lines.
@@ -122,9 +135,16 @@ function(helios_cpu_gate target)
     message(FATAL_ERROR "helios_cpu_gate(${target}): engine/core must be configured first "
                         "(target helios_core_cpugate_hook is missing)")
   endif()
-  # An object library links its object file unconditionally; an archive member holding only an
-  # initializer would be dropped by the linker.
-  target_sources(${target} PRIVATE $<TARGET_OBJECTS:helios_core_cpugate_hook>)
+  if(HELIOS_MODULAR AND MSVC)
+    # The linker drops a DLL whose symbols an image never references; /INCLUDE keeps the import. (A
+    # self-contained image links the hook itself: cmake/HeliosModular.cmake, helios_self_contained.)
+    target_link_options(${target} PRIVATE /INCLUDE:helios_cpu_gate_run)
+    set_target_properties(${target} PROPERTIES HELIOS_CPU_GATE_IN_RUNTIME ON)
+  else()
+    # An object library links its object file unconditionally; an archive member holding only an
+    # initializer would be dropped by the linker.
+    target_sources(${target} PRIVATE $<TARGET_OBJECTS:helios_core_cpugate_hook>)
+  endif()
   target_link_libraries(${target} PRIVATE helios::core)
   set_target_properties(${target} PROPERTIES HELIOS_CPU_GATE ON)
   set_property(GLOBAL APPEND PROPERTY HELIOS_CPU_GATE_TARGETS ${target})
@@ -287,6 +307,12 @@ function(_helios_isa_remap_item item out)
     if(NOT real)
       set(real "${item}")
     endif()
+    # Modular builds: helios::<module> names the module's consumer interface, which links the module's
+    # avx2 group library (cmake/HeliosModular.cmake). A base copy stands for the module itself.
+    get_target_property(apiOf "${real}" HELIOS_API_OF)
+    if(apiOf)
+      set(real "${apiOf}")
+    endif()
     get_property(copy GLOBAL PROPERTY "_HELIOS_ISA_BASE_COPY_${real}")
     if(copy)
       set(result "${copy}")
@@ -404,6 +430,45 @@ function(_helios_isa_check_interface tgt errorsVar)
   endif()
 endfunction()
 
+# The shared libraries built here that an image's link line reaches: its own link items and, transitively,
+# the interface link items of what they name (generator expressions looked through; helios::<module>
+# interfaces kept, so their group library counts). Every shared library is built at avx2 (only images are
+# base), so a base image may reach none: the backstop for modular builds, where helios::<module> links a
+# group library (cmake/HeliosModular.cmake) and _helios_isa_closure sees the module instead.
+function(_helios_isa_shared_reach img out)
+  set(result "")
+  set(queue "")
+  set(seen "${img}")
+  get_target_property(items ${img} LINK_LIBRARIES)
+  if(NOT items)
+    set(items "")
+  endif()
+  foreach(item IN LISTS items)
+    _helios_modular_linked_targets("${item}" linked)
+    list(APPEND queue ${linked})
+  endforeach()
+  while(queue)
+    list(POP_FRONT queue cur)
+    if(cur IN_LIST seen)
+      continue()
+    endif()
+    list(APPEND seen "${cur}")
+    get_target_property(type ${cur} TYPE)
+    get_target_property(imported ${cur} IMPORTED)
+    if(NOT imported AND type MATCHES "^(SHARED|MODULE)_LIBRARY$")
+      list(APPEND result "${cur}")
+    endif()
+    get_target_property(iface ${cur} INTERFACE_LINK_LIBRARIES)
+    if(iface)
+      foreach(item IN LISTS iface)
+        _helios_modular_linked_targets("${item}" linked)
+        list(APPEND queue ${linked})
+      endforeach()
+    endif()
+  endwhile()
+  set(${out} "${result}" PARENT_SCOPE)
+endfunction()
+
 function(helios_isa_finalize)
   _helios_isa_project_targets(all)
   set(errors "")
@@ -515,6 +580,14 @@ function(helios_isa_finalize)
       if(NOT o IN_LIST direct)
         target_link_libraries(${img} PRIVATE ${o})
       endif()
+    endforeach()
+    # Modular Windows builds: the image and its copies carry their own module code, so no dllimport of it.
+    foreach(t IN ITEMS ${img} ${copies})
+      helios_modular_defines_own_copy(${t})
+    endforeach()
+    _helios_isa_shared_reach(${img} shared)
+    foreach(lib IN LISTS shared)
+      list(APPEND errors "helios isa: base image '${img}' imports '${lib}', a shared library built at avx2 (02 §1.1: a base image links only `.base` copies; in a modular build helios::<module> names the module's group library, which the copies replace)")
     endforeach()
     list(JOIN copies ", " text)
     list(APPEND report "${img} (${text})")

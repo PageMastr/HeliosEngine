@@ -1,0 +1,4 @@
+main|0000000000001000|   T  |              FUNC|0000000000000008|     |.text
+_ZN6helios7records13kClientDbFileE|0000000000003000|   d  |            OBJECT|0000000000000008|     |.data.rel.ro
+_ZZN6helios4refl6TypeOfISt6vectorINS_4NameESaIS3_EEE3getEvE4info|0000000000003100|   V  |            OBJECT|0000000000000008|     |.bss
+_ZTIN6helios9AllocatorE|0000000000003200|   V  |            OBJECT|0000000000000008|     |.data.rel.ro

@@ -1,0 +1,7 @@
+helios_module_info|0000000000001000|   T  |              FUNC|0000000000000008|     |.text
+helios_module_load|0000000000001010|   T  |              FUNC|0000000000000008|     |.text
+helios_module_unload|0000000000001020|   T  |              FUNC|0000000000000008|     |.text
+_ZN5probe6updateERN6helios3ecs5WorldE|0000000000001100|   T  |              FUNC|0000000000000008|     |.text
+_ZNK6helios4core6Handle5validEv|0000000000001200|   W  |              FUNC|0000000000000008|     |.text
+_ZN6helios4core9kVersionE|0000000000001300|   r  |            OBJECT|0000000000000008|     |.rodata
+_ZN5probe12_GLOBAL__N_17g_ticksE|0000000000003000|   b  |            OBJECT|0000000000000008|     |.bss

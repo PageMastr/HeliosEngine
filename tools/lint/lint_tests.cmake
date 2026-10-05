@@ -97,6 +97,24 @@ if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
   if(isaElfImages)
     list(APPEND isaImages -DBASE_IMAGES_FILE=${CMAKE_BINARY_DIR}/helios_generated/isa_base_images.txt)
   endif()
+  # Modular dev builds (ELF): the shared libraries a gated executable loads at start-up, which the dynamic
+  # linker relocates before .preinit_array runs: the link-group libraries and the shared libraries they reach
+  # (SDL3, tp_imgui). Check 3 rejects IFUNC relocations in them (ADR-0.6c §3 item 6).
+  if(HELIOS_MODULAR AND NOT WIN32 AND NOT HELIOS_SANITIZE)
+    get_property(isaGroups GLOBAL PROPERTY HELIOS_LINK_GROUP_TARGETS)
+    set(isaShared ${isaGroups})
+    foreach(g IN LISTS isaGroups)
+      _helios_isa_shared_reach(${g} reach)
+      list(APPEND isaShared ${reach})
+    endforeach()
+    list(REMOVE_DUPLICATES isaShared)
+    set(sharedLines "")
+    foreach(t IN LISTS isaShared)
+      string(APPEND sharedLines "$<TARGET_FILE:${t}>\n")
+    endforeach()
+    file(GENERATE OUTPUT ${CMAKE_BINARY_DIR}/helios_generated/isa_shared_images.txt CONTENT "${sharedLines}")
+    list(APPEND isaImages -DSHARED_IMAGES_FILE=${CMAKE_BINARY_DIR}/helios_generated/isa_shared_images.txt)
+  endif()
   # isa_levels.txt is written by helios_isa_finalize(), which runs right after this file.
   helios_lint_test(lint_isa_audit COMMAND ${CMAKE_COMMAND} ${isaCommon} ${isaTools} ${isaImages}
     -DCOMPILE_COMMANDS=${CMAKE_BINARY_DIR}/compile_commands.json
@@ -173,6 +191,16 @@ if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
                 "-DOBJECT=$<TARGET_OBJECTS:lint_isa_fixture_asan>" -P ${LINT}/isa_audit.cmake)
     endif()
   endif()
+  # Check 3's canary for shared libraries (ELF, both link flavours): a shared library with an IFUNC, whose
+  # R_X86_64_IRELATIVE relocation the dynamic linker would apply before a gated executable's .preinit_array.
+  if(isaTools MATCHES "READELF" AND NOT WIN32 AND NOT HELIOS_SANITIZE)
+    add_library(lint_isa_fixture_ifunc SHARED ${LINT_TESTS}/isa/shared_ifunc.c)
+    set_target_properties(lint_isa_fixture_ifunc PROPERTIES FOLDER tests)
+    helios_lint_test(lint_isa_shared_image_detects_ifunc
+      EXPECT_FAIL "liblint_isa_fixture_ifunc.so: R_X86_64_IRELATIVE relocation in a shared library that gated executables load"
+      COMMAND ${CMAKE_COMMAND} ${isaCommon} ${isaTools} -DMODE=shared_image
+              "-DIMAGE=$<TARGET_FILE:lint_isa_fixture_ifunc>" -P ${LINT}/isa_audit.cmake)
+  endif()
   # Check 3's canary (ELF): one .preinit_array entry that is not the gate's hook. (Not in sanitizer
   # builds: their runtimes add .preinit_array entries of their own.)
   if(isaTools MATCHES "READELF" AND isaTools MATCHES "NM" AND NOT HELIOS_SANITIZE)
@@ -220,6 +248,126 @@ if(isaX86)
     EXPECT_FAIL "ISA audit failed .4 finding.s. in base-module sources.:.*tzcnt_bmi.c:7: a target attribute or pragma that enables BMI.*tzcnt_bmi.c:9: a target attribute or pragma that enables BMI.*tzcnt_bmi.c:10: a TZCNT intrinsic.*tzcnt_bmi.c:15: TZCNT in inline assembly"
     COMMAND ${CMAKE_COMMAND} ${isaCommon} -DMODE=base_sources -DSOURCE_DIRS=${LINT_TESTS}/isa/base_sources
             -P ${LINT}/isa_audit.cmake)
+endif()
+
+# ---------------------------------------------------------------------------------------------
+# Link-model symbol audit (02 §1.4, ADR-016, WP-0.6c): every build runs the recorded-listing fixtures (ELF
+# `nm` and PE `dumpbin /exports` output); a modular build (HELIOS_MODULAR=ON) also audits its own images.
+# ---------------------------------------------------------------------------------------------
+set(symLint -DPOLICY=${LINT}/symbol_audit_policy.cmake -P ${LINT}/symbol_audit.cmake)
+foreach(fixture elf_ok pe_ok)
+  helios_lint_test(lint_symbol_audit_fixture_${fixture} COMMAND ${CMAKE_COMMAND}
+    -DFIXTURE=${LINT_TESTS}/symbols/${fixture} ${symLint})
+endforeach()
+# A known finding (policy HELIOS_SYMBOL_KNOWN_FINDINGS) is reported and passes; constants and typeinfo in
+# .data.rel.ro are not state.
+helios_lint_test(lint_symbol_audit_fixture_elf_known COMMAND ${CMAKE_COMMAND}
+  -DFIXTURE=${LINT_TESTS}/symbols/elf_known ${symLint})
+set_tests_properties(lint_symbol_audit_fixture_elf_known PROPERTIES
+  PASS_REGULAR_EXPRESSION "1 known finding.*TypeOf.*owner WP-0.6c part 2.*2 image.s. passed")
+foreach(case
+    "elf_group_export|failed .3 finding.*R1 helios_runtime exports 'mi_malloc' .T.*R1 helios_runtime exports 'ZSTD_compress' .T.*R1 helios_runtime exports '_ZN3JPH7Factory9sInstanceE' .D."
+    "elf_singleton|R2 SDL3 is in two images, helios_client and rhi_tests .'SDL_Init'."
+    "elf_duplicate_state|failed .1 finding.*R3 ecs_tests has its own copy of '_ZZN6helios3ecs11componentIdINS0_8PositionEEEjvE2id' .b, .bss., which helios_runtime defines"
+    "elf_group_duplicate_state|failed .1 finding.*R3 group helios_client also defines '_ZZN6helios3ecs8typeSlotINS0_11NetIdentityEEEjvE4slot' .u, .bss., which helios_runtime defines"
+    "elf_group_weak_state|failed .2 finding.*R1 helios_runtime exports '_ZN3JPH9Character7sNextIDE' .u, .data., mutable data that is not Helios code.*R1 helios_runtime exports 'LogPcg' .u, .bss."
+    "elf_game|failed .5 finding.*R6 game image game_bad has its own strong definition of '_ZN6helios3log5write.*R4 game image game_bad defines 'mi_malloc' from mimalloc.*R5 game image game_bad defines Helios data '_ZN6helios5probe8g_countsE' .B..*R4 game image game_bad defines '_Z12lua_pushnilP9lua_State' from Luau.*R5 game image game_bad defines a per-image ECS type key '_ZZN6helios3ecs6detail15perImageTypeKeyIN12_GLOBAL__N_18CooldownEEEmvE3key'"
+    "elf_client_luau|failed .1 finding.*R1 helios_client exports '_Z12lua_pushnilP9lua_State' .T."
+    "pe_c_export|failed .2 finding.*P1 helios_runtime exports 'mi_malloc', a C name that is not helios_.*P1 helios_runtime exports 'yyjson_read_opts'"
+    "pe_no_exports|P1 helios_editor: no exports found")
+  string(REPLACE "|" ";" parts "${case}")
+  list(GET parts 0 fixture)
+  list(GET parts 1 expect)
+  helios_lint_test(lint_symbol_audit_fixture_${fixture} EXPECT_FAIL "${expect}"
+    COMMAND ${CMAKE_COMMAND} -DFIXTURE=${LINT_TESTS}/symbols/${fixture} ${symLint})
+endforeach()
+
+if(HELIOS_MODULAR)
+  get_property(symGroups GLOBAL PROPERTY HELIOS_LINK_GROUP_TARGETS)
+  get_property(symStandalone GLOBAL PROPERTY HELIOS_SELF_CONTAINED_IMAGES)
+  # Game images: link_model_probe keeps the game rules; link_model_bad_game breaks them (fixture below).
+  set(symGames link_model_probe)
+  set(symFixtures link_model_bad_game)
+  set(symLines "")
+  foreach(t IN LISTS symGroups)
+    string(APPEND symLines "group ${t} $<TARGET_FILE:${t}>\n")
+  endforeach()
+  # Third-party libraries a group exports by design (cmake/HeliosModular.cmake): R1 accepts what their
+  # archives define.
+  set(symThirdParty "")
+  foreach(entry IN LISTS HELIOS_GROUP_EXPORTED_THIRD_PARTY)
+    string(REPLACE "|" ";" parts "${entry}")
+    list(GET parts 0 group)
+    list(GET parts 1 lib)
+    if(TARGET helios_${group} AND TARGET ${lib})
+      string(APPEND symThirdParty "thirdparty helios_${group} ${lib} $<TARGET_FILE:${lib}>\n")
+    endif()
+  endforeach()
+  string(APPEND symLines "${symThirdParty}")
+  set(symTool -DFORMAT=elf)
+  if(MSVC)
+    # PE images have no symbol table: the export tables of the groups (P1). The consumer and game rules
+    # run on the Linux modular build (linux-dev).
+    get_filename_component(symLinkerDir "${CMAKE_LINKER}" DIRECTORY)
+    find_program(HELIOS_DUMPBIN dumpbin HINTS "${symLinkerDir}")
+    set(symTool -DFORMAT=pe)
+    if(HELIOS_DUMPBIN)
+      list(APPEND symTool -DDUMPBIN=${HELIOS_DUMPBIN})
+    endif()
+  else()
+    if(CMAKE_NM)
+      list(APPEND symTool -DNM=${CMAKE_NM})
+    endif()
+    _helios_all_targets(symCandidates)
+    foreach(t IN LISTS symCandidates)
+      get_target_property(type ${t} TYPE)
+      get_target_property(excluded ${t} EXCLUDE_FROM_ALL)
+      # Base images (02 §1.1: the launcher, the bootstrap and the ISA audit's fixtures) link `.base` copies of
+      # their modules and load no group (cmake/HeliosIsa.cmake), like the self-contained images.
+      get_target_property(level ${t} HELIOS_ISA_LEVEL)
+      if(NOT type MATCHES "^(EXECUTABLE|SHARED_LIBRARY|MODULE_LIBRARY)$" OR excluded OR t IN_LIST symGroups
+         OR t IN_LIST symStandalone OR t IN_LIST symFixtures OR level STREQUAL "base")
+        continue()
+      endif()
+      if(t IN_LIST symGames)
+        string(APPEND symLines "game ${t} $<TARGET_FILE:${t}>\n")
+        continue()
+      endif()
+      # A consumer: an image that links a module (and so its group library).
+      _helios_find_path("${t}" _helios_is_module symPath)
+      if(symPath)
+        string(APPEND symLines "consumer ${t} $<TARGET_FILE:${t}>\n")
+      endif()
+    endforeach()
+  endif()
+  # Without its tool (nm, dumpbin) the audit fails and says so: a modular build never skips it.
+  set(symImages ${CMAKE_BINARY_DIR}/helios_generated/symbol_images_$<CONFIG>.txt)
+  file(GENERATE OUTPUT ${symImages} CONTENT "${symLines}")
+  helios_lint_test(lint_symbol_audit COMMAND ${CMAKE_COMMAND} -DIMAGES_FILE=${symImages} ${symTool}
+    -DWORK_DIR=${LINT_WORK}/symbols ${symLint})
+  set_tests_properties(lint_symbol_audit PROPERTIES TIMEOUT 900)
+  if(TARGET link_model_bad_game)
+    # The game rules against a real image (ELF): each rule must fire on link_model_bad_game.
+    set(symBad "")
+    foreach(t IN LISTS symGroups)
+      string(APPEND symBad "group ${t} $<TARGET_FILE:${t}>\n")
+    endforeach()
+    string(APPEND symBad "${symThirdParty}game link_model_bad_game $<TARGET_FILE:link_model_bad_game>\n")
+    set(symBadImages ${CMAKE_BINARY_DIR}/helios_generated/symbol_images_bad_game_$<CONFIG>.txt)
+    file(GENERATE OUTPUT ${symBadImages} CONTENT "${symBad}")
+    foreach(case
+        "r4|R4 game image link_model_bad_game defines '[^']*' from mimalloc"
+        "r5|R5 game image link_model_bad_game defines Helios data '_ZN6helios5probe7g_ticksE'"
+        "r5_type_key|R5 game image link_model_bad_game defines a per-image ECS type key '_ZZN6helios3ecs6detail15perImageTypeKeyIN12_GLOBAL__N_115PrivateCooldownE"
+        "r6|R6 game image link_model_bad_game has its own strong definition of '_ZN6helios13memoryTagNameENS_9MemoryTagE'")
+      string(REPLACE "|" ";" parts "${case}")
+      list(GET parts 0 rule)
+      list(GET parts 1 expect)
+      helios_lint_test(lint_symbol_audit_game_${rule} EXPECT_FAIL "${expect}"
+        COMMAND ${CMAKE_COMMAND} -DIMAGES_FILE=${symBadImages} ${symTool} -DWORK_DIR=${LINT_WORK}/symbols_${rule}
+                ${symLint})
+    endforeach()
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------------------------
@@ -647,20 +795,42 @@ foreach(case
     "isa_gate_target_not_object|helios_cpu_gate_target.fx_gate.: the CPU gate's units live in[ \n]+OBJECT[ \n]+libraries"
     "isa_base_root_links_jolt|helios isa: base image 'fx-launcher' links 'tp_jolt', which is built only at avx2: fx-launcher -> helios_core -> tp_jolt"
     "isa_base_target_objects|helios isa: base image 'fx-launcher' compiles in the objects of 'fx_kernels' .*, which is built only at avx2"
-    "isa_generated_source|FX_COPY_SOURCES: [^\n]*/layering/isa_generated_source/fx_generated.cpp.*HELIOS_FIXTURE_CONFIGURE_OK")
+    # The fixture's build directory is <flavour>_<case> (shipping_ or modular_).
+    "isa_generated_source|FX_COPY_SOURCES: [^\n]*/layering/[a-z]+_isa_generated_source/fx_generated.cpp.*HELIOS_FIXTURE_CONFIGURE_OK"
+    # Modular builds only (HELIOS_MODULAR=ON): an image that links a module's object library directly.
+    "modular:direct_objects|'fx-cook' links the module object library 'helios_core' directly"
+    "modular:direct_objects_genex|layering check failed .1 violation.*'fx-cook' links the module object library 'helios_core' directly"
+    # Modular builds only, with WIN32 set: the base image and its copies get HELIOS_<GROUP>_BUILDING.
+    "modular:isa_base_windows|Helios ISA levels: 1 base image.s.: fx-launcher .helios_core.base, tp_yyjson.base..*FX_OWN_COPY: fx-launcher=HELIOS_RUNTIME_BUILDING.HELIOS_CLIENT_BUILDING.HELIOS_EDITOR_BUILDING helios_core.base=HELIOS_RUNTIME_BUILDING.HELIOS_CLIENT_BUILDING.HELIOS_EDITOR_BUILDING\n.*HELIOS_FIXTURE_CONFIGURE_OK")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)
   list(GET parts 1 expect)
-  add_test(NAME lint_layering_${fixture}
-    COMMAND ${CMAKE_COMMAND} -S ${LINT_TESTS}/layering -B ${LINT_WORK}/layering/${fixture} ${layeringGenerator}
-            -DHELIOS_FIXTURE_CASE=${fixture} -DHELIOS_SOURCE_DIR=${PROJECT_SOURCE_DIR})
-  set_tests_properties(lint_layering_${fixture} PROPERTIES LABELS lint TIMEOUT 120
-    PASS_REGULAR_EXPRESSION "${expect}")
-  if(expect MATCHES "HELIOS_FIXTURE_CONFIGURE_OK")
-    set_tests_properties(lint_layering_${fixture} PROPERTIES FAIL_REGULAR_EXPRESSION "helios (layering|isa):")
-  else()
-    set_tests_properties(lint_layering_${fixture} PROPERTIES FAIL_REGULAR_EXPRESSION "HELIOS_FIXTURE_CONFIGURE_OK")
+  # Every case runs in both link flavours (ADR-016): the checks must see the same graph whether
+  # helios::<module> names a static library or a link group's interface (cmake/HeliosModular.cmake).
+  set(flavours "shipping;modular")
+  if(fixture MATCHES "^modular:(.*)$")
+    set(fixture "${CMAKE_MATCH_1}")
+    set(flavours modular)
   endif()
+  foreach(flavour IN LISTS flavours)
+    if(flavour STREQUAL "modular")
+      set(name lint_layering_modular_${fixture})
+      set(modular ON)
+    else()
+      set(name lint_layering_${fixture})
+      set(modular OFF)
+    endif()
+    add_test(NAME ${name}
+      COMMAND ${CMAKE_COMMAND} -S ${LINT_TESTS}/layering -B ${LINT_WORK}/layering/${flavour}_${fixture}
+              ${layeringGenerator} -DHELIOS_FIXTURE_CASE=${fixture} -DHELIOS_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+              -DHELIOS_MODULAR=${modular})
+    set_tests_properties(${name} PROPERTIES LABELS lint TIMEOUT 120 PASS_REGULAR_EXPRESSION "${expect}")
+    if(expect MATCHES "HELIOS_FIXTURE_CONFIGURE_OK")
+      set_tests_properties(${name} PROPERTIES FAIL_REGULAR_EXPRESSION "helios (layering|isa):")
+    else()
+      set_tests_properties(${name} PROPERTIES FAIL_REGULAR_EXPRESSION "HELIOS_FIXTURE_CONFIGURE_OK")
+    endif()
+  endforeach()
 endforeach()
 
 # RC-1's shipped-pipelines lint (WP-0.12), registered by its owner.

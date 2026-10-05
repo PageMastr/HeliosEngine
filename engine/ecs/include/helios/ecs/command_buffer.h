@@ -20,6 +20,7 @@
 
 #include "helios/core/assert.h"
 #include "helios/core/types.h"
+#include "helios/ecs/type_key.h"
 #include "helios/ecs/types.h"
 
 namespace helios::ecs {
@@ -90,19 +91,8 @@ enum class CommandKind : u8 {
     SpawnN,
 };
 
-/// Resolves a component type to its id in `world` (out of line so this header stays light).
-ComponentId componentIdForSlot(const World& world, u32 typeSlot) noexcept;
-
-namespace detail {
-u32 nextTypeSlot() noexcept;
-}
-
-/// Process-wide dense index of C++ type T (used for fast per-world type -> ComponentId lookup).
-template <class T>
-u32 typeSlot() noexcept {
-    static const u32 slot = detail::nextTypeSlot();
-    return slot;
-}
+/// Resolves a type key to its component id in `world` (out of line so this header stays light).
+ComponentId componentIdForKey(const World& world, TypeKey key) noexcept;
 
 class CommandBuffer {
 public:
@@ -209,7 +199,7 @@ private:
     template <class T>
     ComponentId idOf() const {
         HELIOS_ASSERT(m_world != nullptr, "CommandBuffer needs a World for typed commands");
-        const ComponentId id = componentIdForSlot(*m_world, typeSlot<T>());
+        const ComponentId id = componentIdForKey(*m_world, typeKey<T>());
         HELIOS_ASSERT(id != 0, "component type is not registered in this world");
         return id;
     }

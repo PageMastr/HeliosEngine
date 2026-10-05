@@ -21,6 +21,7 @@
 
 #include "helios/core/platform.h"
 #include "helios/core/types.h"
+#include "helios/runtime_api.h"
 
 #ifndef HELIOS_ENABLE_ASSERTS
 #if defined(NDEBUG)
@@ -54,8 +55,10 @@ AssertHandler setAssertHandler(AssertHandler handler) noexcept;
 AssertHandler assertHandler() noexcept;
 
 /// Default policy: log the failure (Error/Fatal) and flush; Break when a debugger is attached;
-/// otherwise Abort, except a failed VERIFY in a build without asserts continues.
-AssertAction defaultAssertHandler(const AssertInfo& info);
+/// otherwise Abort, except a failed VERIFY in a build without asserts continues. HELIOS_RUNTIME_API: callers
+/// compare handler addresses with &defaultAssertHandler, and in a modular Windows build only an imported
+/// declaration yields the DLL's address instead of the caller's import thunk (02 §1.4).
+HELIOS_RUNTIME_API AssertAction defaultAssertHandler(const AssertInfo& info);
 
 /// Number of assert/verify failures reported so far (all threads).
 u64 assertFailureCount() noexcept;

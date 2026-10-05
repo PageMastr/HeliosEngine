@@ -416,7 +416,9 @@ The Nightly tier adds `windows-vs2026`, `windows-vs2022`, `linux-dev` and the sa
 - **Dev** (`HELIOS_MODULAR=ON`, presets **`windows-msvc-dev`** and **`linux-dev`**, plus the IDE presets
   `windows-vs2026` and `windows-vs2022`, ADR-001a rule 5): modules are combined into
   three shared libraries, one per link group (`helios_runtime`, `helios_client`, `helios_editor`). They export
-  through `HELIOS_*_API` macros (dllexport/dllimport or visibility "default"). Each third-party library and each
+  through `HELIOS_*_API` macros (dllexport/dllimport or visibility "default"); until WP-0.6c part 2 a group
+  exports all of its own module objects and the macros mark only what an import needs (02 §1.4, *Exports*;
+  ADR-0.6c §2). Each third-party library and each
   process singleton (type registry, component ids, memory tags, CVars, jobs, mimalloc heaps, Jolt `Factory`,
   Tracy) lives in exactly one image. Reloadable gem modules build as `game_<gem>[_client|_edcore|_edui]` DLLs/`.so`s
   against those libraries (the editor kinds: 07 §1.10).
@@ -425,7 +427,7 @@ The Nightly tier adds `windows-vs2026`, `windows-vs2022`, `linux-dev` and the sa
   The packaged artist editor ships the VC++ runtime DLLs app-local, taken from the newer of the SDK's validated
   redistributable and the project toolset's (ADR-001a rule 3); the developer SDK uses the system-wide runtime.
 - **Dev link:** `/INCREMENTAL /OPT:NOREF /OPT:NOICF /DEBUG:FULL` on MSVC. On Linux, lld or mold, `-Wl,-z,defs`
-  and `-gsplit-dwarf`; GCC game modules add `-fno-gnu-unique`.
+  and `-gsplit-dwarf` (Clang, the `linux-dev` compiler); GCC game modules add `-fno-gnu-unique`.
 - **Reload protocol and rules** (02 §1.4): stage a uniquely named copy, load it beside the old image, swap at a
   frame or tick boundary, migrate changed component layouts through tagged serialization, then roll back the
   old image's registration scope and unload it. Reloadable code keeps no mutable statics, has no vtables or

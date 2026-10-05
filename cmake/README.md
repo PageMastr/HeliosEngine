@@ -27,8 +27,8 @@ Helios builds **whole images at one ISA level**; no list grants a target or a fi
 - **Base images and `.base` copies.** A base image's link closure is replaced by `<target>.base` copies (OBJECT
   libraries, the plan's `<module>@base`; CMake target names cannot contain `@`), compiled at `base`. Copies
   exist only once a base image is configured, and only for `HELIOS_ISA_BASE_MODULES` (`core`, `app`, `ui`,
-  `text`, `loc`, `patch`, `crash`: `core` and `patch` exist today; `app` and `ui` arrive with the launcher,
-  WP-0.17, `text` and `loc` with the UI runtime, `crash` in Phase 2), `HELIOS_ISA_BASE_THIRD_PARTY` (08 §2.1.1's
+  `text`, `loc`, `patch`, `crash`: `core` and `patch` exist today; `app` and `ui`'s SDL_Renderer backend
+  arrive with the launcher, WP-0.17, `ui`, `text` and `loc` with WP-1.6 (02 §7.5–7.6), `crash` in Phase 2), `HELIOS_ISA_BASE_THIRD_PARTY` (08 §2.1.1's
   SDL3, RmlUi, FreeType, HarfBuzz, SheenBidi, libunibreak, zstd, Monocypher, yyjson, sentry-native) and what
   those link. The audit's `lint_isa_fixture_base` image builds `helios_core.base`, `helios_patch.base` and the
   copies of mimalloc, Monocypher, zstd and the header-only libraries on every toolchain.

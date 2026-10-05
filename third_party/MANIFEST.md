@@ -86,7 +86,25 @@ computed by WP-3.1 (planned region migration); until then this list is the recor
 | `0001-write-bytes-memcpy.patch` | `netcode.c`: `netcode_write_bytes` copies with one `memcpy` instead of calling `netcode_write_uint8` per byte; the bytes written are the same | `netcode_write_packet` writes every payload packet's data through it before encrypting, and the per-byte call (not inlined in a `-fPIC` GCC build) cost 11 % of NS-0.2's encrypted-stack CPU per packet (04 §11.4; WP-0.13r's profile) | not submitted | `net_tests` (`perf: netcode patch write-bytes-memcpy …`, and every case that sends a payload packet, including the Go-vector token handshake); not a `sim_abi` input (transport only) |
 
 The bundled libsodium subset (`third_party/netcode/sodium/`) carries no Helios patch; its own review log is
-`sodium/NOTES.md`.
+`sodium/NOTES.md`. Its sources are unchanged, but `third_party/CMakeLists.txt` compiles it with two of the
+configuration macros upstream's configure would set, by the repository owner's decision of 2026-10-05
+([`docs/evidence/netcode-crypto-owner-decision-2026-10-05.md`](../docs/evidence/netcode-crypto-owner-decision-2026-10-05.md);
+WP-0.13r, NS-0.2 headroom):
+
+| Definition | Where | Effect |
+|---|---|---|
+| `HAVE_AVX_ASM=1` | GCC and Clang (MinGW and clang-cl included) on x86-64 | The CPU probe reads XCR0 with inline `xgetbv`, so it reports AVX/AVX2 and ChaCha20 dispatches to the AVX2 kernel the subset already compiles (the SSSE3 kernel before). MSVC reads XCR0 through `_xgetbv` without it |
+| `HAVE_EXPLICIT_BZERO=1` | Linux, where `check_symbol_exists` finds `explicit_bzero` (glibc) | `sodium_memzero` wipes with `explicit_bzero` instead of a volatile byte loop; Windows keeps `SecureZeroMemory`, which `sodium_memzero` prefers on `_WIN32` |
+
+Ciphertexts, tags and the wire format are unchanged (every kernel computes the same function; `net_tests`
+checks each against RFC 8439 and the Go golden token vectors). ISA rules: `tp_netcode` links only into
+avx2-level images (`cmake/HeliosIsa.cmake` does not list it in `HELIOS_ISA_BASE_THIRD_PARTY`, so a base image
+that linked it would fail configure). Its runtime-dispatched SSSE3 and AVX2 functions were above x86-64-v1
+before this change too; if a base image ever had to link it, audit check 4 would name them, and they would have
+to join `HELIOS_ISA_SELF_DISPATCH_SYMBOLS` as self-dispatching code (they run only after `sodium_runtime_has_*`
+reports the feature, which now includes the OS's XCR0 state). Tests: `net_tests` (`net.netcode_crypto`: the
+probe sees AVX2 and ChaCha20 dispatches to the AVX2 kernel, every compiled kernel matches RFC 8439 §2.4.2 and
+the reference kernel, `perf:` `sodium_memzero` at least 4× faster than a volatile byte loop).
 
 ## Prebuilt tools (downloaded at configure time, never committed)
 

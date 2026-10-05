@@ -239,6 +239,26 @@ target_compile_definitions(tp_netcode PRIVATE NETCODE_ENABLE_TESTS=0 RELIABLE_EN
 if(WIN32)
   target_link_libraries(tp_netcode PUBLIC ws2_32 iphlpapi advapi32)
 endif()
+# The bundled libsodium subset's own faster paths, by compile definitions only (the vendored sources are
+# unchanged): the repository owner's decision of 2026-10-05, docs/evidence/netcode-crypto-owner-decision-2026-10-05.md
+# (WP-0.13r, NS-0.2 headroom; third_party/MANIFEST.md, netcode).
+#  - HAVE_AVX_ASM: the CPU probe reads XCR0 with GNU inline xgetbv. Without it GCC and Clang builds never see AVX,
+#    so they keep the SSSE3 ChaCha20 although they compile the AVX2 one. cl (MSVC) has no GNU inline asm and
+#    reads XCR0 through _xgetbv already; clang-cl gets the define and its headers pick either branch.
+#  - HAVE_EXPLICIT_BZERO: sodium_memzero wipes with explicit_bzero instead of a volatile byte loop, where libc has
+#    it (glibc Linux). sodium_memzero prefers SecureZeroMemory on _WIN32 (MSVC, clang-cl, MinGW), which stays.
+# tp_netcode links only into avx2-level images: a base image may not link it (HELIOS_ISA_BASE_THIRD_PARTY,
+# cmake/HeliosIsa.cmake), so libsodium's runtime-dispatched SSSE3/AVX2 code never meets audit check 4.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|x64)$" AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_definitions(tp_netcode PRIVATE HAVE_AVX_ASM=1)
+endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  include(CheckSymbolExists)
+  check_symbol_exists(explicit_bzero "string.h" HELIOS_LIBC_HAS_EXPLICIT_BZERO)
+  if(HELIOS_LIBC_HAS_EXPLICIT_BZERO)
+    target_compile_definitions(tp_netcode PRIVATE HAVE_EXPLICIT_BZERO=1)
+  endif()
+endif()
 helios_tp_quiet(tp_netcode)
 add_library(helios::tp::netcode ALIAS tp_netcode)
 

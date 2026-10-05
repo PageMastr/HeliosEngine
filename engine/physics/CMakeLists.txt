@@ -2,8 +2,9 @@
 # Helios allocators/trace/asserts, Jolt's JobSystemWithBarrier on the Helios job system, stable body
 # keys, deterministic queries, the CharacterVirtual mover and the RT-03 determinism hash.
 #
-# Jolt is a PRIVATE dependency: its headers select AVX paths inline, so only this module's TUs see
-# tp_jolt's ISA flags and defines; the public headers contain no Jolt type (02 §1.1).
+# Jolt is a PRIVATE dependency: its headers select AVX paths inline (tp_jolt's PUBLIC JPH_USE_* defines),
+# which the avx2 image level of every image that links this module makes legal; the public headers
+# contain no Jolt type (02 §1.1). A base image that links physics fails configure.
 
 helios_module(physics HEADLESS
   SOURCES

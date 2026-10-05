@@ -1,6 +1,6 @@
 /* CPU gate probe: CPUID/XGETBV feature detection and the verdict message (02 §1.1, 08 §2.2).
  *
- * This TU is compiled at the x86-64-v1 baseline (helios_isa_base_sources in engine/core) and must
+ * This TU is compiled at the x86-64-v1 baseline (the `gate` ISA level, cmake/HeliosIsa.cmake) and must
  * stay free of libc calls, so it can run from the pre-initializer hooks before the C runtime is up
  * and on CPUs that lack every extension Helios otherwise assumes. See cpu_gate.h for the rules the
  * ISA audit enforces. Architecture- and compiler-specific code only; no OS calls (those live in

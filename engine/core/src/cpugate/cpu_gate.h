@@ -4,8 +4,8 @@
  *
  * Rules for every gate TU (checked by the ISA audit, tools/lint/isa_audit.cmake):
  *  - C only; no libc or C++ runtime calls (the hooks run before the C/C++ runtimes are initialized);
- *  - compiled at the x86-64-v1 baseline (cmake/HeliosIsa.cmake helios_isa_base_sources): no SSE3+,
- *    POPCNT, LZCNT, BMI, AVX or AVX-512 encodings;
+ *  - compiled at the x86-64-v1 baseline (the `gate` level of cmake/HeliosIsa.cmake): no SSE3+, POPCNT,
+ *    LZCNT, BMI, AVX or AVX-512 encodings;
  *  - only static functions plus the extern "C" entry helios_cpu_gate_run(); no weak, COMDAT or
  *    selectany symbols, so no AVX2 copy of anything can be picked for the gate at link time.
  */

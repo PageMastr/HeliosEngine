@@ -1,0 +1,10 @@
+helios_core avx2
+helios_math avx2
+helios_world avx2
+helios_pcg avx2
+tp_jolt avx2
+helios_core_cpugate gate
+helios_core_cpugate_hook gate
+helios_core.base base
+tp_zstd.base base
+fx_launcher base

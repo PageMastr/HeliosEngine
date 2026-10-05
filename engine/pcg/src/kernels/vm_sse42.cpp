@@ -1,8 +1,7 @@
 // The 4-lane terrain VM kernel: the width-4 conformance twin (02 §5.8). It proves results do not
 // depend on the lane width and is used by runs forced with pcg.kernel=sse42; it is never budgeted.
-// Compiled with -msse4.2 (GCC/Clang/clang-cl; MSVC needs no flag); at the avx2 image level (WP-0.2r)
-// the same intrinsics encode as VEX-128 without changing any result. Uses SSE4.1 products and
-// blends and the SSE4.2 64-bit compare.
+// Built at its image's avx2 level like every pcg TU (02 §1.1), so the intrinsics encode as VEX-128,
+// which changes no result. Uses SSE4.1 products and blends and the SSE4.2 64-bit compare.
 #include "vm_kernels.h"
 
 #if defined(__x86_64__) || defined(_M_X64)

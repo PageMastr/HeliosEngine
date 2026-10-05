@@ -12,23 +12,6 @@
 {
   "known_failing": [
     {
-      "rule": "CONF-11", "owner": "WP-0.2r", "anchor": "09 §5.10.4 (b)",
-      "reason": "The in-tree ISA code was written to the per-file AVX2 allowlist that the ADR-011 amendment retired: HELIOS_ISA_AVX2_TARGETS, HELIOS_ISA_AVX2_SOURCE_PATTERNS and helios_avx2_sources() (and their users in the ISA audit and pcg), and tp_jolt's PUBLIC ISA options. WP-0.2r replaces them with whole-image levels (09 §2 WP-0.2r items 1-5); the audit's own disassembly fixture carries a conformance:allow instead",
-      "findings": [
-        {"path": "cmake/HeliosIsa.cmake", "fingerprint": "b595f906bd38c6db"},        // function(helios_avx2_sources …)
-        {"path": "cmake/HeliosIsa.cmake", "fingerprint": "743a2f7807ad14f3"},        // set_source_files_properties(… "${flags}")
-        {"path": "cmake/isa_allowlist.cmake", "fingerprint": "31d604d16cdf76f7"},    // set(HELIOS_ISA_AVX2_TARGETS …)
-        {"path": "cmake/isa_allowlist.cmake", "fingerprint": "4c017a0679eb238a"},    // set(HELIOS_ISA_AVX2_SOURCE_PATTERNS …)
-        {"path": "engine/pcg/CMakeLists.txt", "fingerprint": "0de2af9bd2bec9a4"},    // helios_avx2_sources(helios_pcg …)
-        {"path": "third_party/CMakeLists.txt", "fingerprint": "76df5658ca641d89"},   // tp_jolt PUBLIC /arch:AVX2 (MSVC)
-        {"path": "third_party/CMakeLists.txt", "fingerprint": "f5b04b4007f48c94"},   // tp_jolt PUBLIC /arch:AVX2 -mbmi … (clang-cl)
-        {"path": "third_party/CMakeLists.txt", "fingerprint": "4f0492e506b0011f"},   // tp_jolt PUBLIC -mavx2 -mbmi … (GCC, Clang)
-        {"path": "tools/lint/isa_audit.cmake", "fingerprint": "034b5b50109d741f"},   // HELIOS_ISA_AVX2_SOURCE_PATTERNS
-        {"path": "tools/lint/isa_audit.cmake", "fingerprint": "70fb752eb6d896bf"},   // HELIOS_ISA_AVX2_TARGETS
-        {"path": "tools/lint/isa_audit.cmake", "fingerprint": "6a01ec7a97810cd7"}    // HELIOS_ISA_AVX2_TARGETS
-      ]
-    },
-    {
       "rule": "CONF-12", "owner": "WP-0.5r", "anchor": "09 §5.10.4 (b)",
       "reason": "The Windows gate sits in .CRT$XIB, ends with ExitProcess, exports helios_cpu_gate_crt_entry, and has neither /INCLUDE:_tls_used nor helios_cpu_gate_tls_entry. WP-0.5r moves it to .CRT$XLA0 with TerminateProcess(…, 78) and the three exports",
       "findings": [

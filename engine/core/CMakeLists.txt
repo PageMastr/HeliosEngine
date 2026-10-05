@@ -14,26 +14,30 @@ else()
   file(GLOB HELIOS_CORE_PLATFORM_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/posix/*.cpp)
 endif()
 
-# CPU gate (02 §1.1, 08 §2.2): the probe is a C unit pinned to the x86-64-v1 baseline so it runs on
-# any x86-64 CPU; the per-OS pre-initializer hook is an object library that helios_cpu_gate()
-# (cmake/HeliosIsa.cmake) links into every AVX2 executable. The ISA audit checks both.
+# CPU gate (02 §1.1, 08 §2.2): two C units at the x86-64-v1 baseline, so they run on any x86-64 CPU, in
+# object libraries of the `gate` level (cmake/HeliosIsa.cmake): their own targets, because every other
+# target of an avx2 image is compiled at avx2. The probe's object is archived into helios_core (a static
+# library links the objects of an object library it links); helios_cpu_gate() links the per-OS
+# pre-initializer hook's object into every avx2 executable. The ISA audit checks both (checks 1 and 2).
 set(HELIOS_CORE_CPUGATE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/cpugate/cpu_gate.c)
 if(WIN32)
   set(HELIOS_CORE_CPUGATE_HOOK ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/win32/cpu_gate_hook.c)
 else()
   set(HELIOS_CORE_CPUGATE_HOOK ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/posix/cpu_gate_hook.c)
 endif()
-helios_cpu_gate_sources(${HELIOS_CORE_CPUGATE_SOURCES} ${HELIOS_CORE_CPUGATE_HOOK})
+add_library(helios_core_cpugate OBJECT ${HELIOS_CORE_CPUGATE_SOURCES})
+add_library(helios_core_cpugate_hook OBJECT ${HELIOS_CORE_CPUGATE_HOOK})
+foreach(gate helios_core_cpugate helios_core_cpugate_hook)
+  target_include_directories(${gate} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  set_target_properties(${gate} PROPERTIES POSITION_INDEPENDENT_CODE ON FOLDER engine)
+  helios_apply_warnings(${gate})
+  helios_cpu_gate_target(${gate})
+endforeach()
 
 helios_module(core HEADLESS
-  SOURCES ${HELIOS_CORE_SOURCES} ${HELIOS_CORE_PLATFORM_SOURCES} ${HELIOS_CORE_CPUGATE_SOURCES}
+  SOURCES ${HELIOS_CORE_SOURCES} ${HELIOS_CORE_PLATFORM_SOURCES}
   DEPS Threads::Threads ${CMAKE_DL_LIBS}
-  PRIVATE_DEPS helios::tp::headers helios::tp::mimalloc)
-
-add_library(helios_core_cpugate_hook OBJECT ${HELIOS_CORE_CPUGATE_HOOK})
-target_include_directories(helios_core_cpugate_hook PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-set_target_properties(helios_core_cpugate_hook PROPERTIES POSITION_INDEPENDENT_CODE ON FOLDER engine)
-helios_apply_warnings(helios_core_cpugate_hook)
+  PRIVATE_DEPS helios::tp::headers helios::tp::mimalloc helios_core_cpugate)
 
 if(WIN32)
   # dbghelp: MiniDumpWriteDump (crash.h); bcrypt: BCryptGenRandom (guid.h / secure random).
@@ -87,10 +91,16 @@ if(TARGET core_tests)
   add_executable(core_cpugate_child ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/cpugate_child.cpp)
   target_link_libraries(core_cpugate_child PRIVATE helios::core)
   helios_cpu_gate(core_cpugate_child)
+  # The Sandy Bridge hook is a third gate object library: the gate's units are never compiled inside an
+  # avx2 target.
+  add_library(core_cpugate_hook_snb OBJECT ${HELIOS_CORE_CPUGATE_HOOK})
+  target_compile_definitions(core_cpugate_hook_snb PRIVATE HELIOS_CPU_GATE_TEST_EMULATE_SANDY_BRIDGE=1)
+  target_include_directories(core_cpugate_hook_snb PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  set_target_properties(core_cpugate_hook_snb PROPERTIES POSITION_INDEPENDENT_CODE ON FOLDER tests)
+  helios_apply_warnings(core_cpugate_hook_snb)
+  helios_cpu_gate_target(core_cpugate_hook_snb)
   add_executable(core_cpugate_child_snb ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/cpugate_child.cpp
-                                         ${HELIOS_CORE_CPUGATE_HOOK})
-  target_compile_definitions(core_cpugate_child_snb PRIVATE HELIOS_CPU_GATE_TEST_EMULATE_SANDY_BRIDGE=1)
-  target_include_directories(core_cpugate_child_snb PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+                                         $<TARGET_OBJECTS:core_cpugate_hook_snb>)
   target_link_libraries(core_cpugate_child_snb PRIVATE helios::core)
   foreach(child core_cpugate_child core_cpugate_child_snb)
     set_target_properties(${child} PROPERTIES FOLDER tests)

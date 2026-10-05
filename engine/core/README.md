@@ -134,7 +134,7 @@ tag used by one thread, and within 16 × 64 KiB when several threads race. The p
 when it rises. `trackAllocations(tag, bytes, count)` / `trackDeallocations` account a batch in one
 call (pools, arenas, a heap flushing a thread-local tally). Budget: <= 25 ns per tracked
 allocate+free pair per thread, flat from 1 to 8 threads. `core_memory_bench` measures it against a
-replica of the old single-slot counters (4-core container, ns per pair, best of 3):
+replica of the old single-slot counters (measured 2026-09-25 on a 4-core container, ns per pair, best of 3):
 
 | Threads | Old counters | Sharded | `alignedAlloc` + free (64 B) |
 |---|---|---|---|

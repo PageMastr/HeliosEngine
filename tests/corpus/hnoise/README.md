@@ -7,9 +7,9 @@ reproduce every value **bit for bit**:
 - the 32-bit-only Slang twin (`shaders/pcg/hnoise.slang`) on the GPU: `pcg_gpu_tests`
   (`engine/pcg/tests/test_gpu.cpp`, CTest label `gpu`; lavapipe in CI, vendor GPUs on the lab runners).
 
-CI runs the CPU side on every determinism toolchain (MSVC both toolsets, clang-cl, GCC, Clang, MinGW).
-The MSVC and clang-cl jobs are the cross-compiler check for Windows; MinGW binaries are only built in
-the Linux container.
+CI runs the CPU side on MSVC (both toolsets), clang-cl, GCC and Clang. The MSVC and clang-cl jobs are the
+cross-compiler check for Windows; MinGW builds it but does not run it (its binaries are only built in the
+Linux container).
 
 ## Files
 

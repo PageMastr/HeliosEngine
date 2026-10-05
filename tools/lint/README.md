@@ -2,11 +2,14 @@
 
 Every lint in this directory is a CMake script (`cmake -P …`), so it runs wherever CMake runs.
 `cmake/HeliosLayering.cmake` registers them as CTests (label `lint`) at the end of configure, and
-`tools/ci/run_lints.cmake` runs the build-independent ones in one go (CI fast path, pre-commit hook),
-together with the D6 status check of 09 §5.10.2 (`tools/status/check_status.cmake`): a module directory
-not named in 09 §8.1, or a module README without its `Plan-Rev`, fails it. That check needs Python
-3.10+; where it is not on `PATH`, pass `-DHELIOS_STATUS_PYTHON=<path>` to `run_lints.cmake`, which
-forwards it.
+`tools/ci/run_lints.cmake` runs the build-independent ones in one go (a fast local check, or a pre-commit
+hook; no CI job calls it, since CI runs those lints as CTests), together with the D6 status check of
+09 §5.10.2 (`tools/status/check_status.cmake`): a module directory not named in 09 §8.1, or a module README
+without its `Plan-Rev`, fails it. CI does not run the D6 check (no CTest or workflow calls it; it runs at the
+round audit, and CTest runs only its fixture tests, `lint_status_unittest`). `run_lints.cmake` also runs the
+self-hosted runner policy check, which like the D6 check needs Python 3.10+ (where it is not on `PATH`, pass
+`-DHELIOS_STATUS_PYTHON=<path>` to `run_lints.cmake`, which forwards it to both), and the conformance lint
+(`go run`, so Go 1.27; `run_lints.cmake` fails without Go).
 
 ```
 ctest --test-dir build/<dir> -L lint --output-on-failure      # all lints + their fixtures
@@ -39,8 +42,15 @@ artifact. CTest's original pass/fail result remains the CI gate.
 | Self-hosted runner policy (WP-0.4; CTests `lint_runner_policy`, `lint_runner_policy_unittest` and, where `pwsh` is found, `lint_runner_scripts`, registered from `tools/ci/CMakeLists.txt`; Python 3.10+) | `tools/ci/check_runner_policy.py` (also run by `run_lints.cmake` through `tools/ci/check_runner_policy.cmake`) | a workflow with a job whose `runs-on` can reach the owner's `win-gpu` runner (it names `win-gpu`, or only that runner's labels, matrix values included, with matrix keys compared ignoring case) and that has a trigger other than `schedule`, `workflow_dispatch` or `push` to `main`; a runner job whose `if:` does not require both `github.ref == 'refs/heads/main'` and `vars.HELIOS_WIN_GPU == 'enabled'`, that can read `secrets` or `github.token` (its own steps, the jobs it needs, the workflow's top level, `secrets:` to a reusable workflow) or needs a reusable-workflow call or an unknown job, whose token is broader than `contents: read`, or that uses an action not pinned to a commit; in any workflow, a missing or empty `runs-on` or one the check cannot resolve, a reusable workflow outside `./.github/workflows/`, or YAML outside the subset its parser reads (anchors, tags, merge keys, NEL/LS/PS and other control characters, ...). Seeded fixtures in `tools/ci/testdata/runner_policy/` | 09 §5.4a, K33 |
 | Shipped pipelines (WP-0.12; CTest `lint_shipped_pipelines`, registered from `tools/rendertest/tests/shipped_pipelines_tests.cmake`) | `tools/rendertest/tests/shipped_pipelines_lint.cmake` | an identifier `create<X>Pipeline` other than `createShippedPipeline`/`createLocalPipeline` in `engine/`, `apps/` or `tools/` (outside `engine/rhi/`, `tools/prebuilt/`, its own and the other lints' fixtures and `engine/render/src/shader_library.cpp`; backslash-newline splices joined) without a `// shipped-pipelines-lint: allow <reason>` waiver on its line or alone on the line above; a waiver without a reason of at least 12 characters. A best-effort textual check against accidental direct pipeline creation, not against deliberately adversarial source (code review and `rendertest.coverage` are the backstops): token pasting, a creation path (wrapper or member pointer) defined outside the scanned files, which includes `engine/rhi/`, and files with other extensions are not seen | 03 §9.3 RC-1 |
 
+Other `lint`-labelled CTests are registered and documented by their owners: `lint_schemac_size_*`
+(tools/schemac README, "Lint report"), `lint_records_sec4*` (AAA-SEC-4; engine/records, helios-cook),
+`lint_gamedef_go_*` (engine/gameplay), `pcg_lint_*` (engine/pcg), `lint_scorecard*` (tools/scorecard),
+`lint_status_unittest` (tools/status) and `lint_milestone_selftest` (tools/milestone, where PowerShell is
+found).
+
 Each lint has seeded-violation fixtures under `tests/` that must be rejected with a specific message
 (`lint_*_fixture_*`, `lint_isa_disasm_*`, `lint_isa_object_*`, `lint_isa_image_*`, `lint_isa_base_image_*`,
+`lint_isa_base_sources_detects_tzcnt`, the git-mode `lint_*_git_*`, `lint_run_lints_status_python`,
 `lint_layering_*`, the ISA level checks' `lint_layering_isa_*`), so a lint that
 silently stops matching fails CI. The fixtures run through `expect_fail.cmake`, which also requires a
 non-zero exit: a lint that prints the finding but exits 0 fails its fixture. The layering check looks
@@ -141,7 +151,8 @@ Limits:
 - **Run time is quadratic in three constructed corners.** 20,000 nested braces take about 18 s, and
   40,000 about 70 s. 4,000 raw strings on one line take about 19 s. 50,000 `/**/` comments at the
   start of one line take about 3 s (5,000 take 0.1 s). Real code is far from all three: the
-  repository run takes about 4 s.
+  repository run took about 4 s when this was written (2026-09-27) and about 9 s on 2026-10-05 (271 test
+  files, 4-vCPU dev container at load 4–5).
 
 ## ISA levels and the audit
 

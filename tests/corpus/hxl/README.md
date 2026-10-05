@@ -10,7 +10,8 @@ A case passes only if the compile outcome (status code **and** position), the by
 result match **bit for bit**. Both runners reject unknown keys, so a typo cannot silently skip a check.
 GP-1 requires the Go side on `windows/amd64`, `linux/amd64` at `GOAMD64=v1` and `v3`, and `linux/arm64`,
 and the C++ side on MSVC (both toolsets), clang-cl, GCC and Clang (MinGW builds but does not run). CI
-covers all of these except `GOAMD64=v3` and `linux/arm64` (see `services/pkg/hxl/README.md`).
+covers all of these except `linux/arm64` (`GOAMD64=v3` runs inside every amd64 `go test` through
+`TestCorpusAtGOAMD64v3`; see `services/pkg/hxl/README.md`).
 
 ## Files
 

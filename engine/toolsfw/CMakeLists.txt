@@ -1,8 +1,8 @@
 # engine/toolsfw — L4 ToolsFramework (EDITOR_ONLY; 07 §1.2, ADR-009): the UI-less editor core —
 # documents over reflected data, selection, the command bus with its input-path origins,
 # property-path transactions with undo/redo and grouping, the crash-recovery journal, the
-# JSON-RPC 2.0 remote-control socket and the Luau automation VM. Linked by helios-editor and
-# helios-tool (07 §1.1); never by the client, launcher, bot or servers (checked at configure time).
+# JSON-RPC 2.0 remote-control socket and the Luau automation VM. Linked by helios-editor, helios-tool
+# and helios-uitest (07 §1.1); never by the client, launcher, bot or servers (checked at configure time).
 # It never includes ImGui or RHI headers.
 #
 # OS-specific code lives only in src/platform/win32 (named pipes; selected when WIN32, MinGW

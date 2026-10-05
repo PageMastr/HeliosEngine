@@ -165,8 +165,8 @@ gate with a criterion to hang on, which is not a small change
 
 ## Gaps (v0)
 
-- **`registry.hreg`** (02 §6.1) is not built: the reader does not need it. It comes with the cook (assetpipe,
-  part 3 and later).
+- **`registry.hreg`** (02 §6.1) is not built: the reader does not need it. It comes with the registry rebuild in
+  engine/assetpipe, which is not built yet (WP-0.8 part 3 added its input, `scanMetas`; see assetpipe's Gaps).
 - **`IResidencyProvider`** (02 §5.7: `resident`, `demand`, `prioritizeGroup`) is not defined; 09 §2 gives the
   residency hook to WP-2.1. v0's bad-block hook is `IBlockRefetcher`, which that WP routes to the
   `StreamingInstaller`'s `demand` (08 §2.6). Pak mounts are not yet `core::IMountProvider`s and have no async

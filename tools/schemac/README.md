@@ -228,7 +228,9 @@ Naming lints (PascalCase types and enum values, camelCase fields) are warnings (
 
 ## Stable ids: the schema lock
 
-`schemas/schema.lock.jsonc` (02 §3.4) is generated, committed and append-only (illustrative entry
+The schema lock (02 §3.4 names a single `schemas/schema.lock.jsonc`; this repository commits one per schema
+set, `schemas/sample/schema.lock.jsonc` and `schemas/gameplay/schema.lock.jsonc`, and `helios_schema()` defaults
+to the one next to the calling `CMakeLists.txt`) is generated, committed and append-only (illustrative entry
 after a rename and a deletion):
 
 ```jsonc
@@ -761,8 +763,9 @@ and review the diff of `tests/golden/*.expected` like any code change.
 
 The golden fixture's expectations include the SQL outputs (`svc_golden.schema.sql` and a migration stub
 against `golden.sql-baseline.lock.jsonc`, the lock of the fixture's previous release), and the Luau outputs (`golden.luau.gen.*`, `schema.d.luau`,
-`fuel_costs.defaults.json`); `tests/golden/corpus/<set>/` holds the same for the committed
-`schemas/` corpus, compiled as CMake compiles it. `test_luau.cpp` runs the generated glue of the golden
+`fuel_costs.defaults.json`); `tests/golden/corpus/sample/` holds the Luau, SQL, replication and lint outputs
+of the committed `schemas/sample` set (`schemas/gameplay` has no corpus golden; `lint_schemac_size_gameplay`
+gates its size lints). `test_luau.cpp` runs the generated glue of the golden
 fixture and the sample schemas on a real engine/script VM (every value form, realms, the fuel charged
 per fn, hostile arguments: wrong types, out-of-range and inexact integers, oversized and cyclic tables,
 metatables that must not run), type-checks `schema.d.luau` with Luau.Analysis (a strict script passes;
@@ -809,17 +812,19 @@ server as `nobody` when started as root, and is not registered on Windows or whe
 
 ## Deviations and limitations
 
-- **Namespace `helios::refl`** instead of the spec's `helios::reflect`: `engine/math` declares a
-  function `helios::reflect()` (vector reflection), which makes a namespace of the same name
-  ill-formed. The CMake target is still `helios::reflect` and the headers live in
-  `helios/reflect/`. Resolving it needs a rename in `engine/math` (outside this package).
+- **Namespace `helios::refl`** instead of the spec's `helios::reflect`: when this package was written,
+  `engine/math` declared a function `helios::reflect()` (vector reflection), which made a namespace of
+  that name ill-formed. engine/math has since renamed it `reflectVector()` (WP-0.5), so the name is
+  free, but the namespace has not moved: that is a rename across every user of `helios::refl`. The
+  CMake target is `helios::reflect` and the headers live in `helios/reflect/`.
 - `refl::EntityId` / `refl::NetHandle` / `refl::Tick` mirror `ecs::EntityId{u64}`,
   `ecs::NetHandle{u32}` and `ecs::Tick = u64`; `engine/ecs` should alias the `refl` vocabulary
   types (or vice versa) so generated components use one set.
 - Not generated yet (later work packages): `registerComponents(ecs::World&)` / flecs traits,
   replication change masks, deltas and variable-size replicated fields (WP-1.10), cooked layouts (`Cooked<T>`), NATS stubs, the Luau
   tagged-userdata glue for components and records (`@script(read|write)` fields; WP-1.6, with the
-  host's `Entity` type), editor JSON, record cooking, HXL compilation of formulas and
+  host's `Entity` type), editor JSON, record cooking in schemac (`--emit records`; `.hrdb` files are
+  cooked by `helios-cook` through engine/records), HXL compilation of formulas and
   `@validate`, `upgrade<T>` hooks for `@version`.
 - **Luau, Phase 0 choices** (02 §3.5 leaves them open). The glue owns light-userdata tags 1 and 2 for
   `EntityId` and record refs, and `EntityId` is declared in `schema.d.luau`; both belong in

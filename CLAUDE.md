@@ -5,9 +5,11 @@ architecture is `docs/plan/00-decisions.md`; the master plan is `docs/PLAN.md` w
 `docs/plan/`. Research that motivates decisions is in `docs/research/`.
 
 ## Platforms (non-negotiable)
-- **Windows x64 is the primary platform** (MSVC 2022 / clang-cl). Linux x64 (GCC 13+, Clang 17+)
-  must also build and pass tests. Never write POSIX-only or Win32-only code outside
-  `engine/core/src/platform/{win32,posix}/`; everything else goes through the platform layer.
+- **Windows x64 is the primary platform** (MSVC: VS 2026 is the primary toolset, VS 2022 17.14 /
+  MSVC 14.44 the floor and release toolset, ADR-001; clang-cl). Linux x64 (GCC 13+, Clang 17+) must also
+  build and pass tests. Never write POSIX-only or Win32-only code outside a module's
+  `src/platform/{win32,posix}/` (today `engine/core`, `engine/net` and `engine/toolsfw`); everything else
+  goes through the platform layer.
 - Use `std::filesystem` for paths, fixed-width integer types, no `long` in serialized data, no
   `#pragma once`-incompatible tricks, no GCC-only extensions (`__int128`, VLAs, statement
   expressions). Guard compiler-specific code with `HELIOS_COMPILER_MSVC/CLANG/GCC` macros.
@@ -20,9 +22,10 @@ cmake --build --preset linux-gcc
 ctest --preset linux-gcc
 cmake --preset cross-mingw && cmake --build --preset cross-mingw   # Win32 portability check on Linux
 ```
-- Lints (layering fixtures, ISA audit, licences, IP names, Windows manifest) are CTests with the
-  label `lint` (`ctest -L lint`); `cmake -P tools/ci/run_lints.cmake` runs the build-independent ones.
-  See `tools/lint/README.md`.
+- Lints (layering fixtures, the ISA audit, licences, vendored patches, IP names, concept refs, test
+  namespaces, shipped pipelines, the runner policy, the Windows manifest, the conformance lint and more)
+  are CTests with the label `lint` (`ctest -L lint`); `cmake -P tools/ci/run_lints.cmake` runs the
+  build-independent ones. See `tools/lint/README.md`.
 - Agents working in parallel must use **their own build directory** (e.g.
   `cmake -S . -B build/<your-task> -G Ninja`), never share one. ccache is enabled automatically.
 - Software Vulkan (lavapipe) is available in this container; GPU tests run under `xvfb-run -a`
@@ -34,10 +37,10 @@ cmake --preset cross-mingw && cmake --build --preset cross-mingw   # Win32 porta
 engine/<module>/include/helios/<module>/*.h   public headers   (namespace helios::<module> or helios)
 engine/<module>/src/*.cpp                     implementation
 engine/<module>/tests/*.cpp                   doctest unit tests (helios_test)
-apps/{client,editor,launcher,cellserver,gateway,tools/*}
+apps/{cellserver,gateway,editor,samples,tools/*}   (client and launcher: WP-0.17, not in the tree yet)
 services/                                     Go module (cmd/, internal/, pkg/)
 schemas/                                      *.hschema — the single source of truth for data types
-content/                                      sample game content (text sources; cooked output is ignored)
+content/                                      sample game content, WP-0.20: not in the tree yet (cooked output is ignored)
 third_party/                                  vendored deps (see MANIFEST.md); never edit in place
 ```
 - Declare modules with `helios_module(name [HEADLESS|EDITOR_ONLY] [LAYER n] SOURCES … DEPS …)`,
@@ -50,9 +53,12 @@ third_party/                                  vendored deps (see MANIFEST.md); n
   dependency, no cycle. HEADLESS modules (everything a cell server links) must never reach
   app/input/rhi/render/ui/audio or a graphics library. EDITOR_ONLY modules never link into the client,
   launcher, bot or servers.
-- AVX/AVX2 flags only on the ISA allowlist (`cmake/isa_allowlist.cmake`: `tp_jolt` and `*_avx2.cpp`
-  kernels added with `helios_avx2_sources`); the CPU gate (`engine/core/src/cpugate`) stays at the
-  x86-64-v1 baseline.
+- ISA flags come only from an image's level (`cmake/HeliosIsa.cmake`, 02 §1.1): `helios_executable`'s ROLE
+  picks `avx2` (every role but launcher and bootstrap; tests are `avx2` too) or `base` (x86-64-v1: launcher
+  and bootstrap, which link `.base` copies), applied to the image and everything it links. No target or file gets
+  ISA flags of its own (CONF-11); `cmake/isa_allowlist.cmake` keeps only the gate's export and import lists
+  and the self-dispatch symbols. The CPU gate (`engine/core/src/cpugate`) builds at the `gate` level
+  (x86-64-v1, no stack protector, no sanitizers). See `cmake/README.md`.
 
 ## Code style
 - C++20. `snake_case` files, `PascalCase` types, `camelCase` functions and variables,

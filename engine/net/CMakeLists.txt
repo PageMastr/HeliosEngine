@@ -1,4 +1,4 @@
-# engine/net — L2 HTP transport (HEADLESS; 04 §2, ADR-007, ADR-013): UdpSocket (Winsock2 / BSD
+# engine/net — L3 HTP transport (HEADLESS; 04 §2, ADR-007, ADR-013): UdpSocket (Winsock2 / BSD
 # sockets), IDatagramTransport (sockets, in-process VirtualNetwork, NetSim), netcode 1.4.8
 # client/server wrappers with Helios allocators and logging, one reliable 1.4.5 endpoint per
 # session, HTP channels, packing, fragmentation, budgets/AIMD, stats, trunk profile.

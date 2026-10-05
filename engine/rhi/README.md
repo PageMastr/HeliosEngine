@@ -157,7 +157,8 @@ Entry points are declared in the source with `[shader("…")]`; see `shaders/REA
 
 ## Tests
 
-`rhi_tests` (doctest) — 35 CPU cases run by default: formats, the Slang toolchain (embedded SPIR-V,
+`rhi_tests` (doctest) — 36 CPU cases run by default: formats, the `HELIOS_RHI_VALIDATION` override
+(`validationFromEnvironment`), `ValidationMessage` classification by fields, the Slang toolchain (embedded SPIR-V,
 entry points, layout decorations, stem lookup), the barrier masks of every state transition on every
 kind of queue family against the spec's synchronization tables (`test_vk_sync.cpp`; lavapipe has one
 universal queue family, so only this catches a transfer-queue mask error before hardware does), and

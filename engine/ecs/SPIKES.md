@@ -6,7 +6,7 @@ Everything here comes from `ecs_bench` (engine/ecs/bench). You can reproduce it 
 ninja -C build/<dir> ecs_bench
 ./build/<dir>/bin/ecs_bench                 # RT-01 zone for 0/1/2/4 workers, then spikes (a) and (b)
 ./build/<dir>/bin/ecs_bench --spikes-only   # spikes only
-./build/<dir>/bin/ecs_bench --quick         # 60 ticks and smaller spikes (CI smoke, ~20 s)
+./build/<dir>/bin/ecs_bench --quick         # 60 ticks and smaller spikes (smoke run, ~20 s; CTest ecs_bench_rt01 in the linux-bench preset)
 ./build/<dir>/bin/ecs_bench --inframe-dontfragment   # InFrame as a DontFragment pair (§2.3)
 ./build/<dir>/bin/ecs_bench --per-command-creates    # burst creates as spawn() + set() (§5)
 ./build/<dir>/bin/ecs_bench --legacy-burst           # the pre-WP-1.1a burst, bugs included (§5.3)
@@ -133,6 +133,9 @@ counters are sharded per thread (32 cache-line shards). The tag can be fed in tw
   peak CAS in particular should only be touched when the batch raises the peak. As it stands, core
   `alignedAlloc` is 30x slower than mimalloc under 4 threads, and the recycling hazard in §1.2 also
   applies to any core user of `mi_heap_*`.
+  *Status (2026-10-05):* done in WP-0.5 (3f9b7fa): the core counters are sharded 16 ways and
+  `trackAllocations`/`trackDeallocations` take batches; see engine/core/README.md, "Memory-tag accounting
+  at scale". Core has no `mi_heap_*` user.
 
 ---
 

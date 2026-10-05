@@ -32,7 +32,7 @@ Vendored code is never edited in place: the few changes Helios needs are patches
 | mimalloc | microsoft/mimalloc | v3.5.3 (d4881d3) | MIT | Heaps behind the tagged allocators (no global override) |
 | yyjson | ibireme/yyjson | 0.13.0 (6447536) | MIT | JSONC text content / config parsing and writing |
 | ozz-animation | guillaumeblanc/ozz-animation | 0.17.0 (744eb9d) | MIT | Skeletal animation runtime + offline builders (FBX/glTF tools excluded) |
-| netcode | mas-bandwidth/netcode | v1.4.8 (47a156b) | BSD-3 (bundled libsodium subset: ISC) | Connect-token secured, encrypted UDP sessions |
+| netcode | mas-bandwidth/netcode | v1.4.8 (47a156b) + 1 Helios patch | BSD-3 (bundled libsodium subset: ISC) | Connect-token secured, encrypted UDP sessions |
 | reliable | mas-bandwidth/reliable | v1.4.5 (e4e7092) | BSD-3 | Packet acks, reliability, fragmentation on top of netcode |
 | nats.c | nats-io/nats.c | v3.14.0 (6cb096a) | Apache-2.0 | Cell/gateway → Go services over NATS request/reply (client library only: static, no TLS/OpenSSL, no Streaming, no libsodium; `helios::tp::natsc`) |
 
@@ -78,6 +78,15 @@ The Luau patches that change VM behaviour (0001 and 0002), with the planned `det
 inputs of `sim_abi.script` (04 §6.7): the component covers Luau's bytecode version range and the ordered list of
 these patches. 0003 compiles to nothing outside AddressSanitizer builds, so it is not an input. `sim_abi` itself is
 computed by WP-3.1 (planned region migration); until then this list is the record of what it must cover.
+
+### netcode (`third_party/netcode/patches/`)
+
+| Patch | What it changes | Why | Upstream | Tests; `sim_abi` |
+|---|---|---|---|---|
+| `0001-write-bytes-memcpy.patch` | `netcode.c`: `netcode_write_bytes` copies with one `memcpy` instead of calling `netcode_write_uint8` per byte; the bytes written are the same | `netcode_write_packet` writes every payload packet's data through it before encrypting, and the per-byte call (not inlined in a `-fPIC` GCC build) cost 11 % of NS-0.2's encrypted-stack CPU per packet (04 §11.4; WP-0.13r's profile) | not submitted | `net_tests` (`perf: netcode patch write-bytes-memcpy …`, and every case that sends a payload packet, including the Go-vector token handshake); not a `sim_abi` input (transport only) |
+
+The bundled libsodium subset (`third_party/netcode/sodium/`) carries no Helios patch; its own review log is
+`sodium/NOTES.md`.
 
 ## Prebuilt tools (downloaded at configure time, never committed)
 

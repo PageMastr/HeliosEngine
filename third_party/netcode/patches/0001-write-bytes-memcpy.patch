@@ -1,0 +1,41 @@
+Helios patch 0001 write-bytes-memcpy (netcode 1.4.8; WP-0.13r, NS-0.2 headroom)
+
+netcode_write_bytes copied its input one byte at a time through netcode_write_uint8. netcode_write_packet
+writes every payload packet's data with it before encrypting the packet in place, so the loop runs once per
+payload byte of every packet a client or server sends. In a -fPIC build (CMake's position-independent code
+for the static library) GCC does not inline netcode_write_uint8, an external function that could be
+interposed, so every byte cost a call; inlined (Clang, MSVC) it is still a byte loop, because a store
+through the uint8_t ** may alias the pointer it advances. In the NS-0.2 encrypted-stack benchmark
+(700-byte EVENT_U messages, net_bench --stack) the loop took 11 % of the CPU per packet on Linux (GCC 13,
+RelWithDebInfo; perf record, WP-0.13r). This patch copies with one memcpy and advances the pointer by the
+same amount. No call site passes overlapping buffers (they copy between packet buffers and token or packet
+structs), and a count of zero or less writes nothing, as the loop did, so the bytes written and the wire
+format are unchanged.
+
+Rebase notes: netcode_write_bytes keeps its signature; netcode_read_bytes still loops (it only reads
+connect and challenge tokens, never payload packets, which netcode_read_packet copies with memcpy).
+
+Upstream status: not submitted. Rebase on every netcode bump (K10), and delete the patch once upstream
+copies with memcpy. Licence: MIT (Helios); netcode itself is BSD-3.
+
+diff --git a/netcode.c b/netcode.c
+index 6458cab..6b3d046 100755
+--- a/netcode.c
++++ b/netcode.c
+@@ -974,10 +974,13 @@ void netcode_write_uint64( uint8_t ** p, uint64_t value )
+ 
+ void netcode_write_bytes( uint8_t ** p, uint8_t * byte_array, int num_bytes )
+ {
+-    int i;
+-    for ( i = 0; i < num_bytes; i++ )
++    // Helios patch write-bytes-memcpy: one memcpy instead of one netcode_write_uint8 call per byte. Every
++    // payload packet passes through here before it is encrypted, and the byte loop cost 11 % of NS-0.2's
++    // encrypted-stack CPU per packet (WP-0.13r profile, GCC, -fPIC: the per-byte call is not inlined).
++    if ( num_bytes > 0 )
+     {
+-        netcode_write_uint8( p, byte_array[i] );
++        memcpy( *p, byte_array, (size_t) num_bytes );
++        *p += num_bytes;
+     }
+ }
+ 

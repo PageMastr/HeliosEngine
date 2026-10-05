@@ -69,7 +69,9 @@ if(BUILD_DIR)
   endforeach()
   _run_lint(isa-audit -DALLOWLIST=${root}/cmake/isa_allowlist.cmake -DREQUIRE_GATE=ON ${tools}
             -DCOMPILE_COMMANDS=${buildDir}/compile_commands.json
-            -DIMAGES_FILE=${buildDir}/helios_generated/isa_images.txt -P ${lint}/isa_audit.cmake)
+            -DLEVELS=${buildDir}/helios_generated/isa_levels.txt
+            -DIMAGES_FILE=${buildDir}/helios_generated/isa_images.txt
+            -DBASE_IMAGES_FILE=${buildDir}/helios_generated/isa_base_images.txt -P ${lint}/isa_audit.cmake)
 endif()
 
 if(failed)

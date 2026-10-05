@@ -60,11 +60,11 @@ instead of hashing per lane; results are bit-identical. The kernel TUs hold inte
 `pcg_lint_kernels`) and no inline function that could leak into other TUs.
 
 **Selection** (`kernel.h`): `initializePcgModule()` reads the `pcg.kernel` CVar (default `avx2`) and
-logs `pcg.kernel=<name>`. Until WP-0.2r builds whole images at the `avx2` level, the choice is also
-checked against CPUID (`core::cpuGate()`; the AVX2 kernel needs the full `Avx2Image` feature set
-because it is built with the whole avx2 flag set) and falls back to the widest supported kernel with a
-warning. `vm_avx2.cpp` is a designated `*_avx2.cpp` unit (`helios_avx2_sources`), `vm_sse42.cpp` gets
-`-msse4.2` (not an AVX-class flag).
+logs `pcg.kernel=<name>`. The choice is also checked against CPUID (`core::cpuGate()`; the AVX2 kernel
+needs the full `Avx2Image` feature set) and falls back to the widest supported kernel with a warning, a
+runtime self-dispatch that 02 §1.1 allows. Since WP-0.2r every pcg TU, the three kernels included, is
+built at its image's `avx2` level (02 §1.1, `cmake/HeliosIsa.cmake`): no kernel has flags of its own,
+and a `base` image (launcher, bootstrap) that links `pcg` fails configure.
 
 ## GPU twin (`shaders/pcg/`)
 

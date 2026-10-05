@@ -25,7 +25,8 @@ artifact. CTest's original pass/fail result remains the CI gate.
 | Lint | Script | What fails it | Plan |
 |---|---|---|---|
 | Module layering | `cmake/HeliosLayering.cmake` (configure time) | upward or unlisted same-layer dependency, cycle, a module missing from `HELIOS_MODULE_ORDER` or the order not topological (a module edge is any path between two modules whose inner targets are not modules, such as an INTERFACE or STATIC helper), a `helios_module()` LAYER, HEADLESS, EDITOR_ONLY or PEERS entry that its table row in `engine/CMakeLists.txt` does not have, a second `helios_declare_module()` row for a module, a module with neither a row nor a LAYER, an executable under `apps/` that is not a `helios_executable()`, a `helios_executable()` without ROLE in a directory whose role cannot be inferred, a HEADLESS module reaching a non-HEADLESS module or a graphics library (volk, VMA, SDL3, ImGui, …), an `EDITOR_ONLY` module in a client/launcher/bot/cell/gateway/voice executable or under a runtime module, a server executable (cell, gateway, voice, bot) linking anything non-HEADLESS | 02 §1.1, RT-09 |
-| ISA audit | `isa_audit.cmake` + `cmake/isa_allowlist.cmake` | AVX-class flags on a unit outside the allowlist (`tp_jolt`, `*_avx2.c(pp)` kernels; `/clang:`-forwarded flags included); FMA or AVX-512 on an allowlisted unit; any flag above x86-64-v1 on the CPU-gate units (`-msse3`…`-msse4.2`, `-mpopcnt`, `-mcx16`, `-mavx*`, `-mbmi*`, a `-march` other than `x86-64`, `/arch:` other than SSE2); `-march=native`, fast-math or FP contraction anywhere; a VEX/EVEX/opmask/BMI/LZCNT/POPCNT/MOVBE/CMPXCHG16B/AES/SHA/SSE3+ instruction (prefixes such as `lock` looked through), a weak/COMDAT/IFUNC symbol, an unlisted export or import (stack-protector and sanitizer symbols included) in a gate object; a gated ELF executable whose single `.preinit_array` entry is not the gate's `hcg_gate`, or that has `R_X86_64_IRELATIVE` relocations | 02 §1.1 "The audit", RT-09, CL-17 |
+| ISA levels (configure time) | `cmake/HeliosIsa.cmake` (`helios_isa_finalize`) | a `base` image (launcher, bootstrap, `ISA base` fixture) whose link closure reaches a library built only at `avx2` (anything but `core`, `app`, `ui`, `text`, `loc`, `patch`, `crash`, 08 §2.1.1's third-party libraries and what they link: `physics`, `pcg`, `tp_jolt`, …; the path is named); an ISA option (`-m<extension>`, `-march=`, `/arch:`) on a library's `INTERFACE_COMPILE_OPTIONS`, which every consumer would inherit; `helios_executable(… ISA …)` under `apps/` or `engine/`, where the role picks the level; `HELIOS_ISA_LEVEL` set on anything but an image or a gate object library | 02 §1.1, RT-09 |
+| ISA audit | `isa_audit.cmake` + `cmake/isa_allowlist.cmake` (+ `cmake/pre_main_allowlist.cmake`) | check 1, each TU of `compile_commands.json` against its target's level (`helios_generated/isa_levels.txt`): a target without a level; an `avx2` TU without the whole set (GCC/Clang: AVX2, BMI1/2, LZCNT, POPCNT, F16C and `-ffp-contract=off`; MSVC `/arch:AVX2`; clang-cl both, through `/clang:` too) or with anything above it (FMA, AVX-512, another extension such as `-msha` or `-mcx16`, an `-march` beyond `x86-64`; clang-cl's `/arch:AVX2` implies Haswell, so FMA unless `-mno-fma`); a `base` or gate TU with any flag above x86-64-v1 (`-msse3`…`-msse4.2`, `-mpopcnt`, `-mcx16`, `-mavx*`, `-mbmi*`, a `-march` other than `x86-64`, `/arch:` other than SSE2); a CPU-gate source compiled outside a gate-level target; `-march=native`, fast-math or FP contraction anywhere. Check 2, the gate objects: a VEX/EVEX/opmask/BMI/LZCNT/POPCNT/MOVBE/CMPXCHG16B/AES/SHA/SSE3+ instruction (prefixes such as `lock` looked through), a weak/COMDAT/IFUNC symbol, an unlisted export or import (`__stack_chk_*`, `__security_cookie` and sanitizer symbols named as such). Check 3 (ELF part): a gated executable whose single `.preinit_array` entry is not the gate's `hcg_gate`, or that has `R_X86_64_IRELATIVE` relocations. Check 4, base images after linking (ELF): an instruction above x86-64-v1 in a symbol that is not on `HELIOS_ISA_SELF_DISPATCH_SYMBOLS` (compiler clone suffixes ignored). TZCNT's encoding counts as BSF there: GCC and Clang emit `rep bsf` for count-trailing-zeros at x86-64-v1 with `-mtune=generic`, only where the operand is non-zero, and CPUs without BMI1 execute it as BSF (the gate objects of check 2 may not contain it) | 02 §1.1 "The audit", RT-09, CL-17 |
 | Licences | `licenses.cmake` + `license_policy.cmake` | a dependency without a top-level licence file, a licence file (nested ones too) that is copyleft/unknown (GPL family, MPL, EPL, Artistic, CC-BY-SA/NC/ND, JSON licence, …) and not one option of an explicit multi-licence choice naming a permissive licence, a dependency without its own row in `third_party/MANIFEST.md` (Name cell, its first word or the upstream repository name), a MANIFEST licence identifier outside MIT/BSD/zlib/Apache-2.0/Boost/ISC/PostgreSQL/public domain (CC0) | CLAUDE.md, 01 §5.2, ADR-012 |
 | Vendored patches | `vendor_patches.cmake` | a `third_party/<dep>/patches/` file not named `NNNN-<slug>.patch`, with no hunk, or not a row of the table under `third_party/MANIFEST.md`'s `### … (third_party/<dep>/patches/)` heading; a row there naming a missing file; a hunk whose post-image (context plus added lines) is not in the committed file, in hunk order; a truncated or malformed hunk; a patched file that is missing, or that the patch deletes but still exists. Line endings are normalized, so CRLF checkouts pass, and `\ No newline at end of file` markers are honoured (a post-image without a final newline must end the file); no git or network. It does not see an in-place edit outside every hunk: re-running `tools/vendor/fetch_third_party.sh <dep>` and diffing `third_party/` is the full proof | CLAUDE.md (vendored code), `third_party/MANIFEST.md` "Patches", K10 |
 | IP names | `ip_names.cmake` + `ip_names_policy.cmake` | a *Cinder Reach* name (Kestrel, Harrow, Tallis, …) outside `content/` and `docs/concept/`, also inside identifiers and paths (`KestrelHull`, `cinder_reach`, `TALLIS_ORBIT`, `hull/kestrel`); an in-universe name from Star Wars, EVE, Destiny or Star Citizen anywhere it looks; a franchise title inside `content/` or `docs/concept/`. It looks at `engine/`, `apps/`, `tools/` (not `tools/lint/`, `tools/prebuilt/` or `tools/vendor/`), `schemas/`, `services/`, `shaders/`, `content/`, `gems/`, `cmake/`, `docs/concept/` and the top-level files; the rest of `docs/` is not scanned. A content directory counts only at the repository root (`engine/docs/concept/` is engine code) | 01 §4.1 rule 2, §5.2 |
@@ -38,7 +39,8 @@ artifact. CTest's original pass/fail result remains the CI gate.
 | Shipped pipelines (WP-0.12; CTest `lint_shipped_pipelines`, registered from `tools/rendertest/tests/shipped_pipelines_tests.cmake`) | `tools/rendertest/tests/shipped_pipelines_lint.cmake` | an identifier `create<X>Pipeline` other than `createShippedPipeline`/`createLocalPipeline` in `engine/`, `apps/` or `tools/` (outside `engine/rhi/`, `tools/prebuilt/`, its own and the other lints' fixtures and `engine/render/src/shader_library.cpp`; backslash-newline splices joined) without a `// shipped-pipelines-lint: allow <reason>` waiver on its line or alone on the line above; a waiver without a reason of at least 12 characters. A best-effort textual check against accidental direct pipeline creation, not against deliberately adversarial source (code review and `rendertest.coverage` are the backstops): token pasting, a creation path (wrapper or member pointer) defined outside the scanned files, which includes `engine/rhi/`, and files with other extensions are not seen | 03 §9.3 RC-1 |
 
 Each lint has seeded-violation fixtures under `tests/` that must be rejected with a specific message
-(`lint_*_fixture_*`, `lint_isa_disasm_*`, `lint_isa_image_*`, `lint_layering_*`), so a lint that
+(`lint_*_fixture_*`, `lint_isa_disasm_*`, `lint_isa_object_*`, `lint_isa_image_*`, `lint_isa_base_image_*`,
+`lint_layering_*`, the ISA level checks' `lint_layering_isa_*`), so a lint that
 silently stops matching fails CI. The fixtures run through `expect_fail.cmake`, which also requires a
 non-zero exit: a lint that prints the finding but exits 0 fails its fixture. The layering check looks
 through generator expressions (`$<BUILD_INTERFACE:…>`, `$<LINK_ONLY:…>`, conditions), so a dependency
@@ -140,29 +142,69 @@ Limits:
   start of one line take about 3 s (5,000 take 0.1 s). Real code is far from all three: the
   repository run takes about 4 s.
 
-## ISA audit on MSVC and clang-cl
+## ISA levels and the audit
 
-The flag check reads `compile_commands.json`, which the Ninja presets (`windows-msvc-*`,
-`windows-clang-cl`) produce, and understands `/arch:AVX*`. The object checks need GNU binutils; on
-MSVC the equivalent is `tools/ci/msvc_gate_audit.ps1` (run by the Windows CI jobs after the build):
+Images are built at one level each (02 §1.1; `cmake/HeliosIsa.cmake`): `avx2` for every image that links a
+runtime module and everything it links, `base` (x86-64-v1) for the launcher and the bootstrap, which link
+`<target>.base` object-library copies of their modules (02 §1.1's `<module>@base`), and `gate` for the CPU
+gate's two C objects. `helios_isa_finalize()` assigns the levels at configure time and writes them to
+`helios_generated/isa_levels.txt`; check 1 compares every TU's flags with its target's level there.
+
+Fixtures, by check:
+
+- **Configure** (`tests/layering`, cases `isa_*`): a base image that links `tp_jolt` (09 §2 WP-0.2r's seeded
+  fixture), `physics` through a helper or `tp_jolt` through `core` (`HELIOS_ISA_BASE_DENY`), or that compiles
+  in an `avx2` object library's objects; `ISA` under `apps/` or in a listfile outside `tools/lint/`, or with a
+  level other than `avx2` or `base`; `CPU_GATE` on a base image; `HELIOS_ISA_LEVEL` set by hand on a library;
+  `helios_cpu_gate_target()` on a static library; and `tp_jolt`'s pre-WP-0.2r options on its interface must
+  stop configure. A launcher and an `ISA base` fixture image must configure, with their copies, and a copy must
+  find a relative source generated in the build directory.
+- **Check 1** (`tests/isa/*.json` against `tests/isa/levels.txt`): a TU of an `avx2` image at the default level
+  (`default_level`, 09 §2's seeded fixture), `tp_jolt`'s old options without BMI2 (`partial_level`), MSVC
+  without `/arch:AVX2`, clang-cl without `-mno-fma`, extra extensions, a target without a level, AVX flags on
+  base and gate units, base and gate units without the base set (`base_default`, `gate_default`: no `-march`,
+  which GCC, Clang and MinGW would replace with the toolchain's default, x86-64-v2 on RHEL 9), a gate unit whose
+  stack protector is turned back on, one with AddressSanitizer after `-fno-sanitize=all`, a cl gate unit
+  without `/GS-`, a gate source in an `avx2` target, FMA, AVX-512, `-march=native`, fast-math and contraction;
+  `ok.json` (GCC, Clang, MSVC, clang-cl, every level, a sanitizer build's gate unit, a resource script) must
+  pass.
+- **Check 2**: objects with AVX2 code, `lock cmpxchg16b`, a stack protector and AddressSanitizer, audited as
+  gate objects (`MODE=object`), must fail.
+- **Check 4**: `lint_isa_fixture_base`, a launcher-like `base` image that links the base copies of `core` and
+  `patch` (with mimalloc, Monocypher and zstd), must pass: zstd's BMI2 functions are on the self-dispatch
+  list, and the `rep bsf` that GCC and Clang emit for count-trailing-zeros at x86-64-v1 (TZCNT's encoding,
+  executed as BSF before BMI1) is accepted; `lint_isa_fixture_base_canary`, a base image with one
+  `target("avx2")` function, must fail and name only it. Accepting TZCNT's encoding leaves a false negative:
+  the bytes do not tell the compilers' idiom (used only where the operand is known to be non-zero) from a real
+  TZCNT, so a `target("bmi")` function that relies on TZCNT's result for a zero operand passes check 4 and
+  computes a wrong value on a CPU without BMI1. `lint_isa_base_sources` (`MODE=base_sources`) narrows it: the
+  `include/` and `src/` directories of the Helios base modules (`HELIOS_ISA_BASE_MODULES` that exist) may hold
+  no target attribute or pragma that enables BMI, no TZCNT intrinsic and no TZCNT in inline assembly, and its
+  fixture (`tests/isa/base_sources`) holds each form once. It is a text scan: a macro that expands to a target
+  attribute is not seen, and third-party base libraries are not scanned.
+
+On MSVC and clang-cl, check 1 reads the Ninja presets' `compile_commands.json` (`windows-msvc-*`,
+`windows-clang-cl`) and understands `/arch:` and `/clang:` options. The object and image checks need GNU
+binutils; `helios-tool isa-audit` (WP-0.2r part 2) takes over checks 2–4 on COFF images and PDBs and adds
+check 3's Windows half (TLS callbacks and `.CRT$X*` entries enumerated and attributed against
+`cmake/pre_main_allowlist.cmake`, `_pRawDllMain`, load order) and Linux's `.init_array` priorities and
+`.dynsym`, and check 5 (SDE and qemu, CL-17). Until then `tools/ci/msvc_gate_audit.ps1` can run check 2 with
+dumpbin by hand from a Visual Studio developer prompt (no CI job calls it):
 
 - `dumpbin /disasm:nobytes cpu_gate.c.obj cpu_gate_hook.c.obj` — no mnemonic starting with `v`, no
   `ymm`/`zmm` operand, no BMI/LZCNT/TZCNT/POPCNT/MOVBE/SSE3+ instruction;
 - `dumpbin /symbols` — `External` symbols are only `helios_cpu_gate_run` and
   `helios_cpu_gate_crt_entry` (defined) plus `HELIOS_ISA_GATE_ALLOWED_IMPORTS` (`UNDEF`); no
   `__security_cookie` / `__security_check_cookie` (the gate TUs build with `/GS-`).
-- The image check of 02 §1.1 item 3 (the gate is the only non-CRT `.CRT$XCA`–`.CRT$XCT` contributor,
-  nothing in `.CRT$XD*`) needs the linker map (`/MAP`); it lands with the client and cell
-  executables (WP-0.17, WP-0.14).
-- Base-image disassembly (item 4) and the Intel SDE emulation runs (item 5, CL-17) start with the
-  launcher (WP-0.17) and the nightly tier (WP-0.3).
 
 ## Plan conformance
 
 Plan-Rev: 3
 
-`isa_audit.cmake` was written to plan revision 3, before the ADR-011 amendment (revision 4). Its open deltas
-are in 09 §5.10.4 (b), and WP-0.2r reworks them, so this README keeps revision 3 (D7). The layering, licence,
+`isa_audit.cmake` was written to plan revision 3, before the ADR-011 amendment (revision 4). WP-0.2r part 1
+reworked it to revision 13 for checks 1, 2 and 4 and the image levels (`cmake/HeliosIsa.cmake`); check 3's
+Windows half and check 5 remain open in 09 §5.10.4 (b) for WP-0.2r part 2, so this README keeps revision 3
+(D7) until then. The layering, licence,
 IP-name and manifest lints have no open delta: WP-0.2 checked them against revision 11 (02 §1.1, 01 §4.1,
 §5.2; revision 11 changed 04 §3.2 and status sections only) and added the `HELIOS_MODULE_ORDER` completeness,
 row-flag, row-peer, single-row and `apps/` executable checks. `vendor_patches.cmake`

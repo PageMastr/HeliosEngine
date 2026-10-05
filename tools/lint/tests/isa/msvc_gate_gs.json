@@ -73,8 +73,26 @@
   },
   {
     "directory": "C:\\b",
-    "command": "C:\\VS\\cl.exe /nologo /TP /W4 /arch:AVX2 /fp:precise /Fothird_party\\CMakeFiles\\helios_core.base.dir\\engine\\core\\src\\log.cpp.obj /c C:\\src\\engine\\core\\src\\log.cpp",
-    "file": "C:\\src\\engine\\core\\src\\log.cpp",
-    "output": "third_party\\CMakeFiles\\helios_core.base.dir\\engine\\core\\src\\log.cpp.obj"
+    "command": "C:\\VS\\cl.exe /nologo /TC /W4 /GS- /Foengine\\core\\CMakeFiles\\helios_core_cpugate_hook.dir\\src\\platform\\win32\\cpu_gate_hook.c.obj /c C:\\src\\engine\\core\\src\\platform\\win32\\cpu_gate_hook.c",
+    "file": "C:\\src\\engine\\core\\src\\platform\\win32\\cpu_gate_hook.c",
+    "output": "engine\\core\\CMakeFiles\\helios_core_cpugate_hook.dir\\src\\platform\\win32\\cpu_gate_hook.c.obj"
+  },
+  {
+    "directory": "C:\\b",
+    "command": "C:\\VS\\clang-cl.exe /nologo /TC /W4 /GS- -fno-sanitize=all /Foengine\\core\\CMakeFiles\\helios_core_cpugate.dir\\src\\cpugate\\cpu_gate.c.obj /c C:\\src\\engine\\core\\src\\cpugate\\cpu_gate.c",
+    "file": "C:\\src\\engine\\core\\src\\cpugate\\cpu_gate.c",
+    "output": "engine\\core\\CMakeFiles\\helios_core_cpugate.dir\\src\\cpugate\\cpu_gate.c.obj"
+  },
+  {
+    "directory": "/build",
+    "command": "/usr/bin/clang -I/src/engine/core/include -g -fsanitize=address,undefined -fno-omit-frame-pointer -march=x86-64 -mtune=generic -mno-sse3 -mno-ssse3 -mno-sse4.1 -mno-sse4.2 -mno-popcnt -mno-avx -mno-avx2 -mno-fma -mno-bmi -mno-bmi2 -mno-lzcnt -mno-f16c -mno-movbe -mno-avx512f -mno-cx16 -fno-stack-protector -fno-sanitize=all -o x/CMakeFiles/helios_core_cpugate.dir/engine/core/src/cpugate/cpu_gate.c.o -c /src/engine/core/src/cpugate/cpu_gate.c",
+    "file": "/src/engine/core/src/cpugate/cpu_gate.c",
+    "output": "x/CMakeFiles/helios_core_cpugate.dir/engine/core/src/cpugate/cpu_gate.c.o"
+  },
+  {
+    "directory": "C:\\b",
+    "command": "C:\\VS\\cl.exe /nologo /TC /W4 /Foengine\\core\\CMakeFiles\\helios_core_cpugate.dir\\src\\cpugate\\cpu_gate.c.obj /c C:\\src\\engine\\core\\src\\cpugate\\cpu_gate.c",
+    "file": "C:\\src\\engine\\core\\src\\cpugate\\cpu_gate.c",
+    "output": "engine\\core\\CMakeFiles\\helios_core_cpugate.dir\\src\\cpugate\\cpu_gate.c.obj"
   }
 ]

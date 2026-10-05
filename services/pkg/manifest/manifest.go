@@ -224,6 +224,15 @@ func validBuildID(s string) bool {
 	return true
 }
 
+// ValidProductID reports whether s is a product ID: ^[a-z][a-z0-9-]{2,31}$ (08 §2.10.1).
+func ValidProductID(s string) bool { return validProductID(s) }
+
+// ValidPlatform reports whether s is a platform name: ^[a-z][a-z0-9_-]{1,31}$.
+func ValidPlatform(s string) bool { return validPlatform(s) }
+
+// ValidBuildID reports whether s is a build ID, a CDN path segment: ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$.
+func ValidBuildID(s string) bool { return validBuildID(s) }
+
 func lowerByte(c byte) byte {
 	if c >= 'A' && c <= 'Z' {
 		return c - 'A' + 'a'

@@ -76,6 +76,10 @@ endif()
 set(HELIOS_ISA_BASE_MODULES core app ui text loc patch crash)
 set(HELIOS_ISA_BASE_THIRD_PARTY SDL3-static tp_rmlui tp_freetype tp_harfbuzz tp_sheenbidi tp_libunibreak tp_zstd
                                 tp_monocypher tp_yyjson tp_sentry)
+# Libraries that are never base-eligible, even when the closure of a module or library above reaches them
+# (02 §1.1 names physics, pcg and tp_jolt): if core ever linked tp_jolt, a base image that links core must
+# fail configure instead of getting a tp_jolt copy.
+set(HELIOS_ISA_BASE_DENY helios_physics helios_pcg tp_jolt)
 
 function(helios_apply_isa_level target level)
   if(level STREQUAL "avx2")
@@ -172,8 +176,8 @@ function(_helios_isa_closure from out)
 endfunction()
 
 # The targets a base image may link: HELIOS_ISA_BASE_MODULES, HELIOS_ISA_BASE_THIRD_PARTY, and the
-# libraries in their closures that are not modules. A module that only their closure reaches stays
-# ineligible, so a base image that reaches it (ui -> script, say) fails configure.
+# libraries in their closures that are not modules, except HELIOS_ISA_BASE_DENY. A module that only their
+# closure reaches stays ineligible, so a base image that reaches it (ui -> script, say) fails configure.
 function(_helios_isa_base_eligible out)
   set(roots "")
   foreach(m IN LISTS HELIOS_ISA_BASE_MODULES)
@@ -201,6 +205,15 @@ function(_helios_isa_base_eligible out)
     endforeach()
   endforeach()
   list(REMOVE_DUPLICATES eligible)
+  foreach(t IN LISTS HELIOS_ISA_BASE_DENY)
+    if(TARGET ${t})
+      get_target_property(aliased ${t} ALIASED_TARGET)
+      if(aliased)
+        set(t ${aliased})
+      endif()
+      list(REMOVE_ITEM eligible ${t})
+    endif()
+  endforeach()
   set(${out} "${eligible}" PARENT_SCOPE)
 endfunction()
 
@@ -317,10 +330,14 @@ function(_helios_isa_make_base_copy tgt out)
         message(FATAL_ERROR "helios isa: no base copy of '${tgt}': its source '${s}' is a generator expression "
                             "(link an object library instead of listing its objects)")
       endif()
-      # A relative source is relative to the library's directory (or, when generated, its build directory).
+      # A relative source is where CMake looks for it: in the build directory when it is GENERATED (it may
+      # not exist yet at configure time), else in the source directory, else in the build directory.
       set(path "${s}")
       if(NOT IS_ABSOLUTE "${path}")
-        if(EXISTS "${srcDir}/${s}" OR NOT EXISTS "${binDir}/${s}")
+        get_source_file_property(generated "${binDir}/${s}" TARGET_DIRECTORY ${tgt} GENERATED)
+        if(generated)
+          set(path "${binDir}/${s}")
+        elseif(EXISTS "${srcDir}/${s}" OR NOT EXISTS "${binDir}/${s}")
           set(path "${srcDir}/${s}")
         else()
           set(path "${binDir}/${s}")
@@ -419,6 +436,23 @@ function(helios_isa_finalize)
   foreach(img IN LISTS baseImages)
     _helios_isa_closure(${img} reach)
     set(bad OFF)
+    # Objects named in the image's own sources are not link items: $<TARGET_OBJECTS:x> compiles x's units
+    # at x's level, and only gate object libraries and base copies are built below avx2.
+    get_target_property(imgSources ${img} SOURCES)
+    if(imgSources)
+      string(REGEX MATCHALL "\\$<TARGET_OBJECTS:[^>]+>" objRefs "${imgSources}")
+      foreach(ref IN LISTS objRefs)
+        string(REGEX REPLACE "^\\$<TARGET_OBJECTS:(.+)>$" "\\1" lib "${ref}")
+        set(libLevel "")
+        if(TARGET "${lib}")
+          get_target_property(libLevel "${lib}" HELIOS_ISA_LEVEL)
+        endif()
+        if(NOT libLevel MATCHES "^(gate|base)$")
+          set(bad ON)
+          list(APPEND errors "helios isa: base image '${img}' compiles in the objects of '${lib}' (${ref}), which is built only at avx2: link the library instead, so that the image gets its base copy (02 §1.1)")
+        endif()
+      endforeach()
+    endif()
     foreach(d IN LISTS reach)
       _helios_isa_base_allowed(${d} ok)
       if(ok)

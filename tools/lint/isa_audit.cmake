@@ -9,6 +9,7 @@
 #   cmake -DMODE=object     -DOBJECT=<file.o>  -DALLOWLIST=... -DOBJDUMP=... -DNM=... -P isa_audit.cmake
 #   cmake -DMODE=image      -DIMAGE=<exe>      -DALLOWLIST=... -DREADELF=... -DNM=... -P isa_audit.cmake
 #   cmake -DMODE=base_image -DIMAGE=<exe>      -DALLOWLIST=... -DOBJDUMP=... -P isa_audit.cmake
+#   cmake -DMODE=base_sources -DSOURCE_DIRS=<dir>[|<dir>...] -DALLOWLIST=... -P isa_audit.cmake
 #
 # LEVELS is written at configure time by helios_isa_finalize() (cmake/HeliosIsa.cmake): one
 # "<target> <level>" line per target, the level being avx2, base or gate. A violation fails the run and is
@@ -21,7 +22,11 @@
 #       beyond x86-64, ...);
 #     - base and gate units carry no flag above x86-64-v1 (-msse3…-msse4.2, -mpopcnt, -mlzcnt, -mcx16,
 #       -mavx*, -mbmi*, -mfma, an -march other than x86-64, an /arch other than SSE2), forwarded
-#       /clang: options included;
+#       /clang: options included, and carry the base set itself: with GCC, Clang and MinGW an -march
+#       (x86-64) and -mtune=generic, because their default -march is the toolchain's (x86-64-v2 on
+#       RHEL 9, for one); x64 MSVC and clang-cl have no base flags;
+#     - gate units also end with the stack protector off (-fno-stack-protector, or /GS- with cl and
+#       clang-cl) and no sanitizer still enabled (-fno-sanitize=all after any -fsanitize=);
 #     - the CPU gate's sources are compiled only in gate-level targets;
 #     - no unit uses -march=native, fast-math or FP contraction (determinism across compilers, 02 §7.1).
 #  2. The gate objects (GNU binutils): no VEX/EVEX, BMI, LZCNT/TZCNT, POPCNT, MOVBE, CMPXCHG16B or SSE3+
@@ -31,10 +36,13 @@
 #     exactly one entry, the gate, and no R_X86_64_IRELATIVE relocation exists.
 #  4. Base images after linking (GNU binutils): every instruction above x86-64-v1 is mapped to its
 #     symbol, and every such symbol must be on HELIOS_ISA_SELF_DISPATCH_SYMBOLS. TZCNT's encoding is
-#     accepted as BSF: GCC and Clang emit `rep bsf` for count-trailing-zeros at x86-64-v1 (see below).
+#     accepted as BSF: GCC and Clang emit `rep bsf` for count-trailing-zeros at x86-64-v1 (see below),
+#     which leaves a false negative that MODE=base_sources narrows for Helios's own base modules.
+#     MODE=base_sources: the Helios base modules' sources hold no target attribute or pragma that grants
+#     BMI, and no TZCNT intrinsic or TZCNT in inline assembly (a text scan; see _isa_scan_base_sources).
 # MSVC and clang-cl: check 1 runs on the Ninja generators' compile_commands.json. Checks 2 to 4 on COFF
 # images and PDBs (dumpbin, llvm-pdbutil) are `helios-tool isa-audit`'s, WP-0.2r part 2; until then
-# tools/ci/msvc_gate_audit.ps1 runs check 2 with dumpbin.
+# tools/ci/msvc_gate_audit.ps1 can run check 2 with dumpbin by hand (no CI job calls it).
 
 cmake_minimum_required(VERSION 3.28)
 
@@ -85,21 +93,25 @@ function(_isa_family tokens out)
 endfunction()
 
 # Evaluates a command's tokens. Sets <out>_<feature> (ON/OFF) for _ISA_FEATURES and popcnt, and
-# <out>_march (and <out>_marchtoken, the option as given), <out>_msvcarch, <out>_fastmath,
-# <out>_contract, <out>_contractoff (an explicit -ffp-contract=off), <out>_abovev1 (every option that
-# enables something above x86-64-v1) and <out>_named (the positive -m extension options). Explicit -m
-# options win over -march's implied set whatever their order (GCC and Clang); among explicit options the
-# last one wins.
+# <out>_march (and <out>_marchtoken, the option as given), <out>_mtune, <out>_msvcarch, <out>_fastmath,
+# <out>_contract, <out>_contractoff (an explicit -ffp-contract=off), <out>_stackoff (the last
+# stack-protector option turns it off: -fno-stack-protector or /GS-), <out>_sanitize (the -fsanitize=
+# options still in effect after the last -fno-sanitize=all), <out>_abovev1 (every option that enables
+# something above x86-64-v1) and <out>_named (the positive -m extension options). Explicit -m options win
+# over -march's implied set whatever their order (GCC and Clang); among explicit options the last one wins.
 function(_isa_eval_flags tokens family out)
   foreach(f IN LISTS _ISA_FEATURES ITEMS popcnt)
     set(explicit_${f} "")
   endforeach()
   set(march "")
   set(marchToken "")
+  set(mtune "")
   set(msvcArch "")
   set(fastmath OFF)
   set(contract OFF)
   set(contractOff OFF)
+  set(stackOff OFF)
+  set(sanitize "")
   set(aboveV1 "")
   set(named "")
   foreach(t IN LISTS tokens)
@@ -128,6 +140,16 @@ function(_isa_eval_flags tokens family out)
     if(t MATCHES "^-march=(.+)$")
       set(march "${CMAKE_MATCH_1}")
       set(marchToken "${t}")
+    elseif(t MATCHES "^-mtune=(.+)$")
+      set(mtune "${CMAKE_MATCH_1}")
+    elseif(t MATCHES "^-fstack-protector(-strong|-all|-explicit)?$" OR t MATCHES "^[-/]GS$")
+      set(stackOff OFF)
+    elseif(t MATCHES "^-fno-stack-protector$" OR t MATCHES "^[-/]GS-$")
+      set(stackOff ON)
+    elseif(t MATCHES "^[-/]fsanitize=.")
+      list(APPEND sanitize "${t}")
+    elseif(t MATCHES "^-fno-sanitize=all$")
+      set(sanitize "")
     elseif(t MATCHES "^[-/]arch:(.+)$")
       set(msvcArch "${CMAKE_MATCH_1}")
     elseif(t MATCHES "^-m(no-)?(avx512[a-z0-9]*|avx10[.0-9a-z-]*)$")
@@ -200,10 +222,13 @@ function(_isa_eval_flags tokens family out)
   endforeach()
   set(${out}_march "${march}" PARENT_SCOPE)
   set(${out}_marchtoken "${marchToken}" PARENT_SCOPE)
+  set(${out}_mtune "${mtune}" PARENT_SCOPE)
   set(${out}_msvcarch "${msvcArch}" PARENT_SCOPE)
   set(${out}_fastmath ${fastmath} PARENT_SCOPE)
   set(${out}_contract ${contract} PARENT_SCOPE)
   set(${out}_contractoff ${contractOff} PARENT_SCOPE)
+  set(${out}_stackoff ${stackOff} PARENT_SCOPE)
+  set(${out}_sanitize "${sanitize}" PARENT_SCOPE)
   set(${out}_abovev1 "${aboveV1}" PARENT_SCOPE)
   set(${out}_named "${named}" PARENT_SCOPE)
 endfunction()
@@ -410,8 +435,12 @@ function(_isa_check_base_image img)
   endif()
   # One entry per symbol: its name, its number of such instructions and the first one (parallel lists).
   # TZCNT's encoding is the exception: GCC and Clang emit it (`rep bsf`) for count-trailing-zeros at
-  # x86-64-v1 with -mtune=generic, only where the operand cannot be zero, and a CPU without BMI1
-  # executes it as BSF with the same result. It is counted, not reported. LZCNT has no such idiom.
+  # x86-64-v1 with -mtune=generic, where the compiler knows the operand is non-zero, and a CPU without
+  # BMI1 executes it as BSF with the same result. It is counted, not reported. LZCNT has no such idiom.
+  # The bytes cannot tell that idiom from a real TZCNT, so this is a known false negative: code built for
+  # BMI1 (a target("bmi") attribute or pragma, or inline assembly) that relies on TZCNT's result for a zero
+  # operand passes here and computes a wrong value on a CPU without BMI1. MODE=base_sources rejects those
+  # forms in the Helios base modules' sources; third-party base libraries are not scanned.
   set(symbols "")
   set(counts "")
   set(firsts "")
@@ -465,6 +494,83 @@ function(_isa_check_base_image img)
   set(_isa_base_listed "${listed}" PARENT_SCOPE)
   set(_isa_base_repbsf ${repBsf} PARENT_SCOPE)
 endfunction()
+
+# ---------------------------------------------------------------------------------------------
+# Check 4's complement: the Helios base modules' sources (02 §1.1). Check 4 accepts TZCNT's encoding as
+# BSF, so it cannot see code that was built for BMI1 and relies on TZCNT for a zero operand. Such code
+# needs a target attribute or pragma that enables BMI (GCC rejects _tzcnt_u32 without one), a TZCNT
+# intrinsic or inline assembly; this scan rejects all three in the given directories. It is a text scan:
+# a macro that expands to a target attribute (zstd's BMI2_TARGET_ATTRIBUTE, say) is not seen, which is why
+# it covers Helios's own modules only. Comments (// and lines that start a /* or * block) are skipped.
+# ---------------------------------------------------------------------------------------------
+function(_isa_scan_base_sources dirs)
+  set(errs "")
+  set(scanned 0)
+  foreach(d IN LISTS dirs)
+    if(NOT IS_DIRECTORY "${d}")
+      list(APPEND errs "${d}: not a directory")
+      continue()
+    endif()
+    file(GLOB_RECURSE files LIST_DIRECTORIES false
+         "${d}/*.c" "${d}/*.cc" "${d}/*.cpp" "${d}/*.cxx" "${d}/*.h" "${d}/*.hh" "${d}/*.hpp" "${d}/*.hxx"
+         "${d}/*.inl" "${d}/*.ipp")
+    list(SORT files)
+    foreach(f IN LISTS files)
+      math(EXPR scanned "${scanned} + 1")
+      file(READ "${f}" text)
+      # Protect what would change CMake's list splitting (a line-continuation backslash would escape
+      # the separator that replaces its newline); the placeholders are undone in the report.
+      string(REPLACE "\\" "<BS>" text "${text}")
+      string(REPLACE ";" "<SEMI>" text "${text}")
+      string(REPLACE "[" "<LB>" text "${text}")
+      string(REPLACE "]" "<RB>" text "${text}")
+      string(REPLACE "\r" "" text "${text}")
+      string(REPLACE "\n" ";" lines "${text}")
+      set(n 0)
+      foreach(line IN LISTS lines)
+        math(EXPR n "${n} + 1")
+        string(REGEX REPLACE "//.*$" "" code "${line}")
+        if(code MATCHES "^[ \t]*(/\\*|\\*)")
+          continue()
+        endif()
+        set(what "")
+        if(code MATCHES "(^|[^A-Za-z0-9_])(__)?target(_clones)?(__)?[ \t]*\\([ \t]*\"[^\"]*(bmi|arch=)")
+          set(what "a target attribute or pragma that enables BMI")
+        elseif(code MATCHES "(^|[^A-Za-z0-9_])(_+tzcnt|_mm_tzcnt|__builtin_ia32_tzcnt)")
+          set(what "a TZCNT intrinsic")
+        elseif(code MATCHES "\"[^\"]*(tzcnt|rep[ \t]*bsf)")
+          set(what "TZCNT in inline assembly")
+        endif()
+        if(what)
+          string(STRIP "${code}" shown)
+          list(APPEND errs "${f}:${n}: ${what} (${shown}): check 4 reads TZCNT as BSF, so a base image cannot rely on TZCNT for a zero operand")
+        endif()
+      endforeach()
+    endforeach()
+  endforeach()
+  set(_isa_sources_errors "${errs}" PARENT_SCOPE)
+  set(_isa_sources_scanned ${scanned} PARENT_SCOPE)
+endfunction()
+
+if(MODE STREQUAL "base_sources")
+  string(REPLACE "|" ";" dirs "${SOURCE_DIRS}")
+  if(NOT dirs)
+    message(FATAL_ERROR "isa_audit: MODE=base_sources needs SOURCE_DIRS (directories separated by |)")
+  endif()
+  _isa_scan_base_sources("${dirs}")
+  if(_isa_sources_errors)
+    list(LENGTH _isa_sources_errors n)
+    string(REPLACE ";" "\n  " text "${_isa_sources_errors}")
+    string(REPLACE "<SEMI>" ";" text "${text}")
+    string(REPLACE "<LB>" "[" text "${text}")
+    string(REPLACE "<RB>" "]" text "${text}")
+    string(REPLACE "<BS>" "\\" text "${text}")
+    message(FATAL_ERROR "ISA audit failed (${n} finding(s) in base-module sources):\n  ${text}\n")
+  endif()
+  message(STATUS "ISA audit: ${_isa_sources_scanned} base-module source files hold no BMI target, TZCNT intrinsic "
+                 "or TZCNT assembly")
+  return()
+endif()
 
 if(MODE STREQUAL "image")
   if(NOT READELF)
@@ -645,6 +751,34 @@ macro(_isa_flush_entry)
       elseif(f_abovev1)
         string(REPLACE ";" " " en "${f_abovev1}")
         _violation("${unit}: baseline unit (${what}) compiled with flags above x86-64-v1 (${en})")
+      endif()
+      # The level set itself must be there, not only nothing above it: GCC, Clang and MinGW otherwise
+      # build for the toolchain's default -march, which is x86-64-v2 on RHEL 9, x86-64-v3 on RHEL 10 and
+      # anything a --with-arch build chose. (x64 MSVC and clang-cl have no base flags: /arch:SSE2 is the
+      # default.) The gate adds its object rules: no stack protector or /GS cookie, no instrumentation.
+      set(missing "")
+      if(family STREQUAL "gnu")
+        if(f_march STREQUAL "")
+          list(APPEND missing "-march=x86-64")
+        endif()
+        if(NOT f_mtune STREQUAL "generic")
+          list(APPEND missing "-mtune=generic")
+        endif()
+      endif()
+      if(level STREQUAL "gate" AND NOT f_stackoff)
+        if(family STREQUAL "gnu")
+          list(APPEND missing "-fno-stack-protector")
+        else()
+          list(APPEND missing "/GS-")
+        endif()
+      endif()
+      if(missing)
+        string(REPLACE ";" ", " text "${missing}")
+        _violation("${unit}: baseline unit (${what}) built without its level set (missing: ${text}) (02 §1.1)")
+      endif()
+      if(level STREQUAL "gate" AND f_sanitize)
+        string(REPLACE ";" " " text "${f_sanitize}")
+        _violation("${unit}: CPU-gate unit built with sanitizer instrumentation (${text}), whose runtime does not exist yet when the gate runs (02 §1.1)")
       endif()
       if(level STREQUAL "gate" AND NOT SKIP_OBJECTS)
         set(obj "${outN}")

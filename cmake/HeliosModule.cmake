@@ -28,7 +28,8 @@
 #   The role also picks the image's ISA level (02 §1.1, cmake/HeliosIsa.cmake): launcher and bootstrap
 #   are `base` (x86-64-v1) and link `.base` copies of their modules; every other role is `avx2`, and so
 #   is everything it links. ISA overrides the role's level for the ISA audit's fixtures only: it is a
-#   configure error under apps/ and engine/, where the real images live.
+#   configure error outside tools/lint/ (the calling listfile) and under apps/ and engine/, where the real
+#   images live.
 #   Windows executables get the Helios manifest (helios_windows_manifest). The CPU gate (a
 #   pre-initializer that refuses CPUs without AVX2, 02 §1.1 / 08 §2.2) is linked into every avx2 image of
 #   a gate role (client cell gateway voice editor bot tool) unless NO_CPU_GATE; CPU_GATE forces it into
@@ -238,11 +239,19 @@ function(helios_executable name)
   endif()
   if(DEFINED E_ISA)
     file(RELATIVE_PATH rel "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
+    # The audit's fixtures live in tools/lint (lint_tests.cmake and the layering fixture project); the
+    # listfile that calls helios_executable() must be there.
+    set(fixtureDir "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tools/lint")
+    cmake_path(IS_PREFIX fixtureDir "${CMAKE_CURRENT_LIST_FILE}" NORMALIZE inFixtures)
     if(NOT E_ISA MATCHES "^(avx2|base)$")
       message(FATAL_ERROR "helios_executable(${name}): ISA is avx2 or base, not '${E_ISA}'")
     elseif(rel MATCHES "^(apps|engine)(/|$)")
       message(FATAL_ERROR "helios_executable(${name}): ISA is for the ISA audit's fixtures only; the level of an "
                           "image under '${rel}/' comes from its ROLE (${role}: ${level}; 02 §1.1)")
+    elseif(NOT inFixtures)
+      message(FATAL_ERROR "helios_executable(${name}): ISA is for the ISA audit's fixtures only, which are declared "
+                          "under tools/lint/, not in ${CMAKE_CURRENT_LIST_FILE}; the level of an image comes from "
+                          "its ROLE (${role}: ${level}; 02 §1.1)")
     endif()
     set(level ${E_ISA})
   endif()

@@ -124,7 +124,12 @@ if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
       "fast_math|fast-math"
       "contract|FP contraction enabled"
       "msvc_arch|log.cpp .helios_core.base.: baseline unit .base image. compiled with AVX-class flags .avx, avx2."
-      "clang_cl_forwarded|window.cpp .fx_launcher.: baseline unit .base image. compiled with AVX-class flags .avx2, bmi2.")
+      "clang_cl_forwarded|window.cpp .fx_launcher.: baseline unit .base image. compiled with AVX-class flags .avx2, bmi2."
+      "base_default|ISA audit failed .1 violation.*log.cpp .helios_core.base.: baseline unit .base image. built without its level set .missing: -march=x86-64, -mtune=generic."
+      "gate_default|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: baseline unit .CPU gate. built without its level set .missing: -march=x86-64, -mtune=generic."
+      "gate_protector|ISA audit failed .1 violation.*cpu_gate_hook.c .helios_core_cpugate_hook.: baseline unit .CPU gate. built without its level set .missing: -fno-stack-protector."
+      "msvc_gate_gs|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: baseline unit .CPU gate. built without its level set .missing: /GS-."
+      "gate_sanitize|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: CPU-gate unit built with sanitizer instrumentation .-fsanitize=address.")
     string(REPLACE "|" ";" parts "${case}")
     list(GET parts 0 fixture)
     list(GET parts 1 expect)
@@ -189,6 +194,32 @@ if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
       COMMAND ${CMAKE_COMMAND} ${isaCommon} ${isaTools} -DMODE=base_image
               "-DIMAGE=$<TARGET_FILE:lint_isa_fixture_base_canary>" -P ${LINT}/isa_audit.cmake)
   endif()
+endif()
+
+# Check 4's complement (MODE=base_sources): check 4 reads TZCNT's encoding as BSF, so the Helios base
+# modules' include/ and src/ directories may hold no BMI target attribute or pragma, TZCNT intrinsic or
+# TZCNT assembly. A text scan, so it runs on every toolchain; the seeded fixture holds each form once.
+if(isaX86)
+  set(baseSourceDirs "")
+  foreach(m IN LISTS HELIOS_ISA_BASE_MODULES)
+    if(TARGET helios_${m})
+      get_target_property(dir helios_${m} SOURCE_DIR)
+      foreach(sub include src)
+        if(IS_DIRECTORY "${dir}/${sub}")
+          list(APPEND baseSourceDirs "${dir}/${sub}")
+        endif()
+      endforeach()
+    endif()
+  endforeach()
+  if(baseSourceDirs)
+    string(REPLACE ";" "|" baseSourceDirs "${baseSourceDirs}")
+    helios_lint_test(lint_isa_base_sources COMMAND ${CMAKE_COMMAND} ${isaCommon} -DMODE=base_sources
+      "-DSOURCE_DIRS=${baseSourceDirs}" -P ${LINT}/isa_audit.cmake)
+  endif()
+  helios_lint_test(lint_isa_base_sources_detects_tzcnt
+    EXPECT_FAIL "ISA audit failed .4 finding.s. in base-module sources.:.*tzcnt_bmi.c:7: a target attribute or pragma that enables BMI.*tzcnt_bmi.c:9: a target attribute or pragma that enables BMI.*tzcnt_bmi.c:10: a TZCNT intrinsic.*tzcnt_bmi.c:15: TZCNT in inline assembly"
+    COMMAND ${CMAKE_COMMAND} ${isaCommon} -DMODE=base_sources -DSOURCE_DIRS=${LINT_TESTS}/isa/base_sources
+            -P ${LINT}/isa_audit.cmake)
 endif()
 
 # ---------------------------------------------------------------------------------------------
@@ -556,9 +587,11 @@ helios_lint_test(lint_run_lints_status_python
 # ---------------------------------------------------------------------------------------------
 # Module layering and ISA levels (02 §1.1): a fixture project configured once per case. Good graphs
 # configure; each seeded violation must stop configure with its diagnostic. The isa_* cases check the
-# image levels of cmake/HeliosIsa.cmake: base copies, and the configure errors for a base image that links
-# an avx2 library (tp_jolt, physics), an ISA override outside the fixtures, and ISA options on a
-# library's interface.
+# image levels of cmake/HeliosIsa.cmake: base copies (a generated source included), and the configure
+# errors for a base image that links an avx2 library (tp_jolt, physics, tp_jolt through core) or compiles
+# in an avx2 object library's objects, an ISA override outside the fixtures or with an unknown level,
+# CPU_GATE on a base image, a level set by hand on a library, a gate target that is not an object library,
+# and ISA options on a library's interface.
 # ---------------------------------------------------------------------------------------------
 # The fixture declares LANGUAGES NONE and stops right after the checks, so no compiler is probed;
 # the generator is passed through only so CMake does not go looking for a default one.
@@ -606,7 +639,15 @@ foreach(case
     "isa_base_links_physics|helios isa: base image 'fx-bootstrap' links 'helios_physics', which is built only at avx2: fx-bootstrap -> fx_helper -> helios_physics"
     "isa_avx2_links_copy|helios isa: 'fx-client' .avx2. links the base copy 'helios_core.base': only base images link base copies"
     "isa_override_in_apps|helios_executable.fx-isa-app.: ISA is for the ISA audit's fixtures only.*'apps/isa/'"
-    "isa_interface_options|helios isa: 'tp_jolt' carries ISA compile options on its interface .-mavx2 -mbmi -mpopcnt -mlzcnt -mf16c.")
+    "isa_interface_options|helios isa: 'tp_jolt' carries ISA compile options on its interface .-mavx2 -mbmi -mpopcnt -mlzcnt -mf16c."
+    "isa_override_elsewhere|helios_executable.fx-isa-elsewhere.: ISA is for the ISA audit's fixtures only.*isa_elsewhere.cmake"
+    "isa_invalid_value|helios_executable.fx-isa-fixture.: ISA is avx2 or base, not 'sse4'"
+    "isa_cpu_gate_on_base|helios_executable.fx-launcher.: CPU_GATE on a base image"
+    "isa_level_on_library|helios isa: 'helios_math' has HELIOS_ISA_LEVEL 'base', which only helios_executable.. .avx2, base. and helios_cpu_gate_target.. .gate. set"
+    "isa_gate_target_not_object|helios_cpu_gate_target.fx_gate.: the CPU gate's units live in OBJECT libraries"
+    "isa_base_root_links_jolt|helios isa: base image 'fx-launcher' links 'tp_jolt', which is built only at avx2: fx-launcher -> helios_core -> tp_jolt"
+    "isa_base_target_objects|helios isa: base image 'fx-launcher' compiles in the objects of 'fx_kernels' .*, which is built only at avx2"
+    "isa_generated_source|FX_COPY_SOURCES: [^\n]*/layering/isa_generated_source/fx_generated.cpp.*HELIOS_FIXTURE_CONFIGURE_OK")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)
   list(GET parts 1 expect)

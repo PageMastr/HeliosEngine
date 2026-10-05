@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <iterator>
 #include <map>
@@ -322,6 +323,28 @@ TEST_CASE("manifest: the sorted-key collision check agrees with the obvious one 
     }
     CHECK(outcomes[0] >= 1000);
     CHECK(outcomes[1] >= 1000);
+}
+
+TEST_CASE("manifest: validating paths costs about the same at any depth") {
+    // A complexity check for every build and PR CI, not a budget (the perf: cases hold those, nightly): the
+    // first version looked up every '/'-prefix of every path, about len²/4 per path, so paths 508 levels deep
+    // validated tens of times slower than as many bytes of paths 4 levels deep; the sorted-key check costs
+    // about the same for both. Best of 5 of each, so a busy machine slows both.
+    constexpr u32 kFiles = 8192; // 8 MiB of 1024-byte paths
+    const auto bestSeconds = [](const Manifest& m) {
+        double best = 1e9;
+        for (int run = 0; run < 5; ++run) {
+            const auto t0 = std::chrono::steady_clock::now();
+            REQUIRE(validateManifest(m).ok());
+            best = std::min(best, std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+        }
+        return best;
+    };
+    const double deepS = bestSeconds(test::pathsManifest(kFiles, true));
+    const double flatS = bestSeconds(test::pathsManifest(kFiles, false));
+    MESSAGE("validating 8 MiB of paths: 508 levels deep " << deepS * 1e3 << " ms, 4 levels " << flatS * 1e3
+                                                           << " ms");
+    CHECK(deepS <= 4 * flatS);
 }
 
 TEST_CASE("manifest: every truncation and every byte flip fails, except in the uninterpreted signature") {

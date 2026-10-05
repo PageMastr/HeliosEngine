@@ -15,11 +15,16 @@ import (
 //   - a 50 GB install's manifest (20,000 files, 700,000 chunks, a 52.6 MB body): read (BLAKE2b, decode,
 //     validate) ≤ 400 ms and write (codec none) ≤ 400 ms;
 //   - deep-paths.hman, the deepest paths the limits allow (64 MiB of paths 508 directories deep, a 72 MB
-//     body): read ≤ 400 ms.
+//     body), whose collision keys arrive sorted, as a build's mostly do: read ≤ 400 ms;
+//   - the same paths with their keys in random order (an attacker's case: the collision check then sorts
+//     65,536 keys of 1 KiB): read ≤ 800 ms.
 //
 // As in pkg/cdc, go test runs packages in parallel, so a plain run asserts four times each budget (a
 // gross-regression floor) and HELIOS_PERF=1 the budgets themselves on a quiet machine.
-const budgetManifest = 400 * time.Millisecond
+const (
+	budgetManifest         = 400 * time.Millisecond
+	budgetShuffledDeepRead = 800 * time.Millisecond
+)
 
 func budgetScale() time.Duration {
 	if os.Getenv("HELIOS_PERF") == "1" {
@@ -97,7 +102,8 @@ func TestPerfManifest(t *testing.T) {
 }
 
 // The path-collision check is linear in path bytes plus a sort, so 64 MiB of paths 508 directories deep
-// reads within the read budget and costs about what as many bytes of paths without directories cost.
+// reads within the read budget and costs about what as many bytes of paths four directories deep cost; with
+// the keys in random order the sort costs more, within its own budget.
 // Looking up every '/'-prefix in a set (len²/4 per path) took 2.5 s here: the ratio fails it on any
 // machine, the budget on a quiet one.
 func TestPerfDeepPaths(t *testing.T) {
@@ -121,13 +127,17 @@ func TestPerfDeepPaths(t *testing.T) {
 	deep := read(marshal(pathsManifest(deepPathFiles, true)))
 	flat := read(marshal(pathsManifest(deepPathFiles, false)))
 	vector := read(readGolden(t, "deep-paths.hman"))
-	t.Logf("64 MiB of paths: 508 levels deep %v (deep-paths.hman %v), without directories %v",
-		deep.Round(time.Millisecond), vector.Round(time.Millisecond), flat.Round(time.Millisecond))
+	shuffled := read(marshal(shuffledDeepPaths(deepPathFiles)))
+	t.Logf("64 MiB of paths: 508 levels deep %v (deep-paths.hman %v, keys in random order %v), 4 levels of 255-byte names %v",
+		deep.Round(time.Millisecond), vector.Round(time.Millisecond), shuffled.Round(time.Millisecond), flat.Round(time.Millisecond))
 	if limit := budgetManifest * budgetScale(); deep > limit || vector > limit {
 		t.Fatalf("above %v (%dx the %v budget)", limit, budgetScale(), budgetManifest)
 	}
+	if limit := budgetShuffledDeepRead * budgetScale(); shuffled > limit {
+		t.Fatalf("keys in random order: above %v (%dx the %v budget)", limit, budgetScale(), budgetShuffledDeepRead)
+	}
 	if deep > 2*flat {
-		t.Fatalf("deep paths read %.1fx slower than flat ones of the same size (at most 2x)",
+		t.Fatalf("deep paths read %.1fx slower than paths 4 levels deep of the same size (at most 2x)",
 			float64(deep)/float64(flat))
 	}
 }

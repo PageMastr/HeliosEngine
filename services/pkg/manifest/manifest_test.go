@@ -176,6 +176,38 @@ func pathsManifest(n int, deep bool) *manifest.Manifest {
 	return m
 }
 
+// shuffledDeepPaths is pathsManifest(n, true) with its collision keys in random order: the first 16
+// directories are named "a" or "A" by the bits of a random permutation of the file index (SplitMix64(0x5EED)
+// Fisher-Yates), and the files are then sorted by path. Lowered, the paths sort by file index; as bytes, by
+// the permutation, so the collision check sorts n keys of 1 KiB from random order. As C++'s
+// test::shuffledDeepPaths.
+func shuffledDeepPaths(n int) *manifest.Manifest {
+	if n > 1<<16 {
+		panic("shuffledDeepPaths: at most 2^16 files")
+	}
+	m := pathsManifest(n, true)
+	perm := make([]uint32, n)
+	for i := range perm {
+		perm[i] = uint32(i)
+	}
+	rng := cdc.SplitMix64{State: 0x5EED}
+	for i := n; i > 1; i-- {
+		j := rng.Next() % uint64(i)
+		perm[i-1], perm[j] = perm[j], perm[i-1]
+	}
+	for i := range m.Files {
+		p := []byte(m.Files[i].Path)
+		for b := 0; b < 16; b++ {
+			if perm[i]>>(15-b)&1 != 0 {
+				p[2*b] = 'A'
+			}
+		}
+		m.Files[i].Path = string(p)
+	}
+	slices.SortFunc(m.Files, func(a, b manifest.File) int { return strings.Compare(a.Path, b.Path) })
+	return m
+}
+
 // deepPathFiles is the file count of deep-paths.hman: 64 MiB of 1024-byte paths.
 const deepPathFiles = manifest.MaxStringBytes / manifest.MaxPathBytes
 

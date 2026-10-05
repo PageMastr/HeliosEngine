@@ -7,7 +7,10 @@
 //   * a 50 GB install's manifest (700k chunks, 20k files): read (BLAKE2b, decode, validate) ≤ 400 ms and
 //     write (codec none) ≤ 400 ms on one core, well inside CL-1's 2 s launcher start;
 //   * deep-paths.hman, the deepest paths the limits allow (64 MiB of paths 508 directories deep, a 72 MB
-//     body): read ≤ 400 ms, and within 2x of as many bytes of paths without directories.
+//     body), whose collision keys arrive sorted, as a build's mostly do: read ≤ 400 ms, and within 2x of as
+//     many bytes of paths four directories deep;
+//   * the same paths with their keys in random order (an attacker's case: the collision check then sorts
+//     65,536 keys of 1 KiB): read ≤ 800 ms, and within 2x of the sorted-key read.
 // Timings are reported always and asserted only in optimized builds without sanitizers.
 #include <doctest/doctest.h>
 
@@ -122,7 +125,7 @@ TEST_CASE("perf: a 50 GB install's manifest reads and writes within budget") {
 
 // The path-collision check is linear in path bytes plus a sort. Looking up every '/'-prefix of every path in
 // a set (len²/4 per path) took 5.1-5.6 s on deep-paths.hman; the ratio to flat paths fails that anywhere.
-TEST_CASE("perf: the deepest paths the limits allow read within the 400 ms budget") {
+TEST_CASE("perf: the deepest paths the limits allow read within budget, keys sorted or not") {
     const auto readBest = [](const std::vector<u8>& file) {
         return bestSeconds(3, [&] { REQUIRE(readManifest(file).ok()); });
     };
@@ -135,13 +138,16 @@ TEST_CASE("perf: the deepest paths the limits allow read within the 400 ms budge
     const f64 vectorS = readBest(test::readBytes(test::vectorsDir() / "hman" / "deep-paths.hman"));
     const f64 deepS = readBest(zstd(test::pathsManifest(test::kDeepPathFiles, true)));
     const f64 flatS = readBest(zstd(test::pathsManifest(test::kDeepPathFiles, false)));
-    MESSAGE(std::format("64 MiB of paths: 508 levels deep {:.0f} ms (deep-paths.hman {:.0f} ms), without "
-                        "directories {:.0f} ms",
-                        deepS * 1e3, vectorS * 1e3, flatS * 1e3));
+    const f64 shuffledS = readBest(zstd(test::shuffledDeepPaths(test::kDeepPathFiles)));
+    MESSAGE(std::format("64 MiB of paths: 508 levels deep {:.0f} ms (deep-paths.hman {:.0f} ms, keys in random "
+                        "order {:.0f} ms), 4 levels of 255-byte names {:.0f} ms",
+                        deepS * 1e3, vectorS * 1e3, shuffledS * 1e3, flatS * 1e3));
 #if HELIOS_PATCH_ASSERT_BUDGETS
     CHECK(vectorS <= 0.400);
     CHECK(deepS <= 0.400);
     CHECK(deepS <= 2 * flatS);
+    CHECK(shuffledS <= 0.800);
+    CHECK(shuffledS <= 2 * deepS);
 #endif
 }
 

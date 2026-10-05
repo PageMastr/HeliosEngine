@@ -143,6 +143,25 @@ inline Manifest pathsManifest(u32 n, bool deep) {
 }
 inline constexpr u32 kDeepPathFiles = hman::kMaxStringBytes / hman::kMaxPathBytes;
 
+/// pathsManifest(n, true) with its collision keys in random order: the first 16 directories are named "a"
+/// or "A" by the bits of a random permutation of the file index (SplitMix64(0x5EED) Fisher-Yates), and the
+/// files are then sorted by path. Lowered, the paths sort by file index; as bytes, by the permutation, so
+/// the collision check sorts n keys of 1 KiB from random order. As Go's shuffledDeepPaths.
+inline Manifest shuffledDeepPaths(u32 n) {
+    REQUIRE(n <= (1u << 16));
+    Manifest m = pathsManifest(n, true);
+    std::vector<u32> perm(n);
+    for (u32 i = 0; i < n; ++i) perm[i] = i;
+    SplitMix64 rng(0x5EED);
+    for (u32 i = n; i > 1; --i) std::swap(perm[i - 1], perm[static_cast<usize>(rng.next() % i)]);
+    for (u32 i = 0; i < n; ++i)
+        for (int b = 0; b < 16; ++b)
+            if ((perm[i] >> (15 - b)) & 1) m.files[i].path[static_cast<usize>(2 * b)] = 'A';
+    std::sort(m.files.begin(), m.files.end(),
+              [](const ManifestFile& a, const ManifestFile& b) { return a.path < b.path; });
+    return m;
+}
+
 /// The error kind names the shared hostile vectors use.
 inline std::string errorKind(ErrorCode code) {
     switch (code) {

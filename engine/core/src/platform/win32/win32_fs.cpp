@@ -106,7 +106,8 @@ Result<void> fileSync(NativeFile file) {
     return {};
 }
 
-Result<void> atomicReplace(const std::filesystem::path& source, const std::filesystem::path& target) {
+Result<void> atomicReplace(const std::filesystem::path& source, const std::filesystem::path& target,
+                           bool durable) {
     // ReplaceFileW keeps the target's identity/attributes and is the documented way to swap in a
     // freshly written file; it requires an existing target, so fall back to MoveFileExW.
     if (GetFileAttributesW(target.c_str()) != INVALID_FILE_ATTRIBUTES) {
@@ -114,7 +115,9 @@ Result<void> atomicReplace(const std::filesystem::path& source, const std::files
             return {};
         }
     }
-    if (!MoveFileExW(source.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    DWORD flags = MOVEFILE_REPLACE_EXISTING;
+    if (durable) flags |= MOVEFILE_WRITE_THROUGH; // a cache's rename (fs::renameNoSync) does not wait for it
+    if (!MoveFileExW(source.c_str(), target.c_str(), flags)) {
         return lastError(std::format("replace '{}' with '{}'", displayPath(target), displayPath(source)));
     }
     return {};

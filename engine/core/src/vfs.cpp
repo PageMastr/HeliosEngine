@@ -56,6 +56,8 @@ bool iequalsAscii(std::string_view a, std::string_view b) noexcept {
     return true;
 }
 
+} // namespace
+
 /// Components that Win32 maps to something other than a file with that name: DOS device names
 /// (CON, NUL, COM1, ... also with an extension, e.g. "nul.json") and names ending in '.' or ' '
 /// (silently stripped, so "a." aliases "a"). Rejected on every platform so a native-directory mount
@@ -80,6 +82,8 @@ bool isNonPortableComponent(std::string_view part) noexcept {
     }
     return iequalsAscii(stem, "conin$") || iequalsAscii(stem, "conout$");
 }
+
+namespace {
 
 bool hasNonPortableComponent(std::string_view rel) noexcept {
     usize start = 0;

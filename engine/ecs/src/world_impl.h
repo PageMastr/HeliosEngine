@@ -148,7 +148,7 @@ struct World::Impl {
     std::deque<std::vector<std::byte>> defaults;  // default value bytes of plain components (+ align slack)
     U64Map indexById{MemoryTag::Unknown, 64}; // ComponentId -> index + 1
     std::map<std::string, u32, std::less<>> indexByName;
-    std::vector<u32> slotOfComponent;         // component index -> bound type slot (~0 = none)
+    std::vector<TypeKey> keyOfComponent;      // component index -> bound type key (0 = none)
     std::array<u32, kMaxReplicatedComponents> replicated{}; // replIndex -> component index
     u32 replicatedCount = 0;
 

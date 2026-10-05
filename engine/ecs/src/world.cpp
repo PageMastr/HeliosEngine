@@ -227,13 +227,13 @@ World::World(const WorldDesc& desc)
 
     // Built-in components. Identity and dirty state are never copied from prefabs.
     m_netIdentityId = *registerComponent(componentDescOf<NetIdentity>("helios.NetIdentity", ComponentFlags::DontInherit));
-    bindSlot(typeSlot<NetIdentity>(), m_netIdentityId);
+    HELIOS_VERIFY(bindTypeKey(kTypeKey<NetIdentity>, m_netIdentityId).hasValue());
     m_repDirtyId = *registerComponent(componentDescOf<RepDirty>("helios.RepDirty", ComponentFlags::DontInherit));
-    bindSlot(typeSlot<RepDirty>(), m_repDirtyId);
+    HELIOS_VERIFY(bindTypeKey(kTypeKey<RepDirty>, m_repDirtyId).hasValue());
     m_frameRefId = *registerComponent(componentDescOf<FrameRef>("helios.FrameRef", ComponentFlags::DontInherit));
-    bindSlot(typeSlot<FrameRef>(), m_frameRefId);
+    HELIOS_VERIFY(bindTypeKey(kTypeKey<FrameRef>, m_frameRefId).hasValue());
     m_dockRefId = *registerComponent(componentDescOf<DockRef>("helios.DockRef", ComponentFlags::DontInherit));
-    bindSlot(typeSlot<DockRef>(), m_dockRefId);
+    HELIOS_VERIFY(bindTypeKey(kTypeKey<DockRef>, m_dockRefId).hasValue());
 
     // Relationships (SPIKES.md §2 explains the storage choices).
     auto makeRelation = [&](const char* name, bool dontFragment) {
@@ -275,25 +275,51 @@ void World::beginTick() {
 // Components
 // ---------------------------------------------------------------------------------------------
 
-void World::bindSlot(u32 slot, ComponentId cid) {
-    if (slot >= m_typeIds.size()) {
-        m_typeIds.resize(static_cast<usize>(slot) + 1, 0);
-        m_typeReplBits.resize(static_cast<usize>(slot) + 1, 0);
-    }
+Result<void> World::bindTypeKey(TypeKey key, ComponentId cid) {
+    HELIOS_ASSERT(key != 0, "type keys are never 0");
     const u64 index = m_impl->indexById.find(cid);
-    HELIOS_ASSERT(index != 0, "bindSlot: unknown component");
-    if (index == 0) return;
-    u32& bound = m_impl->slotOfComponent[index - 1];
-    if (bound != ~0u && bound != slot) {
-        HELIOS_LOG_ERROR(LogEcs, "component '{}' is already bound to another C++ type",
-                         m_impl->components[index - 1].name);
-        HELIOS_ASSERT(false, "two C++ types registered under one component name");
-        return;
-    }
-    bound = slot;
-    m_typeIds[slot] = cid;
+    if (index == 0) return Error{ErrorCode::NotFound, "bindType: unknown component"};
     const ComponentInfo& info = m_impl->components[index - 1];
-    m_typeReplBits[slot] = info.isReplicated() ? (u64(1) << info.replIndex) : 0;
+    TypeKey& boundKey = m_impl->keyOfComponent[index - 1];
+    if (boundKey != 0 && boundKey != key) {
+        HELIOS_LOG_ERROR(LogEcs, "component '{}' is already bound to another C++ type", info.name);
+        return Error{ErrorCode::AlreadyExists, "bindType: the component is bound to another C++ type"};
+    }
+    if (const TypeBinding* b = findType(key); b && b->id != cid) {
+        const u64 other = m_impl->indexById.find(b->id);
+        HELIOS_LOG_ERROR(LogEcs, "component '{}': a C++ type with the same name is already bound to '{}'",
+                         info.name, other != 0 ? std::string_view(m_impl->components[other - 1].name)
+                                               : std::string_view("?"));
+        return Error{ErrorCode::AlreadyExists, "bindType: a C++ type with this name is bound to another component"};
+    }
+    // Keep the table at most half full: every probe sequence then ends at an empty slot.
+    if ((m_typeCount + 1) * 2 > m_typeTable.size()) {
+        std::vector<TypeBinding> old = std::move(m_typeTable);
+        m_typeTable.assign(std::max<usize>(16, old.size() * 2), TypeBinding{});
+        m_typeCount = 0;
+        for (const TypeBinding& b : old) {
+            if (b.key != 0) insertTypeBinding(b);
+        }
+    }
+    insertTypeBinding(TypeBinding{key, cid, info.isReplicated() ? (u64(1) << info.replIndex) : 0});
+    boundKey = key;
+    return {};
+}
+
+void World::insertTypeBinding(const TypeBinding& binding) noexcept {
+    const usize mask = m_typeTable.size() - 1;
+    for (usize i = static_cast<usize>(mix64(binding.key)) & mask;; i = (i + 1) & mask) {
+        TypeBinding& b = m_typeTable[i];
+        if (b.key == binding.key) {
+            b = binding; // rebinding the same type to the same component (idempotent registration)
+            return;
+        }
+        if (b.key == 0) {
+            b = binding;
+            ++m_typeCount;
+            return;
+        }
+    }
 }
 
 Result<ComponentId> World::registerComponent(const ComponentDesc& desc) {
@@ -402,7 +428,7 @@ Result<ComponentId> World::registerComponent(const ComponentDesc& desc) {
         if (ent >= m_infoByLowId.size()) m_infoByLowId.resize(static_cast<usize>(ent) + 1, nullptr);
         m_infoByLowId[ent] = &m_impl->components.back();
     }
-    m_impl->slotOfComponent.push_back(~0u);
+    m_impl->keyOfComponent.push_back(0);
     m_impl->indexById.insert(ent, index + 1);
     m_impl->indexByName.emplace(name, index);
     return ComponentId(ent);

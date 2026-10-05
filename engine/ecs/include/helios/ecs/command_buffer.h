@@ -15,10 +15,13 @@
 #include <cstring>
 #include <new>
 #include <span>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
 #include "helios/core/assert.h"
+#include "helios/core/hash.h"
+#include "helios/core/platform.h"
 #include "helios/core/types.h"
 #include "helios/ecs/types.h"
 
@@ -90,19 +93,35 @@ enum class CommandKind : u8 {
     SpawnN,
 };
 
-/// Resolves a component type to its id in `world` (out of line so this header stays light).
-ComponentId componentIdForSlot(const World& world, u32 typeSlot) noexcept;
+/// Key of a C++ type in the World's type -> ComponentId table (kTypeKey). Never 0.
+using TypeKey = u64;
 
 namespace detail {
-u32 nextTypeSlot() noexcept;
-}
-
-/// Process-wide dense index of C++ type T (used for fast per-world type -> ComponentId lookup).
+/// FNV-1a 64 of this function's signature, which names T. Constant-evaluated through kTypeKey only.
 template <class T>
-u32 typeSlot() noexcept {
-    static const u32 slot = detail::nextTypeSlot();
-    return slot;
+constexpr TypeKey typeKeyOf() noexcept {
+#if defined(HELIOS_COMPILER_MSVC)
+    constexpr std::string_view signature = __FUNCSIG__;
+#else
+    constexpr std::string_view signature = __PRETTY_FUNCTION__;
+#endif
+    const TypeKey key = fnv1a64(signature);
+    return key != 0 ? key : 1;
 }
+} // namespace detail
+
+/// Process-wide key of C++ type T (cv-qualifiers ignored), computed at compile time from T's name.
+/// Every image (a link-group library, an executable, a game module) computes the same key for T, so a
+/// type that one image binds in a World is found by every other, and no image keeps a cache of its own
+/// (02 §1.4, "No per-image caches of global state"; a function-local static per image split the ids in
+/// modular builds). Two distinct types with one qualified name, such as types in unnamed namespaces of
+/// different translation units, share a key: a World binds only the first (World::bindType).
+/// A constant; usable from any thread.
+template <class T>
+inline constexpr TypeKey kTypeKey = detail::typeKeyOf<std::remove_cv_t<T>>();
+
+/// Resolves a type key to its component id in `world` (out of line so this header stays light).
+ComponentId componentIdForKey(const World& world, TypeKey key) noexcept;
 
 class CommandBuffer {
 public:
@@ -209,7 +228,7 @@ private:
     template <class T>
     ComponentId idOf() const {
         HELIOS_ASSERT(m_world != nullptr, "CommandBuffer needs a World for typed commands");
-        const ComponentId id = componentIdForSlot(*m_world, typeSlot<T>());
+        const ComponentId id = componentIdForKey(*m_world, kTypeKey<T>);
         HELIOS_ASSERT(id != 0, "component type is not registered in this world");
         return id;
     }

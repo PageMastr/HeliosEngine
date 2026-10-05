@@ -89,7 +89,11 @@ World add `RepDirty` in the same structural step (spawn, add, set, override, com
 the per-entity summary appears without a flecs `With` trait (which would create intermediate
 tables). Spawns and command-buffer groups look up their final table with `ecs_table_find` (no
 intermediate tables in the table graph).
-C++ types map to ids through a process-wide type slot → per-world vector (O(1), lock-free).
+C++ types map to ids through `kTypeKey<T>`, a compile-time hash of the type's name that every image
+computes alike (02 §1.4: no per-image caches, so a modular build's executables and game modules see the
+ids `helios_runtime` bound), and a per-world open-addressing table (O(1), lock-free). Two distinct types
+with one qualified name (unnamed namespaces of different translation units) share a key; a World binds
+only the first and `bindType` reports `AlreadyExists` for the second.
 Component names must not resolve to an existing flecs entity (builtins, relations, named frames or
 scopes); such registrations fail with `AlreadyExists` instead of silently re-typing that entity.
 

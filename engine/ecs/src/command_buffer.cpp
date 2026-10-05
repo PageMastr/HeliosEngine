@@ -1,7 +1,6 @@
 #include "helios/ecs/command_buffer.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cstring>
 #include <utility>
 
@@ -12,12 +11,9 @@ namespace helios::ecs {
 
 namespace {
 constexpr usize kBlockSize = 16 * 1024;
-std::atomic<u32> g_nextTypeSlot{0};
 } // namespace
 
-u32 detail::nextTypeSlot() noexcept { return g_nextTypeSlot.fetch_add(1, std::memory_order_relaxed); }
-
-ComponentId componentIdForSlot(const World& world, u32 slot) noexcept { return world.idForSlot(slot); }
+ComponentId componentIdForKey(const World& world, TypeKey key) noexcept { return world.idForKey(key); }
 
 CommandBuffer::~CommandBuffer() {
     clear();

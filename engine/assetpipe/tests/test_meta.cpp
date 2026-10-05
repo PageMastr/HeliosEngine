@@ -665,7 +665,9 @@ TEST_CASE("meta: saveMeta only updates a sidecar, so it never mints or reuses a 
     wrongImporter.importer = "font";
     wrongImporter.importerVersion = 1;
     wrongImporter.settings = "{}";
-    CHECK(saveMeta(dir.path, "a.png", wrongImporter, r).error().code == ErrorCode::InvalidArgument);
+    const auto unclaimed = saveMeta(dir.path, "a.png", wrongImporter, r);
+    REQUIRE(!unclaimed);
+    CHECK(unclaimed.error().code == ErrorCode::InvalidArgument);
     CHECK(readText(dir.path, "a.png.meta") == sidecar);
     // A sidecar whose source is gone (an orphan, which scanMetas() reports) is not updated either.
     REQUIRE(fs::rename(dir.path / "a.png", dir.path / "moved-away.bin"));

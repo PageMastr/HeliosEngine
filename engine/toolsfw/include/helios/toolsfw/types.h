@@ -13,10 +13,12 @@
 #include "helios/core/guid.h"
 #include "helios/core/log.h"
 #include "helios/core/types.h"
+#include "helios/editor_api.h"
 
 namespace helios::tf {
 
-HELIOS_LOG_CHANNEL(LogTools, "Tools");
+/// Log channel of the ToolsFramework (defined in types.cpp: one per process).
+HELIOS_LOG_CHANNEL_EXTERN(HELIOS_EDITOR_API, LogTools);
 
 /// A document's stable identity (07 §1.2). Records use a GUID minted when the document is first
 /// opened or created in a session; the record's own `$rid` stays the content identity on disk.

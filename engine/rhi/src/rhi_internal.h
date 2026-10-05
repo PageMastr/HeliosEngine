@@ -16,9 +16,12 @@
 #include "helios/core/memory.h"
 #include "helios/core/result.h"
 #include "helios/rhi/device.h"
+#include "helios/client_api.h"
 
 namespace helios {
-HELIOS_LOG_CHANNEL(LogRhi, "RHI");
+// Defined once in common.cpp: white-box tests include this header, and an inline channel would give each
+// of their images a second "RHI" channel (02 §1.4; the symbol audit's rule R3).
+HELIOS_LOG_CHANNEL_EXTERN(HELIOS_CLIENT_API, LogRhi);
 }
 
 namespace helios::rhi::detail {

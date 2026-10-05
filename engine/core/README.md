@@ -83,6 +83,12 @@ copy). The ISA audit (`tools/lint`) checks the gate objects' flags, disassembly 
 build; `core_cpugate_child_snb` (the hook evaluating a recorded Sandy Bridge) tests the refusal path on
 any machine (CL-17, early).
 
+In a modular dev build (`HELIOS_MODULAR=ON`, ADR-016) core is part of `helios_runtime`, and so is the probe's
+object library, still at the `gate` level (an OBJECT module does not carry the object libraries it links, so
+`cmake/HeliosModular.cmake` links them into the group). On Windows the hook then lives in
+`helios_runtime.dll`, which every gated executable imports, and executables carry none; ELF executables keep their `.preinit_array` hook, which calls the probe in
+`libhelios_runtime.so` (docs/adr/ADR-0.6c-link-model-spike.md §3, including what WP-0.5r changes).
+
 ## Processes
 
 `Process::spawn` runs a program with UTF-8 arguments (quoted by `quoteWindowsArgument` so the MSVC CRT
@@ -147,6 +153,11 @@ Before the change, `alignedAlloc` + free cost 42 / 94 / 230 ns at 1 / 2 / 4 thre
 * Everything that must be bit-identical between Windows and Linux (RNG, hashing, `DilatableClock`)
   is integer- or bit-exact and pinned by golden tests.
 * Asserts are enabled in Debug and RelWithDebInfo (`HELIOS_ENABLE_ASSERTS`), compiled out of Release.
+* State that more than one image may reach is defined once, in the owning module: a log channel that a
+  public header names is declared there with `HELIOS_LOG_CHANNEL_EXTERN(<group API macro>, var)` and
+  defined in one `.cpp` with `HELIOS_LOG_CHANNEL_DEFINE`; `HELIOS_LOG_CHANNEL` (an inline variable,
+  one copy per image) is for channels of a module's own sources. Data that code outside the module reads
+  carries `HELIOS_RUNTIME_API` (02 §1.4; the symbol audit's rule R3 checks it).
 
 ## Tests
 

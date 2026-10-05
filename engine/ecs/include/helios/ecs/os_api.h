@@ -26,11 +26,12 @@
 
 #include "helios/core/log.h"
 #include "helios/core/types.h"
+#include "helios/runtime_api.h"
 
 namespace helios::ecs {
 
-/// Log channel for helios::ecs and everything flecs reports.
-HELIOS_LOG_CHANNEL(LogEcs, "ECS");
+/// Log channel for helios::ecs and everything flecs reports (defined in os_api.cpp: one per process).
+HELIOS_LOG_CHANNEL_EXTERN(HELIOS_RUNTIME_API, LogEcs);
 
 /// Installs the Helios OS API (idempotent). Called by World's constructor; call it yourself before
 /// using flecs directly. Returns false if flecs' OS API was already initialized by someone else

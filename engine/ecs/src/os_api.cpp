@@ -16,6 +16,8 @@
 
 namespace helios::ecs {
 
+HELIOS_LOG_CHANNEL_DEFINE(LogEcs, "ECS");
+
 namespace {
 
 std::atomic<bool> g_installed{false};

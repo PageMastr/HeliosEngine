@@ -120,7 +120,10 @@ ctest --preset windows-msvc-release
 ```
 
 Other presets: `windows-msvc-debug`, `windows-clang-cl`, and `windows-vs2022` / `windows-vs2026`, which
-generate a Visual Studio solution under `build\<preset>\`.
+generate a Visual Studio solution under `build\<preset>\`. `windows-msvc-dev` is the modular dev build
+(`HELIOS_MODULAR=ON`, ADR-016): the engine modules link into three DLLs (`helios_runtime`, `helios_client`,
+`helios_editor`; SDL3 and Dear ImGui are DLLs of their own) and every image uses the `/MD` runtime, which
+game-module hot reload needs. Shipping builds stay monolithic and `/MT`.
 
 **Run the sample:** `build\windows-msvc-release\bin\rhi_triangle.exe`.
 
@@ -146,12 +149,15 @@ ctest --preset linux-gcc          # GPU tests run on any Vulkan driver, includin
 
 - `linux-bench` builds the headless Release benchmarks with asserts off (`ecs_bench`, RT-01).
 - `linux-headless` builds only the dedicated servers and tools.
-- `cross-mingw` cross-compiles the Windows code paths as a portability check.
+- `linux-dev` is the modular dev build with Clang (`HELIOS_MODULAR=ON`, ADR-016): the engine modules link
+  into three shared libraries, and `ctest -L lint` includes the link-model symbol audit.
+- `cross-mingw` cross-compiles the Windows code paths as a portability check (shipping flavour only).
 
 ## Continuous integration
 
 Every pull request, and every push to `main`, runs [CI](.github/workflows/ci.yml) on these jobs:
-- Windows MSVC: VS 2026 primary and the VS 2022 (MSVC 14.44) floor;
+- Windows MSVC: VS 2026 primary and the VS 2022 (MSVC 14.44) floor, plus the modular dev build
+  (`windows-msvc-dev`) with the symbol audit;
 - Windows clang-cl;
 - Linux GCC and Linux Clang, with software-Vulkan GPU tests;
 - a headless server build;

@@ -1,0 +1,13 @@
+helios_runtime_link_group_modules|0000000000004000|   T  |              FUNC|0000000000000008|     |.text
+helios_cpu_gate_run|0000000000004010|   T  |              FUNC|0000000000000008|     |.text
+_ZN6helios3log5writeENS0_5LevelESt17basic_string_viewIcSt11char_traitsIcEE|0000000000004100|   T  |              FUNC|0000000000000008|     |.text
+_ZNK6helios4core8Registry4findEj|0000000000004200|   T  |              FUNC|0000000000000008|     |.text
+_ZNSt6vectorIiSaIiEE17_M_realloc_insertIJiEEEvN9__gnu_cxx17__normal_iteratorIPiS1_EEDpOT_|0000000000004300|   W  |              FUNC|0000000000000008|     |.text
+_ZTVN6helios4core8RegistryE|0000000000004400|   V  |            OBJECT|0000000000000008|     |.data.rel.ro
+_ZZN6helios4core8registryEvE8instance|0000000000004500|   u  |            OBJECT|0000000000000008|     |.bss
+_ZN6helios3log8g_levelE|0000000000004600|   B  |            OBJECT|0000000000000008|     |.bss
+_ZTSN6helios4core8RegistryE|0000000000004700|   R  |            OBJECT|0000000000000008|     |.rodata
+__bss_start|0000000000009000|   B  |            OBJECT|0000000000000008|     |.bss
+_edata|0000000000009000|   D  |            OBJECT|0000000000000008|     |.data
+_end|0000000000009100|   B  |            OBJECT|0000000000000008|     |.bss
+_Z12lua_pushnilP9lua_State|0000000000004800|   T  |              FUNC|0000000000000008|     |.text

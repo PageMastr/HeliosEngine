@@ -9,7 +9,11 @@
 # helios_module(<name> [HEADLESS] [EDITOR_ONLY] [LAYER <n>] [PEERS <module>...]
 #               SOURCES ... DEPS ... PRIVATE_DEPS ...)
 #   Declares engine module library `helios_<name>` with alias `helios::<name>`. Public headers live in
-#   engine/<name>/include/helios/<name>/..., sources in engine/<name>/src.
+#   engine/<name>/include/helios/<name>/..., sources in engine/<name>/src. Shipping builds make it a
+#   STATIC library; modular dev builds (HELIOS_MODULAR=ON) make it an OBJECT library inside its link
+#   group's shared library, and helios::<name> links that library (cmake/HeliosModular.cmake, ADR-016).
+#   Either way consumers link helios::<name>, and the module's own CMakeLists.txt configures
+#   helios_<name> (private sources, definitions, dependencies).
 #   * LAYER is optional when the module has a helios_declare_module row (it must then match).
 #   * HEADLESS: linked by the cell server; may never reach a non-HEADLESS module or a graphics
 #     third-party library (rhi/render/ui/audio/app/input, SDL3, ImGui, volk, ...).
@@ -33,7 +37,8 @@
 #   Windows executables get the Helios manifest (helios_windows_manifest). The CPU gate (a
 #   pre-initializer that refuses CPUs without AVX2, 02 §1.1 / 08 §2.2) is linked into every avx2 image of
 #   a gate role (client cell gateway voice editor bot tool) unless NO_CPU_GATE; CPU_GATE forces it into
-#   any avx2 image. A base image never carries it.
+#   any avx2 image. A base image never carries it. (Modular Windows builds carry the gate in
+#   helios_runtime.dll instead; see helios_cpu_gate.)
 #
 # helios_test(<name> SOURCES ... DEPS ...)
 #   Declares a doctest executable registered with CTest. Tests link runtime modules, so they are avx2
@@ -49,6 +54,7 @@ include_guard(GLOBAL)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR})
 include(HeliosIsa)
 include(HeliosWindows)
+include(HeliosModular)
 
 # Third-party targets a HEADLESS module or a server executable must never reach (graphics, windowing,
 # audio, UI). Real target names; aliases are resolved before the comparison.
@@ -169,9 +175,17 @@ function(helios_module name)
   endif()
 
   set(target helios_${name})
-  add_library(${target} STATIC ${M_SOURCES})
-  add_library(helios::${name} ALIAS ${target})
+  if(HELIOS_MODULAR)
+    add_library(${target} OBJECT ${M_SOURCES})
+    helios_link_group_of(group ${headless} ${editorOnly})
+    _helios_modular_module(${target} ${name} ${group}) # also declares helios::${name}
+  else()
+    add_library(${target} STATIC ${M_SOURCES})
+    add_library(helios::${name} ALIAS ${target})
+  endif()
+  # The generated export headers (helios/<group>_api.h) are visible to every module and its consumers.
   target_include_directories(${target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+                                              $<BUILD_INTERFACE:${HELIOS_MODULAR_INCLUDE_DIR}>
                                         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(${target} PUBLIC ${M_DEPS} PRIVATE ${M_PRIVATE_DEPS})
   set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON FOLDER engine

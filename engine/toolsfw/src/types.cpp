@@ -11,6 +11,8 @@
 
 namespace helios::tf {
 
+HELIOS_LOG_CHANNEL_DEFINE(LogTools, "Tools");
+
 namespace {
 constexpr std::array<std::string_view, kOriginCount> kOriginNames = {"ui", "ui-scripted", "luau", "rpc",
                                                                      "cli", "import", "collab"};

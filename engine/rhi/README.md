@@ -6,6 +6,10 @@ backend for tests and GPU-less automation, behind one backend-agnostic API. No V
 in a public header (`src/vulkan/` is the only place that includes Vulkan), so a D3D12 backend can
 slot in behind the same seam (Phase 3 seam test / Phase 4 gate).
 
+In a modular dev build (`HELIOS_MODULAR=ON`, ADR-016) `rhi` is part of `helios_client`. VMA's implementation
+(`src/vulkan/vk_vma.cpp`) is then compiled into an archive of its own, `helios_rhi_vma`, so it stays out
+of the group's exports like every vendored library (docs/adr/ADR-0.6c-link-model-spike.md).
+
 | Header (`helios/rhi/…`) | Contents |
 |---|---|
 | `handles.h` | `BufferH`, `TextureH`, `PipelineH`, `SwapchainH` (core generational handles), `BindlessIndex`, `Queue`, `TimelinePoint`, `Backend` |

@@ -1,0 +1,8 @@
+
+lapi.cpp.o:
+
+Name                  Value           Class        Type         Size             Line  Section
+
+_Z12lua_pushnilP9lua_State|0000000000000100|   T  |              FUNC|0000000000000010|     |.text
+luaH_dummynode|0000000000000000|   R  |            OBJECT|0000000000000020|     |.rodata
+_Z9luaH_getP9lua_Table|0000000000000200|   t  |              FUNC|0000000000000010|     |.text

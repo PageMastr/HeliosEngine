@@ -170,8 +170,20 @@ baseline callers. So Helios builds **whole images at one level** and audits the 
       (§1.4) carry it in `helios_runtime.dll`, and the executable carries none. The loader initializes a
       DLL's imports before the DLL, and it calls an executable's TLS callbacks only after every statically
       imported DLL has initialized. `helios_runtime.dll` imports only OS and Microsoft runtime DLLs. Every
-      other Helios image imports it directly or through another group. Its first TLS callback is therefore
-      the first Helios-compiled code in the process. Check 3 verifies both import facts.
+      other Helios group and executable imports it directly or through another group, except the
+      self-contained images that carry their own copy of the modules (the build-time tool `helios-schemac`,
+      `ecs_bench`, and white-box tests such as `ecs_tests`, `script_tests`, `net_tests` and the `net_fuzz_*`
+      targets; ADR-0.6c) and the `base` images, which link `.base` copies of their modules (the launcher, the
+      bootstrap and the ISA audit's base fixtures; ADR-0.6c §3.1); none of these is gated. The DLL's first TLS
+      callback is therefore the first Helios-compiled code to run in a gated process. Check 3 verifies both
+      import facts. The two third-party
+      images of a modular build, `SDL3` and `tp_imgui` (§1.4), import no Helios image: `SDL3` imports only OS
+      and runtime DLLs, and `tp_imgui` those and `SDL3`. The loader may therefore initialize them first.
+      `tp_imgui` also carries `editorui`'s ImGui item hooks, Helios code with no initializer that runs only
+      when ImGui calls it.
+      Those images are built at `avx2` (WP-0.2r's levels, which WP-0.6c part 1 carries into the modular
+      build), so WP-0.5r's check 3 must attribute their initializers, as it does mimalloc's, or the build must
+      make them import `helios_runtime.dll` (ADR-0.6c §3).
     - *Rejected alternative: build `tp_mimalloc` and Tracy's client TU at `base`.* It fixes today's two cases
       but not the next library that adds a hook. It also turns mimalloc's LZCNT, TZCNT and POPCNT bit scans on
       the allocation fast path into slower baseline sequences. Placement fixes the class of problem, and the
@@ -390,7 +402,7 @@ incremental linking.
 | Game code | Gems linked statically; explicit `static_modules.cpp` | Reloadable gem modules build as `game_<gem>[_client\|_edcore\|_edui].dll/.so` (the editor kinds: 07 §1.10); non-reloadable gems link into their group, except a project's editor modules on the binary SDK, which are always their own DLLs |
 | MSVC CRT | `/MT` (ADR-011; no redist for players) | **`/MD` for every image**, third-party included, so there is one CRT heap. The prebuilt editor ships the VC++ runtime DLLs app-local |
 | MSVC link | `/OPT:REF /OPT:ICF`, optional LTCG (never in SDK static libraries, ADR-001a rule 2) | `/INCREMENTAL /OPT:NOREF /OPT:NOICF /DEBUG:FULL`; PCH per game module |
-| Linux | `-fvisibility=hidden`, static | `-fvisibility=hidden -fvisibility-inlines-hidden`, `-Wl,-z,defs`, lld or mold, `-gsplit-dwarf`; GCC game modules add `-fno-gnu-unique` |
+| Linux | `-fvisibility=hidden`, static | `-fvisibility=hidden -fvisibility-inlines-hidden` for everything but module code, which keeps default visibility with `-fvisibility-inlines-hidden` until WP-0.6c part 2 (*Exports*, below); groups link with `-Wl,-z,defs` and `--exclude-libs,ALL`; lld or mold; `-gsplit-dwarf` (Clang); GCC game modules add `-fno-gnu-unique` |
 | Presets | `windows-msvc-release`, `linux-gcc`, `linux-headless`, … | **`windows-msvc-dev`** (RelWithDebInfo, `/MD`, the dev link flags), the IDE presets `windows-vs2026` and `windows-vs2022` (ADR-001a rule 5) and **`linux-dev`** (Clang) |
 
 The Linux dev flags are there for two reasons. `-Wl,-z,defs` makes a missing export a link error, as it
@@ -402,19 +414,54 @@ impossible to unload.
 | Group | Modules | Third-party inside |
 |---|---|---|
 | `helios_runtime` | Every HEADLESS L1–L4 runtime module: `core` … `authority`, `clientcore`, `telemetry`, `patch`, `crash` | mimalloc, Tracy client, xxHash, yyjson, flecs, Jolt, ozz, Recast, Luau, zstd, netcode, sentry-native |
-| `helios_client` | `app`, `input`, `audio`, `voice`, `text`, `ui`, `rhi`, `render`, `presentation` | SDL3, miniaudio, libopus, RmlUi, FreeType, HarfBuzz, volk, VMA |
-| `helios_editor` | `assetpipe`, `toolsfw`, `editorui`, `edtools/*` | ImGui, importers and encoders |
+| `helios_client` | `app`, `input`, `audio`, `voice`, `text`, `ui`, `rhi`, `render`, `presentation` | miniaudio, libopus, RmlUi, FreeType, HarfBuzz, volk, VMA |
+| `helios_editor` | `assetpipe`, `toolsfw`, `editorui`, `edtools/*` | importers and encoders |
+| `SDL3`, `tp_imgui` (third-party images) | None; `tp_imgui` also compiles `editorui`'s ImGui item hooks | SDL3; Dear ImGui with ImPlot and the ImGuizmo suite |
+
+SDL3 and Dear ImGui are shared libraries of their own rather than part of a group. Their state must be one
+copy (SDL's video subsystem, windows and events; ImGui's `GImGui`), and more than one group, the apps and the
+tests call them. Their own export macros (`SDL_DECLSPEC`, `IMGUI_API`) export them, which a group's export of
+its own objects would not do for an archive. ImGui's Vulkan backend is not built in dev builds: the editor
+draws ImGui through the RHI, and the backend would carry a second copy of volk (ADR-0.6c §5).
 
 - **Exports.** Each group exports through `HELIOS_RUNTIME_API`, `HELIOS_CLIENT_API` or `HELIOS_EDITOR_API`.
   These expand to `__declspec(dllexport/dllimport)` or `visibility("default")` in dev builds and to nothing in
-  shipping builds.
+  shipping builds. *Until WP-0.6c part 2* (ADR-0.6c §2), a group exports every external symbol of its own
+  module objects (MSVC `WINDOWS_EXPORT_ALL_SYMBOLS`; on ELF, default visibility for module code) and nothing
+  from its third-party archives except Luau's VM, whose C API is `engine/script`'s public API. The macros are
+  then required only where an import needs them: data another image reads (MSVC imports data only through
+  `dllimport`), a function whose address another image compares, and C entry points. The symbol audit keeps
+  the export tables to Helios code (R1, P1). WP-0.6c part 2 owns the tightening: module code moves to
+  `-fvisibility=hidden`, and every declaration another image uses carries the macro, starting with the API
+  that game modules import.
 - **Singletons.** Every process singleton lives in exactly one image and is reached only through exported
   functions: the type registry, the component-id table, the memory-tag, CVar and log registries, the job
   system, the mimalloc heaps, Jolt's `Factory` and the Tracy client.
 - **No per-image caches of global state.** Header-defined `inline` and template statics must not hold such
-  state. Generated component code gets its id from `ecs::componentId(TypeId)` using the schema-lock
-  `TypeId`, never from flecs' C++ per-type cache. flecs, Jolt and Luau headers never reach game code, which
-  §1.1's "no third-party types in public headers" rule already guarantees.
+  state. Generated component code gets its id from `ecs::componentId(TypeId)` using the schema-lock `TypeId`,
+  never from flecs' C++ per-type cache. The ECS's typed API (`World::id<T>()`, `set<T>()`, `CommandBuffer`,
+  `SystemBuilder`) looks a C++ type up by `ecs::typeKey<T>()` in a table each World keeps. A type declared in
+  a named namespace has a name key: a compile-time hash of its canonical name (without the class-keys MSVC
+  prints, spaces only between identifier characters), size and alignment, which every image built by one
+  compiler derives alike. For a class, union or enum declared with a name whose qualified name has neither
+  template arguments nor an inline namespace, every ADR-001a toolset and clang-cl derive the same key. Other
+  names are printed differently by different compilers, so their keys hold only within one compiler: template
+  specializations and the types nested in them, and types in inline namespaces (GCC and MSVC print the inline
+  namespace; Clang and clang-cl omit it wherever the name is unambiguous without it, so on Clang the key also
+  depends on which declarations of that name a translation unit sees). Every other type (in an unnamed
+  namespace, a local class, a closure, in the global namespace, where Clang also prints local classes, or a
+  specialization with such a type among its template arguments) has a per-image key, never shared with another
+  type. The exception is Clang and clang-cl, which print a local class without its function and so give a name
+  key to a type named through one: a class or enum nested in a local class (`Local::Inner`) or a pointer to a
+  member of one (`int Local::*`), also as a template argument; two such types with one name and one layout
+  share that key (`helios/ecs/type_key.h`). A component that crosses images is therefore declared in a named
+  namespace, with template arguments from named namespaces, and one that crosses images built by different
+  compilers is neither a template specialization (nor nested in one) nor declared in an inline namespace.
+  Components and other types that a reloadable module uses through the typed ECS API are declared in a named
+  namespace too: a per-image key is a template static (`perImageTypeKey<T>()::key`), which the game-image
+  rules below forbid, and every reload would draw it anew while the component stays bound to the old key.
+  flecs, Jolt and Luau headers never reach game code, which §1.1's "no third-party types in public headers"
+  rule already guarantees.
 - **Tracy.** The runtime group compiles the Tracy client with `TRACY_EXPORTS`, and game modules build with
   `TRACY_IMPORTS`. `HELIOS_PROFILE_ZONE` in a reloadable module expands to Tracy's transient zones, which copy
   their source-location strings, so the profiler never holds a pointer into an unloaded image.
@@ -461,7 +508,8 @@ PIE", a warm restart of ≤ 5 s.
   non-reloadable gems.
 - **Symbol audit (CI).** `dumpbin /symbols` or `nm` runs over each game image. It must show no definitions
   at all from flecs, Jolt, Luau, mimalloc or Tracy. From engine namespaces it must show no data symbols
-  (statics, registries, template static members) and no strong definitions of exported engine functions.
+  (statics, registries, template static members, per-image ECS type keys even for a game's own
+  unnamed-namespace types) and no strong definitions of exported engine functions.
   Inline functions and template instantiations from engine headers are allowed. A game image imports engine
   state; it never owns any.
 

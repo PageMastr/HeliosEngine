@@ -40,6 +40,11 @@ add_executable(helios-schemac src/main.cpp)
 target_link_libraries(helios-schemac PRIVATE helios_schemac_lib)
 set_target_properties(helios-schemac PROPERTIES FOLDER tools)
 helios_apply_warnings(helios-schemac)
+# Modular dev builds (ADR-016): the generator runs during the build and its output feeds a module of
+# helios_runtime, so it carries its own copy of core instead of linking that library
+# (helios_self_contained, cmake/HeliosModular.cmake).
+helios_self_contained(helios_schemac_lib)
+helios_self_contained(helios-schemac)
 
 # ---------------------------------------------------------------------------------------------
 # Tests: parser/sema/lock/golden tests in-process, plus the sample schemas compiled through
@@ -51,6 +56,9 @@ if(HELIOS_BUILD_TESTS)
   # helios::net: test_lint.cpp pins the size.unreliable budget to engine/net's wire limits.
   helios_test(schemac_tests SOURCES ${HELIOS_SCHEMAC_TEST_SOURCES}
     DEPS helios_schemac_lib helios::reflect helios::script helios::tp::luau_analysis helios::net)
+  # Luau.Analysis links its own Luau VM and compiler: in a modular build the test carries its own copy of
+  # the modules too, so the process has one VM (ADR-016; cmake/HeliosModular.cmake).
+  helios_self_contained(schemac_tests)
   set(HELIOS_SAMPLE_SCHEMAS
     ${PROJECT_SOURCE_DIR}/schemas/sample/common.hschema
     ${PROJECT_SOURCE_DIR}/schemas/sample/ship.hschema

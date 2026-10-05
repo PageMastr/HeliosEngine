@@ -6,3 +6,4 @@ _ZN6helios5tests9g_scratchE|0000000000003020|   b  |            OBJECT|000000000
 _ZN6helios4core9kVersionE|0000000000003030|   r  |            OBJECT|0000000000000008|     |.rodata
 _ZN6helios3log8g_levelE|0000000000003040|   B  |            OBJECT|0000000000000008|     |.bss
 _ZTVN6helios4core8RegistryE|0000000000003080|   V  |            OBJECT|0000000000000008|     |.data.rel.ro
+_ZZN6helios3ecs6detail15perImageTypeKeyIN12_GLOBAL__N_18CooldownEEEmvE3key|0000000000003050|   b  |            OBJECT|0000000000000008|     |.bss

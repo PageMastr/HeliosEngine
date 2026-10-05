@@ -271,7 +271,7 @@ foreach(case
     "elf_duplicate_state|failed .1 finding.*R3 ecs_tests has its own copy of '_ZZN6helios3ecs11componentIdINS0_8PositionEEEjvE2id' .b, .bss., which helios_runtime defines"
     "elf_group_duplicate_state|failed .1 finding.*R3 group helios_client also defines '_ZZN6helios3ecs8typeSlotINS0_11NetIdentityEEEjvE4slot' .u, .bss., which helios_runtime defines"
     "elf_group_weak_state|failed .2 finding.*R1 helios_runtime exports '_ZN3JPH9Character7sNextIDE' .u, .data., mutable data that is not Helios code.*R1 helios_runtime exports 'LogPcg' .u, .bss."
-    "elf_game|failed .4 finding.*R6 game image game_bad has its own strong definition of '_ZN6helios3log5write.*R4 game image game_bad defines 'mi_malloc' from mimalloc.*R5 game image game_bad defines Helios data '_ZN6helios5probe8g_countsE' .B..*R4 game image game_bad defines '_Z12lua_pushnilP9lua_State' from Luau"
+    "elf_game|failed .5 finding.*R6 game image game_bad has its own strong definition of '_ZN6helios3log5write.*R4 game image game_bad defines 'mi_malloc' from mimalloc.*R5 game image game_bad defines Helios data '_ZN6helios5probe8g_countsE' .B..*R4 game image game_bad defines '_Z12lua_pushnilP9lua_State' from Luau.*R5 game image game_bad defines a per-image ECS type key '_ZZN6helios3ecs6detail15perImageTypeKeyIN12_GLOBAL__N_18CooldownEEEmvE3key'"
     "elf_client_luau|failed .1 finding.*R1 helios_client exports '_Z12lua_pushnilP9lua_State' .T."
     "pe_c_export|failed .2 finding.*P1 helios_runtime exports 'mi_malloc', a C name that is not helios_.*P1 helios_runtime exports 'yyjson_read_opts'"
     "pe_no_exports|P1 helios_editor: no exports found")
@@ -358,6 +358,7 @@ if(HELIOS_MODULAR)
     foreach(case
         "r4|R4 game image link_model_bad_game defines '[^']*' from mimalloc"
         "r5|R5 game image link_model_bad_game defines Helios data '_ZN6helios5probe7g_ticksE'"
+        "r5_type_key|R5 game image link_model_bad_game defines a per-image ECS type key '_ZZN6helios3ecs6detail15perImageTypeKeyIN12_GLOBAL__N_115PrivateCooldownE"
         "r6|R6 game image link_model_bad_game has its own strong definition of '_ZN6helios13memoryTagNameENS_9MemoryTagE'")
       string(REPLACE "|" ";" parts "${case}")
       list(GET parts 0 rule)

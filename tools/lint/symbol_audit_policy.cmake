@@ -30,6 +30,12 @@ set(HELIOS_SYMBOL_GAME_FORBIDDEN
 set(HELIOS_SYMBOL_OWNED_REGEX
   "^(helios_|_Z(T[VISTTHW]|GV|GR|Th[n0-9]+_|Tv[n0-9]+_[n0-9]+_)?(GV)?Z?N[rVK]*[RO]?(6helios|[0-9]+helios_))")
 
+# A per-image ECS type key (helios/ecs/type_key.h): the function-local static of
+# helios::ecs::detail::perImageTypeKey<T>(), instantiated in each image that uses a type outside a named
+# namespace through the typed ECS API. A game image may define none, also for a type in an unnamed namespace
+# (R5; 02 §1.4 "Rules for reloadable code"): it is image state, and every reload draws a new key.
+set(HELIOS_SYMBOL_PER_IMAGE_TYPE_KEY_REGEX "^_ZZN6helios3ecs6detail15perImageTypeKeyI")
+
 # C names that MSVC's CRT and STL headers define inline or as selectany data (the UCRT's stdio wrappers, the
 # STL's __std_* helpers and its vectorization switches). Every object that uses one carries a copy, so
 # WINDOWS_EXPORT_ALL_SYMBOLS exports it; each image still calls its own copy over the one /MD CRT, so the

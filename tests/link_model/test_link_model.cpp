@@ -21,15 +21,19 @@
 #ifndef HELIOS_LINK_MODEL_PROBE_PATH
 #error "HELIOS_LINK_MODEL_PROBE_PATH must be defined by the build"
 #endif
+#ifndef HELIOS_LINK_MODEL_PLUGIN_PATH
+#error "HELIOS_LINK_MODEL_PLUGIN_PATH must be defined by the build"
+#endif
 
 namespace {
 
 using helios::DynamicLibrary;
 
-/// Prints the same name as link_model_probe's Cooldown, a type of another layout in another image.
+/// Prints the same name as link_model_plugin's Cooldown, a type of the same layout in another image.
 struct Cooldown {
     helios::u32 ticks = 0;
 };
+static_assert(sizeof(Cooldown) == 4 && alignof(Cooldown) == 4, "the layout of plugin.cpp's Cooldown");
 
 bool hasWord(std::string_view list, std::string_view word) {
     std::string_view rest = list;
@@ -173,12 +177,14 @@ TEST_CASE("link model: a plugin image reads and writes components of a World the
 }
 
 TEST_CASE("link model: a plugin's type in an unnamed namespace never reaches a component of this image") {
-    // Both images print "(anonymous namespace)::Cooldown" (or their compiler's spelling of it); a type key
-    // built from that name alone would hand the plugin this image's smaller component.
-    auto lib = DynamicLibrary::loadUtf8(HELIOS_LINK_MODEL_PROBE_PATH);
+    // Both images print "(anonymous namespace)::Cooldown" (or their compiler's spelling of it), and both
+    // types have one layout: a key built from the name and the layout would hand the plugin this image's
+    // component. link_model_plugin is not a game image; a game image may not key a type per image (symbol
+    // audit R5).
+    auto lib = DynamicLibrary::loadUtf8(HELIOS_LINK_MODEL_PLUGIN_PATH);
     REQUIRE_MESSAGE(lib, (lib ? "" : lib.error().toString()));
     using PrivateFn = int (*)(const helios::ecs::World*, std::uint64_t);
-    auto privateType = lib->function<PrivateFn>("helios_link_model_probe_private_type");
+    auto privateType = lib->function<PrivateFn>("helios_link_model_plugin_private_type");
     REQUIRE(privateType != nullptr);
 
     helios::ecs::World world;

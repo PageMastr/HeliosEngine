@@ -40,7 +40,10 @@
 #       imports from a group by copy relocation (in both images' dynamic symbol tables) is one instance,
 #       not a copy.
 #   R4  a game image defines nothing from flecs, Jolt, Luau, mimalloc or Tracy;
-#   R5  a game image defines no mutable data in namespace helios (it imports engine state, never owns it);
+#   R5  a game image defines no mutable data in namespace helios (it imports engine state, never owns it),
+#       and no per-image ECS type key (perImageTypeKey<T>()::key, HELIOS_SYMBOL_PER_IMAGE_TYPE_KEY_REGEX), even
+#       for a type in an unnamed namespace: the types a reloadable module uses through the typed ECS API are
+#       declared in a named namespace, because each reload would draw such a key anew (02 §1.4);
 #   R6  a game image has no strong definition of a function that a group exports (it imports engine code).
 # PE images (dumpbin /exports; a linked image has no symbol table, so R2-R6 run on the ELF build):
 #   P1  every undecorated (C) name a group exports is helios_* or one of the CRT and STL header inlines the
@@ -372,7 +375,14 @@ if(format STREQUAL "elf")
       endif()
       # Guard variables follow their variable; unnamed-namespace names repeat in every TU.
       _is_mutable_data("${c}" "${sec}" mutable)
-      if(mutable AND s MATCHES "${HELIOS_SYMBOL_OWNED_REGEX}" AND NOT s MATCHES "^_ZGV"
+      set(perImageKey OFF)
+      if(role STREQUAL "game" AND mutable AND s MATCHES "${HELIOS_SYMBOL_PER_IMAGE_TYPE_KEY_REGEX}")
+        # Checked before the unnamed-namespace exemption below: the key of an unnamed-namespace type is a
+        # per-image key like any other.
+        set(perImageKey ON)
+        _fail(R5 "${s}" "R5 game image ${name} defines a per-image ECS type key '${s}' (${c}, ${sec}): a type it uses through the typed ECS API is outside a named namespace, and every reload would draw its key anew (02 §1.4)")
+      endif()
+      if(mutable AND NOT perImageKey AND s MATCHES "${HELIOS_SYMBOL_OWNED_REGEX}" AND NOT s MATCHES "^_ZGV"
          AND NOT s MATCHES "_GLOBAL__N_")
         string(MD5 k "${s}")
         if(role STREQUAL "group" AND DEFINED DATA_${k} AND NOT DATA_${k} STREQUAL name)

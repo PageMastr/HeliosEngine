@@ -7,9 +7,12 @@
 #                        helios_runtime), uses the ECS's typed API on a World the executable owns, and keeps
 #                        the symbol audit's game rules (tools/lint/symbol_audit.cmake). WP-0.6c part 2
 #                        replaces it with the Probe game module and the reload loader.
+#   link_model_plugin    a plugin that is not a game image (an editor or tool plugin, say), so the game
+#                        rules do not cover it: a type in its unnamed namespace has a per-image ECS key.
 #   link_model_bad_game  a game-like image that breaks the audit's game rules on purpose (a static
-#                        mimalloc, engine data, a strong copy of an engine function). It is never loaded;
-#                        the lint_symbol_audit_game_* fixtures (ELF builds) must reject it.
+#                        mimalloc, engine data, a per-image ECS type key, a strong copy of an engine
+#                        function). It is never loaded; the lint_symbol_audit_game_* fixtures (ELF builds)
+#                        must reject it.
 if(NOT HELIOS_MODULAR OR NOT HELIOS_BUILD_TESTS)
   return()
 endif()
@@ -19,11 +22,16 @@ target_link_libraries(link_model_probe PRIVATE helios::core helios::ecs)
 set_target_properties(link_model_probe PROPERTIES FOLDER tests)
 helios_apply_warnings(link_model_probe)
 
+add_library(link_model_plugin SHARED ${CMAKE_CURRENT_SOURCE_DIR}/plugin.cpp)
+target_link_libraries(link_model_plugin PRIVATE helios::core helios::ecs)
+set_target_properties(link_model_plugin PROPERTIES FOLDER tests)
+helios_apply_warnings(link_model_plugin)
+
 # The audit reads ELF symbol tables only (a PE image has none), so the fixture is built where it is used.
 # Default visibility: its strong copy of an engine function must be a global definition (rule R6).
 if(NOT WIN32)
   add_library(link_model_bad_game SHARED ${CMAKE_CURRENT_SOURCE_DIR}/bad_game.cpp)
-  target_link_libraries(link_model_bad_game PRIVATE helios::core helios::tp::mimalloc)
+  target_link_libraries(link_model_bad_game PRIVATE helios::core helios::ecs helios::tp::mimalloc)
   set_target_properties(link_model_bad_game PROPERTIES FOLDER tests CXX_VISIBILITY_PRESET default)
   helios_apply_warnings(link_model_bad_game)
 endif()
@@ -31,8 +39,10 @@ endif()
 helios_test(link_model_tests
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_main.cpp ${CMAKE_CURRENT_SOURCE_DIR}/test_link_model.cpp
   DEPS helios::core helios::ecs)
-add_dependencies(link_model_tests link_model_probe)
-target_compile_definitions(link_model_tests PRIVATE HELIOS_LINK_MODEL_PROBE_PATH="$<TARGET_FILE:link_model_probe>")
+add_dependencies(link_model_tests link_model_probe link_model_plugin)
+target_compile_definitions(link_model_tests PRIVATE
+  HELIOS_LINK_MODEL_PROBE_PATH="$<TARGET_FILE:link_model_probe>"
+  HELIOS_LINK_MODEL_PLUGIN_PATH="$<TARGET_FILE:link_model_plugin>")
 # The other groups exist only in builds with graphics (client) and with editor modules (editor).
 foreach(group client editor)
   if(TARGET helios_${group})

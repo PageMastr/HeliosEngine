@@ -1,9 +1,10 @@
 // link_model_probe: a game-like plugin image for the link-model tests (ADR-016, 02 §1.4, WP-0.6c part 1).
 // It links helios::core and helios::ecs, which in a modular build means importing from helios_runtime, and
 // registers into the engine's registries through the engine's own functions. It owns no engine state, so
-// it keeps the symbol audit's game rules (tools/lint/symbol_audit.cmake, R4-R6). Entry points are C
-// functions, resolved with DynamicLibrary; each may be called from any thread unless its comment says
-// otherwise.
+// it keeps the symbol audit's game rules (tools/lint/symbol_audit.cmake, R4-R6): every type it uses through
+// the typed ECS API is in a named namespace, so it holds no per-image type key (link_model_plugin, which is
+// not a game image, has one). Entry points are C functions, resolved with DynamicLibrary; each may be
+// called from any thread unless its comment says otherwise.
 #include "helios/core/cvar.h"
 #include "helios/core/memory.h"
 #include "helios/core/platform.h"
@@ -23,13 +24,6 @@ helios::MemoryTag probeTag() {
     // Registered by name, so a second call returns the same tag (core keeps the registry).
     return helios::registerMemoryTag("link_model.probe");
 }
-
-/// Prints the same name as test_link_model.cpp's Cooldown but is another, larger type, private to this
-/// translation unit: it must never reach that type's component (helios/ecs/type_key.h).
-struct Cooldown {
-    std::uint64_t started = 0;
-    std::uint64_t length = 0;
-};
 
 } // namespace
 
@@ -88,17 +82,5 @@ HELIOS_PLUGIN_EXPORT int helios_link_model_probe_ecs(helios::ecs::World* world, 
     world->apply(commands);
     host = world->get<HostCounter>(e);
     if (host == nullptr || host->value != value + 1) return -6;
-    return 1;
-}
-
-/// Typed ECS access through a type in an unnamed namespace, on a World where the caller registered and set its
-/// own type of that name on `entity`: this image's Cooldown must resolve to no component. Returns 1, or a
-/// negative step number at the first check that fails. Same thread as the World.
-HELIOS_PLUGIN_EXPORT int helios_link_model_probe_private_type(const helios::ecs::World* world,
-                                                              std::uint64_t entity) {
-    const helios::ecs::Entity e{entity};
-    if (world->id<Cooldown>() != 0) return -1;
-    if (world->has<Cooldown>(e)) return -2;
-    if (world->get<Cooldown>(e) != nullptr) return -3;
     return 1;
 }

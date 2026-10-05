@@ -10,7 +10,6 @@
 #include <cstring>
 #include <format>
 
-
 namespace helios::patch {
 
 namespace {
@@ -20,14 +19,14 @@ constexpr std::string_view kPointerContext = "HELIOS-POINTER-V0\n";
 constexpr usize kMaxIdText = 64; // product IDs, channels, platforms and build IDs are shorter
 
 constexpr std::string_view kCheckNames[] = {
-    "keyset-malformed",      "keyset-root",          "keyset-root-ratchet", "keyset-signature",
-    "keyset-product",        "keyset-version",       "pointer-malformed",   "pointer-key-unknown",
-    "pointer-key-role",      "pointer-signature",    "pointer-key-window",  "pointer-lifetime",
-    "pointer-product",       "pointer-channel",      "pointer-platform",    "pointer-expired",
-    "pointer-sequence",      "manifest-malformed",   "manifest-hash",       "manifest-key-unknown",
-    "manifest-key-role",     "manifest-signature",   "manifest-key-window", "manifest-product",
-    "manifest-platform",     "manifest-build",       "manifest-compat-epoch", "manifest-expired",
-    "manifest-body",         "chunk-missing",        "chunk-corrupt",       "chunk-hash",
+    "keyset-malformed",  "keyset-root",        "keyset-root-ratchet",   "keyset-signature",
+    "keyset-product",    "keyset-version",     "pointer-malformed",     "pointer-key-unknown",
+    "pointer-key-role",  "pointer-signature",  "pointer-key-window",    "pointer-lifetime",
+    "pointer-product",   "pointer-channel",    "pointer-platform",      "pointer-expired",
+    "pointer-sequence",  "manifest-malformed", "manifest-hash",         "manifest-key-unknown",
+    "manifest-key-role", "manifest-signature", "manifest-key-window",   "manifest-product",
+    "manifest-platform", "manifest-build",     "manifest-compat-epoch", "manifest-expired",
+    "manifest-body",     "chunk-missing",      "chunk-corrupt",         "chunk-hash",
 };
 static_assert(std::size(kCheckNames) == static_cast<usize>(TrustCheck::Count));
 
@@ -38,7 +37,8 @@ Error reject(TrustCheck check, std::format_string<Args...> fmt, Args&&... args) 
                            check == TrustCheck::ChunkCorrupt;
     ErrorCode code = malformed ? ErrorCode::Corrupt : ErrorCode::PermissionDenied;
     if (check == TrustCheck::ChunkMissing) code = ErrorCode::NotFound;
-    return Error{code, std::format("{}: {}", trustCheckName(check), std::format(fmt, std::forward<Args>(args)...))};
+    return Error{code,
+                 std::format("{}: {}", trustCheckName(check), std::format(fmt, std::forward<Args>(args)...))};
 }
 
 std::string hexOf(std::span<const u8> bytes) {
@@ -52,7 +52,9 @@ std::string hexOf(std::span<const u8> bytes) {
 }
 
 constexpr bool isLowerHex(u8 c) noexcept { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }
-constexpr u8 hexNibble(u8 c) noexcept { return c <= '9' ? static_cast<u8>(c - '0') : static_cast<u8>(c - 'a' + 10); }
+constexpr u8 hexNibble(u8 c) noexcept {
+    return c <= '9' ? static_cast<u8>(c - '0') : static_cast<u8>(c - 'a' + 10);
+}
 constexpr bool inStringAlphabet(u8 c) noexcept { return c >= 0x20 && c <= 0x7E && c != '"' && c != '\\'; }
 
 // ---------------------------------------------------------------------------------------------
@@ -69,11 +71,13 @@ public:
 
     template <typename... Args>
     void fail(std::format_string<Args...> fmt, Args&&... args) {
-        if (ok()) m_error = std::format("at byte {}: {}", m_pos, std::format(fmt, std::forward<Args>(args)...));
+        if (ok())
+            m_error = std::format("at byte {}: {}", m_pos, std::format(fmt, std::forward<Args>(args)...));
     }
 
     bool peek(std::string_view s) const noexcept {
-        return ok() && m_doc.size() - m_pos >= s.size() && std::memcmp(m_doc.data() + m_pos, s.data(), s.size()) == 0;
+        return ok() && m_doc.size() - m_pos >= s.size() &&
+               std::memcmp(m_doc.data() + m_pos, s.data(), s.size()) == 0;
     }
 
     void lit(std::string_view s) {
@@ -162,7 +166,8 @@ public:
     void hex(std::span<u8> out) {
         const std::string s = str(2 * out.size());
         if (!ok()) return;
-        if (s.size() != 2 * out.size()) return fail("expected {} hex digits, got {}", 2 * out.size(), s.size());
+        if (s.size() != 2 * out.size())
+            return fail("expected {} hex digits, got {}", 2 * out.size(), s.size());
         for (usize i = 0; i < out.size(); ++i) {
             const u8 hi = static_cast<u8>(s[2 * i]), lo = static_cast<u8>(s[2 * i + 1]);
             if (!isLowerHex(hi) || !isLowerHex(lo)) return fail("\"{}\" is not lowercase hex", s);
@@ -255,18 +260,23 @@ bool validHost(std::string_view s) noexcept {
 
 Result<void> validateKeyset(const Keyset& k) {
     if (!isValidProductId(k.productId)) return invalid("productId \"{}\" is not a product ID", k.productId);
-    if (k.version == 0 || k.version > kMaxJsonInt) return invalid("version {} is outside 1..{}", k.version, kMaxJsonInt);
+    if (k.version == 0 || k.version > kMaxJsonInt)
+        return invalid("version {} is outside 1..{}", k.version, kMaxJsonInt);
     if (k.rootEpoch == 0 || k.rootEpoch == 0xFFFFFFFFu)
         return invalid("rootEpoch {} is outside 1..{}", k.rootEpoch, 0xFFFFFFFEu);
-    if (k.keys.empty() || k.keys.size() > kMaxKeys) return invalid("{} keys, expected 1..{}", k.keys.size(), kMaxKeys);
+    if (k.keys.empty() || k.keys.size() > kMaxKeys)
+        return invalid("{} keys, expected 1..{}", k.keys.size(), kMaxKeys);
     for (usize i = 0; i < k.keys.size(); ++i) {
         const KeysetKey& key = k.keys[i];
         const std::string id = hexOf(key.id);
-        if (key.id != keyFingerprint(key.pub)) return invalid("key {}: the ID is not the fingerprint of its public key", id);
-        if (i > 0 && !(k.keys[i - 1].id < key.id)) return invalid("key {}: keys are not sorted by ID or repeat", id);
+        if (key.id != keyFingerprint(key.pub))
+            return invalid("key {}: the ID is not the fingerprint of its public key", id);
+        if (i > 0 && !(k.keys[i - 1].id < key.id))
+            return invalid("key {}: keys are not sorted by ID or repeat", id);
         if (!validRole(key.role)) return invalid("key {}: role \"{}\" is not a role name", id, key.role);
         if (key.notBefore >= key.notAfter || key.notAfter > kMaxJsonInt)
-            return invalid("key {}: validity [{}, {}) is empty or above {}", id, key.notBefore, key.notAfter, kMaxJsonInt);
+            return invalid("key {}: validity [{}, {}) is empty or above {}", id, key.notBefore, key.notAfter,
+                           kMaxJsonInt);
     }
     return {};
 }
@@ -277,16 +287,22 @@ Result<void> validatePointer(const Pointer& p) {
     if (!isValidPlatform(p.platform)) return invalid("platform \"{}\" is not a platform name", p.platform);
     if (p.sequence == 0 || p.sequence > kMaxJsonInt)
         return invalid("sequence {} is outside 1..{}", p.sequence, kMaxJsonInt);
-    if (!validVersionText(p.minLauncher)) return invalid("min_launcher \"{}\" is not a dotted version", p.minLauncher);
-    if (!validVersionText(p.minClient)) return invalid("min_client \"{}\" is not a dotted version", p.minClient);
-    if (p.cdnHosts.size() > kMaxCdnHosts) return invalid("{} cdn_hosts, the limit is {}", p.cdnHosts.size(), kMaxCdnHosts);
+    if (!validVersionText(p.minLauncher))
+        return invalid("min_launcher \"{}\" is not a dotted version", p.minLauncher);
+    if (!validVersionText(p.minClient))
+        return invalid("min_client \"{}\" is not a dotted version", p.minClient);
+    if (p.cdnHosts.size() > kMaxCdnHosts)
+        return invalid("{} cdn_hosts, the limit is {}", p.cdnHosts.size(), kMaxCdnHosts);
     if (p.rolloutPct > 100) return invalid("rollout_pct {} is above 100", p.rolloutPct);
-    if (p.signedAt > kMaxJsonInt || p.expires > kMaxJsonInt) return invalid("signed_at or expires is above {}", kMaxJsonInt);
+    if (p.signedAt > kMaxJsonInt || p.expires > kMaxJsonInt)
+        return invalid("signed_at or expires is above {}", kMaxJsonInt);
     if (!isValidBuildId(p.ref.buildId)) return invalid("build_id \"{}\" is not a build ID", p.ref.buildId);
     for (const std::string& h : p.cdnHosts)
-        if (!validHost(h)) return invalid("cdn_hosts entry \"{}\" is not an https:// or loopback http:// URL", h);
+        if (!validHost(h))
+            return invalid("cdn_hosts entry \"{}\" is not an https:// or loopback http:// URL", h);
     if (p.next) {
-        if (!isValidBuildId(p.next->ref.buildId)) return invalid("next.build_id \"{}\" is not a build ID", p.next->ref.buildId);
+        if (!isValidBuildId(p.next->ref.buildId))
+            return invalid("next.build_id \"{}\" is not a build ID", p.next->ref.buildId);
         if (p.next->availableAt > kMaxJsonInt) return invalid("next.available_at is above {}", kMaxJsonInt);
     }
     return {};
@@ -294,7 +310,8 @@ Result<void> validatePointer(const Pointer& p) {
 
 bool verifySignature(const PublicKey& pub, std::span<const u8> message, const Signature& sig) noexcept {
     static constexpr u8 kEmpty = 0;
-    return crypto_ed25519_check(sig.data(), pub.data(), message.empty() ? &kEmpty : message.data(), message.size()) == 0;
+    return crypto_ed25519_check(sig.data(), pub.data(), message.empty() ? &kEmpty : message.data(),
+                                message.size()) == 0;
 }
 
 std::vector<u8> withContext(std::string_view context, std::vector<u8> doc) {
@@ -476,7 +493,8 @@ Result<Keyset> parseKeyset(std::span<const u8> doc) {
     r.lit("}");
     r.end();
     if (!r.ok()) return Error{ErrorCode::Corrupt, r.error()};
-    if (epoch > 0xFFFFFFFFull) return makeError(ErrorCode::Corrupt, "rootEpoch {} is outside 1..{}", epoch, 0xFFFFFFFEu);
+    if (epoch > 0xFFFFFFFFull)
+        return makeError(ErrorCode::Corrupt, "rootEpoch {} is outside 1..{}", epoch, 0xFFFFFFFEu);
     k.rootEpoch = static_cast<u32>(epoch);
     HELIOS_TRY(validateKeyset(k));
     return k;
@@ -562,7 +580,8 @@ std::optional<TrustCheck> trustCheckOf(const Error& error) noexcept {
     const std::string_view m = error.message;
     for (usize i = 0; i < std::size(kCheckNames); ++i) {
         const std::string_view name = kCheckNames[i];
-        if (m.size() > name.size() && m.starts_with(name) && m[name.size()] == ':') return static_cast<TrustCheck>(i);
+        if (m.size() > name.size() && m.starts_with(name) && m[name.size()] == ':')
+            return static_cast<TrustCheck>(i);
     }
     return std::nullopt;
 }
@@ -575,7 +594,8 @@ TrustState advanceTrustState(const TrustState& state, const Keyset& keyset, cons
     TrustState out = state;
     out.rootEpoch = std::max(state.rootEpoch, keyset.rootEpoch);
     out.keysetVersion = std::max(state.keysetVersion, keyset.version);
-    out.pointerSequence = pointer.rollback ? pointer.sequence : std::max(state.pointerSequence, pointer.sequence);
+    out.pointerSequence =
+        pointer.rollback ? pointer.sequence : std::max(state.pointerSequence, pointer.sequence);
     return out;
 }
 
@@ -596,7 +616,8 @@ std::array<u8, kTrustStateSize> encodeTrustState(const TrustState& state) noexce
 }
 
 Result<TrustState> decodeTrustState(std::span<const u8> record) {
-    if (record.size() != kTrustStateSize || loadLE<u32>(record.data()) != kStateMagic || loadLE<u32>(record.data() + 4) != 0)
+    if (record.size() != kTrustStateSize || loadLE<u32>(record.data()) != kStateMagic ||
+        loadLE<u32>(record.data() + 4) != 0)
         return Error{ErrorCode::Corrupt, "not a trust state record"};
     const Hash256 h = blake2b256(record.first(28));
     if (!std::equal(h.bytes.begin(), h.bytes.begin() + 4, record.begin() + 28))
@@ -625,12 +646,15 @@ Result<void> FileTrustStateStore::save(const TrustState& state) {
 // Verifier
 // ---------------------------------------------------------------------------------------------
 
-Result<TrustVerifier> TrustVerifier::create(TrustTarget target, const RootPair& roots, const TrustOptions& options) {
-    if (!isValidProductId(target.productId) || !validChannel(target.channel) || !isValidPlatform(target.platform))
-        return makeError(ErrorCode::InvalidArgument, "invalid target {}/{}/{}", target.productId, target.channel,
-                         target.platform);
+Result<TrustVerifier> TrustVerifier::create(TrustTarget target, const RootPair& roots,
+                                            const TrustOptions& options) {
+    if (!isValidProductId(target.productId) || !validChannel(target.channel) ||
+        !isValidPlatform(target.platform))
+        return makeError(ErrorCode::InvalidArgument, "invalid target {}/{}/{}", target.productId,
+                         target.channel, target.platform);
     if (roots.epoch == 0 || roots.epoch == 0xFFFFFFFFu)
-        return makeError(ErrorCode::InvalidArgument, "root epoch {} is outside 1..{}", roots.epoch, 0xFFFFFFFEu);
+        return makeError(ErrorCode::InvalidArgument, "root epoch {} is outside 1..{}", roots.epoch,
+                         0xFFFFFFFEu);
     if (roots.current == roots.next)
         return Error{ErrorCode::InvalidArgument, "the current and next roots are the same key"};
     if (!options.allowTestKeys && (isTestOnlyKey(roots.current) || isTestOnlyKey(roots.next)))
@@ -652,17 +676,22 @@ Result<Keyset> TrustVerifier::verifyKeyset(std::span<const u8> doc, const TrustS
     else if (ks.rootEpoch == m_roots.epoch + 1)
         root = &m_roots.next;
     else
-        return reject(TrustCheck::KeysetRoot, "rootEpoch {} is neither the current root's ({}) nor the next's",
-                      ks.rootEpoch, m_roots.epoch);
+        return reject(TrustCheck::KeysetRoot,
+                      "rootEpoch {} is neither the current root's ({}) nor the next's", ks.rootEpoch,
+                      m_roots.epoch);
     if (ks.rootEpoch < state.rootEpoch)
-        return reject(TrustCheck::KeysetRootRatchet, "signed by root epoch {}; this install accepts {} and later",
-                      ks.rootEpoch, state.rootEpoch);
+        return reject(TrustCheck::KeysetRootRatchet,
+                      "signed by root epoch {}; this install accepts {} and later", ks.rootEpoch,
+                      state.rootEpoch);
     if (!verifySignature(*root, keysetSignedMessage(ks), ks.sig))
-        return reject(TrustCheck::KeysetSignature, "the root of epoch {} did not sign this keyset", ks.rootEpoch);
+        return reject(TrustCheck::KeysetSignature, "the root of epoch {} did not sign this keyset",
+                      ks.rootEpoch);
     if (ks.productId != m_target.productId)
-        return reject(TrustCheck::KeysetProduct, "keyset of \"{}\", expected \"{}\"", ks.productId, m_target.productId);
+        return reject(TrustCheck::KeysetProduct, "keyset of \"{}\", expected \"{}\"", ks.productId,
+                      m_target.productId);
     if (ks.version < state.keysetVersion)
-        return reject(TrustCheck::KeysetVersion, "version {} is below the stored {}", ks.version, state.keysetVersion);
+        return reject(TrustCheck::KeysetVersion, "version {} is below the stored {}", ks.version,
+                      state.keysetVersion);
     return parsed;
 }
 
@@ -693,17 +722,19 @@ Result<Pointer> TrustVerifier::verifyPointer(std::span<const u8> doc, const Keys
         return reject(TrustCheck::PointerKeyWindow, "signed at {}, key {} signs in [{}, {})", p.signedAt,
                       hexOf(p.keyId), key->notBefore, key->notAfter);
     if (p.expires <= p.signedAt || p.expires - p.signedAt > kMaxPointerLifetime)
-        return reject(TrustCheck::PointerLifetime, "expires {} is not within {} s after signed_at {}", p.expires,
-                      kMaxPointerLifetime, p.signedAt);
+        return reject(TrustCheck::PointerLifetime, "expires {} is not within {} s after signed_at {}",
+                      p.expires, kMaxPointerLifetime, p.signedAt);
     if (p.productId != m_target.productId)
-        return reject(TrustCheck::PointerProduct, "pointer of \"{}\", expected \"{}\"", p.productId, m_target.productId);
+        return reject(TrustCheck::PointerProduct, "pointer of \"{}\", expected \"{}\"", p.productId,
+                      m_target.productId);
     if (p.channel != m_target.channel)
         return reject(TrustCheck::PointerChannel, "pointer of channel \"{}\", expected \"{}\"", p.channel,
                       m_target.channel);
     if (p.platform != m_target.platform)
         return reject(TrustCheck::PointerPlatform, "pointer of platform \"{}\", expected \"{}\"", p.platform,
                       m_target.platform);
-    if (now >= p.expires) return reject(TrustCheck::PointerExpired, "expired at {}, now is {}", p.expires, now);
+    if (now >= p.expires)
+        return reject(TrustCheck::PointerExpired, "expired at {}, now is {}", p.expires, now);
     if (p.sequence < state.pointerSequence && !p.rollback)
         return reject(TrustCheck::PointerSequence, "sequence {} is below the stored {} and not a rollback",
                       p.sequence, state.pointerSequence);
@@ -716,10 +747,10 @@ Result<ManifestHeaderInfo> TrustVerifier::verifyManifestHeader(std::span<const u
     if (!info) return reject(TrustCheck::ManifestMalformed, "{}", info.error().message);
     const ManifestHeader& h = info->header;
     if (info->headerHash != ref.manifestHash)
-        return reject(TrustCheck::ManifestHash, "header hash {}, the pointer names {}", info->headerHash.toHex(),
-                      ref.manifestHash.toHex());
-    HELIOS_TRY_ASSIGN(const KeysetKey* key,
-                      signingKey(keyset, h.keyId, TrustCheck::ManifestKeyUnknown, TrustCheck::ManifestKeyRole));
+        return reject(TrustCheck::ManifestHash, "header hash {}, the pointer names {}",
+                      info->headerHash.toHex(), ref.manifestHash.toHex());
+    HELIOS_TRY_ASSIGN(const KeysetKey* key, signingKey(keyset, h.keyId, TrustCheck::ManifestKeyUnknown,
+                                                       TrustCheck::ManifestKeyRole));
     Signature sig;
     std::copy(h.signature.begin(), h.signature.end(), sig.begin());
     if (!verifySignature(key->pub, file.first(hman::kSignedBytes), sig))
@@ -744,8 +775,8 @@ Result<ManifestHeaderInfo> TrustVerifier::verifyManifestHeader(std::span<const u
     return info;
 }
 
-Result<Manifest> TrustVerifier::verifyManifest(std::span<const u8> file, const Keyset& keyset, const ManifestRef& ref,
-                                               u64 now) const {
+Result<Manifest> TrustVerifier::verifyManifest(std::span<const u8> file, const Keyset& keyset,
+                                               const ManifestRef& ref, u64 now) const {
     HELIOS_TRY(verifyManifestHeader(file, keyset, ref, now));
     Result<Manifest> m = readManifest(file);
     if (!m) return reject(TrustCheck::ManifestBody, "{}", m.error().message);
@@ -754,8 +785,8 @@ Result<Manifest> TrustVerifier::verifyManifest(std::span<const u8> file, const K
 
 Result<void> TrustVerifier::verifyChunk(const ManifestChunk& chunk, std::span<const u8> raw) {
     if (raw.size() != chunk.rawSize)
-        return reject(TrustCheck::ChunkCorrupt, "chunk {} is {} bytes, the manifest says {}", chunk.hash.toHex(),
-                      raw.size(), chunk.rawSize);
+        return reject(TrustCheck::ChunkCorrupt, "chunk {} is {} bytes, the manifest says {}",
+                      chunk.hash.toHex(), raw.size(), chunk.rawSize);
     const Hash256 got = blake2b256(raw);
     if (got != chunk.hash)
         return reject(TrustCheck::ChunkHash, "chunk {} hashes to {}", chunk.hash.toHex(), got.toHex());

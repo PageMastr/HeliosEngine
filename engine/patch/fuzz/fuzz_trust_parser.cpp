@@ -36,7 +36,8 @@ struct TestKey {
 
 TestKey testKey(std::string_view name) {
     const std::string preimage = std::string("helios test-only key: ") + std::string(name);
-    Hash256 seed = blake2b256(std::span<const u8>(reinterpret_cast<const u8*>(preimage.data()), preimage.size()));
+    Hash256 seed =
+        blake2b256(std::span<const u8>(reinterpret_cast<const u8*>(preimage.data()), preimage.size()));
     TestKey k;
     crypto_ed25519_key_pair(k.secret, k.pub.data(), seed.bytes.data());
     return k;
@@ -72,7 +73,8 @@ const World& world() {
         ks.version = 3;
         ks.rootEpoch = 1;
         ks.keys = {subkey("manifest-a", "manifest"), subkey("news-a", "news"), subkey("store-a", "store")};
-        std::sort(ks.keys.begin(), ks.keys.end(), [](const KeysetKey& a, const KeysetKey& b) { return a.id < b.id; });
+        std::sort(ks.keys.begin(), ks.keys.end(),
+                  [](const KeysetKey& a, const KeysetKey& b) { return a.id < b.id; });
         sign(ks, keysetSignedMessage(ks), testKey("root-1"));
         Pointer p;
         p.productId = "vector-game";

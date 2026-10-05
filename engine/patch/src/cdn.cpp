@@ -43,13 +43,16 @@ bool isValidObjectPath(std::string_view path) noexcept {
 
 CdnFetch localCdn(fs::Path root) {
     return [root = std::move(root)](std::string_view path, u64 limit) -> Result<std::vector<u8>> {
-        if (!cdn::isValidObjectPath(path)) return makeError(ErrorCode::InvalidArgument, "bad object path \"{}\"", path);
+        if (!cdn::isValidObjectPath(path))
+            return makeError(ErrorCode::InvalidArgument, "bad object path \"{}\"", path);
         const fs::Path full = root / fs::pathFromUtf8(path);
         if (!fs::isFile(full)) return makeError(ErrorCode::NotFound, "{}: not found", path);
         HELIOS_TRY_ASSIGN(const u64 size, fs::fileSize(full));
-        if (size > limit) return makeError(ErrorCode::LimitExceeded, "{} is larger than {} bytes", path, limit);
+        if (size > limit)
+            return makeError(ErrorCode::LimitExceeded, "{} is larger than {} bytes", path, limit);
         HELIOS_TRY_ASSIGN(std::vector<u8> bytes, fs::readFile(full));
-        if (bytes.size() > limit) return makeError(ErrorCode::LimitExceeded, "{} is larger than {} bytes", path, limit);
+        if (bytes.size() > limit)
+            return makeError(ErrorCode::LimitExceeded, "{} is larger than {} bytes", path, limit);
         return bytes;
     };
 }
@@ -76,9 +79,11 @@ Result<std::vector<u8>> decodeChunkObject(std::span<const u8> stored, u32 rawSiz
             if (ret != 0) return Error{ErrorCode::Corrupt, "the object ends inside a zstd frame"};
             break;
         }
-        if (in.pos == before && o.pos == producedBefore) return Error{ErrorCode::Corrupt, "the object does not decode"};
+        if (in.pos == before && o.pos == producedBefore)
+            return Error{ErrorCode::Corrupt, "the object does not decode"};
     }
-    if (o.pos != rawSize) return makeError(ErrorCode::Corrupt, "decodes to {} bytes, expected {}", o.pos, rawSize);
+    if (o.pos != rawSize)
+        return makeError(ErrorCode::Corrupt, "decodes to {} bytes, expected {}", o.pos, rawSize);
     out.resize(rawSize);
     return out;
 }
@@ -93,15 +98,18 @@ Error rejection(TrustCheck check, std::string detail) {
 Result<std::vector<u8>> fetchChunk(const CdnFetch& fetch, const ManifestChunk& chunk) {
     Result<std::vector<u8>> stored = fetch(cdn::chunkPath(chunk.hash), cdn::kMaxChunkObject);
     if (!stored) {
-        if (stored.errorCode() == ErrorCode::NotFound) return rejection(TrustCheck::ChunkMissing, stored.error().message);
+        if (stored.errorCode() == ErrorCode::NotFound)
+            return rejection(TrustCheck::ChunkMissing, stored.error().message);
         return makeError(stored.errorCode(), "chunk {}: {}", chunk.hash.toHex(), stored.error().message);
     }
     if (chunk.storedSize != 0 && stored->size() != chunk.storedSize)
-        return rejection(TrustCheck::ChunkCorrupt, std::format("chunk {} is stored in {} bytes, the manifest says {}",
-                                                               chunk.hash.toHex(), stored->size(), chunk.storedSize));
+        return rejection(TrustCheck::ChunkCorrupt,
+                         std::format("chunk {} is stored in {} bytes, the manifest says {}",
+                                     chunk.hash.toHex(), stored->size(), chunk.storedSize));
     Result<std::vector<u8>> raw = decodeChunkObject(*stored, chunk.rawSize);
     if (!raw)
-        return rejection(TrustCheck::ChunkCorrupt, std::format("chunk {}: {}", chunk.hash.toHex(), raw.error().message));
+        return rejection(TrustCheck::ChunkCorrupt,
+                         std::format("chunk {}: {}", chunk.hash.toHex(), raw.error().message));
     HELIOS_TRY(TrustVerifier::verifyChunk(chunk, *raw));
     return raw;
 }
@@ -121,16 +129,17 @@ Result<VerifiedChannel> verifyChannel(const CdnFetch& fetch, const TrustVerifier
         HELIOS_TRY_ASSIGN(out.pointer, verifier.verifyPointer(doc, out.keyset, now, state));
     }
     {
-        HELIOS_TRY_ASSIGN(const std::vector<u8> file, fetch(cdn::manifestPath(t.productId, out.pointer.ref.buildId,
-                                                                                t.platform),
-                                                              cdn::kMaxManifestObject));
+        HELIOS_TRY_ASSIGN(const std::vector<u8> file,
+                          fetch(cdn::manifestPath(t.productId, out.pointer.ref.buildId, t.platform),
+                                cdn::kMaxManifestObject));
         HELIOS_TRY_ASSIGN(out.manifest, verifier.verifyManifest(file, out.keyset, out.pointer.ref, now));
     }
     out.state = advanceTrustState(state, out.keyset, out.pointer);
     HELIOS_TRY(store.save(out.state));
     for (const ManifestChunk& c : out.manifest.chunks) {
         if (c.pack != hman::kNoPack)
-            return makeError(ErrorCode::Unsupported, "chunk {} is packed; packs are not supported in v0", c.hash.toHex());
+            return makeError(ErrorCode::Unsupported, "chunk {} is packed; packs are not supported in v0",
+                             c.hash.toHex());
         HELIOS_TRY_ASSIGN(const std::vector<u8> raw, fetchChunk(fetch, c));
         ++out.chunks;
         out.rawBytes += raw.size();

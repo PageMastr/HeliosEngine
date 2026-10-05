@@ -156,7 +156,8 @@ Overlay caseOverlay(const Vectors& v, yyjson_val* c) {
                 target = &o.pointer;
             } else if (art == "manifest") {
                 if (!o.manifest)
-                    o.manifest = cdnFile(cdn::manifestPath(v.target.productId, cdnPointer->ref.buildId, v.target.platform));
+                    o.manifest = cdnFile(
+                        cdn::manifestPath(v.target.productId, cdnPointer->ref.buildId, v.target.platform));
                 target = &*o.manifest;
             } else {
                 REQUIRE(art == "chunk");
@@ -222,7 +223,8 @@ TEST_CASE("trust: the shared syntax vectors are refused by both parsers") {
     const Vectors v = loadVectors();
     const TrustVerifier verifier = verifierFor(v);
     const std::vector<u8> ksDoc = cdnFile(cdn::keysetPath(v.target.productId));
-    const std::vector<u8> ptrDoc = cdnFile(cdn::pointerPath(v.target.productId, v.target.channel, v.target.platform));
+    const std::vector<u8> ptrDoc =
+        cdnFile(cdn::pointerPath(v.target.productId, v.target.channel, v.target.platform));
     const Result<Keyset> ks = verifier.verifyKeyset(ksDoc, {});
     REQUIRE(ks.ok());
     const test::Json j = test::loadJson(trustDir() / "syntax.json");
@@ -231,7 +233,8 @@ TEST_CASE("trust: the shared syntax vectors are refused by both parsers") {
         const usize del = static_cast<usize>(test::getU64(c, "delete"));
         REQUIRE(at + del <= base.size());
         std::vector<u8> put;
-        if (yyjson_val* p = test::get(c, "put")) put.assign(yyjson_get_str(p), yyjson_get_str(p) + yyjson_get_len(p));
+        if (yyjson_val* p = test::get(c, "put"))
+            put.assign(yyjson_get_str(p), yyjson_get_str(p) + yyjson_get_len(p));
         if (yyjson_val* p = test::get(c, "putHex")) put = test::fromHex(yyjson_get_str(p));
         std::vector<u8> out(base.begin(), base.begin() + static_cast<std::ptrdiff_t>(at));
         out.insert(out.end(), put.begin(), put.end());
@@ -284,7 +287,8 @@ TEST_CASE("trust: every single-byte change of a signed byte is rejected") {
             for (const u8 x : {u8(0x01), u8(0x20), u8(0x80)}) {
                 doc[i] ^= x;
                 MemoryTrustStateStore store(v.state);
-                const Result<VerifiedChannel> r = verifyChannel(overlayFetch(base, v.target), verifier, v.now, store);
+                const Result<VerifiedChannel> r =
+                    verifyChannel(overlayFetch(base, v.target), verifier, v.now, store);
                 doc[i] ^= x;
                 CAPTURE(art);
                 CAPTURE(i);

@@ -266,7 +266,8 @@ class TrustVerifier {
 public:
     /// Checks the target's identifiers and the root pair (epoch range, distinct keys, no test-only key
     /// unless options allow it). InvalidArgument otherwise.
-    static Result<TrustVerifier> create(TrustTarget target, const RootPair& roots, const TrustOptions& options = {});
+    static Result<TrustVerifier> create(TrustTarget target, const RootPair& roots,
+                                        const TrustOptions& options = {});
 
     const TrustTarget& target() const noexcept { return m_target; }
 

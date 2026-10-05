@@ -83,9 +83,10 @@ copy). The ISA audit (`tools/lint`) checks the gate objects' flags, disassembly 
 build; `core_cpugate_child_snb` (the hook evaluating a recorded Sandy Bridge) tests the refusal path on
 any machine (CL-17, early).
 
-In a modular dev build (`HELIOS_MODULAR=ON`, ADR-016) core is part of `helios_runtime`. On Windows the
-hook then lives in `helios_runtime.dll`, which every gated executable imports, and executables carry
-none; ELF executables keep their `.preinit_array` hook, which calls the probe in
+In a modular dev build (`HELIOS_MODULAR=ON`, ADR-016) core is part of `helios_runtime`, and so is the probe's
+object library, still at the `gate` level (an OBJECT module does not carry the object libraries it links, so
+`cmake/HeliosModular.cmake` links them into the group). On Windows the hook then lives in
+`helios_runtime.dll`, which every gated executable imports, and executables carry none; ELF executables keep their `.preinit_array` hook, which calls the probe in
 `libhelios_runtime.so` (docs/adr/ADR-0.6c-link-model-spike.md §3, including what WP-0.5r changes).
 
 ## Processes

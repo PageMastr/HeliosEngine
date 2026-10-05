@@ -179,8 +179,9 @@ baseline callers. So Helios builds **whole images at one level** and audits the 
       and runtime DLLs, and `tp_imgui` those and `SDL3`. The loader may therefore initialize them first.
       `tp_imgui` also carries `editorui`'s ImGui item hooks, Helios code with no initializer that runs only
       when ImGui calls it.
-      Once WP-0.2r builds those images at `avx2`, WP-0.5r's check 3 must attribute their initializers, as
-      it does mimalloc's, or the build must make them import `helios_runtime.dll` (ADR-0.6c §3).
+      Those images are built at `avx2` (WP-0.2r's levels, which WP-0.6c part 1 carries into the modular
+      build), so WP-0.5r's check 3 must attribute their initializers, as it does mimalloc's, or the build must
+      make them import `helios_runtime.dll` (ADR-0.6c §3).
     - *Rejected alternative: build `tp_mimalloc` and Tracy's client TU at `base`.* It fixes today's two cases
       but not the next library that adds a hook. It also turns mimalloc's LZCNT, TZCNT and POPCNT bit scans on
       the allocation fast path into slower baseline sequences. Placement fixes the class of problem, and the
@@ -441,11 +442,16 @@ draws ImGui through the RHI, and the backend would carry a second copy of volk (
   A type declared in a named namespace has a name key: a compile-time hash of its canonical name (without
   the class-keys MSVC prints, spaces only between identifier characters), size and alignment, which every
   image derives alike, whichever ADR-001a toolset or clang-cl built it. For a template specialization that
-  holds only within one compiler. Every other type (in an unnamed namespace, a local class, a closure, or in
-  the global namespace, where Clang also prints local classes) has a per-image key, never shared with
-  another type. A component that crosses images is therefore declared in a named namespace, and one that
-  crosses images built by different compilers is not a template specialization. flecs, Jolt and Luau headers
-  never reach game code, which §1.1's "no third-party types in public headers" rule already guarantees.
+  holds only within one compiler. Every other type (in an unnamed namespace, a local class, a closure, in
+  the global namespace, where Clang also prints local classes, or a specialization with such a type among
+  its template arguments) has a per-image key, never shared with another type. A component that crosses
+  images is therefore declared in a named namespace, with template arguments from named namespaces, and one
+  that crosses images built by different compilers is not a template specialization. Components and other
+  types that a reloadable module uses through the typed ECS API are declared in a named namespace too: a
+  per-image key is a template static (`perImageTypeKey<T>()::key`), which the game-image rules below
+  forbid, and every reload would draw it anew while the component stays bound to the old key. flecs, Jolt
+  and Luau headers never reach game code, which §1.1's "no third-party types in public headers" rule
+  already guarantees.
 - **Tracy.** The runtime group compiles the Tracy client with `TRACY_EXPORTS`, and game modules build with
   `TRACY_IMPORTS`. `HELIOS_PROFILE_ZONE` in a reloadable module expands to Tracy's transient zones, which copy
   their source-location strings, so the profiler never holds a pointer into an unloaded image.
@@ -492,7 +498,8 @@ PIE", a warm restart of ≤ 5 s.
   non-reloadable gems.
 - **Symbol audit (CI).** `dumpbin /symbols` or `nm` runs over each game image. It must show no definitions
   at all from flecs, Jolt, Luau, mimalloc or Tracy. From engine namespaces it must show no data symbols
-  (statics, registries, template static members) and no strong definitions of exported engine functions.
+  (statics, registries, template static members, per-image ECS type keys even for a game's own
+  unnamed-namespace types) and no strong definitions of exported engine functions.
   Inline functions and template instantiations from engine headers are allowed. A game image imports engine
   state; it never owns any.
 

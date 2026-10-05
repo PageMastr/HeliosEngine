@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **Part 1 of 2 recorded (2026-10-04).** The modular dev build exists: `HELIOS_MODULAR`, the three link-group shared libraries with generated `HELIOS_*_API` headers, `/MD` for every image of a modular MSVC build, the `windows-msvc-dev` and `linux-dev` presets, the symbol audit and the `windows-msvc-dev` PR job. **RT-18 is unmeasured**: the reload loader, the `Probe` game module and the 100-reload soak are part 2. ADR-016 stands; nothing here reopens it. Two decisions departed from the earlier letter of 02 §1.4: what a group exports (§2) and where SDL3 and Dear ImGui live (§5, finding 7). This PR amends 02 §1.4 (the export policy until part 2, the Linux row, the third-party images, the ECS type key), 02 §1.1 ("Which image") and ADR-016's dev bullets to match, as plan revision 14 (`docs/plan/CONSISTENCY.md` §43), and gives the export tightening to part 2 (09 §2, WP-0.6 (c)) |
+| **Status** | **Part 1 of 2 recorded (2026-10-04).** The modular dev build exists: `HELIOS_MODULAR`, the three link-group shared libraries with generated `HELIOS_*_API` headers, `/MD` for every image of a modular MSVC build, the `windows-msvc-dev` and `linux-dev` presets, the symbol audit and the `windows-msvc-dev` PR job. **RT-18 is unmeasured**: the reload loader, the `Probe` game module and the 100-reload soak are part 2. ADR-016 stands; nothing here reopens it. Two decisions departed from the earlier letter of 02 §1.4: what a group exports (§2) and where SDL3 and Dear ImGui live (§5, finding 7). This PR amends 02 §1.4 (the export policy until part 2, the Linux row, the third-party images, the ECS type key), 02 §1.1 ("Which image") and ADR-016's dev bullets to match, as plan revision 14 (`docs/plan/CONSISTENCY.md` §43), and gives the export tightening to part 2 (09 §2, WP-0.6 (c)). After #60 (WP-0.2r) merged, part 1 also carries the image ISA levels into the modular build (§3.1) |
 | **Decides** | How [ADR-016](../plan/00-decisions.md#adr-016-dev-versus-shipping-link-model-game-module-hot-reload) and [02 §1.4](../plan/02-engine-runtime.md#14-link-model-and-game-module-hot-reload-adr-016) are built: what each group exports, how consumers link, which images carry their own copy of the engine, where the CPU gate lives in a modular build, which toolchains build the dev flavour |
 | **Gates** | RT-18 (02 §8.2), and through it RT-14 and AAA-ITR-5. Part 1 delivers RT-18's prerequisites (the modular link model and the symbol audit) |
 | **Owner** | Runtime lead. Work package WP-0.6c ([09 §2](../plan/09-roadmap-and-process.md), WP-0.6 (c)) |
@@ -144,7 +144,7 @@ The PE format allows 65,535 exports per image, so the largest group uses about 1
 3. Audit check 3 (d), "the gate image imports only OS and Microsoft runtime DLLs", must accept the VC++
    runtime DLLs for `helios_runtime.dll` (it is `/MD`), and check that every Helios DLL imports it. SDL3 and
    Dear ImGui are DLLs of their own in modular builds (§5), and neither imports `helios_runtime.dll`, so the
-   loader may initialize them first. Once WP-0.2r builds them at `avx2`, check 3 must either attribute their
+   loader may initialize them first. WP-0.2r builds them at `avx2` (§3.1), so check 3 must either attribute their
    initializers (as it does mimalloc's) or the build must make them import `helios_runtime.dll`.
 4. On Linux the gate objects call `helios_cpu_gate_run` across an image boundary (PLT). WP-0.5r should link
    the probe object into gated executables too, or keep the cross-image call and add it to the gate
@@ -155,14 +155,38 @@ The PE format allows 65,535 exports per image, so the largest group uses about 1
 6. **IFUNCs in the group libraries.** The ISA audit bans `R_X86_64_IRELATIVE` relocations in gated
    executables, because an IFUNC resolver runs at relocation time, before `.preinit_array`. In a modular ELF
    build the engine code sits in `libhelios_*.so` (and SDL3 and ImGui in their own libraries), which the
-   dynamic linker also relocates before the gate. None has an IRELATIVE relocation today (`readelf -r` on
-   the GCC and Clang modular builds); WP-0.5r adds the group and third-party libraries to the image check.
+   dynamic linker also relocates before the gate. Since review round 3, `lint_isa_audit`'s check 3 covers
+   them in modular builds (the groups and the shared libraries they reach), with the seeded fixture
+   `lint_isa_shared_image_detects_ifunc`; none has an IRELATIVE relocation (GCC and Clang modular builds).
+   WP-0.5r keeps the rule when it extends check 3.
 7. **Which processes are gated.** In a modular Windows build the hook runs in every process that loads
    `helios_runtime.dll`, including images whose role is `NO_CPU_GATE` or baseline: tests, samples and the
    future launcher, whose refusal screen 02 §1.1 wants reachable on an old CPU. Shipping launchers are
    monolithic, so that screen is unaffected; a modular launcher stops at the gate like any gated image.
    On Linux only gated executables carry the hook (`.preinit_array`), so the role still decides there.
    WP-0.5r records this in the gate's role rules.
+
+### 3.1 ISA levels in modular builds
+
+#60 (WP-0.2r part 1, whole-image ISA levels) merged first, so this PR carries the levels into the modular
+build (review round 3):
+- **Every library is `avx2`**, as in a shipping build: the three group libraries, the module object libraries
+  inside them, and the third-party shared libraries `SDL3` and `tp_imgui` (`helios_isa_finalize`,
+  `cmake/HeliosIsa.cmake`). `lint_isa_audit`'s check 1 audits their units like any other.
+- **The gate's object libraries keep the `gate` level** inside `helios_runtime`. A STATIC `helios_core`
+  archives the probe's object library (`helios_core_cpugate`); an OBJECT module passes on only its usage
+  requirements, so `helios_modular_finalize` links the object libraries a module links into its group and into
+  self-contained images, with default visibility (gated ELF executables call the probe in the group). On
+  Windows the hook's object library is linked into `helios_runtime.dll` as before (§3).
+- **A base image never imports a group.** In a modular build `helios::<module>` names the module's consumer
+  interface, which links the group, so `helios_isa_finalize` replaces those links with the module's `.base`
+  copy, and configure fails if a base image's link line still reaches any shared library built here (all of
+  them are `avx2`). On Windows the base image and its copies define the `HELIOS_<GROUP>_API` data themselves,
+  as self-contained images do. The symbol audit skips base images, which load no group. The `isa_*` layering
+  fixtures run in both flavours; without the remapping, `lint_layering_modular_isa_base_ok` fails.
+- **For WP-0.17.** A modular build has `SDL3` only as a shared library (`avx2`), so a base image that links
+  SDL3 (the launcher) fails configure there. WP-0.17 chooses between building `SDL3-static` beside it in
+  modular builds and keeping the launcher out of the dev flavour; shipping launchers are unaffected.
 
 ## 4. The symbol audit
 
@@ -174,7 +198,7 @@ ELF: `nm`; PE: `dumpbin /exports`, because a linked PE image has no symbol table
 | R1 | A group exports a strong definition, or mutable data of any binding (weak and GNU-unique inline and template statics included), outside namespace `helios` and the `helios_` C prefix |
 | R2 | A third-party library with process state (mimalloc, flecs, Jolt, Luau, Tracy, SDL3, Dear ImGui, volk, netcode) is defined in two images |
 | R3 | A consumer image, or a second group, has its own copy of mutable `helios` data that a group defines (02 §1.4, "No per-image caches of global state"). Two groups export such data with default visibility, so Linux binds both to one instance and only Windows splits it: the audit compares the groups' symbol tables. Data that an executable imports by copy relocation is in both images' dynamic symbol tables and is one instance, not a copy |
-| R4–R6 | A game image defines anything from flecs, Jolt, Luau, mimalloc or Tracy; defines mutable `helios` data; or carries a global strong copy of an exported engine function |
+| R4–R6 | A game image defines anything from flecs, Jolt, Luau, mimalloc or Tracy; defines mutable `helios` data, a per-image ECS type key included, even for its own unnamed-namespace type (review round 3: the types a reloadable module uses through the typed ECS API are declared in a named namespace, 02 §1.4); or carries a global strong copy of an exported engine function |
 | P1 | A group's export table has an undecorated name that is not `helios_*`, or no exports at all. The C names that MSVC's CRT and STL headers define inline or as `selectany` data (`fprintf`, `snprintf`, `__local_stdio_printf_options`, `__std_*`, `_Avx2WmemEnabledWeakValue`, …) are accepted: every object that uses them has a copy, and each image still calls its own over the one `/MD` CRT (policy `HELIOS_SYMBOL_PE_TOOLCHAIN`) |
 
 02 §1.4 has no rule against STL types in signatures across the boundary: every image shares one CRT heap,
@@ -182,8 +206,9 @@ so STL objects may cross it (`link_model_tests` checks this), and the audit has 
 
 Fixtures: recorded `nm` and `dumpbin` listings (`tools/lint/tests/symbols/`, 12 cases, 9 of them seeded
 failures, including `elf_group_duplicate_state` and `elf_group_weak_state`) run in every build; ELF modular
-builds also build `link_model_bad_game`, which breaks R4–R6 on purpose. `link_model_probe` is the passing
-game image.
+builds also build `link_model_bad_game`, which breaks R4–R6 on purpose (since review round 3 also with a
+per-image type key). `link_model_probe` is the passing game image; `link_model_plugin`, a plugin that is not a
+game image, keeps a per-image key and passes as a consumer.
 
 **Where each rule runs.** R1–R6 need an ELF modular build. No CI job runs one yet: `windows-msvc-dev` runs P1
 and the recorded fixtures, and `linux-dev` joins the nightly tier with part 2 (§6). Until then R1–R6 run
@@ -264,17 +289,24 @@ What the first modular builds of the tree showed (GCC and Clang on Linux; MSVC t
    Nothing per image holds state for these types, and a reloaded game module finds its components under the
    same key. Every other type keeps a per-image key, drawn once from a counter in `helios_runtime` as
    `typeSlot` was: types in unnamed namespaces, local classes and closures, which can never cross an image,
-   and global-namespace types, which Clang prints exactly like its local classes. Round 2 also found that
-   the first key merged two such types that print one name (unnamed namespaces of two translation units):
-   typed access through the second, unregistered type reached the first's component, past its end when the
-   second was larger, a change to shipping behaviour; now each has its own key, as on main. Two name-keyed
-   types collide only with one canonical name and one layout (on Clang, a class nested in a local class);
-   typed access through the second then reaches the first's same-sized component, and `registerComponent<T>`
-   (which now returns 0 after a `HELIOS_VERIFY` failure whenever T cannot be bound) and `bindType<T>`
-   refuse the second binding. `link_model_tests` checks the built-ins from the executable, lets
+   global-namespace types, which Clang prints exactly like its local classes, and every specialization with
+   such a type among its template arguments (review round 3: Clang and clang-cl print `ns::Box<Local>` for
+   every function's `Local`, and for a global-namespace `Local`, so two such specializations shared a name
+   key; a class name without a scope in a template argument now makes the type per-image). Round 2 also
+   found that the first key merged two such types that print one name (unnamed namespaces of two
+   translation units): typed access through the second, unregistered type reached the first's component, past
+   its end when the second was larger, a change to shipping behaviour; now each has its own key, as on main. What remains:
+   two name-keyed types with one canonical name and one layout, which in a correct program is only a class
+   nested in a local class on Clang (`Local::Inner`, also as a template argument); typed access through the
+   second reaches the first's same-sized component. A 64-bit collision of two name keys (name, size and
+   alignment hashed together) could also join two types of different layouts. In both cases
+   `registerComponent<T>` (which now returns 0 after a `HELIOS_VERIFY` failure whenever T cannot be bound) and
+   `bindType<T>` refuse the second binding. A per-image key is a template static, so a game image may hold
+   none (R5, §4; 02 §1.4). `link_model_tests` checks the built-ins from the executable, lets
    `link_model_probe` read and write components of a World the executable created (typed `set`/`get` and a
-   typed `CommandBuffer`) and checks that the probe's unnamed-namespace type never reaches the executable's
-   type of the same name; `ecs_tests` covers the table, the pinned canonical names and the per-image keys.
+   typed `CommandBuffer`) and checks that `link_model_plugin`'s unnamed-namespace type, of the same name and
+   layout as the executable's, never reaches the executable's component; `ecs_tests` covers the table, the
+   pinned canonical names and the per-image keys.
 12. **State that two groups define, and third-party state in the exports.** The first audit compared only
    consumers with groups. A header-defined static instantiated in two groups is one instance on Linux and
    two on Windows, so R3 now compares groups with each other (none exists today). R1 also checked only

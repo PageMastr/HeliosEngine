@@ -138,14 +138,15 @@ then 8 reserved bytes), then the tables back to back, then the paths:
   to 0x00, so byte order on keys puts a directory's contents directly after it; the keys are sorted (only if
   they are not already) and neighbours compared. That costs O(P + n log n · ℓ) byte operations for P path
   bytes, n files and common prefixes ℓ ≤ 1024, and hashes no attacker-chosen string. (Looking up every
-  `/`-prefix of every path in a set, as the first version did, costs about len²/4 per path: 5 s for
-  `deep-paths.hman`.)
+  `/`-prefix of every path in a set, as the first version did, costs about len²/4 per path: 2.4 s (Go) and
+  5 s (C++) for `deep-paths.hman`.)
 - **Refs:** a file's refs tile it: each `chunk` exists, each `offset` is the sum of the previous chunks' raw
   sizes, and the total is the file's `size` (so `refCount` is 0 exactly when `size` is 0).
 - **Chunks:** sorted by ID and unique; `rawSize` 1..256 KiB; `storedSize` ≤ 256 KiB + 4 KiB (0 = not recorded);
   every chunk is referenced; a loose chunk has `pack` = 0xFFFFFFFF and `packOffset` 0; a packed one has
   `storedSize` ≥ 1 and fits inside its pack.
-- **Packs:** sorted by ID and unique; `size` 1 B..1 GiB; each holds at least one chunk.
+- **Packs:** sorted by ID and unique; `size` 1 B..1 GiB (a zero-size pack already fails its chunks' fit check);
+  each holds at least one chunk.
 - **Patches:** sorted by (`file`, `fromHash`) and unique; `file` exists; `fromHash` differs from the file's hash;
   `patchSize` 1..2^40. The CDN object is `/patches/<fromHash>_<file hash>.zpatch` (05 §7).
 - **Reserved bytes** are zero everywhere.
@@ -264,12 +265,15 @@ build/fuzz/bin/patch_fuzz_manifest_reader -max_total_time=600 -rss_limit_mb=2048
 cd services && go test ./pkg/manifest -run '^$' -fuzz FuzzParse -fuzztime 5m
 ```
 
-A 10-minute local campaign (Clang 18.1.3, ASan and UBSan with `-fno-sanitize-recover=undefined`, one process,
-`-malloc_limit_mb=512`, 2026-10-04) from the 7 committed seeds ran 5,434,506 inputs at about 8,750 per second,
-reached 2,088 coverage edges (6,814 features; the corpus grew from 7 to 1,234 units; peak RSS 236 MB) and found
-nothing. `patch_tests` (all 22 cases) passed twice in the same sanitizer build. Go: two `FuzzParse` runs (5.5 and
-5.3 minutes, two workers) executed 977,340 and 848,423 inputs, and `FuzzChunker` 22,345 inputs in 90 seconds, with
-no failure; on the loaded VM the Go fuzzer ran in bursts of about 20,000 inputs per second between pauses.
+Local campaigns (Clang 18.1.3, ASan and UBSan with `-fno-sanitize-recover=undefined`, one process,
+`-malloc_limit_mb=512`), 10 minutes each, found nothing. The first (2026-10-04, from 7 seeds) ran 5,434,506 inputs
+at about 8,750 per second and reached 2,088 coverage edges (6,814 features; corpus 7 → 1,234 units; peak RSS 236
+MB). After review round 1 (the collision sort, the realloc'd zstd buffer; 2026-10-05, from the 9 committed seeds)
+one ran 6,566,017 inputs at about 10,900 per second and reached 2,104 edges (6,997 features; corpus 9 → 1,375
+units; peak RSS 261 MB); `patch_tests` (all 26 cases) passed twice in the same sanitizer build. Go: `FuzzParse`
+ran 977,340 and 848,423 inputs in two first runs (5.5 and 5.3 minutes) and 1,189,554 in 5 minutes after round 1
+(two workers, 21 new interesting inputs), and `FuzzChunker` 22,345 inputs in 90 seconds, with no failure; on the
+loaded VM the Go fuzzer ran in bursts of about 20,000 inputs per second between pauses.
 
 ## Gaps (v0)
 

@@ -11,7 +11,8 @@ Kestrel hull record.
 ```
 helios.project.jsonc                 the project file, at the project (repository) root (09 §2.7.2)
 content/
-  .gitattributes                     LF everywhere: content is canonical JSONC, compared byte for byte (07 §1.7)
+  .gitattributes                     LF for the text types (.hrec .hcont .hent .meta .md .jsonc): canonical
+                                     JSONC is compared byte for byte (07 §1.7); not content, so no sidecar
   README.md (+ .meta)                this file
   records/<table>/<name>.hrec        records, one per file, typed by the record type's @table (02 §3.3)
     hull/kestrel.hrec                the Kestrel light fighter (sample.ship.ShipHullDef)
@@ -27,7 +28,9 @@ content/
   defaults left out. `helios-tool --project-root=content fmt` writes that form; the editor's saves do too.
   Today's record types are the native `sample` package (`schemas/sample`, listed in the project file's
   `schemas.native`); the Kestrel is a `ShipHullDef` (02 §3.1's ship record). 06 defines no ship record of
-  its own, so no schema type was added.
+  its own, so no schema type was added. Its `faction`, `Pilots`, is a placeholder from the sample enum
+  `sample.common.Faction` (Neutral, Pilots, Syndicate, Drones): 01 §4.2's factions (the Meridian
+  Directorate, the Free Compact, the Hollow) have no type yet, so the Kestrel names none of them.
 - **Zones and containers** follow the owner's "Option A" of 2026-10-04 (02 §5.5, recorded by #51): Tallis space
   and the Harrow surface are the one zone `tallis` (zone id 1002 at 20 Hz, the cell's standalone default),
   and Saltmarch is an object container in it, not a zone. Its container sits in the zone's folder, so it is
@@ -42,10 +45,11 @@ content/
 
 ## Provenance (01 §5.2, 07 T24)
 
-Every file under `content/` has a `.meta` sidecar next to it (`kestrel.hrec.meta`), in engine/assetpipe's
-format and checked by its rules ([engine/assetpipe](../engine/assetpipe/README.md#meta-sidecars)): a
-GUID, the document type (`hrec`, `hcont`, `hent` or `md`), and `provenance` with `origin`, `author` and
-an allowed licence (MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, Zlib, BSL-1.0, ISC, PostgreSQL, CC0-1.0).
+Every file under `content/` except the root's `.gitattributes` (git settings, not content; a deeper one
+fails the check) has a `.meta` sidecar next to it (`kestrel.hrec.meta`), in engine/assetpipe's format and
+checked by its rules ([engine/assetpipe](../engine/assetpipe/README.md#meta-sidecars)): a GUID, the
+document type (`hrec`, `hcont`, `hent` or `md`), and `provenance` with `origin`, `author` and an allowed
+licence (MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, Zlib, BSL-1.0, ISC, PostgreSQL, CC0-1.0).
 
 - **origin** is `original` (written for the project by a contributor), `commissioned` (with `rights`),
   `cc0` (with the `url` it came from, licence `CC0-1.0`) or `ai-assisted` (with `ai`: the generator, the
@@ -65,7 +69,7 @@ an allowed licence (MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, Zlib, BSL-1.0, 
 | `lint_content_records_cook` | `helios-cook records --project-root=content`: the records compile (02 §3.3 checks, AAA-SEC-4 split) |
 | `lint_content_records_canonical` | `helios-tool --project-root=content fmt --check`: the records are in the canonical form the editor writes |
 | `lint_records_sec4_content` | AAA-SEC-4 on these records: the Kestrel's server-only `aiHints` keys are in the server cook and not in the client cook |
-| `lint_content_check_fixture_*` | 34 copies of the project with one seeded violation each (among them a missing sidecar, a disallowed licence, an `ai-assisted` origin without its record, an unknown file type, a hidden file, an undeclared zone folder, a container outside its zone, a record in a zone folder, a wrong streaming group, a sidecar GUID that differs from `$container`, an entity named for another GUID, an unknown or duplicate project key, a 61 Hz zone, a reserved URI scheme and a record the cook refuses) must fail with its diagnostic; `valid`, the unchanged copy, and `cook_then_check` must pass ([helios-cook README](../apps/tools/helios-cook/README.md) lists them all) |
+| `lint_content_check_fixture_*` | 79 copies of the project with one seeded violation each, at least one per rule the check enforces (among them a missing sidecar, a disallowed licence, an `ai-assisted` origin without its record, an unknown file type, a hidden file, a `.gitattributes` below the root, an undeclared zone folder, a container outside its zone, a record in a zone folder, a wrong streaming group, a sidecar GUID that differs from `$container` or `$entity`, an entity named for another GUID, an unknown or duplicate project key, a 61 Hz zone, a reserved URI scheme and a record the cook refuses) must fail with its diagnostic; `valid`, the unchanged copy, `cook_then_check` and `ignored_cache` must pass ([helios-cook README](../apps/tools/helios-cook/README.md) lists them all) |
 | `lint_ip_names` | No other franchise's names or titles here (01 §5.2) |
 
 `cmake -P tools/ci/run_lints.cmake` runs the IP-name lint without a build.
@@ -95,4 +99,5 @@ Written for plan revision 13 (01 §4.2, §5.2; 02 §3.3, §3.8, §5.5, §5.6; 06
 `.meta` sidecars for text documents (records, containers, entities, Markdown) with the document type as the
 importer id; `original` for contributor-written text, agent-written included; the project file's field names
 (`$project`, `contentRoots`, `zones[]` with `name`, `id`, `tickHz` and `frame`, and the product stub); the
-GUID forms of 02 §5.6's example (`"guid:<GUID>"` for `$container`, a bare GUID for `$entity`).
+GUID forms of 02 §5.6's example (`"guid:<GUID>"` for `$container`, a bare GUID for `$entity`); the Kestrel's
+placeholder `faction` (`Pilots`, a value of the sample enum, until 01 §4.2's factions have a type).

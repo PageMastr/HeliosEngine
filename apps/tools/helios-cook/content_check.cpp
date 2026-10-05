@@ -556,7 +556,9 @@ ContentStats checkContent(const fs::Path& projectRoot, const ProjectFile& projec
             for (usize i = 0; i < parts.size() && !skip; ++i) {
                 if (parts[i].empty() || parts[i][0] != '.') continue;
                 skip = true;
-                if (i + 1 == parts.size() && parts[i] == ".gitattributes") break; // git settings, not content
+                // The root's own git settings are not content. Deeper ones are refused: they could mark a
+                // content file binary or -text behind the root's rules.
+                if (parts.size() == 1 && parts[0] == ".gitattributes") break;
                 const std::string prefix(std::string_view(rel).substr(
                     0, static_cast<usize>(parts[i].data() - rel.data()) + parts[i].size()));
                 if (hidden.insert(prefix).second) {

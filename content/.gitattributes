@@ -1,2 +1,8 @@
-# Content is canonical JSONC text compared byte for byte (07 §1.7): keep LF on Windows checkouts.
-* text eol=lf
+# Content text is canonical JSONC compared byte for byte (07 §1.7): LF on Windows checkouts too. Listed
+# per extension so binary sources (Git LFS, WP-0.20b) keep git's binary detection.
+*.hrec text eol=lf
+*.hcont text eol=lf
+*.hent text eol=lf
+*.meta text eol=lf
+*.md text eol=lf
+*.jsonc text eol=lf

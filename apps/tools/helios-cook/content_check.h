@@ -7,8 +7,8 @@
 //   * Provenance (01 §5.2; 07 T24): every file under every content root is a content document type that the
 //     cook knows (contentTypes()) and has a valid `.meta` sidecar, as engine/assetpipe validates it
 //     (scanMetas: GUID, importer, provenance with an allowed licence, case and portability rules). Hidden
-//     files fail too, except `.gitattributes` and the ignored cook outputs `.cooked/` and `.cache/` at a
-//     root's top: the records cook would read a hidden `.hrec`, so nothing may hide from the scan.
+//     files fail too, except at a root's top only: `.gitattributes` and the ignored cook outputs `.cooked/`
+//     and `.cache/`. The records cook would read a hidden `.hrec`, so nothing may hide from the scan.
 //   * Layout (07 §1.8.2's `collab.scope`; 02 §5.5-5.6): spatial documents (`.hcont`, `.hent`) sit under
 //     `zones/<zone>/` of a declared zone and nothing else does; records sit under `records/`; a container's
 //     `$container`, `name`, `frame.parent` and `streaming.group` agree with its file and zone, and its

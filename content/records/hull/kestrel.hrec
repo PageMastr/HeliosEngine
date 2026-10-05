@@ -1,7 +1,7 @@
 {
   "$rid": 6108480901779567426,
   "$name": "hull/kestrel",
-  "$comment": "Kestrel: the light fighter of Cinder Reach's Phase 1 slice (01 §4.2). M0's editor demo edits this record (09 §2.1).",
+  "$comment": "Kestrel: the light fighter of Cinder Reach's Phase 1 slice (01 §4.2). M0's editor demo is meant to edit this record (09 §2.1).",
   "name": "loc:ship.kestrel.name",
   "size": "Small",
   "faction": "Pilots",

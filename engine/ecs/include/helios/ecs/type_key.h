@@ -14,19 +14,25 @@
 //     and so are keys of types in inline namespaces (Clang omits them).
 //   * Every other type is keyed per image: a number drawn once per type from a process-wide counter in
 //     helios_runtime. That covers what only one translation unit can name (types in unnamed namespaces,
-//     local classes, closure types) and types in the global namespace. Clang prints a local class without
-//     its enclosing function ("Local"), exactly like a global-namespace type, so the global namespace has
-//     to be keyed per image too. Two such types never share a key, even when they print the same name; a
-//     global-namespace type used from two images has two keys, so declare a component that crosses images
-//     in a named namespace.
+//     local classes, closure types), types in the global namespace, and every specialization with such a
+//     type among its template arguments. Clang and clang-cl print a local class without its enclosing
+//     function ("Local"), exactly like a global-namespace type, and inside template arguments too
+//     ("ns::Box<Local>" for every function's Local). So a class name without a scope makes a type per-image
+//     wherever it appears: as the type itself or in a template argument. Two such types never share a key,
+//     even when they print the same name; a global-namespace type used from two images has two keys, so
+//     declare a component that crosses images, and its template arguments, in named namespaces.
 //
-// What a key cannot tell apart: two distinct name-keyed types with one canonical name and one layout. In a
-// correct program that is only a class nested in a local class (Clang prints "Local::Inner" for one in any
-// function) or a 64-bit hash collision. Typed access through the second such type reaches the first type's
-// component, which has the same size and alignment; registerComponent<T>() and bindType<T>() refuse to bind
-// a key that is already bound to another component. A type with the same name but another layout (a game
-// module built against a changed header, say) has another key: it resolves to no component until it is
-// registered.
+// What a key cannot tell apart:
+//   * Two distinct name-keyed types with one canonical name and one layout. In a correct program that is
+//     only a class nested in a local class, which Clang prints as "Local::Inner" for one in any function,
+//     as the type itself or in a template argument ("ns::Box<Local::Inner>"). Typed access through the
+//     second such type reaches the first type's component, which has the same size and alignment.
+//   * A 64-bit collision of two name keys (the name, size and alignment hashed together), which can join
+//     two types of different layouts: typed access through the second type would then reach a component
+//     of another size.
+//   In both cases registerComponent<T>() and bindType<T>() refuse to bind a key that is already bound to
+//   another component. A type with the same name but another layout (a game module built against a changed
+//   header, say) has another key: it resolves to no component until it is registered.
 //
 // Threading: keys are constants or are drawn once per type under the C++ static-initialization guard;
 // every function here may be called from any thread.
@@ -144,9 +150,34 @@ constexpr bool canonicalNameEquals(std::string_view printed, std::string_view ca
     return equal && at == canonical.size();
 }
 
+/// Words a compiler prints inside template arguments that do not name a class: fundamental types and their
+/// modifiers (MSVC's __int64 included), cv-qualifiers, the class-keys, literal keywords, and the calling
+/// conventions and pointer modifiers MSVC prints in function and pointer types.
+inline constexpr std::string_view kNonClassWords[] = {
+    "void", "bool", "char", "signed", "unsigned", "short", "int", "long", "float", "double", "wchar_t",
+    "char8_t", "char16_t", "char32_t", "__int8", "__int16", "__int32", "__int64", "__int128", "__float128",
+    "const", "volatile", "struct", "class", "union", "enum", "true", "false", "nullptr", "decltype",
+    "noexcept", "__restrict", "__restrict__", "__cdecl", "__stdcall", "__fastcall", "__vectorcall",
+    "__thiscall", "__clrcall", "__ptr32", "__ptr64", "__unaligned"};
+
+/// True if `printed` has "::" right before position `at` (spaces skipped).
+constexpr bool scopeEndsAt(std::string_view printed, usize at) noexcept {
+    while (at > 0 && printed[at - 1] == ' ') --at;
+    return at >= 2 && printed[at - 1] == ':' && printed[at - 2] == ':';
+}
+
+/// True if `printed` has "::" at position `at` (spaces skipped).
+constexpr bool scopeStartsAt(std::string_view printed, usize at) noexcept {
+    while (at < printed.size() && printed[at] == ' ') ++at;
+    return at + 1 < printed.size() && printed[at] == ':' && printed[at + 1] == ':';
+}
+
 /// True if a type printed as `printed` is keyed per image (see the header comment): it is in an unnamed
-/// namespace, a local class or a closure type as some compiler prints it, or its name has no "::" outside
-/// template arguments (the global namespace, and Clang's spelling of a local class).
+/// namespace, a local class or a closure type as some compiler prints it, its name has no "::" outside
+/// template arguments (the global namespace, and Clang's spelling of a local class), or a template argument
+/// names a class without a scope (the same two, as an argument: "ns::Box<Local>"). A word inside template
+/// arguments counts as such a class name unless "::" precedes or follows it, it starts with a digit, or it
+/// is one of kNonClassWords.
 constexpr bool isPerImageTypeName(std::string_view printed) noexcept {
     // "(anonymous namespace)" Clang, "{anonymous}" GCC, "`anonymous namespace'" and every other scope MSVC
     // makes up ("`void __cdecl f(void)'::`2'::Local") start with a backtick; ")::" is GCC's "f()::Local".
@@ -156,14 +187,34 @@ constexpr bool isPerImageTypeName(std::string_view printed) noexcept {
         if (printed.find(marker) != std::string_view::npos) return true;
     }
     int depth = 0;
-    char previous = '\0';
     bool qualified = false;
-    forEachCanonicalChar(printed, [&](char c) {
-        if (c == '<') ++depth;
-        if (c == '>') --depth;
-        if (c == ':' && previous == ':' && depth == 0) qualified = true;
-        previous = c;
-    });
+    usize i = 0;
+    while (i < printed.size()) {
+        const char c = printed[i];
+        if (c == '<') {
+            ++depth;
+        } else if (c == '>') {
+            --depth;
+        } else if (c == ':' && i + 1 < printed.size() && printed[i + 1] == ':') {
+            if (depth == 0) qualified = true;
+            ++i;
+        } else if (isIdentifierChar(c)) {
+            usize end = i;
+            while (end < printed.size() && isIdentifierChar(printed[end])) ++end;
+            const bool scoped = scopeEndsAt(printed, i) || scopeStartsAt(printed, end);
+            if (depth > 0 && !scoped && !(c >= '0' && c <= '9')) {
+                const std::string_view word = printed.substr(i, end - i);
+                bool nonClass = false;
+                for (const std::string_view known : kNonClassWords) {
+                    if (word == known) nonClass = true;
+                }
+                if (!nonClass) return true;
+            }
+            i = end;
+            continue;
+        }
+        ++i;
+    }
     return !qualified;
 }
 

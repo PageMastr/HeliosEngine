@@ -91,11 +91,29 @@ static_assert(isPerImageTypeName("ns::Box<(anonymous namespace)::Cooldown>"));
 static_assert(isPerImageTypeName("(lambda at a.cpp:1:2)"));
 static_assert(isPerImageTypeName("<lambda()>"));
 static_assert(isPerImageTypeName("class <lambda_1>"));
+// A template argument that names a class without a scope: Clang and clang-cl print every function's local
+// class Local, and a global-namespace Local, as "ns::Box<Local>".
+static_assert(isPerImageTypeName("ns::Box<Local>"));
+static_assert(isPerImageTypeName("ns::Pair<ns::A, Local>"));
+static_assert(isPerImageTypeName("ns::Box<const Local *>"));
+static_assert(isPerImageTypeName("ns::Box<ns::Inner<Local> >"));
+static_assert(isPerImageTypeName("struct ns::Box<struct Global>"));      // MSVC
+static_assert(isPerImageTypeName("ns::Box<game::f()::Local>"));          // GCC
 // Keyed by name.
 static_assert(!isPerImageTypeName("helios::ecs::NetIdentity"));
 static_assert(!isPerImageTypeName("struct helios::ecs::NetIdentity"));
 static_assert(!isPerImageTypeName("ns::Box<int>"));
 static_assert(!isPerImageTypeName("ns::Outer::Inner"));
+static_assert(!isPerImageTypeName("ns::Box<long unsigned int, 3>"));                       // GCC
+static_assert(!isPerImageTypeName("ns::Box<unsigned long, 3UL>"));                         // Clang
+static_assert(!isPerImageTypeName("struct ns::Box<class ns::A,unsigned __int64>"));        // MSVC
+static_assert(!isPerImageTypeName("ns::Fn<void (__cdecl *)(const ns::A &) noexcept>"));    // MSVC
+static_assert(!isPerImageTypeName("ns::Fn<void (*)(const volatile ns::A&, signed char)>")); // GCC
+static_assert(!isPerImageTypeName("ns::Flag<true, false, nullptr>"));
+// What a name cannot tell apart: Clang prints a class nested in a local class as "Local::Inner" (the header's
+// documented residual), as the type itself and as an argument.
+static_assert(!isPerImageTypeName("Local::Inner"));
+static_assert(!isPerImageTypeName("ns::Box<Local::Inner>"));
 
 // ---------------------------------------------------------------------------------------------
 // This compiler's keys. A name key is the same on every compiler: its canonical name is pinned here.
@@ -113,6 +131,8 @@ static_assert(tk::kCanonicalNameHash<ecs_test::KeyUnion> == fnv1a64("ecs_test::K
 // A template of class and enum types also matches on GCC, Clang and MSVC (guaranteed only within one compiler).
 static_assert(tk::kCanonicalNameHash<ecs_test::KeyPair<ecs_test::Position, ecs_test::KeyKind>> ==
               fnv1a64("ecs_test::KeyPair<ecs_test::Position,ecs_test::KeyKind>"));
+static_assert(tk::kKeyedByName<ecs_test::KeyPair<ecs_test::Position, ecs_test::KeyKind>>);
+static_assert(tk::kKeyedByName<ecs_test::KeyPair<ecs_test::Position, u32>>); // a fundamental argument
 static_assert(tk::kNameTypeKey<NetIdentity> % 2 == 1); // name keys are odd, per-image keys even
 static_assert(tk::kNameTypeKey<ecs_test::Position> != tk::kNameTypeKey<ecs_test::Velocity>);
 static_assert(tk::kNameTypeKey<NetIdentity> != tk::kNameTypeKey<RepDirty>);
@@ -248,6 +268,43 @@ TEST_CASE("ecs type keys: local classes with one name keep their own components"
     CHECK(useLocalB(world, e, 0) == 2);
     CHECK(world.findComponent("ecs_test.LocalA") != nullptr);
     CHECK(world.findComponent("ecs_test.LocalB") != nullptr);
+}
+
+// A class template specialized on local classes with one name. Clang and clang-cl print both specializations
+// as "ecs_test::KeyPair<Local, unsigned int>" (review round 3, finding 2).
+u32 useBoxedLocalA(World& world, Entity e, u32 value) {
+    struct Local {
+        u32 hp = 0;
+    };
+    using Boxed = ecs_test::KeyPair<Local, u32>;
+    static_assert(!tk::kKeyedByName<Boxed>);
+    if (world.id<Boxed>() == 0) world.registerComponent<Boxed>(ComponentFlags::None, "ecs_test.BoxedLocalA");
+    if (value != 0) world.set(e, Boxed{Local{value}, 0});
+    const Boxed* boxed = world.get<Boxed>(e);
+    return boxed ? boxed->a.hp : 0;
+}
+
+u32 useBoxedLocalB(World& world, Entity e, u32 value) {
+    struct Local {
+        u32 ammo = 0;
+    };
+    using Boxed = ecs_test::KeyPair<Local, u32>;
+    static_assert(!tk::kKeyedByName<Boxed>);
+    if (world.id<Boxed>() == 0) world.registerComponent<Boxed>(ComponentFlags::None, "ecs_test.BoxedLocalB");
+    if (value != 0) world.set(e, Boxed{Local{value}, 0});
+    const Boxed* boxed = world.get<Boxed>(e);
+    return boxed ? boxed->a.ammo : 0;
+}
+
+TEST_CASE("ecs type keys: templates of local classes with one name keep their own components") {
+    World world;
+    const Entity e = world.spawn();
+    CHECK(useBoxedLocalA(world, e, 1) == 1);
+    CHECK(useBoxedLocalB(world, e, 2) == 2);
+    CHECK(useBoxedLocalA(world, e, 0) == 1);
+    CHECK(useBoxedLocalB(world, e, 0) == 2);
+    CHECK(world.findComponent("ecs_test.BoxedLocalA") != nullptr);
+    CHECK(world.findComponent("ecs_test.BoxedLocalB") != nullptr);
 }
 
 TEST_CASE("ecs type keys: a global-namespace type has one per-image key in every translation unit") {

@@ -96,12 +96,16 @@ and alignment, which every image and every supported compiler derives alike for 
 §1.4: no per-image caches, so a modular build's executables and game modules, clang-cl ones included, see
 the ids `helios_runtime` bound; template specializations are stable only within one compiler). Every other
 type has a per-image key drawn once from a counter in `helios_runtime`: types in unnamed namespaces, local
-classes and closures, which only one translation unit can name, and global-namespace types, which Clang
-prints exactly like its local classes. Two types that print the same name therefore never share a key, and
-an unregistered one resolves to no component; declare a component that crosses images in a named
-namespace. Name keys clash only for two types with one canonical name and one layout (a class nested in
-a local class, on Clang): typed access through the second reaches the first's component, of the same size
-and alignment, and `registerComponent<T>`/`bindType<T>` refuse to bind it (`AlreadyExists`).
+classes and closures, which only one translation unit can name, global-namespace types, which Clang
+prints exactly like its local classes, and specializations with such a type among their template arguments
+(Clang and clang-cl print `ns::Box<Local>` for every function's `Local`). Two types that print the same name
+therefore never share a key, and an unregistered one resolves to no component; declare a component that
+crosses images, and its template arguments, in named namespaces. A reloadable game module keys no type per
+image (02 §1.4; symbol audit R5). Name keys clash only for two types with one canonical name and one layout
+(a class nested in a local class, on Clang, also as a template argument): typed access through the second
+reaches the first's component, of the same size and alignment. A 64-bit collision of two name keys could
+also join types of different layouts. Either way `registerComponent<T>`/`bindType<T>` refuse to bind the
+second type (`AlreadyExists`).
 `registerComponent<T>` returns 0 after a `HELIOS_VERIFY` failure whenever T cannot be bound.
 Component names must not resolve to an existing flecs entity (builtins, relations, named frames or
 scopes); such registrations fail with `AlreadyExists` instead of silently re-typing that entity.

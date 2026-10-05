@@ -1,7 +1,7 @@
 # engine/toolsfw — ToolsFramework (`helios::tf`)
 
 The UI-less core of the editor (07 §1.2, ADR-009). Layer 4, **EDITOR_ONLY**: it is linked by
-`helios-editor` and `helios-tool`, and never by the client, launcher, bot or servers
+`helios-editor`, `helios-tool` and `helios-uitest`, and never by the client, launcher, bot or servers
 (`cmake/HeliosLayering.cmake` checks this at configure time). It includes no ImGui or RHI header.
 Its dependencies are `core` and `reflect`, plus `script` privately for the Luau automation VM.
 
@@ -17,6 +17,7 @@ Its dependencies are `core` and `reflect`, plus `script` privately for the Luau 
 | `rpc.h`, `ipc.h` | JSON-RPC 2.0 remote control over a local named pipe (Windows) or Unix socket (Linux), and the framework's RPC methods |
 | `automation.h` | The Luau editor VM (`HostProfile::Editor`): `Editor.cmd/transaction/undo/redo/find/log`, `Record.get/set`, `Validate.run` |
 | `json_util.h` | Small JSON helpers shared with the editor UI and the tools |
+| `types.h` | `DocId`, `TxId` (user + lamport), `Origin` (the input paths), and `printable()` / `isFormatOrSeparator()`, the escaping applied to journal strings |
 | `samples/` (`helios_toolsfw_samples`) | The sample record types (`schemas/sample/*.hschema`), the Frigate hull record, and `samples/project`, the sample project (a Frigate hull and an item record) that `helios-tool`'s CLI test, the editor's tests and the ED-15 goldens open |
 
 ## Model
@@ -195,7 +196,7 @@ checked against the project's records).
 
 ## Tests
 
-`toolsfw_tests` (doctest, 85 cases, plus 1 `perf:` case in `toolsfw_tests_perf`): transactions and
+`toolsfw_tests` (doctest, 87 cases, plus 1 `perf:` case in `toolsfw_tests_perf`): transactions and
 inverses, history and merging, nested groups, commands and arguments, documents and 3-way reload,
 the journal (torn tails at every cut point, group commit, recovery, recovery after a reload,
 cross-session reverts, and saves and reloads refused inside a group or an uncommitted builder,

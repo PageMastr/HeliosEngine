@@ -111,8 +111,9 @@ compile errors), 2,358 evaluations including 1,050 FMA-sensitive vectors, and 1,
 
 ## Known limitations
 
-- schemac does not compile `formula` declarations and `HxlExpr` fields yet (02 §3.5 `records`
-  emitter); hosts compile the source with this module until then.
+- schemac does not compile `formula` declarations (its `--emit records` is still a stub, 02 §3.5).
+  `HxlExpr` record fields are compiled by the records cook (`engine/records`), which stores their HXL1
+  bytecode in `.hrdb`; other hosts compile the source with this module.
 - Only one level of context fields (`p.field`); no user functions or formula-to-formula calls.
 - MSVC and clang-cl are verified only in CI (09 §5.4); locally the corpus runs on GCC and Clang
   (MinGW is compile/link only). The Go side of GP-1's matrix is in

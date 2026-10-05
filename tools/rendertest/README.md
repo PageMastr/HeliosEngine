@@ -69,7 +69,8 @@ therefore needs a scene and its goldens in the same commit; `--scene` limits the
   `tools/lint/lint_tests.cmake`, so the headless configuration runs it too, and run by
   `tools/ci/run_lints.cmake`) fails on any identifier `create<X>Pipeline` other than
   `createShippedPipeline`/`createLocalPipeline` in `engine/`, `apps/` and `tools/` (not `engine/rhi/`,
-  which implements the API, `tools/prebuilt/` or the lints' fixtures), unless a reasoned
+  which implements the API, `engine/render/src/shader_library.cpp`, which implements the record,
+  `tools/prebuilt/` or the lints' fixtures), unless a reasoned
   `// shipped-pipelines-lint: allow <reason>` waiver sits on its line or alone on the line above. It
   catches `.` and `->` calls, calls split across lines, a backslash-newline splice inside the
   identifier, member-function pointers and `std::invoke` that name the member (review mutants C7, L1,
@@ -158,7 +159,7 @@ helios-rendertest --backend vulkan --scene forward --update-goldens   # re-bless
 Per scene the tool writes `<out>/<backend>/<scene>.json` (result), the actual image or trace, a copy
 of the golden and the ꟻLIP error map (magma). `--report-only` aggregates the JSON results into
 `report.html` / `report.md` and fails if any scene failed or the suite exceeded `--budget`
-(default 600 s, RC-1). The whole suite takes about 1 s on lavapipe on the 4-core dev container.
+(default 600 s, RC-1). The whole suite took about 1 s on lavapipe on the 4-core dev container (6 scenes, 2026-09-25).
 
 CTest: `rendertest.vulkan.<scene>` (labels `gpu;rendertest`; validated as described above, and any
 validation error fails the scene), `rendertest.null.<scene>` (label `rendertest`), `rendertest.scenes`

@@ -1,7 +1,8 @@
 # engine/math — leaf math library (std only; must not depend on any other Helios module).
-# Header-only except for determinism-critical code (noise, packing, deterministic trig,
-# cube-sphere mapping, colour tables), which lives in src/ so its floating-point code generation
-# is pinned in one place (see src/fp_control.h and README.md).
+# Header-only except for determinism-critical code (noise, packing, deterministic trig and
+# det::exp/ln/pow/asinh, fixed-point division and square roots, cube-sphere mapping, colour tables),
+# which lives in src/ so its floating-point code generation is pinned in one place (see
+# src/fp_control.h and README.md).
 helios_module(math HEADLESS
   SOURCES
     src/color.cpp

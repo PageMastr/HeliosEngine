@@ -125,8 +125,11 @@ RGBA8Unorm, and `forward-srgb` to RGBA8Srgb, the tonemap's hardware-encoding pat
 `lint_shipped_pipelines` (label `lint`) keeps pipelines from bypassing the record: in `engine/`,
 `apps/` and `tools/` (except `engine/rhi/`, which implements the API), any identifier
 `create<X>Pipeline` other than `createShippedPipeline`/`createLocalPipeline` needs a reasoned
-`// shipped-pipelines-lint: allow <reason>` waiver, and only `src/shader_library.cpp` is exempt (waived
-today: rendertest's `createLocalPipeline()`, the raw-RHI sample and the pcg twin's test pipelines). The
+`// shipped-pipelines-lint: allow <reason>` waiver, and only `src/shader_library.cpp` (which implements
+the record) and the lints' fixture and downloaded-SDK directories (`tools/rendertest/tests/`,
+`tools/lint/tests/`, `tools/prebuilt/`) are exempt (waived today: rendertest's `createLocalPipeline()`,
+EditorUI's `editorPipeline()` (its own shaders, covered by the ED-15 goldens), the raw-RHI sample and the
+pcg twin's test pipelines). The
 lint is a best-effort textual check against accidental direct creation, not against deliberately
 adversarial source; code review and the coverage check are the backstops. This is RC-1's "every
 shipped feature has a golden" for the pipelines the golden scenes create. What it cannot see, and the

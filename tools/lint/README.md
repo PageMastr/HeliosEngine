@@ -7,7 +7,7 @@ hook; no CI job calls it, since CI runs those lints as CTests), together with th
 09 §5.10.2 (`tools/status/check_status.cmake`): a module directory not named in 09 §8.1, or a module README
 without its `Plan-Rev`, fails it. CI does not run the D6 check (no CTest or workflow calls it; it runs at the
 round audit, and CTest runs only its fixture tests, `lint_status_unittest`). `run_lints.cmake` also runs the
-self-hosted runner policy check; both need Python 3.10+ (where it is not on `PATH`, pass
+self-hosted runner policy check, which like the D6 check needs Python 3.10+ (where it is not on `PATH`, pass
 `-DHELIOS_STATUS_PYTHON=<path>` to `run_lints.cmake`, which forwards it to both), and the conformance lint
 (`go run`, so Go 1.27; `run_lints.cmake` fails without Go).
 

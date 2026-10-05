@@ -27,6 +27,7 @@ const (
 	CheckPointerKeyRole      Check = "pointer-key-role"      // the subkey's role is not "manifest"
 	CheckPointerSignature    Check = "pointer-signature"     // the subkey's signature does not verify
 	CheckPointerKeyWindow    Check = "pointer-key-window"    // signed_at outside the subkey's validity
+	CheckPointerFuture       Check = "pointer-future"        // signed_at later than now + MaxClockSkew
 	CheckPointerLifetime     Check = "pointer-lifetime"      // expires not within 7 days after signed_at
 	CheckPointerProduct      Check = "pointer-product"       // another product's pointer
 	CheckPointerChannel      Check = "pointer-channel"       // another channel's pointer
@@ -39,6 +40,7 @@ const (
 	CheckManifestKeyRole     Check = "manifest-key-role"     // the subkey's role is not "manifest"
 	CheckManifestSignature   Check = "manifest-signature"    // the signature over bytes [0, 256) fails
 	CheckManifestKeyWindow   Check = "manifest-key-window"   // createdAt outside the subkey's validity
+	CheckManifestFuture      Check = "manifest-future"       // createdAt later than now + MaxClockSkew
 	CheckManifestProduct     Check = "manifest-product"      // another product's manifest
 	CheckManifestPlatform    Check = "manifest-platform"     // another platform's manifest
 	CheckManifestBuild       Check = "manifest-build"        // buildId differs from the pointer's
@@ -204,10 +206,13 @@ func signingKey(ks *Keyset, id KeyID, unknown, role Check) (*KeysetKey, error) {
 	return key, nil
 }
 
+// inFuture reports whether a signer-claimed time t lies more than MaxClockSkew after now.
+func inFuture(t, now uint64) bool { return t > now && t-now > MaxClockSkew }
+
 // VerifyPointer checks a pointer document against a verified keyset: canonical and valid, signed by a
-// manifest subkey of the keyset within its validity, a lifetime of at most 7 days, this install's product,
-// channel and platform, not expired at now (unix seconds), and a sequence not below the stored one unless
-// the pointer is signed rollback: true.
+// manifest subkey of the keyset within its validity, signed_at not after now + MaxClockSkew, a lifetime of
+// at most 7 days, this install's product, channel and platform, not expired at now (unix seconds), and a
+// sequence not below the stored one unless the pointer is signed rollback: true.
 func (v *Verifier) VerifyPointer(b []byte, ks *Keyset, now uint64, st State) (*Pointer, error) {
 	p, err := ParsePointer(b)
 	if err != nil {
@@ -223,6 +228,10 @@ func (v *Verifier) VerifyPointer(b []byte, ks *Keyset, now uint64, st State) (*P
 	if p.SignedAt < key.NotBefore || p.SignedAt >= key.NotAfter {
 		return nil, reject(CheckPointerKeyWindow, "signed at %d, key %x signs in [%d, %d)", p.SignedAt, p.KeyID,
 			key.NotBefore, key.NotAfter)
+	}
+	if inFuture(p.SignedAt, now) {
+		return nil, reject(CheckPointerFuture, "signed at %d, more than %d s after now (%d)", p.SignedAt,
+			MaxClockSkew, now)
 	}
 	if p.Expires <= p.SignedAt || p.Expires-p.SignedAt > MaxPointerLifetime {
 		return nil, reject(CheckPointerLifetime, "expires %d is not within %d s after signed_at %d", p.Expires,
@@ -249,8 +258,9 @@ func (v *Verifier) VerifyPointer(b []byte, ks *Keyset, now uint64, st State) (*P
 
 // VerifyManifestHeader checks a .hman file's header against a verified keyset and the manifest a verified
 // pointer names (Pointer.ManifestRef, or its Next): the header reads, its hash is ref.ManifestHash, a
-// manifest subkey signed bytes [0, 256) within its validity (at createdAt), and product, platform, build,
-// compat epoch and expiry match. It does not decode the payload.
+// manifest subkey signed bytes [0, 256) within its validity (at createdAt, which is not after now +
+// MaxClockSkew), and product, platform, build, compat epoch and expiry match. It does not decode the
+// payload.
 func (v *Verifier) VerifyManifestHeader(file []byte, ks *Keyset, ref ManifestRef, now uint64) (manifest.HeaderInfo,
 	error) {
 	info, err := manifest.ParseHeader(file, 0)
@@ -272,6 +282,10 @@ func (v *Verifier) VerifyManifestHeader(file []byte, ks *Keyset, ref ManifestRef
 	if h.CreatedAt < key.NotBefore || h.CreatedAt >= key.NotAfter {
 		return info, reject(CheckManifestKeyWindow, "created at %d, key %x signs in [%d, %d)", h.CreatedAt,
 			h.KeyID[:], key.NotBefore, key.NotAfter)
+	}
+	if inFuture(h.CreatedAt, now) {
+		return info, reject(CheckManifestFuture, "created at %d, more than %d s after now (%d)", h.CreatedAt,
+			MaxClockSkew, now)
 	}
 	switch {
 	case h.ProductID != v.target.ProductID:

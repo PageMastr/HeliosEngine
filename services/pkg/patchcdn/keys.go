@@ -27,9 +27,11 @@ import (
 //	root-keys.json     {"dev":true,"productId":S,"epoch":1,"current":H32,"next":H32}: root seeds (0600)
 //	roots.json         {"productId":S,"epoch":1,"current":H32,"next":H32}: the public root pair, what a
 //	                   dev launcher would be stamped with (`helios-patch verify --roots`)
+//	.gitignore         "*": git ignores the whole directory, wherever --data-dir puts it
 //
-// Dev keys are generated from the OS CSPRNG on the developer's machine, never committed, marked "dev": true,
-// and publish signs only the dev channel, for loopback CDN hosts, with them.
+// Dev keys are generated from the OS CSPRNG on the developer's machine, marked "dev": true, and publish signs
+// only the dev channel, for loopback CDN hosts, with them. They are kept out of git twice: the directory's
+// own .gitignore (written before any seed) and the repository's "helios-data/" pattern.
 
 const devWarning = "throwaway dev keys: helios-patch signs only the dev channel (loopback CDNs) with them"
 
@@ -135,6 +137,18 @@ func LoadKeys(dir, productID string) (*Keys, error) {
 	return k, nil
 }
 
+// devGitignore is the dev key directory's .gitignore: it ignores everything there, itself included.
+const devGitignore = "# helios-patch dev keys: private seeds, never committed\n*\n"
+
+// ensureGitignore writes dir's .gitignore unless it already holds devGitignore.
+func ensureGitignore(dir string) error {
+	path := filepath.Join(dir, ".gitignore")
+	if b, err := os.ReadFile(path); err == nil && string(b) == devGitignore {
+		return nil
+	}
+	return patchtrust.WriteFileAtomic(path, []byte(devGitignore), 0o644)
+}
+
 func writeJSON(path string, v any, perm os.FileMode) error {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
@@ -143,9 +157,9 @@ func writeJSON(path string, v any, perm os.FileMode) error {
 	return patchtrust.WriteFileAtomic(path, append(b, '\n'), perm)
 }
 
-// CreateDevKeys writes a new dev signing directory for productID: a root pair (epoch 1), a manifest subkey
-// valid from a day before now for DevKeyLifetime, and keyset version 1 signed by the current root. rnd nil
-// means crypto/rand.
+// CreateDevKeys writes a new dev signing directory for productID: first a .gitignore that ignores the whole
+// directory, then a root pair (epoch 1), a manifest subkey valid from a day before now for DevKeyLifetime,
+// and keyset version 1 signed by the current root. rnd nil means crypto/rand.
 func CreateDevKeys(dir, productID string, now time.Time, rnd io.Reader) error {
 	if rnd == nil {
 		rnd = rand.Reader
@@ -175,6 +189,9 @@ func CreateDevKeys(dir, productID string, now time.Time, rnd io.Reader) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	if err := ensureGitignore(dir); err != nil {
+		return err
+	}
 	curPub, nextPub := patchtrust.PublicKeyOf(cur), patchtrust.PublicKeyOf(next)
 	id := ks.Keys[0].ID
 	return errors.Join(
@@ -189,8 +206,9 @@ func CreateDevKeys(dir, productID string, now time.Time, rnd io.Reader) error {
 	)
 }
 
-// LoadOrCreateDevKeys loads the dev signing directory, creating it first if it does not exist. It refuses a
-// directory whose keys are not marked dev.
+// LoadOrCreateDevKeys loads the dev signing directory, creating it first if it does not exist, and makes sure
+// its .gitignore is there (a directory made before it was written gets one). It refuses a directory whose
+// keys are not marked dev.
 func LoadOrCreateDevKeys(dir, productID string, now time.Time) (*Keys, bool, error) {
 	created := false
 	if _, err := os.Stat(filepath.Join(dir, "manifest-key.json")); errors.Is(err, fs.ErrNotExist) {
@@ -205,6 +223,9 @@ func LoadOrCreateDevKeys(dir, productID string, now time.Time) (*Keys, bool, err
 	}
 	if !k.Dev {
 		return nil, false, fmt.Errorf("patchcdn: %s holds keys not marked dev", dir)
+	}
+	if err := ensureGitignore(dir); err != nil {
+		return nil, false, err
 	}
 	return k, created, nil
 }

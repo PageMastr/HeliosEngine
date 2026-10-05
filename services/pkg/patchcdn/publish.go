@@ -36,6 +36,9 @@ type PublishOptions struct {
 	Tier0       []string // path prefixes of tier-0 files (08 §2.6); nil means {"bin/"}
 	Now         time.Time
 	Lifetime    time.Duration // the pointer's; 0 means patchtrust.MaxPointerLifetime (7 days)
+	// Roots, if set, is the product's root pair: publish then refuses a keyset that does not verify against
+	// it (the CLI passes the signing directory's roots.json when it has one, as dev directories do).
+	Roots *patchtrust.RootPair
 }
 
 // PublishResult reports what a publish wrote.
@@ -45,15 +48,12 @@ type PublishResult struct {
 	Sequence        uint64 // the channel pointer's sequence after the publish
 	Files           int
 	Chunks          int   // distinct chunks in the build
-	ChunksWritten   int   // chunk objects written (the others already existed)
+	ChunksWritten   int   // chunk objects written (the others already existed and decoded to their chunk)
+	ChunksRepaired  int   // of those, objects that existed but did not decode to their chunk (rewritten)
 	BytesWritten    int64 // bytes of chunk objects written
 	ManifestWritten bool  // false: the build was already published with this content
+	KeysetWritten   bool  // false: the CDN already had this keyset
 	PointerWritten  bool  // false: the pointer already named this build with these fields and is fresh
-}
-
-func isLoopbackHost(h string) bool {
-	return strings.HasPrefix(h, "http://localhost") || strings.HasPrefix(h, "http://127.0.0.1") ||
-		strings.HasPrefix(h, "http://[::1]")
 }
 
 // Publish chunks BuildDir (FastCDC, package cdc), writes each new chunk object once (deduplicated by ID),
@@ -61,7 +61,9 @@ func isLoopbackHost(h string) bool {
 // keyset, and last a signed pointer with the next sequence, so a reader never sees a pointer to objects that
 // are not there. Republishing an identical build to the same channel writes nothing (the pointer is
 // re-signed with the next sequence once it is past half its lifetime). Immutable objects are never
-// overwritten: a build ID already published with other content is an error.
+// overwritten: a build ID already published with other content is an error, and a chunk object is
+// rewritten only when it does not decode to its chunk (its ID says what it must hold). The CDN's keyset is
+// never replaced by a lower version, a lower root epoch or other bytes of the same version.
 func Publish(ctx context.Context, o PublishOptions, keys *Keys) (*PublishResult, error) {
 	t := o.Target
 	if o.MinLauncher == "" {
@@ -94,13 +96,28 @@ func Publish(ctx context.Context, o PublishOptions, keys *Keys) (*PublishResult,
 	}
 	if keys.Dev {
 		for _, h := range o.CDNHosts {
-			if !isLoopbackHost(h) {
+			if !patchtrust.IsLoopbackURL(h) {
 				return nil, fmt.Errorf("patchcdn: dev keys sign only for loopback CDN hosts, not %q", h)
 			}
 		}
 	}
 	if key := keys.Keyset.Key(keys.KeyID); key == nil || now < key.NotBefore || now >= key.NotAfter {
 		return nil, fmt.Errorf("patchcdn: manifest key %x may not sign at %d", keys.KeyID, now)
+	}
+	if o.Roots != nil {
+		v, err := patchtrust.NewVerifier(t, *o.Roots, patchtrust.Options{})
+		if err != nil {
+			return nil, fmt.Errorf("patchcdn: %w", err)
+		}
+		if _, err := v.VerifyKeyset(keys.KeysetBytes, patchtrust.State{}); err != nil {
+			return nil, fmt.Errorf("patchcdn: the signing directory's keyset does not verify against the root pair: %w",
+				err)
+		}
+	}
+	kpath := filepath.Join(o.CDNRoot, filepath.FromSlash(KeysetPath(t.ProductID)))
+	writeKeyset, err := keysetChange(kpath, keys)
+	if err != nil {
+		return nil, err
 	}
 
 	res := &PublishResult{}
@@ -137,29 +154,33 @@ func Publish(ctx context.Context, o PublishOptions, keys *Keys) (*PublishResult,
 		return nil, err
 	}
 
-	kpath := filepath.Join(o.CDNRoot, filepath.FromSlash(KeysetPath(t.ProductID)))
-	if old, err := os.ReadFile(kpath); err != nil || !bytes.Equal(old, keys.KeysetBytes) {
-		if err := patchtrust.WriteFileAtomic(kpath, keys.KeysetBytes, 0o644); err != nil {
-			return nil, err
-		}
-	}
-
+	// The pointer is signed before the keyset is written, so only the two file writes lie between them.
 	p := &patchtrust.Pointer{ProductID: t.ProductID, Channel: t.Channel, Platform: t.Platform,
 		ManifestRef: patchtrust.ManifestRef{BuildID: m.Header.BuildID, ManifestHash: res.ManifestHash,
 			CompatEpoch: o.CompatEpoch},
 		MinLauncher: o.MinLauncher, MinClient: o.MinClient, CDNHosts: o.CDNHosts, RolloutPct: o.RolloutPct,
 		SignedAt: now, Expires: now + uint64(o.Lifetime/time.Second), KeyID: keys.KeyID}
-	if prev != nil && samePointer(prev, p) && prev.Expires > now && prev.Expires-now > uint64(o.Lifetime/time.Second)/2 {
+	unchanged := prev != nil && samePointer(prev, p) && prev.Expires > now &&
+		prev.Expires-now > uint64(o.Lifetime/time.Second)/2
+	var pb []byte
+	if !unchanged {
+		p.Sequence = seq
+		if err := p.Sign(keys.Manifest); err != nil {
+			return nil, err
+		}
+		if pb, err = p.Marshal(); err != nil {
+			return nil, err
+		}
+	}
+	if writeKeyset {
+		if err := patchtrust.WriteFileAtomic(kpath, keys.KeysetBytes, 0o644); err != nil {
+			return nil, err
+		}
+		res.KeysetWritten = true
+	}
+	if unchanged {
 		res.Sequence = prev.Sequence
 		return res, nil
-	}
-	p.Sequence = seq
-	if err := p.Sign(keys.Manifest); err != nil {
-		return nil, err
-	}
-	pb, err := p.Marshal()
-	if err != nil {
-		return nil, err
 	}
 	ppath := filepath.Join(o.CDNRoot, filepath.FromSlash(PointerPath(t.ProductID, t.Channel, t.Platform)))
 	if err := patchtrust.WriteFileAtomic(ppath, pb, 0o644); err != nil {
@@ -167,6 +188,41 @@ func Publish(ctx context.Context, o PublishOptions, keys *Keys) (*PublishResult,
 	}
 	res.Sequence, res.PointerWritten = seq, true
 	return res, nil
+}
+
+// keysetChange reports whether publish must write the signing directory's keyset over the CDN's. It refuses
+// to replace it with a lower version (that would undo the revocations of the versions between, and fail
+// every install that ratcheted to the higher one), a lower root epoch (installs past it refuse it), or other
+// bytes of the same version (two keysets of one version would verify for different installs).
+func keysetChange(path string, keys *Keys) (bool, error) {
+	old, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return true, nil
+	case err != nil:
+		return false, err
+	case bytes.Equal(old, keys.KeysetBytes):
+		return false, nil
+	}
+	cur, err := patchtrust.ParseKeyset(old)
+	if err != nil {
+		return false, fmt.Errorf("patchcdn: the CDN's keyset does not parse (%v); fix or remove it", err)
+	}
+	next := keys.Keyset
+	switch {
+	case cur.ProductID != next.ProductID:
+		return false, fmt.Errorf("patchcdn: the CDN's keyset is %q's, not %q's", cur.ProductID, next.ProductID)
+	case next.Version < cur.Version:
+		return false, fmt.Errorf("patchcdn: the CDN has keyset version %d; replacing it with version %d would undo "+
+			"its revocations (publish with the current keyset)", cur.Version, next.Version)
+	case next.Version == cur.Version:
+		return false, fmt.Errorf("patchcdn: the CDN's keyset version %d differs from the signing directory's of the "+
+			"same version; a changed keyset needs a higher version", cur.Version)
+	case next.RootEpoch < cur.RootEpoch:
+		return false, fmt.Errorf("patchcdn: the CDN's keyset is signed by root epoch %d; one of epoch %d would be "+
+			"refused by every install past it", cur.RootEpoch, next.RootEpoch)
+	}
+	return true, nil
 }
 
 // samePointer compares everything but the sequence, times and signature.
@@ -281,6 +337,29 @@ func addBuild(ctx context.Context, o PublishOptions, b *manifest.Builder, res *P
 	return nil
 }
 
+// existingChunk checks a chunk object already on the CDN: ok if it decodes to data, with its size. An
+// object that exists but does not (a torn copy, a flipped bit) is rewritten by the caller rather than
+// signed into another manifest.
+func existingChunk(path string, data []byte) (size int, exists, ok bool) {
+	f, err := os.Open(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, false, false
+	}
+	if err != nil {
+		return 0, true, false
+	}
+	defer f.Close()
+	stored, err := readLimited(f, path, MaxChunkObject)
+	if err != nil {
+		return 0, true, false
+	}
+	raw, err := DecodeChunk(stored, uint32(len(data)))
+	if err != nil || !bytes.Equal(raw, data) {
+		return 0, true, false
+	}
+	return len(stored), true, true
+}
+
 func chunkFile(cdnRoot, path string, seen map[cdc.Hash]bool, b *manifest.Builder,
 	res *PublishResult) (manifest.FileInput, error) {
 	f, err := os.Open(path)
@@ -307,9 +386,13 @@ func chunkFile(cdnRoot, path string, seen map[cdc.Hash]bool, b *manifest.Builder
 		}
 		seen[ch.Hash] = true
 		obj := filepath.Join(cdnRoot, filepath.FromSlash(ChunkPath(ch.Hash)))
-		if st, err := os.Stat(obj); err == nil {
-			b.SetStoredSize(ch.Hash, uint32(min(st.Size(), MaxChunkObject)))
+		size, exists, ok := existingChunk(obj, data)
+		if ok {
+			b.SetStoredSize(ch.Hash, uint32(size))
 			continue
+		}
+		if exists {
+			res.ChunksRepaired++
 		}
 		stored, err := EncodeChunk(data)
 		if err != nil {

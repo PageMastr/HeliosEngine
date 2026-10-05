@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -168,6 +169,36 @@ func baseKeyset() *patchtrust.Keyset {
 		subkey("news-a", patchtrust.RoleNews, vT0-90*vDay, vT0+90*vDay),
 		subkey("store-a", "store", vT0-90*vDay, vT0+90*vDay),
 	})}
+}
+
+// prestagedKeyset is keyset v4: v3's keys plus manifest-next, pre-staged for next quarter (valid from 60
+// days after now), as 08 §2.10.3's pre-signed rotations make them.
+func prestagedKeyset() *patchtrust.Keyset {
+	k := baseKeyset()
+	k.Version = 4
+	k.Keys = sortKeys(append(k.Keys, subkey("manifest-next", patchtrust.RoleManifest, vT0+60*vDay, vT0+150*vDay)))
+	return k
+}
+
+// rawFrame is a zstd frame holding data in `blocks` raw blocks: single segment, a 2-byte content size
+// (256 <= len(data) <= 65791), no checksum. Both decoders read it; publish never writes this form, so it
+// gives the same bytes in another stored size.
+func rawFrame(t *testing.T, data []byte, blocks int) []byte {
+	t.Helper()
+	if len(data) < 256 || len(data) > 65791 || blocks < 1 {
+		t.Fatalf("rawFrame: %d bytes in %d blocks", len(data), blocks)
+	}
+	out := []byte{0x28, 0xB5, 0x2F, 0xFD, 0x60} // magic; FHD: 2-byte content size, single segment
+	out = binary.LittleEndian.AppendUint16(out, uint16(len(data)-256))
+	for i := 0; i < blocks; i++ {
+		part := data[len(data)*i/blocks : len(data)*(i+1)/blocks]
+		h := uint32(len(part)) << 3 // block type 0: raw
+		if i == blocks-1 {
+			h |= 1 // the last block
+		}
+		out = append(append(out, byte(h), byte(h>>8), byte(h>>16)), part...)
+	}
+	return out
 }
 
 func signKeyset(t *testing.T, k *patchtrust.Keyset, root string) []byte {
@@ -378,9 +409,16 @@ func TestUpdateTrustVectors(t *testing.T) {
 	ok("root-rotation-after-ratchet", st(2, 4, 7), st(2, 4, 7), vectorCase{Keyset: nextRoot})
 	ok("pointer-without-next-or-hosts", nil, st(1, 3, 7), vectorCase{Pointer: pointer("pointer-minimal.json",
 		"manifest-a", func(p *patchtrust.Pointer) { p.Next, p.CDNHosts, p.RolloutPct = nil, nil, 0 })})
-	ok("pointer-signed-at-key-start", nil, st(1, 3, 7), vectorCase{Now: vT0 - 90*vDay + 3600, Pointer: pointer(
-		"pointer-key-start.json", "manifest-a", func(p *patchtrust.Pointer) {
-			p.SignedAt, p.Expires = vT0-90*vDay, vT0-90*vDay+7*vDay
+	// At the key's notBefore, an hour later by the install's clock: a manifest and a pointer signed then.
+	keyStart := signedManifest(t, m, "manifest-a", func(h *manifest.Header) { h.CreatedAt = vT0 - 90*vDay })
+	ok("pointer-signed-at-key-start", nil, st(1, 3, 7), vectorCase{Now: vT0 - 90*vDay + 3600,
+		Manifest: write("manifest-key-start.hman", keyStart), Pointer: pointer("pointer-key-start.json", "manifest-a",
+			func(p *patchtrust.Pointer) {
+				p.SignedAt, p.Expires, p.ManifestHash = vT0-90*vDay, vT0-90*vDay+7*vDay, headerHash(t, keyStart)
+			})})
+	ok("pointer-signed-at-clock-skew-limit", nil, st(1, 3, 7), vectorCase{Pointer: pointer("pointer-skew-limit.json",
+		"manifest-a", func(p *patchtrust.Pointer) {
+			p.SignedAt, p.Expires = vT0+patchtrust.MaxClockSkew, vT0+patchtrust.MaxClockSkew+6*vDay
 		})})
 
 	// Keysets.
@@ -421,6 +459,22 @@ func TestUpdateTrustVectors(t *testing.T) {
 	bad("pointer-signed-before-key", patchtrust.CheckPointerKeyWindow, vectorCase{Pointer: pointer(
 		"pointer-before-key.json", "manifest-a", func(p *patchtrust.Pointer) {
 			p.SignedAt, p.Expires = vT0-90*vDay-1, vT0+vDay
+		})})
+	bad("pointer-signed-past-clock-skew", patchtrust.CheckPointerFuture, vectorCase{Pointer: pointer(
+		"pointer-past-skew.json", "manifest-a", func(p *patchtrust.Pointer) {
+			p.SignedAt, p.Expires = vT0+patchtrust.MaxClockSkew+1, vT0+patchtrust.MaxClockSkew+1+6*vDay
+		})})
+	// The current key signing 80 days ahead (inside its window): without the clock bound it would verify for
+	// 87 days.
+	bad("pointer-signed-80-days-ahead", patchtrust.CheckPointerFuture, vectorCase{Pointer: pointer(
+		"pointer-80-days-ahead.json", "manifest-a", func(p *patchtrust.Pointer) {
+			p.SignedAt, p.Expires = vT0+80*vDay, vT0+87*vDay
+		})})
+	// A pre-staged next-quarter key signing at its notBefore, 60 days before that comes.
+	prestaged := write("keyset-prestaged.json", signKeyset(t, prestagedKeyset(), "root-1"))
+	bad("pointer-key-before-its-window-opens", patchtrust.CheckPointerFuture, vectorCase{Keyset: prestaged,
+		Pointer: pointer("pointer-prestaged-key.json", "manifest-next", func(p *patchtrust.Pointer) {
+			p.SignedAt, p.Expires = vT0+60*vDay, vT0+67*vDay
 		})})
 	bad("pointer-lifetime-over-7-days", patchtrust.CheckPointerLifetime, vectorCase{Pointer: pointer(
 		"pointer-long-lifetime.json", "manifest-a", func(p *patchtrust.Pointer) { p.Expires = p.SignedAt + 7*vDay + 1 })})
@@ -480,6 +534,24 @@ func TestUpdateTrustVectors(t *testing.T) {
 		mf, pf := manifestCase("manifest-expires-later", "manifest-a", func(h *manifest.Header) { h.ExpiresAt = vT0 + 1 })
 		return vectorCase{Manifest: mf, Pointer: pf}
 	}())
+	ok("manifest-created-at-clock-skew-limit", nil, st(1, 3, 7), func() vectorCase {
+		mf, pf := manifestCase("manifest-skew-limit", "manifest-a", func(h *manifest.Header) {
+			h.CreatedAt = vT0 + patchtrust.MaxClockSkew
+		})
+		return vectorCase{Manifest: mf, Pointer: pf}
+	}())
+	bad("manifest-created-past-clock-skew", patchtrust.CheckManifestFuture, func() vectorCase {
+		mf, pf := manifestCase("manifest-past-skew", "manifest-a", func(h *manifest.Header) {
+			h.CreatedAt = vT0 + patchtrust.MaxClockSkew + 1
+		})
+		return vectorCase{Manifest: mf, Pointer: pf}
+	}())
+	bad("manifest-key-before-its-window-opens", patchtrust.CheckManifestFuture, func() vectorCase {
+		mf, pf := manifestCase("manifest-prestaged-key", "manifest-next", func(h *manifest.Header) {
+			h.CreatedAt = vT0 + 60*vDay
+		})
+		return vectorCase{Keyset: prestaged, Manifest: mf, Pointer: pf}
+	}())
 
 	// Chunks.
 	bad("chunk-substituted", patchtrust.CheckChunkHash, vectorCase{Chunks: map[string]string{
@@ -488,6 +560,25 @@ func TestUpdateTrustVectors(t *testing.T) {
 		Chunk: bigID, At: 100, Hex: "ff"}}})
 	bad("chunk-oversize", patchtrust.CheckChunkCorrupt, vectorCase{Chunks: map[string]string{
 		bigID: write("chunk-oversize.zst", oversize)}})
+	// The chunk's own bytes in another valid encoding: only the stored size differs from the manifest's.
+	bigRaw, err := patchcdn.DecodeChunk(readVector(t, filepath.Join("cdn", filepath.FromSlash(patchcdn.ChunkPath(big.Hash)))),
+		big.RawSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reencoded := rawFrame(t, bigRaw, 1)
+	if len(reencoded) == int(big.StoredSize) {
+		t.Fatal("the re-encoded chunk has the stored size")
+	}
+	bad("chunk-reencoded", patchtrust.CheckChunkCorrupt, vectorCase{Chunks: map[string]string{
+		bigID: write("chunk-reencoded.zst", reencoded)}})
+	// A frame of the stored size that decodes to 2 bytes fewer than rawSize (three raw blocks, no checksum).
+	short := rawFrame(t, bigRaw[:len(bigRaw)-2], 3)
+	if len(short) != int(big.StoredSize) {
+		t.Fatalf("short chunk: %d bytes, want %d", len(short), big.StoredSize)
+	}
+	bad("chunk-short", patchtrust.CheckChunkCorrupt, vectorCase{Chunks: map[string]string{
+		bigID: write("chunk-short.zst", short)}})
 	bad("chunk-missing", patchtrust.CheckChunkMissing, vectorCase{Chunks: map[string]string{bigID: ""}})
 
 	vf := vectorFile{
@@ -661,6 +752,16 @@ func syntaxCases(t *testing.T, ks, ptr []byte) syntaxFile {
 	p("loopback name as a prefix", edit(ptr, `"https://cdn1.vector-game.example"`,
 		`"http://localhost.vector-game.example"`))
 	p("host with a space", edit(ptr, `"https://cdn1.vector-game.example"`, `"https://cdn1 vector-game.example"`))
+	p("loopback host with userinfo", edit(ptr, `"https://cdn1.vector-game.example"`,
+		`"http://localhost:1@evil.example/cdn"`))
+	p("loopback address with userinfo", edit(ptr, `"https://cdn1.vector-game.example"`,
+		`"http://127.0.0.1:80@203.0.113.9/"`))
+	p("https host with userinfo", edit(ptr, `"https://cdn1.vector-game.example"`,
+		`"https://cdn1.vector-game.example@evil.example"`))
+	p("loopback port not a number", edit(ptr, `"https://cdn1.vector-game.example"`, `"http://localhost:80x/cdn"`))
+	p("loopback port of six digits", edit(ptr, `"https://cdn1.vector-game.example"`, `"http://127.0.0.1:123456/"`))
+	p("loopback host with a query", edit(ptr, `"https://cdn1.vector-game.example"`, `"http://localhost?x"`))
+	p("https without a host", edit(ptr, `"https://cdn1.vector-game.example"`, `"https:///cdn"`))
 	p("17 hosts", edit(ptr, `"cdn_hosts":[`, `"cdn_hosts":[`+strings.Repeat(`"https://x.example",`, 15)))
 	p("version with five parts", edit(ptr, `"min_launcher":"1.2.0"`, `"min_launcher":"1.2.0.0.0"`))
 	p("version with a letter", edit(ptr, `"min_client":"1.2.0"`, `"min_client":"v1.2.0"`))
@@ -845,11 +946,13 @@ var allChecks = []patchtrust.Check{
 	patchtrust.CheckKeysetMalformed, patchtrust.CheckKeysetRoot, patchtrust.CheckKeysetRootRatchet,
 	patchtrust.CheckKeysetSignature, patchtrust.CheckKeysetProduct, patchtrust.CheckKeysetVersion,
 	patchtrust.CheckPointerMalformed, patchtrust.CheckPointerKeyUnknown, patchtrust.CheckPointerKeyRole,
-	patchtrust.CheckPointerSignature, patchtrust.CheckPointerKeyWindow, patchtrust.CheckPointerLifetime,
+	patchtrust.CheckPointerSignature, patchtrust.CheckPointerKeyWindow, patchtrust.CheckPointerFuture,
+	patchtrust.CheckPointerLifetime,
 	patchtrust.CheckPointerProduct, patchtrust.CheckPointerChannel, patchtrust.CheckPointerPlatform,
 	patchtrust.CheckPointerExpired, patchtrust.CheckPointerSequence, patchtrust.CheckManifestMalformed,
 	patchtrust.CheckManifestHash, patchtrust.CheckManifestKeyUnknown, patchtrust.CheckManifestKeyRole,
-	patchtrust.CheckManifestSignature, patchtrust.CheckManifestKeyWindow, patchtrust.CheckManifestProduct,
+	patchtrust.CheckManifestSignature, patchtrust.CheckManifestKeyWindow, patchtrust.CheckManifestFuture,
+	patchtrust.CheckManifestProduct,
 	patchtrust.CheckManifestPlatform, patchtrust.CheckManifestBuild, patchtrust.CheckManifestCompatEpoch,
 	patchtrust.CheckManifestExpired, patchtrust.CheckManifestBody, patchtrust.CheckChunkMissing,
 	patchtrust.CheckChunkCorrupt, patchtrust.CheckChunkHash,

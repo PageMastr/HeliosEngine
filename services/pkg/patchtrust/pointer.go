@@ -76,20 +76,58 @@ func validVersionText(s string) bool {
 	return true
 }
 
-// validHost accepts https:// URLs and http:// URLs on a loopback host (the dev CDN), without spaces.
+// authority returns the part of rest (a URL after its "scheme://") before the first '/', '?' or '#'.
+func authority(rest string) string {
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		return rest[:i]
+	}
+	return rest
+}
+
+// IsLoopbackURL reports whether s is an http:// URL whose authority is exactly localhost, 127.0.0.1 or
+// [::1], optionally with a port of 1–5 digits, followed by nothing or a path. A URL with userinfo
+// ("http://localhost:1@cdn.example/") is refused: its host is the part after '@'. Pure; any goroutine.
+func IsLoopbackURL(s string) bool {
+	rest, ok := strings.CutPrefix(s, "http://")
+	if !ok || strings.ContainsRune(s, '@') {
+		return false
+	}
+	auth := authority(rest)
+	if len(auth) < len(rest) && rest[len(auth)] != '/' {
+		return false // a query or fragment right after the authority
+	}
+	for _, host := range []string{"localhost", "127.0.0.1", "[::1]"} {
+		port, ok := strings.CutPrefix(auth, host)
+		if !ok {
+			continue
+		}
+		if port == "" {
+			return true
+		}
+		digits, ok := strings.CutPrefix(port, ":")
+		if !ok || len(digits) == 0 || len(digits) > 5 {
+			return false
+		}
+		for i := 0; i < len(digits); i++ {
+			if digits[i] < '0' || digits[i] > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// validHost accepts https:// URLs with a non-empty authority and http:// URLs on a loopback host (the dev
+// CDN, IsLoopbackURL), without spaces or userinfo ('@').
 func validHost(s string) bool {
-	if len(s) == 0 || len(s) > MaxHostLength || !printable(s) || strings.ContainsRune(s, ' ') {
+	if len(s) == 0 || len(s) > MaxHostLength || !printable(s) || strings.ContainsAny(s, " @") {
 		return false
 	}
 	if rest, ok := strings.CutPrefix(s, "https://"); ok {
-		return rest != ""
+		return authority(rest) != ""
 	}
-	for _, loop := range []string{"http://localhost", "http://127.0.0.1", "http://[::1]"} {
-		if rest, ok := strings.CutPrefix(s, loop); ok && (rest == "" || rest[0] == ':' || rest[0] == '/') {
-			return true
-		}
-	}
-	return false
+	return IsLoopbackURL(s)
 }
 
 func (m *ManifestRef) validate(what string) error {

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/PageMastr/scifi-test/services/pkg/patchtrust"
 )
 
 func runCmd(t *testing.T, now time.Time, args ...string) (int, string, string) {
@@ -40,13 +42,13 @@ func TestPublishVerify(t *testing.T) {
 	if code != 0 || strings.Contains(out, "created dev keys") {
 		t.Fatalf("second publish: %d %s", code, out)
 	}
-	state := filepath.Join(dir, "state.json")
+	state := filepath.Join(dir, "state.bin")
 	code, out, errOut = runCmd(t, now.Add(time.Minute), append([]string{"verify", "--state", state}, target...)...)
 	if code != 0 || !strings.Contains(out, "verified sample-game/dev/win64") {
 		t.Fatalf("verify: %d %s %s", code, out, errOut)
 	}
-	if b, err := os.ReadFile(state); err != nil || !strings.Contains(string(b), `"pointerSequence":2`) {
-		t.Fatalf("state: %s %v", b, err)
+	if st, err := (patchtrust.FileStateStore{Path: state}).Load(); err != nil || st.PointerSequence != 2 {
+		t.Fatalf("state: %+v %v", st, err)
 	}
 	ptr := filepath.Join(data, "cdn", "channels", "sample-game", "dev", "win64.json")
 	b, err := os.ReadFile(ptr)

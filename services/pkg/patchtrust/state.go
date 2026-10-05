@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 
+	"github.com/PageMastr/scifi-test/services/pkg/cdc"
 	"github.com/PageMastr/scifi-test/services/pkg/manifest"
 )
 
@@ -21,11 +22,45 @@ type StateStore interface {
 	Save(State) error
 }
 
-// FileStateStore keeps State as a small JSON file, replaced atomically.
+// StateRecordSize is the size of a state record (EncodeState).
+const StateRecordSize = 32
+
+const stateMagic = 0x53525448 // "HTRS"
+
+// EncodeState returns state's 32-byte record, the same bytes as engine/patch's encodeTrustState: "HTRS",
+// version 0, rootEpoch (u32), keysetVersion and pointerSequence (u64), all little-endian, then the first
+// 4 bytes of BLAKE2b-256 of the first 28 bytes. Pure; any goroutine.
+func EncodeState(st State) [StateRecordSize]byte {
+	var b [StateRecordSize]byte
+	binary.LittleEndian.PutUint32(b[0:], stateMagic)
+	binary.LittleEndian.PutUint32(b[8:], st.RootEpoch)
+	binary.LittleEndian.PutUint64(b[12:], st.KeysetVersion)
+	binary.LittleEndian.PutUint64(b[20:], st.PointerSequence)
+	h := cdc.Sum(b[:28])
+	copy(b[28:], h[:4])
+	return b
+}
+
+// DecodeState reads a record EncodeState wrote; any other bytes (another size, magic or version, or a
+// checksum that does not match) are an error. Pure; any goroutine.
+func DecodeState(b []byte) (State, error) {
+	if len(b) != StateRecordSize || binary.LittleEndian.Uint32(b) != stateMagic || binary.LittleEndian.Uint32(b[4:]) != 0 {
+		return State{}, errors.New("not a trust state record")
+	}
+	if h := cdc.Sum(b[:28]); !bytes.Equal(h[:4], b[28:]) {
+		return State{}, errors.New("the trust state record's checksum does not match")
+	}
+	return State{RootEpoch: binary.LittleEndian.Uint32(b[8:]), KeysetVersion: binary.LittleEndian.Uint64(b[12:]),
+		PointerSequence: binary.LittleEndian.Uint64(b[20:])}, nil
+}
+
+// FileStateStore keeps State in a file holding one state record (EncodeState: the format of engine/patch's
+// FileTrustStateStore, so either language reads the other's file), replaced atomically. Not synchronized:
+// one goroutine at a time.
 type FileStateStore struct{ Path string }
 
-// Load returns the zero State when the file does not exist. A file that does not parse is an error, never
-// a reset: a reset ratchet would accept a rolled-back pointer.
+// Load returns the zero State when the file does not exist. A file that is not exactly one valid record is
+// an error, never a reset: a reset ratchet would accept a rolled-back pointer.
 func (s FileStateStore) Load() (State, error) {
 	b, err := os.ReadFile(s.Path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -34,28 +69,23 @@ func (s FileStateStore) Load() (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	// Every field must be present: "{}" would otherwise load as a fresh install's state.
-	var f struct {
-		RootEpoch       *uint32 `json:"rootEpoch"`
-		KeysetVersion   *uint64 `json:"keysetVersion"`
-		PointerSequence *uint64 `json:"pointerSequence"`
+	st, err := DecodeState(b)
+	if err != nil {
+		return State{}, fmt.Errorf("patchtrust: state %s: %w", s.Path, err)
 	}
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&f); err != nil || f.RootEpoch == nil || f.KeysetVersion == nil || f.PointerSequence == nil {
-		return State{}, fmt.Errorf("patchtrust: state %s is not a complete state record (%v)", s.Path, err)
-	}
-	return State{RootEpoch: *f.RootEpoch, KeysetVersion: *f.KeysetVersion, PointerSequence: *f.PointerSequence}, nil
+	return st, nil
 }
 
-// Save writes the state to a temporary file in the same directory and renames it over the old one.
+// Save writes the state's record to a temporary file in the same directory and renames it over the old one.
 func (s FileStateStore) Save(st State) error {
-	b, _ := json.Marshal(st)
-	return WriteFileAtomic(s.Path, append(b, '\n'), 0o644)
+	rec := EncodeState(st)
+	return WriteFileAtomic(s.Path, rec[:], 0o644)
 }
 
-// WriteFileAtomic writes data to a temporary file next to path, syncs it and renames it over path, so a
-// reader sees the old or the new content, never a mix.
+// WriteFileAtomic writes data to a temporary file next to path (".tmp-*"), syncs it and renames it over
+// path, so a reader sees the old or the new content, never a mix; then it syncs the directory (POSIX, best
+// effort) so the rename survives a power cut. A crash before the rename can leave the temporary file
+// behind; no CDN layout path names one.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -81,8 +111,15 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 	if err != nil {
 		_ = os.Remove(tmp)
+		return err
 	}
-	return err
+	if runtime.GOOS != "windows" { // Windows cannot open a directory for FlushFileBuffers
+		if d, derr := os.Open(dir); derr == nil {
+			_ = d.Sync() // some filesystems refuse to sync a directory; the rename has happened either way
+			_ = d.Close()
+		}
+	}
+	return nil
 }
 
 // SignManifest signs a marshaled .hman file in place: an Ed25519 signature over bytes [0, 256) written to

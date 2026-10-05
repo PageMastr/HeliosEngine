@@ -117,6 +117,17 @@
    "check": "",
    "now": 1782227600,
    "pointer": "pointer-key-start.json",
+   "manifest": "manifest-key-start.hman",
+   "wantState": {
+    "rootEpoch": 1,
+    "keysetVersion": 3,
+    "pointerSequence": 7
+   }
+  },
+  {
+   "name": "pointer-signed-at-clock-skew-limit",
+   "check": "",
+   "pointer": "pointer-skew-limit.json",
    "wantState": {
     "rootEpoch": 1,
     "keysetVersion": 3,
@@ -235,6 +246,22 @@
    "name": "pointer-signed-before-key",
    "check": "pointer-key-window",
    "pointer": "pointer-before-key.json"
+  },
+  {
+   "name": "pointer-signed-past-clock-skew",
+   "check": "pointer-future",
+   "pointer": "pointer-past-skew.json"
+  },
+  {
+   "name": "pointer-signed-80-days-ahead",
+   "check": "pointer-future",
+   "pointer": "pointer-80-days-ahead.json"
+  },
+  {
+   "name": "pointer-key-before-its-window-opens",
+   "check": "pointer-future",
+   "keyset": "keyset-prestaged.json",
+   "pointer": "pointer-prestaged-key.json"
   },
   {
    "name": "pointer-lifetime-over-7-days",
@@ -388,6 +415,30 @@
    }
   },
   {
+   "name": "manifest-created-at-clock-skew-limit",
+   "check": "",
+   "pointer": "manifest-skew-limit-pointer.json",
+   "manifest": "manifest-skew-limit.hman",
+   "wantState": {
+    "rootEpoch": 1,
+    "keysetVersion": 3,
+    "pointerSequence": 7
+   }
+  },
+  {
+   "name": "manifest-created-past-clock-skew",
+   "check": "manifest-future",
+   "pointer": "manifest-past-skew-pointer.json",
+   "manifest": "manifest-past-skew.hman"
+  },
+  {
+   "name": "manifest-key-before-its-window-opens",
+   "check": "manifest-future",
+   "keyset": "keyset-prestaged.json",
+   "pointer": "manifest-prestaged-key-pointer.json",
+   "manifest": "manifest-prestaged-key.hman"
+  },
+  {
    "name": "chunk-substituted",
    "check": "chunk-hash",
    "chunks": {
@@ -411,6 +462,20 @@
    "check": "chunk-corrupt",
    "chunks": {
     "132be2bbb1b99220cf57c38ec32cb80e2ff5edffff7bff8efea9ae588f98d9e9": "chunk-oversize.zst"
+   }
+  },
+  {
+   "name": "chunk-reencoded",
+   "check": "chunk-corrupt",
+   "chunks": {
+    "132be2bbb1b99220cf57c38ec32cb80e2ff5edffff7bff8efea9ae588f98d9e9": "chunk-reencoded.zst"
+   }
+  },
+  {
+   "name": "chunk-short",
+   "check": "chunk-corrupt",
+   "chunks": {
+    "132be2bbb1b99220cf57c38ec32cb80e2ff5edffff7bff8efea9ae588f98d9e9": "chunk-short.zst"
    }
   },
   {

@@ -360,6 +360,48 @@
    "put": " "
   },
   {
+   "name": "loopback host with userinfo",
+   "at": 46,
+   "delete": 28,
+   "put": "://localhost:1@evil.example/cdn"
+  },
+  {
+   "name": "loopback address with userinfo",
+   "at": 46,
+   "delete": 28,
+   "put": "://127.0.0.1:80@203.0.113.9/"
+  },
+  {
+   "name": "https host with userinfo",
+   "at": 74,
+   "delete": 0,
+   "put": "@evil.example"
+  },
+  {
+   "name": "loopback port not a number",
+   "at": 46,
+   "delete": 28,
+   "put": "://localhost:80x/cdn"
+  },
+  {
+   "name": "loopback port of six digits",
+   "at": 46,
+   "delete": 28,
+   "put": "://127.0.0.1:123456/"
+  },
+  {
+   "name": "loopback host with a query",
+   "at": 46,
+   "delete": 28,
+   "put": "://localhost?x"
+  },
+  {
+   "name": "https without a host",
+   "at": 50,
+   "delete": 24,
+   "put": "/cdn"
+  },
+  {
    "name": "17 hosts",
    "at": 50,
    "delete": 0,

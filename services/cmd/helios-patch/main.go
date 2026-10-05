@@ -162,11 +162,12 @@ func publish(ctx context.Context, fs *flag.FlagSet, args []string, t *patchtrust
 	}
 	var keys *patchcdn.Keys
 	var err error
+	dir := *keysDir
 	switch {
-	case *keysDir != "":
-		keys, err = patchcdn.LoadKeys(*keysDir, t.ProductID)
+	case dir != "":
+		keys, err = patchcdn.LoadKeys(dir, t.ProductID)
 	case t.Channel == "dev":
-		dir := filepath.Join(*dataDir, "keys", "patch", t.ProductID)
+		dir = filepath.Join(*dataDir, "keys", "patch", t.ProductID)
 		var created bool
 		keys, created, err = patchcdn.LoadOrCreateDevKeys(dir, t.ProductID, o.Now)
 		if created {
@@ -178,6 +179,17 @@ func publish(ctx context.Context, fs *flag.FlagSet, args []string, t *patchtrust
 	if err != nil {
 		return err
 	}
+	// A signing directory with the public root pair (dev ones have it): publish checks the keyset against it.
+	if roots := filepath.Join(dir, "roots.json"); fileExists(roots) {
+		product, rp, err := patchcdn.LoadRoots(roots)
+		if err != nil {
+			return err
+		}
+		if product != t.ProductID {
+			return fmt.Errorf("%s holds %q's roots, not %q's", roots, product, t.ProductID)
+		}
+		o.Roots = &rp
+	}
 	res, err := patchcdn.Publish(ctx, o, keys)
 	if err != nil {
 		return err
@@ -188,19 +200,28 @@ func publish(ctx context.Context, fs *flag.FlagSet, args []string, t *patchtrust
 		}
 		return note
 	}
-	fmt.Fprintf(stdout, "published %s/%s/%s build %s: %d files, %d chunks (%d written, %d bytes), manifest %s%s, "+
+	repaired := ""
+	if res.ChunksRepaired > 0 {
+		repaired = fmt.Sprintf(", %d of them replacing corrupt objects", res.ChunksRepaired)
+	}
+	fmt.Fprintf(stdout, "published %s/%s/%s build %s: %d files, %d chunks (%d written%s, %d bytes), manifest %s%s, "+
 		"pointer sequence %d%s\n", t.ProductID, t.Channel, t.Platform, res.BuildID, res.Files, res.Chunks,
-		res.ChunksWritten, res.BytesWritten, res.ManifestHash, unless(res.ManifestWritten, " (already published)"),
-		res.Sequence, unless(res.PointerWritten, " (unchanged)"))
+		res.ChunksWritten, repaired, res.BytesWritten, res.ManifestHash,
+		unless(res.ManifestWritten, " (already published)"), res.Sequence, unless(res.PointerWritten, " (unchanged)"))
 	return nil
+}
+
+func fileExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.Mode().IsRegular()
 }
 
 func verify(ctx context.Context, fs *flag.FlagSet, args []string, t *patchtrust.Target, dataDir, cdn *string,
 	stdout io.Writer, now func() time.Time) error {
 	roots := fs.String("roots", "", "roots.json with the product's root pair; default "+
 		"<data-dir>/keys/patch/<product>/roots.json (the dev keys')")
-	statePath := fs.String("state", "", "ratchet state file, loaded and saved as an install would; default: "+
-		"a fresh install's state, not saved")
+	statePath := fs.String("state", "", "ratchet state file (a 32-byte record, engine/patch's format), loaded "+
+		"and saved as an install would; default: a fresh install's state, not saved")
 	if err := parse(fs, args, t); err != nil {
 		return err
 	}

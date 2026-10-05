@@ -23,9 +23,17 @@ const (
 	MaxVersionText = 39 // four dotted parts of at most 9 digits
 	maxIDText      = 64 // product IDs, channels, platforms and build IDs are shorter
 
-	// MaxPointerLifetime bounds expires - signed_at (08 §2.10.3: pointers expire after 7 days), so a
-	// subkey past its notAfter cannot sign a pointer that verifies more than 7 days later.
+	// MaxPointerLifetime bounds expires - signed_at (08 §2.10.3: pointers expire after 7 days, against
+	// freeze attacks). With MaxClockSkew it bounds a pointer's life from the verifier's clock: signed_at is
+	// at most now + MaxClockSkew, so a pointer that verifies expires at most 7 days and 1 hour after now,
+	// and a subkey past its notAfter cannot sign a pointer that verifies more than that after notAfter.
 	MaxPointerLifetime = 7 * 24 * 3600
+
+	// MaxClockSkew is how far a pointer's signed_at or a manifest's createdAt may lie after the verifier's
+	// now (the signer's and the install's clocks differ). Without it a signer-claimed future time passes the
+	// subkey window check: a pre-staged next-quarter subkey could sign before its notBefore, and a pointer
+	// could stay valid for as long past now as its subkey's window allows.
+	MaxClockSkew = 3600
 )
 
 // The subkey roles of 08 §2.10.3. A keyset may name other roles (a later phase's); they are kept and

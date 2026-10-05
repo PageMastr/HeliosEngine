@@ -3,6 +3,7 @@ package patchtrust_test
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -201,8 +202,21 @@ func TestAdvance(t *testing.T) {
 	}
 }
 
+// The state record is engine/patch's (test_trust.cpp pins the same bytes), and the file store refuses
+// anything but one valid record: a reset ratchet would accept rolled-back pointers.
 func TestFileStateStore(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sub", "state.json")
+	rec := patchtrust.EncodeState(patchtrust.State{RootEpoch: 3, KeysetVersion: 9, PointerSequence: 1 << 40})
+	if got := hex.EncodeToString(rec[:]); got != "4854525300000000030000000900000000000000000000000001000047ae02f5" {
+		t.Fatalf("record %s", got)
+	}
+	for i := range rec {
+		bad := rec
+		bad[i] ^= 0x10
+		if _, err := patchtrust.DecodeState(bad[:]); err == nil {
+			t.Fatalf("a record with byte %d changed decoded", i)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "sub", "state.bin")
 	s := patchtrust.FileStateStore{Path: path}
 	if st, err := s.Load(); err != nil || st != (patchtrust.State{}) {
 		t.Fatalf("missing file: %+v %v", st, err)
@@ -214,13 +228,19 @@ func TestFileStateStore(t *testing.T) {
 	if st, err := s.Load(); err != nil || st != want {
 		t.Fatalf("%+v %v", st, err)
 	}
-	for _, bad := range []string{"{", "{}", `{"rootEpoch":1,"keysetVersion":2}`, `{"rootEpoch":1,"keysetVersion":2,` +
-		`"pointerSequence":3,"x":1}`, `{"rootEpoch":-1,"keysetVersion":2,"pointerSequence":3}`} {
-		if err := os.WriteFile(path, []byte(bad), 0o644); err != nil {
+	good, _ := os.ReadFile(path)
+	for name, b := range map[string][]byte{
+		"empty":           nil,
+		"truncated":       good[:31],
+		"trailing byte":   append(bytes.Clone(good), '\n'),
+		"a second record": append(bytes.Clone(good), good...),
+		"JSON":            []byte(`{"rootEpoch":1,"keysetVersion":2,"pointerSequence":3}`),
+	} {
+		if err := os.WriteFile(path, b, 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.Load(); err == nil {
-			t.Fatalf("state file %s loaded (a reset ratchet accepts rolled-back pointers)", bad)
+			t.Fatalf("state file (%s) loaded", name)
 		}
 	}
 }

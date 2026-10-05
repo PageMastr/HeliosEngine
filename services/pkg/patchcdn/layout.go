@@ -144,10 +144,12 @@ var (
 		return zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBestCompression), zstd.WithEncoderConcurrency(1))
 	})
 	// MaxMemory bounds what DecodeAll produces (a chunk is at most cdc.MaxSize bytes), MaxWindow the window
-	// a frame may ask for (32 MiB, as engine/patch).
+	// a frame may ask for: cdc.MaxSize, as engine/patch's kMaxChunkWindowLog. EncodeAll declares a window of
+	// at most max(content size, 1 KiB) (a single-segment frame from 256 bytes, a 1 KiB window below), so
+	// every chunk object it writes fits, and a hostile one cannot make a decoder reserve a larger window.
 	chunkDecoder = sync.OnceValues(func() (*zstd.Decoder, error) {
 		return zstd.NewReader(nil, zstd.WithDecoderConcurrency(0), zstd.WithDecoderMaxMemory(cdc.MaxSize),
-			zstd.WithDecoderMaxWindow(1<<25))
+			zstd.WithDecoderMaxWindow(cdc.MaxSize))
 	})
 )
 
@@ -160,8 +162,8 @@ func EncodeChunk(raw []byte) ([]byte, error) {
 	return enc.EncodeAll(raw, make([]byte, 0, len(raw)/2+64)), nil
 }
 
-// DecodeChunk decodes a chunk object that must hold exactly rawSize bytes. Output is bounded by cdc.MaxSize,
-// so a hostile object cannot make it allocate more.
+// DecodeChunk decodes a chunk object that must hold exactly rawSize bytes. Output and the zstd window are
+// bounded by cdc.MaxSize, so a hostile object cannot make it allocate more.
 func DecodeChunk(stored []byte, rawSize uint32) ([]byte, error) {
 	dec, err := chunkDecoder()
 	if err != nil {

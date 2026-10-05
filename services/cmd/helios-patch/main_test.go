@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -69,6 +71,50 @@ func TestPublishVerify(t *testing.T) {
 	code, _, errOut = runCmd(t, now.Add(8*24*time.Hour), append([]string{"verify"}, target...)...)
 	if code != 1 || !strings.Contains(errOut, "pointer-expired") {
 		t.Fatalf("expired pointer: %d %s", code, errOut)
+	}
+
+	// publish checks the keyset against the signing directory's roots.json: one signed by another root
+	// (here with a higher version, so only the root check refuses it) is not published.
+	keysDir := filepath.Join(data, "keys", "patch", "sample-game")
+	ksb, err := os.ReadFile(filepath.Join(keysDir, "keyset.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks, err := patchtrust.ParseKeyset(ksb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, other, _ := ed25519.GenerateKey(nil)
+	ks.Version++
+	if err := ks.Sign(other); err != nil {
+		t.Fatal(err)
+	}
+	forged, _ := ks.Marshal()
+	if err := os.WriteFile(filepath.Join(keysDir, "keyset.json"), forged, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut = runCmd(t, now, append([]string{"publish", "--build", build}, target...)...)
+	if code != 1 || !strings.Contains(errOut, "keyset-signature") {
+		t.Fatalf("a keyset of another root: %d %s", code, errOut)
+	}
+}
+
+// The default data directory, as services/README.md runs publish (from services/), is git-ignored: dev key
+// directories also ignore themselves (pkg/patchcdn's TestDevKeysAreGitIgnored).
+func TestDefaultDataDirIsGitIgnored(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is not installed")
+	}
+	services := filepath.Join("..", "..")
+	if exec.Command(git, "-C", services, "rev-parse", "--is-inside-work-tree").Run() != nil {
+		t.Skip("not in a git work tree")
+	}
+	for _, f := range []string{"helios-data/keys/patch/sample-game/manifest-key.json",
+		"helios-data/keys/patch/sample-game/root-keys.json", "helios-data/cdn/keys/sample-game/keyset.json"} {
+		if err := exec.Command(git, "-C", services, "check-ignore", "-q", f).Run(); err != nil {
+			t.Errorf("git does not ignore services/%s: %v", f, err)
+		}
 	}
 }
 

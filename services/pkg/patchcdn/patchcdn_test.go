@@ -3,10 +3,12 @@ package patchcdn_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -204,6 +206,12 @@ func TestPublishRefusals(t *testing.T) {
 		"dev keys for a non-loopback host": func(o *patchcdn.PublishOptions) {
 			o.CDNHosts = []string{"https://cdn.example"}
 		},
+		"dev keys for a remote host behind localhost userinfo": func(o *patchcdn.PublishOptions) {
+			o.CDNHosts = []string{"http://localhost:1@evil.example/cdn"}
+		},
+		"dev keys for a remote host behind 127.0.0.1 userinfo": func(o *patchcdn.PublishOptions) {
+			o.CDNHosts = []string{"http://127.0.0.1:80@203.0.113.9/"}
+		},
 		"another product":   func(o *patchcdn.PublishOptions) { o.Target.ProductID = "other-game" },
 		"no clock":          func(o *patchcdn.PublishOptions) { o.Now = time.Time{} },
 		"a bad build ID":    func(o *patchcdn.PublishOptions) { o.BuildID = "../escape" },
@@ -280,6 +288,19 @@ func TestChunkObjects(t *testing.T) {
 			t.Errorf("%s: decoded", name)
 		}
 	}
+	// A frame may declare a window of at most cdc.MaxSize (256 KiB), as engine/patch: a hand-made frame with
+	// no content size, a window descriptor and one raw block.
+	windowFrame := func(log uint) []byte {
+		f := []byte{0x28, 0xB5, 0x2F, 0xFD, 0x00, byte((log - 10) << 3)}
+		h := uint32(len(raw))<<3 | 1
+		return append(append(f, byte(h), byte(h>>8), byte(h>>16)), raw...)
+	}
+	if back, err := patchcdn.DecodeChunk(windowFrame(18), uint32(len(raw))); err != nil || !bytes.Equal(back, raw) {
+		t.Errorf("a 256 KiB window: %v", err)
+	}
+	if _, err := patchcdn.DecodeChunk(windowFrame(20), uint32(len(raw))); err == nil {
+		t.Error("decoded a frame that declares a 1 MiB window")
+	}
 	// A frame that claims a huge window or content is refused without allocating it.
 	enc, _ := zstd.NewWriter(nil, zstd.WithWindowSize(1<<26), zstd.WithSingleSegment(false))
 	bomb := enc.EncodeAll(make([]byte, 64<<20), nil)
@@ -322,5 +343,184 @@ func TestSources(t *testing.T) {
 	}
 	if patchcdn.ChunkPath(cdc.Sum(nil)) != "chunks/0e/57/0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8.zst" {
 		t.Errorf("chunk path %s", patchcdn.ChunkPath(cdc.Sum(nil)))
+	}
+}
+
+// signingDir writes a non-dev signing directory for vector-game: keyset k signed by root, subkey manifest-a.
+func signingDir(t *testing.T, k *patchtrust.Keyset, root string) *patchcdn.Keys {
+	t.Helper()
+	dir := t.TempDir()
+	writeSigningDir(t, dir, signKeyset(t, k, root), "manifest-a", false)
+	keys, err := patchcdn.LoadKeys(dir, vProduct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keys
+}
+
+// Publish never replaces the CDN's keyset with a lower version (which would undo the revocations of the
+// versions between), other bytes of the same version, or a lower root epoch.
+func TestPublishKeysetNeverDowngrades(t *testing.T) {
+	cdn, build := t.TempDir(), t.TempDir()
+	writeFiles(t, build, map[string][]byte{"bin/game": cdctest.Random(3, 9000)})
+	ctx := context.Background()
+	o := patchcdn.PublishOptions{CDNRoot: cdn, BuildDir: build, Target: vTarget, Now: t0}
+	kpath := filepath.Join(cdn, filepath.FromSlash(patchcdn.KeysetPath(vProduct)))
+	version := func(v uint64, epoch uint32, extra bool) *patchtrust.Keyset {
+		k := baseKeyset()
+		k.Version, k.RootEpoch = v, epoch
+		if extra {
+			k.Keys = sortKeys(append(k.Keys, subkey("manifest-next", patchtrust.RoleManifest, vT0+60*vDay, vT0+150*vDay)))
+		}
+		return k
+	}
+	publish := func(k *patchtrust.Keyset, root string) (*patchcdn.PublishResult, error) {
+		keys := signingDir(t, k, root)
+		before, _ := os.ReadFile(kpath)
+		res, err := patchcdn.Publish(ctx, o, keys)
+		after, _ := os.ReadFile(kpath)
+		if err != nil && !bytes.Equal(before, after) {
+			t.Fatalf("a refused publish changed the CDN's keyset: %v", err)
+		}
+		return res, err
+	}
+	if res, err := publish(version(5, 1, false), "root-1"); err != nil || !res.KeysetWritten {
+		t.Fatalf("v5: %+v %v", res, err)
+	}
+	if res, err := publish(version(5, 1, false), "root-1"); err != nil || res.KeysetWritten {
+		t.Fatalf("v5 again: %+v %v", res, err)
+	}
+	for name, c := range map[string]struct {
+		k    *patchtrust.Keyset
+		root string
+		want string
+	}{
+		"a lower version":                  {version(3, 1, false), "root-1", "would undo"},
+		"the same version with other keys": {version(5, 1, true), "root-1", "needs a higher version"},
+	} {
+		if _, err := publish(c.k, c.root); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if res, err := publish(version(6, 2, false), "root-2"); err != nil || !res.KeysetWritten {
+		t.Fatalf("v6 of the next root: %+v %v", res, err)
+	}
+	if _, err := publish(version(7, 1, false), "root-1"); err == nil || !strings.Contains(err.Error(), "root epoch") {
+		t.Errorf("a lower root epoch: %v", err)
+	}
+	if err := os.WriteFile(kpath, []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publish(version(8, 2, false), "root-2"); err == nil || !strings.Contains(err.Error(), "does not parse") {
+		t.Errorf("a corrupt CDN keyset: %v", err)
+	}
+}
+
+// With the root pair (Roots, from the signing directory's roots.json), publish refuses a keyset the roots
+// did not sign.
+func TestPublishChecksKeysetAgainstRoots(t *testing.T) {
+	target := patchtrust.Target{ProductID: "sample-game", Channel: "dev", Platform: "win64"}
+	keys, _, dir := devSetup(t, target)
+	_, rp, err := patchcdn.LoadRoots(filepath.Join(dir, "roots.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := t.TempDir()
+	writeFiles(t, build, map[string][]byte{"a.txt": []byte("a")})
+	o := patchcdn.PublishOptions{CDNRoot: t.TempDir(), BuildDir: build, Target: target, Now: t0, Roots: &rp}
+	if _, err := patchcdn.Publish(context.Background(), o, keys); err != nil {
+		t.Fatal(err)
+	}
+	_, other, _ := ed25519.GenerateKey(nil)
+	ks := *keys.Keyset
+	ks.Version++
+	if err := ks.Sign(other); err != nil {
+		t.Fatal(err)
+	}
+	forged := *keys
+	forged.Keyset = &ks
+	if forged.KeysetBytes, err = ks.Marshal(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := patchcdn.Publish(context.Background(), o, &forged); patchtrust.CheckOf(err) !=
+		patchtrust.CheckKeysetSignature {
+		t.Fatalf("published a keyset the roots did not sign: %v", err)
+	}
+}
+
+// A chunk object already on the CDN that does not decode to its chunk is rewritten by the next publish,
+// instead of being signed into another manifest.
+func TestPublishRepairsChunkObjects(t *testing.T) {
+	target := patchtrust.Target{ProductID: "sample-game", Channel: "dev", Platform: "win64"}
+	keys, v, _ := devSetup(t, target)
+	build, cdn := t.TempDir(), t.TempDir()
+	writeFiles(t, build, map[string][]byte{"bin/game": cdctest.Random(4, 200<<10), "data": cdctest.Random(5, 300<<10)})
+	ctx := context.Background()
+	o := patchcdn.PublishOptions{CDNRoot: cdn, BuildDir: build, Target: target, Now: t0}
+	r1, err := patchcdn.Publish(ctx, o, keys)
+	if err != nil || r1.Chunks < 3 {
+		t.Fatalf("%+v %v", r1, err)
+	}
+	var objects []string
+	_ = filepath.WalkDir(filepath.Join(cdn, "chunks"), func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			objects = append(objects, p)
+		}
+		return nil
+	})
+	flipped, _ := os.ReadFile(objects[0])
+	flipped[len(flipped)/2] ^= 0x40
+	truncated, _ := os.ReadFile(objects[1])
+	if err := os.WriteFile(objects[0], flipped, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(objects[1], truncated[:len(truncated)-1], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	now := uint64(t0.Unix()) + 60
+	if _, err := patchcdn.Verify(ctx, patchcdn.DirSource{Root: cdn}, v, now, &patchcdn.MemoryStateStore{}); err == nil {
+		t.Fatal("verified corrupt chunk objects")
+	}
+	r2, err := patchcdn.Publish(ctx, o, keys)
+	if err != nil || r2.ChunksRepaired != 2 || r2.ChunksWritten != 2 || r2.ManifestWritten {
+		t.Fatalf("republish: %+v %v", r2, err)
+	}
+	if _, err := patchcdn.Verify(ctx, patchcdn.DirSource{Root: cdn}, v, now, &patchcdn.MemoryStateStore{}); err != nil {
+		t.Fatalf("after the repair: %v", err)
+	}
+	if r3, err := patchcdn.Publish(ctx, o, keys); err != nil || r3.ChunksWritten != 0 || r3.ChunksRepaired != 0 {
+		t.Fatalf("a third publish: %+v %v", r3, err)
+	}
+}
+
+// Dev key directories ignore themselves in git, wherever they are, before any seed is written; a directory
+// made without the file gets it on the next load.
+func TestDevKeysAreGitIgnored(t *testing.T) {
+	repo := t.TempDir()
+	dir := filepath.Join(repo, "tools", "helios-data", "keys", "patch", "sample-game")
+	if err := patchcdn.CreateDevKeys(dir, "sample-game", t0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, ".gitignore")); err != nil || !strings.Contains(string(b), "\n*\n") {
+		t.Fatalf(".gitignore: %q %v", b, err)
+	}
+	if err := os.Remove(filepath.Join(dir, ".gitignore")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := patchcdn.LoadOrCreateDevKeys(dir, "sample-game", t0); err != nil {
+		t.Fatal(err)
+	}
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is not installed; the .gitignore file was checked")
+	}
+	if out, err := exec.Command(git, "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	for _, f := range []string{"root-keys.json", "manifest-key.json", "keyset.json", "roots.json", ".gitignore"} {
+		cmd := exec.Command(git, "-C", repo, "check-ignore", "-q", filepath.Join(dir, f))
+		if err := cmd.Run(); err != nil {
+			t.Errorf("git does not ignore %s: %v", f, err)
+		}
 	}
 }

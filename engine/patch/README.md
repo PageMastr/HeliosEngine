@@ -251,10 +251,10 @@ never verifies as another.
 | `sequence` | 1..2^53−1, monotonic per product, channel and platform |
 | `rollback` | lets `sequence` be below an install's stored one |
 | `min_launcher`, `min_client` | dotted versions `^[0-9]{1,9}(\.[0-9]{1,9}){0,3}$` |
-| `cdn_hosts` | 0–16 base URLs of ≤ 256 bytes: `https://…`, or `http://` on `localhost`, `127.0.0.1` or `[::1]` (the dev CDN) |
+| `cdn_hosts` | 0–16 base URLs of ≤ 256 bytes without spaces or userinfo (`@`): `https://` with a non-empty authority, or `http://` whose authority is exactly `localhost`, `127.0.0.1` or `[::1]` with an optional port of 1–5 digits, then nothing or a path (the dev CDN) |
 | `next` | optional pre-download target (08 §2.6) |
 | `rollout_pct` | 0..100 |
-| `signed_at`, `expires` | unix seconds; checked against the subkey's validity and the 7-day lifetime |
+| `signed_at`, `expires` | unix seconds; checked against the subkey's validity, the verifier's clock (`signed_at` at most 1 hour ahead) and the 7-day lifetime |
 | `key_id`, `sig` | the signing subkey and its signature |
 
 ### Verification order
@@ -275,25 +275,31 @@ check's name, which both languages share and the vectors pin:
 | 9 | `pointer-key-role` | the subkey's role is not `manifest` |
 | 10 | `pointer-signature` | the subkey did not sign it |
 | 11 | `pointer-key-window` | `signed_at` is outside the subkey's [`notBefore`, `notAfter`) |
-| 12 | `pointer-lifetime` | `expires` ≤ `signed_at`, or more than 7 days after it |
-| 13–15 | `pointer-product`, `pointer-channel`, `pointer-platform` | it was published for another product, channel or platform |
-| 16 | `pointer-expired` | now ≥ `expires` |
-| 17 | `pointer-sequence` | `sequence` < the stored one and `rollback` is false |
-| 18 | `manifest-malformed` | the `.hman` header does not read (part 1's header checks, including its header hash) |
-| 19 | `manifest-hash` | its header hash is not the pointer's `manifest_hash` |
-| 20–22 | `manifest-key-unknown`, `manifest-key-role`, `manifest-signature` | as 8–10, for the header's `keyId` and the signature over bytes [0, 256) |
-| 23 | `manifest-key-window` | `createdAt` is outside the subkey's validity |
-| 24–27 | `manifest-product`, `manifest-platform`, `manifest-build`, `manifest-compat-epoch` | the header disagrees with the install or the pointer |
-| 28 | `manifest-expired` | `expiresAt` is set and now ≥ it |
-| 29 | `manifest-body` | the payload does not decode to a valid body (part 1's reader: `bodyHash`, tables, validation) |
-| 30 | `chunk-missing` | a chunk object is not on the CDN |
-| 31 | `chunk-corrupt` | it differs from a recorded `storedSize` or does not decode to exactly `rawSize` bytes |
-| 32 | `chunk-hash` | its bytes do not hash to the chunk ID |
+| 12 | `pointer-future` | `signed_at` is more than `kMaxClockSkew` (1 hour) after now |
+| 13 | `pointer-lifetime` | `expires` ≤ `signed_at`, or more than 7 days after it |
+| 14–16 | `pointer-product`, `pointer-channel`, `pointer-platform` | it was published for another product, channel or platform |
+| 17 | `pointer-expired` | now ≥ `expires` |
+| 18 | `pointer-sequence` | `sequence` < the stored one and `rollback` is false |
+| 19 | `manifest-malformed` | the `.hman` header does not read (part 1's header checks, including its header hash) |
+| 20 | `manifest-hash` | its header hash is not the pointer's `manifest_hash` |
+| 21–23 | `manifest-key-unknown`, `manifest-key-role`, `manifest-signature` | as 8–10, for the header's `keyId` and the signature over bytes [0, 256) |
+| 24 | `manifest-key-window` | `createdAt` is outside the subkey's validity |
+| 25 | `manifest-future` | `createdAt` is more than `kMaxClockSkew` after now |
+| 26–29 | `manifest-product`, `manifest-platform`, `manifest-build`, `manifest-compat-epoch` | the header disagrees with the install or the pointer |
+| 30 | `manifest-expired` | `expiresAt` is set and now ≥ it |
+| 31 | `manifest-body` | the payload does not decode to a valid body (part 1's reader: `bodyHash`, tables, validation) |
+| 32 | `chunk-missing` | a chunk object is not on the CDN |
+| 33 | `chunk-corrupt` | it differs from a recorded `storedSize` or does not decode to exactly `rawSize` bytes |
+| 34 | `chunk-hash` | its bytes do not hash to the chunk ID |
 
 Signature checks come before the fields they protect are acted on; the cheap ratchet and epoch checks (2, 3) come
 before the root's signature because they need no key. The subkey window is checked at signing time (`signed_at`,
-`createdAt`), as 08 §2.10.3's 30-day overlap needs, and the 7-day lifetime bounds what that allows: a subkey past
-its `notAfter` cannot sign a pointer that verifies more than 7 days later. A manifest can be named by several
+`createdAt`), as 08 §2.10.3's 30-day overlap needs. Those times are the signer's claim, so the next check bounds
+them by the install's clock: at most `kMaxClockSkew` (1 hour, Go `MaxClockSkew`) ahead of now. Without it a
+pre-staged next-quarter subkey could sign before its `notBefore`, and a pointer with `signed_at` far ahead would
+stay valid for as long as its subkey's window allows. With it the 7-day lifetime is a bound from now: a pointer
+that verifies expires at most 7 days and 1 hour later, and a subkey past its `notAfter` cannot sign a pointer that
+verifies more than that after `notAfter`. A launcher should report `pointer-future` as a wrong system clock. A manifest can be named by several
 channels' pointers (promotion re-points), so its own `sequence` is not compared with the pointer's.
 `verifyManifestHeader` checks a header without decoding the payload; it also verifies a pointer's `next` manifest
 (pass `next->ref`) for pre-download. Malformed documents fail with `Corrupt` (`LimitExceeded` when too large), a
@@ -312,21 +318,25 @@ an install fetches over hours.
 `TrustStateStore` is the interface the launcher implements on `install.db`; `FileTrustStateStore` keeps a 32-byte
 record (`HTRS`, version 0, the three fields little-endian, the first 4 bytes of BLAKE2b-256 of the first 28) and
 refuses a corrupt one instead of resetting, since a reset ratchet would accept rolled-back pointers. A missing
-file is a fresh install. (Go's `patchtrust.FileStateStore`, used by `helios-patch verify --state`, is a JSON
-file with the same rule.)
+file is a fresh install. Go's `patchtrust.FileStateStore` (`helios-patch verify --state`) keeps the same record
+(`EncodeState`, `DecodeState`) with the same rule, so either language reads the other's file; both tests pin the
+same 32 bytes.
 
 ### Test-only and dev keys
 
 No private key material is committed. The shared vectors are signed by **test-only keys** whose seeds are
 BLAKE2b-256(`"helios test-only key: <name>"`), public by construction (Go package `patchtrust/trusttest`, imported
-only by `_test.go` files; the C++ tests derive them with Monocypher). Their roots (`root-1`, `root-2`, `root-x`) are
+only by `_test.go` files, which `TestTrustTestImportedOnlyByTests` checks over every other file of the module;
+the C++ tests derive them with Monocypher). Their roots (`root-1`, `root-2`, `root-x`) are
 listed in `isTestOnlyKey` (Go: `IsTestOnlyKey`), and `TrustVerifier::create` (Go: `NewVerifier`) refuses a root
 pair that contains one unless `TrustOptions::allowTestKeys` is set, which only tests do; so a product build that
 somehow carried a test root would verify nothing. Tests check both lists against the derivation.
 
 **Dev keys** for `helios-patch publish --channel dev` are generated from the OS CSPRNG at first use into
 `helios-data/keys/patch/<product>/` (05 §5's `keys\`; mode 0600 for the private files, marked `"dev": true`), and
-publish signs only the `dev` channel with them, for loopback CDN hosts only. Real roots stay offline and real
+publish signs only the `dev` channel with them, for loopback CDN hosts only. They stay out of git twice, as 08
+§2.10.3 asks of dev keys: the directory gets a `.gitignore` of `*` before any seed is written (wherever
+`--data-dir` puts it), and the repository ignores `helios-data/`. Real roots stay offline and real
 subkeys come from Vault/KMS (08 §2.10.3, `helios-tool product init`, a later WP).
 
 **No secret is compared.** The verifiers hold public keys only; signatures are checked by Ed25519 itself, and the
@@ -346,7 +356,9 @@ keys/<product>/keyset.json                         the root-signed keyset (mutab
 `verifyChannel` refuses a packed chunk as `Unsupported`. `CdnFetch` reads an object by layout path with a size
 limit (`NotFound`, `LimitExceeded`); `localCdn(root)` reads a directory through the platform layer and refuses
 paths with empty, `.` or `..` segments, `\` or `:`. A chunk object decodes into exactly `rawSize` bytes (one byte of
-room catches more; zstd windows above 32 MiB are refused), so a hostile object costs at most `rawSize + 1` bytes.
+room catches more), and its frame may declare a zstd window of at most 256 KiB (`cdn::kMaxChunkWindowLog`, the
+largest chunk; Go's encoder declares at most max(content size, 1 KiB)), so a hostile object costs at most
+`rawSize + 1` bytes of output and a decoder with a 256 KiB window.
 Go's `patchcdn` has the same read path (`DirSource`, and `HTTPSource`, which tests point at an `http.FileServer`)
 and writes the layout (`helios-patch publish`, [services/README.md](../../services/README.md#patching-helios-patch)).
 
@@ -363,8 +375,8 @@ and writes the layout (`helios-patch publish`, [services/README.md](../../servic
 | `hman/names.json` | Valid and invalid paths (among them 255- and 256-byte segments), product IDs, platforms and build IDs, and whole path lists that must pass or fail the collision rules (the invalid ones with the check they fail) | by hand |
 
 | `trust/cdn/` | A CDN tree in the 05 §7 layout, made by Go's `Publish` with the test-only keys: product `vector-game`, channel `live`, platform `win64`; keyset v3 of root epoch 1 (`manifest-a`, `manifest-old` whose validity ended 100 days before now, `news-a`, and `store-a` of a role no check knows); build `2026.09.21-r1` (an executable chunk stored raw, a pak whose repeated unit dedups, a text file, an empty file); a pointer of sequence 7 with `next` | `go test ./pkg/patchcdn -run TestUpdateTrustVectors -update` |
-| `trust/cases.json` | 52 cases over that tree: the root pair, now (1,790,000,000) and the stored state, then per case replacement keyset, pointer, manifest and chunk files (in `trust/`, signed by the test-only keys), byte edits (overwrite or insert), a case's own state or now, and either the check it must fail or, if accepted, the state afterwards. 10 are accepted (a fresh install, an equal sequence, a rollback pointer below and above the stored sequence, a keyset of the next root before and after the ratchet moved, a pointer without `next` or hosts, one signed at its key's `notBefore`, a manifest that expires later); 42 are rejected, and every check of the table above is the one some case fails | as above |
-| `trust/syntax.json` | 66 documents (35 keysets, 31 pointers) both parsers must refuse: the CDN's keyset or pointer with one splice (`at`, `delete`, `put` or `putHex`, then `padTo` spaces): whitespace, a BOM, a trailing newline, truncation, member order, duplicate, unknown and missing members, escapes, non-ASCII, `null`, leading zeros, signs, fractions, exponents, 2^53 and 2^64, uppercase hex, short keys, unsorted, repeated and 65 keys, a key ID that is not the fingerprint, an empty validity window, out-of-range epochs, rollout, compat epochs and sequences, bad channels, platforms, build IDs, versions and hosts, an empty or misplaced `next`, and documents one byte over the size limits | as above |
+| `trust/cases.json` | 61 cases over that tree: the root pair, now (1,790,000,000) and the stored state, then per case replacement keyset, pointer, manifest and chunk files (in `trust/`, signed by the test-only keys), byte edits (overwrite or insert), a case's own state or now, and either the check it must fail or, if accepted, the state afterwards. 12 are accepted (a fresh install, an equal sequence, a rollback pointer below and above the stored sequence, a keyset of the next root before and after the ratchet moved, a pointer without `next` or hosts, a pointer and manifest signed at their key's `notBefore`, a manifest that expires later, a pointer and a manifest signed exactly 1 hour ahead of now); 49 are rejected, and every check of the table above is the one some case fails. Among them: a pointer and a manifest signed 1 hour and 1 second ahead, the current key signing 80 days ahead, and a pre-staged next-quarter key (`keyset-prestaged.json`) signing before its window opens; and two chunk objects that only one check catches, the chunk's own bytes in another encoding (`chunk-reencoded`: only the stored size differs) and a frame of the stored size that decodes to 2 bytes too few (`chunk-short`) | as above |
+| `trust/syntax.json` | 73 documents (35 keysets, 38 pointers) both parsers must refuse: the CDN's keyset or pointer with one splice (`at`, `delete`, `put` or `putHex`, then `padTo` spaces): whitespace, a BOM, a trailing newline, truncation, member order, duplicate, unknown and missing members, escapes, non-ASCII, `null`, leading zeros, signs, fractions, exponents, 2^53 and 2^64, uppercase hex, short keys, unsorted, repeated and 65 keys, a key ID that is not the fingerprint, an empty validity window, out-of-range epochs, rollout, compat epochs and sequences, bad channels, platforms, build IDs, versions and hosts (among them userinfo after a loopback name or address, a non-numeric or six-digit port, a query, an `https://` without a host), an empty or misplaced `next`, and documents one byte over the size limits | as above |
 
 Inputs come from a seeded generator (`services/pkg/cdc/cdctest`, mirrored in `tests/patch_test_util.h`): `random`
 (SplitMix64 outputs as little-endian bytes), `zero`, `repeat` (a random unit repeated) and `insert`, each
@@ -397,7 +409,7 @@ optionally followed by `edits` (bytes written at offsets: the crafted inputs).
   a placement or patch naming an unknown chunk, pack or file, or a chunk placed twice fails with
   `InvalidArgument`.
 - **Trust documents.** The keyset and pointer parsers read at most 64 KiB and 16 KiB, never recurse, allocate at
-  most one string per member, and stop at the first byte that is not the canonical encoding; `syntax.json` pins 66
+  most one string per member, and stop at the first byte that is not the canonical encoding; `syntax.json` pins 73
   refusals in both languages, and every single-byte change of the vectors' keyset, pointer and manifest header
   (three changes per byte) is rejected by both (`patch_tests`, Go's `TestEveryByteTampered`).
 - **Threading.** Everything is a value type or a pure function; a `StreamChunker`, `Blake2b256` or
@@ -485,7 +497,8 @@ cmake --preset linux-clang -B build/fuzz -DHELIOS_BUILD_GRAPHICS=OFF -DHELIOS_BU
   "-DCMAKE_CXX_FLAGS=-fsanitize=fuzzer-no-link,address,undefined"
 cmake --build build/fuzz --target patch_fuzz_manifest_reader patch_fuzz_trust_parser
 build/fuzz/bin/patch_fuzz_manifest_reader -max_total_time=600 -rss_limit_mb=2048 -malloc_limit_mb=512 corpus-copy/
-build/fuzz/bin/patch_fuzz_trust_parser -max_total_time=600 -rss_limit_mb=2048 -malloc_limit_mb=512 trust-copy/
+build/fuzz/bin/patch_fuzz_trust_parser -max_total_time=600 -max_len=70000 -rss_limit_mb=2048 -malloc_limit_mb=512 \
+  trust-copy/   # -max_len: libFuzzer's default (4096 here) never reaches the 64 KiB keyset or 16 KiB pointer bound
 cd services && go test ./pkg/manifest -run '^$' -fuzz FuzzParse -fuzztime 5m
 go test ./pkg/patchtrust -run '^$' -fuzz '^FuzzParseKeyset$' -fuzztime 5m   # and FuzzParsePointer, FuzzVerifyManifestHeader
 ```
@@ -534,6 +547,19 @@ sanitizer build. Go, one worker, 5 minutes each:
   a scorecard gate. The Go timing test with `HELIOS_PERF=1` is not in the nightly perf step either.
 - **One publisher at a time.** `helios-patch publish` takes no lock on the CDN directory; two concurrent publishes
   to one channel can both read sequence n and both write n + 1.
+- **Minimum keyset version.** A fresh install (the zero `TrustState`) accepts any keyset version. 08 §2.10.3's
+  product block carries a minimum keyset version; the launcher (WP-0.17, with the product block of WP-2.16)
+  should seed `TrustState::keysetVersion` from it on first run, so a fresh install cannot be handed an old keyset
+  that still lists a revoked subkey. `RootPair` does not carry it in v0.
+- **Publish is not atomic across files.** The keyset is written just before the pointer (the pointer is signed
+  first, so only the two renames lie between them). A keyset that drops the key of the pointer already on the
+  CDN leaves the two inconsistent for that moment, or until the next publish if the pointer's write fails.
+  `WriteFileAtomic` syncs the file and (POSIX) its directory; a crash before the rename can leave a `.tmp-*` file
+  in a served directory, which no layout path names.
+- **Identifiers on NTFS.** Build IDs, channels and platforms follow part 1's grammar, which admits names that
+  alias on a Windows `helios-data\cdn` (device names, trailing dots, case-only variants). This fails safe (the
+  manifest-build check and publish's body-hash comparison refuse the mix-up) but gives confusing publish errors;
+  tightening the grammar is a follow-up.
 
 ## Plan conformance
 
@@ -575,9 +601,17 @@ plan leaves open:
   subkey is checked at signing time; a manifest's own `expiresAt`, when set, is checked; manifest and pointer
   sequences are not compared; a `rollback` pointer resets the stored sequence to its own (05 §7 says only that a
   lower sequence needs the flag). Equal sequences and keyset versions verify (a re-fetch).
+- **Clock skew (review round 1).** The plan names no tolerance between a signer's clock and an install's; this
+  PR refuses a `signed_at` or `createdAt` more than **1 hour** after the install's now (`kMaxClockSkew`, Go
+  `MaxClockSkew`), so the 7-day lifetime holds from the install's clock (7 days + 1 hour at most) and a
+  pre-staged subkey cannot sign before its window. One hour is this PR's choice, not the plan's: an install whose
+  clock lags by more refuses each freshly signed pointer until its clock catches up (the launcher should say so).
+  Changing it is one constant per language and a regeneration of the vectors.
 - **Dev keys** live in `helios-data/keys/patch/<product>/` (05 §5's `keys\` holds the dev "manifest Ed25519"
   keys), not 08 §2.10.3's `<project>/.helios/devkeys/`, which belongs to `helios-tool product init --dev` (a
-  later WP, with project files). `helios-patch` has a `verify` subcommand the plan does not name.
+  later WP, with project files). Like 08's, they are git-ignored (the directory's own `.gitignore` and the
+  repository's `helios-data/` pattern). `helios-patch` has a `verify` subcommand the plan does not name.
 - **CL-14 subset.** This meets CL-14 for tampered, expired, rolled-back and wrongly keyed pointers, manifests,
   keysets and chunks, another product's keyset, pointer and manifest, a revoked subkey and a root the install has
-  ratcheted past. Not here: the `.hprod` clause (WP-2.16) and the release tier's 24 CPU-hours of fuzzing.
+  ratcheted past, and a subkey used before its validity window (a signing time ahead of the install's clock).
+  Not here: the `.hprod` clause (WP-2.16) and the release tier's 24 CPU-hours of fuzzing.

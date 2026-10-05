@@ -134,7 +134,7 @@ the way the launcher will (engine/patch/README.md specifies the formats and the 
 ```sh
 go run ./cmd/helios-patch publish --build ../out/win64 --product sample-game --channel dev --platform win64 \
     --cdn-host http://127.0.0.1:7700/cdn            # writes helios-data/cdn (05 §5)
-go run ./cmd/helios-patch verify --product sample-game --channel dev --platform win64 --state trust.json
+go run ./cmd/helios-patch verify --product sample-game --channel dev --platform win64 --state trust.state
 ```
 
 - **publish** walks the build in path order (regular files only; `bin/` is tier 0, or `--tier0` prefixes; a file
@@ -145,17 +145,24 @@ go run ./cmd/helios-patch verify --product sample-game --channel dev --platform 
   `--cdn-host`, `--rollout-pct`, `--lifetime` up to 7 days), so a reader never sees a pointer to objects that are
   not there. Republishing an identical build writes nothing; the pointer is re-signed with the next sequence once
   it is past half its lifetime. Manifests and chunks are immutable: a build ID already published with other
-  content is refused.
+  content is refused. A chunk object already on the CDN is decoded and compared with the chunk, and rewritten if it
+  does not match (a torn copy is repaired instead of being signed into another manifest). The CDN's keyset is
+  never replaced by a lower version, a lower root epoch or other bytes of the same version (that would undo
+  revocations and fail installs that ratcheted past it), and when the signing directory has a `roots.json`
+  (dev directories do) the keyset must verify against it.
 - **Keys.** `--channel dev` without `--keys` creates throwaway dev keys on first use in
   `helios-data/keys/patch/<product>/` (`roots.json`, the public root pair; `root-keys.json` and
   `manifest-key.json`, the private seeds, mode 0600 and marked `"dev": true`; `keyset.json`, signed by the dev
-  root), from the OS CSPRNG; they sign only the `dev` channel and only loopback CDN hosts. Any other channel needs
+  root), from the OS CSPRNG; they sign only the `dev` channel and only loopback CDN hosts (`http://` on exactly
+  `localhost`, `127.0.0.1` or `[::1]`, no userinfo). The key directory gets a `.gitignore` of `*` before any seed
+  is written, and the repository ignores `helios-data/`, so a `git add -A` never picks them up. Any other channel needs
   `--keys DIR` with a `keyset.json` and a `manifest-key.json` not marked dev (real roots stay offline and real
   subkeys come from Vault/KMS, 08 §2.10.3; `helios-tool product init` makes them in a later WP).
 - **verify** runs the full client-side chain against `--cdn` (a directory, default `helios-data/cdn`, or an
   `http(s)://` base URL) with the root pair from `--roots` (default the dev keys' `roots.json`): keyset, pointer,
   manifest, then every chunk object decoded and hashed. `--state FILE` loads and saves the ratchets as an install
-  does (root epoch, keyset version, pointer sequence), so a later rollback is refused. A rejection exits 1 with
+  does (root epoch, keyset version, pointer sequence; engine/patch's 32-byte checksummed record), so a later
+  rollback is refused. A rejection exits 1 with
   the failed check's name (`pointer-expired: ...`).
 
 `pkg/patchtrust` holds the formats, signing, the verifier and the ratchet state; `pkg/patchcdn` the layout, the

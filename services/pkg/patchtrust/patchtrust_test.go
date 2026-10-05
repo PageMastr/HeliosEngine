@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -242,6 +244,91 @@ func TestFileStateStore(t *testing.T) {
 		if _, err := s.Load(); err == nil {
 			t.Fatalf("state file (%s) loaded", name)
 		}
+	}
+}
+
+// cdn_hosts: https:// with an authority, or http:// on exactly a loopback authority. Userinfo is refused,
+// since "http://localhost:1@evil.example/" names the host after the '@'.
+func TestCDNHosts(t *testing.T) {
+	for _, h := range []string{"http://localhost", "http://127.0.0.1:7700/cdn", "http://[::1]:8080/", "http://localhost/"} {
+		if !patchtrust.IsLoopbackURL(h) {
+			t.Errorf("%s is loopback", h)
+		}
+	}
+	for _, h := range []string{"http://localhost:1@evil.example/cdn", "http://127.0.0.1:80@203.0.113.9/",
+		"http://localhost.evil.example", "http://localhost:80x/", "http://localhost:", "http://127.0.0.1:123456/",
+		"http://localhost?x", "http://localhost#x", "http://localhost/a@b", "https://localhost", "http://cdn.example",
+		"HTTP://localhost", "http://[::1]x"} {
+		if patchtrust.IsLoopbackURL(h) {
+			t.Errorf("%s is not loopback", h)
+		}
+	}
+	p := testPointer()
+	for _, h := range []string{"https://cdn.example:443/x", "https://a", "http://localhost", "http://[::1]:8080/"} {
+		p.CDNHosts = []string{h}
+		if err := p.Validate(); err != nil {
+			t.Errorf("%s: %v", h, err)
+		}
+	}
+	for _, h := range []string{"https://cdn.example@evil.example", "https:///cdn", "https://", "https://?x",
+		"http://localhost:1@evil.example/cdn", "ftp://localhost"} {
+		p.CDNHosts = []string{h}
+		if err := p.Validate(); err == nil {
+			t.Errorf("%s validated", h)
+		}
+	}
+}
+
+// VerifyChunk checks the length before the hash: a short chunk is chunk-corrupt, not chunk-hash.
+func TestVerifyChunk(t *testing.T) {
+	raw := []byte("some chunk bytes")
+	c := manifest.Chunk{Hash: cdc.Sum(raw), RawSize: uint32(len(raw))}
+	if err := patchtrust.VerifyChunk(c, raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := patchtrust.VerifyChunk(c, raw[:len(raw)-1]); patchtrust.CheckOf(err) != patchtrust.CheckChunkCorrupt {
+		t.Errorf("short chunk: %v", err)
+	}
+	flipped := bytes.Clone(raw)
+	flipped[0] ^= 1
+	if err := patchtrust.VerifyChunk(c, flipped); patchtrust.CheckOf(err) != patchtrust.CheckChunkHash {
+		t.Errorf("changed chunk: %v", err)
+	}
+}
+
+// Package trusttest's keys are public; only test files may import it (README "Test-only and dev keys").
+// IsTestOnlyKey refuses its roots in a verifier anyway; this keeps the signer side out of non-test code.
+func TestTrustTestImportedOnlyByTests(t *testing.T) {
+	root := filepath.Join("..", "..")
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		t.Fatalf("not the module root: %v", err)
+	}
+	const pkg = "github.com/PageMastr/scifi-test/services/pkg/patchtrust/trusttest"
+	self := filepath.Join(root, "pkg", "patchtrust", "trusttest")
+	files := 0
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir() && (d.Name() == "testdata" || d.Name() == "vendor" || path == self):
+			return filepath.SkipDir
+		case d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go"):
+			return nil
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		files++
+		for _, imp := range f.Imports {
+			if strings.Trim(imp.Path.Value, "`\"") == pkg {
+				t.Errorf("%s imports %s; only _test.go files may", path, pkg)
+			}
+		}
+		return nil
+	})
+	if err != nil || files < 50 {
+		t.Fatalf("walked %d files: %v", files, err)
 	}
 }
 

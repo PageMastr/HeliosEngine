@@ -143,10 +143,10 @@ var (
 	chunkEncoder = sync.OnceValues(func() (*zstd.Encoder, error) {
 		return zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBestCompression), zstd.WithEncoderConcurrency(1))
 	})
-	// MaxMemory bounds what DecodeAll produces (a chunk is at most cdc.MaxSize bytes), MaxWindow the window
-	// a frame may ask for: cdc.MaxSize, as engine/patch's kMaxChunkWindowLog. EncodeAll declares a window of
-	// at most max(content size, 1 KiB) (a single-segment frame from 256 bytes, a 1 KiB window below), so
-	// every chunk object it writes fits, and a hostile one cannot make a decoder reserve a larger window.
+	// MaxMemory bounds what DecodeAll produces (a chunk is at most cdc.MaxSize bytes) and, in this decoder,
+	// also refuses a frame declaring a larger window; MaxWindow states that window bound outright, as
+	// engine/patch's kMaxChunkWindowLog. EncodeAll declares a window of at most max(content size, 1 KiB) (a
+	// single-segment frame from 256 bytes, a 1 KiB window below), so every chunk object it writes fits.
 	chunkDecoder = sync.OnceValues(func() (*zstd.Decoder, error) {
 		return zstd.NewReader(nil, zstd.WithDecoderConcurrency(0), zstd.WithDecoderMaxMemory(cdc.MaxSize),
 			zstd.WithDecoderMaxWindow(cdc.MaxSize))

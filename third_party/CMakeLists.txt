@@ -90,7 +90,11 @@ endif()
 # --- Jolt Physics 5.6 (double precision + cross-platform determinism) -----------------------------
 # Client and server must produce bit-identical physics on MSVC, clang-cl, GCC and Clang, so FMA is
 # off (JPH_CROSS_PLATFORM_DETERMINISTIC) and the ISA feature macros are emitted explicitly: Jolt's
-# headers select SIMD paths from them, so every consumer must see the same set (hence PUBLIC).
+# headers select SIMD paths from them, so every consumer must see the same set (hence PUBLIC). The
+# compile flags that make those paths legal come from the image's `avx2` level (cmake/HeliosIsa.cmake,
+# 02 §1.1), which every image that links Jolt has, so the defines and the flags agree by construction.
+# tp_jolt carries no ISA option of its own, and configure fails if one reappears on its interface; a
+# base image that links it fails configure too.
 file(GLOB_RECURSE JOLT_SRC CONFIGURE_DEPENDS ${TP}/jolt/Jolt/*.cpp)
 list(FILTER JOLT_SRC EXCLUDE REGEX "/Jolt/(Compute|Shaders|Physics/Hair)/")
 add_library(tp_jolt STATIC ${JOLT_SRC})
@@ -100,13 +104,6 @@ target_compile_definitions(tp_jolt PUBLIC JPH_DOUBLE_PRECISION JPH_CROSS_PLATFOR
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
   target_compile_definitions(tp_jolt PUBLIC JPH_USE_AVX2 JPH_USE_AVX JPH_USE_SSE4_1 JPH_USE_SSE4_2
                                             JPH_USE_LZCNT JPH_USE_TZCNT JPH_USE_F16C)
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-    target_compile_options(tp_jolt PUBLIC /arch:AVX2)
-  elseif(MSVC) # clang-cl
-    target_compile_options(tp_jolt PUBLIC /arch:AVX2 -mbmi -mpopcnt -mlzcnt -mf16c /clang:-ffp-contract=off)
-  else()
-    target_compile_options(tp_jolt PUBLIC -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfpmath=sse -ffp-contract=off)
-  endif()
 endif()
 helios_tp_quiet(tp_jolt)
 add_library(helios::tp::jolt ALIAS tp_jolt)

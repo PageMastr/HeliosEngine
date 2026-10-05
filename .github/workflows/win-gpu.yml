@@ -238,6 +238,31 @@ jobs:
               Write-Output "      (unreadable manifest: $($_.Exception.Message))"
             }
           }
+          # A layer settings file's settings for the validation layer (comments and other layers left out).
+          function Show-LayerSettings([string] $path) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Write-Output "-- $path (missing)"; return }
+            Write-Output "-- $path (its khronos_validation.* lines)"
+            Get-Content -LiteralPath $path | Where-Object { $_ -match '^\s*khronos_validation\.' } |
+              Select-Object -First 60 | ForEach-Object { Write-Output "   $_" }
+          }
+          # Runs a program for at most five minutes; returns its exit code and its standard output and standard error
+          # as separate lines.
+          function Invoke-Captured([string] $exe, [string] $arguments) {
+            $start = New-Object System.Diagnostics.ProcessStartInfo $exe, $arguments
+            $start.UseShellExecute = $false
+            $start.RedirectStandardOutput = $true
+            $start.RedirectStandardError = $true
+            $process = [System.Diagnostics.Process]::Start($start)
+            $out = $process.StandardOutput.ReadToEndAsync()  # both at once: a full pipe would stall the program
+            $err = $process.StandardError.ReadToEndAsync()
+            $code = 'timed out after 5 min'
+            if ($process.WaitForExit(300000)) { $process.WaitForExit(); $code = $process.ExitCode } else { $process.Kill() }
+            [pscustomobject]@{
+              ExitCode = $code
+              Out = @($out.Result -split '\r?\n' | Where-Object { $_ })
+              Err = @($err.Result -split '\r?\n' | Where-Object { $_ })
+            }
+          }
           $high = $false
           try {
             Show-Section 'Process token (the loader ignores layer and driver variables and HKCU at High integrity and above)'
@@ -279,11 +304,15 @@ jobs:
               Write-Output "no $manifest"
             }
 
-            # Layer keys: value name = manifest path, data 0 = enabled. LoaderSettings: value name = the settings file.
-            Show-Section 'Registry: HKLM and HKCU \SOFTWARE\Khronos\Vulkan (layers, drivers, loader settings files)'
+            # Layer keys: value name = manifest path, data 0 = enabled. LoaderSettings: value name = the loader settings
+            # file. Settings: value name = a layer settings file (vk_layer_settings.txt, Vulkan Configurator), data 0 =
+            # used; the layer reads the first that exists (HKCU's too unless High), else VK_LAYER_SETTINGS_PATH's, else
+            # the working directory's. Its report_flags, message_id_filter or disables can mute the layer while it
+            # stays in the call chain and answers the RHI's check: rendertest.validation-layer's seeded error catches that.
+            Show-Section 'Registry: HKLM and HKCU \SOFTWARE\Khronos\Vulkan (layers, drivers, loader and layer settings files)'
             foreach ($hive in 'HKLM', 'HKCU') {
-              $ignored = if ($hive -eq 'HKCU' -and $high) { ' (the loader does not read it in this process)' } else { '' }
-              foreach ($key in 'ExplicitLayers', 'ImplicitLayers', 'Drivers', 'LoaderSettings') {
+              $ignored = if ($hive -eq 'HKCU' -and $high) { ' (neither the loader nor the layer reads it in this process)' } else { '' }
+              foreach ($key in 'ExplicitLayers', 'ImplicitLayers', 'Drivers', 'LoaderSettings', 'Settings') {
                 $path = "${hive}:\SOFTWARE\Khronos\Vulkan\$key"
                 $item = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
                 if (-not $item) { Write-Output "$path (none)"; continue }
@@ -292,9 +321,16 @@ jobs:
                   Write-Output "   $name = $($item.GetValue($name))"
                   # A loader settings file (Vulkan Configurator) overrides layer environment variables for "on" and "off" layers.
                   if ($key -eq 'LoaderSettings') { Show-File $name 60 }
+                  if ($key -eq 'Settings') { Show-LayerSettings $name }
                   if ($key -like '*Layers') { Show-Manifest $name }
                 }
               }
+            }
+            if ($env:VK_LAYER_SETTINGS_PATH) {
+              $file = $env:VK_LAYER_SETTINGS_PATH
+              if (Test-Path -LiteralPath $file -PathType Container) { $file = Join-Path $file 'vk_layer_settings.txt' }
+              Write-Output "VK_LAYER_SETTINGS_PATH:"
+              Show-LayerSettings $file
             }
 
             Show-Section 'Adapters (vulkaninfo --summary)'
@@ -305,21 +341,33 @@ jobs:
               Write-Output 'vulkaninfo is not on PATH'
             }
 
-            # The RHI's own verdict and the loader's log: its version, the settings file it uses, an override layer,
-            # the variables it ignores, and the layers it inserts into the instance (the call chain).
+            # The RHI's log and verdict (--print-probe's standard output) in full, then the loader's log (standard
+            # error). At High integrity the loader logs every variable it ignores on each of its dozens of manifest
+            # scans, hundreds of lines that would bury the rest, so its log is summarised: in full and in order the
+            # lines that say what it loaded (its version, the settings file it uses, an override layer, each layer it
+            # inserts into an instance: the call chain) and the RHI's and the tool's errors; then every other line
+            # about settings, overrides, ignored variables and layer filters once.
             $tool = Get-ChildItem -LiteralPath $env:BUILD -Recurse -Filter helios-rendertest.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-            $pattern = 'Loader Version|elevated|ignored|forced|settings|override|disabled|Insert instance layer|call chain|Khronos validation|device:'
+            $loaded = 'Vulkan Loader Version|Using layer configurations found in loader settings|Using the (global )?override layer|Insert instance layer|\[RHI\]|^helios-rendertest:'
+            $notable = 'elevated|ignored|forced|settings|override|disabled|call chain|Khronos validation'
             foreach ($disable in '', 'VK_LAYER_KHRONOS_validation') {
               $title = if ($disable) { "under rendertest.validation-required's first case (VK_LOADER_LAYERS_DISABLE=$disable)" } else { 'as the GPU tests run (HELIOS_RHI_VALIDATION=1)' }
-              Show-Section "The RHI $title; the loader's log, filtered"
+              Show-Section "The RHI $title, and the loader's log (VK_LOADER_DEBUG=all)"
               if (-not $tool) { Write-Output "no helios-rendertest.exe under $env:BUILD"; break }
               $env:HELIOS_RHI_VALIDATION = '1'
               $env:VK_LOADER_DEBUG = 'all'
               if ($disable) { $env:VK_LOADER_LAYERS_DISABLE = $disable }
-              cmd /c "`"$($tool.FullName)`" --print-probe 2>&1" | Select-String -Pattern $pattern |
-                Select-Object -First 80 | ForEach-Object { Write-Output "   $($_.Line)" }
+              $probe = Invoke-Captured $tool.FullName '--print-probe'
               Remove-Item env:HELIOS_RHI_VALIDATION, env:VK_LOADER_DEBUG
               if ($disable) { Remove-Item env:VK_LOADER_LAYERS_DISABLE }
+              Write-Output "-- the RHI's log and verdict (helios-rendertest --print-probe, exit code $($probe.ExitCode))"
+              $probe.Out | ForEach-Object { Write-Output "   $_" }
+              Write-Output "-- the loader's log ($($probe.Err.Count) lines): what it loaded, and errors"
+              $probe.Err | Where-Object { $_ -match $loaded } | ForEach-Object { Write-Output "   $_" }
+              $other = @($probe.Err | Where-Object { $_ -notmatch $loaded -and $_ -match $notable } | Select-Object -Unique)
+              Write-Output "-- the loader's other lines on settings, overrides, ignored variables and filters, each once ($($other.Count))"
+              $other | Select-Object -First 100 | ForEach-Object { Write-Output "   $_" }
+              if ($other.Count -gt 100) { Write-Output "   (and $($other.Count - 100) more)" }
             }
           } catch {
             Write-Output "diagnostics stopped early: $($_.Exception.Message)"

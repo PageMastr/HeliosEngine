@@ -14,9 +14,10 @@ you start it from the Actions tab ("Run workflow" on `main`). A queued job waits
    it cannot open a TCP connection to the LAN's default gateway;
 2. builds the `windows-vs2022` preset (MSBuild, RelWithDebInfo), prints what the Vulkan loader sees in the job's
    process (the token's integrity level, `VK_*` variables, the loader's and the validation layer's versions and
-   paths, the layer and loader-settings entries under `HKLM` and `HKCU\SOFTWARE\Khronos\Vulkan` with the layers
-   each manifest declares, an override layer from Vulkan Configurator included, the adapters from `vulkaninfo
-   --summary`, and the RHI's verdict with the loader's own log of the settings file and layers it used), and runs
+   paths, the layer, loader-settings and layer-settings entries under `HKLM` and `HKCU\SOFTWARE\Khronos\Vulkan`
+   with the layers each manifest declares, an override layer from Vulkan Configurator included, the adapters from
+   `vulkaninfo --summary`, and the RHI's verdict in full with a summary of the loader's own log: the settings file
+   and the layers it loaded in full, each variable it ignored once), and runs
    the `gpu`-labelled CTests on the real GPU: the Vulkan golden images (`rendertest.vulkan.*`, Khronos-validated),
    `rhi_tests_gpu`, `pcg_gpu_tests` and `rhi_triangle_smoke`; a case of `rendertest.validation-required` that this
    PC's loader does not let the job set up shows as a warning on the run;

@@ -34,15 +34,23 @@ Helios builds **whole images at one ISA level**; no list grants a target or a fi
   Monocypher, yyjson, sentry-native) and what those link. The audit's `lint_isa_fixture_base` image builds
   `helios_core.base`, `helios_patch.base` and the copies of mimalloc, Monocypher, zstd and the header-only
   libraries on every toolchain.
-- **Configure errors** (`helios isa:` lines, fixtures `lint_layering_isa_*`): a base image whose closure
-  reaches any other library (`physics`, `pcg`, `tp_jolt`, ...), with the path to it; an ISA option on a
-  library's `INTERFACE_COMPILE_OPTIONS` (consumers would inherit it: `tp_jolt` exports only its `JPH_USE_*`
-  defines); `helios_executable(… ISA …)` under `apps/` or `engine/` (the explicit level is for the audit's
-  fixtures); a `HELIOS_ISA_LEVEL` set on anything but an image or a gate object library.
+- **Configure errors** (fixtures `lint_layering_isa_*`): a base image whose closure reaches any other library
+  (`physics`, `pcg`, `tp_jolt`, ...), with the path to it; `HELIOS_ISA_BASE_DENY` (`physics`, `pcg`,
+  `tp_jolt`) is never eligible, even when a base module links it; a base image whose own sources name another
+  library's objects (`$<TARGET_OBJECTS:…>`) unless they are a gate object library or a base copy; an ISA option
+  on a library's `INTERFACE_COMPILE_OPTIONS` (consumers would inherit it: `tp_jolt` exports only its
+  `JPH_USE_*` defines); `helios_executable(… ISA …)` in a listfile outside `tools/lint/`, under `apps/` or
+  `engine/`, or with a level other than `avx2` or `base` (the explicit level is for the audit's fixtures);
+  `CPU_GATE` on a base image; a `HELIOS_ISA_LEVEL` set on anything but an image or a gate object library;
+  `helios_cpu_gate_target()` on anything but an object library.
 - **Self-dispatch.** Code that checks CPUID itself stays allowed: in `base` images only in the symbols that
   `isa_allowlist.cmake` lists (audit check 4: zstd's BMI2 functions today), in `avx2` images anywhere (pcg's
   kernel selection). Check 4 reads TZCNT's encoding as BSF, because GCC and Clang emit `rep bsf` for
-  count-trailing-zeros at x86-64-v1 and CPUs without BMI1 execute it as BSF.
+  count-trailing-zeros at x86-64-v1 and CPUs without BMI1 execute it as BSF. That leaves a false negative
+  (code built for BMI1 that relies on TZCNT for a zero operand), which `lint_isa_base_sources` narrows for the
+  Helios base modules: no BMI target attribute or pragma, TZCNT intrinsic or TZCNT assembly in their sources.
+- **Not removed from the gate yet** (WP-0.5r): MSVC's `/RTC1` (CMake's Debug default) and cl's
+  `/fsanitize=address`, which 02 §1.1 also bans in the gate; check 1 reports the latter.
 
 The audit itself is `tools/lint/isa_audit.cmake` (see `tools/lint/README.md`).
 

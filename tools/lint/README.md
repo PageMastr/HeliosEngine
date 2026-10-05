@@ -152,28 +152,43 @@ gate's two C objects. `helios_isa_finalize()` assigns the levels at configure ti
 Fixtures, by check:
 
 - **Configure** (`tests/layering`, cases `isa_*`): a base image that links `tp_jolt` (09 §2 WP-0.2r's seeded
-  fixture) or `physics` through a helper, `ISA` under `apps/`, and `tp_jolt`'s pre-WP-0.2r options on its
-  interface must stop configure; a launcher and an `ISA base` fixture image must configure, with their copies.
+  fixture), `physics` through a helper or `tp_jolt` through `core` (`HELIOS_ISA_BASE_DENY`), or that compiles
+  in an `avx2` object library's objects; `ISA` under `apps/` or in a listfile outside `tools/lint/`, or with a
+  level other than `avx2` or `base`; `CPU_GATE` on a base image; `HELIOS_ISA_LEVEL` set by hand on a library;
+  `helios_cpu_gate_target()` on a static library; and `tp_jolt`'s pre-WP-0.2r options on its interface must
+  stop configure. A launcher and an `ISA base` fixture image must configure, with their copies, and a copy must
+  find a relative source generated in the build directory.
 - **Check 1** (`tests/isa/*.json` against `tests/isa/levels.txt`): a TU of an `avx2` image at the default level
   (`default_level`, 09 §2's seeded fixture), `tp_jolt`'s old options without BMI2 (`partial_level`), MSVC
   without `/arch:AVX2`, clang-cl without `-mno-fma`, extra extensions, a target without a level, AVX flags on
-  base and gate units, a gate source in an `avx2` target, FMA, AVX-512, `-march=native`, fast-math and
-  contraction; `ok.json` (GCC, MSVC, clang-cl, every level, a resource script) must pass.
+  base and gate units, base and gate units without the base set (`base_default`, `gate_default`: no `-march`,
+  which GCC, Clang and MinGW would replace with the toolchain's default, x86-64-v2 on RHEL 9), a gate unit whose
+  stack protector is turned back on, one with AddressSanitizer after `-fno-sanitize=all`, a cl gate unit
+  without `/GS-`, a gate source in an `avx2` target, FMA, AVX-512, `-march=native`, fast-math and contraction;
+  `ok.json` (GCC, Clang, MSVC, clang-cl, every level, a sanitizer build's gate unit, a resource script) must
+  pass.
 - **Check 2**: objects with AVX2 code, `lock cmpxchg16b`, a stack protector and AddressSanitizer, audited as
   gate objects (`MODE=object`), must fail.
 - **Check 4**: `lint_isa_fixture_base`, a launcher-like `base` image that links the base copies of `core` and
   `patch` (with mimalloc, Monocypher and zstd), must pass: zstd's BMI2 functions are on the self-dispatch
   list, and the `rep bsf` that GCC and Clang emit for count-trailing-zeros at x86-64-v1 (TZCNT's encoding,
   executed as BSF before BMI1) is accepted; `lint_isa_fixture_base_canary`, a base image with one
-  `target("avx2")` function, must fail and name only it.
+  `target("avx2")` function, must fail and name only it. Accepting TZCNT's encoding leaves a false negative:
+  the bytes do not tell the compilers' idiom (used only where the operand is known to be non-zero) from a real
+  TZCNT, so a `target("bmi")` function that relies on TZCNT's result for a zero operand passes check 4 and
+  computes a wrong value on a CPU without BMI1. `lint_isa_base_sources` (`MODE=base_sources`) narrows it: the
+  `include/` and `src/` directories of the Helios base modules (`HELIOS_ISA_BASE_MODULES` that exist) may hold
+  no target attribute or pragma that enables BMI, no TZCNT intrinsic and no TZCNT in inline assembly, and its
+  fixture (`tests/isa/base_sources`) holds each form once. It is a text scan: a macro that expands to a target
+  attribute is not seen, and third-party base libraries are not scanned.
 
 On MSVC and clang-cl, check 1 reads the Ninja presets' `compile_commands.json` (`windows-msvc-*`,
 `windows-clang-cl`) and understands `/arch:` and `/clang:` options. The object and image checks need GNU
 binutils; `helios-tool isa-audit` (WP-0.2r part 2) takes over checks 2–4 on COFF images and PDBs and adds
 check 3's Windows half (TLS callbacks and `.CRT$X*` entries enumerated and attributed against
 `cmake/pre_main_allowlist.cmake`, `_pRawDllMain`, load order) and Linux's `.init_array` priorities and
-`.dynsym`, and check 5 (SDE and qemu, CL-17). Until then `tools/ci/msvc_gate_audit.ps1` runs check 2 with
-dumpbin from a Visual Studio developer prompt:
+`.dynsym`, and check 5 (SDE and qemu, CL-17). Until then `tools/ci/msvc_gate_audit.ps1` can run check 2 with
+dumpbin by hand from a Visual Studio developer prompt (no CI job calls it):
 
 - `dumpbin /disasm:nobytes cpu_gate.c.obj cpu_gate_hook.c.obj` — no mnemonic starting with `v`, no
   `ymm`/`zmm` operand, no BMI/LZCNT/TZCNT/POPCNT/MOVBE/SSE3+ instruction;

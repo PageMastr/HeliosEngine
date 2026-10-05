@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "helios/core/time.h"
@@ -117,8 +118,9 @@ TEST_SUITE("net.netcode_crypto") {
     TEST_CASE("netcode crypto: libsodium's CPU probe sees AVX2, and ChaCha20 dispatches to the AVX2 kernel") {
         REQUIRE(sodium_init() >= 0);
         const char* kernel = selectedKernel();
-        MESSAGE("bundled libsodium: ChaCha20 " << kernel << ", sodium_memzero " << expectedMemzero()
-                                               << ", has_avx2 " << sodium_runtime_has_avx2());
+        MESSAGE("bundled libsodium: ChaCha20 " << std::string(kernel) << ", sodium_memzero (expected) "
+                                               << std::string(expectedMemzero()) << ", has_avx2 "
+                                               << sodium_runtime_has_avx2());
 #if defined(__AVX2__) && defined(HELIOS_TEST_SODIUM_AVX2)
         // This image is built for AVX2 and runs only where the CPU and OS support it (the CPU gate checks
         // CPUID and XCR0 before main), so the probe must see AVX2 and the dispatch must pick its kernel.
@@ -158,7 +160,7 @@ TEST_SUITE("net.netcode_crypto") {
         for (const Kernel& k : compiledKernels()) {
             CAPTURE(k.name);
             if (!k.usable) {
-                MESSAGE("ChaCha20 " << k.name << ": not supported by this CPU, skipped");
+                MESSAGE("ChaCha20 " << std::string(k.name) << ": not supported by this CPU, skipped");
                 continue;
             }
             ++ran;
@@ -212,8 +214,8 @@ TEST_SUITE("net.netcode_crypto") {
             volatile unsigned char* volatile p = buf.data();
             for (usize i = 0; i < buf.size(); ++i) p[i] = 0;
         });
-        MESSAGE("sodium_memzero (" << expectedMemzero() << "): " << library * 1e6 << " us per 64 KB; volatile byte loop "
-                                   << byteLoop * 1e6 << " us");
+        MESSAGE("sodium_memzero (expected: " << std::string(expectedMemzero()) << "): " << library * 1e6
+                                   << " us per 64 KB; volatile byte loop " << byteLoop * 1e6 << " us");
 #if defined(_WIN32) || defined(__GLIBC__)
         CHECK(library * 4.0 <= byteLoop);
 #endif

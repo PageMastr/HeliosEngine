@@ -137,12 +137,13 @@ struct ManifestHeader {
     std::string productId; ///< Whose build: ^[a-z][a-z0-9-]{2,31}$ (08 §2.10.1).
     std::string platform;  ///< The install platform: ^[a-z][a-z0-9_-]{1,31}$.
     std::string buildId;   ///< ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$; the CDN path segment (05 §7).
-    u64 sequence = 0;      ///< Monotonic per product, channel and platform (anti-rollback, 05 §7).
+    u64 sequence = 0;      ///< Monotonic per product, channel and platform (05 §7); not verified.
+                           ///< Anti-rollback checks the pointer's sequence (TrustVerifier).
     u64 createdAt = 0;     ///< Unix seconds.
-    u64 expiresAt = 0;     ///< Unix seconds; 0 = never, else after createdAt. Checked by part 2's TrustChain.
+    u64 expiresAt = 0;     ///< Unix seconds; 0 = never, else after createdAt. Checked by TrustVerifier.
     u32 compatEpoch = 0;   ///< The build's content compat epoch (05 §1.14.1).
-    std::array<u8, hman::kKeyIdSize> keyId{};         ///< The keyset subkey that signs (part 2); zeros in v0.
-    std::array<u8, hman::kSignatureSize> signature{}; ///< Ed25519 over bytes [0, 256) (part 2); zeros in v0.
+    std::array<u8, hman::kKeyIdSize> keyId{};         ///< The signing keyset subkey; TrustVerifier checks it.
+    std::array<u8, hman::kSignatureSize> signature{}; ///< Ed25519 over [0, 256); TrustVerifier checks it.
     friend bool operator==(const ManifestHeader&, const ManifestHeader&) = default;
 };
 

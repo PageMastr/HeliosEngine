@@ -25,8 +25,8 @@ The installer, `install.db` (which implements `TrustStateStore`), the planner, t
 `StreamingInstaller` of 08 §4.1 and the stamped product block that supplies the root pair (08 §2.10.4) are later
 WPs (0.17, 2.7, 2.16).
 
-Depends on `helios::core`, Monocypher (BLAKE2b and Ed25519) and zstd (all private). The launcher links this module
-in its x86-64-v1 (`base`) image (08 §2.1.1), so it has no ISA-specific code; file IO goes through core's platform
+Depends on `helios::core`, and privately on Monocypher (BLAKE2b and Ed25519) and zstd. The launcher (WP-0.17) will
+link this module in its x86-64-v1 (`base`) image (08 §2.1.1), so it has no ISA-specific code; file IO goes through core's platform
 layer. Base images link `helios_patch.base` (02 §1.1's `patch@base`), an object-library copy built at x86-64-v1
 together with the copies of core, Monocypher and zstd (`cmake/HeliosIsa.cmake`); it exists once a base image is
 configured, which today is the ISA audit's `lint_isa_fixture_base` and from WP-0.17 the launcher. Every other image
@@ -113,7 +113,7 @@ little-endian.
 | 6 | `headerSize` u16 | 352 |
 | 8 | `flags` u32 | 0: v0 defines none (else `Unsupported`) |
 | 12 | `codec` u8, 3 reserved bytes | 0 = none, 1 = zstd (else `Unsupported`) |
-| 16 | `sequence` u64 | monotonic per product, channel and platform (anti-rollback, 05 §7; checked by part 2) |
+| 16 | `sequence` u64 | monotonic per product, channel and platform (05 §7); not checked by the verifier, whose anti-rollback check is the pointer's `sequence` (check 18), since several channels' pointers can name one manifest |
 | 24 | `createdAt` u64 | unix seconds |
 | 32 | `expiresAt` u64 | unix seconds; 0 = never, else after `createdAt` (checked against the clock by part 2) |
 | 40 | `compatEpoch` u32, 4 reserved bytes | the build's content compat epoch (05 §1.14.1) |
@@ -123,10 +123,10 @@ little-endian.
 | 96 | `productId` [32] | `^[a-z][a-z0-9-]{2,31}$` (08 §2.10.1), zero padded |
 | 128 | `platform` [32] | `^[a-z][a-z0-9_-]{1,31}$` (`win64`, `linux64`), zero padded |
 | 160 | `buildId` [64] | `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` (the CDN path segment, 05 §7), zero padded |
-| 224 | `keyId` [16] | the keyset subkey that signed (part 2); zeros in v0, not interpreted |
+| 224 | `keyId` [16] | the keyset subkey that signed the manifest (checks 21–22); `readManifest` does not interpret it |
 | 240 | 16 reserved bytes | zero |
 | 256 | `headerHash` [32] | BLAKE2b-256 of bytes [0, 256): the manifest's identity |
-| 288 | `signature` [64] | part 2: Ed25519 over bytes [0, 256); zeros in v0, not interpreted |
+| 288 | `signature` [64] | Ed25519 over bytes [0, 256) by the `keyId` subkey, checked by `TrustVerifier` (check 23); `readManifest` does not interpret it |
 
 The signed region [0, 256) commits to the body through `bodyHash`, so part 2 signs without changing the layout,
 and a verifier checks the signature before it decompresses anything. Identifier fields hold the string, then
@@ -364,7 +364,7 @@ constant-time. The private seeds (Go's signer, the dev key files) are used only 
 ## The CDN layout and read path
 
 ```
-chunks/<aa>/<bb>/<blake2b-hex>.zst                 immutable: one zstd frame (level 19, content size, checksum)
+chunks/<aa>/<bb>/<blake2b-hex>.zst                 immutable: one zstd frame (Go's klauspost encoder at its best level, about zstd 11; content size, checksum)
 manifests/<product>/<build-id>/<platform>.hman     immutable, signed
 channels/<product>/<channel>/<platform>.json       the signed pointer (mutable)
 keys/<product>/keyset.json                         the root-signed keyset (mutable)
@@ -388,7 +388,7 @@ and writes the layout (`helios-patch publish`, [services/README.md](../../servic
 | `services/testdata/vectors/fastcdc.json` | Parameters, the gear table and its hash, and 18 inputs (empty, 1 byte, below/at/past the minimum, at and past the maximum, all-zero, random 1–8 MiB, a periodic input, an insertion, and three crafted ones: the earliest possible `kMaskS` match, at byte 16386, and `kMaskL`-only matches at bytes 65535, where `kMaskS` still applies, and 65536, the first byte `kMaskL` covers) with every chunk's offset, size and ID | `go test ./pkg/cdc -run TestUpdateVectors -update` |
 | `hman/pipeline.json` | A build description: 8 files given by generator (shared chunks, an empty file, all-zero data, every tag), a pack with two placed chunks, a stored size, two patches, a key ID and signature | by hand |
 | `hman/pipeline.hman` | That description written with codec 0: both writers must produce it byte for byte, from files added in any order | `go test ./pkg/manifest -run TestUpdateGoldens -update` |
-| `hman/pipeline.go-zstd.hman`, `pipeline.cpp-zstd.hman` | The same manifest with a zstd-19 payload from each language's encoder; both readers must read both | Go: as above; C++: `HELIOS_PATCH_UPDATE_VECTORS=1 patch_tests` |
+| `hman/pipeline.go-zstd.hman`, `pipeline.cpp-zstd.hman` | The same manifest with a zstd payload from each language's encoder at level 19 (Go's klauspost encoder maps 19 to its best level, about zstd 11); both readers must read both | Go: as above; C++: `HELIOS_PATCH_UPDATE_VECTORS=1 patch_tests` |
 | `hman/hostile.json` | 56 edits of `pipeline.hman` (header, every table, reserved bytes, sizes, truncation, trailing bytes, a ref after the last file's, a path byte of no file, a pack that holds no chunk) and one of `pipeline.go-zstd.hman` (a trailing skippable frame one byte past the payload bound), resealed or not, each with the error kind both readers must return and the one check it breaks (`rule`, a substring of the error message both languages share); an edit overwrites or (`insert`) inserts bytes; where one edit would break two checks, the case edits the dependent field too (a chunk's raw size with its file's size, a table entry with its count) | `go test ./pkg/manifest -run TestUpdateGoldens -update` |
 | `hman/deep-paths.hman` | The deepest paths the limits allow: 65,536 empty files whose 1024-byte paths sit 508 directories deep (64 MiB of paths, a 72 MB body, 187 KB with zstd-19). Both readers read it; the perf tests hold it to the read budget | `go test ./pkg/manifest -run TestUpdateGoldens -update` |
 | `hman/names.json` | Valid and invalid paths (among them 255- and 256-byte segments), product IDs, platforms and build IDs, and whole path lists that must pass or fail the collision rules (the invalid ones with the check they fail) | by hand |

@@ -134,7 +134,7 @@ public:
                                       const RecordDbOptions& options = {});
 
     CookAudience audience() const noexcept;
-    /// The header's layout hash (part of the DDC key, 02 §3.4).
+    /// The header's layout hash (meant to be part of the records' DDC key, 02 §3.4).
     u64 layoutHash() const noexcept;
     /// The header's tag-table hash (hrdb_format.h): equal in the client and the server cook of one cook
     /// run, different when their TagIndex numbering differs. Compare it to pair a client cook with its

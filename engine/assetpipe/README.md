@@ -236,14 +236,14 @@ VM, GCC 13, RelWithDebInfo, 2026-10-04, three runs after review round 1 (load av
 | `LocalDdc::get`, 256 KiB entry (a hit) | ≤ 1 ms p95 | 70–84 µs p95 (36–49 µs p50) |
 | `LocalDdc::put`, 256 KiB entry | ≤ 5 ms p95 | 0.22–0.31 ms p95 (0.15–0.21 ms p50) |
 | `cookAsset` hit, 64 KiB source (sidecar load and validation, source read and hash, key, get) | ≤ 1 ms p95 | 49–57 µs p95 (30–34 µs p50) |
-| `ensureMeta`, `saveMeta`, `moveAsset` in a directory of 2,000 entries (case-check listings, durable write) | ≤ 50 ms p95 each | 15.7–22.3, 18.1–23.9 and 12.0–19.9 ms p95 |
+| `ensureMeta`, `saveMeta`, `moveAsset` in a directory of 2,000 entries (case-check listings, durable write) | ≤ 50 ms p95 each | 5.9–22.3, 17.4–23.9 and 11.8–19.9 ms p95 |
 
-The sidecar writers' row was measured after review round 2 (2026-10-05, three runs, load average about 5.7).
+The sidecar writers' row was measured after review round 2 (2026-10-05, four runs, load average 4–6).
 Their budget is half the smallest build-step budget, since a first import or a settings edit comes before a
 build step. Each call lists every directory on its path once for the case checks (a listing of 2,000 entries
-took about 4.4 ms here, a stat per entry) and writes durably (a flushed temp file and a persisted rename: 1–12
-ms on this VM's disk). So a first import of n files into one directory lists O(n²) entries in all: 1,000 files
-took 9.8–11.3 s here, mostly in flushes. A batch import that lists each directory once is `helios-assetd`'s
+took 4.2–4.6 ms here, a stat per entry) and writes durably (a flushed temp file and a persisted rename: 1–12
+ms on this VM's disk, depending on load). So a first import of n files into one directory lists O(n²) entries
+in all: 1,000 files took 3.7–11.3 s here, mostly in flushes. A batch import that lists each directory once is `helios-assetd`'s
 (Gaps).
 
 Puts no longer fsync the fan-out directory (`fs::renameNoSync`; strace counts no `fsync` in 64 puts). With the

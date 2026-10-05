@@ -53,8 +53,8 @@ third_party/                                  vendored deps (see MANIFEST.md); n
   app/input/rhi/render/ui/audio or a graphics library. EDITOR_ONLY modules never link into the client,
   launcher, bot or servers.
 - ISA flags come only from an image's level (`cmake/HeliosIsa.cmake`, 02 §1.1): `helios_executable`'s ROLE
-  picks `avx2` (every role but launcher and bootstrap, and the tests) or `base` (x86-64-v1: launcher and
-  bootstrap, which link `.base` copies), applied to the image and everything it links. No target or file gets
+  picks `avx2` (every role but launcher and bootstrap; tests are `avx2` too) or `base` (x86-64-v1: launcher
+  and bootstrap, which link `.base` copies), applied to the image and everything it links. No target or file gets
   ISA flags of its own (CONF-11); `cmake/isa_allowlist.cmake` keeps only the gate's export and import lists
   and the self-dispatch symbols. The CPU gate (`engine/core/src/cpugate`) builds at the `gate` level
   (x86-64-v1, no stack protector, no sanitizers). See `cmake/README.md`.

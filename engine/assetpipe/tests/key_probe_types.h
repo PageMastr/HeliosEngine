@@ -73,9 +73,11 @@ struct Node { // recursive through a list
     std::vector<Node> children;
 };
 
+// Nested through a list, so that a default-constructed object is not a deeply nested aggregate (MSVC
+// limits initializer nesting): two walk levels per step, Deep<N>'s leaf at level 2N + 1.
 template <int N>
 struct Deep {
-    Deep<N - 1> inner;
+    std::vector<Deep<N - 1>> inner;
 };
 template <>
 struct Deep<0> {

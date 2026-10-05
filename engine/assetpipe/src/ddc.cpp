@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <format>
+#include <system_error>
 
 #include "helios/core/guid.h"
 #include "helios/core/log.h"
@@ -219,11 +221,16 @@ Result<std::vector<u8>> LocalDdc::get(const Hash128& key) {
         return Error{e.code, std::format("{}: {}", fs::pathToGenericUtf8(path), e.message)};
     };
     // Only a regular file is opened: opening a FIFO named like an entry would block until a writer came.
-    if (!fs::isFile(path)) {
-        if (fs::exists(path)) return bad(Error{ErrorCode::Corrupt, "not a regular file"});
+    // One status call, so a writer's rename landing meanwhile is never mistaken for a non-regular file.
+    std::error_code ec;
+    const std::filesystem::file_type type = std::filesystem::status(path, ec).type();
+    if (type == std::filesystem::file_type::not_found) {
         m_misses.fetch_add(1, std::memory_order_relaxed);
         return makeError(ErrorCode::NotFound, "no DDC entry {}", key.toHex());
     }
+    // (`none`: the status could not be read; the open below reports why, as it always did.)
+    if (type != std::filesystem::file_type::regular && type != std::filesystem::file_type::none)
+        return bad(Error{ErrorCode::Corrupt, "not a regular file"});
     auto file = fs::File::open(path, fs::OpenMode::Read);
     if (!file) {
         if (file.error().code == ErrorCode::NotFound) m_misses.fetch_add(1, std::memory_order_relaxed);

@@ -88,16 +88,17 @@ TEST_CASE("settings type hash: recursive types terminate, and nesting is bounded
     const Hash128 node = fingerprint(typeOf<key_probe::Node>());
     CHECK(node != Hash128{});
     CHECK(fingerprint(typeOf<key_probe::Node>()) == node);
-    // kMaxSettingsTypeDepth levels below the settings type: Deep<62>'s leaf u32 is level 63.
+    // At most kMaxSettingsTypeDepth levels below the settings type: Deep<31>'s leaf u32 is level 63 and
+    // Deep<32>'s level 65.
     static_assert(kMaxSettingsTypeDepth == 64);
-    CHECK(hashSettingsType(&typeOf<key_probe::Deep<62>>()));
-    const auto deep = hashSettingsType(&typeOf<key_probe::Deep<70>>());
+    CHECK(hashSettingsType(&typeOf<key_probe::Deep<31>>()));
+    const auto deep = hashSettingsType(&typeOf<key_probe::Deep<32>>());
     REQUIRE(!deep);
     CHECK(deep.error().code == ErrorCode::LimitExceeded);
     // The registry refuses such a settings type, and caches the fingerprint of the ones it takes.
     ImporterRegistry r;
     ImporterInfo i = textureImporter();
-    i.settings = &typeOf<key_probe::Deep<70>>();
+    i.settings = &typeOf<key_probe::Deep<32>>();
     CHECK(r.add(i).error().code == ErrorCode::InvalidArgument);
     i.settings = &typeOf<TextureSettings>();
     REQUIRE(r.add(i));

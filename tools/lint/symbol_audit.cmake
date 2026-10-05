@@ -38,7 +38,8 @@
 #   R5  a game image defines no mutable data in namespace helios (it imports engine state, never owns it);
 #   R6  a game image has no strong definition of a function that a group exports (it imports engine code).
 # PE images (dumpbin /exports; a linked image has no symbol table, so R2-R6 run on the ELF build):
-#   P1  every undecorated (C) name a group exports is helios_*, and a group exports something.
+#   P1  every undecorated (C) name a group exports is helios_* or one of the CRT and STL header inlines the
+#       policy lists (HELIOS_SYMBOL_PE_TOOLCHAIN), and a group exports something.
 # A finding that matches the policy's HELIOS_SYMBOL_KNOWN_FINDINGS (rule, owner, regex) is printed as known
 # and does not fail the audit; every other finding does. Exits non-zero with one line per finding.
 
@@ -203,7 +204,14 @@ if(format STREQUAL "pe")
       if(row MATCHES "^ +[0-9]+ +[0-9A-Fa-f]+ +[0-9A-Fa-f]+ +([^ ]+)")
         set(sym "${CMAKE_MATCH_1}")
         math(EXPR n "${n} + 1")
-        if(NOT sym MATCHES "^\\?" AND NOT sym MATCHES "${HELIOS_SYMBOL_OWNED_REGEX}")
+        set(toolchain OFF)
+        foreach(rx IN LISTS HELIOS_SYMBOL_PE_TOOLCHAIN)
+          if(sym MATCHES "${rx}")
+            set(toolchain ON)
+            break()
+          endif()
+        endforeach()
+        if(NOT sym MATCHES "^\\?" AND NOT sym MATCHES "${HELIOS_SYMBOL_OWNED_REGEX}" AND NOT toolchain)
           _fail(P1 "${sym}" "P1 ${name} exports '${sym}', a C name that is not helios_*: a group exports only Helios objects, never a third-party library (02 §1.4)")
         endif()
       endif()

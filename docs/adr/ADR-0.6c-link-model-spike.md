@@ -112,9 +112,9 @@ module's own sources (an inline variable, so one copy per image).
 
 **Export counts** (GCC 13, `HELIOS_MODULAR=ON`, RelWithDebInfo; `nm -D --defined-only`): `helios_runtime`
 4,474 (271 of them Luau's VM), `helios_client` 349, `helios_editor` 485; SDL3 1,272 and Dear ImGui 4,316.
-The PE format allows 65,535 exports per image. `WINDOWS_EXPORT_ALL_SYMBOLS` also exports the inline and
-template instantiations of the group's objects, so the MSVC counts are higher; the CI job's symbol-audit
-step prints them.
+MSVC 14.51 (`windows-msvc-dev` job): `helios_runtime` 10,084, `helios_client` 1,817, `helios_editor` 2,002;
+`WINDOWS_EXPORT_ALL_SYMBOLS` also exports the inline and template instantiations of the group's objects.
+The PE format allows 65,535 exports per image, so the largest group uses about 15 % of it.
 
 ## 3. Decision: the CPU gate in modular builds
 
@@ -157,7 +157,7 @@ ELF: `nm`; PE: `dumpbin /exports`, because a linked PE image has no symbol table
 | R2 | A third-party library with process state (mimalloc, flecs, Jolt, Luau, Tracy, SDL3, Dear ImGui, volk, netcode) is defined in two images |
 | R3 | A consumer image has its own copy of mutable `helios` data that a group defines (02 §1.4, "No per-image caches of global state"). Data that an executable imports by copy relocation is in both images' dynamic symbol tables and is one instance, not a copy |
 | R4–R6 | A game image defines anything from flecs, Jolt, Luau, mimalloc or Tracy; defines mutable `helios` data; or carries a global strong copy of an exported engine function |
-| P1 | A group's export table has an undecorated name that is not `helios_*`, or no exports at all |
+| P1 | A group's export table has an undecorated name that is not `helios_*`, or no exports at all. The C names that MSVC's CRT and STL headers define inline or as `selectany` data (`fprintf`, `snprintf`, `__local_stdio_printf_options`, `__std_*`, `_Avx2WmemEnabledWeakValue`, …) are accepted: every object that uses them has a copy, and each image still calls its own over the one `/MD` CRT (policy `HELIOS_SYMBOL_PE_TOOLCHAIN`) |
 
 02 §1.4 has no rule against STL types in signatures across the boundary: every image shares one CRT heap,
 so STL objects may cross it (`link_model_tests` checks this), and the audit has no such rule either.
@@ -216,10 +216,12 @@ What the first modular builds of the tree showed (GCC and Clang on Linux; MSVC t
    `helios_runtime` (`luaD_throw`, `luaD_rawrunprotected`) but unwind through binding frames in other images
    (`toolsfw`'s automation bindings). One CRT and `/EHsc` everywhere make that safe; the throw and catch
    sites stay in one image.
-9. **Not verified here.** MSVC is built and tested only by the `windows-msvc-dev` CI job: the data imports
-   (`dllimport`), the export counts, `WINDOWS_EXPORT_ALL_SYMBOLS` over object libraries (CMake's Ninja
-   generator passes linked object libraries' objects to its export scan) and the DLL search at test time
-   (every image is written to `bin/`).
+9. **The first MSVC modular build linked cleanly.** The data imports found by the ELF scan were all it
+   needed, and `WINDOWS_EXPORT_ALL_SYMBOLS` works over linked object libraries (CMake's Ninja generator
+   passes their objects to its export scan). Its audit found one class of names the ELF build cannot show:
+   the CRT's and STL's header inlines with C linkage (P1 above).
+10. **Not verified here.** MSVC is built and tested only by the `windows-msvc-dev` CI job, including the DLL
+   search at test time (every image is written to `bin/`).
 
 ## 6. Part 2
 

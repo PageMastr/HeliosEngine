@@ -30,6 +30,17 @@ set(HELIOS_SYMBOL_GAME_FORBIDDEN
 set(HELIOS_SYMBOL_OWNED_REGEX
   "^(helios_|_Z(T[VISTTHW]|GV|GR|Th[n0-9]+_|Tv[n0-9]+_[n0-9]+_)?(GV)?Z?N[rVK]*[RO]?(6helios|[0-9]+helios_))")
 
+# C names that MSVC's CRT and STL headers define inline or as selectany data (the UCRT's stdio wrappers, the
+# STL's __std_* helpers and its vectorization switches). Every object that uses one carries a copy, so
+# WINDOWS_EXPORT_ALL_SYMBOLS exports it; each image still calls its own copy over the one /MD CRT, so the
+# export is inert (P1 accepts these). Regexes on the undecorated name.
+set(HELIOS_SYMBOL_PE_TOOLCHAIN
+  "^__local_stdio_(printf|scanf)_options$"
+  "^_?v?[a-z]?[a-z]?[a-z]?(printf|scanf)(_s|_p)?(_l)?$"
+  "^__std_[a-z0-9_]+$"
+  "^_Avx2WmemEnabledWeakValue$"
+  "^__isa_available_default$")
+
 # Symbols the ELF linker defines in every shared object.
 set(HELIOS_SYMBOL_LINKER_DEFINED _init _fini __bss_start _edata _end __end__ __data_start data_start
   _GLOBAL_OFFSET_TABLE_ _DYNAMIC __dso_handle __TMC_END__)

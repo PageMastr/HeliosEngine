@@ -20,6 +20,10 @@ File Type: DLL
           4    3 00012345 helios_cpu_gate_crt_entry = helios_cpu_gate_crt_entry
           5    4 00012350 helios_cpu_gate_run = @ILT+12352(helios_cpu_gate_run)
           6    5 00012360 helios_runtime_link_group_modules = @ILT+12368(helios_runtime_link_group_modules)
+          7    6 00012370 __local_stdio_printf_options = @ILT+12400(__local_stdio_printf_options)
+          8    7 00012380 __std_is_file_not_found = @ILT+12416(__std_is_file_not_found)
+          9    8 000C3B20 _Avx2WmemEnabledWeakValue = _Avx2WmemEnabledWeakValue
+         10    9 00012390 snprintf = @ILT+12432(snprintf)
 
   Summary
 

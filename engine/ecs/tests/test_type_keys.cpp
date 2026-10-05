@@ -16,6 +16,7 @@
 #include "test_types.h"
 #include "type_key_clash.h"
 
+// helios-lint: outside-anon-namespace begin (name keys: only types in a named namespace have one)
 namespace ecs_test {
 
 struct KeyOuter {
@@ -39,6 +40,7 @@ struct KeyNumbered {
 };
 
 } // namespace ecs_test
+// helios-lint: outside-anon-namespace end
 
 namespace {
 

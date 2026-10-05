@@ -330,14 +330,13 @@ function(_helios_isa_make_base_copy tgt out)
         message(FATAL_ERROR "helios isa: no base copy of '${tgt}': its source '${s}' is a generator expression "
                             "(link an object library instead of listing its objects)")
       endif()
-      # A relative source is where CMake looks for it: in the build directory when it is GENERATED (it may
-      # not exist yet at configure time), else in the source directory, else in the build directory.
+      # A relative source is in the library's source directory if it is there, else in its build directory,
+      # where a generated one is written (it need not exist yet at configure time). Asking for the GENERATED
+      # property of the build-directory path instead would create a source entry there, which CMake then
+      # matches for the library's own relative source.
       set(path "${s}")
       if(NOT IS_ABSOLUTE "${path}")
-        get_source_file_property(generated "${binDir}/${s}" TARGET_DIRECTORY ${tgt} GENERATED)
-        if(generated)
-          set(path "${binDir}/${s}")
-        elseif(EXISTS "${srcDir}/${s}" OR NOT EXISTS "${binDir}/${s}")
+        if(EXISTS "${srcDir}/${s}")
           set(path "${srcDir}/${s}")
         else()
           set(path "${binDir}/${s}")

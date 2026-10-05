@@ -255,12 +255,26 @@ What the first modular builds of the tree showed (GCC and Clang on Linux; MSVC t
    `helios_runtime` had its own static, drew its own number, and found nothing that `helios_runtime` had
    bound: `world.id<NetIdentity>()` returned 0 in `link_model_tests`. No test crossed the boundary, because
    `ecs_tests` and `ecs_bench` are self-contained and no other image instantiated `typeSlot`. The table is now
-   keyed by `ecs::kTypeKey<T>`, a compile-time FNV-1a hash of the type's name, which every image computes
-   alike; nothing per image holds state, and a reloaded game module finds its components under the same
-   key. Two distinct types with one qualified name (unnamed namespaces of different translation units)
-   share a key, and a World binds only the first. `link_model_tests` checks the built-ins from the
-   executable and lets `link_model_probe` read and write components of a World the executable created
-   (typed `set`/`get` and a typed `CommandBuffer`); `ecs_tests` covers the table and the clash.
+   keyed by `ecs::typeKey<T>()` (`helios/ecs/type_key.h`). A type in a named namespace has a name key, a
+   compile-time hash of its canonical name, size and alignment, which every image derives alike, whichever
+   supported compiler built it: the canonical name drops MSVC's class-keys and normalizes spaces, so MSVC,
+   clang-cl, GCC and Clang agree on every non-template type (review round 2 found the first key, a hash of
+   the whole function signature, differed between compilers, and ADR-001a rule 1 lets a game module use
+   clang-cl beside an MSVC-built SDK). Template specializations are stable only within one compiler.
+   Nothing per image holds state for these types, and a reloaded game module finds its components under the
+   same key. Every other type keeps a per-image key, drawn once from a counter in `helios_runtime` as
+   `typeSlot` was: types in unnamed namespaces, local classes and closures, which can never cross an image,
+   and global-namespace types, which Clang prints exactly like its local classes. Round 2 also found that
+   the first key merged two such types that print one name (unnamed namespaces of two translation units):
+   typed access through the second, unregistered type reached the first's component, past its end when the
+   second was larger, a change to shipping behaviour; now each has its own key, as on main. Two name-keyed
+   types collide only with one canonical name and one layout (on Clang, a class nested in a local class);
+   typed access through the second then reaches the first's same-sized component, and `registerComponent<T>`
+   (which now returns 0 after a `HELIOS_VERIFY` failure whenever T cannot be bound) and `bindType<T>`
+   refuse the second binding. `link_model_tests` checks the built-ins from the executable, lets
+   `link_model_probe` read and write components of a World the executable created (typed `set`/`get` and a
+   typed `CommandBuffer`) and checks that the probe's unnamed-namespace type never reaches the executable's
+   type of the same name; `ecs_tests` covers the table, the pinned canonical names and the per-image keys.
 12. **State that two groups define, and third-party state in the exports.** The first audit compared only
    consumers with groups. A header-defined static instantiated in two groups is one instance on Linux and
    two on Windows, so R3 now compares groups with each other (none exists today). R1 also checked only

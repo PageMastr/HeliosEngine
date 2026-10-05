@@ -72,12 +72,13 @@
     "why": "The layering DAG, HEADLESS and EDITOR_ONLY rules fail configure (cmake/HeliosLayering.cmake; lint_layering_* fixtures)"
   },
   // The dev link model (ADR-016; 02 §1.4 as amended by WP-0.6c part 1, PLAN-REV 14): the modular build, the
-  // symbol audit, the cross-image tests and the ECS's per-image-free type keys.
+  // symbol audit, the cross-image tests and the ECS's type keys (typeKey<T>(): no per-image cache of state).
   "02 §1.4": {
     "paths": ["cmake/HeliosModular.cmake", "tools/lint/symbol_audit.cmake", "tools/lint/symbol_audit_policy.cmake",
               "tools/lint/tests/symbols/**", "tests/link_model/**", "engine/ecs/include/helios/ecs/command_buffer.h",
-              "engine/ecs/include/helios/ecs/world.h", "engine/ecs/src/world.cpp"],
-    "tests": ["lint_symbol_audit", "link_model_tests"],
+              "engine/ecs/include/helios/ecs/world.h", "engine/ecs/src/world.cpp",
+              "engine/ecs/include/helios/ecs/type_key.h", "engine/ecs/src/type_key.cpp"],
+    "tests": ["lint_symbol_audit", "link_model_tests", "ecs_tests"],
     "why": "Exports, singletons and per-image state are properties of linked images, which the symbol audit (lint_symbol_audit, R1-R6 and P1, with seeded fixtures) and link_model_tests check on the modular build; no source pattern can"
   },
   "01 §4.1": {

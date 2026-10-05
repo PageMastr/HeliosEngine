@@ -170,11 +170,15 @@ baseline callers. So Helios builds **whole images at one level** and audits the 
       (§1.4) carry it in `helios_runtime.dll`, and the executable carries none. The loader initializes a
       DLL's imports before the DLL, and it calls an executable's TLS callbacks only after every statically
       imported DLL has initialized. `helios_runtime.dll` imports only OS and Microsoft runtime DLLs. Every
-      other Helios group and executable imports it directly or through another group. Its first TLS
-      callback is therefore the first Helios-compiled code to run in the process. Check 3 verifies both
-      import facts. The two third-party images of a modular build, `SDL3` and `tp_imgui` (§1.4), import
-      only OS and runtime DLLs, so the loader may initialize them first. `tp_imgui` also carries
-      `editorui`'s ImGui item hooks, Helios code with no initializer that runs only when ImGui calls it.
+      other Helios group and executable imports it directly or through another group, except the
+      self-contained images that carry their own copy of the modules (the build-time tool `helios-schemac`,
+      `ecs_bench`, and white-box tests such as `ecs_tests`, `script_tests`, `net_tests` and the `net_fuzz_*`
+      targets; ADR-0.6c), none of which is gated. The DLL's first TLS callback is therefore the first
+      Helios-compiled code to run in a gated process. Check 3 verifies both import facts. The two third-party
+      images of a modular build, `SDL3` and `tp_imgui` (§1.4), import no Helios image: `SDL3` imports only OS
+      and runtime DLLs, and `tp_imgui` those and `SDL3`. The loader may therefore initialize them first.
+      `tp_imgui` also carries `editorui`'s ImGui item hooks, Helios code with no initializer that runs only
+      when ImGui calls it.
       Once WP-0.2r builds those images at `avx2`, WP-0.5r's check 3 must attribute their initializers, as
       it does mimalloc's, or the build must make them import `helios_runtime.dll` (ADR-0.6c §3).
     - *Rejected alternative: build `tp_mimalloc` and Tracy's client TU at `base`.* It fixes today's two cases
@@ -433,9 +437,15 @@ draws ImGui through the RHI, and the backend would carry a second copy of volk (
 - **No per-image caches of global state.** Header-defined `inline` and template statics must not hold such
   state. Generated component code gets its id from `ecs::componentId(TypeId)` using the schema-lock
   `TypeId`, never from flecs' C++ per-type cache. The ECS's typed API (`World::id<T>()`, `set<T>()`,
-  `CommandBuffer`, `SystemBuilder`) looks a C++ type up by `ecs::kTypeKey<T>`, a compile-time hash of the
-  type's name that every image derives alike, in a table each World keeps. flecs, Jolt and Luau headers never
-  reach game code, which §1.1's "no third-party types in public headers" rule already guarantees.
+  `CommandBuffer`, `SystemBuilder`) looks a C++ type up by `ecs::typeKey<T>()` in a table each World keeps.
+  A type declared in a named namespace has a name key: a compile-time hash of its canonical name (without
+  the class-keys MSVC prints, spaces only between identifier characters), size and alignment, which every
+  image derives alike, whichever ADR-001a toolset or clang-cl built it. For a template specialization that
+  holds only within one compiler. Every other type (in an unnamed namespace, a local class, a closure, or in
+  the global namespace, where Clang also prints local classes) has a per-image key, never shared with
+  another type. A component that crosses images is therefore declared in a named namespace, and one that
+  crosses images built by different compilers is not a template specialization. flecs, Jolt and Luau headers
+  never reach game code, which §1.1's "no third-party types in public headers" rule already guarantees.
 - **Tracy.** The runtime group compiles the Tracy client with `TRACY_EXPORTS`, and game modules build with
   `TRACY_IMPORTS`. `HELIOS_PROFILE_ZONE` in a reloadable module expands to Tracy's transient zones, which copy
   their source-location strings, so the profiler never holds a pointer into an unloaded image.

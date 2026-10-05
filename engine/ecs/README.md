@@ -89,11 +89,20 @@ World add `RepDirty` in the same structural step (spawn, add, set, override, com
 the per-entity summary appears without a flecs `With` trait (which would create intermediate
 tables). Spawns and command-buffer groups look up their final table with `ecs_table_find` (no
 intermediate tables in the table graph).
-C++ types map to ids through `kTypeKey<T>`, a compile-time hash of the type's name that every image
-computes alike (02 §1.4: no per-image caches, so a modular build's executables and game modules see the
-ids `helios_runtime` bound), and a per-world open-addressing table (O(1), lock-free). Two distinct types
-with one qualified name (unnamed namespaces of different translation units) share a key; a World binds
-only the first and `bindType` reports `AlreadyExists` for the second.
+C++ types map to ids through `typeKey<T>()` (`helios/ecs/type_key.h`) and a per-world open-addressing
+table (O(1), lock-free). A type in a named namespace has a name key: a compile-time hash of its canonical
+name (MSVC's `struct `/`class `/`union `/`enum ` dropped, spaces only between identifier characters), size
+and alignment, which every image and every supported compiler derives alike for a non-template type (02
+§1.4: no per-image caches, so a modular build's executables and game modules, clang-cl ones included, see
+the ids `helios_runtime` bound; template specializations are stable only within one compiler). Every other
+type has a per-image key drawn once from a counter in `helios_runtime`: types in unnamed namespaces, local
+classes and closures, which only one translation unit can name, and global-namespace types, which Clang
+prints exactly like its local classes. Two types that print the same name therefore never share a key, and
+an unregistered one resolves to no component; declare a component that crosses images in a named
+namespace. Name keys clash only for two types with one canonical name and one layout (a class nested in
+a local class, on Clang): typed access through the second reaches the first's component, of the same size
+and alignment, and `registerComponent<T>`/`bindType<T>` refuse to bind it (`AlreadyExists`).
+`registerComponent<T>` returns 0 after a `HELIOS_VERIFY` failure whenever T cannot be bound.
 Component names must not resolve to an existing flecs entity (builtins, relations, named frames or
 scopes); such registrations fail with `AlreadyExists` instead of silently re-typing that entity.
 
@@ -286,5 +295,5 @@ Revisions 7–9 change no anchor that maps to this module. Revision 10 is WP-1.1
 ADR-004a (§6 M1 and M5, §7: its results, the `InFrame` choice and the owner's decision on the M1
 statistic). It records measurements of this module's code and bench, and adds no requirement that the
 code does not meet. Revisions 11–13 change no anchor that maps to this module. Revision 14 is WP-0.6c part
-1's amendment of 02 §1.4 (PR #59): the typed API looks a C++ type up by `kTypeKey<T>`, never by a per-image
-cache, which this module implements in the same PR.
+1's amendment of 02 §1.4 (PR #59): the typed API looks a C++ type up by `typeKey<T>()`, never by a per-image
+cache of global state, which this module implements in the same PR.

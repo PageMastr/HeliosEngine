@@ -45,10 +45,11 @@ module closure is computed at the end of configure. Two kinds of image need it:
 - `helios-schemac`, which runs during the build and generates `gameplay`'s sources. Linked against
   `helios_runtime`, which contains `gameplay`, it would form a target cycle.
 - White-box tests and benches that call a group's third-party library directly: `ecs_tests` and
-  `ecs_bench` (flecs and mimalloc), `script_tests` (Luau's internals), `net_tests` and the `net_fuzz_*`
-  targets (netcode), and `schemac_tests` (Luau.Analysis links its own Luau VM and compiler). A group
-  hides its third-party code (§2), so these cannot link against it, and a second copy of flecs, Luau or
-  netcode beside the group's would split its state.
+  `ecs_bench` (flecs and mimalloc), `script_tests` (Luau's code generator and parser, Luau.CodeGen and
+  Luau.Ast, which no group exports), `net_tests` and the `net_fuzz_*` targets (netcode), and
+  `schemac_tests` (Luau.Analysis links its own Luau VM and compiler). A group hides its third-party code
+  (§2), so these cannot link against it, and a second copy of flecs, Luau or netcode beside the group's
+  would split its state.
 
 Such an image shares nothing with the groups, so it tests its modules as a shipping image would, and the
 symbol audit skips it. Every other test and tool links the groups.
@@ -228,8 +229,8 @@ ELF build is the check for it.
 What the first modular builds of the tree showed (GCC and Clang on Linux; MSVC through CI):
 
 1. **White-box tests reach into third-party internals.** `ecs_tests` calls flecs and mimalloc, `script_tests`
-   Luau's internals, `net_tests` netcode, and `schemac_tests` links Luau.Analysis, which brings its own VM.
-   A group hides those libraries, so these images became self-contained (§1). The link model itself is
+   Luau's code generator and parser, `net_tests` netcode, and `schemac_tests` links Luau.Analysis, which
+   brings its own VM. A group hides those libraries, so these images became self-contained (§1). The link model itself is
    exercised by `link_model_tests` and by every other test, which links the groups.
 2. **Luau's C API crosses groups** (§2). This also bears on part 2: 02 §1.4 says Luau headers never reach
    game code, but `helios-schemac`'s Luau emitter generates binding glue that includes `lualib.h`. Part 2
@@ -281,32 +282,41 @@ What the first modular builds of the tree showed (GCC and Clang on Linux; MSVC t
    bound: `world.id<NetIdentity>()` returned 0 in `link_model_tests`. No test crossed the boundary, because
    `ecs_tests` and `ecs_bench` are self-contained and no other image instantiated `typeSlot`. The table is now
    keyed by `ecs::typeKey<T>()` (`helios/ecs/type_key.h`). A type in a named namespace has a name key, a
-   compile-time hash of its canonical name, size and alignment, which every image derives alike, whichever
-   supported compiler built it: the canonical name drops MSVC's class-keys and normalizes spaces, so MSVC,
-   clang-cl, GCC and Clang agree on every non-template type (review round 2 found the first key, a hash of
-   the whole function signature, differed between compilers, and ADR-001a rule 1 lets a game module use
-   clang-cl beside an MSVC-built SDK). Template specializations are stable only within one compiler.
-   Nothing per image holds state for these types, and a reloaded game module finds its components under the
-   same key. Every other type keeps a per-image key, drawn once from a counter in `helios_runtime` as
-   `typeSlot` was: types in unnamed namespaces, local classes and closures, which can never cross an image,
-   global-namespace types, which Clang prints exactly like its local classes, and every specialization with
-   such a type among its template arguments (review round 3: Clang and clang-cl print `ns::Box<Local>` for
-   every function's `Local`, and for a global-namespace `Local`, so two such specializations shared a name
-   key; a class name without a scope in a template argument now makes the type per-image). Round 2 also
-   found that the first key merged two such types that print one name (unnamed namespaces of two
-   translation units): typed access through the second, unregistered type reached the first's component, past
-   its end when the second was larger, a change to shipping behaviour; now each has its own key, as on main. What remains:
-   two name-keyed types with one canonical name and one layout, which in a correct program is only a class
-   nested in a local class on Clang (`Local::Inner`, also as a template argument); typed access through the
-   second reaches the first's same-sized component. A 64-bit collision of two name keys (name, size and
-   alignment hashed together) could also join two types of different layouts. In both cases
-   `registerComponent<T>` (which now returns 0 after a `HELIOS_VERIFY` failure whenever T cannot be bound) and
-   `bindType<T>` refuse the second binding. A per-image key is a template static, so a game image may hold
-   none (R5, §4; 02 §1.4). `link_model_tests` checks the built-ins from the executable, lets
-   `link_model_probe` read and write components of a World the executable created (typed `set`/`get` and a
-   typed `CommandBuffer`) and checks that `link_model_plugin`'s unnamed-namespace type, of the same name and
-   layout as the executable's, never reaches the executable's component; `ecs_tests` covers the table, the
-   pinned canonical names and the per-image keys.
+   compile-time hash of its canonical name, size and alignment, which every image built by one compiler
+   derives alike. The canonical name drops MSVC's class-keys and normalizes spaces, so MSVC, clang-cl, GCC and
+   Clang agree on every class, union and enum declared with a name whose qualified name has neither template
+   arguments nor an inline namespace (review round 2 found the first key, a hash of the whole function
+   signature, differed between compilers, and ADR-001a rule 1 lets a game module use clang-cl beside an
+   MSVC-built SDK). Other names hold only within one compiler (review round 4): template specializations and
+   the types nested in them, whose arguments the compilers spell differently, and types in inline namespaces,
+   which GCC and MSVC print (`ns::v1::T`) and Clang and clang-cl leave out (`ns::T`) wherever the name is
+   unambiguous without it. Such a type, built by clang-cl beside an MSVC-built `helios_runtime`, would resolve
+   to no component, so 02 §1.4 keeps it from crossing images built by different compilers. Nothing per image
+   holds state for these types, and a reloaded game module finds its components under the same key. Every
+   other type keeps a per-image key, drawn once from a counter in `helios_runtime` as `typeSlot` was: types in
+   unnamed namespaces, local classes and closures, which can never cross an image, global-namespace types,
+   which Clang prints exactly like its local classes, and every specialization with such a type among its
+   template arguments (review round 3: Clang and clang-cl print `ns::Box<Local>` for every function's `Local`,
+   and for a global-namespace `Local`, so two such specializations shared a name key; a class name without a
+   scope in a template argument now makes the type per-image). Round 2 also found that the first key merged
+   two such types that print one name (unnamed namespaces of two translation units): typed access through the
+   second, unregistered type reached the first's component, past its end when the second was larger, a change
+   to shipping behaviour; now each has its own key, as on main. What remains: two name-keyed types with one
+   canonical name and one layout, which in a correct program happens only on Clang and clang-cl. They print a
+   local class without its function, so a type named through one is name-keyed: a class nested in a local
+   class (`Local::Inner`, itself a local class) or a pointer to a member of one (`int Local::*`), also as
+   template arguments. They also print a type in an inline namespace like a same-named type of the enclosing
+   namespace, in translation units that see only one of them. Typed access through the second type reaches the
+   first's same-sized component. A 64-bit collision of two name keys (name, size and alignment hashed
+   together) could also join two types of different layouts. In both cases `registerComponent<T>` (which now
+   returns 0 after a `HELIOS_VERIFY` failure whenever T cannot be bound) and `bindType<T>` refuse the second
+   binding. A per-image key is a template static, so a game image may hold none (R5, §4; 02 §1.4).
+   `link_model_tests` checks the built-ins from the executable, lets `link_model_probe` read and write
+   components of a World the executable created (typed `set`/`get` and a typed `CommandBuffer`) and checks
+   that `link_model_plugin`'s unnamed-namespace type, of the same name and layout as the executable's, never
+   reaches the executable's component; `ecs_tests` covers the table, the pinned canonical names and the
+   per-image keys, and pins per compiler the spellings that differ (an inline namespace, a type nested in a
+   specialization, Clang's name keys for types named through a local class).
 12. **State that two groups define, and third-party state in the exports.** The first audit compared only
    consumers with groups. A header-defined static instantiated in two groups is one instance on Linux and
    two on Windows, so R3 now compares groups with each other (none exists today). R1 also checked only

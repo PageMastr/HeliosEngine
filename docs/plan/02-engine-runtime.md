@@ -45,7 +45,10 @@ G02, G15/R04, R05 and R06.
 ### 1.1 Layering DAG (R06-ENG-01)
 
 Key: **HL** = HEADLESS (the cell links it); **ED** = `EDITOR_ONLY`; `→` = privately linked third-party
-library.
+library. **Deps** are the Helios modules a module may link, and the code may link fewer: `asset` v0 does not
+use `reflect` yet, and `records` v0 does not use `asset` (WP-0.8). `engine/CMakeLists.txt` declares each
+row's layer, flags and same-layer peers, and configure fails on an upward or unlisted same-layer dependency
+(`cmake/HeliosLayering.cmake`).
 
 | L | Module (`engine/…`) | Responsibility | HL | Deps | Owner |
 |---|---|---|---|---|---|
@@ -57,7 +60,7 @@ library.
 | 2 | `records` | Record DB, client/server split, tag registry | ✓ | reflect, hxl, asset | 02 |
 | 2 | `ecs` | flecs wrapper: IDs, relationships, scheduler, command buffers, dirty bits, prefabs | ✓ | core, reflect → flecs | 02 |
 | 2 | `loc` | String tables, MessageFormat subset | ✓ | core, asset | 02 |
-| 2 | `telemetry`; `patch`, `crash` | Metrics (04); streaming installer and sentry wrapper (08 §4.1) | ✓ | core | 04 / 08 |
+| 2 | `telemetry`; `patch`, `crash` | Metrics (04); streaming installer and sentry wrapper (08 §4.1) | ✓ | core (`patch` → zstd, Monocypher) | 04 / 08 |
 | 2 | `replay` | `SimInbox`, replay recorder, log format and replayer driver (04 §10.2); state hashes are supplied by `replication` through a callback | ✓ | core, reflect | 04 |
 | 2 | `app`, `input` | SDL3 windows, events, devices, IME; actions, contexts, rebinding, haptics | – | core, reflect → SDL3 | 02 |
 | 3 | `physics` | Jolt grids, characters, vehicles, buoyancy, queries | ✓ | core, math, asset → Jolt | 02 |
@@ -74,6 +77,7 @@ library.
 | 4 | `gameplay` | Kernel and sci-fi systems | ✓ | world, hxl | 06 |
 | 4 | `assembly` | Modular part/port rules and budgets shared by T21, the client builder and the cell (07 T21) | ✓ | gameplay, records | 06 / 07 |
 | 4 | `replication`, `netgame`, `authority`; `clientcore` | 04 §11.1; 08 §4.1 | ✓ | world, net, telemetry | 04 / 08 |
+| 4 | `server` | The cell's and the gateway's process runtime: `ZoneHost`, `CellServer`, `GatewayServer`, `TickGraph`, the orchestrator client; Phase 0's dev `ZoneInstance` until `world` owns it (WP-1.2). `apps/cellserver` and `apps/gateway` only parse options and call it (04 §11.1) | ✓ | core, net, ecs, authority → nats.c, yyjson | 04 |
 | 4 | `presentation` | Extractors filling `RenderScene`; cameras, listener, UI surfaces | – | world, render, audio, ui, app | 02 (03 co-owns) |
 | 4 | `assetpipe` | Importers, bakers, DDC, cooker, pak writer | ED | asset, records, pcg, physics, anim, nav → cgltf, ufbx, meshopt, bc7enc_rdo, basisu | 02 |
 | 4 | `toolsfw`, `editorui`, `edtools/*` | ToolsFramework, ImGui shell, tools | ED | world, assetpipe | 07 |
@@ -443,25 +447,26 @@ draws ImGui through the RHI, and the backend would carry a second copy of volk (
   `SystemBuilder`) looks a C++ type up by `ecs::typeKey<T>()` in a table each World keeps. A type declared in
   a named namespace has a name key: a compile-time hash of its canonical name (without the class-keys MSVC
   prints, spaces only between identifier characters), size and alignment, which every image built by one
-  compiler derives alike. For a class, union or enum declared with a name whose qualified name has neither
-  template arguments nor an inline namespace, every ADR-001a toolset and clang-cl derive the same key. Other
-  names are printed differently by different compilers, so their keys hold only within one compiler: template
-  specializations and the types nested in them, and types in inline namespaces (GCC and MSVC print the inline
-  namespace; Clang and clang-cl omit it wherever the name is unambiguous without it, so on Clang the key also
-  depends on which declarations of that name a translation unit sees). Every other type (in an unnamed
-  namespace, a local class, a closure, in the global namespace, where Clang also prints local classes, or a
-  specialization with such a type among its template arguments) has a per-image key, never shared with another
-  type. The exception is Clang and clang-cl, which print a local class without its function and so give a name
-  key to a type named through one: a class or enum nested in a local class (`Local::Inner`) or a pointer to a
-  member of one (`int Local::*`), also as a template argument; two such types with one name and one layout
-  share that key (`helios/ecs/type_key.h`). A component that crosses images is therefore declared in a named
-  namespace, with template arguments from named namespaces, and one that crosses images built by different
-  compilers is neither a template specialization (nor nested in one) nor declared in an inline namespace.
-  Components and other types that a reloadable module uses through the typed ECS API are declared in a named
-  namespace too: a per-image key is a template static (`perImageTypeKey<T>()::key`), which the game-image
-  rules below forbid, and every reload would draw it anew while the component stays bound to the old key.
-  flecs, Jolt and Luau headers never reach game code, which §1.1's "no third-party types in public headers"
-  rule already guarantees.
+  compiler derives alike, except on Clang and clang-cl for a type in an inline namespace whose enclosing
+  namespace also declares that name (below). For a class, union or enum declared with a name whose qualified
+  name has neither template arguments nor an inline namespace, every ADR-001a toolset and clang-cl derive the
+  same key. Other names are printed differently by different compilers, so their keys hold only within one
+  compiler: template specializations and the types nested in them, and types in inline namespaces (GCC and
+  MSVC print the inline namespace; Clang and clang-cl omit it wherever the name is unambiguous without it, so
+  on Clang the key also depends on which declarations of that name a translation unit sees). Every other type
+  (in an unnamed namespace, a local class, a closure, in the global namespace, where Clang also prints local
+  classes, or a specialization with such a type among its template arguments) has a per-image key, never
+  shared with another type. The exception is Clang and clang-cl, which print a local class without its
+  function and so give a name key to a type named through one: a class or enum nested in a local class
+  (`Local::Inner`) or a pointer to a member of one (`int Local::*`), also as a template argument; two such
+  types with one name and one layout share that key (`helios/ecs/type_key.h`). A component that crosses images
+  is therefore declared in a named namespace, with template arguments from named namespaces, and one that
+  crosses images built by different compilers is neither a template specialization (nor nested in one) nor
+  declared in an inline namespace. Components and other types that a reloadable module uses through the typed
+  ECS API are declared in a named namespace too: a per-image key is a template static
+  (`perImageTypeKey<T>()::key`), which the game-image rules below forbid, and every reload would draw it anew
+  while the component stays bound to the old key. flecs, Jolt and Luau headers never reach game code, which
+  §1.1's "no third-party types in public headers" rule already guarantees.
 - **Tracy.** The runtime group compiles the Tracy client with `TRACY_EXPORTS`, and game modules build with
   `TRACY_IMPORTS`. `HELIOS_PROFILE_ZONE` in a reloadable module expands to Tracy's transient zones, which copy
   their source-location strings, so the profiler never holds a pointer into an unloaded image.
@@ -868,7 +873,7 @@ activity 60 Hz for BENCH-4.
 - Engine schemas live in `engine/<module>/schema/`. Game and gem schemas live in `schemas/<pkg>/`.
 - A package is **native** (compiled to C++ and Go) or **dynamic** (compiled to a runtime type bundle, with no
   C++ or Go). Project packages are dynamic by default (§3.8).
-- Tags live in `.htags` files (06 §1.1).
+- Tags are declared by `TagDef` records, and the records cook interns them (06 §1.1).
 - A package maps to a C++ namespace. `///` comments become `@doc`.
 
 **Declaration kinds:** `enum`, `flags`, `struct`, `component`, `relation`, `record`, `event`, `rpc`,
@@ -990,7 +995,10 @@ written.
 ### 3.4 Versioning and field redirects
 
 - **Stable IDs.** schemac assigns stable u32 type and field IDs, recorded in the committed, append-only
-  `schemas/schema.lock.jsonc`. `--check-lock` fails CI on reuse. Deleted fields become tombstones.
+  `schema.lock.jsonc` of each schema package, next to its schemas (`schemas/<pkg>/schema.lock.jsonc`;
+  several packages may share one lock). `--check-lock` fails CI on reuse. Deleted fields become tombstones.
+  A lock salts a type ID only against its own entries, so `TypeRegistry` refuses, at start-up, an image that
+  registers two types with one ID from different locks.
 - **Renames.** `@was("old")` keeps the ID. Readers accept the old key and the writer emits the new one.
 - **Type changes.** Widenings keep the ID: i32→i64, f32→f64, T→T?, appended enum values. Anything else needs a
   new field. Structural migrations use `@version(n)` plus a C++ `upgrade<T>` hook.
@@ -1028,7 +1036,7 @@ declarations), `editor`, `records`, `lint` and `docs`.
 ### 3.6 Runtime reflection API
 
 ```cpp
-namespace helios::reflect {
+namespace helios::refl {    // module engine/reflect, headers helios/reflect/*.h
 struct FieldInfo { std::string_view name; u32 id, offset; const TypeInfo* type; FieldFlags flags;
                    Audience audience; AttrSpan attrs; };
 struct TypeInfo  { std::string_view qualifiedName; TypeId id; u32 size, align; Kind kind; u64 layoutHash;
@@ -1106,7 +1114,7 @@ split into client and server parts, like records (§3.3).
   - a layout hash per type.
 - **It is content.** It ships in paks and travels in the client part or the server part (05 §1.14.1). Its
   client-visible part enters the compat fingerprint like any replication descriptor.
-- **IDs.** Type and field IDs come from the project's `schema.lock.jsonc`, as for native types (§3.4).
+- **IDs.** Type and field IDs come from the package's `schema.lock.jsonc`, as for native types (§3.4).
 - **Budgets.** schemac builds 2,000 types in ≤ 1 s (the §3.5 budget), and the bundle loads in ≤ 50 ms.
 
 **What a dynamic package may declare.**
@@ -1142,7 +1150,7 @@ split into client and server parts, like records (§3.3).
   types (§1.4). Storage is an ordinary flecs column. Prefabs, `@shared`, `@sparse`, checkpoints, undo and the
   inspector all work through `TypeInfo` already.
 - **Writes and replication.** C++ cannot name a dynamic type.
-  - Every write goes through `reflect::DynMut`, whose per-field setters set the `_dirty` bits exactly as
+  - Every write goes through `refl::DynMut`, whose per-field setters set the `_dirty` bits exactly as
     `Mut<C>` does (§4.4).
   - `repl::describeDynamic` builds each `ComponentRepDesc` at load from the bundle, using 04's table-driven
     quantizers. The bytes on the wire equal those of the same type compiled native.
@@ -1570,11 +1578,14 @@ the generic node-graph formulation that ADR-006's patent note calls for.
   - **Only integer ops go in the kernel TUs.** A lint rejects `float` and `double` there. `visualOnly` float
     nodes run in shared code whatever kernel is selected. Integer results are exact, so all three widths
     hash identically, and RT-04 runs its corpus through each of them.
-  - **Selection.** `pcg`'s module entry point (called explicitly from `static_modules.cpp`, or at load in
-    modular builds; §1.2) reads the `pcg.kernel` CVar (default `avx2`) and stores one `const VmKernels*`.
-    No CPUID dispatch is needed, because every image that links `pcg` has passed the gate. The tile
-    evaluator calls through the table once per op per tile, not per sample, so a 40-node tile costs about 40
-    indirect calls.
+  - **Selection.** `pcg`'s module entry point, `initializePcgModule()` (called by the host at start-up, from
+    `static_modules.cpp` once that exists, or at load in modular builds, §1.2; otherwise by the first tile
+    evaluation), reads the `pcg.kernel` CVar (default `avx2`) and stores one `const VmKernels*`. No per-call
+    CPUID dispatch is needed, because every image that links `pcg` has passed the gate. The entry point still
+    checks the requested kernel once against `core::cpuGate()` and falls back, with a warning, to the widest
+    kernel the CPU supports; in a gated image the `avx2` default never falls back, and the measurement guard
+    below fails any budgeted run that did not select `avx2`. The tile evaluator calls through the table once
+    per op per tile, not per sample, so a 40-node tile costs about 40 indirect calls.
   - **Measurement guard.** `pcg` logs `pcg.kernel` at start. WP-0.9c, RC-13, RT-20 and the RT-04 bench
     record it, and **a MIN, REF or SERVER run that did not select `avx2` fails**, so a forced 4-lane run
     cannot trip 03 §5.5a's F3 threshold. The SSE4.2 path's ms per tile (expected ≈ 1.8× AVX2) is reported alongside
@@ -1884,13 +1895,15 @@ TOC        sorted { AssetId, cookedHash XXH3-128, offset, compSize, rawSize, cod
     - *Stable body keys.* Each body's `mUserData` holds its key: the `EntityId` for entity bodies (placed
       statics included), the packed `TileKey` for Terrain-layer tile bodies, and the deterministic PCG instance
       key for generated asteroids and collidable scatter (§5.8). A `CharacterVirtual` carries its entity's
-      `EntityId`. `(object layer, key)` is unique within a `PhysicsSystem`; debug builds assert it
-      in `AddBody`, which refuses key 0.
-    - *Vendored patch `third_party/jolt/patches/stable-order`* (≈ 80 lines, listed in
+      `EntityId`. `(object layer, key)` is unique within a `PhysicsSystem`: every build refuses a duplicate
+      key, and key 0, with an error when the body is added.
+    - *Vendored patch `third_party/jolt/patches/0001-stable-order.patch`* (listed in
       `third_party/MANIFEST.md` beside Luau's patches, rebased on each Jolt update and covered by
-      `sim_abi.physics`, 04 §6.7). It uses `(layer, key)` in all three places: the sort-key hash and its
-      tie-break, the body-1 choice and `ContactOrderingPredicate`. Jolt's caches stay keyed by `BodyID`,
-      because they are lookups, not orders.
+      `sim_abi.physics`, 04 §6.7). It orders by `(layer, key)`, with the `BodyID` only as the last tie-break,
+      in the three places above and in a fourth: `ContactConstraintManager` stores each pair, and so each
+      contact constraint's body 1 and body 2 and the order `ContactListener` callbacks see, in that order,
+      where stock Jolt puts the lower `BodyID` first. Jolt's caches stay keyed by `BodyID`, because they are
+      lookups, not orders.
     - *No cross-`Update` contact cache on predicted bodies.* Warm-start impulses, and manifolds that Jolt
       reuses when a pair moved < 1 mm (`mBodyPairCacheMaxDeltaPositionSq`), carry state from one step to the
       next in caches keyed by `BodyID`. A client rollback restores the chassis and constraint (06 §8.1a

@@ -93,7 +93,10 @@ C++ types map to ids through `typeKey<T>()` (`helios/ecs/type_key.h`) and a per-
 (O(1), lock-free). A type in a named namespace has a name key: a compile-time hash of its canonical name
 (MSVC's `struct `/`class `/`union `/`enum ` dropped, spaces only between identifier characters), size and
 alignment, which every image built by one compiler derives alike (02 §1.4: no per-image caches, so a modular
-build's executables and game modules see the ids `helios_runtime` bound). Every supported compiler derives the
+build's executables and game modules see the ids `helios_runtime` bound). The exception is Clang and clang-cl
+with a type in an inline namespace whose enclosing namespace also declares that name: a translation unit that
+sees both prints `ns::v1::T`, one that sees only the inline one prints `ns::T`, so the type gets two keys and
+typed access from the second unit does not find the component the first registered. Every supported compiler derives the
 same key for a class, union or enum declared with a name whose qualified name has neither template arguments
 nor an inline namespace, so clang-cl game modules beside an MSVC-built SDK see those ids too. Other names hold
 only within one compiler: template specializations and the types nested in them (the compilers spell template

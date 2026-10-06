@@ -228,9 +228,9 @@ Naming lints (PascalCase types and enum values, camelCase fields) are warnings (
 
 ## Stable ids: the schema lock
 
-The schema lock (02 §3.4 names a single `schemas/schema.lock.jsonc`; this repository commits one per schema
-set, `schemas/sample/schema.lock.jsonc` and `schemas/gameplay/schema.lock.jsonc`, and `helios_schema()` defaults
-to the one next to the calling `CMakeLists.txt`) is generated, committed and append-only (illustrative entry
+The schema lock (one per schema package, 02 §3.4: this repository commits `schemas/sample/schema.lock.jsonc`
+and `schemas/gameplay/schema.lock.jsonc`, and `helios_schema()` defaults to the one next to the calling
+`CMakeLists.txt`) is generated, committed and append-only (illustrative entry
 after a rename and a deletion):
 
 ```jsonc
@@ -812,11 +812,10 @@ server as `nobody` when started as root, and is not registered on Windows or whe
 
 ## Deviations and limitations
 
-- **Namespace `helios::refl`** instead of the spec's `helios::reflect`: when this package was written,
-  `engine/math` declared a function `helios::reflect()` (vector reflection), which made a namespace of
-  that name ill-formed. engine/math has since renamed it `reflectVector()` (WP-0.5), so the name is
-  free, but the namespace has not moved: that is a rename across every user of `helios::refl`. The
-  CMake target is `helios::reflect` and the headers live in `helios/reflect/`.
+- **Namespace `helios::refl`**, which 02 §3.6 adopted in plan revision 15 (it wrote `helios::reflect`): when
+  this package was written, `engine/math` declared a function `helios::reflect()` (vector reflection), which
+  made a namespace of that name ill-formed. The CMake target is `helios::reflect` and the headers live in
+  `helios/reflect/`.
 - `refl::EntityId` / `refl::NetHandle` / `refl::Tick` mirror `ecs::EntityId{u64}`,
   `ecs::NetHandle{u32}` and `ecs::Tick = u64`; `engine/ecs` should alias the `refl` vocabulary
   types (or vice versa) so generated components use one set.

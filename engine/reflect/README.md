@@ -9,9 +9,9 @@ files, the future inspector — works on any object known only by its `TypeInfo`
 
 Depends on `helios::core`, `helios::math` and yyjson (private). Headless (servers and tools use it).
 
-> **Namespace:** the spec writes `helios::reflect`; the namespace is `helios::refl`, chosen while
-> `engine/math` still declared the function `helios::reflect(v, n)` (renamed `reflectVector` in WP-0.5,
-> which frees the name; see the schemac README, "Deviations").
+> **Namespace:** `helios::refl`, chosen while `engine/math` still declared the function
+> `helios::reflect(v, n)` (renamed `reflectVector` in WP-0.5). 02 §3.6 has named it since plan revision 15;
+> the module, the CMake target and the header directory keep the name `reflect`.
 
 ## Headers
 

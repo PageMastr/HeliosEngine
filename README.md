@@ -13,10 +13,10 @@ Windows is the primary platform for development and play. Linux is fully support
 OS for dedicated servers.
 
 > **Status: Phase 0 (Foundations).** The master plan is complete and independently reviewed. The
-> foundation modules below are implemented, adversarially reviewed and tested. The game client and launcher
-> do not exist yet, and the editor is a Phase 0 shell (`apps/editor`): they are scheduled for Phase 0–1 in the
-> [roadmap](docs/plan/09-roadmap-and-process.md). Helios is far from the AAA bar today; the plan says what
-> reaching it takes.
+> foundation modules below are implemented, adversarially reviewed and tested. The game client and
+> launcher do not exist yet, and the editor is a Phase 0 shell (`apps/editor`): they are scheduled for
+> Phase 0–1 in the [roadmap](docs/plan/09-roadmap-and-process.md). Helios is far from the AAA bar today;
+> the plan says what reaching it takes.
 
 ---
 

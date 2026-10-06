@@ -10,6 +10,21 @@ All 35 files are CC0-1.0, retrieved 2026-10-06, and committed byte for byte as d
 edited). CC0 needs no licence text next to the files. They are placeholders for Phase 1 (01 §4.2: the
 Kestrel, Saltmarch, Harrow and the Scree belt), not final art.
 
+## Review
+
+Before a file was added: its source page states CC0 (quoted below) and its download says the same; its
+preview was viewed (the kits' own preview renders, ambientCG's material spheres, Poly Haven's sky
+thumbnail) for franchise designs, logos, insignia, text and people, and none were found; every name and
+string inside it (glTF node, mesh, material and image names, PNG text chunks, OpenEXR header attributes)
+was matched against the IP-name lint's franchise lists with no hit; and it was opened with a decoder
+(every model loads as glTF 2.0 with its external texture found, every PNG decodes, the EXR decodes as
+1024 x 512 RGB). The files keep their embedded metadata: the models name their exporter, some PNGs carry
+an XMP packet naming their authoring tool, and the EXR keeps its render stamps (render times and the
+photographer's local scene path). None of the sources discloses generative AI; Poly Haven states that
+its assets are the original work of its staff or contributing artists, and the sky is a photograph.
+Rejected while selecting: night-sky HDRIs whose page gives no creation method (when in doubt, leave it
+out), and the kits' own License.txt, which CC0 does not require and which names social-media brands.
+
 ## Sources
 
 | Source | Author | Page | Download | Archive SHA-256 | Licence as stated |

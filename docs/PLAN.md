@@ -8,8 +8,8 @@ reports under [`research/`](research/). Where this summary and a section disagre
 **Status:** approved in review round 5 (2026-09-25) with minor revisions, which have been applied (plan
 revision 6; [§13](#13-review-record)); the plan changes merged since bring it to revision 15
 (`plan/CONSISTENCY.md` §43). Phase 0 (Foundations) is in progress (§11). Three Phase 0 risk triggers have
-fired: RT-01's structural-ops pre-bench (K2, [ADR-004a](adr/ADR-004a-ecs-rt01-structural-ops.md) open), RT-13's
-Luau fuel metering (K39, both mitigations merged) and the `hnoise` throughput spike (K5b,
+fired: RT-01's structural-ops pre-bench (K2, [ADR-004a](adr/ADR-004a-ecs-rt01-structural-ops.md) open),
+RT-13's Luau fuel metering (K39, both mitigations merged) and the `hnoise` throughput spike (K5b,
 [ADR-0.9c](adr/ADR-0.9c-hnoise-throughput.md), F3).
 
 ---
@@ -988,12 +988,12 @@ contention. Both are recorded under K3 and fixed by 02 §2.2's sharded, batched 
 
 ## 11. Building and running today (Windows and Linux)
 
-**Current state (2026-10-06, `main` at fb9517f).** The Director refreshes this list every round
-([09 §5.10.2](plan/09-roadmap-and-process.md#5102-rules-for-the-director), rule D6), and
-[09 §8.1](plan/09-roadmap-and-process.md#81-phase-0-status-repository-on-2026-10-06) has the detail: test
-counts, evidence and the run behind each figure. `cmake -P tools/status/check_status.cmake` checks that 09 §8.1
-names every module in the tree (61 module directories on fb9517f). CI on fb9517f (run 37416153106) passed 11 of
-its 12 jobs; the Windows Go job failed `TestPerfDeepPaths`, a timing ratio (below).
+**Current state (2026-10-06, `main` at fb9517f).** The Director refreshes this list every round ([09
+§5.10.2](plan/09-roadmap-and-process.md#5102-rules-for-the-director), rule D6), and [09
+§8.1](plan/09-roadmap-and-process.md#81-phase-0-status-repository-on-2026-10-06) has the detail: test counts,
+evidence and the run behind each figure. `cmake -P tools/status/check_status.cmake` checks that 09 §8.1 names
+every module in the tree (61 module directories on fb9517f). CI on fb9517f (run 37416153106) passed 11 of its
+12 jobs; the Windows Go job failed `TestPerfDeepPaths`, a timing ratio (below).
 - **Merged since the plan's approval** (2026-09-25), by work package:
   - WP-0.1: the post-merge `merge-policy` check (#7), doctest TU isolation (#17), and the nightly's MSBuild
     configure and Go-integration fixes (#31, #23);
@@ -1039,14 +1039,14 @@ its 12 jobs; the Windows Go job failed `TestPerfDeepPaths`, a timing ratio (belo
     of 101.7 ms against 50 ms on the hosted runner), `schemac_sql_postgres` under ASan (a socket path too long
     for PostgreSQL), `TestPerfDeepPaths` on Windows Go (2.8× against 2×; also in CI on fb9517f) and NS-0.2's
     strict gate on hosted Windows. Each is a P0 (09 §8.2); no threshold moves.
-- **NS-0.2 passes on hosted Linux on the repository owner's approval of 2026-09-30**
-  ([09 §5.6](plan/09-roadmap-and-process.md#56-ci-tiers-and-evidence-classes);
-  [the record](evidence/ns-0.2-owner-approval-2026-09-30.md) quotes it verbatim). The hosted Linux nightly runs
+- **NS-0.2 passes on hosted Linux on the repository owner's approval of 2026-09-30** ([09
+  §5.6](plan/09-roadmap-and-process.md#56-ci-tiers-and-evidence-classes); [the
+  record](evidence/ns-0.2-owner-approval-2026-09-30.md) quotes it verbatim). The hosted Linux nightly runs
   `net_bench --gate --advisory ns02-stack`, which reports the encrypted stack's rate instead of failing on it;
-  everything else in the run still gates. The **fixed-hardware re-test** the approval owes **passed strictly on
-  Windows**: on the owner's PC (`win-gpu`, Ryzen 5 5500) the stack measured 82,842, 82,134 and 89,080 packets
-  per core in runs 1–3 and **118,253 in run 4** (37391930751, 2026-10-06, after WP-0.13r's #62: 8.46 µs per
-  packet; raw datagrams 215,488 per core). Its Linux half needs a Linux lab host, so the approval still
+  everything else in the run still gates. The **fixed-hardware re-test** the approval owes **passed strictly
+  on Windows**: on the owner's PC (`win-gpu`, Ryzen 5 5500) the stack measured 82,842, 82,134 and 89,080
+  packets per core in runs 1–3 and **118,253 in run 4** (37391930751, 2026-10-06, after WP-0.13r's #62: 8.46
+  µs per packet; raw datagrams 215,488 per core). Its Linux half needs a Linux lab host, so the approval still
   carries no phase exit on its own; whether the hosted-Linux `--advisory` gets a floor or is retired is the
   owner's decision. **Hosted Windows is not covered** and stays strict: its stack measured below 100k in 4 of
   7 nightly runs to 2026-10-05, none of them after #62. **NS-0.7 is not covered**: it failed twice on hosted

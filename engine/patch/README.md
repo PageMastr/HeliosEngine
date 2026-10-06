@@ -27,10 +27,11 @@ WPs (0.17, 2.7, 2.16).
 
 Depends on `helios::core`, and privately on Monocypher (BLAKE2b and Ed25519) and zstd. The launcher (WP-0.17)
 will link this module in its x86-64-v1 (`base`) image (08 §2.1.1), so it has no ISA-specific code; file IO
-goes through core's platform layer. Base images link `helios_patch.base` (02 §1.1's `patch@base`), an object-library copy built at x86-64-v1
-together with the copies of core, Monocypher and zstd (`cmake/HeliosIsa.cmake`); it exists once a base image is
-configured, which today is the ISA audit's `lint_isa_fixture_base` and from WP-0.17 the launcher. Every other image
-links `helios_patch`, built at `avx2`.
+goes through core's platform layer. Base images link `helios_patch.base` (02 §1.1's `patch@base`), an
+object-library copy built at x86-64-v1 together with the copies of core, Monocypher and zstd
+(`cmake/HeliosIsa.cmake`); it exists once a base image is configured, which today is the ISA audit's
+`lint_isa_fixture_base` and from WP-0.17 the launcher. Every other image links `helios_patch`, built at
+`avx2`.
 
 ## Headers
 
@@ -95,9 +96,9 @@ KiB). An insertion changes only the 1–3 chunks around it (tested at 100 bytes 
 ## The `.hman` v0 format
 
 05 §7 lists what the manifest holds (build, monotonic `sequence`, platform; per file: path, size, hash, chunk
-list, tags and install tier; a pack index and patches) and says "a schema-generated binary, zstd-compressed".
-v0 is a hand-written fixed-layout binary instead (see [Plan conformance](#plan-conformance)). All integers are
-little-endian.
+list, tags and install tier; a pack index and patches). Since plan revision 15 it also names this
+hand-written fixed layout, where it said "a schema-generated binary" (see
+[Plan conformance](#plan-conformance)). All integers are little-endian.
 
 ```
 [0, 352)     header (fixed)

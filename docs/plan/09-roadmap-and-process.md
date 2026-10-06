@@ -1374,21 +1374,21 @@ so far: K2, K39 and K5b (2026-09-25, §8.1).
 The Director refreshes this table at the start of every round (§5.10.2 D6). `tools/status/check_status.cmake`
 fails the round audit when a module in the tree is missing from it, and `tools/status/snapshot` (WP-0.3)
 generates its tree inventory row. The full refresh of 2026-09-27 used `main` at 5f88be7 (plan revision 10,
-raised to 11 by its PR, #21). Its test counts are doctest cases per binary in a linux-gcc build of 1425608 (all
-suites, `perf:` and skipped cases included), plus the 12 `schemac_tests` cases that #19 added (counted from
-source), and Go `Test` functions as `go test -list` gives them. Since then each WP PR has updated its own row,
-the NS-0.2 owner-approval PR (#43, plan revision 12) updated the WP-0.13 and fired-risks rows, and the
+raised to 11 by its PR, #21). Its test counts are doctest cases per binary in a linux-gcc build of 1425608
+(all suites, `perf:` and skipped cases included), plus the 12 `schemac_tests` cases that #19 added (counted
+from source), and Go `Test` functions as `go test -list` gives them. Since then each WP PR has updated its own
+row, the NS-0.2 owner-approval PR (#43, plan revision 12) updated the WP-0.13 and fired-risks rows, and the
 documentation audit of 2026-10-05 (#63) brought the rows' merge state, fixes and `win-gpu` results up to
 f5f2729. **This refresh (2026-10-06)** uses `main` at fb9517f (plan revision 14, which this refresh's PR
 raises to 15) after the PRs merged since the last Director PR (#51): #55, #57–#64 and #66. It also reads the
 four `win-gpu` runs (37231118477, 37263321224, 37328633862 and 37391930751) and the scheduled nightlies of
-2026-10-04 and 2026-10-05 (37193564608, 37297423497); no nightly has run yet on a `main` that includes #62.
-It rewrites the plan, WP-0.1, WP-0.3, WP-0.4, WP-0.6, WP-0.8, WP-0.9, WP-0.12, WP-0.13, WP-0.14, WP-0.16 and
+2026-10-04 and 2026-10-05 (37193564608, 37297423497); no nightly has run yet on a `main` that includes #62. It
+rewrites the plan, WP-0.1, WP-0.3, WP-0.4, WP-0.6, WP-0.8, WP-0.9, WP-0.12, WP-0.13, WP-0.14, WP-0.16 and
 WP-0.20 rows. The `engine/core`, WP-0.2/0.5, WP-0.7, vendored-dependency, "Not started", fired-risks,
-plan-conformance and tree-inventory rows are those of their last update: the open WP-0.5r PR (#65) rewrites
-or borders them, and the refresh after it merges brings them up, so that the two PRs do not conflict. Until
-then §7's K5b row and the WP-0.4 and WP-0.13 rows below supersede the fired-risks row's K5b ("armed") and
-NS-0.2 re-test sentences. Test counts that a refresh did not change are those of each row's last update.
+plan-conformance and tree-inventory rows are those of their last update: the open WP-0.5r PR (#65) rewrites or
+borders them, and the refresh after it merges brings them up, so that the two PRs do not conflict. Until then
+§7's K5b row and the WP-0.4 and WP-0.13 rows below supersede the fired-risks row's K5b ("armed") and NS-0.2
+re-test sentences. Test counts that a refresh did not change are those of each row's last update.
 
 Terms:
 - **Merged (#n):** landed on `main` from reviewed PR #n as one squash commit (§5.2a), which the post-merge

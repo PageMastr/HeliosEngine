@@ -997,8 +997,8 @@ written.
 - **Stable IDs.** schemac assigns stable u32 type and field IDs, recorded in the committed, append-only
   `schema.lock.jsonc` of each schema package, next to its schemas (`schemas/<pkg>/schema.lock.jsonc`;
   several packages may share one lock). `--check-lock` fails CI on reuse. Deleted fields become tombstones.
-  A lock salts a type ID only against its own entries, so `TypeRegistry` refuses, at start-up, an image that
-  registers two types with one ID from different locks.
+  A lock salts a type ID only against its own entries; an image that registers two types with one ID from
+  different locks fails at start-up (`TypeRegistry` refuses the second).
 - **Renames.** `@was("old")` keeps the ID. Readers accept the old key and the writer emits the new one.
 - **Type changes.** Widenings keep the ID: i32→i64, f32→f64, T→T?, appended enum values. Anything else needs a
   new field. Structural migrations use `@version(n)` plus a C++ `upgrade<T>` hook.

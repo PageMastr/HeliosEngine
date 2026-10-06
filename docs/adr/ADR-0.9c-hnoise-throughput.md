@@ -109,7 +109,8 @@ confirmation (§6, item 2) is still due.
 | GPU | Green ≥ 64 tiles per 0.8 ms; amber ≥ 16; red < 16 | lavapipe only (0.43), no claim | **Unconfirmed**. The estimate below says amber is plausible on MIN |
 
 **Outcome: RED (F3), pending the MIN confirmation.** The CPU clause alone decides red. The run was valid
-by 03 §5.5a's own rule, because it logged `pcg.kernel=avx2`. **K5b fired** (its trigger is "spike below green"; 09 §7).
+by 03 §5.5a's own rule, because it logged `pcg.kernel=avx2`. **K5b fired** (its trigger is "spike below
+green"; 09 §7).
 
 **GPU estimate (not a measurement).**
 - On the GPU the per-sample work is scalar 32-bit code. The instruction count per noise evaluation is about

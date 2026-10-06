@@ -974,7 +974,9 @@ func checkGate(p *Pass) {
 			}
 		}
 		if gate && cFamily.MatchString(f) {
-			checkGateSymbols(p, f, lines)
+			// Statements end at ';' and nest at braces, so literals are blanked: in `"a; b"` or '{' they
+			// are text, and the gate keeps its messages in static char arrays.
+			checkGateSymbols(p, f, codeLines(p.Tree.Lines(f), true))
 		}
 	}
 	if winHook != "" {

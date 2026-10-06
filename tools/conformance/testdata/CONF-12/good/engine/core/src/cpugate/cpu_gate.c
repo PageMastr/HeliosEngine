@@ -21,3 +21,6 @@ extern struct hcg_state hcg_elsewhere;
 static char hcg_buf[sizeof(int)];
 static _Alignas(16) unsigned char hcg_aligned[64];
 extern char hcg_table[sizeof(long)];
+/* Text in static arrays: a ';' or a brace inside a literal neither ends nor opens a statement. */
+static const char hcg_txt[] = "not an x86-64 build; no requirement {applies}";
+static const char hcg_semi = ';', hcg_open = '{';

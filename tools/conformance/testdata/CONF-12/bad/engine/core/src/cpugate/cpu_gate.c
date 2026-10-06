@@ -19,3 +19,4 @@ int hcg_after = 0;
 char hcg_buf[sizeof(int)];
 _Alignas(16) unsigned char hcg_aligned[64];
 int hcg_c = 3, hcg_proto(void);
+const char hcg_text[] = "a; b {c}";

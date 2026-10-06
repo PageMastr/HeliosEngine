@@ -3,8 +3,9 @@
 # symbols in gate TUs (line 12 is both a .CRT$XIB entry and an external symbol; extern definitions, both
 # declarators of one statement, variables of struct, anonymous struct and enum type, a function returning
 # a struct, and the statement after it count; so do an array whose bound has parentheses, an _Alignas
-# array, and a variable declared beside a prototype, 21, whose prototype is not one); pre-gate hooks
-# elsewhere, in a vendored patch too.
+# array, and a variable declared beside a prototype, 21, whose prototype is not one; an array initialized
+# with a string that holds a ';' and braces, 22, is one symbol); pre-gate hooks elsewhere, in a vendored
+# patch too.
 apps/tool/dispatch.cpp:2: CONF-12
 apps/tool/dispatch.cpp:3: CONF-12
 engine/core/src/cpugate/cpu_gate.c:2: CONF-12
@@ -21,6 +22,7 @@ engine/core/src/cpugate/cpu_gate.c:18: CONF-12
 engine/core/src/cpugate/cpu_gate.c:19: CONF-12
 engine/core/src/cpugate/cpu_gate.c:20: CONF-12
 engine/core/src/cpugate/cpu_gate.c:21: CONF-12
+engine/core/src/cpugate/cpu_gate.c:22: CONF-12
 engine/core/src/platform/win32/cpu_gate_hook.c: CONF-12
 engine/core/src/platform/win32/cpu_gate_hook.c: CONF-12
 engine/core/src/platform/win32/cpu_gate_hook.c:2: CONF-12

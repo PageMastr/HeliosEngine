@@ -227,12 +227,15 @@ takes no other name and needs `--gate` (exit 2 otherwise; `bench/ns02_gate.h`, t
 and the `net_bench_advisory_*` CTests). A stack that fails gets only its failure line, never also the
 advisory one. Hosted Windows is not covered (its stack measured below 100k on 2 of 3 runs and 125,611 on
 2026-10-03, and the owner has not confirmed the approval for it), so its nightly step runs `net_bench --gate`
-without the flag, as do local runs and fixed hardware.
+without the flag, as do local runs and fixed hardware. **The approval lapsed on 2026-10-04** (09 §5.6), when
+the fixed-hardware re-test it owed measured the stack below 100k on the `win-gpu` runner (82,842 packets per
+core); after WP-0.13r the runner passed strictly (118,253). The Linux nightly keeps the flag until the owner
+answers whether to re-confirm the approval (09 §8.1, WP-0.13 row).
 
 | Criterion | Measurement (WP-0.13, 2026-09-25; this container, GCC 13 RelWithDebInfo, shared 4-core VM) |
 |---|---|
 | NS-0.1 handshake 1.5 RTT | server 75.6 ms, client 100.7 ms at 50 ms RTT (`net.endpoint`) |
-| NS-0.2 loopback 100k pps/core without loss | passes on hosted Linux on the owner's approval (above); gated at both levels by `net_bench --gate`. Medians of five 10-minute gate runs on 2026-10-05 (WP-0.13r): **170k encrypted HTP packets/s per core** through the full stack with both endpoints on one core, 5.9 µs per packet (156,803–174,430; every packet delivered; load average 2.7–6.7), against 113,516 (104,734–119,751, load 0.6–2.7) on main the same day; and ≈ 540k datagrams/s per core at L0 (send + receive on one core, 1,000,000/1,000,000; also `net.udp`), 474k on main the same day, a path WP-0.13r does not change on Linux |
+| NS-0.2 loopback 100k pps/core without loss | the owner's approval for hosted Linux lapsed on 2026-10-04 (above); gated at both levels by `net_bench --gate`. Medians of five 10-minute gate runs on 2026-10-05 (WP-0.13r): **170k encrypted HTP packets/s per core** through the full stack with both endpoints on one core, 5.9 µs per packet (156,803–174,430; every packet delivered; load average 2.7–6.7), against 113,516 (104,734–119,751, load 0.6–2.7) on main the same day; and ≈ 540k datagrams/s per core at L0 (send + receive on one core, 1,000,000/1,000,000; also `net.udp`), 474k on main the same day, a path WP-0.13r does not change on Linux |
 | NS-0.4 fuzzers 1 h clean | harnesses + seeds + CTest smoke; long runs under ASan/UBSan clean (see WP report); the 1 h libFuzzer nightly needs Clang's compiler-rt (absent in this container) |
 | NS-0.7 trunk 20k pps × 1,200 B, < 0.1 % drops, ≤ 1 core | `net_bench --gate`, 600 s, full datagrams (1,188 B STATE payload → 1,200 B netcode payload): 11,999,999 of 11,999,999 delivered (20,000 pps, 190.1 Mbit/s payload, 199.7 Mbit/s wire), 0 drops, cell thread 0.26 cores, gateway thread 0.29 cores; `net.trunk` repeats it for 1 s on every test run |
 

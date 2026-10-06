@@ -2789,10 +2789,12 @@ failure mode's drill is a nightly or weekly chaos test (09 §6).
 ```
 
 **Manifest (`.hman`).** A fixed-layout little-endian binary with a 352-byte header, whose payload may be
-zstd-compressed. Its byte layout is specified in `engine/patch/README.md`, and the Go and C++ writers produce
-one canonical body byte for byte, pinned by shared golden vectors. It is not schema-generated: schemac's
-binary codec is the tagged format, which tolerates unknown fields and has no single canonical encoding, while
-a signed manifest needs one. It holds:
+zstd-compressed. Its byte layout is specified in `engine/patch/README.md` ("The `.hman` v0 format"), and the
+Go and C++ writers produce one canonical body byte for byte, pinned by the shared golden vectors in
+`services/testdata/vectors/hman/`. That README section and those vectors are normative as part of this
+section: a PR that changes either is a 05 §7 Plan-Change (09 §5.10.2 D1). It is not schema-generated:
+schemac's binary codec is the tagged format, which tolerates unknown fields and has no single canonical
+encoding, while a signed manifest needs one. It holds:
 - build, monotonic `sequence` and platform;
 - per file: path, size, hash, chunk list, tags (language, optional content, vaulting — R05-P2-25) and an
   install **tier** (0 = launcher/client/login area, 1 = common, 2 = streamable regions);

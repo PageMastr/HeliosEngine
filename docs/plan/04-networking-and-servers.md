@@ -1843,14 +1843,15 @@ engine/netgame/      time sync, prediction/reconciliation, interpolation, lag-co
 engine/authority/    AGs, epochs, GhostRef, effects, handoff FSM, cell mesh, fence client
 engine/telemetry/    metrics, spans, cheat events
 engine/server/       helios::server (HEADLESS, L4; 02 §1.1): ZoneHost, CellServer, GatewayServer, TickGraph
-apps/cellserver/     helios-cell on engine/server (profiles, --replay, --embedded-gateway, --replicant, --role world-script)
+apps/cellserver/     helios-cell on engine/server (profiles, --replay, --embedded-gateway, --replicant,
+                     --role world-script)
 apps/gateway/        helios-gateway on engine/server (--embedded-voice)
 apps/voice/          helios-voice forwarder (engine/net only; no ECS)
 engine/replay/       SimInbox, recorder, keyframes and script rebase, replayer, state hashing
 tools/bots/  tools/devcluster/  tools/netinspect/  tools/fuzz/  tools/lint/simdet/
 third_party/luau/patches/det-math   Luau transcendentals, ^ and constant folding → det:: (§10.2)
 third_party/luau/patches/codegen-fornloop-fuel, fuel-counter   native-code fuel parity; inline fuel counter (§10.2)
-third_party/jolt/patches/0001-stable-order.patch   solver order by stable keys; no cross-Update cache (02 §7.1)
+third_party/jolt/patches/0001-stable-order.patch   stable-key solver order; no cross-Update cache (02 §7.1)
 schemas/net/         *.hschema wire messages (token format shared with Go via schemac)
 tests/net/ tests/replication/ tests/authority/   doctest suites, Windows↔Linux and Go-token interop
 ```

@@ -1033,25 +1033,27 @@ every module in the tree (61 module directories on fb9517f). CI on fb9517f (run 
     Phase 1 gate;
   - K39 (RT-13) fired on 2026-09-25, and both its mitigations have merged (#9);
   - K5b: WP-0.9c's `hnoise` CPU clause is red (F3), so `pcg_tests_perf` fails by design. The owner's Ryzen 5
-    5500 and RTX 3050 measured 1.67 ms per tile and 19–20 full-detail tiles per 0.8 ms (four `win-gpu` runs,
-    ADR-0.9c §2); neither is MIN hardware, and the MIN confirmation is still due;
+    5500 and RTX 3050 measured 1.67 ms per tile and 14.6–19.7 full-detail tiles per 0.8 ms (five `win-gpu`
+    runs, ADR-0.9c §2); neither is MIN hardware, and the MIN confirmation is still due;
   - the scheduled nightlies of 2026-10-04 and 2026-10-05 are red on `assetpipe_tests_perf` (a `saveMeta` p95
     of 101.7 ms against 50 ms on the hosted runner), `schemac_sql_postgres` under ASan (a socket path too long
     for PostgreSQL), `TestPerfDeepPaths` on Windows Go (2.8× against 2×; also in CI on fb9517f) and NS-0.2's
     strict gate on hosted Windows. Each is a P0 (09 §8.2); no threshold moves.
-- **NS-0.2 passes on hosted Linux on the repository owner's approval of 2026-09-30** ([09
+- **NS-0.2's owner approval of 2026-09-30 lapsed on 2026-10-04** ([09
   §5.6](plan/09-roadmap-and-process.md#56-ci-tiers-and-evidence-classes); [the
-  record](evidence/ns-0.2-owner-approval-2026-09-30.md) quotes it verbatim). The hosted Linux nightly runs
-  `net_bench --gate --advisory ns02-stack`, which reports the encrypted stack's rate instead of failing on it;
-  everything else in the run still gates. The **fixed-hardware re-test** the approval owes **passed strictly
-  on Windows**: on the owner's PC (`win-gpu`, Ryzen 5 5500) the stack measured 82,842, 82,134 and 89,080
-  packets per core in runs 1–3 and **118,253 in run 4** (37391930751, 2026-10-06, after WP-0.13r's #62: 8.46
-  µs per packet; raw datagrams 215,488 per core). Its Linux half needs a Linux lab host, so the approval still
-  carries no phase exit on its own; whether the hosted-Linux `--advisory` gets a floor or is retired is the
-  owner's decision. **Hosted Windows is not covered** and stays strict: its stack measured below 100k in 4 of
-  7 nightly runs to 2026-10-05, none of them after #62. **NS-0.7 is not covered**: it failed twice on hosted
-  Windows (2026-09-27: 1.55 % drops; 2026-10-03: 0.92 %) and passed on every other run, the four `win-gpu`
-  runs included.
+  record](evidence/ns-0.2-owner-approval-2026-09-30.md) quotes it verbatim). It let the hosted Linux nightly
+  run `net_bench --gate --advisory ns02-stack`, which reports the encrypted stack's rate instead of failing
+  on it, and it owed a strict re-test on fixed hardware: below 100k per core there, the approval lapses and
+  the stack gets a second pass. On the owner's PC (`win-gpu`, Ryzen 5 5500) the re-test failed: 82,842
+  packets per core on 2026-10-04 (run 37231118477), then 82,134, 89,080 and 85,054. The second pass followed
+  (WP-0.13r, #62), and run 37391930751 (2026-10-06) then **passed strictly at 118,253** (8.46 µs per packet;
+  raw datagrams 215,488 per core). The Linux half needs a Linux lab host. Hosted-Linux NS-0.2 counts as
+  approved again only if the owner re-confirms the approval, dated and verbatim, in its record (an owner
+  decision, 09 §8.2); until then it is judged strictly there too, although the nightly still passes
+  `--advisory` (the one hosted-Linux nightly since the lapse, 2026-10-05, measured 113,289). **Hosted Windows
+  was never covered** and stays strict: its stack measured below 100k in 4 of 7 nightly runs to 2026-10-05,
+  none of them after #62. **NS-0.7 is not covered**: it failed twice on hosted Windows (2026-09-27: 1.55 %
+  drops; 2026-10-03: 0.92 %) and passed on every other run, the five `win-gpu` runs included.
 - **Known deltas from the plan** (09 §8.1, §5.10.4):
   - the vendored SDL3 is built without its renderers and Wayland (WP-0.17);
   - the in-tree ISA and CPU-gate code still uses the per-file AVX2 allowlist and the `.CRT$XIB` entry

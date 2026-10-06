@@ -98,7 +98,8 @@ KiB). An insertion changes only the 1–3 chunks around it (tested at 100 bytes 
 05 §7 lists what the manifest holds (build, monotonic `sequence`, platform; per file: path, size, hash, chunk
 list, tags and install tier; a pack index and patches). Since plan revision 15 it also names this
 hand-written fixed layout, where it said "a schema-generated binary" (see
-[Plan conformance](#plan-conformance)). All integers are little-endian.
+[Plan conformance](#plan-conformance)), and makes this section and the shared `hman/` vectors normative: a
+change to either is a 05 §7 Plan-Change (09 §5.10.2 D1). All integers are little-endian.
 
 ```
 [0, 352)     header (fixed)

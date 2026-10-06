@@ -1,0 +1,13 @@
+{
+  "$meta": 0,
+  "guid": "51250b7c-9229-4f74-b1f9-bf8ae259d1dd",
+  "importer": "png",
+  "importerVersion": 1,
+  "provenance": {
+    "origin": "cc0",
+    "author": "ambientCG (ambientcg.com)",
+    "licence": "CC0-1.0",
+    "url": "https://ambientcg.com/view?id=Rock035",
+    "notes": "Harrow rock (PBR). Downloaded 2026-10-06 from https://ambientcg.com/get?file=Rock035_1K-PNG.zip (SHA-256 e745b558d754962ac44162ccee8805d7dba84ecdc428a543c3e552bcb28f8b85), file 'Rock035_1K-PNG_Color.png', unmodified; the committed file's SHA-256 is in content/ASSETS.md. Licence as stated: the asset page says \"All assets are released under the Creative Commons CC0 license\", and https://ambientcg.com/license says \"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\"."
+  }
+}

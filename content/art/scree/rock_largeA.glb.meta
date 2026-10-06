@@ -1,0 +1,13 @@
+{
+  "$meta": 0,
+  "guid": "3e539c29-c8e0-469d-9a52-1ef54f3e84cc",
+  "importer": "glb",
+  "importerVersion": 1,
+  "provenance": {
+    "origin": "cc0",
+    "author": "Kenney (www.kenney.nl)",
+    "licence": "CC0-1.0",
+    "url": "https://kenney.nl/assets/space-kit",
+    "notes": "Placeholder rock for the Scree belt (01 §4.2). Downloaded 2026-10-06 from https://kenney.nl/media/pages/assets/space-kit/20874c75ac-1677698978/kenney_space-kit.zip (SHA-256 d5d7cdf2635ed5a43a9187deaf409b6f47484e402321128341d3c3698e9ef4d9), file 'Models/GLTF format/rock_largeA.glb', unmodified; the committed file's SHA-256 is in content/ASSETS.md. Licence as stated: the page says \"License: Creative Commons CC0\", and the archive's License.txt says \"License: (Creative Commons Zero, CC0) http://creativecommons.org/publicdomain/zero/1.0/\"."
+  }
+}

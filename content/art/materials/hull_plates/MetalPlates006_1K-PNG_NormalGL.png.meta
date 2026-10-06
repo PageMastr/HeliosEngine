@@ -1,0 +1,13 @@
+{
+  "$meta": 0,
+  "guid": "a35878d9-edc3-4d72-99dd-577523454743",
+  "importer": "png",
+  "importerVersion": 1,
+  "provenance": {
+    "origin": "cc0",
+    "author": "ambientCG (ambientcg.com)",
+    "licence": "CC0-1.0",
+    "url": "https://ambientcg.com/view?id=MetalPlates006",
+    "notes": "Hull metal (PBR). Downloaded 2026-10-06 from https://ambientcg.com/get?file=MetalPlates006_1K-PNG.zip (SHA-256 ecf94450f608bf03bfdbefe18a740e7599f17bc199cf082e3c88387b2e7404a0), file 'MetalPlates006_1K-PNG_NormalGL.png', unmodified; the committed file's SHA-256 is in content/ASSETS.md. Licence as stated: the asset page says \"All assets are released under the Creative Commons CC0 license\", and https://ambientcg.com/license says \"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\"."
+  }
+}

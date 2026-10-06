@@ -3,6 +3,9 @@
 #include "content_check.h"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
+#include <filesystem>
 #include <format>
 #include <initializer_list>
 #include <map>
@@ -10,9 +13,11 @@
 #include <set>
 #include <span>
 #include <string_view>
+#include <system_error>
 
 #include "helios/assetpipe/meta.h"
 #include "helios/core/guid.h"
+#include "helios/core/process.h"
 #include "helios/core/vfs.h"
 #include "helios/reflect/json.h"
 
@@ -36,6 +41,16 @@ constexpr std::string_view kReservedSchemes[] = {"com.epicgames.launcher", "data
 /// grid, interior; a zone simulates one system at most, since f64 covers a single system).
 constexpr std::string_view kZoneFrameKinds[] = {"system", "body", "grid"};
 constexpr std::string_view kParentFrameKinds[] = {"system", "body", "grid", "interior"};
+/// Binary sources, stored in Git LFS (07 §1.7): the importer id (also the extension) and a name for messages.
+struct BinaryType {
+    std::string_view id;
+    std::string_view name;
+};
+constexpr BinaryType kBinaryTypes[] = {{"exr", "OpenEXR"}, {"glb", "glTF 2.0 binary"}, {"png", "PNG"}};
+/// The Git LFS pointer spec caps a pointer file at 1024 bytes (git-lfs writes about 130).
+constexpr u64 kMaxLfsPointerBytes = 1024;
+/// The cook's output folders at a content root's top, which .gitignore keeps out of git.
+constexpr std::string_view kCookOutputs[] = {".cooked", ".cache"};
 
 bool isLower(char c) noexcept { return c >= 'a' && c <= 'z'; }
 bool isDigit(char c) noexcept { return c >= '0' && c <= '9'; }
@@ -83,13 +98,70 @@ std::optional<Guid> canonicalGuid(std::string_view s) {
     return *g;
 }
 
-std::string lowerExtension(std::string_view name) {
+/// The extension of `name` as written, from its last '.' ("" without one).
+std::string_view rawExtension(std::string_view name) {
     const usize slash = name.rfind('/');
     const usize dot = name.rfind('.');
     if (dot == std::string_view::npos || (slash != std::string_view::npos && dot < slash)) return {};
-    std::string ext(name.substr(dot));
+    return name.substr(dot);
+}
+
+std::string lowerExtension(std::string_view name) {
+    std::string ext(rawExtension(name));
     for (char& c : ext) c = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
     return ext;
+}
+
+const BinaryType* binaryType(std::string_view lowerExt) {
+    for (const BinaryType& t : kBinaryTypes) {
+        if (lowerExt.size() == t.id.size() + 1 && lowerExt[0] == '.' && lowerExt.substr(1) == t.id) return &t;
+    }
+    return nullptr;
+}
+
+/// `.cooked`, `.cache` or a path inside them (relative to a content root).
+bool isCookOutput(std::string_view rel) {
+    return std::any_of(std::begin(kCookOutputs), std::end(kCookOutputs), [&](std::string_view dir) {
+        return rel == dir || (rel.starts_with(dir) && rel.size() > dir.size() && rel[dir.size()] == '/');
+    });
+}
+
+/// A Git LFS pointer as git-lfs writes it (pointer spec v1): exactly the version line, `oid sha256:` with 64
+/// lower-case hex digits and `size` with a decimal byte count, each ending in LF. Anything else, extension
+/// keys included, is not one (fail closed).
+bool isLfsPointer(std::string_view t) {
+    constexpr std::string_view kVersion = "version https://git-lfs.github.com/spec/v1\n";
+    constexpr std::string_view kOid = "oid sha256:";
+    constexpr std::string_view kSize = "size ";
+    if (!t.starts_with(kVersion)) return false;
+    t.remove_prefix(kVersion.size());
+    if (!t.starts_with(kOid) || t.size() < kOid.size() + 65 || t[kOid.size() + 64] != '\n') return false;
+    const std::string_view hex = t.substr(kOid.size(), 64);
+    if (!std::all_of(hex.begin(), hex.end(), [](char c) { return isDigit(c) || (c >= 'a' && c <= 'f'); }))
+        return false;
+    t.remove_prefix(kOid.size() + 65);
+    if (!t.starts_with(kSize)) return false;
+    t.remove_prefix(kSize.size());
+    usize digits = 0;
+    while (digits < t.size() && isDigit(t[digits])) ++digits;
+    return digits > 0 && digits <= 19 && (t[0] != '0' || digits == 1) && t.substr(digits) == "\n";
+}
+
+/// Whether `head` (the first bytes of a file of `fileSize` bytes) starts like a file of binary type `id`.
+bool matchesFormat(std::string_view id, std::span<const u8> head, u64 fileSize) {
+    const auto u32At = [&](usize at) {
+        return static_cast<u32>(head[at]) | static_cast<u32>(head[at + 1]) << 8 |
+               static_cast<u32>(head[at + 2]) << 16 | static_cast<u32>(head[at + 3]) << 24;
+    };
+    if (id == "glb") // glTF 2.0 §4.4.3: magic "glTF", container version 2, total length
+        return head.size() >= 12 && u32At(0) == 0x46546C67u && u32At(4) == 2 && u32At(8) == fileSize;
+    if (id == "png") { // ISO/IEC 15948 §5.2: the 8-byte signature
+        constexpr u8 kSignature[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+        return head.size() >= 8 && std::equal(std::begin(kSignature), std::end(kSignature), head.begin());
+    }
+    if (id == "exr") // OpenEXR: magic number 20000630, file format version 2 in the low byte
+        return head.size() >= 8 && u32At(0) == 20000630u && (u32At(4) & 0xFFu) == 2;
+    return false;
 }
 
 std::vector<std::string_view> components(std::string_view rel) {
@@ -161,8 +233,13 @@ Result<std::string> readSmallText(const fs::Path& path, u64 size) {
 // --------------------------------------------------------------------------------------------------------
 
 void checkGems(const fs::Path& projectRoot, JsonValue gems, const Report& r) {
+    std::set<std::string_view> targets;
     for (const refl::JsonMember& t : gems.members()) {
         const std::string where = join("gems", t.key);
+        if (!targets.insert(t.key).second) { // yyjson keeps both members, so readers could disagree
+            r(where, "duplicate key");
+            continue;
+        }
         if (!contains(kTargets, t.key)) {
             r(where,
               "not a build target (02 §1.3: cellserver, client, editor, gateway, launcher, tools, voice)");
@@ -309,8 +386,13 @@ void checkProduct(JsonValue product, const Report& r) {
     if (const JsonValue v = member(product, kWhere, "displayName", refl::JsonType::Object, true, r);
         v.isValid()) {
         if (v.size() == 0) r("product.displayName", "needs one entry per shipped language, at least one");
+        std::set<std::string_view> languages;
         for (const refl::JsonMember& m : v.members()) {
             const std::string where = join("product.displayName", m.key);
+            if (!languages.insert(m.key).second) {
+                r(where, "duplicate key");
+                continue;
+            }
             const bool tag = m.key.size() >= 2 && m.key.size() <= 35 &&
                              std::all_of(m.key.begin(), m.key.end(),
                                          [](char c) { return isAlpha(c) || isDigit(c) || c == '-'; }) &&
@@ -453,6 +535,172 @@ void checkEntity(const Doc& d, const std::set<std::string>& docs,
                           m->second, *guid));
 }
 
+/// A binary source's file (07 §1.7): a Git LFS pointer, as a checkout without the LFS objects has (CI), or
+/// a file that starts like its type, so that a renamed file of another kind cannot pass for it. Reads at
+/// most kMaxLfsPointerBytes.
+void checkBinarySource(const Doc& d, const BinaryType& type, ContentStats& stats, const Report& r) {
+    auto file = fs::File::open(d.path, fs::OpenMode::Read);
+    if (!file) {
+        r("", file.error().message);
+        return;
+    }
+    std::array<u8, kMaxLfsPointerBytes> head{};
+    const usize want = static_cast<usize>(std::min<u64>(d.size, head.size()));
+    usize got = 0;
+    while (got < want) {
+        auto n = file->read(head.data() + got, want - got);
+        if (!n) {
+            r("", n.error().message);
+            return;
+        }
+        if (*n == 0) break;
+        got += *n;
+    }
+    const std::string_view text(reinterpret_cast<const char*>(head.data()), got);
+    if (d.size <= kMaxLfsPointerBytes && isLfsPointer(text)) {
+        ++stats.lfsPointers;
+        return;
+    }
+    if (!matchesFormat(type.id, std::span<const u8>(head.data(), got), d.size))
+        r("", std::format("neither a Git LFS pointer nor a {} file: a binary source is its format's bytes, "
+                          "stored in Git LFS (07 §1.7)",
+                          type.name));
+}
+
+/// Runs `git -C <dir> <args...>` with `input` on its standard input; returns its standard output, or why it
+/// could not run or failed.
+Result<std::string> runGit(const fs::Path& dir, std::initializer_list<std::string_view> args,
+                           std::string_view input = {}) {
+    ProcessDesc desc;
+    desc.executable = fs::pathFromUtf8("git");
+    desc.searchPath = true;
+    desc.args = {"-C", fs::pathToUtf8(dir)};
+    for (const std::string_view a : args) desc.args.emplace_back(a);
+    HELIOS_TRY_ASSIGN(ProcessOutput out, runProcess(std::move(desc), input));
+    if (out.exitCode != 0) {
+        std::string_view err = out.err;
+        while (!err.empty() && (err.back() == '\n' || err.back() == '\r')) err.remove_suffix(1);
+        return makeError(ErrorCode::IoError, "git {} exited with {}: {}", *args.begin(), out.exitCode, err);
+    }
+    return std::move(out.out);
+}
+
+/// Git's view of a content root (07 §1.7), when it lies in a git work tree: nothing tracked under the cook's
+/// output folders (the scan skips them because git ignores them; a force-added file there would escape it),
+/// no tracked symbolic link or submodule, and every tracked binary source stored as a Git LFS pointer
+/// rather than as a blob of its bytes. Blob sizes are read first, so a large binary is never loaded.
+void checkGit(const fs::Path& root, const std::string& rootRel, const ContentOptions& options,
+              ContentStats& stats, std::vector<Finding>& findings) {
+    const auto report = [&](std::string_view rel, std::string message) {
+        findings.push_back(Finding{std::format("{}/{}", rootRel, rel), std::move(message)});
+    };
+    const auto inside = runGit(root, {"rev-parse", "--is-inside-work-tree"});
+    if (!inside || !(*inside == "true\n" || *inside == "true\r\n")) {
+        if (options.requireGit)
+            findings.push_back(Finding{
+                rootRel, std::format("not checked against git ({}): --require-git needs the content root in a "
+                                     "git work tree and git on PATH",
+                                     inside ? "not inside a work tree" : inside.error().message)});
+        return;
+    }
+    const auto listing = runGit(root, {"ls-files", "--stage", "-z", "--", "."});
+    if (!listing) {
+        findings.push_back(Finding{rootRel, listing.error().message});
+        return;
+    }
+    ++stats.gitRoots;
+    struct Tracked {
+        std::string_view blob;
+        std::string_view path;
+    };
+    std::vector<Tracked> binaries;
+    std::string_view rest = *listing;
+    while (!rest.empty()) {
+        // "<mode> <object> <stage>\t<path>\0", the path relative to the content root.
+        const usize end = std::min(rest.find('\0'), rest.size());
+        const std::string_view entry = rest.substr(0, end);
+        rest.remove_prefix(std::min(end + 1, rest.size()));
+        const usize tab = entry.find('\t');
+        const usize space = entry.find(' ');
+        if (tab == std::string_view::npos || space == std::string_view::npos || space > tab) {
+            findings.push_back(Finding{rootRel, std::format("unexpected git ls-files output '{}'", entry)});
+            continue;
+        }
+        const std::string_view mode = entry.substr(0, space);
+        const std::string_view object = entry.substr(space + 1, entry.find(' ', space + 1) - space - 1);
+        const std::string_view path = entry.substr(tab + 1);
+        if (isCookOutput(path)) {
+            report(path, "tracked by git in the cook's output folder, which the provenance scan skips: cook "
+                         "output is not content (git rm --cached it)");
+        } else if (mode == "120000") {
+            report(path, "tracked by git as a symbolic link: content is plain files (07 §1.7)");
+        } else if (mode != "100644" && mode != "100755") {
+            report(path, std::format("tracked by git with mode {} (a submodule?): content is plain files", mode));
+        } else if (binaryType(lowerExtension(path))) {
+            binaries.push_back({object, path});
+        }
+    }
+    if (binaries.empty()) return;
+
+    std::string request;
+    for (const Tracked& t : binaries) request += std::format("{}\n", t.blob);
+    const auto sizes = runGit(root, {"cat-file", "--batch-check"}, request);
+    if (!sizes) {
+        findings.push_back(Finding{rootRel, sizes.error().message});
+        return;
+    }
+    // "<object> blob <size>\n" per request line, in order.
+    std::vector<const Tracked*> small;
+    request.clear();
+    rest = *sizes;
+    for (const Tracked& t : binaries) {
+        const usize nl = std::min(rest.find('\n'), rest.size());
+        const std::string_view line = rest.substr(0, nl);
+        rest.remove_prefix(std::min(nl + 1, rest.size()));
+        const usize sp = line.rfind(' ');
+        u64 size = 0;
+        const std::string_view digits = sp == std::string_view::npos ? std::string_view() : line.substr(sp + 1);
+        const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), size);
+        if (!line.starts_with(t.blob) || line.find(" blob ") == std::string_view::npos || digits.empty() ||
+            parsed.ptr != digits.data() + digits.size()) {
+            report(t.path, std::format("git cat-file cannot read its blob ('{}')", line));
+        } else if (size > kMaxLfsPointerBytes) {
+            report(t.path, std::format("git stores it as a {}-byte blob, not as a Git LFS pointer: binary sources "
+                                       "are Git LFS objects (07 §1.7; content/.gitattributes)",
+                                       size));
+        } else {
+            small.push_back(&t);
+            request += std::format("{}\n", t.blob);
+        }
+    }
+    if (small.empty()) return;
+    const auto blobs = runGit(root, {"cat-file", "--batch"}, request);
+    if (!blobs) {
+        findings.push_back(Finding{rootRel, blobs.error().message});
+        return;
+    }
+    // "<object> blob <size>\n<content>\n" per request line, in order.
+    rest = *blobs;
+    for (const Tracked* t : small) {
+        const usize nl = rest.find('\n');
+        const usize sp = nl == std::string_view::npos ? nl : rest.rfind(' ', nl);
+        u64 size = 0;
+        if (sp == std::string_view::npos ||
+            std::from_chars(rest.data() + sp + 1, rest.data() + nl, size).ptr != rest.data() + nl ||
+            rest.size() - nl - 1 < size + 1) {
+            report(t->path, "git cat-file --batch output ended early");
+            return;
+        }
+        const std::string_view content = rest.substr(nl + 1, static_cast<usize>(size));
+        rest.remove_prefix(nl + 1 + static_cast<usize>(size) + 1);
+        if (isLfsPointer(content))
+            ++stats.gitLfs;
+        else
+            report(t->path, "git stores it as a blob that is not a Git LFS pointer: binary sources are Git LFS "
+                            "objects (07 §1.7; content/.gitattributes)");
+    }
+}
+
 } // namespace
 
 Result<assetpipe::ImporterRegistry> contentTypes() {
@@ -461,6 +709,8 @@ Result<assetpipe::ImporterRegistry> contentTypes() {
     HELIOS_TRY(types.add({.id = "hcont", .version = 1, .extensions = {".hcont"}}));
     HELIOS_TRY(types.add({.id = "hent", .version = 1, .extensions = {".hent"}}));
     HELIOS_TRY(types.add({.id = "md", .version = 1, .extensions = {".md"}}));
+    for (const BinaryType& t : kBinaryTypes)
+        HELIOS_TRY(types.add({.id = std::string(t.id), .version = 1, .extensions = {std::format(".{}", t.id)}}));
     return types;
 }
 
@@ -527,7 +777,8 @@ ProjectFile checkProjectFile(const fs::Path& projectRoot, std::vector<Finding>& 
 }
 
 ContentStats checkContent(const fs::Path& projectRoot, const ProjectFile& project,
-                          const assetpipe::ImporterRegistry& types, std::vector<Finding>& findings) {
+                          const assetpipe::ImporterRegistry& types, std::vector<Finding>& findings,
+                          const ContentOptions& options) {
     ContentStats stats;
     std::set<std::string_view> zones;
     for (const ZoneDecl& z : project.zones) zones.insert(z.name);
@@ -538,8 +789,7 @@ ContentStats checkContent(const fs::Path& projectRoot, const ProjectFile& projec
             findings.push_back(Finding{at(rel), std::move(message)});
         };
         fs::ListOptions opts;
-        opts.recursive = true;
-        opts.includeDirectories = false;
+        opts.recursive = true; // directories too: the listing shows a linked one but does not enter it
         auto listing = fs::listDirectory(root, opts);
         if (!listing) {
             findings.push_back(Finding{rootRel, listing.error().message});
@@ -549,8 +799,18 @@ ContentStats checkContent(const fs::Path& projectRoot, const ProjectFile& projec
         std::set<std::string> hidden;
         for (const fs::DirEntry& e : *listing) {
             const std::string& rel = e.relativePath;
-            // The cook outputs that .gitignore keeps out of git (/content/.cooked/, /content/.cache/).
-            if (rel.starts_with(".cooked/") || rel.starts_with(".cache/")) continue;
+            // The cook outputs that .gitignore keeps out of git (/content/.cooked/, /content/.cache/); a
+            // tracked file there is checkGit's.
+            if (isCookOutput(rel)) continue;
+            // The scan and the records cook do not follow a link into a directory, and a link (or junction)
+            // can point outside the project: everything here is a plain file or directory.
+            std::error_code ec;
+            const std::filesystem::file_status st = std::filesystem::symlink_status(e.path, ec);
+            if (ec || !(std::filesystem::is_regular_file(st) || std::filesystem::is_directory(st))) {
+                report(rel, "a symbolic link, junction or special file: content is plain files and directories, "
+                            "which the provenance scan reads (replace it with what it points to)");
+                continue;
+            }
             const std::vector<std::string_view> parts = components(rel);
             bool skip = false;
             for (usize i = 0; i < parts.size() && !skip; ++i) {
@@ -568,9 +828,14 @@ ContentStats checkContent(const fs::Path& projectRoot, const ProjectFile& projec
                         "may not hide (rename or remove it)");
                 }
             }
-            if (skip) continue;
+            if (skip || e.isDirectory) continue;
             if (lowerExtension(rel) == assetpipe::kMetaExtension) continue; // scanMetas checks sidecars
             ++stats.files;
+            if (const std::string_view ext = rawExtension(rel); ext != lowerExtension(rel)) {
+                report(rel, std::format("extension '{}' is not lower case: the content root's .gitattributes "
+                                        "patterns (LF text, Git LFS) match lower case only",
+                                        ext));
+            }
             if (!types.forFile(rel)) {
                 const std::string ext = lowerExtension(rel);
                 report(rel, std::format(
@@ -639,8 +904,12 @@ ContentStats checkContent(const fs::Path& projectRoot, const ProjectFile& projec
             } else if (ext == ".hent") {
                 checkEntity(d, docPaths, metaGuids, r);
                 ++stats.entities;
+            } else if (const BinaryType* type = binaryType(ext)) {
+                checkBinarySource(d, *type, stats, r);
+                ++stats.binaries;
             }
         }
+        checkGit(root, rootRel, options, stats, findings);
     }
     return stats;
 }

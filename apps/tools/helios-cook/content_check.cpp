@@ -51,7 +51,7 @@ struct BinaryType {
 constexpr BinaryType kBinaryTypes[] = {{"exr", "OpenEXR"}, {"glb", "glTF 2.0 binary"}, {"png", "PNG"}};
 /// The Git LFS pointer spec caps a pointer file at 1024 bytes (git-lfs writes about 130).
 constexpr u64 kMaxLfsPointerBytes = 1024;
-/// A text document is validated in chunks of this size, so the check holds no more whatever the file's size.
+/// Text documents are validated in chunks of this size, so memory stays bounded whatever a file's size.
 constexpr usize kTextChunkBytes = 64 * 1024;
 /// The cook's output folders at a content root's top, which .gitignore keeps out of git.
 constexpr std::string_view kCookOutputs[] = {".cooked", ".cache"};

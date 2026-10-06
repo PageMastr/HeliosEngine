@@ -89,6 +89,7 @@ extern "C" const PIMAGE_TLS_CALLBACK helios_cpu_gate_tls_entry; // the gate's sl
 #endif
 
 namespace {
+#if defined(HELIOS_CPUGATE_CHILD_HOOK_IN_IMAGE) || defined(HELIOS_CPUGATE_RUNTIME_DLL)
 // Whether `slot` is AddressOfCallBacks[0] of `image`'s TLS directory.
 const char* firstCallback(HMODULE image, std::uintptr_t slot, const char* first) {
     const auto* base = reinterpret_cast<const unsigned char*>(image);
@@ -100,6 +101,7 @@ const char* firstCallback(HMODULE image, std::uintptr_t slot, const char* first)
     // AddressOfCallBacks is a virtual address, already relocated by the loader.
     return static_cast<std::uintptr_t>(tls->AddressOfCallBacks) == slot ? first : "not-first";
 }
+#endif
 
 const char* tlsOrder() {
 #if defined(HELIOS_CPUGATE_CHILD_HOOK_IN_IMAGE)

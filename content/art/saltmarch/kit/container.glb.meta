@@ -1,0 +1,13 @@
+{
+  "$meta": 0,
+  "guid": "87efc101-7b8d-41ff-bdbc-a89d097db703",
+  "importer": "glb",
+  "importerVersion": 1,
+  "provenance": {
+    "origin": "cc0",
+    "author": "Kenney (www.kenney.nl)",
+    "licence": "CC0-1.0",
+    "url": "https://kenney.nl/assets/space-station-kit",
+    "notes": "Modular piece for the Saltmarch outpost (01 §4.2). Downloaded 2026-10-06 from https://kenney.nl/media/pages/assets/space-station-kit/6475288f2e-1712749919/kenney_space-station-kit.zip (SHA-256 215e79bd5415cff93665183390f0343ed9acf87780306331013b78520170c6d8), file 'Models/GLB format/container.glb', unmodified; the committed file's SHA-256 is in content/ASSETS.md. Licence as stated: the page says \"License: Creative Commons CC0\", and the archive's License.txt says \"License: (Creative Commons Zero, CC0) http://creativecommons.org/publicdomain/zero/1.0/\"."
+  }
+}

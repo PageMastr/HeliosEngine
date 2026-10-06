@@ -1,0 +1,13 @@
+{
+  "$meta": 0,
+  "guid": "8d390b9c-efb6-4a09-ab7c-9d4edd277f65",
+  "importer": "exr",
+  "importerVersion": 1,
+  "provenance": {
+    "origin": "cc0",
+    "author": "Greg Zaal (photography) and Jarod Guest (processing), Poly Haven",
+    "licence": "CC0-1.0",
+    "url": "https://polyhaven.com/a/qwantani_dusk_2_puresky",
+    "notes": "Sky environment map for Harrow (HDR, equirectangular). Downloaded 2026-10-06 from https://dl.polyhaven.org/file/ph-assets/HDRIs/exr/1k/qwantani_dusk_2_puresky_1k.exr (SHA-256 9374eec747b84f76bb8535250a0756ca4dcbecfe0cb67abcfb0558ca2fbd2037), unmodified; the committed file's SHA-256 is in content/ASSETS.md. Licence as stated: the asset page's License field says \"CC0\", and https://polyhaven.com/license says \"Our assets are all licensed as CC0, which is effectively Public Domain even in jurisdictions that do not support the Public Domain.\"."
+  }
+}

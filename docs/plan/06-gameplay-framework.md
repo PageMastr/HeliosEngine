@@ -46,10 +46,11 @@
 ### 1.1 Tags
 
 - **Declaration and interning.** Hierarchical tags (`State.Debuff.Stun`, `Ship.Class.Frigate`)
-  are declared in `.htags` files or inline in records, each with a replication audience.
-  `helios-schemac` interns each tag to a dense u16 `TagIndex` with a precomputed ancestor list.
-  It also computes a **hot set**: every tag named by any `TagQuery`, at most 1,024. The registry
-  hash is part of the content version.
+  are declared by `TagDef` records (`schemas/gameplay/tags.hschema`), each with a replication
+  audience, or implied by their use in records. The records cook interns each tag, its ancestors
+  included, to a dense u16 `TagIndex` with a precomputed ancestor list, in byte-wise name order,
+  and writes the table into both `.hrdb` files (02 §3.3). It also computes a **hot set**: every tag
+  named by any `TagQuery`, at most 1,024. The registry hash is part of the content version.
 - **Runtime storage.** `TagCounts` is a sorted `(TagIndex, refcount)` vector, because several
   effects can grant the same tag. `TagBits` is a hot-set bitset of at most 128 B. Adding tag X sets
   X's bit and the bits of its ancestors.

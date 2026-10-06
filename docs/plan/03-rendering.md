@@ -1844,8 +1844,11 @@ exists for one gate (AAA-REN-3) and inherits everything else from High.
 - **Harness:** `helios-rendertest` renders deterministic scenes (fixed camera, time, seeds, jitter;
   temporal warm-up) to EXR/PNG.
 - **Comparison:** ꟻLIP (NVIDIA, BSD-3, verify when vendoring), mean ≤ 0.01 plus per-test max error.
-  Goldens live in Git LFS per backend and driver; CI pins the Mesa image; REF/MIN hardware keeps
-  nightly goldens.
+  Goldens are kept per backend and driver; CI pins the Mesa image; REF/MIN hardware keeps nightly
+  goldens. The lavapipe and Null goldens that every PR job compares are small (320 × 180 to 640 × 360) and
+  are committed as ordinary files under `tools/rendertest/golden/` (`vulkan-<driver>/`, `null/`), because
+  PR-tier checkouts do not fetch Git LFS objects. Hardware goldens go to Git LFS when the H1 lab produces
+  them (WP-1.23), with their nightly job fetching them.
 - **Lavapipe realities:** it rasterizes on the CPU, so tests run at 320 × 180 to 640 × 360 and the
   per-commit suite gets ≤ 10 min on 8 cores. Mesa 25.2 lets it cover the mesh-shader and ray-query
   paths as well as the cap-masked fallbacks.
@@ -1897,8 +1900,9 @@ engine/render/         L3, non-HEADLESS: graph/ pipeline/ scene/ culling/ stream
 engine/presentation/   L4 (02 owns, 03 co-owns extractors): flecs → RenderScene packet
 engine/render_plugins/ aftermath, dlss, xess (optional; SDKs not vendored)
 shaders/               core/ brdf/ lighting/ atmosphere/ materials/ passes/ vfx/ terrain/
-apps/tools/            helios-shaderc, helios-rendertest, helios-bake (impostors, nebulae, probes)
-tests/golden/          LFS goldens per backend/driver; Null trace goldens
+tools/shaderc/         helios-shaderc
+tools/rendertest/      helios-rendertest; golden/vulkan-<driver>/ images and golden/null/ traces (§8.4)
+apps/tools/            helios-bake (impostors, nebulae, probes)
 ```
 
 ### 9.2 MVP → AAA feature ladder

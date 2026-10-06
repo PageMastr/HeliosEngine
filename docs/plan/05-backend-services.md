@@ -2773,7 +2773,8 @@ failure mode's drill is a nightly or weekly chaos test (09 §6).
   asset/block in a stable order (ADR-006).
 - **Chunk ID:** the **BLAKE2b-256** of the uncompressed bytes (Monocypher 4.0.3 in C++,
   `x/crypto/blake2b` in Go). XXH3 is not used here because it is not adversary-resistant.
-- **Storage:** chunks are stored zstd-19 (`klauspost/compress` in Go).
+- **Storage:** each chunk is stored as one zstd frame at `klauspost/compress`'s best ratio
+  (`SpeedBestCompression`, about zstd level 11), since `helios-patch publish` is Go.
 - **Packs:** chunks under 32 KiB are grouped into ~8 MiB packs and fetched with coalesced range requests.
 
 **CDN layout.** Everything except the pointers is immutable, so nothing is ever invalidated.
@@ -2787,7 +2788,11 @@ failure mode's drill is a nightly or weekly chaos test (09 §6).
 /keys/<product>/keyset.json                            root-signed subkey list, max-age=60 (08 §2.10.3)
 ```
 
-**Manifest (`.hman`).** A schema-generated binary, zstd-compressed. It holds:
+**Manifest (`.hman`).** A fixed-layout little-endian binary with a 352-byte header, whose payload may be
+zstd-compressed. Its byte layout is specified in `engine/patch/README.md`, and the Go and C++ writers produce
+one canonical body byte for byte, pinned by shared golden vectors. It is not schema-generated: schemac's
+binary codec is the tagged format, which tolerates unknown fields and has no single canonical encoding, while
+a signed manifest needs one. It holds:
 - build, monotonic `sequence` and platform;
 - per file: path, size, hash, chunk list, tags (language, optional content, vaulting — R05-P2-25) and an
   install **tier** (0 = launcher/client/login area, 1 = common, 2 = streamable regions);

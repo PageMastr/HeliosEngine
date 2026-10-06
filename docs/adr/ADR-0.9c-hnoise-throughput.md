@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Status** | **Recorded, outcome RED (F3 trigger) on the CPU clause; GPU clause unconfirmed.** Measured 2026-09-25 in the development container. The CPU clause fails by about 6× in the development container (and by about 3.3× on the owner's Ryzen 5 5500: 1.670 ms per tile, win-gpu run 37328633862, 2026-10-05). The GPU clause was measured on lavapipe, which 03 §5.5a counts as a CI budget figure, never a performance claim, and on the owner's RTX 3050 (win-gpu runs since 2026-10-04), neither of them MIN hardware. The **MIN confirmation (GTX 1660 S, RX 5600 XT, Ryzen 5 3600) is still due before WP-1.8 starts**, and the Phase 0 exit records this spike as "pending its MIN confirmation" (09 §2.1) |
+| **Status** | **Recorded, outcome RED (F3 trigger) on the CPU clause; GPU clause unconfirmed.** Measured 2026-09-25 in the development container. The CPU clause fails by about 6× in the development container (and by about 3.3× on the owner's Ryzen 5 5500: 1.666–1.674 ms per tile in four `win-gpu` runs, 2026-10-04 to 2026-10-06, §2). The GPU clause was measured on lavapipe, which 03 §5.5a counts as a CI budget figure, never a performance claim, and on the owner's RTX 3050 (19.1–19.7 full-detail tiles per 0.8 ms in the same runs, the amber band), neither of them MIN hardware, so the outcome does not change. The **MIN confirmation (GTX 1660 S, RX 5600 XT, Ryzen 5 3600) is still due before WP-1.8 starts**, and the Phase 0 exit records this spike as "pending its MIN confirmation" (09 §2.1) |
 | **Decides** | The WP-0.9c outcome of [03 §5.5a](../plan/03-rendering.md#55a-terrain-generation-throughput-32-bit-twin-cost-model-spike-fallbacks): green, amber (F2) or red (F3) |
-| **Arms** | Risk **K5b** ([09 §7](../plan/09-roadmap-and-process.md#7-risk-register)): its trigger is "spike below green" |
+| **Fired** | Risk **K5b** ([09 §7](../plan/09-roadmap-and-process.md#7-risk-register)): its trigger is "spike below green", which this outcome met on 2026-09-25 |
 | **Owner** | Render lead (03 §5.5a), with the runtime lead for the CPU VM (02 §5.8) |
 | **Evidence** | `pcg_hnoise_bench` (`engine/pcg/bench/hnoise_bench.cpp`), `pcg_tests` `perf:` case, `pcg_gpu_tests`; code in `engine/pcg/` and `shaders/pcg/`; the shared corpus `tests/corpus/hnoise` |
 
@@ -74,7 +74,7 @@ shapes are built from the Phase 0 node set. The costs are the node set's real co
 | Adapter | Full detail (64 tiles per dispatch) | Level-adaptive |
 |---|---|---|
 | lavapipe (llvmpipe, 4 vCPUs) | 119 ms per 64 tiles → **0.43 tiles per 0.8 ms** | 110 ms → 0.47 tiles per 0.8 ms |
-| `win-gpu` runner | not run (WP-0.4 runner not available to this work package) | — |
+| `win-gpu` runner: RTX 3050 8 GB (driver 610.88), not MIN hardware | 19.07, 19.65, 19.41 and 19.65 tiles per 0.8 ms (runs 37231118477, 37263321224, 37328633862, 37391930751) | 21.51, 22.55, 21.94 and 22.38 |
 | MIN: GTX 1660 S, RX 5600 XT | not run (the H1 lab has not landed) | — |
 
 GPU time is the wall time of submit plus wait for one dispatch, minus an empty dispatch's (0.25 ms). The
@@ -84,6 +84,23 @@ everything else on the VM: a re-run while another build was compiling (load aver
 vCPUs) measured 253 ms per 64 tiles (0.20 tiles per 0.8 ms). The CPU medians in that run stayed within
 3 % of the table above (AVX2 3.15 ms GCC, 3.11 ms Clang).
 
+**The owner's PC (`win-gpu`, WP-0.4): additional evidence, not MIN hardware.** Four runs of `win-gpu.yml`
+(`pcg_hnoise_bench --hardware-gpu --tiles=64 --gpu-tiles=64 --repeats=20` in the `windows-vs2022`
+RelWithDebInfo build, MSVC; AMD Ryzen 5 5500, NVIDIA GeForce RTX 3050 8 GB, driver 610.88). Each logged
+`pcg.kernel=avx2`, and each GPU batch was bit-identical to the CPU; the empty-dispatch overhead subtracted was
+0.124–0.153 ms.
+
+| Run (date, `main`) | CPU avx2, full detail / level-adaptive (ms per tile, median) | sse42 / scalar, full detail | GPU full detail / level-adaptive (tiles per 0.8 ms) |
+|---|---|---|---|
+| 37231118477 (2026-10-04, 583662c) | 1.666 / 1.804 | 3.337 / 9.984 | 19.07 / 21.51 |
+| 37263321224 (2026-10-05, 1adb599) | 1.674 / 1.799 | 3.292 / 10.234 | 19.65 / 22.55 |
+| 37328633862 (2026-10-05, aa80a1d) | 1.670 / 1.803 | 3.089 / 9.814 | 19.41 / 21.94 |
+| 37391930751 (2026-10-06, 2bc2d85) | 1.673 / 1.805 | 3.085 / 9.856 | 19.65 / 22.38 |
+
+The CPU clause is red there too (about 3.3× the 0.5 ms), and the GPU lands in the amber band (≥ 16, < 64
+tiles per 0.8 ms). An RTX 3050 is not a MIN GPU, so neither figure changes the outcome below; the MIN
+confirmation (§6, item 2) is still due.
+
 ## 3. Outcome against 03 §5.5a
 
 | Clause | Threshold on MIN | Measured | Verdict |
@@ -92,7 +109,7 @@ vCPUs) measured 253 ms per 64 tiles (0.20 tiles per 0.8 ms). The CPU medians in 
 | GPU | Green ≥ 64 tiles per 0.8 ms; amber ≥ 16; red < 16 | lavapipe only (0.43), no claim | **Unconfirmed**. The estimate below says amber is plausible on MIN |
 
 **Outcome: RED (F3), pending the MIN confirmation.** The CPU clause alone decides red. The run was valid
-by 03 §5.5a's own rule, because it logged `pcg.kernel=avx2`. **K5b is armed.**
+by 03 §5.5a's own rule, because it logged `pcg.kernel=avx2`. **K5b fired** (its trigger is "spike below green"; 09 §7).
 
 **GPU estimate (not a measurement).**
 - On the GPU the per-sample work is scalar 32-bit code. The instruction count per noise evaluation is about
@@ -168,6 +185,8 @@ budget and the graph size do not fit together.
    - The run is valid only if the log shows `pcg.kernel=avx2` (exit code 2 otherwise) and the GPU batch is
      bit-identical to the CPU (exit code 3 otherwise).
    - Record full-detail and level-adaptive tiles per 0.8 ms and the CPU ms per tile in this ADR.
+   - *Done:* `win-gpu.yml` runs it in the `windows-vs2022` RelWithDebInfo build on every run; four runs from
+     2026-10-04 to 2026-10-06 are recorded in §2.
 2. **MIN confirmation**, due before WP-1.8 starts (K7's trigger counts an unmeasured MIN at the Phase 1
    midpoint as red).
    - Run the same command on the lab's MIN-NV box (Ryzen 5 3600 + GTX 1660 S) and MIN-AMD box (RX 5600 XT),

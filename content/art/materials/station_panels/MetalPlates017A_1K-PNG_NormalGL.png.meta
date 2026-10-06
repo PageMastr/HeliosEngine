@@ -1,0 +1,13 @@
+{
+  "$meta": 0,
+  "guid": "74437f58-0133-4921-8eb2-cd51324c13df",
+  "importer": "png",
+  "importerVersion": 1,
+  "provenance": {
+    "origin": "cc0",
+    "author": "ambientCG (ambientcg.com)",
+    "licence": "CC0-1.0",
+    "url": "https://ambientcg.com/view?id=MetalPlates017A",
+    "notes": "Station panels (PBR). Downloaded 2026-10-06 from https://ambientcg.com/get?file=MetalPlates017A_1K-PNG.zip (SHA-256 10a146661c3ce17a5c9c8587a30de5de5f193f8c9215eb4af08b4804cc52c308), file 'MetalPlates017A_1K-PNG_NormalGL.png', unmodified; the committed file's SHA-256 is in content/ASSETS.md. Licence as stated: the asset page says \"All assets are released under the Creative Commons CC0 license\", and https://ambientcg.com/license says \"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\"."
+  }
+}

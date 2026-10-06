@@ -29,14 +29,15 @@ if(HELIOS_BUILD_TESTS)
   set_tests_properties(lint_records_sec4 lint_records_sec4_m0_sample lint_records_sec4_fixture_leak PROPERTIES LABELS lint TIMEOUT 120)
 
   # The reference project (WP-0.20, 09 §2.1: "Records compile; 100 % provenance"). lint_content_check runs
-  # `check` on the repository's helios.project.jsonc and content/; lint_content_records_cook cooks content/'s
+  # `check` on the repository's helios.project.jsonc and content/, with --require-git so that git's rules
+  # (binary sources in Git LFS, nothing tracked as cook output) cannot be skipped; lint_content_records_cook cooks content/'s
   # records; lint_content_records_canonical has helios-tool confirm they are in the canonical form the editor
   # writes; lint_records_sec4_content searches the cook for the server-only aiHints keys of the reference
   # ship (AAA-SEC-4 on the game's own records). The fixture cases copy the project file, content/ and schemas/
   # into the build tree, seed one violation each (tests/content_check_test.cmake lists them) and must fail
   # with it; `valid` copies them unchanged and must pass, `cook_then_check` passes after a default cook and
   # `ignored_cache` with a cook cache at the root's top.
-  add_test(NAME lint_content_check COMMAND helios-cook check --project-root=${PROJECT_SOURCE_DIR})
+  add_test(NAME lint_content_check COMMAND helios-cook check --project-root=${PROJECT_SOURCE_DIR} --require-git)
   add_test(NAME lint_content_records_cook
     COMMAND helios-cook records --project-root=${PROJECT_SOURCE_DIR}/content --out=${CMAKE_CURRENT_BINARY_DIR}/content_cook)
   add_test(NAME lint_content_records_canonical
@@ -66,13 +67,25 @@ if(HELIOS_BUILD_TESTS)
       project_product_unknown_key project_product_id project_product_id_form project_display_name
       project_display_name_tag project_display_name_empty project_install_name project_install_name_form
       project_install_name_prefix project_reserved_scheme project_uri_scheme_form project_scheme_helios_prefix
-      project_scheme_ms_prefix project_product_version
-      broken_record)
+      project_scheme_ms_prefix project_product_version project_gems_duplicate_target
+      project_display_name_duplicate
+      broken_record
+      binary_missing_sidecar binary_licence_by binary_cc0_without_url binary_real_files binary_wrong_format
+      binary_glb_length binary_exr_wrong_format binary_text lfs_pointer_malformed upper_case_extension
+      directory_symlink file_symlink text_binary_md text_nul_in_record text_invalid_utf8 text_truncated_utf8
+      text_utf8_chunk_boundary)
+  # Git's view of the content (07 §1.7): each case makes its copy a repository of its own.
+  find_program(HELIOS_COOK_GIT git)
+  if(HELIOS_COOK_GIT)
+    list(APPEND _contentCases git_tracked_cooked git_tracked_cache git_binary_outside_lfs
+         git_binary_outside_lfs_large git_tracked_symlink git_tracked_submodule git_lfs_valid git_required)
+  endif()
   set(_contentTests lint_content_check lint_content_records_cook lint_content_records_canonical lint_records_sec4_content)
   foreach(case IN LISTS _contentCases)
     add_test(NAME lint_content_check_fixture_${case}
       COMMAND ${CMAKE_COMMAND} -DCOOK=$<TARGET_FILE:helios-cook> -DSOURCE=${PROJECT_SOURCE_DIR}
               -DWORK=${CMAKE_CURRENT_BINARY_DIR}/content_fixture/${case} -DCASE=${case}
+              -DFIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures -DGIT=${HELIOS_COOK_GIT}
               -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/content_check_test.cmake)
     list(APPEND _contentTests lint_content_check_fixture_${case})
   endforeach()

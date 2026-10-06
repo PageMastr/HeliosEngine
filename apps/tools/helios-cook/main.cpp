@@ -34,7 +34,8 @@ Verbs
              (02 §3.3: $parent inheritance, reference, tag and formula checks, the client/server
              split with its AAA-SEC-4 rules)
   check      validate helios.project.jsonc and every file under its content roots: provenance
-             (a valid .meta sidecar each; 01 §5.2) and layout (zones, containers, entities; 07 §1.8.2)
+             (a valid .meta sidecar each; 01 §5.2), layout (zones, containers, entities; 07 §1.8.2)
+             and binary sources (Git LFS pointers or files of their type, stored in LFS; 07 §1.7)
 
 Options
   --project-root=<dir>   records: a content root, the directory with records/<table>/*.hrec;
@@ -42,6 +43,9 @@ Options
                          (default for both: current directory)
   --out=<dir>            records: output directory (default: <project-root>/.cooked, which
                          .gitignore keeps out of git for content/ and the check skips)
+  --require-git          check: a content root outside a git work tree (or no git on PATH)
+                         is an error instead of skipping the git rules (tracked cook output,
+                         links, binary sources outside Git LFS)
   --quiet                print errors only
   --log-level=<level>    trace|debug|info|warn|error (default warn)
   --version, --help
@@ -94,7 +98,8 @@ int cmdCheck(const CommandLine& cl) {
     if (!types) return fail(kFailed, std::format("content types: {}", types.error()));
     std::vector<cook::Finding> findings;
     const cook::ProjectFile project = cook::checkProjectFile(root, findings);
-    const cook::ContentStats st = cook::checkContent(root, project, *types, findings);
+    const cook::ContentStats st =
+        cook::checkContent(root, project, *types, findings, {.requireGit = cl.has("require-git")});
     const auto key = [](const cook::Finding& f) { return std::tie(f.path, f.message); };
     std::sort(findings.begin(), findings.end(),
               [&](const auto& a, const auto& b) { return key(a) < key(b); });
@@ -108,11 +113,15 @@ int cmdCheck(const CommandLine& cl) {
         return fail(kCookErrors, std::format("{} finding(s)", findings.size()));
     }
     if (!cl.has("quiet")) {
+        const std::string git =
+            st.gitRoots == project.contentRoots.size()
+                ? std::format("{} tracked in Git LFS", st.gitLfs)
+                : std::format("git rules run on {} of {} content root(s)", st.gitRoots, project.contentRoots.size());
         const std::string text = std::format(
             "helios.project.jsonc: {} content root(s), {} zone(s); {} content files, {} with provenance; "
-            "{} container(s), {} entit{}\n",
+            "{} container(s), {} entit{}; {} binary source(s), {} as LFS pointers, {}\n",
             project.contentRoots.size(), project.zones.size(), st.files, st.withMeta, st.containers,
-            st.entities, st.entities == 1 ? "y" : "ies");
+            st.entities, st.entities == 1 ? "y" : "ies", st.binaries, st.lfsPointers, git);
         std::fputs(text.c_str(), stdout);
     }
     return kOk;

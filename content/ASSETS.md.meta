@@ -1,0 +1,12 @@
+{
+  "$meta": 0,
+  "guid": "50751a17-4db1-46c9-b688-e8d5a6fdb93a",
+  "importer": "md",
+  "importerVersion": 1,
+  "provenance": {
+    "origin": "original",
+    "author": "Claude Code, agent-authored",
+    "licence": "MIT",
+    "notes": "Written for this repository in WP-0.20b: the starter art's sources and hashes, quoting each source's licence statement."
+  }
+}

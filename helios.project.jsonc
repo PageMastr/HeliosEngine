@@ -1,0 +1,43 @@
+// The project file of this repository's reference game, Cinder Reach (01 §4.2), at the project root as
+// 09 §2.7.2 lays a project out. `helios-cook check` validates it and the content it names, and fails closed
+// on an unknown key (apps/tools/helios-cook/README.md); content/README.md explains the content layout.
+{
+  "$project": 0,
+  // Semver pin of the engine this project is written for (09 §2.7.2): the top-level CMake project()'s
+  // version until the first engine release.
+  "engineVersion": "0.1.0",
+  // Gems enabled per build target (02 §1.2, §1.3). Phase 0 has no gems.
+  "gems": {},
+  // Patch channels the project publishes to (09 §2.7.2; 05 §7). M0's launcher uses dev.
+  "channels": ["dev"],
+  // Project schema packages compiled to C++ and Go (02 §3.8); the record types under content/ are in the
+  // native `sample` package (schemas/sample), which helios-cook and helios-tool link.
+  "schemas": {
+    "native": ["sample"]
+  },
+  // Content roots, relative to this file: records in <root>/records/<table>/, zones in <root>/zones/<zone>/
+  // (07 §1.7.1, §1.8.2). Every file under a root carries provenance (01 §5.2; content/README.md).
+  "contentRoots": ["content"],
+  // Zones (02 §5.5). Phase 1 has one: Tallis space and the Harrow surface are the zone `tallis`, and the
+  // Saltmarch outpost is a container in it (the owner's "Option A", 2026-10-04). `id` and `tickHz` match the
+  // cell's standalone default (apps/cellserver, tallis:1002 at 20 Hz). `frame` is the zone's root frame
+  // (02 §5.1), the Tallis system. Its edit session is zone-tallis (07 §1.8.2).
+  "zones": [
+    {
+      "name": "tallis",
+      "id": 1002,
+      "tickHz": 20,
+      "frame": "system:tallis"
+    }
+  ],
+  // The product block (08 §2.10.1), as a stub: 08 names the reference game's product cinder-reach,
+  // CinderReach, scheme cinderreach. Endpoints, branding, signing and keys come with WP-2.16a1/2.16b and
+  // WP-0.17.
+  "product": {
+    "productId": "cinder-reach",
+    "displayName": {"en": "Cinder Reach"},
+    "installName": "CinderReach",
+    "uriScheme": "cinderreach",
+    "version": "0.1.0"
+  }
+}

@@ -212,6 +212,15 @@ class SnapshotTests(unittest.TestCase):
                              encoding="utf-8")
         self.assertTrue(snapshot.inventory_cell(self.root).endswith("`tools/gone` (0.7); `content/demo` (0.8)"))
 
+    def test_an_existing_non_module_directory_is_not_absent(self):
+        self.plan.write_text(PLAN.replace("`tools/gone` (0.7) |", "`tools/gone` (0.7); `content` (0.20) |"),
+                             encoding="utf-8")
+        absent = [n for n in self.check()[1] if "not in this tree" in n]
+        self.assertTrue(absent and absent[0].endswith("tools/gone, content"), absent)
+        (self.root / "content").mkdir()
+        absent = [n for n in self.check()[1] if "not in this tree" in n]
+        self.assertTrue(absent and absent[0].endswith("tools/gone"), absent)
+
     def test_write_keeps_escaped_pipes_in_other_cells(self):
         self.plan.write_text(PLAN.replace("with its WP |", "with its WP (`a\\|b`) |"), encoding="utf-8")
         (self.root / "tools" / "newtool").mkdir(parents=True)

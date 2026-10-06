@@ -1,0 +1,12 @@
+{
+  "$meta": 0,
+  "guid": "eccddf2f-5ab3-4d14-8286-2d242035d73c",
+  "importer": "md",
+  "importerVersion": 1,
+  "provenance": {
+    "origin": "original",
+    "author": "Claude Code, agent-authored",
+    "licence": "MIT",
+    "notes": "Written for this repository in WP-0.20: original text with no third-party material."
+  }
+}

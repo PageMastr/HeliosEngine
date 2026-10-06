@@ -6,9 +6,11 @@ reports under [`research/`](research/). Where this summary and a section disagre
 [`plan/00-decisions.md`](plan/00-decisions.md) (the Architecture Decision Record) wins over both.*
 
 **Status:** approved in review round 5 (2026-09-25) with minor revisions, which have been applied (plan
-revision 6; [§13](#13-review-record)). Phase 0 (Foundations) is in progress. Two Phase 0 risk triggers have
-fired: RT-01's structural-ops pre-bench (K2, [ADR-004a](adr/ADR-004a-ecs-rt01-structural-ops.md) open) and
-RT-13's Luau fuel metering (K39).
+revision 6; [§13](#13-review-record)); the plan changes merged since bring it to revision 15
+(`plan/CONSISTENCY.md` §43). Phase 0 (Foundations) is in progress (§11). Three Phase 0 risk triggers have
+fired: RT-01's structural-ops pre-bench (K2, [ADR-004a](adr/ADR-004a-ecs-rt01-structural-ops.md) open), RT-13's
+Luau fuel metering (K39, both mitigations merged) and the `hnoise` throughput spike (K5b,
+[ADR-0.9c](adr/ADR-0.9c-hnoise-throughput.md), F3).
 
 ---
 
@@ -986,110 +988,85 @@ contention. Both are recorded under K3 and fixed by 02 §2.2's sharded, batched 
 
 ## 11. Building and running today (Windows and Linux)
 
-**Current state (2026-09-27, `main` at 5f88be7).** The Director refreshes this list every round
+**Current state (2026-10-06, `main` at fb9517f).** The Director refreshes this list every round
 ([09 §5.10.2](plan/09-roadmap-and-process.md#5102-rules-for-the-director), rule D6), and
-[09 §8.1](plan/09-roadmap-and-process.md#81-phase-0-status-repository-on-2026-09-27) has the detail. The
-facts below were checked against that tree: test counts are doctest cases in a linux-gcc build of 1425608,
-plus #19's 12 `schemac_tests` cases counted from source, and Go tests as `go test -list` gives them.
-CI run 36344848217 on 5f88be7 was still queued at this snapshot. The last completed run on `main`,
-36336602340 on 1425608, passed all ten jobs: the GCC, Clang and headless tests, the MinGW cross-build, MSVC at
-the primary and the floor, clang-cl, and Go.
-`cmake -P tools/status/check_status.cmake` checks that 09 §8.1 names every module in the tree. On
-2026-10-03 the NS-0.2 owner-approval PR (plan revision 12) updated the `engine/net` item, added the NS-0.2
-approval item below (with NS-0.7's hosted-Windows failure) and pointed the first nightly's NS-0.2 failure to
-it; the rest is the 2026-09-27 snapshot.
-- **Merged through review since round 5** (14 PRs: #7–#20):
-  - WP-0.15r, the backend's conformance rework (#8), and a NATS subscription flush that ends the
-    `TestNATSRoundTrip` flake (#20);
-  - WP-0.10r, the two Luau fuel patches (#9): RT-13's fuel-identity and overhead clauses pass, and native
-    codegen stays refused on cells;
-  - WP-0.19, the gameplay kernel with HXL in C++ and Go (#12);
-  - WP-0.3, the scorecard, the nightly with its perf history and 1 h libFuzzer runs,
-    `tools/status/snapshot.py` and `tools/milestone/validate.ps1` (#10, #11, #13);
-  - WP-1.1a, ADR-004a's option A for RT-01's structural ops (#14);
-  - WP-0.14, the cell and gateway (#16), and WP-0.12, the render graph with `helios-shaderc` and
-    `helios-rendertest` (#18);
-  - WP-0.1's post-merge `merge-policy` check (#7) and doctest TU isolation (#17), WP-0.5's async-read
-    fix (#15), and WP-0.7's schemac lock under Windows races (#19).
-- **Committed and building:**
-  - the vendored third-party tree (26 dependencies, including `nats.c`);
-  - `engine/core` (187 tests) and `engine/math` (115), with WP-0.5's completion committed ahead of its review;
-  - `tools/schemac` with `engine/reflect` (133 tests: C++, byte-identical Go and JSON output; the other emitters
-    are stubs);
-  - `engine/ecs` on flecs (107 tests; `ecs_bench` runs the RT-01 zone and the spikes in `engine/ecs/SPIKES.md`);
-  - `engine/script`, the Luau host (97 tests);
-  - `engine/rhi`, Vulkan and Null (52 tests, lavapipe goldens, the SDL3 swapchain, the `rhi_triangle` sample;
-    Slang v2026.18.2 is fetched with a pinned SHA-256), and `engine/render` with `tools/shaderc` and
-    `tools/rendertest` (66 tests and 8 lavapipe golden scenes);
-  - `engine/net`, the HTP transport (86 tests; NS-0.1, NS-0.2 and NS-0.7 pass in the dev container, and
-    NS-0.2 passes on hosted Linux on the owner's approval, below);
-  - `engine/physics` and `engine/pcg` (40 and 42 tests; RT-03's Phase 0 golden holds, and WP-0.9c's `hnoise`
-    spike is red, F3);
-  - the cell and gateway: `engine/server`, `engine/authority`, `apps/cellserver` and `apps/gateway` (64 and 35
-    tests; to try them, see "Run it locally" in `engine/server/README.md`);
-  - the gameplay kernel: `engine/gameplay` and `engine/hxl` (44 and 27 tests), with `services/pkg/hxl`.
-- **Backend (committed):** the `services/` Go module builds `helios-backend`, with 151 tests plus 18
-  integration tests on Go 1.27.1 through `go.mod` (`pkg/hxl` adds 37). It runs identity, sessions with netcode
-  connect tokens that are byte-exact with the C implementation, and the orchestrator (PG leadership, ID blocks)
-  in one process, on embedded PostgreSQL 18, NATS and miniredis. Its conformance rework, WP-0.15r
-  ([09 §5.10.4](plan/09-roadmap-and-process.md#5104-applications-on-the-repository-of-2026-09-25-wp-015r-wp-02r-and-wp-05r)),
-  brought it to the current plan: the `svc_identity` and `svc_orch` schemas, direct PII sealed under
-  per-account keys, `region_lease` generations and CONF-03's holder rule.
-- **In progress** (open PRs at this snapshot, besides this refresh, #21): #22 and #30 (WP-0.7b: the `luau`
-  emitter, and the `sql` emitter stacked on it), #23 and #31 (WP-0.1: the nightly's Go-integration and
-  MSBuild-configure fixes), #24 (WP-0.10: the `script_tests` ASan fix), #25–#29 (WP-0.2's review of the
-  committed lints, and the conformance lint) and #32 (WP-0.3: the nightly's Windows doctest-XML step).
-  WP-0.5's core and math completion, CPU gate included, is committed and still awaits its WP review.
-- **Not yet present:** the launcher, client and editor, the patch pipeline, the link-model spike, the
-  conformance lint, and the *Cinder Reach* `content/`.
+[09 §8.1](plan/09-roadmap-and-process.md#81-phase-0-status-repository-on-2026-10-06) has the detail: test
+counts, evidence and the run behind each figure. `cmake -P tools/status/check_status.cmake` checks that 09 §8.1
+names every module in the tree (61 module directories on fb9517f). CI on fb9517f (run 37416153106) passed 11 of
+its 12 jobs; the Windows Go job failed `TestPerfDeepPaths`, a timing ratio (below).
+- **Merged since the plan's approval** (2026-09-25), by work package:
+  - WP-0.1: the post-merge `merge-policy` check (#7), doctest TU isolation (#17), and the nightly's MSBuild
+    configure and Go-integration fixes (#31, #23);
+  - WP-0.2: the layering, licence and IP lints and the conformance lint, CONF-01…12 (#25–#29); WP-0.2r part 1,
+    whole-image ISA levels and `@base` libraries (#60);
+  - WP-0.3: the scorecard, the nightly with its perf history and 1 h libFuzzer runs, `snapshot.py` and
+    `validate.ps1` (#10, #11, #13), and their follow-ups (#32, #39, #44, #45);
+  - WP-0.4: the `win-gpu` runner's policy check, jobs and runbook (#46), and the RHI and rendertest fixes from
+    its first run (#58);
+  - WP-0.5's async-read fix (#15); WP-0.6c part 1, modular dev builds, link groups and the symbol audit (#59);
+  - WP-0.7's schemac lock under Windows races (#19) and WP-0.7b's `luau`, `sql`, `repl` and `lint` emitters
+    (#22, #30, #33, #35);
+  - WP-0.8: `engine/asset` and `.hpak` v0 (#49), `engine/records` with client/server `.hrdb` and AAA-SEC-4
+    (#54), `.meta` sidecars and the local DDC (#57);
+  - WP-0.9's `stable-order` Jolt patch (#48) and Debug-ASan fixes (#36, #37); WP-0.10r, the Luau fuel patches
+    (#9), and #24; WP-0.11's LSan fix (#38);
+  - WP-0.12, the render graph with `helios-shaderc` and `helios-rendertest` (#18), and its compile headroom
+    (#47); WP-0.13r, NS-0.2 headroom: the stack's per-packet cost and Windows Registered I/O (#62);
+  - WP-0.14, the cell and gateway (#16); WP-0.15r, the backend's conformance rework (#8, #20, #53);
+  - WP-0.16, the patch pipeline: FastCDC and `.hman` (#55), then the Ed25519 trust chain, the local CDN and
+    `helios-patch` (#61);
+  - WP-0.18: ToolsFramework, `helios-tool`, the editor shell, `helios-uitest` and the editor font (#40–#42),
+    and journal confinement (#50);
+  - WP-0.19, the gameplay kernel with HXL in C++ and Go (#12); WP-0.20 and WP-0.20b, the *Cinder Reach*
+    skeleton and its CC0 starter art in Git LFS (#64, #66);
+  - WP-1.1a, ADR-004a's option A (#14, #34);
+  - Director and documentation PRs: #21, #43, #51, the concept-art folder (#52) and the documentation audit
+    (#63); and the owner's licence-holder commits (#56).
+- **In progress:** #65, WP-0.5r part 1 (the CPU gate in its final place). Next (09 §8.2): WP-0.17, WP-0.2r and
+  WP-0.5r part 2, WP-0.6c part 2 (RT-18) and WP-0.1's merge queue.
+- **Not yet present:** the launcher and the game client (WP-0.17); asset importers and `helios-assetd`;
+  animation, audio and game UI.
 - **Failing gates and fired risks:**
   - RT-01's structural ops (K2; [ADR-004a](adr/ADR-004a-ecs-rt01-structural-ops.md)). WP-1.1a (#14) cut the
-    9k-op burst to 1.15–1.21 ms (GCC) and 0.90–0.91 ms (Clang) on the dev VM (2.9–3.3 ms before; the
-    pre-bench measured 3.4–6.7 ms against 1.5 ms). **M1**, the wrapper's cost of ≤ 1.6× raw flecs, **is
-    met by the owner's decision** of 2026-09-27 (23 of 24 quiet runs, with one run skewed by a VM stall
-    discarded). The formal clause is **M2** on the SERVER reference box at the Phase 1 gate, and **K2 stays
-    fired until M2 passes**. The create form is the owner's call;
-  - WP-0.9c's `hnoise` CPU clause is red (F3; K5b), so `pcg_tests_perf` fails by design;
+    9k-op burst to 1.15–1.21 ms (GCC) and 0.90–0.91 ms (Clang) on the dev VM. **M1** is **met by the owner's
+    decision** of 2026-09-27, and **K2 stays fired until M2** passes on the SERVER reference box at the
+    Phase 1 gate;
   - K39 (RT-13) fired on 2026-09-25, and both its mitigations have merged (#9);
-  - the first nightly on WP-0.3's workflow (2026-09-27) is red. The VS 2026 and VS 2022 MSBuild builds do not
-    configure, so the registry check reports 80 findings: the tests it cites are missing from their inventories
-    (124 CTests and 0 doctest cases each). NS-0.2's gate fails on the hosted Linux runner (88k packets per core
-    against 100k). The Debug-ASan build fails 8 of 140 CTests: `ecs_tests` (WP-1.1a's parity golden),
-    `physics_tests` (a Debug-only Jolt assert), `pcg_hnoise_bench_smoke` (a stack-use-after-scope),
-    `rhi_triangle_smoke` (SDL3 X11 leaks), `script_tests` and `script_tests_perf` (so RT-13 cannot pass there),
-    and the perf gates `net_tests_perf` and `pcg_tests_perf`. clang-cl's doctest-XML step and Linux Go's
-    integration step fail too. Each gets a bisect or a P0 fix (09 §5.8, §8.2). #31, #32, #23 and #24 are open
-    for the MSBuild configure, the Windows doctest-XML step, Go integration and `script_tests`. NS-0.2's hosted
-    Linux rate has since passed on the owner's approval (below).
+  - K5b: WP-0.9c's `hnoise` CPU clause is red (F3), so `pcg_tests_perf` fails by design. The owner's Ryzen 5
+    5500 and RTX 3050 measured 1.67 ms per tile and 19–20 full-detail tiles per 0.8 ms (four `win-gpu` runs,
+    ADR-0.9c §2); neither is MIN hardware, and the MIN confirmation is still due;
+  - the scheduled nightlies of 2026-10-04 and 2026-10-05 are red on `assetpipe_tests_perf` (a `saveMeta` p95
+    of 101.7 ms against 50 ms on the hosted runner), `schemac_sql_postgres` under ASan (a socket path too long
+    for PostgreSQL), `TestPerfDeepPaths` on Windows Go (2.8× against 2×; also in CI on fb9517f) and NS-0.2's
+    strict gate on hosted Windows. Each is a P0 (09 §8.2); no threshold moves.
 - **NS-0.2 passes on hosted Linux on the repository owner's approval of 2026-09-30**
   ([09 §5.6](plan/09-roadmap-and-process.md#56-ci-tiers-and-evidence-classes);
-  [the record](evidence/ns-0.2-owner-approval-2026-09-30.md) quotes it verbatim). From 2026-09-27 to
-  2026-10-03 the encrypted stack measured 88k–132k packets per core on hosted Linux (below 100k in 7 of 10
-  runs, with no code change between passing and failing runs) and 85k–126k on hosted Windows (below 100k in 2
-  of 3 runs) against 100k; on both, the level follows the host's raw rate. Raw datagrams passed on every
-  hosted run and no hosted run lost a packet; one dev-VM run lost 64 (2026-09-30), and a loss still fails the
-  gate. The hosted Linux nightly now runs `net_bench --gate --advisory ns02-stack`, which reports that one
-  rate instead of failing on it; everything else in the run still gates. **Hosted Windows is not covered**:
-  the owner has not confirmed the approval for it, so its step stays strict. NS-0.2 fails there each night
-  the stack measures below 100k, and its one strict pass (125,611 on 2026-10-03) is not the 3-night streak,
-  so NS-0.2 cannot turn green until Windows has one or the owner confirms. A re-test on fixed hardware
-  (WP-0.4's `win-gpu` runner) is owed, and if it fails, NS-0.2 fails again and the stack gets a second pass;
-  until it passes, the approval carries no phase exit on its own.
-  **NS-0.7 is not covered**: it failed once on hosted Windows (2026-09-27: 19,690 pps, 1.55 % drops) and
-  passed on every other run.
+  [the record](evidence/ns-0.2-owner-approval-2026-09-30.md) quotes it verbatim). The hosted Linux nightly runs
+  `net_bench --gate --advisory ns02-stack`, which reports the encrypted stack's rate instead of failing on it;
+  everything else in the run still gates. The **fixed-hardware re-test** the approval owes **passed strictly on
+  Windows**: on the owner's PC (`win-gpu`, Ryzen 5 5500) the stack measured 82,842, 82,134 and 89,080 packets
+  per core in runs 1–3 and **118,253 in run 4** (37391930751, 2026-10-06, after WP-0.13r's #62: 8.46 µs per
+  packet; raw datagrams 215,488 per core). Its Linux half needs a Linux lab host, so the approval still
+  carries no phase exit on its own; whether the hosted-Linux `--advisory` gets a floor or is retired is the
+  owner's decision. **Hosted Windows is not covered** and stays strict: its stack measured below 100k in 4 of
+  7 nightly runs to 2026-10-05, none of them after #62. **NS-0.7 is not covered**: it failed twice on hosted
+  Windows (2026-09-27: 1.55 % drops; 2026-10-03: 0.92 %) and passed on every other run, the four `win-gpu`
+  runs included.
 - **Known deltas from the plan** (09 §8.1, §5.10.4):
   - the vendored SDL3 is built without its renderers and Wayland (WP-0.17);
   - the in-tree ISA and CPU-gate code still uses the per-file AVX2 allowlist and the `.CRT$XIB` entry
     (WP-0.2r, WP-0.5r).
 - **CI** (GitHub Actions) runs on pull requests and on pushes to `main`:
-  - Windows: MSVC with VS 2026 (the primary) and with VS 2022 at MSVC 14.44 (the floor), and clang-cl;
+  - Windows: MSVC with VS 2026 (the primary), with VS 2022 at MSVC 14.44 (the floor) and in the modular
+    `windows-msvc-dev` build (WP-0.6c), and clang-cl;
   - Linux: GCC and Clang (GPU tests on lavapipe), headless, and the MinGW cross-build;
   - the Go backend on Windows and Linux, plus its integration suite (embedded PostgreSQL, non-root).
 
   The nightly (WP-0.3) runs GCC with the perf gates, Clang and ASan on Linux; the VS 2026, VS 2022 and
   clang-cl builds on Windows; Go on both; a 1 h libFuzzer run per `engine/net` target; and the scorecard
-  report with the perf history. SARIF and the independent post-merge `merge-policy` check are present. Still
-  missing: the merge queue and `main` ruleset, and the modular MSVC job (after WP-0.6c).
+  report with the perf history. SARIF and the independent post-merge `merge-policy` check are present. The
+  owner's self-hosted `win-gpu` runner (WP-0.4) runs the hardware-GPU goldens, ADR-0.9c's bench and a strict
+  `net_bench --gate` on `main`. Still missing: the merge queue and the `main` ruleset (WP-0.1).
 
 **Windows (primary).** Install **Visual Studio 2026** (recommended) or **Visual Studio 2022 17.14 or later**,
 with "Desktop development with C++" and "C++ CMake tools"
@@ -1152,7 +1129,7 @@ exception: it is a SHA-256-pinned prebuilt that configure fetches through
 | `docs/PLAN.md` (this file) | Entry point and summary |
 | [`plan/README.md`](plan/README.md) | Section index and the **phase vocabulary** used everywhere |
 | [`plan/00-decisions.md`](plan/00-decisions.md) | Binding architecture decisions (ADR-001…016, with ADR-001a) |
-| [`adr/`](adr/) | Decision records opened by the build loop: [ADR-004a](adr/ADR-004a-ecs-rt01-structural-ops.md), ECS structural ops against RT-01 (open); [ADR-0.9c](adr/ADR-0.9c-hnoise-throughput.md), the hnoise throughput spike (red, F3); [ADR-0.18](adr/ADR-0.18-imgui-test-engine-licence.md), Dear ImGui Test Engine not used |
+| [`adr/`](adr/) | Decision records opened by the build loop: [ADR-004a](adr/ADR-004a-ecs-rt01-structural-ops.md), ECS structural ops against RT-01 (open); [ADR-0.9c](adr/ADR-0.9c-hnoise-throughput.md), the hnoise throughput spike (red, F3); [ADR-0.18](adr/ADR-0.18-imgui-test-engine-licence.md), Dear ImGui Test Engine not used; [ADR-0.6c](adr/ADR-0.6c-link-model-spike.md), the link-model spike (part 1 of 2) |
 | [`runbooks/`](runbooks/win-gpu-runner.md) | Operating procedures: the owner's self-hosted `win-gpu` runner |
 | [`evidence/`](evidence/) | Owner decisions and approvals, quoted verbatim |
 | [`concept/`](concept/README.md) | Concept-art references (editor first) with provenance sidecars; the plan wins where they differ |

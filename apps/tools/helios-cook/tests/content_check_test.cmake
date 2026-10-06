@@ -555,8 +555,9 @@ elseif(CASE STREQUAL "git_lfs_valid")
   list(APPEND args --require-git)
   set(expect "")
 elseif(CASE STREQUAL "git_required")
-  # --require-git outside a work tree: GIT_CEILING_DIRECTORIES stops git's search for one at WORK.
-  set(launcher "${CMAKE_COMMAND}" -E env "GIT_CEILING_DIRECTORIES=${WORK}")
+  # --require-git where git finds no repository: GIT_DIR names one that does not exist (portable, unlike
+  # GIT_CEILING_DIRECTORIES's path forms), so every git command fails as it does outside a work tree.
+  set(launcher "${CMAKE_COMMAND}" -E env "GIT_DIR=${WORK}/no-such-repository")
   list(APPEND args --require-git)
   set(expect "content: not checked against git .*--require-git needs the content root in a git work tree")
 else()

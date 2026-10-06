@@ -17,6 +17,7 @@
 //     `.cache/` (output, exempt from the scan above only because git ignores it), no tracked symbolic link
 //     or submodule, and every tracked binary source stored as a Git LFS pointer, never as a plain blob.
 //     ContentOptions::requireGit turns "not a git work tree" (or no git on PATH) into a finding.
+//
 // Not checked in v0: the rest of a container's fields and an entity's components (the container loader is
 // Phase 1's), and the product block's endpoints, branding, signing and keys (not in the stub; WP-2.16a1).
 //

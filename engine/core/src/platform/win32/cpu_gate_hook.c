@@ -52,8 +52,6 @@ static const HeliosCpuidRaw hcg_test_cpu = {
 static char hcg_backstop[640];
 static DWORD hcg_backstop_len;
 
-typedef int(WINAPI* HcgMessageBoxW)(HWND, LPCWSTR, LPCWSTR, UINT);
-
 static DWORD hcg_append(char* dst, DWORD len, DWORD cap, const char* s) {
     while (*s && len + 1 < cap) dst[len++] = *s++;
     dst[len] = '\0';
@@ -84,6 +82,9 @@ static int hcg_silent(void) {
     return n == 1 && value[0] == L'1';
 }
 
+#if !defined(HELIOS_CPU_GATE_TEST_EMULATE_SANDY_BRIDGE)
+typedef int(WINAPI* HcgMessageBoxW)(HWND, LPCWSTR, LPCWSTR, UINT);
+
 /* user32 comes from System32 only. In the shipping client the executable imports it already (SDL3), so this
  * only adds a reference; in a modular build the load may nest under the loader lock, as the UCRT's own
  * fatal-error dialog does, and no application thread exists yet that could hold a lock the dialog needs. */
@@ -107,12 +108,29 @@ static void hcg_dialog(const char* msg, DWORD len) {
         }
     }
 }
+#define HCG_TEST_NOTE(text) ((void)0)
+#else
+/* Test builds only: each branch of the dialog decision writes a line to stderr, and the dialog is replaced by
+ * one, so core_tests checks both inputs (the subsystem and HELIOS_CPU_GATE_SILENT) without a dialog that
+ * nobody would dismiss. */
+#define HCG_TEST_NOTE(text) hcg_write_stderr(text, (DWORD)(sizeof(text) - 1))
+static void hcg_dialog(const char* msg, DWORD len) {
+    (void)msg;
+    (void)len;
+    HCG_TEST_NOTE("cpu-gate test hook: dialog (not shown in this test build)\r\n");
+}
+#endif
 
 /* Never returns. TerminateProcess on the current process ends the calling thread too; the loop only makes
  * "never returns into AVX2 code" independent of that. */
 static void hcg_refuse(const char* msg, DWORD len) {
     hcg_write_stderr(msg, len);
-    if (hcg_gui_process() && !hcg_silent()) hcg_dialog(msg, len);
+    if (!hcg_gui_process())
+        HCG_TEST_NOTE("cpu-gate test hook: no dialog: console image\r\n");
+    else if (hcg_silent())
+        HCG_TEST_NOTE("cpu-gate test hook: no dialog: HELIOS_CPU_GATE_SILENT=1\r\n");
+    else
+        hcg_dialog(msg, len);
     for (;;) TerminateProcess(GetCurrentProcess(), HCG_EXIT_CODE);
 }
 

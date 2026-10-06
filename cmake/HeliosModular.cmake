@@ -431,6 +431,9 @@ extern \"C\" const char* helios_${group}_link_group_modules(void) {
   # before the initializers of libhelios_runtime.so.
   if(WIN32 AND TARGET helios_runtime AND TARGET helios_core_cpugate_hook)
     target_sources(helios_runtime PRIVATE $<TARGET_OBJECTS:helios_core_cpugate_hook>)
+    # Its TLS slot is exported as data, which WINDOWS_EXPORT_ALL_SYMBOLS skips (read-only), so core_tests can
+    # check that it is AddressOfCallBacks[0] of the DLL, ahead of mimalloc's .CRT$XLB callback there.
+    target_link_options(helios_runtime PRIVATE "/EXPORT:helios_cpu_gate_tls_entry,DATA")
   endif()
 endfunction()
 

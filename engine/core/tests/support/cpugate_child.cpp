@@ -12,9 +12,10 @@
 //   --trap         executes ud2 (__builtin_trap), a deliberate crash the backstop must leave alone;
 //   --xlb-verdict  (Windows) prints the gate's verdict as a TLS callback in .CRT$XLB, mimalloc's slot, saw it
 //                  when the loader called it: "pass" proves the gate ran ahead of that slot;
-//   --tls-order    (Windows) prints whether the gate's .CRT$XLA0 slot is AddressOfCallBacks[0] of this
-//                  executable's TLS directory ("first"), or "in-runtime-dll" when a modular build carries the
-//                  gate in helios_runtime.dll (HELIOS_CPUGATE_CHILD_HOOK_IN_IMAGE is not defined then).
+//   --tls-order    (Windows) prints whether the gate's .CRT$XLA0 slot is AddressOfCallBacks[0] of the TLS
+//                  directory of the image that carries it: this executable ("first";
+//                  HELIOS_CPUGATE_CHILD_HOOK_IN_IMAGE) or, in a modular build, helios_runtime.dll ("first in
+//                  <dll>"; HELIOS_CPUGATE_RUNTIME_DLL), which exports the slot as data for this check.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -88,20 +89,32 @@ extern "C" const PIMAGE_TLS_CALLBACK helios_cpu_gate_tls_entry; // the gate's sl
 #endif
 
 namespace {
-const char* tlsOrder() {
-#if defined(HELIOS_CPUGATE_CHILD_HOOK_IN_IMAGE)
-    const auto* base = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
+// Whether `slot` is AddressOfCallBacks[0] of `image`'s TLS directory.
+const char* firstCallback(HMODULE image, std::uintptr_t slot, const char* first) {
+    const auto* base = reinterpret_cast<const unsigned char*>(image);
     const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
     const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
     const IMAGE_DATA_DIRECTORY& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS];
     if (dir.VirtualAddress == 0) return "no-tls-directory";
     const auto* tls = reinterpret_cast<const IMAGE_TLS_DIRECTORY*>(base + dir.VirtualAddress);
     // AddressOfCallBacks is a virtual address, already relocated by the loader.
-    const auto* first =
-        reinterpret_cast<const PIMAGE_TLS_CALLBACK*>(static_cast<std::uintptr_t>(tls->AddressOfCallBacks));
-    return first == &helios_cpu_gate_tls_entry ? "first" : "not-first";
+    return static_cast<std::uintptr_t>(tls->AddressOfCallBacks) == slot ? first : "not-first";
+}
+
+const char* tlsOrder() {
+#if defined(HELIOS_CPUGATE_CHILD_HOOK_IN_IMAGE)
+    return firstCallback(GetModuleHandleW(nullptr), reinterpret_cast<std::uintptr_t>(&helios_cpu_gate_tls_entry),
+                         "first");
+#elif defined(HELIOS_CPUGATE_RUNTIME_DLL)
+    // The loader initialized the DLL, TLS callbacks included, before this executable's own callbacks ran, so
+    // its .CRT$XLB check above cannot see the order inside the DLL; the DLL's TLS directory can.
+    const HMODULE dll = GetModuleHandleW(L"" HELIOS_CPUGATE_RUNTIME_DLL);
+    if (dll == nullptr) return "no-runtime-dll";
+    const FARPROC slot = GetProcAddress(dll, "helios_cpu_gate_tls_entry"); // a data export: the slot itself
+    if (slot == nullptr) return "slot-not-exported";
+    return firstCallback(dll, reinterpret_cast<std::uintptr_t>(slot), "first in " HELIOS_CPUGATE_RUNTIME_DLL);
 #else
-    return "in-runtime-dll";
+    return "no-gate-slot";
 #endif
 }
 } // namespace

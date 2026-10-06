@@ -118,9 +118,12 @@ initializer); the verdict it records is the library's, which `platformInit()` re
 `tests/test_cpu.cpp` runs the gate children (`engine/core/CMakeLists.txt`): `core_cpugate_child` (the real
 hook), `core_cpugate_child_snb` (the hook evaluating a recorded Sandy Bridge: the refusal path on any machine,
 CL-17 early), `core_cpugate_child_nohook` (no hook: `platformInit()` must stop it) and, on Windows,
-`core_cpugate_child_snb_gui` (a `WINDOWS_GUI` image refused silently under `HELIOS_CPU_GATE_SILENT=1`). On
-Windows the child also carries its own `.CRT$XLB` TLS callback, which must find the verdict already set, and
-checks that the gate's slot is `AddressOfCallBacks[0]` of a shipping image.
+`core_cpugate_child_snb_gui` (a `WINDOWS_GUI` image). The Sandy Bridge hook writes its dialog decision to
+stderr instead of showing a dialog (console image; `HELIOS_CPU_GATE_SILENT=1`; or the dialog), so the tests
+check both inputs of that decision. On Windows the child also carries its own `.CRT$XLB` TLS callback, which
+must find the verdict already set, and checks that the gate's slot is `AddressOfCallBacks[0]` of the image
+that carries it: the executable, or in a modular build `helios_runtime.dll`, which exports the slot as data
+for this check (`cmake/HeliosModular.cmake`).
 
 ## Processes
 

@@ -10,8 +10,10 @@
       starting with "v", ymm/zmm operands), BMI, LZCNT/TZCNT, POPCNT, MOVBE, CMPXCHG16B or SSE3+
       instruction;
     * dumpbin /symbols: External symbols are only the gate exports (defined) and the allowlisted
-      imports (UNDEF), mirroring cmake/isa_allowlist.cmake.
+      imports (UNDEF), mirroring cmake/isa_allowlist.cmake, plus the compiler's literal pools (below).
   Exits 1 with one line per finding.
+  No CI job runs it yet (WP-0.2r part 2 wires it into ci.yml), so its lists have not been checked against
+  real dumpbin output.
 
 .EXAMPLE
   pwsh tools/ci/msvc_gate_audit.ps1 -BuildDir build/windows-msvc-release
@@ -32,6 +34,11 @@ $imports = @(
     'GetCurrentProcess', 'TerminateProcess', 'AddVectoredExceptionHandler',
     '__chkstk')  # no __security_cookie / __security_check_cookie (/GS-), no _RTC_* (no /RTC), no ExitProcess
 $forbidden = '^(v[a-z0-9]+|andn|bextr|blsi|blsmsk|blsr|bzhi|pdep|pext|rorx|sarx|shlx|shrx|mulx|lzcnt|tzcnt|popcnt|movbe|cmpxchg16b|crc32|pshufb|palignr|phadd[wd]|phaddsw|phsub[wd]|phsubsw|pmaddubsw|pmulhrsw|psign[bwd]|pabs[bwd]|ptest|pblendw|pblendvb|blendps|blendpd|blendvps|blendvpd|round[sp][sd]|pminsb|pminsd|pminuw|pminud|pmaxsb|pmaxsd|pmaxuw|pmaxud|pmulld|pmuldq|pinsr[bdq]|pextr[bdq]|pcmpeqq|pcmpgtq|packusdw|pmov[sz]x[a-z]+|dpp[sd]|insertps|extractps|mpsadbw|phminposuw|pcmp[ei]str[im]|movntdqa|hadd[sp][sd]|hsub[sp][sd]|addsub[sp][sd]|movddup|movshdup|movsldup|lddqu|fisttp|k(mov|and|andn|or|xor|xnor|not|ortest|test|shiftl|shiftr|unpck|add)[bwdq]+|aes[a-z0-9]*|pclmul[a-z]*|sha1[a-z0-9]*|sha256[a-z0-9]*|adcx|adox|rdrand|rdseed|prefetchw|xsave[a-z0-9]*|xrstor[a-z0-9]*)$'
+# Literal pools that cl and clang-cl emit as External "pick any" COMDATs so that equal literals merge across
+# objects: string literals (??_C@..., /GF, which /O1 and /O2 imply) and floating-point and SSE constants
+# (__real@..., __xmm@...). Their names encode their bytes, so whichever copy the linker keeps is identical:
+# read-only data, never code, unlike a COMDAT function, which another object could replace.
+$literalPools = '^(\?\?_C@|__real@|__xmm@)'
 # Prefixes dumpbin prints as separate words ("lock cmpxchg16b ...").
 $prefixes = @('lock', 'rep', 'repe', 'repne', 'repz', 'repnz', 'xacquire', 'xrelease', 'notrack', 'bnd')
 
@@ -66,7 +73,7 @@ foreach ($obj in $objects) {
             $name = $Matches[1]
             if ($line -match '\bUNDEF\b') {
                 if ($imports -notcontains $name) { $findings.Add("$($obj.FullName): references '$name' (not on the import allowlist)") }
-            } elseif ($exports -notcontains $name) {
+            } elseif ($exports -notcontains $name -and $name -notmatch $literalPools) {
                 $findings.Add("$($obj.FullName): exports '$name' (gate code must be static)")
             }
         }

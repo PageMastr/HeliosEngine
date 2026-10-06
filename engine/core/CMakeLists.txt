@@ -107,9 +107,15 @@ if(TARGET core_tests)
   helios_executable(core_cpugate_child CPU_GATE
                     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/cpugate_child.cpp DEPS helios::core)
   get_target_property(gateInRuntime core_cpugate_child HELIOS_CPU_GATE_IN_RUNTIME)
+  set(cpugateRuntimeDll "")
   if(NOT gateInRuntime)
     # The hook (and on Windows its TLS slot) is in this executable, not in helios_runtime.dll.
     target_compile_definitions(core_cpugate_child PRIVATE HELIOS_CPUGATE_CHILD_HOOK_IN_IMAGE=1)
+  else()
+    # The hook is in helios_runtime.dll, which exports its TLS slot (cmake/HeliosModular.cmake); the child
+    # and the test both need the DLL's name.
+    set(cpugateRuntimeDll HELIOS_CPUGATE_RUNTIME_DLL="$<TARGET_FILE_NAME:helios_runtime>")
+    target_compile_definitions(core_cpugate_child PRIVATE ${cpugateRuntimeDll})
   endif()
   # The Sandy Bridge hook is a third gate object library: the gate's units are never compiled inside an
   # avx2 target.
@@ -150,7 +156,7 @@ if(TARGET core_tests)
     HELIOS_CPUGATE_CHILD_NOHOOK_PATH="$<TARGET_FILE:core_cpugate_child_nohook>")
   if(WIN32)
     target_compile_definitions(core_tests PRIVATE
-      HELIOS_CPUGATE_CHILD_SNB_GUI_PATH="$<TARGET_FILE:core_cpugate_child_snb_gui>")
+      HELIOS_CPUGATE_CHILD_SNB_GUI_PATH="$<TARGET_FILE:core_cpugate_child_snb_gui>" ${cpugateRuntimeDll})
   endif()
   # Stress tests (1M jobs etc.) get generous time on slow CI machines.
   set_tests_properties(core_tests PROPERTIES TIMEOUT 600)

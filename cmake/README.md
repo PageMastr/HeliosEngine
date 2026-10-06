@@ -64,8 +64,10 @@ Helios builds **whole images at one ISA level**; no list grants a target or a fi
   Windows: the first TLS callback, `.CRT$XLA0`). In a modular Windows build the hook lives in
   `helios_runtime.dll` and a gated executable gets `/INCLUDE:helios_cpu_gate_run`, so the DLL is always
   imported and initialized first; that gates every process that loads the DLL, tests, samples and a modular
-  launcher included (ADR-0.6c §3 item 7). On Linux only gated executables carry the hook, so there the role
-  decides. A self-contained gated image links the hook itself (`HeliosModular.cmake`).
+  launcher included (ADR-0.6c §3 item 7). The DLL exports the gate's TLS slot as data
+  (`/EXPORT:helios_cpu_gate_tls_entry,DATA`), so `core_tests` can check that it is the DLL's first TLS
+  callback. On Linux only gated executables carry the hook, so there the role decides. A self-contained gated
+  image links the hook itself (`HeliosModular.cmake`).
 - **Gate-object rules CMake cannot express per target.** MSVC's `/RTC1` (CMake's Debug default) lives in
   `CMAKE_C_FLAGS_DEBUG`, which applies per directory: `engine/core/CMakeLists.txt` drops it from that
   directory's C flags, whose only C units are the gate's. cl has no switch that turns `/fsanitize=address` off

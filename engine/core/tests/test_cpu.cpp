@@ -303,23 +303,25 @@ TEST_CASE("cpu gate: Windows: the gate is the first TLS callback, ahead of .CRT$
     REQUIRE(r.ok());
     CHECK(linesOf(r->out) == std::vector<std::string>{"static-init", "xlb-verdict: not-run"});
 
-    // The section order in the linked image: the gate's .CRT$XLA0 slot is AddressOfCallBacks[0].
+    // The section order in the linked image: the gate's .CRT$XLA0 slot is AddressOfCallBacks[0] of the image
+    // that carries it. In a modular build that is helios_runtime.dll, whose callbacks all run before the
+    // child's, so only its own TLS directory shows the gate ahead of mimalloc's .CRT$XLB callback there.
     d.executable = fs::pathFromUtf8(HELIOS_CPUGATE_CHILD_PATH);
     d.args = {"--tls-order"};
     r = runProcess(d);
     REQUIRE(r.ok());
     const std::vector<std::string> lines = linesOf(r->out);
     REQUIRE(lines.size() == 2);
-    if (lines[1] == "tls-order: in-runtime-dll") {
-        MESSAGE("modular build: the gate's TLS slot is in helios_runtime.dll, not in the child");
-    } else {
-        CHECK(lines[1] == "tls-order: first");
-    }
+#if defined(HELIOS_CPUGATE_RUNTIME_DLL)
+    CHECK(lines[1] == "tls-order: first in " HELIOS_CPUGATE_RUNTIME_DLL);
+#else
+    CHECK(lines[1] == "tls-order: first");
+#endif
 }
 
+// The refusal's dialog decision (02 §1.1 failure path, step 2). The Sandy Bridge test hook writes the branch
+// it took to stderr and never shows the dialog itself, so each input of the decision is checked here.
 TEST_CASE("cpu gate: Windows: a refused WINDOWS_GUI image exits 78 without a dialog when silent") {
-    // The GUI child carries the Sandy Bridge hook. A dialog would block it until the suite's timeout, so a
-    // prompt exit with 78 and the message on stderr shows that the silent switch skipped it.
     ProcessDesc d;
     d.executable = fs::pathFromUtf8(HELIOS_CPUGATE_CHILD_SNB_GUI_PATH);
     d.environment = {{"HELIOS_CPU_GATE_SILENT", "1"}};
@@ -328,6 +330,40 @@ TEST_CASE("cpu gate: Windows: a refused WINDOWS_GUI image exits 78 without a dia
     CHECK(r->exitCode == kCpuGateExitCode);
     CHECK(r->out.empty());
     CHECK(contains(r->err, "Helios requires an AVX2 CPU (Intel Haswell / AMD Excavator or newer)."));
+    CHECK(contains(r->err, "cpu-gate test hook: no dialog: HELIOS_CPU_GATE_SILENT=1"));
+    CHECK(!contains(r->err, "cpu-gate test hook: dialog"));
+}
+
+TEST_CASE("cpu gate: Windows: a refused WINDOWS_GUI image shows the dialog unless HELIOS_CPU_GATE_SILENT is 1") {
+    // Unset, and values other than exactly "1".
+    for (const char* value : {"", "0", "10", "true"}) {
+        CAPTURE(value);
+        ProcessDesc d;
+        d.executable = fs::pathFromUtf8(HELIOS_CPUGATE_CHILD_SNB_GUI_PATH);
+        if (*value == '\0') {
+            d.unsetEnvironment = {"HELIOS_CPU_GATE_SILENT"};
+        } else {
+            d.environment = {{"HELIOS_CPU_GATE_SILENT", value}};
+        }
+        Result<ProcessOutput> r = runProcess(d);
+        REQUIRE(r.ok());
+        CHECK(r->exitCode == kCpuGateExitCode);
+        CHECK(contains(r->err, "Helios requires an AVX2 CPU (Intel Haswell / AMD Excavator or newer)."));
+        CHECK(contains(r->err, "cpu-gate test hook: dialog (not shown in this test build)"));
+        CHECK(!contains(r->err, "cpu-gate test hook: no dialog"));
+    }
+}
+
+TEST_CASE("cpu gate: Windows: a refused console image shows no dialog") {
+    // The console child, not silent: the subsystem alone decides.
+    ProcessDesc d;
+    d.executable = fs::pathFromUtf8(HELIOS_CPUGATE_CHILD_SNB_PATH);
+    d.unsetEnvironment = {"HELIOS_CPU_GATE_SILENT"};
+    Result<ProcessOutput> r = runProcess(d);
+    REQUIRE(r.ok());
+    CHECK(r->exitCode == kCpuGateExitCode);
+    CHECK(contains(r->err, "cpu-gate test hook: no dialog: console image"));
+    CHECK(!contains(r->err, "cpu-gate test hook: dialog"));
 }
 #endif
 

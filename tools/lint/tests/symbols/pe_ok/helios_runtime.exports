@@ -17,7 +17,7 @@ File Type: DLL
           1    0 0000A0F5 ??0Logger@log@helios@@QEAA@XZ = @ILT+65760(??0Logger@log@helios@@QEAA@XZ)
           2    1 000C3B10 ?g_level@log@helios@@3W4Level@12@A = ?g_level@log@helios@@3W4Level@12@A (enum helios::log::Level helios::log::g_level)
           3    2 0001B2A0 ??$_Emplace_reallocate@H@?$vector@HV?$allocator@H@std@@@std@@QEAAPEAHQEAH$$QEAH@Z = @ILT+109215(??$_Emplace_reallocate@H@?$vector@HV?$allocator@H@std@@@std@@QEAAPEAHQEAH$$QEAH@Z)
-          4    3 00012345 helios_cpu_gate_crt_entry = helios_cpu_gate_crt_entry
+          4    3 00012345 helios_cpu_gate_tls_entry = helios_cpu_gate_tls_entry
           5    4 00012350 helios_cpu_gate_run = @ILT+12352(helios_cpu_gate_run)
           6    5 00012360 helios_runtime_link_group_modules = @ILT+12368(helios_runtime_link_group_modules)
           7    6 00012370 __local_stdio_printf_options = @ILT+12400(__local_stdio_printf_options)

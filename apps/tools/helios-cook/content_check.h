@@ -11,6 +11,8 @@
 //     and `.cache/`. The records cook would read a hidden `.hrec`, so nothing may hide from the scan; nor may
 //     a symbolic link, junction or other special file (the scan does not follow one into a directory).
 //     Extensions are lower case, since the root's `.gitattributes` patterns are case-sensitive on Linux.
+//   * Text documents (records, containers, entities, Markdown) are UTF-8 without NUL bytes, so a binary file
+//     under a text extension cannot bypass Git LFS and ASSETS.md (both go by extension).
 //   * Binary sources (07 §1.7; `.glb`, `.png`, `.exr`): each file is a Git LFS pointer (a checkout without
 //     the LFS objects, as in CI) or starts like a file of its type, so a renamed file of another kind fails.
 //   * Git (07 §1.7), when the content root lies in a git work tree: no tracked file under `.cooked/` or

@@ -103,6 +103,11 @@ Binary sources are Git LFS objects (07 §1.7); the text documents, sidecars incl
   pointer files instead: three lines with the object's SHA-256 and size. The checks and the cook accept
   them, so building and testing never need the objects. CI checks out pointers only (`actions/checkout`'s
   default `lfs: false`) and fetches no LFS object.
+- **Shared clones.** The first time its filter runs (and on `git lfs install`), git-lfs writes its
+  `pre-push`, `post-checkout`, `post-commit` and `post-merge` hooks into the repository's hooks directory,
+  which every worktree of the clone shares, even when the filter is configured only per command. Its
+  `pre-push` stops `git push` wherever git-lfs is not on PATH. In a clone that several people or tools use,
+  either all of them have git-lfs on PATH or the LFS work sets `core.hooksPath` to a directory of its own.
 - **Budget.** The starter set is 35 files, 32.7 MB (31.2 MiB; the largest file 6.1 MB), within WP-0.20b's
   budget of 50 assets, 15 MB each and 120 MB in all (GitHub's LFS quota).
 
@@ -111,7 +116,8 @@ Binary sources are Git LFS objects (07 §1.7); the text documents, sidecars incl
 1. Write the file where the layout above puts it. A record: a new random `$rid` (63-bit, non-zero) and a
    `$name` of `<table>/<name>`; then `helios-tool --project-root=content fmt` for the canonical form.
    A container or entity: a new random GUID (lower case) in `$container` (`"guid:<GUID>"`) or `$entity`
-   and the entity's file name.
+   and the entity's file name. Text documents are UTF-8 with LF line ends; the check refuses a NUL byte or
+   invalid UTF-8 in one, so a binary file cannot pass for a text document.
 2. Write its `<file>.meta` with a new GUID (the container's or entity's own), the document type and the
    provenance. A new kind of file needs its document type in `helios-cook` first
    (`apps/tools/helios-cook/content_check.cpp`, `contentTypes()`): until then the check refuses it, so no

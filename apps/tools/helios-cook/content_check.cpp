@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <initializer_list>
@@ -18,6 +19,7 @@
 #include "helios/assetpipe/meta.h"
 #include "helios/core/guid.h"
 #include "helios/core/process.h"
+#include "helios/core/utf.h"
 #include "helios/core/vfs.h"
 #include "helios/reflect/json.h"
 
@@ -49,6 +51,8 @@ struct BinaryType {
 constexpr BinaryType kBinaryTypes[] = {{"exr", "OpenEXR"}, {"glb", "glTF 2.0 binary"}, {"png", "PNG"}};
 /// The Git LFS pointer spec caps a pointer file at 1024 bytes (git-lfs writes about 130).
 constexpr u64 kMaxLfsPointerBytes = 1024;
+/// A text document is validated in chunks of this size, so the check holds no more whatever the file's size.
+constexpr usize kTextChunkBytes = 64 * 1024;
 /// The cook's output folders at a content root's top, which .gitignore keeps out of git.
 constexpr std::string_view kCookOutputs[] = {".cooked", ".cache"};
 
@@ -567,6 +571,73 @@ void checkBinarySource(const Doc& d, const BinaryType& type, ContentStats& stats
                           type.name));
 }
 
+/// The length of `chunk`'s prefix that ends on a UTF-8 sequence boundary: a sequence that the chunk's end
+/// cuts (its lead byte at most 3 bytes back) is left for the next chunk. Malformed bytes stay in the prefix,
+/// where validation refuses them.
+usize completeUtf8Prefix(std::string_view chunk) {
+    for (usize back = 1; back <= std::min<usize>(3, chunk.size()); ++back) {
+        const auto c = static_cast<u8>(chunk[chunk.size() - back]);
+        if ((c & 0xC0) == 0x80) continue; // a continuation byte: its lead is further back
+        const usize need = (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : (c & 0xF8) == 0xF0 ? 4 : 1;
+        return need > back ? chunk.size() - back : chunk.size();
+    }
+    return chunk.size();
+}
+
+/// The offset of the first malformed sequence in `text` (which isValidUtf8 refused).
+usize firstInvalidUtf8(std::string_view text) {
+    constexpr std::string_view kEncodedReplacement = "\xEF\xBF\xBD";
+    usize pos = 0;
+    while (pos < text.size()) {
+        const usize start = pos;
+        if (decodeUtf8(text, pos) == kReplacementChar && text.substr(start, 3) != kEncodedReplacement)
+            return start;
+    }
+    return text.size();
+}
+
+/// A text document (records, containers, entities, Markdown) is UTF-8 without NUL bytes. Binary sources are
+/// told apart by their extension alone (content/.gitattributes, ASSETS.md, the git rules), so without this
+/// a binary file renamed to a text extension would be stored as a plain git blob, normalised as LF text and
+/// listed nowhere (07 §1.7). Reads the file in kTextChunkBytes chunks.
+void checkTextDocument(const Doc& d, const Report& r) {
+    auto file = fs::File::open(d.path, fs::OpenMode::Read);
+    if (!file) {
+        r("", file.error().message);
+        return;
+    }
+    const auto refuse = [&](std::string_view what, u64 offset) {
+        r("", std::format("{} at byte offset {}: a text document is UTF-8 text, and binary data under a text "
+                          "extension would bypass Git LFS and ASSETS.md (07 §1.7)",
+                          what, offset));
+    };
+    std::string buffer(kTextChunkBytes + 3, '\0'); // a chunk plus the cut sequence carried over
+    usize carry = 0;                                 // bytes of a cut sequence kept from the previous chunk
+    u64 offset = 0;                                  // the file offset of buffer[0]
+    while (true) {
+        auto n = file->read(buffer.data() + carry, kTextChunkBytes);
+        if (!n) {
+            r("", n.error().message);
+            return;
+        }
+        const std::string_view chunk(buffer.data(), carry + *n);
+        if (const usize nul = chunk.find('\0'); nul != std::string_view::npos) {
+            refuse("a NUL byte", offset + nul);
+            return;
+        }
+        // At the end of the file a cut sequence is not carried: it is malformed.
+        const usize end = *n == 0 ? chunk.size() : completeUtf8Prefix(chunk);
+        if (const std::string_view whole = chunk.substr(0, end); !isValidUtf8(whole)) {
+            refuse("invalid UTF-8", offset + firstInvalidUtf8(whole));
+            return;
+        }
+        if (*n == 0) return;
+        carry = chunk.size() - end;
+        if (end != 0) std::memmove(buffer.data(), buffer.data() + end, carry);
+        offset += end;
+    }
+}
+
 /// Runs `git -C <dir> <args...>` with `input` on its standard input; returns its standard output, or why it
 /// could not run or failed.
 Result<std::string> runGit(const fs::Path& dir, std::initializer_list<std::string_view> args,
@@ -898,14 +969,16 @@ ContentStats checkContent(const fs::Path& projectRoot, const ProjectFile& projec
             if (ext == ".hrec" && parts[0] != "records")
                 report(d.rel, "a record outside records/<table>/, which the records cook never reads");
             const Report r{at(d.rel), &findings};
+            const BinaryType* binary = binaryType(ext);
+            if (!binary) checkTextDocument(d, r);
             if (ext == ".hcont") {
                 checkContainer(d, zone, metaGuids, r);
                 ++stats.containers;
             } else if (ext == ".hent") {
                 checkEntity(d, docPaths, metaGuids, r);
                 ++stats.entities;
-            } else if (const BinaryType* type = binaryType(ext)) {
-                checkBinarySource(d, *type, stats, r);
+            } else if (binary) {
+                checkBinarySource(d, *binary, stats, r);
                 ++stats.binaries;
             }
         }

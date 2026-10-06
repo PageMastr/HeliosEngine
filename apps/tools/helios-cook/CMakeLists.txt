@@ -72,7 +72,8 @@ if(HELIOS_BUILD_TESTS)
       broken_record
       binary_missing_sidecar binary_licence_by binary_cc0_without_url binary_real_files binary_wrong_format
       binary_glb_length binary_exr_wrong_format binary_text lfs_pointer_malformed upper_case_extension
-      directory_symlink file_symlink)
+      directory_symlink file_symlink text_binary_md text_nul_in_record text_invalid_utf8 text_truncated_utf8
+      text_utf8_chunk_boundary)
   # Git's view of the content (07 §1.7): each case makes its copy a repository of its own.
   find_program(HELIOS_COOK_GIT git)
   if(HELIOS_COOK_GIT)

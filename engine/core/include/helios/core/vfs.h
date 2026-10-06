@@ -64,6 +64,15 @@ public:
     virtual std::string describe() const = 0;
 };
 
+/// The component rule DirectoryMount applies, public so that other code naming files portably
+/// (assetpipe's `.meta` paths) shares it: true when Win32 does not treat `component` as a plain
+/// file name with that spelling, i.e. a DOS device name (CON, PRN, AUX, NUL, COM0-9, LPT0-9, the
+/// superscript forms COM¹²³ / LPT¹²³, CONIN$ and CONOUT$; any ASCII case, with any extension, as in
+/// "nul.json" or "Con .txt") or a name ending in '.' or ' ' (Windows strips them, so "a." aliases
+/// "a"). The empty string is not rejected. Separators and other characters are the caller's rule.
+/// Threading: pure.
+bool isNonPortableComponent(std::string_view component) noexcept;
+
 /// Mount backed by a native directory. Besides '..'/':' escapes it rejects path components that
 /// Win32 does not treat as plain file names (DOS devices such as "con"/"nul.json", names ending
 /// in '.' or ' '), on every platform, so content resolves identically on Windows and Linux.

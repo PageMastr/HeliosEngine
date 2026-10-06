@@ -118,9 +118,9 @@ through. `S(i)` uses `helios::det::exp` and is bit-identical with HXL's
 - NaN magnitudes disable their modifier (`nanMagnitudes()`); NaN finals are canonical.
 
 **Budgets (06 §12.2 GP-1)**, asserted in optimized builds (`test_attributes_perf.cpp`, `perf:` tests,
-best of N; PR CI skips them and the nightly `linux-perf` job runs them):
+best of N; PR CI skips them, and the nightly Linux GCC job runs them in its serial "Perf gates" step):
 
-| Budget | Measured (GCC 13 RelWithDebInfo, shared 4-vCPU container) |
+| Budget | Measured 2026-09-26 (GCC 13 RelWithDebInfo, shared 4-vCPU container) |
 |---|---|
 | 300-modifier ship recompute ≤ 50 µs | ~5.4 µs |
 | one incremental change ≤ 5 µs | ~0.2 µs |
@@ -166,8 +166,10 @@ different sets can be recomputed concurrently.
 
 - Cross-entity modifier domains (`ModDomain` other than `Self`, target filters) and live
   source-entity magnitudes are Phase 2 (`Unsupported`).
-- schemac does not yet emit slot constants for hot attributes, cook `.htags` files or compute the hot
-  set from content; callers pass query texts to `TagRegistry::fromRecords`.
+- schemac does not yet emit slot constants for hot attributes, and nothing computes the hot set from
+  content: callers pass query texts to `TagRegistry::fromRecords`. The records cook (`engine/records`)
+  writes the tag table into `.hrdb` with the same `TagIndex` numbering (there is no separate `.htags`
+  file).
 - `EffectDef` is schema only; the effect runtime (timing wheel, stacking, prediction) is WP-1.15.
 
 ## Plan conformance

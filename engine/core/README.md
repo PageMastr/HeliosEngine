@@ -20,8 +20,8 @@ and `src/platform/posix/` behind the internal interface `src/platform/os.h`.
 | `time.h` | Monotonic clock, `Stopwatch`, sleeps, `DilatableClock` (fixed-step game clock with time dilation) |
 | `thread.h` | `Thread` (named, pinnable), `SpinLock`, `Semaphore`, `ManualResetEvent`, lock aliases |
 | `jobs.h` | `JobSystem` (work stealing, priorities, helping waits), `Counter`, `parallelFor`, `TaskGraph`, `BackgroundPool` |
-| `fs.h` | Whole-file I/O (atomic replace), `File`, `MappedFile`, directory listing, `FileWatcher` |
-| `vfs.h` | `Vfs` mount table (`/content`, `/cache`, `/saved`), layered priorities, sandboxed paths, `IMountProvider` |
+| `fs.h` | Whole-file I/O (atomic replace), `File`, `MappedFile`, directory listing, last write time (get and set), `rename` and the cache variant `renameNoSync`, `FileWatcher` |
+| `vfs.h` | `Vfs` mount table (`/content`, `/cache`, `/saved`), layered priorities, sandboxed paths, `IMountProvider`, `isNonPortableComponent` |
 | `dynlib.h` | `DynamicLibrary` (LoadLibraryExW / dlopen) |
 | `cvar.h` | Console variables (`HELIOS_CVAR`), commands, `execute("set r.vsync 0")`, flags, callbacks |
 | `cmdline.h` | `-key=value`, `--flag`, positionals; MSVC-CRT-exact Windows command-line splitting |
@@ -74,10 +74,20 @@ supported CPU it installs a SIGILL / `STATUS_ILLEGAL_INSTRUCTION` backstop with 
 message; core's crash handler replaces it once installed. Deliberate traps (`ud2`/`ud1`/`ud0`:
 `__builtin_trap`, clang-cl's trap-on-unreachable, sanitizer traps) are passed through, so they still
 crash normally and reach the crash handler instead of being reported as an unsupported CPU. The gate
-TUs are built with `helios_cpu_gate_sources()`: x86-64-v1, no stack protector (`/GS-`,
-`-fno-stack-protector`) and no sanitizer instrumentation, because they run before those runtimes. The ISA audit (`tools/lint`) checks the
-gate objects' flags, disassembly and symbols on every build; `core_cpugate_child_snb` (the hook
-evaluating a recorded Sandy Bridge) tests the refusal path on any machine (CL-17, early).
+TUs are object libraries of the `gate` ISA level (`helios_cpu_gate_target()`, `cmake/HeliosIsa.cmake`;
+WP-0.2r): `helios_core_cpugate` (the probe, archived into `helios_core`), `helios_core_cpugate_hook` and
+the test hook `core_cpugate_hook_snb`. That level is x86-64-v1 with no stack protector (`/GS-`,
+`-fno-stack-protector`) and no sanitizer instrumentation, because the gate runs before those runtimes;
+every other core TU is built at its image's level (`avx2`, or `base` in a launcher's `helios_core.base`
+copy). The ISA audit (`tools/lint`) checks the gate objects' flags, disassembly and symbols on every
+build; `core_cpugate_child_snb` (the hook evaluating a recorded Sandy Bridge) tests the refusal path on
+any machine (CL-17, early).
+
+In a modular dev build (`HELIOS_MODULAR=ON`, ADR-016) core is part of `helios_runtime`, and so is the probe's
+object library, still at the `gate` level (an OBJECT module does not carry the object libraries it links, so
+`cmake/HeliosModular.cmake` links them into the group). On Windows the hook then lives in
+`helios_runtime.dll`, which every gated executable imports, and executables carry none; ELF executables keep their `.preinit_array` hook, which calls the probe in
+`libhelios_runtime.so` (docs/adr/ADR-0.6c-link-model-spike.md §3, including what WP-0.5r changes).
 
 ## Processes
 
@@ -124,7 +134,7 @@ tag used by one thread, and within 16 × 64 KiB when several threads race. The p
 when it rises. `trackAllocations(tag, bytes, count)` / `trackDeallocations` account a batch in one
 call (pools, arenas, a heap flushing a thread-local tally). Budget: <= 25 ns per tracked
 allocate+free pair per thread, flat from 1 to 8 threads. `core_memory_bench` measures it against a
-replica of the old single-slot counters (4-core container, ns per pair, best of 3):
+replica of the old single-slot counters (measured 2026-09-25 on a 4-core container, ns per pair, best of 3):
 
 | Threads | Old counters | Sharded | `alignedAlloc` + free (64 B) |
 |---|---|---|---|
@@ -143,6 +153,11 @@ Before the change, `alignedAlloc` + free cost 42 / 94 / 230 ns at 1 / 2 / 4 thre
 * Everything that must be bit-identical between Windows and Linux (RNG, hashing, `DilatableClock`)
   is integer- or bit-exact and pinned by golden tests.
 * Asserts are enabled in Debug and RelWithDebInfo (`HELIOS_ENABLE_ASSERTS`), compiled out of Release.
+* State that more than one image may reach is defined once, in the owning module: a log channel that a
+  public header names is declared there with `HELIOS_LOG_CHANNEL_EXTERN(<group API macro>, var)` and
+  defined in one `.cpp` with `HELIOS_LOG_CHANNEL_DEFINE`; `HELIOS_LOG_CHANNEL` (an inline variable,
+  one copy per image) is for channels of a module's own sources. Data that code outside the module reads
+  carries `HELIOS_RUNTIME_API` (02 §1.4; the symbol audit's rule R3 checks it).
 
 ## Tests
 
@@ -173,7 +188,8 @@ ninja -C build/core helios_core core_tests && ctest --test-dir build/core -R cor
   the time of the call.
 * `DirectoryMount` rejects path components Win32 would not treat as plain names (DOS devices such
   as `con` / `nul.json`, names ending in `.` or space) on every platform, so content resolves the
-  same on Windows and Linux.
+  same on Windows and Linux. The rule is public as `fs::isNonPortableComponent`, so other path checks
+  (engine/assetpipe's `.meta` paths) share it.
 * Windows crash handling covers SEH exceptions (unhandled-exception filter) and every `abort()`
   (failed asserts, `HELIOS_LOG_FATAL`, `std::terminate` on any thread) through a process-wide
   SIGABRT hook; MSVC pure-call / invalid-parameter failures are hooked too. `__fastfail` paths
@@ -196,5 +212,6 @@ Plan-Rev: 3
 
 The CPU-gate code was written to plan revision 3, before the ADR-011 amendment (revision 4). Open deltas are in
 09 §5.10.4 (b), for WP-0.5r: gate placement, the failure path, the exports, and the round-5 backstop
-classifier and crash-handler handover. §5.10.4 (c) has one more, for WP-0.5: 02 §2.2's ≤ 3× `mi_malloc`
+classifier and crash-handler handover. WP-0.2r (revision 13) changed only how the gate and the module are
+built: the gate's own `gate`-level object libraries and the image ISA levels of 02 §1.1. §5.10.4 (c) has one more, for WP-0.5: 02 §2.2's ≤ 3× `mi_malloc`
 accounting target. The rest of the module has no open delta.

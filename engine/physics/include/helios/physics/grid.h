@@ -9,9 +9,10 @@
 //     turns real time into whole steps with an accumulator;
 //   * bodies are added in (layer, key) order within every createBodies() batch;
 //   * every order-dependent result (stateHash(), query tie-breaks, bodies()) is ordered by
-//     (layer, key), never by Jolt's BodyID. Each body's user data holds its key, which is what the
-//     `stable-order` Jolt patch (02 §7.1; not vendored yet, see engine/physics/README.md) needs to
-//     take the BodyID out of the solver's own ordering as well;
+//     (layer, key), never by Jolt's BodyID. Each body's user data holds its key, which the vendored
+//     `stable-order` Jolt patch (02 §7.1) uses to take the BodyID out of the solver's own ordering;
+//   * ShipHull and Vehicle bodies keep no contact cache from one step() to the next (the patch's
+//     NoCrossUpdateCache), so their step is a function of the bodies' states (client prediction);
 //   * the result does not depend on the number of job-system workers.
 //
 // Threading: a grid is not thread-safe; one thread drives it (step() fans out onto the job system
@@ -82,7 +83,8 @@ struct BodyDesc {
     /// Mass in kg; 0 = from the shape's volume at 1000 kg/m^3.
     f32 mass = 0.0f;
     /// Speed cap in m/s. Jolt's own default (500 m/s) is below 06's NAV mode (1 km/s) and BENCH-2
-    /// (1.5 km/s), so Helios defaults to 10 km/s.
+    /// (1.5 km/s), so Helios defaults to 10 km/s. createBody() clamps linearVelocity to it, and
+    /// angularVelocity to Jolt's cap (0.25 * pi * 60 rad/s).
     f32 maxLinearVelocity = 10'000.0f;
     bool allowSleeping = true;
     /// Sensor: reports overlaps, never collides.
@@ -167,7 +169,11 @@ public:
     /// Adds one body. Fails for key 0, a duplicate (layer, key), a missing shape, a full grid, a
     /// motion type the layer does not allow (Static/Terrain/Interior bodies must be static), a mesh
     /// shape (or a compound holding one) on a moving body, a zero or non-finite rotation, and
-    /// non-finite or negative mass, friction, restitution, damping or speed cap.
+    /// non-finite or negative mass, friction, restitution, damping or speed cap. The initial
+    /// velocities of dynamic and kinematic bodies are clamped to their caps (maxLinearVelocity,
+    /// Jolt's angular cap), as setVelocity() clamps them; with discrete motion quality (every Helios
+    /// body), Jolt never clamps a kinematic body later. ShipHull and Vehicle bodies keep no contact
+    /// cache across step() (02 §7.1).
     Result<BodyHandle> createBody(const BodyDesc& desc);
     /// Adds a batch in (layer, key) order, whatever the order of `descs`; handles are returned in
     /// the order of `descs`. All-or-nothing: on error no body of the batch exists.

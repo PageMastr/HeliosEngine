@@ -1,0 +1,4 @@
+#! -rules CONF-10
+# The WP-9.8r record has no EXIT-0.conformance gap naming CONF-10 (one names another rule, one is in
+# another exit item), so the record fails; the WP-9.9r record's gap lists its owner second.
+tools/conformance/known_failing.jsonc:6: conformance

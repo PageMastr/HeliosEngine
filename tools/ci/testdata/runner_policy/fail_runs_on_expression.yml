@@ -1,0 +1,8 @@
+# expect: runs-on
+# A runner label from a variable could name win-gpu; the check cannot tell.
+on: pull_request
+jobs:
+  build:
+    runs-on: ${{ vars.RUNNER }}
+    steps:
+      - run: echo build

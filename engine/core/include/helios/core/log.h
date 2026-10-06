@@ -28,6 +28,7 @@
 
 #include "helios/core/platform.h"
 #include "helios/core/types.h"
+#include "helios/runtime_api.h"
 
 #define HELIOS_LOG_LEVEL_TRACE 0
 #define HELIOS_LOG_LEVEL_DEBUG 1
@@ -233,7 +234,8 @@ inline bool isEnabled(Level lvl, const Channel& channel) noexcept;
 void writeMessage(Level level, Channel& channel, const SourceLocation& location, std::string_view message);
 
 namespace detail {
-extern std::atomic<u8> g_globalLevel;
+// Read by isEnabled() in every image, so it is exported data (02 §1.4; MSVC imports data through dllimport).
+extern HELIOS_RUNTIME_API std::atomic<u8> g_globalLevel;
 
 void writeFormatted(Level level, Channel& channel, const SourceLocation& location, std::string_view fmt,
                     std::format_args args);
@@ -267,18 +269,31 @@ inline bool isEnabled(Level lvl, const Channel& channel) noexcept {
 } // namespace helios::log
 
 /// Declares (in a header or .cpp) a log channel variable usable as the first HELIOS_LOG_* argument.
+/// It is an inline variable, so every image that includes the declaration has its own copy: use it for
+/// channels that only one module's sources name. A public header declares its channels with
+/// HELIOS_LOG_CHANNEL_EXTERN instead (02 §1.4: header-defined state is per image in modular builds).
 #define HELIOS_LOG_CHANNEL(var, name)                                                   \
     inline constinit ::helios::log::Channel var{name};                                  \
     [[maybe_unused]] static const bool HELIOS_CONCAT(heliosLogChannelReg_, var) =       \
         (var.ensureRegistered(), true)
 
+/// Declares, in a public header, a channel that one .cpp of the module defines with
+/// HELIOS_LOG_CHANNEL_DEFINE. `api` is the owning link group's export macro (helios/<group>_api.h).
+#define HELIOS_LOG_CHANNEL_EXTERN(api, var) extern api ::helios::log::Channel var
+
+/// Defines a channel declared with HELIOS_LOG_CHANNEL_EXTERN (once, in the owning module).
+#define HELIOS_LOG_CHANNEL_DEFINE(var, name)                                            \
+    constinit ::helios::log::Channel var{name};                                         \
+    [[maybe_unused]] static const bool HELIOS_CONCAT(heliosLogChannelReg_, var) =       \
+        (var.ensureRegistered(), true)
+
 namespace helios {
-// Core channels. LogGeneral is used when a HELIOS_LOG_* call names no channel.
-HELIOS_LOG_CHANNEL(LogGeneral, "General");
-HELIOS_LOG_CHANNEL(LogCore, "Core");
-HELIOS_LOG_CHANNEL(LogJobs, "Jobs");
-HELIOS_LOG_CHANNEL(LogFs, "FileSystem");
-HELIOS_LOG_CHANNEL(LogMemory, "Memory");
+// Core channels (defined in log.cpp). LogGeneral is used when a HELIOS_LOG_* call names no channel.
+HELIOS_LOG_CHANNEL_EXTERN(HELIOS_RUNTIME_API, LogGeneral);
+HELIOS_LOG_CHANNEL_EXTERN(HELIOS_RUNTIME_API, LogCore);
+HELIOS_LOG_CHANNEL_EXTERN(HELIOS_RUNTIME_API, LogJobs);
+HELIOS_LOG_CHANNEL_EXTERN(HELIOS_RUNTIME_API, LogFs);
+HELIOS_LOG_CHANNEL_EXTERN(HELIOS_RUNTIME_API, LogMemory);
 } // namespace helios
 
 #define HELIOS_LOG_SOURCE_LOCATION_ \

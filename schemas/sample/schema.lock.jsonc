@@ -271,6 +271,22 @@
         {"name": "ByTarget", "value": 2}
       ]
     },
+    "sample.ship.HangarSlot": {
+      "id": 2194061890,
+      "kind": "struct",
+      "sql": "svc_character.hangar_slot",
+      "nextField": 9,
+      "fields": [
+        {"id": 1, "name": "owner", "type": "EntityId"},
+        {"id": 2, "name": "slot", "type": "u16"},
+        {"id": 3, "name": "ship", "type": "EntityId"},
+        {"id": 4, "name": "hull", "type": "Ref<sample.ship.ShipHullDef>"},
+        {"id": 5, "name": "size", "type": "sample.ship.ShipSize", "default": "\"Medium\""},
+        {"id": 6, "name": "label", "type": "string?"},
+        {"id": 7, "name": "damage", "type": "sample.ship.HullDamage"},
+        {"id": 8, "name": "storedAt", "type": "Tick"}
+      ]
+    },
     "sample.ship.Hardpoint": {
       "id": 236907002,
       "kind": "struct",
@@ -376,6 +392,14 @@
       "fields": [
         {"id": 1, "name": "lastInputTick", "type": "u32"}
       ]
+    },
+    "sample.ship.ShipQueries.dockedShips": {
+      "id": 3205355278,
+      "kind": "fn"
+    },
+    "sample.ship.ShipQueries.hullOf": {
+      "id": 2430466287,
+      "kind": "fn"
     },
     "sample.ship.ShipSize": {
       "id": 3990085262,

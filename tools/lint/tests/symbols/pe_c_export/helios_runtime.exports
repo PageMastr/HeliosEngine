@@ -1,0 +1,17 @@
+
+Dump of file helios_runtime.dll
+
+File Type: DLL
+
+  Section contains the following exports for helios_runtime.dll
+
+    ordinal hint RVA      name
+
+          1    0 0000A0F5 ??0Logger@log@helios@@QEAA@XZ = @ILT+65760(??0Logger@log@helios@@QEAA@XZ)
+          2    1 00012345 helios_runtime_link_group_modules = @ILT+12345(helios_runtime_link_group_modules)
+          3    2 00022000 mi_malloc = @ILT+22000(mi_malloc)
+          4    3 00022100 yyjson_read_opts = @ILT+22100(yyjson_read_opts)
+
+  Summary
+
+        1000 .data

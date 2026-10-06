@@ -1,0 +1,26 @@
+jobs:
+  go:
+    steps:
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.1"
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-go@v6
+      - run: go test ./...
+      - name: Reads go.mod but pins a version as well (setup-go then uses go-version)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: services/go.mod
+          go-version: "1.22"
+      - {uses: actions/setup-go@v6, with: {go-version: "1.22"}}
+      - run: GOTOOLCHAIN=go1.25.0 go test ./...
+  env-override:
+    env:
+      GOTOOLCHAIN: go1.26.3
+    steps:
+      - run: echo "GOTOOLCHAIN=go1.24.0+auto" >> "$GITHUB_ENV"
+  flow-sequence:
+    steps: [{uses: actions/setup-go@v6, with: {go-version-file: services/go.mod}}, {uses: actions/setup-go@v6, with: {go-version-file: go.mod}}]

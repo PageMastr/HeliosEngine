@@ -1,18 +1,23 @@
-"""The nightly's fetch and perf steps (.github/workflows/nightly.yml), run under bash against a fake `gh`.
+"""The nightly's fetch and perf steps (.github/workflows/nightly.yml), run under bash against a fake `gh`,
+the scope of its one advisory gate, and which steps run the timing gates (CTest label perf).
 
 These steps decide whether tonight is compared with a perf history, so each way they can go wrong (an API
 error, a lost or expired artifact, a restart over a usable history) is a scenario here. POSIX only: the
-steps are bash, and the fake `gh` is a shell script.
+steps are bash, and the fake `gh` is a shell script. The advisory and perf-label scope tests read the files
+and run everywhere.
 """
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+
+import scorecard
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "nightly.yml"
@@ -103,6 +108,7 @@ class NightlyPerfStepsTests(unittest.TestCase):
         # The perf step runs whatever the fetch step did (`if: !cancelled()`).
         perf = subprocess.run(["bash", "-e", "-c", self.perf], cwd=work, env=base, capture_output=True, text=True,
                               timeout=120)
+        self.perf_log = perf.stdout + perf.stderr  # what the job log shows
         out = work / "out" / "perf-history.json"
         entries = len(json.loads(out.read_text(encoding="utf-8"))["entries"]) if out.is_file() else None
         summary = (work / "summary.md").read_text(encoding="utf-8") if (work / "summary.md").is_file() else ""
@@ -169,11 +175,239 @@ class NightlyPerfStepsTests(unittest.TestCase):
         self.assertIn("**missing**", summary)  # compared with the fetched history, as on a normal night
         self.assertTrue((self.dir / "work" / "ci-jobs.json").is_file())  # the rest of the step still ran
 
+    def test_the_job_log_names_each_failing_row(self):
+        # The nightly of 2026-10-03 (run 37098788944): the rows went only to the summary and the artifact.
+        self.runs(r3=["scorecard-report"], r2=["scorecard-report", "perf-history"])
+        fetch, perf, _, entries, summary, _ = self.night()
+        self.assertEqual((fetch, perf, entries), (0, 1, 2))  # tee keeps compare's exit code (pipefail)
+        self.assertIn("| `linux-gcc/net.ns02.loopback_pps_per_core` |", self.perf_log)  # the table
+        self.assertIn("::error title=perf missing::linux-gcc/net.ns02.loopback_pps_per_core: no value tonight",
+                      self.perf_log)
+        self.assertNotIn("::error", summary)  # the summary gets the markdown only
+        text = WORKFLOW.read_text(encoding="utf-8")
+        upload = text[text.index("name: perf-history"):]
+        self.assertIn("out/perf.md", upload[:upload.index("retention-days")])
+
+    def test_a_first_night_on_a_host_class_is_reported_not_failed(self):
+        # The history predates host fingerprints; tonight's linux-gcc result set records its host.
+        self.runs(r2=["scorecard-report", "perf-history"])
+        run = self.dir / "work" / "results" / "linux-gcc"
+        (run / "doctest").mkdir(parents=True)
+        (run / "run.json").write_text('{"run": "linux-gcc"}', encoding="utf-8")
+        (run / "host.json").write_text('{"cpu": "AMD EPYC 7763 64-Core Processor", "logical_cpus": 4}',
+                                       encoding="utf-8")
+        case = "perf: NS-0.2: loopback 100k pps per core without loss"
+        (run / "doctest" / "net_tests.perf.xml").write_text(
+            f'<doctest binary="net_tests"><TestCase name="{case}"><Message type="WARNING"><Text>1000000 sent '
+            f'-> 300000 pps per core</Text></Message><OverallResultsAsserts test_case_success="true" '
+            f'duration="0.5"/></TestCase></doctest>', encoding="utf-8")
+        (run / "doctest" / "net_tests.perf.status.json").write_text('{"returncode": 0}', encoding="utf-8")
+        fetch, perf, _, entries, summary, _ = self.night()
+        self.assertEqual((fetch, perf, entries), (0, 0, 2), self.perf_log)  # 300k against 480k: another class
+        self.assertIn("new-host-class (first night on this host class (AMD EPYC 7763 64-Core Processor, "
+                      "4 logical CPUs)", summary)
+        self.assertNotIn("::error", self.perf_log)
+        # The run page says so (a new class does not fail, so without this the night would leave no annotation).
+        self.assertIn("\n::warning title=perf new-host-class::linux-gcc on AMD EPYC 7763 64-Core Processor, "
+                      "4 logical CPUs (2 host classes with levels)\n", self.perf_log)
+        self.assertNotIn("::warning", summary)  # the summary gets the markdown only
+        for job in ("linux", "windows"):  # every native job records its host next to run.json
+            text = WORKFLOW.read_text(encoding="utf-8")
+            body = text[text.index(f"\n  {job}:"):]
+            self.assertIn('runners.py host --out "$', body[:body.index("- name: Configure")])
+
     def test_scheduled_runs_have_no_input(self):
         self.runs(r2=["scorecard-report", "perf-history"])
         fetch, perf, previous, entries, _, _ = self.night(RESTART_PERF_HISTORY="")
         self.assertEqual((fetch, perf, entries), (0, 1, 2))
         self.assertNotIn("perf-restart", previous)
+
+
+class AdvisoryScopeTests(unittest.TestCase):
+    """NS-0.2's owner approval of 2026-09-30 relaxes one clause, the encrypted stack's 100k packets per core, on
+    the runs the registry names (`advisory_runs`), through `net_bench --gate --advisory ns02-stack` (09 §5.6).
+    It covers hosted Linux only: hosted Windows measured the stack below 100k on 2 of its 3 runs (125,611 on
+    2026-10-03) and the owner has not confirmed the approval there, so that step stays strict. This pins that
+    scope: another advisory, another advisory run or another approval fails here until this test, and its
+    review, say otherwise."""
+
+    def test_only_ns02s_stack_rate_is_advisory_and_only_on_the_named_runs(self):
+        data, _ = scorecard.load_jsonc(ROOT / "scorecard.jsonc")
+        approvals = {e["id"]: scorecard.approval(e) for e in data["criteria"] + data["exit"] if scorecard.approval(e)}
+        self.assertEqual(list(approvals), ["NS-0.2"])
+        approval = approvals["NS-0.2"]
+        self.assertEqual(approval["advisory"], ["net.ns02.stack_packets_per_core"])
+        self.assertEqual(approval["evidence"], "docs/evidence/ns-0.2-owner-approval-2026-09-30.md")
+        self.assertEqual(approval["advisory_runs"], ["linux-gcc"])
+        metric = next(m for m in data["perf_metrics"] if m["id"] == "net.ns02.stack_packets_per_core")
+        self.assertEqual((metric["criterion"], metric["gate"]), ("NS-0.2", "net_bench_gate"))
+        self.assertIn("NS-0\\.2 HTP stack", metric["pattern"])
+
+        # Each `net_bench --gate` step, by the run its `if:` names. Comments do not count.
+        commands = [line for line in WORKFLOW.read_text(encoding="utf-8").splitlines()
+                    if not line.lstrip().startswith("#")]
+        self.assertEqual([m for line in commands for m in re.findall(r"--advisory\b\s*(\S*)", line)], ["ns02-stack"])
+        gates, run = [], None
+        for line in commands:
+            if m := re.search(r"matrix\.run == '([^']+)'", line):
+                run = m[1]
+            if "-- net_bench --gate" in line:
+                gates.append((run, line.rstrip()))
+        self.assertEqual(sorted(name for name, _ in gates), ["linux-gcc", "windows-vs2026"])
+        for name, line in gates:
+            want = " --advisory ns02-stack" if name in approval["advisory_runs"] else ""
+            self.assertTrue(line.endswith("-- net_bench --gate" + want), (name, line))
+
+
+def steps(job: str) -> list[dict]:
+    """The steps of a nightly.yml job, in order: {"name", "if", "run"} (the run block's lines, comments
+    dropped), read from the text; the workflow is plain enough that no YAML parser is needed."""
+    lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
+    start = lines.index(f"  {job}:")
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"  [\w-]+:$", lines[i])), len(lines))
+    out = []
+    for line in lines[start + 1:end]:
+        if m := re.match(r"\s+- (?:name: (.*)|uses: )", line):
+            out.append({"name": m[1] or "", "if": "", "run": []})
+        elif out and (m := re.match(r"\s+if: (.*)", line)):
+            out[-1]["if"] = m[1]
+        elif out and not line.lstrip().startswith("#"):
+            out[-1]["run"].append(line)
+    return out
+
+
+def commands(step: dict) -> list[str]:
+    """A step's run block as logical command lines: a folded block (`run: >`) is one line, as YAML joins it,
+    and a literal block's line ending with a bash `\\` or a pwsh backtick continues on the next."""
+    out = []
+    for k, line in enumerate(step["run"]):
+        if not (m := re.match(r"(\s+)run:\s*(.*)$", line)):
+            continue
+        body = []
+        for text in step["run"][k + 1:]:
+            if text.strip() and len(text) - len(text.lstrip()) <= len(m[1]):
+                break
+            body.append(text.strip())
+        if m[2] in (">", ">-"):
+            out.append(" ".join(b for b in body if b))
+        elif m[2] in ("|", "|-"):
+            command = ""
+            for b in body:
+                if b.endswith(("\\", "`")):
+                    command += b[:-1] + " "
+                else:
+                    out.append(command + b)
+                    command = ""
+            out += [command] if command else []
+        else:
+            out.append(m[2])
+    return out
+
+
+# CTest's label include, in either spelling, and its regex argument.
+LABEL_INCLUDE = re.compile(r"""(?<![\w-])(?:-L|--label-regex)(?:\s+|=)("[^"]*"|'[^']*'|\S+)""")
+
+
+def runs_perf(command: str) -> bool:
+    """Whether a command runs the perf entries: a CTest label include whose regex matches the label `perf`
+    (as CTest reads it, so `-L "gpu|perf"` and `-L .` count; an unreadable regex counts too), or the doctest
+    runner's --perf."""
+    for arg in LABEL_INCLUDE.findall(command):
+        try:
+            if re.search(arg.strip("\"'"), "perf"):
+                return True
+        except re.error:
+            return True
+    return bool(re.search(r"runners\.py\s+doctest\b.*(?<![\w-])--perf(?![\w-])", command))
+
+
+# A CTest invocation in a command, and CTest's label exclude with its regex argument.
+CTEST = re.compile(r"(?:^|[\s;&|(])ctest(?:\.exe)?(?=\s|$)")
+LABEL_EXCLUDE = re.compile(r"""(?<![\w-])(?:-LE|--label-exclude)\s+("[^"]*"|'[^']*'|\S+)""")
+
+
+def excludes_perf(args: str) -> bool:
+    """Whether CTest arguments exclude the label `perf`: a -LE / --label-exclude regex that matches it (an
+    unreadable regex does not count)."""
+    for arg in LABEL_EXCLUDE.findall(args):
+        try:
+            if re.search(arg.strip("\"'"), "perf"):
+                return True
+        except re.error:
+            pass
+    return False
+
+
+def matrix_rows(job: str) -> list[dict]:
+    """The `include:` rows of a nightly.yml job's matrix, as {key: value} strings."""
+    lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
+    start = lines.index(f"  {job}:")
+    rows = []
+    for line in lines[start + 1:]:
+        if re.match(r"  [\w-]+:$", line) or line.strip().startswith("steps:"):
+            break
+        if line.lstrip().startswith("#"):
+            continue
+        if m := re.match(r"\s+- (\w+): ?(.*)$", line):
+            rows.append({m[1]: m[2].strip()})
+        elif rows and (m := re.match(r"\s+(\w+): ?(.*)$", line)) and line.startswith(" " * 12):
+            rows[-1][m[1]] = m[2].strip()
+    return rows
+
+
+class PerfLabelScopeTests(unittest.TestCase):
+    """The owner's decision of 2026-09-30 (PR #39): the timing gates (CTest label perf) run only in the GCC
+    job's serial perf step, never in a sanitizer build, whose instrumented Debug code measures the sanitizers
+    and not the budget. This fails if the linux-asan row runs them again or another step does."""
+
+    def test_the_sanitizer_row_excludes_perf_and_only_the_gcc_step_runs_it(self):
+        rows = {r["run"]: r for r in matrix_rows("linux")}
+        self.assertEqual(sorted(rows), ["linux-asan", "linux-clang", "linux-gcc"])
+        self.assertEqual(rows["linux-asan"]["preset"], "linux-debug-asan")
+        for run, row in rows.items():
+            # Every Linux row's main CTest step excludes the label (the GCC job runs it in its own step).
+            m = re.fullmatch(r"(?:.*\s)?-LE (\S+)(?:\s.*)?", row.get("ctest_args", ""))
+            self.assertTrue(m and re.search(m[1].strip('"'), "perf"), (run, row.get("ctest_args")))
+            self.assertIsNone(LABEL_INCLUDE.search(row.get("ctest_args", "")), (run, row.get("ctest_args")))
+        test = next(s for s in steps("linux") if s["name"].startswith("Test (software Vulkan"))
+        self.assertIn("${{ matrix.ctest_args }}", "\n".join(test["run"]))
+        # `-L perf` (and the doctest runner's --perf, the same entries) only in the step gated on linux-gcc.
+        text = WORKFLOW.read_text(encoding="utf-8")
+        jobs = re.findall(r"^  ([\w-]+):$", text[text.index("\njobs:"):], re.M)
+        self.assertEqual(jobs, ["linux", "windows", "go", "fuzz", "scorecard"])
+        # Spelled any way CTest or the runner reads it (#45's review, N4: --label-regex, and --perf anywhere in
+        # the doctest runner's command, a folded block's later line included).
+        every = [s for job in jobs for s in steps(job)]
+        self.assertEqual([s["name"] for s in every if any(re.match(r"\s+run:", x) for x in s["run"]) and
+                          not any(c.strip() for c in commands(s))], [])  # no run block read as empty
+        perf_steps = [s for s in every if any(runs_perf(c) for c in commands(s))]
+        self.assertEqual([s["name"] for s in perf_steps], ["Perf gates (label perf, serial)"])
+        self.assertEqual(perf_steps[0]["if"], "${{ !cancelled() && matrix.run == 'linux-gcc' }}")
+        # The registry's description of the sanitizer run says the same.
+        data, _ = scorecard.load_jsonc(ROOT / "scorecard.jsonc")
+        self.assertIn("every CTest except perf", data["runs"]["linux-asan"]["description"])
+
+    def test_every_other_ctest_command_excludes_perf(self):
+        # #45's round-2 review, N2: a CTest command without a label include still runs the perf entries if it
+        # does not exclude them (`-R _perf`, a preset's filter, or `-Lperf`, which CTest 3.28 does not read as
+        # a label filter, so it runs everything). Outside the perf step, each one excludes the label itself
+        # (-LE with a regex that matches `perf`) or takes its job's matrix `ctest_args`, which every row sets
+        # to exclude it.
+        text = WORKFLOW.read_text(encoding="utf-8")
+        jobs = re.findall(r"^  ([\w-]+):$", text[text.index("\njobs:"):], re.M)
+        checked = set()
+        for job in jobs:
+            rows = matrix_rows(job)
+            rows_exclude = bool(rows) and all(excludes_perf(r.get("ctest_args", "")) for r in rows)
+            for step in steps(job):
+                if step["name"] == "Perf gates (label perf, serial)":
+                    continue
+                for command in filter(CTEST.search, commands(step)):
+                    checked.add(step["name"])
+                    self.assertTrue(excludes_perf(command) or
+                                    (rows_exclude and "${{ matrix.ctest_args }}" in command), (job, command))
+        self.assertLessEqual({"Test (software Vulkan via lavapipe)", "Test (no GPU on hosted runners)"},
+                             checked)
 
 
 if __name__ == "__main__":

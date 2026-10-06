@@ -1,4 +1,4 @@
-# engine/net — L2 HTP transport (HEADLESS; 04 §2, ADR-007, ADR-013): UdpSocket (Winsock2 / BSD
+# engine/net — L3 HTP transport (HEADLESS; 04 §2, ADR-007, ADR-013): UdpSocket (Winsock2 / BSD
 # sockets), IDatagramTransport (sockets, in-process VirtualNetwork, NetSim), netcode 1.4.8
 # client/server wrappers with Helios allocators and logging, one reliable 1.4.5 endpoint per
 # session, HTP channels, packing, fragmentation, budgets/AIMD, stats, trunk profile.
@@ -33,6 +33,9 @@ if(TARGET net_tests)
     HELIOS_NET_TOKEN_VECTORS_DIR="${PROJECT_SOURCE_DIR}/services/testdata/vectors"
     HELIOS_NET_FUZZ_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus")
   set_tests_properties(net_tests PROPERTIES TIMEOUT 600)
+  # White-box tests call netcode directly, which helios_runtime never exports: in a modular build the image
+  # carries its own copy of the modules (ADR-016; cmake/HeliosModular.cmake).
+  helios_self_contained(net_tests)
 endif()
 
 # ---------------------------------------------------------------------------------------------
@@ -58,6 +61,7 @@ foreach(t ${HELIOS_NET_FUZZ_TARGETS})
   target_link_libraries(${exe} PRIVATE helios::net helios::tp::netcode)
   target_include_directories(${exe} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/fuzz)
   set_target_properties(${exe} PROPERTIES FOLDER fuzz)
+  helios_self_contained(${exe}) # calls netcode directly, like net_tests
   helios_apply_warnings(${exe})
   if(HELIOS_BUILD_TESTS AND NOT (HELIOS_NET_LIBFUZZER AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
     add_test(NAME ${exe} COMMAND ${exe} --smoke 20000 ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/${t})
@@ -70,9 +74,26 @@ foreach(t ${HELIOS_NET_FUZZ_TARGETS})
 endforeach()
 
 # ---------------------------------------------------------------------------------------------
-# Benchmarks / gates: NS-0.2 (loopback pps/core) and NS-0.7 (trunk throughput). Executable only;
-# CI runs `net_bench --gate` in the nightly tier (10 min at 20k pps).
+# Benchmarks / gates: NS-0.2 (loopback pps/core) and NS-0.7 (trunk throughput). CI runs
+# `net_bench --gate` in the nightly tier (10 min at 20k pps); CTest checks only its arguments.
 # ---------------------------------------------------------------------------------------------
 helios_executable(net_bench SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/bench/net_bench.cpp DEPS helios::net)
 target_include_directories(net_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/bench)
 set_target_properties(net_bench PROPERTIES FOLDER bench)
+# `--advisory` is accepted only as `--gate --advisory ns02-stack` (NS-0.2's owner approval of 2026-09-30).
+# Any other form must exit non-zero with this message before a gate runs, so that a typo cannot gate
+# something other than what was meant; a parser that let one through would start the 10-minute gate and
+# hit the timeout.
+if(HELIOS_BUILD_TESTS)
+  set(_nbExpect "-DEXPECT=--advisory takes 'ns02-stack' and applies to --gate only"
+                "-DARG0=$<TARGET_FILE:net_bench>")
+  set(_nbScript -P ${PROJECT_SOURCE_DIR}/tools/lint/expect_fail.cmake)
+  add_test(NAME net_bench_advisory_needs_gate
+    COMMAND ${CMAKE_COMMAND} ${_nbExpect} -DNARGS=3 -DARG1=--advisory -DARG2=ns02-stack ${_nbScript})
+  add_test(NAME net_bench_advisory_unknown_name
+    COMMAND ${CMAKE_COMMAND} ${_nbExpect} -DNARGS=4 -DARG1=--gate -DARG2=--advisory -DARG3=ns07-trunk ${_nbScript})
+  add_test(NAME net_bench_advisory_missing_name
+    COMMAND ${CMAKE_COMMAND} ${_nbExpect} -DNARGS=3 -DARG1=--gate -DARG2=--advisory ${_nbScript})
+  set_tests_properties(net_bench_advisory_needs_gate net_bench_advisory_unknown_name
+                       net_bench_advisory_missing_name PROPERTIES TIMEOUT 60)
+endif()

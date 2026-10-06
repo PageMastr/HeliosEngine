@@ -1,0 +1,7 @@
+helios_module_info|0000000000001000|   T  |              FUNC|0000000000000008|     |.text
+_ZN6helios3log5writeENS0_5LevelESt17basic_string_viewIcSt11char_traitsIcEE|0000000000001100|   T  |              FUNC|0000000000000008|     |.text
+mi_malloc|0000000000001200|   t  |              FUNC|0000000000000008|     |.text
+_mi_page_malloc|0000000000001300|   t  |              FUNC|0000000000000008|     |.text
+_ZN6helios5probe8g_countsE|0000000000003000|   B  |            OBJECT|0000000000000008|     |.bss
+_Z12lua_pushnilP9lua_State|0000000000001400|   t  |              FUNC|0000000000000008|     |.text
+_ZZN6helios3ecs6detail15perImageTypeKeyIN12_GLOBAL__N_18CooldownEEEmvE3key|0000000000003010|   b  |            OBJECT|0000000000000008|     |.bss

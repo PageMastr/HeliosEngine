@@ -8,6 +8,8 @@ their import path, so `import core.bindless;` resolves to `core/bindless.slang`.
 | Module | Contents |
 |---|---|
 | `core/bindless.slang` | The global bindless heap (set 0): sampled/storage image, storage buffer and sampler arrays plus accessors. Must match `engine/rhi`'s descriptor layout. |
+| `pcg/hnoise.slang` | The GPU twin of fixed-point `hnoise` and the terrain VM (02 §5.8, 03 §5.5a): 32-bit integer operations only (`pcg_lint_twin`), bit-identical to `engine/pcg` over `tests/corpus/hnoise` (`import pcg.hnoise;`). |
+| `pcg/hnoise_tile.slang` | Compute entry points of the twin, used by `pcg_gpu_tests` and `pcg_hnoise_bench`. |
 
 Planned (03 §9.1): `core/` (GPU-scene structs, `BufferRef<T>`), `brdf/`, `lighting/`,
 `atmosphere/`, `materials/`, `passes/`, `vfx/`, `terrain/`.

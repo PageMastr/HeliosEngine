@@ -1,15 +1,17 @@
 # Helios backend services (Go)
 
 The Go control plane of Helios (ADR-008, ADR-014, `docs/plan/05-backend-services.md`). Phase 0 ships one
-binary, `helios-backend`, that runs every service in-process on top of **embedded PostgreSQL 18**, an
-**embedded NATS server with JetStream** and **miniredis** (the Valkey stand-in), so a Windows developer needs
-nothing but Go. The same code runs against real PostgreSQL, NATS and Valkey via flags or Docker Compose.
+service binary, `helios-backend` (plus `helios-patch`, the patch publishing tool, below), that runs every
+service in-process on top of **embedded PostgreSQL 18**, an **embedded NATS server with JetStream** and
+**miniredis** (the Valkey stand-in), so a Windows developer needs nothing but Go. The same code runs against
+real PostgreSQL, NATS and Valkey via flags or Docker Compose.
 
 | Service | Package | Phase 0 scope |
 |---|---|---|
 | Identity/Auth (05 §1.1) | `internal/identity`, `pkg/pii` | accounts with `Handle#1234` tags; direct PII and GM free text stored in PostgreSQL only encrypted under a per-account DEK wrapped by the subject KEK: e-mail addresses (found by a keyed blind index), client IPs (on refresh tokens and in a login history, both kept 90 days) and ban reasons; audit rows hold only pseudonymous IDs (05 §1.17, §6.6, below). Per-IP rate-limit buckets in Valkey are still keyed by the raw IP and expire with their window; argon2id (m=64 MiB, t=3, p=1 behind a 2×GOMAXPROCS semaphore that sheds load after 5 s), EdDSA JWTs (10 min) + JWKS, rotating refresh-token families with reuse detection (rotation and revocation serialized per family), one-time launch codes bound to the launcher's family, bans that kick the live session, per-IP/per-account GCRA rate limits, hash-chained append-only audit log |
 | Session & connect tokens (05 §1.3, 04 §2.3–2.4) | `internal/session`, `pkg/connecttoken` | netcode 1.02 connect tokens (XChaCha20-Poly1305, byte-exact with vendored netcode 1.4.8), 1–4 gateway addresses picked by free slots on the newest shard key (old-key gateways drain), random 63-bit session IDs, `sess:<id>` + `session_epoch` in Valkey, reconnect tickets sealed for gateways over NATS and redeemed over HTTPS with an epoch CAS |
 | Orchestrator / world directory (05 §1.4) | `internal/orchestrator` | one leader per shard anchored in PostgreSQL (`orch_leader`, 10 s lease, term-fenced writes, standby takeover), process registry (failure domain `fd{az, rack, host}` and server build stored at registration; 1 Hz heartbeat over NATS reporting the regions held with their generations; 12 s liveness TTL, per-name epochs), time-prefixed ID blocks (`id_alloc`, `AllocateIdBlocks`), v0 zone placement (one cell per zone, one region per zone) under `region_lease` generations allocated in PostgreSQL, `ResolveZone`, KV projection `DIRECTORY`, local process supervision with backoff |
+| Patch pipeline (05 §1.19, §7) | `pkg/cdc`, `pkg/manifest`, `pkg/patchtrust`, `pkg/patchcdn`, `cmd/helios-patch` | FastCDC (min 16 / normal 64 / max 256 KiB) with BLAKE2b-256 chunk IDs, the `.hman` v0 manifest reader, writer and builder, the Ed25519 trust chain (root-signed keysets, signed pointers with sequence, expiry and rollback, the ratchets) and the local CDN with `helios-patch publish` and `verify` (below), byte-identical with `engine/patch` (shared vectors below; the formats are specified in [engine/patch/README.md](../engine/patch/README.md)). The production manifest service (05 §1.19, Phase 2) is not started |
 | Platform | `internal/platform` | config (defaults < TOML < `HELIOS_*` env < flags), slog, OpenTelemetry hooks, `/healthz` `/readyz`, Prometheus `/metrics`, HTTP(S) servers with graceful shutdown |
 
 ## Run it
@@ -124,6 +126,51 @@ go run ./cmd/helios-backend --data ./saved/compose \
 
 `docker compose -f deploy/docker-compose.yml --profile backend up -d --build` also runs the backend image
 (`deploy/Dockerfile`, distroless, non-root).
+
+## Patching: helios-patch
+
+`helios-patch` (WP-0.16) publishes a build directory to a CDN directory in the 05 §7 layout and verifies a channel
+the way the launcher will (engine/patch/README.md specifies the formats and the checks):
+
+```sh
+go run ./cmd/helios-patch publish --build ../out/win64 --product sample-game --channel dev --platform win64 \
+    --cdn-host http://127.0.0.1:7700/cdn            # writes helios-data/cdn (05 §5)
+go run ./cmd/helios-patch verify --product sample-game --channel dev --platform win64 --state trust.state
+```
+
+- **publish** walks the build in path order (regular files only; `bin/` is tier 0, or `--tier0` prefixes; a file
+  with an execute bit is `Executable`), chunks each file with FastCDC, writes each chunk that the CDN does not
+  have yet as one zstd-19 object (deduplicated by ID), builds the `.hman` (`--build-id`, default 16 hex digits
+  derived from the content and compat epoch) and signs its header with the manifest subkey, then the keyset, and
+  last the channel's pointer with the next sequence (`--compat-epoch`, `--min-launcher`, `--min-client`,
+  `--cdn-host`, `--rollout-pct`, `--lifetime` up to 7 days), so a reader never sees a pointer to objects that are
+  not there. Republishing an identical build writes nothing; the pointer is re-signed with the next sequence once
+  it is past half its lifetime. Manifests and chunks are immutable: a build ID already published with other
+  content is refused, and so is one whose manifest no longer passes the checks an install runs (a damaged payload
+  or signature; publish it under another `--build-id`), instead of being re-pointed. A chunk object already on the CDN is decoded and compared with the chunk, and rewritten if it
+  does not match (a torn copy is repaired instead of being signed into another manifest). The CDN's keyset is
+  never replaced by a lower version, a lower root epoch or other bytes of the same version (that would undo
+  revocations and fail installs that ratcheted past it), and when the signing directory has a `roots.json`
+  (dev directories do) the keyset must verify against it. A `roots.json` with a zero or other small-order key is
+  refused (`verify` too): anyone could sign a keyset under one.
+- **Keys.** `--channel dev` without `--keys` creates throwaway dev keys on first use in
+  `helios-data/keys/patch/<product>/` (`roots.json`, the public root pair; `root-keys.json` and
+  `manifest-key.json`, the private seeds, mode 0600 and marked `"dev": true`; `keyset.json`, signed by the dev
+  root), from the OS CSPRNG; they sign only the `dev` channel and only loopback CDN hosts (`http://` on exactly
+  `localhost`, `127.0.0.1` or `[::1]`, no userinfo). The key directory gets a `.gitignore` of `*` before any seed
+  is written, and the repository ignores `helios-data/`, so a `git add -A` never picks them up. Any other channel needs
+  `--keys DIR` with a `keyset.json` and a `manifest-key.json` not marked dev (real roots stay offline and real
+  subkeys come from Vault/KMS, 08 §2.10.3; `helios-tool product init` makes them in a later WP).
+- **verify** runs the full client-side chain against `--cdn` (a directory, default `helios-data/cdn`, or an
+  `http(s)://` base URL) with the root pair from `--roots` (default the dev keys' `roots.json`): keyset, pointer,
+  manifest, then every chunk object decoded and hashed. `--state FILE` loads and saves the ratchets as an install
+  does (root epoch, keyset version, pointer sequence; engine/patch's 32-byte checksummed record), so a later
+  rollback is refused. A rejection exits 1 with
+  the failed check's name (`pointer-expired: ...`).
+
+`pkg/patchtrust` holds the formats, signing, the verifier and the ratchet state; `pkg/patchcdn` the layout, the
+read path (`DirSource`, `HTTPSource`), `Verify`, `Publish` and the key directories. One publisher at a time may
+write a CDN directory.
 
 ## API
 
@@ -290,12 +337,38 @@ go test -run 'TestConformance/holder_rule' ./internal/orchestrator/   # CONF-03'
   (CONF-03) keeps the control plane unreachable for 60 s (no responders, timeouts, `unavailable` answers) and
   requires the Agent to keep every region, then to drop exactly the region whose generation rose. A shorter
   outage would not be CONF-03 evidence, so `-short` skips it; CI's Go jobs run without `-short`.
-- Fuzzing: `go test -fuzz FuzzParse ./pkg/connecttoken/`.
+- **Patch vectors** (WP-0.16), shared with `engine/patch`'s doctest suite: `fastcdc.json` (the gear table and
+  every chunk of 18 generated inputs, three of them crafted around the mask switch; `go test ./pkg/cdc -run
+  TestUpdateVectors -update` rewrites it) and `hman/` (a build description, `pipeline.hman` that both writers
+  must reproduce byte for byte, a zstd copy written by each language that both must read, `deep-paths.hman`
+  (the deepest paths the limits allow), 57 hostile edits with the error kind both readers return and the check
+  each breaks, and name and path-collision rules; `go test ./pkg/manifest -run TestUpdateGoldens -update`
+  rewrites the Go-written files, and `HELIOS_PATCH_UPDATE_VECTORS=1` makes `patch_tests` rewrite
+  `pipeline.cpp-zstd.hman`).
+- **Trust vectors** (WP-0.16 part 2), shared with `patch_tests`: `trust/` holds a CDN tree published by
+  `Publish` with test-only keys, 64 cases (`cases.json`: 13 accepted, 51 rejected, each naming the one check it
+  fails, together covering all 34 checks) and 76 keysets and pointers both parsers refuse (`syntax.json`: 38
+  keysets, 38 pointers; non-canonical encodings, invalid content such as a small-order subkey, and size limits);
+  `go test ./pkg/patchcdn -run TestUpdateTrustVectors -update` rewrites them. The keys are
+  derived from public seeds (`pkg/patchtrust/trusttest`, imported by tests only), and both verifiers refuse their
+  roots unless a test allows them. `TestEveryByteTampered` changes every byte of the keyset, the pointer and the
+  manifest header three ways and requires a rejection each time.
+- Timing: `TestPerfChunking` (pkg/cdc) and `TestPerfManifest` and `TestPerfDeepPaths` (pkg/manifest) assert four
+  times each budget's time in a normal run and the budgets themselves with `HELIOS_PERF=1`; `TestPerfDeepPaths`
+  also holds the deep-paths read to twice one of paths four directories deep of the same size, and reads the
+  same deep paths with their collision keys in random order against their own budget (engine/patch/README.md
+  "Performance").
+  `BenchmarkParse`, `BenchmarkMarshal` and `BenchmarkParseDeepPaths` measure the manifest paths.
+- Fuzzing: `go test -fuzz FuzzParse ./pkg/connecttoken/`, `go test -fuzz FuzzParse ./pkg/manifest/`,
+  `go test -fuzz FuzzChunker ./pkg/cdc/`, and `FuzzParseKeyset`, `FuzzParsePointer` and
+  `FuzzVerifyManifestHeader` in `./pkg/patchtrust/` (every `go test` runs their seeds; the trust fuzzers' seeds
+  are the shared trust vectors).
 
 ## Layout
 
 ```
 cmd/helios-backend/        main: run, migrate, keys rotate, reset, version
+cmd/helios-patch/          publish a build to a CDN directory; verify a channel (05 §7)
 internal/app/              Service lifecycle + ordered runner
 internal/backend/          wiring used by main and the integration test
 internal/platform/         config, logging, telemetry, health, metrics, HTTP servers
@@ -309,6 +382,11 @@ pkg/authn/                 EdDSA JWT issue/verify, JWKS, bearer middleware
 pkg/ratelimit/             GCRA buckets in Valkey (one Lua script)
 pkg/rpc/                   Connect-style JSON over HTTP, JSON request/reply over NATS, error codes
 pkg/pii/                   DEKs, KEK wrapping, field sealing (XChaCha20-Poly1305) and blind indexes (05 §6.6)
+pkg/cdc/                   FastCDC + BLAKE2b-256 chunk IDs (cdctest/: the shared vectors' input generator)
+pkg/manifest/              .hman v0 manifests: reader, writer, builder (05 §7)
+pkg/patchtrust/            keysets, signed pointers, the verifier and ratchets (trusttest/: test-only keys)
+pkg/patchcdn/              the CDN layout, read path, Verify, Publish, signing directories
+pkg/hxl/                   HXL in Go: compiler, verifier and VM, twin of engine/hxl (gamedef/ is generated)
 pkg/idgen/ pkg/keyring/ pkg/clock/ pkg/testkit/
 migrations/<service>/      goose migrations for svc_<service>, embedded (plus Go steps in migrations.go)
 deploy/                    docker-compose.yml, Dockerfile, helios.example.toml
@@ -331,7 +409,9 @@ Written to draft v1 (plan revision 1), reworked to revision 2's lease and ID des
 WP-0.15r (09 §5.10.4 (a)): the `svc_identity` and `svc_orch` schema names, e-mail as `email_ct` and
 `email_bidx`, client IPs as `client_ip_ct` and ban reasons as `ban_reason_ct` under per-account DEKs, audit
 rows without IPs or GM text (row format 2), `region_lease`, `fd` and `serverBuild` in registration, and held
-regions in heartbeats. No delta is open. Revisions 4–6 added none (§5.10.4 (a), (c)).
+regions in heartbeats. No delta is open. Revisions 4–6 added none (§5.10.4 (a), (c)). `pkg/cdc`,
+`pkg/manifest` (WP-0.16 part 1), `pkg/patchtrust`, `pkg/patchcdn` and `cmd/helios-patch` (part 2) were written
+for revision 13; engine/patch/README.md records their conformance and deviations.
 
 Deviations, all Phase 0:
 - **05 §3.3 (expand/contract).** No release had shipped, so the schema rename is a single in-place step and

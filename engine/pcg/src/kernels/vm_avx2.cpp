@@ -1,7 +1,7 @@
-// The 8-lane AVX2 terrain VM kernel: pcg's default and the budgeted path (02 §5.8, 03 §5.5a). Built
-// with helios_avx2_sources() (AVX2, BMI1/2, LZCNT, POPCNT, F16C, no FMA); dispatched to only after
-// CPUID confirmed those features (kernel.cpp). 32x32 -> 64 products use _mm256_mul_epi32 /
-// _mm256_mul_epu32 on the even and odd lanes.
+// The 8-lane AVX2 terrain VM kernel: pcg's default and the budgeted path (02 §5.8, 03 §5.5a). Built at
+// its image's avx2 level like every pcg TU (02 §1.1: AVX2, BMI1/2, LZCNT, POPCNT, F16C, no FMA);
+// kernel.cpp still selects it only after CPUID confirmed those features. 32x32 -> 64 products use
+// _mm256_mul_epi32 / _mm256_mul_epu32 on the even and odd lanes.
 #include "vm_kernels.h"
 
 #if defined(__x86_64__) || defined(_M_X64)

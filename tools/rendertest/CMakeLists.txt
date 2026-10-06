@@ -54,18 +54,27 @@ if(HELIOS_BUILD_TESTS)
   if(HELIOS_VK_VALIDATION_LAYER)
     list(APPEND layer_args "-DLAYER=${HELIOS_VK_VALIDATION_LAYER}")
   endif()
-  # Two fake VK_LAYER_KHRONOS_validation layers for that check (Linux test builds; never installed):
+  # Three fake VK_LAYER_KHRONOS_validation layers for that check (Linux test builds; never installed):
   # vkCreateInstance fails with VK_ERROR_INITIALIZATION_FAILED, or with VK_ERROR_INCOMPATIBLE_DRIVER,
-  # which reads like a machine without a driver until the probe device finds one.
+  # which reads like a machine without a driver until the probe device finds one; or a working
+  # pass-through layer under the validator's name that validates nothing (in the call chain, but not
+  # the validator: the RHI must not report validation as active).
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_CROSSCOMPILING)
-    foreach(variant "INITFAIL|VK_ERROR_INITIALIZATION_FAILED" "NODRIVER|VK_ERROR_INCOMPATIBLE_DRIVER")
+    foreach(variant "INITFAIL|VK_ERROR_INITIALIZATION_FAILED" "NODRIVER|VK_ERROR_INCOMPATIBLE_DRIVER"
+                    "PASSTHROUGH|VK_SUCCESS")
       string(REPLACE "|" ";" parts "${variant}")
       list(GET parts 0 kind)
       list(GET parts 1 result)
       string(TOLOWER "${kind}" suffix)
       set(fake helios_rendertest_fake_layer_${suffix})
       add_library(${fake} MODULE ${CMAKE_CURRENT_SOURCE_DIR}/tests/fake_layer.c)
-      target_compile_definitions(${fake} PRIVATE FAKE_LAYER_RESULT=${result})
+      if(kind STREQUAL "PASSTHROUGH")
+        target_compile_definitions(${fake} PRIVATE FAKE_LAYER_PASSTHROUGH)
+        set(what "forwards every call and validates nothing")
+      else()
+        target_compile_definitions(${fake} PRIVATE FAKE_LAYER_RESULT=${result})
+        set(what "vkCreateInstance fails with ${result}")
+      endif()
       target_link_libraries(${fake} PRIVATE helios::tp::vulkan_headers)
       set_target_properties(${fake} PROPERTIES FOLDER tests)
       helios_apply_warnings(${fake})
@@ -78,7 +87,7 @@ if(HELIOS_BUILD_TESTS)
         \"library_path\": \"$<TARGET_FILE:${fake}>\",
         \"api_version\": \"1.3.275\",
         \"implementation_version\": \"1\",
-        \"description\": \"rendertest.validation-required: vkCreateInstance fails with ${result}\",
+        \"description\": \"rendertest.validation-required: ${what}\",
         \"functions\": {
             \"vkGetInstanceProcAddr\": \"fakeGetInstanceProcAddr\",
             \"vkGetDeviceProcAddr\": \"fakeGetDeviceProcAddr\"
@@ -105,6 +114,14 @@ if(HELIOS_BUILD_TESTS)
     set_tests_properties(rendertest.null.${scene} PROPERTIES LABELS "rendertest" TIMEOUT 120)
     list(APPEND vulkan_tests rendertest.vulkan.${scene} rendertest.null.${scene})
   endforeach()
+  # Hardware golden sets (golden/vulkan-<driver>/, filed by import_goldens.cmake from a win-gpu run for
+  # review) carry their provenance; GPU-less, so every toolchain checks it. The self-test exercises the
+  # import and the check on synthetic inputs.
+  add_test(NAME rendertest.goldens
+           COMMAND ${CMAKE_COMMAND} -DGOLDEN_DIR=${CMAKE_CURRENT_SOURCE_DIR}/golden "-DSCENES=${scene_list}"
+                   -DSELF_TEST=${CMAKE_CURRENT_BINARY_DIR}/rendertest-goldens-selftest
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden_checks.cmake)
+  set_tests_properties(rendertest.goldens PROPERTIES LABELS "rendertest" TIMEOUT 120)
   # RC-1 coverage, GPU-less: every shipped shader entry point and pipeline of engine/render is bound by
   # a scene whose lavapipe and Null goldens are committed (helios/render/shader_library.h).
   add_test(NAME rendertest.coverage COMMAND helios-rendertest --coverage)

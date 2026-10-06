@@ -44,6 +44,9 @@ bool isStaticLayer(ObjectLayer l) {
     return l == ObjectLayer::Static || l == ObjectLayer::Terrain || l == ObjectLayer::Interior;
 }
 
+/// Layers whose bodies keep no contact cache across step() (02 §7.1): ShipHull and Vehicle.
+bool hasNoCrossUpdateCache(ObjectLayer l) { return l == ObjectLayer::ShipHull || l == ObjectLayer::Vehicle; }
+
 JPH::EMotionType toJolt(MotionType m) {
     switch (m) {
         case MotionType::Kinematic: return JPH::EMotionType::Kinematic;
@@ -265,9 +268,8 @@ struct PhysicsGrid::Impl {
     Result<BodyHandle> add(const BodyDesc& d) {
         JPH::BodyCreationSettings bcs(static_cast<const JPH::Shape*>(d.shape.native()), toJolt(d.position),
                                       toJolt(d.rotation).Normalized(), toJolt(d.motion), jolt::toJolt(d.layer));
-        bcs.mUserData = d.key; // the stable key (02 §7.1): what the stable-order patch sorts by
-        bcs.mLinearVelocity = toJolt(d.linearVelocity);
-        bcs.mAngularVelocity = toJolt(d.angularVelocity);
+        bcs.mUserData = d.key; // the stable key (02 §7.1); the stable-order patch sorts by (layer, key)
+        // The velocities are applied after CreateBody, clamped to the body's caps (below).
         bcs.mFriction = d.friction;
         bcs.mRestitution = d.restitution;
         bcs.mLinearDamping = d.linearDamping;
@@ -286,6 +288,17 @@ struct PhysicsGrid::Impl {
         if (!body) {
             return makeError(ErrorCode::LimitExceeded, "grid '{}' is full ({} bodies)", desc.name, desc.maxBodies);
         }
+        if (d.motion != MotionType::Static) {
+            // Jolt requires a new body's velocities to be within its caps (debug builds assert). Release
+            // builds clamped a dynamic body only at its first step, and never a kinematic one. Clamp both
+            // now, as setVelocity() does through BodyInterface.
+            body->SetLinearVelocityClamped(toJolt(d.linearVelocity));
+            body->SetAngularVelocityClamped(toJolt(d.angularVelocity));
+        }
+        // Hulls and vehicles are predicted on clients, and a rollback restores bodies, never the cell's
+        // contact cache, so their contacts start every step() with no cached manifold or warm-start
+        // impulse (02 §7.1; the stable-order patch's Body::EFlags::NoCrossUpdateCache).
+        if (hasNoCrossUpdateCache(d.layer)) body->SetNoCrossUpdateCache(true);
         bi.AddBody(body->GetID(), d.motion == MotionType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
         const BodyHandle h = bodies.create(BodySlot{body->GetID(), d.layer, d.key});
         byKey.emplace(LayerKey{static_cast<u8>(d.layer), d.key}, h);

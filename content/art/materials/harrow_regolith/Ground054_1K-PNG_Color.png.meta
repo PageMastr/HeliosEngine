@@ -1,0 +1,13 @@
+{
+  "$meta": 0,
+  "guid": "7fb10e35-eb81-4b35-82b4-f8d0bf0dcd95",
+  "importer": "png",
+  "importerVersion": 1,
+  "provenance": {
+    "origin": "cc0",
+    "author": "ambientCG (ambientcg.com)",
+    "licence": "CC0-1.0",
+    "url": "https://ambientcg.com/view?id=Ground054",
+    "notes": "Harrow regolith (PBR). Downloaded 2026-10-06 from https://ambientcg.com/get?file=Ground054_1K-PNG.zip (SHA-256 19aafb7d257cff80eca5374b097abacb714149aa899891be82572e82fbac1326), file 'Ground054_1K-PNG_Color.png', unmodified; the committed file's SHA-256 is in content/ASSETS.md. Licence as stated: the asset page says \"All assets are released under the Creative Commons CC0 license\", and https://ambientcg.com/license says \"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\"."
+  }
+}

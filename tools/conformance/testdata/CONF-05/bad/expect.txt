@@ -1,0 +1,5 @@
+#! -rules CONF-05 -strict
+# A non-minter command, the session service, and a package whose name only ends in "test".
+services/cmd/tool/main.go:11: CONF-05
+services/internal/latest/feed.go:4: CONF-05
+services/internal/session/ids.go:4: CONF-05

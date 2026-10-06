@@ -22,7 +22,8 @@ python3 tools/status/snapshot.py report --inventory inventory.json   # Markdown 
 
 Hidden directories and `__pycache__` are not modules. Directories without a README must be named but
 need no `Plan-Rev`. Modules the row names that are not in the tree (work in progress on other branches)
-are reported as a note, as is a row that is not in the generated form. A missing §8.1 or PLAN-REV, or a
+are reported as a note (a named directory that is not a module, such as `content`, counts as in the tree
+when it exists), as is a row that is not in the generated form. A missing §8.1 or PLAN-REV, or a
 PLAN-REV that does not start with a number, is an error (exit 2), not a stale status (exit 1).
 
 `check_status.cmake` looks for Python 3.10+ in every `PATH` directory for each name in turn (Windows:
@@ -40,9 +41,8 @@ counted in an `(other)` row. The prose of §8.1 stays the Director's, and so do 
 ratchet state, which D6 also names: they are not generated yet (see the WP-0.3 row of §8.1).
 
 CTest `lint_status_unittest` (label `lint`) runs the seeded-fixture tests in `test_snapshot.py`. The
-check itself runs at the round audit. Registering it with the build-independent lints
-(`tools/ci/run_lints.cmake`) is WP-0.2's, once the in-progress modules are named, so that it does not fail
-parallel work mid-round (`CONSISTENCY.md`, round 5).
+check itself runs with the build-independent lints (`tools/ci/run_lints.cmake`, registered by WP-0.2 once
+the in-progress modules were named), which forwards `-DHELIOS_STATUS_PYTHON`, and at the round audit.
 
 ## Plan conformance
 

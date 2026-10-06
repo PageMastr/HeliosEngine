@@ -592,6 +592,20 @@ class PerfMetricTests(Fixture):
     def test_metric_cases_are_exact(self):
         self.assertFinding(self.run_check(self.with_metric(case="NS-0.1: *")), "take no '*'")
 
+    def test_a_bound_is_a_criterion_limit_that_no_accept_moves(self):
+        # WP-0.3: a ratio such as RT-13's metering overhead is gated against its plan bound, not its anchor.
+        self.assertEqual(self.run_check(self.with_metric(bound=10)), [])
+        self.assertEqual(self.run_check(self.with_metric(bound=0.5)), [])
+        for bad in ("10", True, float("inf"), None):
+            self.assertFinding(self.run_check(self.with_metric(bound=bad)), "'bound' must be a finite number")
+        data = self.with_metric(bound=10)
+        del data["perf_metrics"][0]["criterion"]
+        self.assertFinding(self.run_check(data), "must name its 'criterion'")
+        data = self.with_metric(bound=10)
+        data["perf_accept"] = [{"metric": "net.pps", "night": "2026-01-05", "value": 4.0, "run": "linux-gcc",
+                                "reason": "accepted"}]
+        self.assertFinding(self.run_check(data), "gated against its plan 'bound', which no perf_accept moves")
+
     def test_perf_accept_is_checked(self):
         good = {"metric": "net.pps", "night": "2026-01-05", "value": 1234.5, "run": "linux-gcc",
                 "reason": "new codec; accepted by the Director"}
@@ -649,6 +663,215 @@ class PerfMetricTests(Fixture):
         self.assertEqual(len(sc.check_workflow(local, self.root / "scorecard.jsonc", workflow)), 1)
         local["runs"]["windows-local"]["nightly"] = "no"
         self.assertFinding(self.run_check(local), "run 'windows-local': 'nightly'")
+
+
+CASES = {"socket": {"criterion": "NS-0.2", "result": r"socket: \d+", "failure": r"socket FAILED"},
+         "trunk": {"criterion": "NS-0.1", "result": r"trunk: \d+", "failure": r"trunk FAILED"}}
+
+
+class GateCaseTests(Fixture):
+    """A gate that measures several criteria reports one JUnit case per clause (`cases`), and each criterion
+    cites only its own (#43's review, N4: NS-0.2's strict Windows stack rate failed NS-0.7's Windows cell)."""
+
+    def split(self, cases=None, ns01=None, ns02=None):
+        """VALID with net_bench_gate's clauses declared; NS-0.1 and NS-0.2 cite theirs unless given tests."""
+        data = copy.deepcopy(VALID)
+        data["gates"]["net_bench_gate"]["cases"] = copy.deepcopy(CASES if cases is None else cases)
+        for e in data["criteria"]:
+            if e["id"] == "NS-0.1":
+                e["tests"] = ns01 if ns01 is not None else e["tests"] + [{"gate": "net_bench_gate", "case": "trunk"}]
+            if e["id"] == "NS-0.2":
+                e["tests"] = ns02 if ns02 is not None else [{"gate": "net_bench_gate", "case": "socket"},
+                                                            {"gate": "fuzz_linux", "platforms": ["linux"]}]
+        return data
+
+    def test_each_criterion_cites_its_own_clause(self):
+        self.assertEqual(self.run_check(self.split()), [])
+
+    def test_a_gate_with_cases_is_never_cited_whole(self):
+        # The coupling #43's review found: a reference to the whole command reads every clause's failure.
+        errors = self.run_check(self.split(ns02=[{"gate": "net_bench_gate"}, {"gate": "net_bench_gate", "case": "socket"}]))
+        self.assertFinding(errors, "gate 'net_bench_gate' reports one case per clause, so a reference names its "
+                                   "clause with 'case' (socket, trunk)")
+
+    def test_a_criterion_cannot_cite_another_criterions_clause(self):
+        errors = self.run_check(self.split(ns02=[{"gate": "net_bench_gate", "case": "socket"},
+                                                 {"gate": "net_bench_gate", "case": "trunk"}]))
+        self.assertFinding(errors, "gate net_bench_gate / trunk: the case is NS-0.1's clause, so only NS-0.1 cites it")
+
+    def test_a_case_must_be_declared_and_cited(self):
+        errors = self.run_check(self.split(ns02=[{"gate": "net_bench_gate", "case": "sock*"}]))
+        self.assertFinding(errors, "'sock*' is not a case of gate 'net_bench_gate' (socket, trunk)")
+        # Every declared clause is read by its criterion, or a clause would be measured and never count.
+        self.assertFinding(errors, "gate 'net_bench_gate' case 'socket': no NS-0.2 entry cites it")
+        self.assertFinding(self.run_check(self.split(ns01=[{"ctest": "net_tests"}])),
+                           "gate 'net_bench_gate' case 'trunk': no NS-0.1 entry cites it")
+        # `case` is only for a gate that declares cases.
+        errors = self.run_check(self.mutate("NS-0.2", tests=[{"gate": "net_bench_gate", "case": "socket"}]))
+        self.assertFinding(errors, "gate 'net_bench_gate' declares no 'cases'")
+        for case in ("", 7):
+            errors = self.run_check(self.split(ns02=[{"gate": "net_bench_gate", "case": case},
+                                                     {"gate": "net_bench_gate", "case": "socket"}]))
+            self.assertFinding(errors, "needs a non-empty string 'case'")
+
+    def test_cases_are_well_formed(self):
+        bad = {
+            "not an object": [],
+            "empty": {},
+        }
+        for why, cases in bad.items():
+            self.assertFinding(self.run_check(self.split(cases=cases, ns01=[{"ctest": "net_tests"}],
+                                                         ns02=[{"ctest": "net_tests"}])),
+                               "gate 'net_bench_gate': 'cases' must be a non-empty object")
+        for change, finding in (
+                ({"result": "socket: (\\d+"}, "'result' is not a valid regex"),
+                ({"failure": ""}, "needs a non-empty string 'failure'"),
+                ({"criterion": None}, "needs a non-empty string 'criterion'"),
+                ({"pattern": "x"}, "unknown field 'pattern'")):
+            cases = copy.deepcopy(CASES)
+            cases["socket"].update(change)
+            self.assertFinding(self.run_check(self.split(cases=cases)), f"case 'socket': {finding}")
+        cases = copy.deepcopy(CASES)
+        cases["net_bench_gate"] = cases.pop("socket")
+        self.assertFinding(self.run_check(self.split(cases=cases)), "a non-empty name other than its gate's")
+
+
+APPROVAL = {"evidence": "docs/evidence/ns02-approval.md", "owner_approval": "2026-09-30", "advisory": ["net.stack"],
+            "advisory_runs": ["linux-gcc"]}
+FOLLOW_UPS = [{"clause": "re-test on fixed hardware", "owner": "WP-0.4, WP-0.13"}]
+STACK = {"id": "net.stack", "criterion": "NS-0.2", "gate": "net_bench_gate", "pattern": r"stack: (\d+)",
+         "unit": "packets/core", "better": "higher", "category": "runtime"}
+STACK_CASE = {k: v for k, v in STACK.items() if k != "gate"} | {"doctest": "net_tests", "case": "perf: stack"}
+
+
+class OwnerApprovalTests(Fixture):
+    """09 §5.6's owner approval: a dated record, the clause still measured, and a re-test owed."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "docs" / "evidence" / "ns02-approval.md").write_text("verbatim\n", encoding="utf-8")
+        (self.root / "docs" / "approval.md").write_text("verbatim\n", encoding="utf-8")
+
+    def approved(self, approval=None, metrics=None, **fields):
+        """VALID with NS-0.2 passed on an approval: `approval` updates its record reference, and `fields`
+        replace NS-0.2's own fields."""
+        data = copy.deepcopy(VALID)
+        data["perf_metrics"] = copy.deepcopy(metrics if metrics is not None else [STACK])
+        ns02 = self.ns02(data)
+        ns02.update(status="approved", tests=ns02["tests"] + [{**APPROVAL, **(approval or {})}],
+                    follow_ups=copy.deepcopy(FOLLOW_UPS))
+        ns02.update({k.rstrip("_"): v for k, v in fields.items()})
+        return data
+
+    @staticmethod
+    def ns02(data):
+        return next(e for e in data["criteria"] if e["id"] == "NS-0.2")
+
+    def test_an_approved_entry_passes_the_check(self):
+        self.assertEqual(self.run_check(self.approved()), [])
+        # A metric naming a doctest case exactly reads a reference that matches the case with a wildcard.
+        data = self.approved(metrics=[STACK_CASE])
+        self.ns02(data)["tests"].insert(0, {"doctest": "net_tests", "case": "perf: *", "platforms": ["linux"]})
+        self.assertEqual(self.run_check(data), [])
+
+    def test_status_follows_the_approval(self):
+        self.assertFinding(self.run_check(self.approved(status="measured")), "it is 'approved'")
+        # Gaps still win: an approval does not hide an open clause.
+        self.assertFinding(self.run_check(self.approved(gaps=GAP)), "it is 'partial'")
+        self.assertFinding(self.run_check(self.mutate("NS-0.1", status="approved")), "it is 'measured'")
+
+    def test_the_approval_is_a_dated_record_under_docs_evidence(self):
+        for date in ("2026-02-30", "30/09/2026", 20260930):
+            self.assertFinding(self.run_check(self.approved({"owner_approval": date})),
+                               "'owner_approval' must be the YYYY-MM-DD date")
+        self.assertFinding(self.run_check(self.approved({"owner_approval": "2999-01-01"})),
+                           "'owner_approval' is after today")
+        self.assertFinding(self.run_check(self.approved({"evidence": "docs/approval.md"})),
+                           "an owner approval is a record under docs/evidence/")
+        self.assertFinding(self.run_check(self.approved({"evidence": "docs/evidence/missing.md"})), "does not exist")
+        data = self.approved()
+        self.ns02(data)["tests"][0]["owner_approval"] = "2026-09-30"
+        self.assertFinding(self.run_check(data), "'owner_approval' applies to an entry's evidence references only")
+
+    def test_one_approval_per_criterion_and_never_on_an_exit_item(self):
+        data = self.approved()
+        self.ns02(data)["tests"].append({"evidence": "docs/evidence/funding-F0.md", "owner_approval": "2026-09-29"})
+        self.assertFinding(self.run_check(data), "NS-0.2: one owner approval per entry")
+        exit_item = self.mutate("EXIT-0.funding", status="approved", follow_ups=FOLLOW_UPS,
+                                tests=[{"evidence": "docs/evidence/funding-F0.md", "owner_approval": "2026-09-29"}])
+        self.assertFinding(self.run_check(exit_item), "an owner approval passes a criterion, not an exit item")
+
+    def test_the_clause_is_still_measured_and_a_re_test_is_owed(self):
+        record_only = self.approved()
+        self.ns02(record_only)["tests"] = [{k: v for k, v in APPROVAL.items() if k != "advisory"}]
+        self.assertFinding(self.run_check(record_only), "the entry needs a test reference besides the record")
+        self.assertFinding(self.run_check(self.approved(follow_ups=[])), "an owner approval owes a re-test")
+        no_key = self.approved()
+        del self.ns02(no_key)["follow_ups"]
+        self.assertFinding(self.run_check(no_key), "an owner approval owes a re-test")
+        for bad in ([{"clause": "re-test"}], [{"clause": " ", "owner": "WP-0.4"}], [{**FOLLOW_UPS[0], "due": "soon"}],
+                    [{"clause": "re-test", "owner": "someone"}], ["re-test"]):
+            self.assertFinding(self.run_check(self.approved(follow_ups=bad)),
+                               "a follow-up needs a non-empty 'clause' and an 'owner'")
+        self.assertFinding(self.run_check(self.approved(follow_ups=FOLLOW_UPS[0])), "'follow_ups' must be a list")
+        # Without an approval an open clause is a gap, never a follow-up.
+        self.assertFinding(self.run_check(self.mutate("NS-0.1", follow_ups=FOLLOW_UPS)),
+                           "'follow_ups' are work an owner approval leaves open")
+
+    def test_advisory_names_only_the_approved_clauses_own_metrics(self):
+        for value in ([], "net.stack", ["net.stack", "net.stack"], [1]):
+            self.assertFinding(self.run_check(self.approved({"advisory": value})),
+                               "'advisory' must be a non-empty list of distinct perf metric ids")
+        self.assertFinding(self.run_check(self.approved({"advisory": ["net.nothing"]})),
+                           "advisory metric 'net.nothing' is not a declared perf metric")
+        # Another criterion's metric, or one read from a reference the entry does not cite, is not its clause.
+        self.assertFinding(self.run_check(self.approved(metrics=[{**STACK, "criterion": "NS-0.1"}])),
+                           "advisory metric 'net.stack' must be NS-0.2's")
+        self.assertFinding(self.run_check(self.approved(metrics=[STACK_CASE])), "advisory metric 'net.stack' must be NS-0.2's")
+        # Only the approval's own reference carries it, so nothing is advisory without an approval.
+        data = self.approved()
+        self.ns02(data)["tests"][0]["advisory"] = ["net.stack"]
+        self.assertFinding(self.run_check(data), "so it goes on the approval's evidence reference")
+        unapproved = self.approved()
+        del self.ns02(unapproved)["tests"][-1]["owner_approval"]
+        errors = self.run_check(unapproved)
+        self.assertFinding(errors, "so it goes on the approval's evidence reference")
+        self.assertFinding(errors, "'advisory_runs' names the runs an owner approval covers")
+        self.assertFinding(errors, "'follow_ups' are work an owner approval leaves open")
+        self.assertFinding(errors, "it is 'measured'")
+
+    def test_the_approval_names_the_nightly_runs_it_covers(self):
+        no_runs = self.approved()
+        del self.ns02(no_runs)["tests"][-1]["advisory_runs"]
+        self.assertFinding(self.run_check(no_runs), "an owner approval names the nightly runs it covers")
+        for value in ([], "linux-gcc", ["linux-gcc", "linux-gcc"], [1]):
+            self.assertFinding(self.run_check(self.approved({"advisory_runs": value})),
+                               "'advisory_runs' must be a non-empty list of distinct run names")
+        self.assertFinding(self.run_check(self.approved({"advisory_runs": ["linux-nope"]})),
+                           "advisory run 'linux-nope' is not a declared run")
+        self.assertFinding(self.run_check(self.approved({"advisory_runs": ["windows-vs2026"]}, platforms=["linux"])),
+                           "advisory run 'windows-vs2026' is not on the entry's platforms")
+        # A local or lab run gates every clause (09 §5.6), so an approval never covers one.
+        local = self.approved({"advisory_runs": ["linux-gcc", "windows-local"]})
+        local["runs"]["windows-local"] = {"os": "windows", "default": True, "nightly": False}
+        self.assertFinding(self.run_check(local), "advisory run 'windows-local' is not a nightly run")
+        self.assertEqual(self.run_check(self.approved({"advisory_runs": ["linux-gcc", "windows-vs2026"]})), [])
+        # Only the approval's own reference names runs.
+        data = self.approved()
+        self.ns02(data)["tests"][0]["advisory_runs"] = ["linux-gcc"]
+        self.assertFinding(self.run_check(data), "'advisory_runs' names the runs an owner approval covers")
+
+    def test_a_gap_pin_is_never_an_approval(self):
+        # A pin passes while its clause fails, so it can carry none of the approval's fields.
+        pin = {"evidence": "docs/evidence/ns02-approval.md", "owner_approval": "2026-09-30"}
+        gap = [{"clause": "stack rate", "state": "failing", "owner": "WP-0.13", "pinned_by": pin}]
+        self.assertFinding(self.run_check(self.approved(gaps=gap)),
+                           "'owner_approval' applies to an entry's evidence references only")
+        for key, value, fragment in (("advisory", ["net.stack"], "so it goes on the approval's evidence reference"),
+                                     ("advisory_runs", ["linux-gcc"], "'advisory_runs' names the runs an owner "
+                                                                      "approval covers")):
+            gap[0]["pinned_by"] = {**pin, key: value}
+            self.assertFinding(self.run_check(self.approved(gaps=gap)), fragment)
 
 
 class InventoryTests(Fixture):

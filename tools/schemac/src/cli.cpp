@@ -25,11 +25,17 @@ options:
   --lock <file>               append-only schema lock (stable type/field ids); created if missing
   --check-lock                fail instead of updating an out-of-date lock (CI)
   --allow-default-change      accept changed field defaults (they are part of the wire contract)
-  --emit <list>               comma-separated generators: cpp, go, json (default: cpp)
+  --emit <list>               comma-separated generators: cpp, go, json, luau, sql, repl, lint (default: cpp);
+                              repl writes <file>.repl.gen.h/.cpp to --cpp-out
   --cpp-out <dir>             C++ output root (default: .)
   --go-out <dir>              Go package directory (default: .)
   --go-package <name>         Go package name (default: last component of the schema package)
   --json-out <file>           schema description for --emit json (default: schema.json)
+  --luau-out <dir>            schema.d.luau and fuel_costs.defaults.json for --emit luau (default: .);
+                              the scriptlib glue (<file>.luau.gen.h/.cpp) goes to --cpp-out
+  --sql-out <dir>             <schema>/schema.sql and <schema>/migration.sql for --emit sql (default: .)
+  --sql-baseline <lock>       lock the migration stub starts from (default: --lock as it was before this run)
+  --lint-out <file>           lint report for --emit lint (default: schema.lint.json)
   --samples                   also emit <file>.samples.gen.h (test values shared with the Go test)
   --depfile <file>            write a Makefile-style dependency file (for build systems)
   --depfile-target <path>     target named in the depfile (default: first output)
@@ -38,7 +44,7 @@ options:
   --quiet                     only print diagnostics
   --version, --help
 
-planned generators (not yet implemented): luau, repl, sql, proto, editor, records, lint, docs
+planned generators (not yet implemented): proto, editor, records, docs
 )";
 
 struct PlannedEmitter {
@@ -46,13 +52,9 @@ struct PlannedEmitter {
     std::string_view what;
 };
 constexpr PlannedEmitter kPlanned[] = {
-    {"luau", "Luau bindings + .d.luau (script host, 02 §7.4)"},
-    {"repl", "replication descriptors / ComponentRepDesc (04 §4.1)"},
-    {"sql", "goose migration stubs (05 §3)"},
     {"proto", ".proto files for connect-go (05 §2.1)"},
     {"editor", "schema.editor.json (07); use --emit json meanwhile"},
     {"records", "record cooking to .hrdb (02 §3.3)"},
-    {"lint", "standalone lint pass (the lints already run on every compile)"},
     {"docs", "JSON doc model for helios-docs (09 §2.7.1); use --emit json meanwhile"},
 };
 
@@ -163,6 +165,14 @@ int runCli(std::span<const std::string> args, std::string& out, std::string& err
             if (!need(options.goPackage)) return 2;
         } else if (arg == "--json-out") {
             if (!need(options.jsonOut)) return 2;
+        } else if (arg == "--luau-out") {
+            if (!need(options.luauOut)) return 2;
+        } else if (arg == "--sql-out") {
+            if (!need(options.sqlOut)) return 2;
+        } else if (arg == "--sql-baseline") {
+            if (!need(options.sqlBaseline)) return 2;
+        } else if (arg == "--lint-out") {
+            if (!need(options.lintOut)) return 2;
         } else if (arg == "--samples") {
             options.samples = true;
         } else if (arg == "--depfile") {
@@ -191,6 +201,14 @@ int runCli(std::span<const std::string> args, std::string& out, std::string& err
             options.emitGo = true;
         } else if (e == "json") {
             options.emitJson = true;
+        } else if (e == "luau") {
+            options.emitLuau = true;
+        } else if (e == "sql") {
+            options.emitSql = true;
+        } else if (e == "repl") {
+            options.emitRepl = true;
+        } else if (e == "lint") {
+            options.emitLint = true;
         } else {
             for (const PlannedEmitter& p : kPlanned) {
                 if (p.name == e) {
@@ -199,7 +217,7 @@ int runCli(std::span<const std::string> args, std::string& out, std::string& err
                     return 2;
                 }
             }
-            err += std::format("helios-schemac: error: unknown generator '{}' (available: cpp, go, json)\n", e);
+            err += std::format("helios-schemac: error: unknown generator '{}' (available: cpp, go, json, luau, sql, repl, lint)\n", e);
             return 2;
         }
     }
@@ -217,6 +235,21 @@ int runCli(std::span<const std::string> args, std::string& out, std::string& err
     CompileResult result = compile(options, fsys, diags);
     err += diags.formatAll();
     if (!result.ok) {
+        // The lint report is what CI keeps of a failing gate (--emit lint --Werror), so it is written
+        // whenever the lint pass ran; the other outputs of a failed run are not. A run that failed
+        // before the lint pass removes an older report, which CI would otherwise keep as this run's.
+        bool reported = false;
+        for (const OutputFile& o : result.outputs) {
+            bool w = false;
+            if (options.emitLint && o.path == options.lintOut) reported = writeIfChanged(o.path, o.content, err, w);
+        }
+        if (options.emitLint && !reported) {
+            const fs::Path report = fs::pathFromUtf8(options.lintOut);
+            if (fs::exists(report)) {
+                if (auto r = fs::remove(report); !r)
+                    err += std::format("helios-schemac: error: cannot remove the stale lint report '{}': {}\n", options.lintOut, r.error().message);
+            }
+        }
         lockMutex.release(err);
         return 1;
     }

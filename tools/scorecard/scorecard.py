@@ -13,6 +13,12 @@ given inventories or a build directory, that every referenced CTest, doctest cas
 the platforms it is expected on. Findings print as `file:line: message`. `inventory` records the tests
 of a build (CTest names, doctest cases per binary) and of `go test -list` output as JSON.
 
+An entry may cite the repository owner's approval (09 §5.6): an `evidence` reference under docs/evidence/
+with `owner_approval` (the date), `advisory_runs` (the nightly runs it covers) and `advisory` (the perf
+metrics of the one clause it passes, which the report shows beside the pass). The checker holds it to the
+plan's rule: one per criterion, named runs, a test that still runs, and the re-test it owes as a follow-up.
+The registry never relaxes a result itself.
+
 Standard library only, no network. The report and perf tools import this module; nothing here is
 thread-safe or meant to be.
 """
@@ -22,6 +28,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import math
 import re
 import subprocess
 import sys
@@ -33,18 +40,26 @@ ROOT = Path(__file__).resolve().parents[2]
 CLASSES = {"N", "H", "W", "M", "N+H"}
 PLATFORMS = {"linux", "windows", "any"}
 OSES = ("linux", "windows")
-STATUSES = {"measured", "partial", "unmeasured"}
+STATUSES = {"measured", "partial", "unmeasured", "approved"}
 GAP_STATES = {"unmeasured", "failing"}
 REF_KINDS = {"ctest": set(), "doctest": {"case"}, "go": {"test"}, "gate": set(), "ci_job": set(), "evidence": set()}
-REF_OPTIONAL = {"platforms", "run", "note", "tags"}
+REF_OPTIONAL = {"platforms", "run", "note", "tags", "advisory", "advisory_runs", "owner_approval"}
+REF_KIND_OPTIONAL = {"gate": {"case"}}  # a gate that declares `cases` is cited one clause at a time
 TEST_KINDS = {"ctest", "doctest", "go", "gate"}  # references that run on a platform
 ENTRY_REQUIRED = {"id", "phase", "source", "owner", "title", "class", "platforms", "threshold", "status", "tests"}
-ENTRY_OPTIONAL = {"gaps", "notes"}
+ENTRY_OPTIONAL = {"gaps", "notes", "follow_ups"}
 GAP_KEYS = {"clause", "state", "owner", "pinned_by"}
+FOLLOW_UP_KEYS = {"clause", "owner"}
+# The repository owner's approval of a criterion is a record under this directory, like 09 §5.6's M records.
+APPROVAL_DIR = "docs/evidence/"
 TOP_KEYS = {"version", "plan_rev", "covers", "runs", "gates", "criteria", "exit", "perf_metrics", "perf_accept"}
 RUN_KEYS = {"os", "default", "nightly", "description"}
-GATE_KEYS = {"runs", "min_seconds", "description"}
-METRIC_FIELDS = {"id", "criterion", "doctest", "case", "gate", "pattern", "unit", "better", "category", "run", "note"}
+GATE_KEYS = {"runs", "min_seconds", "description", "cases"}
+# One clause of a gate command: the criterion it belongs to, the line that reports its measurement, and the
+# line the command prints when the clause fails (runners.py gate turns each into its own JUnit case).
+GATE_CASE_KEYS = {"criterion", "result", "failure"}
+METRIC_FIELDS = {"id", "criterion", "doctest", "case", "gate", "pattern", "unit", "better", "category", "run", "note",
+                 "bound"}
 METRIC_CATEGORIES = {"render", "runtime", "backend", "editor", "iteration"}
 ACCEPT_FIELDS = {"metric", "night", "value", "run", "reason"}
 OWNER = re.compile(r"^(?:WP-\d+\.\d+[a-z0-9]*|User|Director)(?:, (?:WP-\d+\.\d+[a-z0-9]*|User|Director))*$")
@@ -89,6 +104,14 @@ def display(path: Path) -> str:
 def is_int(value) -> bool:
     """An integer that is not a bool (JSON true would otherwise pass as 1)."""
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def is_date(value) -> bool:
+    """A YYYY-MM-DD string naming a real calendar date."""
+    try:
+        return isinstance(value, str) and datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d") == value
+    except ValueError:
+        return False
 
 
 # ------------------------------------------------------------------------------------------------
@@ -191,6 +214,21 @@ def ref_label(ref: dict) -> str:
     kind = ref_kind(ref) or "?"
     extra = ref.get("case") or ref.get("test")
     return f"{kind} {ref.get(kind)}" + (f" / {extra}" if extra else "")
+
+
+def approval(entry: dict) -> dict | None:
+    """The entry's owner-approval reference (an `evidence` reference with `owner_approval`), if any."""
+    return next((r for r in entry.get("tests") or [] if isinstance(r, dict) and ref_kind(r) == "evidence"
+                 and "owner_approval" in r), None)
+
+
+def metric_reads(metric: dict, ref: dict) -> bool:
+    """Whether a perf metric reads a test reference's output: the same gate, or the same doctest case."""
+    kind = ref_kind(ref)
+    if kind == "gate":
+        return "gate" in metric and metric["gate"] == ref["gate"]
+    return kind == "doctest" and metric.get("doctest") == ref["doctest"] and isinstance(metric.get("case"), str) \
+        and isinstance(ref.get("case"), str) and matches(metric["case"], ref["case"])
 
 
 def ref_platforms(entry: dict, ref: dict) -> list[str]:
@@ -531,10 +569,10 @@ def _check_ref(where: str, ref, entry: dict, data: dict, ctx: dict, errors: list
         errors.append(f"{where}: a test reference needs exactly one of {', '.join(sorted(REF_KINDS))}")
         return
     label = ref_label(ref)
-    allowed = {kind} | REF_KINDS[kind] | REF_OPTIONAL
+    allowed = {kind} | REF_KINDS[kind] | REF_KIND_OPTIONAL.get(kind, set()) | REF_OPTIONAL
     for key in sorted(set(ref) - allowed):
         errors.append(f"{where}: unknown field '{key}' in {label}")
-    for key in [kind, *sorted(REF_KINDS[kind])]:
+    for key in [kind, *sorted(REF_KINDS[kind]), *sorted(REF_KIND_OPTIONAL.get(kind, set()) & set(ref))]:
         if not isinstance(ref.get(key), str) or not ref[key].strip():
             errors.append(f"{where}: {label} needs a non-empty string '{key}'")
             return
@@ -562,6 +600,62 @@ def _check_ref(where: str, ref, entry: dict, data: dict, ctx: dict, errors: list
         errors.append(f"{where}: {label}: 'tags' (a string) applies to go references only")
     if "note" in ref and not isinstance(ref["note"], str):
         errors.append(f"{where}: {label}: 'note' must be a string")
+    # The repository owner's approval (09 §5.6) is a dated record under docs/evidence/. `advisory` names the
+    # perf metrics of the one clause it passes, so the report can show their level beside the pass; it does
+    # not stop any reference from counting.
+    if "owner_approval" in ref:
+        date = ref["owner_approval"]
+        if kind != "evidence" or ctx.get("pin"):
+            errors.append(f"{where}: {label}: 'owner_approval' applies to an entry's evidence references only")
+        elif not is_date(date):
+            errors.append(f"{where}: {label}: 'owner_approval' must be the YYYY-MM-DD date the repository owner "
+                          f"approved the criterion")
+        elif date > ctx.get("today", date):
+            errors.append(f"{where}: {label}: 'owner_approval' is after today ({ctx['today']})")
+        if kind == "evidence" and not ref["evidence"].startswith(APPROVAL_DIR):
+            errors.append(f"{where}: {label}: an owner approval is a record under {APPROVAL_DIR}")
+        if kind == "evidence" and not ctx.get("pin") and "advisory_runs" not in ref:
+            errors.append(f"{where}: {label}: an owner approval names the nightly runs it covers in "
+                          f"'advisory_runs' (09 §5.6)")
+    # The runs an approval covers: hosted nightly runs only, since a local or lab run gates every clause.
+    if "advisory_runs" in ref:
+        names = ref["advisory_runs"]
+        if "owner_approval" not in ref or kind != "evidence" or ctx.get("pin"):
+            errors.append(f"{where}: {label}: 'advisory_runs' names the runs an owner approval covers, so it goes on "
+                          f"the approval's evidence reference")
+        elif not isinstance(names, list) or not names or not all(isinstance(n, str) for n in names) or \
+                len(set(names)) != len(names):
+            errors.append(f"{where}: {label}: 'advisory_runs' must be a non-empty list of distinct run names")
+        else:
+            for n in names:
+                run = runs.get(n)
+                if not isinstance(run, dict):
+                    errors.append(f"{where}: {label}: advisory run '{n}' is not a declared run")
+                elif run.get("os") not in entry_plats:
+                    errors.append(f"{where}: {label}: advisory run '{n}' is not on the entry's platforms")
+                elif run.get("nightly") is False:
+                    errors.append(f"{where}: {label}: advisory run '{n}' is not a nightly run: a local or lab run "
+                                  f"gates every clause (09 §5.6)")
+    if "advisory" in ref:
+        names = ref["advisory"]
+        if "owner_approval" not in ref or kind != "evidence" or ctx.get("pin"):
+            errors.append(f"{where}: {label}: 'advisory' names the perf metrics of the clause an owner approval "
+                          f"passes, so it goes on the approval's evidence reference")
+        elif not isinstance(names, list) or not names or not all(isinstance(n, str) for n in names) or \
+                len(set(names)) != len(names):
+            errors.append(f"{where}: {label}: 'advisory' must be a non-empty list of distinct perf metric ids")
+        else:
+            declared = data.get("perf_metrics") if isinstance(data.get("perf_metrics"), list) else []
+            metrics = {m.get("id"): m for m in declared if isinstance(m, dict)}
+            measured = [r for r in entry.get("tests") or [] if isinstance(r, dict) and ref_kind(r) in TEST_KINDS
+                        and isinstance(r.get(ref_kind(r)), str)]
+            for n in names:
+                m = metrics.get(n)
+                if m is None:
+                    errors.append(f"{where}: {label}: advisory metric '{n}' is not a declared perf metric")
+                elif m.get("criterion") != entry.get("id") or not any(metric_reads(m, r) for r in measured):
+                    errors.append(f"{where}: {label}: advisory metric '{n}' must be {entry.get('id')}'s and read one "
+                                  f"of its test references (the clause the approval passes is still measured)")
     if kind == "gate":
         gate = (data.get("gates") or {}).get(ref["gate"]) if isinstance(data.get("gates"), dict) else None
         if not isinstance(gate, dict):
@@ -570,6 +664,21 @@ def _check_ref(where: str, ref, entry: dict, data: dict, ctx: dict, errors: list
             gate_oses = {runs.get(r, {}).get("os") for r in gate.get("runs") or [] if isinstance(r, str)}
             for p in sorted(set(ref_platforms(entry, ref)) - gate_oses - {"any"}):
                 errors.append(f"{where}: {label} never runs on {p}")
+            # A gate that measures several criteria reports each clause as its own case, and each criterion
+            # cites only its own: a reference to the whole command would fail one criterion on another's clause.
+            cases = gate.get("cases") if isinstance(gate.get("cases"), dict) else None
+            case = ref.get("case")
+            if cases is None and "case" in ref:
+                errors.append(f"{where}: {label}: gate '{ref['gate']}' declares no 'cases'")
+            elif cases is not None and "case" not in ref:
+                errors.append(f"{where}: {label}: gate '{ref['gate']}' reports one case per clause, so a reference "
+                              f"names its clause with 'case' ({', '.join(sorted(cases))})")
+            elif cases is not None and (not isinstance(case, str) or case not in cases):
+                errors.append(f"{where}: {label}: '{case}' is not a case of gate '{ref['gate']}' "
+                              f"({', '.join(sorted(cases))})")
+            elif cases is not None and isinstance(cases[case], dict) and cases[case].get("criterion") != entry.get("id"):
+                errors.append(f"{where}: {label}: the case is {cases[case].get('criterion')}'s clause, so only "
+                              f"{cases[case].get('criterion')} cites it")
     if kind == "evidence":
         rel = Path(ref["evidence"])
         if rel.is_absolute() or ".." in rel.parts or ref["evidence"].startswith(("/", "\\")):
@@ -642,7 +751,33 @@ def _check_top(name: str, data: dict, errors: list[str]) -> list[int]:
                           f"positive integer")
         if not isinstance(gate.get("description", ""), str):
             errors.append(f"{name}:1: gate '{gate_name}': 'description' must be a string")
+        if "cases" in gate:
+            _check_gate_cases(name, gate_name, gate["cases"], errors)
     return covers
+
+
+def _check_gate_cases(name: str, gate_name: str, cases, errors: list[str]) -> None:
+    """A gate's `cases`: {case name: {"criterion", "result", "failure"}}, the two patterns valid regexes."""
+    if not isinstance(cases, dict) or not cases:
+        errors.append(f"{name}:1: gate '{gate_name}': 'cases' must be a non-empty object of clause cases")
+        return
+    for case_name, case in cases.items():
+        where = f"{name}:1: gate '{gate_name}' case '{case_name}'"
+        if not case_name.strip() or case_name == gate_name:
+            errors.append(f"{where}: a case needs a non-empty name other than its gate's")
+        if not isinstance(case, dict):
+            errors.append(f"{where}: must be an object with {', '.join(sorted(GATE_CASE_KEYS))}")
+            continue
+        for key in sorted(set(case) - GATE_CASE_KEYS):
+            errors.append(f"{where}: unknown field '{key}'")
+        for key in sorted(GATE_CASE_KEYS):
+            if not isinstance(case.get(key), str) or not case[key].strip():
+                errors.append(f"{where}: needs a non-empty string '{key}'")
+            elif key != "criterion":
+                try:
+                    re.compile(case[key])
+                except re.error as e:
+                    errors.append(f"{where}: '{key}' is not a valid regex: {e}")
 
 
 def validate(data: dict, text: str, path: Path, plan: Plan | None = None, ci_jobs: list[str] | None = None,
@@ -657,7 +792,8 @@ def validate(data: dict, text: str, path: Path, plan: Plan | None = None, ci_job
     covers = _check_top(name, data, errors)
     _check_metrics(name, data, errors)
     known, exits = (plan.criteria, plan.exits) if plan else ({}, {})
-    ctx = {"ci_jobs": ci_jobs, "repo": repo, "go_sources": go_sources}
+    ctx = {"ci_jobs": ci_jobs, "repo": repo, "go_sources": go_sources,
+           "today": datetime.now(timezone.utc).strftime("%Y-%m-%d")}
     items = entries(data)
     exit_items = [x for x in data.get("exit") or [] if isinstance(x, dict)] if isinstance(data.get("exit"), list) else []
     seen: set[tuple] = set()
@@ -713,7 +849,8 @@ def validate(data: dict, text: str, path: Path, plan: Plan | None = None, ci_job
             errors.append(f"{where}: {ident}: 'tests' and 'gaps' must be lists")
             continue
         status = entry.get("status")
-        want = "unmeasured" if not tests else "partial" if gaps else "measured"
+        # An entry that passes on an owner approval is never "measured", even where its other tests pass.
+        want = "unmeasured" if not tests else "partial" if gaps else "approved" if approval(entry) else "measured"
         if status not in STATUSES:
             errors.append(f"{where}: {ident}: 'status' must be one of {', '.join(sorted(STATUSES))}")
         elif status != want:
@@ -723,6 +860,31 @@ def validate(data: dict, text: str, path: Path, plan: Plan | None = None, ci_job
             errors.append(f"{where}: {ident}: an entry without tests must list its gaps")
         for ref in tests:
             _check_ref(where, ref, entry, data, ctx, errors)
+        if sum(1 for r in tests if isinstance(r, dict) and "owner_approval" in r) > 1:
+            errors.append(f"{where}: {ident}: one owner approval per entry (the report names one record)")
+        # 09 §5.6: an approval passes a criterion whose gate keeps running and reporting, and it owes a
+        # re-test on fixed hardware, which the entry tracks as a follow-up.
+        if approval(entry) is not None:
+            if any(entry is x for x in exit_items):
+                errors.append(f"{where}: {ident}: an owner approval passes a criterion, not an exit item")
+            elif not any(isinstance(r, dict) and ref_kind(r) in TEST_KINDS for r in tests):
+                errors.append(f"{where}: {ident}: an owner approval leaves the criterion's measurement running "
+                              f"(09 §5.6), so the entry needs a test reference besides the record")
+            if not entry.get("follow_ups"):
+                errors.append(f"{where}: {ident}: an owner approval owes a re-test on fixed hardware (09 §5.6): "
+                              f"list it in 'follow_ups' with its owner")
+        follow_ups = entry.get("follow_ups", [])
+        if not isinstance(follow_ups, list):
+            errors.append(f"{where}: {ident}: 'follow_ups' must be a list")
+            follow_ups = []
+        for item in follow_ups:
+            if not isinstance(item, dict) or set(item) - FOLLOW_UP_KEYS or not isinstance(item.get("clause"), str) or \
+                    not item["clause"].strip() or not isinstance(item.get("owner"), str) or not OWNER.match(item["owner"]):
+                errors.append(f"{where}: {ident}: a follow-up needs a non-empty 'clause' and an 'owner' (WPs, 'User' or "
+                              f"'Director')")
+        if follow_ups and approval(entry) is None:
+            errors.append(f"{where}: {ident}: 'follow_ups' are work an owner approval leaves open without blocking it; "
+                          f"without an approval, a missing clause is a gap")
         for gap in gaps:
             if not isinstance(gap, dict) or set(gap) - GAP_KEYS or not isinstance(gap.get("clause"), str) or \
                     not gap["clause"].strip() or gap.get("state") not in GAP_STATES or \
@@ -736,6 +898,17 @@ def validate(data: dict, text: str, path: Path, plan: Plan | None = None, ci_job
                                                               for r in tests):
                     errors.append(f"{where}: {ident}: {ref_label(gap['pinned_by'])} pins a failing clause, so it "
                                   f"cannot also be evidence")
+    # Every clause case is cited by its criterion, or that clause would be measured and never read.
+    for gate_name, gate in (data.get("gates") if isinstance(data.get("gates"), dict) else {}).items():
+        cases = gate.get("cases") if isinstance(gate, dict) and isinstance(gate.get("cases"), dict) else {}
+        for case_name, case in cases.items():
+            owner = case.get("criterion") if isinstance(case, dict) else None
+            cited = [e for e in items if e.get("id") == owner and any(
+                isinstance(r, dict) and r.get("gate") == gate_name and r.get("case") == case_name
+                for r in e.get("tests") or [])]
+            if isinstance(owner, str) and not cited:
+                errors.append(f"{name}:1: gate '{gate_name}' case '{case_name}': no {owner} entry cites it, so the "
+                              f"clause would be measured and never read")
     if plan:
         errors += plan.problems
         for phase in covers:
@@ -796,6 +969,13 @@ def _check_metrics(name: str, data: dict, errors: list[str]) -> None:
                 errors.append(f"{where}: 'pattern' must have exactly one group (the number)")
         except re.error as e:
             errors.append(f"{where}: bad 'pattern': {e}")
+        # An absolute bound is a plan criterion's limit in the metric's unit (RT-13's 10 % overhead): perf.py
+        # gates the value against it instead of against the anchor, so it must name the criterion it quotes.
+        if "bound" in m and not (isinstance(m["bound"], (int, float)) and not isinstance(m["bound"], bool)
+                                 and math.isfinite(m["bound"])):
+            errors.append(f"{where}: 'bound' must be a finite number (the criterion's limit in '{m.get('unit')}')")
+        elif "bound" in m and "criterion" not in m:
+            errors.append(f"{where}: a 'bound' quotes a plan criterion, so the metric must name its 'criterion'")
     _check_accepts(name, data, seen, errors)
 
 
@@ -810,6 +990,8 @@ def _check_accepts(name: str, data: dict, metric_ids: set, errors: list[str], to
     runs = data.get("runs") if isinstance(data.get("runs"), dict) else {}
     metric_runs = {m["id"]: m.get("run") for m in data.get("perf_metrics") or []
                    if isinstance(m, dict) and isinstance(m.get("id"), str)}
+    bounded = {m["id"] for m in data.get("perf_metrics") or []
+               if isinstance(m, dict) and isinstance(m.get("id"), str) and "bound" in m}
     for a in accepts:
         if not isinstance(a, dict):
             errors.append(f"{name}:1: every perf_accept item must be an object")
@@ -819,12 +1001,10 @@ def _check_accepts(name: str, data: dict, metric_ids: set, errors: list[str], to
             errors.append(f"{where}: unknown field '{key}'")
         if a.get("metric") not in metric_ids:
             errors.append(f"{where}: 'metric' must name a declared perf metric")
+        elif a.get("metric") in bounded:
+            errors.append(f"{where}: the metric is gated against its plan 'bound', which no perf_accept moves")
         night = a.get("night")
-        try:
-            ok = isinstance(night, str) and datetime.strptime(night, "%Y-%m-%d").strftime("%Y-%m-%d") == night
-        except ValueError:
-            ok = False
-        if not ok:
+        if not is_date(night):
             errors.append(f"{where}: 'night' must be the YYYY-MM-DD date (UTC) of the nightly whose value is accepted")
         elif night > today:
             errors.append(f"{where}: 'night' is after today ({today}); accept a night that has been measured")

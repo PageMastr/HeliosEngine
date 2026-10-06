@@ -6,9 +6,13 @@
 //  - codegen-fornloop-fuel: native code reaches the same safepoints as the interpreter, including
 //    numeric for loops left by `break` or `return`, and at the same program points, so a kill at
 //    the k-th safepoint stops both at the same place.
+// And the one that keeps the VM ASan-clean on Helios' heap:
+//  - asan-unpoison-freed-page: a page Luau frees goes back to lua_Alloc addressable, so the host heap
+//    may write it (mimalloc's debug fill, its own metadata, the next owner) without use-after-poison.
 
 #include <doctest/doctest.h>
 
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -17,6 +21,19 @@
 #include "lualib.h"
 
 #include "helios/script/compiler.h"
+
+// Whether this build can ask AddressSanitizer about poisoned bytes (clang: __has_feature; GCC and
+// MSVC: __SANITIZE_ADDRESS__).
+#if defined(__SANITIZE_ADDRESS__)
+#define HELIOS_LUAU_PATCH_TEST_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define HELIOS_LUAU_PATCH_TEST_ASAN 1
+#endif
+#endif
+#if defined(HELIOS_LUAU_PATCH_TEST_ASAN)
+#include <sanitizer/asan_interface.h>
+#endif
 
 using namespace helios;
 using namespace helios::script;
@@ -239,6 +256,74 @@ TEST_CASE("luau patches: codegen-fornloop-fuel — a kill at safepoint k stops b
     INFO(mismatches.size(), " of ", total + 1, " stop points differ; first: ",
          mismatches.empty() ? std::string("none") : mismatches.front());
     CHECK(mismatches.empty());
+}
+
+// The lua_Alloc contract engine/script's allocator relies on: every block Luau hands back, freed or
+// resized (the host copies the old contents), is addressable over its old size. Stock Luau poisons
+// the free blocks of its pages and returned empty pages to lua_Alloc still poisoned, so a host heap
+// that is not ASan's own (mimalloc behind helios::alignedFree) hit use-after-poison writing them.
+struct ReturnAudit {
+    u64 returned = 0; ///< blocks freed or resized
+    u64 poisoned = 0; ///< of those, blocks with a poisoned byte in [ptr, ptr + osize)
+};
+
+void* auditingAlloc(void* ud, void* ptr, size_t osize, size_t nsize) {
+    auto* audit = static_cast<ReturnAudit*>(ud);
+    if (ptr) {
+        ++audit->returned;
+#if defined(HELIOS_LUAU_PATCH_TEST_ASAN)
+        if (__asan_region_is_poisoned(ptr, osize) != nullptr) {
+            ++audit->poisoned;
+            // Counted, not reported by ASan: this heap reads the block (realloc) and must not trip.
+            __asan_unpoison_memory_region(ptr, osize);
+        }
+#else
+        (void)osize;
+#endif
+    }
+    if (nsize == 0) {
+        std::free(ptr);
+        return nullptr;
+    }
+    return std::realloc(ptr, nsize);
+}
+
+TEST_CASE("luau patches: asan-unpoison-freed-page — freed pages go back to lua_Alloc addressable") {
+    // Short-lived strings (small and large size classes), tables and closures fill pages, the
+    // collections below empty and free them while the state lives, and lua_close frees the rest.
+    const auto bc = compile(R"(
+        local lengths = 0
+        for round = 1, 3 do
+            local t = {}
+            for i = 1, 1500 do
+                t[i] = { tostring(i) .. string.rep("x", i % 700), function() return i + round end }
+            end
+            lengths += #t
+            t = nil
+        end
+        return lengths
+    )", {}, "pages");
+    REQUIRE(bc.ok());
+    ReturnAudit audit;
+    lua_State* L = lua_newstate(&auditingAlloc, &audit);
+    REQUIRE(L != nullptr);
+    luaL_openlibs(L);
+    REQUIRE(luau_load(L, "pages", (**bc).data.data(), (**bc).data.size(), 0) == 0);
+    const int status = lua_pcall(L, 0, 1, 0);
+    REQUIRE_MESSAGE(status == LUA_OK, (status == LUA_OK ? "" : lua_tostring(L, -1)));
+    CHECK(lua_tonumber(L, -1) == 4500);
+    lua_pop(L, 1);
+    lua_gc(L, LUA_GCCOLLECT, 0);
+    const u64 returnedLive = audit.returned;
+    lua_close(L);
+    CHECK(returnedLive > 100);
+    CHECK(audit.returned > returnedLive);
+#if defined(HELIOS_LUAU_PATCH_TEST_ASAN)
+    INFO(audit.poisoned, " of ", audit.returned, " blocks came back to lua_Alloc poisoned");
+    CHECK(audit.poisoned == 0);
+#else
+    MESSAGE("not an AddressSanitizer build: poisoning is not observable, only the workload ran");
+#endif
 }
 
 } // namespace

@@ -59,12 +59,12 @@ share a lattice cell, a coherent path hashes the cell once with scalar code (and
 instead of hashing per lane; results are bit-identical. The kernel TUs hold integer code only (CTest
 `pcg_lint_kernels`) and no inline function that could leak into other TUs.
 
-**Selection** (`kernel.h`): `initializePcgModule()` reads the `pcg.kernel` CVar (default `avx2`) and
-logs `pcg.kernel=<name>`. Until WP-0.2r builds whole images at the `avx2` level, the choice is also
-checked against CPUID (`core::cpuGate()`; the AVX2 kernel needs the full `Avx2Image` feature set
-because it is built with the whole avx2 flag set) and falls back to the widest supported kernel with a
-warning. `vm_avx2.cpp` is a designated `*_avx2.cpp` unit (`helios_avx2_sources`), `vm_sse42.cpp` gets
-`-msse4.2` (not an AVX-class flag).
+**Selection** (`kernel.h`): `initializePcgModule()` reads the `pcg.kernel` CVar (default `avx2`) and logs
+`pcg.kernel=<name>`. The choice is also checked against CPUID (`core::cpuGate()`; the AVX2 kernel needs
+the full `Avx2Image` feature set) and falls back to the widest supported kernel with a warning, a
+deviation from 02 §5.8 ([below](#deviations-from-the-plan-text)). Since WP-0.2r every pcg TU, the three
+kernels included, is built at its image's `avx2` level (02 §1.1, `cmake/HeliosIsa.cmake`): no kernel has
+flags of its own, and a `base` image (launcher, bootstrap) that links `pcg` fails configure.
 
 ## GPU twin (`shaders/pcg/`)
 
@@ -87,8 +87,9 @@ Regenerating the corpus: `HELIOS_UPDATE_HNOISE_CORPUS=1 pcg_tests -tc="corpus:*"
 
 ## Deviations from the plan text
 
-- CPUID-checked kernel selection (02 §5.8 says no CPUID is needed once whole images are `avx2`; that
-  arrives with WP-0.2r).
+- CPUID-checked kernel selection: 02 §5.8 says no CPUID is needed once whole images are `avx2`. They
+  have been since WP-0.2r part 1, but `src/kernel.cpp` still checks `cpuGate()` and falls back to the
+  widest supported kernel.
 - Phase 0 node set only: no dedicated crater, terrace, cellular, erosion or region nodes yet; the
   reference graph approximates those shapes with the Phase 0 nodes.
 - The GPU twin interprets bytecode per sample (uniform control flow across a dispatch) rather than
@@ -103,4 +104,4 @@ Plan-Rev: 6
 
 Written to plan revision 6 (02 §5.8; 03 §5.5a; 09 §2.1 WP-0.9 and WP-0.9c) on 2026-09-25,
 ahead of its round (it needs WP-0.2r), under `docs/plan/09-roadmap-and-process.md` §5.10.2 D7. The
-open deviations are listed in this README; the module still needs its row in 09 §8.1.
+open deviations are listed in this README; its status is in 09 §8.1's WP-0.9 row.

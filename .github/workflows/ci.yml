@@ -40,6 +40,26 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  # Modular dev build on the primary toolchain (ADR-001a, ADR-016, 02 §1.4): engine modules in the three
+  # link-group DLLs, /MD for every image, the dev link flags, all tests and the symbol audit.
+  # TODO(WP-0.6c part 2): the 20-reload smoke test of the sample game module (02 §8.3, ADR-001a).
+  windows-msvc-dev:
+    name: Windows (MSVC, modular dev)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Configure
+        run: cmake --preset windows-msvc-dev
+      - name: Build
+        run: cmake --build --preset windows-msvc-dev
+      - name: Symbol audit (link groups' export tables)
+        run: ctest --preset windows-msvc-dev -R "^lint_symbol_audit"
+      - name: Test (no GPU on hosted runners)
+        run: ctest --preset windows-msvc-dev -LE "gpu|perf" -E "^lint_symbol_audit"
+
   # Supported floor: VS 2022 17.14 / MSVC 14.44 on the pinned windows-2022 image (ADR-001).
   windows-msvc-floor:
     name: Windows (MSVC 14.44 floor)
@@ -140,6 +160,42 @@ jobs:
         with:
           sarif_file: build/linux-headless/lints.sarif
           category: helios-lints
+
+  # Plan-conformance lint (09 §5.10.3, tools/conformance): the tool's seeded fixtures, then the full tree
+  # (a superset of the changed paths) with tools/conformance/known_failing.jsonc applied. SARIF goes to
+  # code scanning like the CMake lints'. No dependencies, so no module cache.
+  conformance:
+    name: Conformance lint (tools/conformance)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: services/go.mod
+          cache: false
+      - name: Vet and test (every rule's seeded fixtures)
+        working-directory: tools/conformance
+        run: |
+          go vet ./...
+          go test -count=1 ./...
+      - name: Lint the tree
+        working-directory: tools/conformance
+        run: go run ./cmd/helios-conformance -root ../.. -sarif "$GITHUB_WORKSPACE/conformance.sarif"
+      - name: Upload conformance SARIF artifact
+        if: ${{ always() && hashFiles('conformance.sarif') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-sarif
+          path: conformance.sarif
+      - name: Publish conformance SARIF
+        if: ${{ always() && hashFiles('conformance.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: conformance.sarif
+          category: helios-conformance
 
   # Win32 code paths compiled and linked with MinGW-w64 (portability signal; binaries are not run).
   mingw-cross:

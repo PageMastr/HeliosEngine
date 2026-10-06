@@ -2,6 +2,10 @@
 # terrain graph and its register VM with scalar / SSE4.2 / AVX2 kernels. The Slang twin lives in
 # shaders/pcg/ and is exercised by pcg_gpu_tests (graphics builds only; pcg itself never links rhi).
 
+# The kernels (02 §5.8 "SIMD kernels") are ordinary sources: every image that links pcg is built at the
+# avx2 level (02 §1.1, cmake/HeliosIsa.cmake), so vm_avx2.cpp's AVX2 intrinsics and vm_sse42.cpp's
+# SSE4.2 ones (VEX-128 at that level) need no flags of their own. src/kernel.cpp still checks CPUID
+# before it selects a kernel (a runtime self-dispatch the plan allows). A base image cannot link pcg.
 set(HELIOS_PCG_SOURCES
   src/compiler.cpp
   src/hnoise.cpp
@@ -9,27 +13,13 @@ set(HELIOS_PCG_SOURCES
   src/reference_graphs.cpp
   src/terrain_graph.cpp
   src/tile.cpp
-  src/kernels/vm_scalar.cpp)
+  src/kernels/vm_scalar.cpp
+  src/kernels/vm_sse42.cpp
+  src/kernels/vm_avx2.cpp)
 
 helios_module(pcg HEADLESS
   SOURCES ${HELIOS_PCG_SOURCES}
   DEPS helios::core helios::math)
-
-# The two SIMD kernels (02 §5.8 "SIMD kernels"). Until WP-0.2r builds whole images at the avx2
-# level, the AVX2 kernel is a designated *_avx2.cpp unit on the ISA allowlist and is dispatched to
-# only after CPUID (src/kernel.cpp). The SSE4.2 twin needs -msse4.2 on GCC/Clang/clang-cl (not an
-# AVX-class flag); MSVC compiles SSE4.2 intrinsics at its default level.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
-  helios_avx2_sources(helios_pcg ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/vm_avx2.cpp)
-  target_sources(helios_pcg PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/vm_sse42.cpp)
-  if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-    set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/vm_sse42.cpp
-      TARGET_DIRECTORY helios_pcg PROPERTIES COMPILE_OPTIONS "-msse4.2")
-  endif()
-else()
-  target_sources(helios_pcg PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/vm_avx2.cpp
-                                    ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/vm_sse42.cpp)
-endif()
 
 # ---------------------------------------------------------------------------------------------
 # Lints: only integer ops in the kernel TUs (02 §5.8) and a 32-bit-only Slang twin (03 §5.5a).

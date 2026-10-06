@@ -127,29 +127,17 @@ void VulkanCommandList::barrier(std::span<const Barrier> barriers) {
     SmallVector<VkBufferMemoryBarrier2, 8> buffers;
     SmallVector<VkImageMemoryBarrier2, 8> images;
     for (const Barrier& b : barriers) {
-        const StateInfo src = stateInfo(b.before);
-        const StateInfo dst = stateInfo(b.after);
-        // Sources with no pipeline stage of their own still order the transition after earlier work:
-        // Undefined (discard, not race) and Present, whose image was released by the presentation
-        // engine through the acquire semaphore — the barrier must chain with that wait (waited at
-        // ALL_COMMANDS), or the layout transition could run before the engine is done reading.
-        const bool noSourceStage = b.before == ResourceState::Undefined || b.before == ResourceState::Present;
-        const VkPipelineStageFlags2 srcStages =
-            maskStages(noSourceStage ? VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT : src.stages, qflags);
-        // Discarding contents is still a write after whatever wrote them before (e.g. memory reused
-        // by a new resource): write-after-write needs those writes made available, not just ordered.
-        const VkAccessFlags2 srcAccess =
-            b.before == ResourceState::Undefined ? VK_ACCESS_2_MEMORY_WRITE_BIT : src.access;
-        const VkPipelineStageFlags2 dstStages =
-            maskStages(dst.stages == VK_PIPELINE_STAGE_2_NONE ? VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT : dst.stages,
-                       qflags);
+        // Stages and access types this queue family can perform (vk_sync.h): a dedicated transfer
+        // queue has no shader stages, so a buffer last written by a shader keeps only ALL_COMMANDS
+        // here; the semaphore wait that ordered it after the writing queue made those writes visible.
+        const BarrierMasks masks = barrierMasks(b.before, b.after, qflags);
         switch (b.kind) {
         case Barrier::Kind::Global: {
             VkMemoryBarrier2 m{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-            m.srcStageMask = srcStages;
-            m.srcAccessMask = srcAccess;
-            m.dstStageMask = dstStages;
-            m.dstAccessMask = dst.access;
+            m.srcStageMask = masks.src.stages;
+            m.srcAccessMask = masks.src.access;
+            m.dstStageMask = masks.dst.stages;
+            m.dstAccessMask = masks.dst.access;
             memory.emplace_back(m);
             break;
         }
@@ -159,10 +147,10 @@ void VulkanCommandList::barrier(std::span<const Barrier> barriers) {
             if (b.size != kWholeSize && !bufferRange(*res, b.offset, b.size, "barrier")) break;
             if (b.size == kWholeSize && !check(b.offset < res->desc.size, "barrier: buffer offset out of range")) break;
             VkBufferMemoryBarrier2 m{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
-            m.srcStageMask = srcStages;
-            m.srcAccessMask = srcAccess;
-            m.dstStageMask = dstStages;
-            m.dstAccessMask = dst.access;
+            m.srcStageMask = masks.src.stages;
+            m.srcAccessMask = masks.src.access;
+            m.dstStageMask = masks.dst.stages;
+            m.dstAccessMask = masks.dst.access;
             m.srcQueueFamilyIndex = m.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             m.buffer = res->buffer;
             m.offset = b.offset;
@@ -181,12 +169,12 @@ void VulkanCommandList::barrier(std::span<const Barrier> barriers) {
                 break;
             }
             VkImageMemoryBarrier2 m{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            m.srcStageMask = srcStages;
-            m.srcAccessMask = srcAccess;
-            m.dstStageMask = dstStages;
-            m.dstAccessMask = dst.access;
-            m.oldLayout = src.layout;
-            m.newLayout = dst.layout;
+            m.srcStageMask = masks.src.stages;
+            m.srcAccessMask = masks.src.access;
+            m.dstStageMask = masks.dst.stages;
+            m.dstAccessMask = masks.dst.access;
+            m.oldLayout = masks.oldLayout;
+            m.newLayout = masks.newLayout;
             m.srcQueueFamilyIndex = m.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             m.image = res->image;
             m.subresourceRange = {res->aspect, r.baseMip, r.mipCount, r.baseLayer, r.layerCount};

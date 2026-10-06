@@ -15,20 +15,24 @@ const std::string& DiagnosticEngine::fileText(u32 file) const { return m_files.a
 
 Diagnostic& DiagnosticEngine::error(SourceLoc loc, std::string message) {
     ++m_errors;
-    m_diags.push_back(Diagnostic{Severity::Error, loc, std::move(message), {}});
+    m_diags.push_back(Diagnostic{Severity::Error, loc, std::move(message), {}, false});
     return m_diags.back();
 }
 
 Diagnostic& DiagnosticEngine::warning(SourceLoc loc, std::string message) {
-    if (m_werror) return error(loc, std::move(message));
+    if (m_werror) {
+        Diagnostic& d = error(loc, std::move(message));
+        d.promoted = true;
+        return d;
+    }
     ++m_warnings;
-    m_diags.push_back(Diagnostic{Severity::Warning, loc, std::move(message), {}});
+    m_diags.push_back(Diagnostic{Severity::Warning, loc, std::move(message), {}, false});
     return m_diags.back();
 }
 
 void DiagnosticEngine::note(SourceLoc loc, std::string message) {
     if (m_diags.empty()) return;
-    m_diags.back().notes.push_back(Diagnostic{Severity::Note, loc, std::move(message), {}});
+    m_diags.back().notes.push_back(Diagnostic{Severity::Note, loc, std::move(message), {}, false});
 }
 
 namespace {

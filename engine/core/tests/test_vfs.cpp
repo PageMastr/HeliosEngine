@@ -188,6 +188,19 @@ TEST_CASE("vfs: directory mounts reject names Windows would treat as devices or 
     CHECK(vfs.readTextFile("/content/console.txt").value() == "ok");
 }
 
+TEST_CASE("vfs: isNonPortableComponent is the directory-mount rule, public for other path checks") {
+    for (const char* bad : {"con", "CON", "nul.json", "aux", "com1", "LPT9.txt", "prn", "conin$", "CONOUT$",
+                            "com\xC2\xB9", "LPT\xC2\xB3.log", "file.", "file ", "Con .txt"}) {
+        CAPTURE(bad);
+        CHECK(isNonPortableComponent(bad));
+    }
+    for (const char* fine : {"", "com10", "comx", "lpt", "nullable.json", "a.b.c", ".hidden", "console.txt",
+                             "com\xC2\xB4"}) {
+        CAPTURE(fine);
+        CHECK(!isNonPortableComponent(fine));
+    }
+}
+
 TEST_CASE("vfs: writes go to the highest-priority writable mount") {
     TempDir readOnly;
     TempDir writable;

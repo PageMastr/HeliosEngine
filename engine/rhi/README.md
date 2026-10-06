@@ -6,6 +6,10 @@ backend for tests and GPU-less automation, behind one backend-agnostic API. No V
 in a public header (`src/vulkan/` is the only place that includes Vulkan), so a D3D12 backend can
 slot in behind the same seam (Phase 3 seam test / Phase 4 gate).
 
+In a modular dev build (`HELIOS_MODULAR=ON`, ADR-016) `rhi` is part of `helios_client`. VMA's implementation
+(`src/vulkan/vk_vma.cpp`) is then compiled into an archive of its own, `helios_rhi_vma`, so it stays out
+of the group's exports like every vendored library (docs/adr/ADR-0.6c-link-model-spike.md).
+
 | Header (`helios/rhi/…`) | Contents |
 |---|---|
 | `handles.h` | `BufferH`, `TextureH`, `PipelineH`, `SwapchainH` (core generational handles), `BindlessIndex`, `Queue`, `TimelinePoint`, `Backend` |
@@ -46,7 +50,13 @@ rhi::TimelinePoint done = device->submit(rhi::Queue::Graphics, {&cmd, 1}).value(
   shader side is `shaders/core/bindless.slang`.
 * **States, not access masks.** Barriers name logical `ResourceState`s (`RenderTarget`,
   `ShaderResource`, `CopySource`, …); the backend derives stages, access masks and image layouts
-  (sync2). The render graph (engine/render) will emit them; the Null backend validates them.
+  (sync2), restricted to what the recording queue family supports (`src/vulkan/vk_sync.h`): a
+  dedicated transfer queue gets no shader stages or shader access types, since the timeline wait that
+  ordered it after the writing queue already made those writes visible; a state with no stage on the
+  queue keeps `ALL_COMMANDS`, so layout transitions still chain after that wait. Resources shared by
+  several queue families are `CONCURRENT`, so no ownership release/acquire pairs exist yet (vk_sync.h
+  says how their halves take masks when exclusive sharing arrives). The render graph (engine/render)
+  emits the states; the Null backend validates them.
 * **Timelines everywhere.** Each logical queue (`Graphics`, `AsyncCompute`, `Transfer`) owns a
   timeline semaphore; `submit()` returns a `TimelinePoint` and takes points to wait for. Queues
   without dedicated hardware alias the graphics `VkQueue` (Caps says which) but keep their own
@@ -77,8 +87,29 @@ rhi::TimelinePoint done = device->submit(rhi::Queue::Graphics, {&cmd, 1}).value(
 * Object names and labels through `VK_EXT_debug_utils` (RenderDoc, Nsight, RGP); `ScopedLabel`.
 * Khronos validation with `DeviceDesc::validation` or `HELIOS_RHI_VALIDATION=1` when the layer is
   installed; messages go to the log and `DeviceDesc::onMessage`, errors to `validationErrorCount()`.
-  `Caps::validationLayer` names the enabled layer and its versions (empty without one), so tests can
-  log what checked them (WP-0.12's `helios-rendertest --validation-self-test`).
+  Validation counts as active (`CapBit::ValidationLayer`, `Caps::validationLayer`) only when the layer
+  is in the instance's call chain: after `vkCreateInstance` the device asks the chain for a validation
+  tool (`vkGetPhysicalDeviceToolProperties`, which only the layer itself answers). A layer the loader
+  lists and accepts but leaves out (`VK_LOADER_LAYERS_DISABLE`, a loader settings file from Vulkan
+  Configurator) or a library posing under its name does not count, and `requireValidation` then fails
+  creation; a layer the loader adds unasked (`VK_INSTANCE_LAYERS`, a settings file) is reported as such.
+  The layer's reports must also reach the device: without the `VK_EXT_debug_utils` messenger (the
+  extension unavailable or masked off with `capsMask`/`HELIOS_RHI_CAPS_MASK`) nothing would count them,
+  so validation does not count as active then either.
+  So the cap means "in the call chain and wired to the messenger", not "reports errors": a layer
+  settings file (`vk_layer_settings.txt`, registered under `HK{LM,CU}\SOFTWARE\Khronos\Vulkan\Settings`
+  by Vulkan Configurator, or found through `VK_LAYER_SETTINGS_PATH` or the working directory) or
+  `VK_KHRONOS_VALIDATION_*` variables can mute its reports (`report_flags`, `message_id_filter`,
+  disabled checks) while it stays in the chain and still answers the tool query. Only a seeded error
+  shows that it reports: WP-0.12's `helios-rendertest --validation-self-test` (`rendertest.validation-layer`).
+  `Caps::validationLayer` names the layer, its versions and the tool that answered, so tests can log
+  what checked them.
+* `ValidationMessage` says where a message came from (`Source::Rhi` for the RHI's own checks,
+  `Source::Api` for the debug messenger) and, for the latter, whether it is a validation report and its
+  message ID (`id` = `pMessageIdName`, `idNumber`). Tell layer reports apart by these fields, never by
+  the text: layer 1.3.275 starts its text with "Validation Error: [ VUID ]", the 2026 SDKs do not.
+  `ValidationMessage::isLayerError()` is that test for errors (the loader's own "Loader Message"s
+  excluded).
   `DeviceDesc::validationFromEnvironment = false` makes a device ignore `HELIOS_RHI_VALIDATION` (a probe
   that must run without the layer whatever the environment says).
   RHI misuse that would be undefined behavior in the driver is reported the same way and the
@@ -126,11 +157,15 @@ Entry points are declared in the source with `[shader("…")]`; see `shaders/REA
 
 ## Tests
 
-`rhi_tests` (doctest) — 30 CPU cases run by default: formats, the Slang toolchain (embedded SPIR-V,
-entry points, layout decorations, stem lookup), and the Null backend (API behavior, validation, a
+`rhi_tests` (doctest) — 36 CPU cases run by default: formats, the `HELIOS_RHI_VALIDATION` override
+(`validationFromEnvironment`), `ValidationMessage` classification by fields, the Slang toolchain (embedded SPIR-V,
+entry points, layout decorations, stem lookup), the barrier masks of every state transition on every
+kind of queue family against the spec's synchronization tables (`test_vk_sync.cpp`; lavapipe has one
+universal queue family, so only this catches a transfer-queue mask error before hardware does), and
+the Null backend (API behavior, validation, a
 trace golden re-rendered for determinism, state tracking, timelines, memory emulation, copy-region
 rules, list lifetimes, parallel recording on the job system, swapchain flow, device-loss
-injection). The `gpu*` suites (21 cases) need Vulkan and run as the CTest entry `rhi_tests_gpu`
+injection). The `gpu*` suites (23 cases) need Vulkan and run as the CTest entry `rhi_tests_gpu`
 (label `gpu`): clears, a triangle and a bindless textured quad against golden PNGs in
 `tests/golden/` (per-pixel tolerance, each rendered twice and required to be bit-identical), compute
 through device addresses, bindless buffers and storage images, the matrix and winding conventions,
@@ -138,7 +173,8 @@ cross-queue timelines, upload/readback, deferred deletion, async PSOs, parallel 
 breadcrumbs, injected device loss, the CPU recording budget (bind + push + draw ≪ 1 µs on REF;
 ~0.2 µs measured on lavapipe, timed without validation layers), misuse rejection (out-of-range
 transfers, closed/stale/foreign lists, queue rules), several devices side by side, released
-bindless slots, and a **windowless swapchain** (SDL's `offscreen` video driver +
+bindless slots, validation-layer reports identified by their message ID and type, and a
+**windowless swapchain** (SDL's `offscreen` video driver +
 `VK_EXT_headless_surface`: acquire/present/resize with pixel readback; skipped where the driver has
 no headless surfaces). `rhi_triangle_smoke` runs the sample in a real window under `xvfb-run`.
 
@@ -166,7 +202,8 @@ Machines without Vulkan can skip the gpu suites with `HELIOS_SKIP_GPU_TESTS=1`.
   desktop GPUs).
 * Per-thread command pools are keyed by `std::thread::id` and kept for the device's lifetime:
   record on a fixed set of threads (the job system's workers), not on short-lived threads.
-* Barrier stage masks cover all shader stages for shader states (no per-stage refinement yet).
+* Barrier stage masks cover all shader stages for shader states (no per-stage refinement yet; the
+  recording queue family's restriction applies).
 * Not yet exposed: timestamp queries/GPU profiling, mesh-shader draws, ray tracing, set 1 (per-frame
   view constants), MSAA depth resolve, a driver-workaround table, VRAM-budget-driven eviction,
   pipeline libraries. `CapBit`s for mesh shaders, RT, descriptor buffers, GPL, pipeline binaries,

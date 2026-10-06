@@ -50,8 +50,9 @@ options:
   --seed-name-collision  test hook for rendertest.cli: with --coverage, first create a rendertest
                          pipeline named like a shipped one, which the check must reject
   --print-probe          test hook for rendertest.validation-required: print whether the Khronos layer
-                         is active on a default device (HELIOS_RHI_VALIDATION applies) and on the
-                         no-validation probe device (it must not be, whatever the environment says)
+                         is active (in the call chain, with its description) on a default device
+                         (HELIOS_RHI_VALIDATION applies) and on the no-validation probe device (it must
+                         not be, whatever the environment says)
   -h, --help             this text
 
 environment: HELIOS_SKIP_GPU_TESTS=1 skips (passes) Vulkan scenes on a machine without a Vulkan loader,
@@ -250,8 +251,12 @@ int runCli(const std::vector<std::string>& args, std::string& out, std::string& 
                 err += std::format("helios-rendertest: {} device: {}\n", which, device.error().toString());
                 return 1;
             }
-            out += std::format("{} device: Khronos validation {}\n", which,
-                               device.value()->caps().has(rhi::CapBit::ValidationLayer) ? "active" : "inactive");
+            // The layer's own description when active (versions, the tool that answered, "enabled by the loader,
+            // not requested"), for the win-gpu job's diagnostics.
+            const rhi::Caps& caps = device.value()->caps();
+            out += caps.has(rhi::CapBit::ValidationLayer)
+                       ? std::format("{} device: Khronos validation active ({})\n", which, caps.validationLayer)
+                       : std::format("{} device: Khronos validation inactive\n", which);
         }
         return 0;
     }

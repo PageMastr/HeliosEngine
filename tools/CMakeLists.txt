@@ -2,7 +2,7 @@
 # every build configuration, including servers and cross builds).
 include(HeliosSchema)
 
-foreach(tool schemac scorecard status milestone)
+foreach(tool schemac scorecard status milestone conformance ci)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${tool}/CMakeLists.txt)
     add_subdirectory(${tool})
   endif()

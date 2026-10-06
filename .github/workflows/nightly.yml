@@ -45,27 +45,30 @@ jobs:
             run: linux-clang
             ctest_args: -LE perf
             validation_layer: vulkan-validationlayers
-          # ASan/UBSan runs every test, the timing gates included, as it did before WP-0.3. No
-          # validation layer: its leaks and instrumentation are not checked under LSan.
+          # ASan/UBSan runs every test except the timing gates (label perf): an instrumented Debug
+          # build measures the sanitizers, not the budget, so the gates run only in the GCC job's perf
+          # step, never under sanitizers (the owner's decision of 2026-09-30). No validation layer: its
+          # leaks and instrumentation are not checked under LSan.
           - preset: linux-debug-asan
             run: linux-asan
-            ctest_args: ""
+            ctest_args: -LE perf
             validation_layer: ""
     env:
       BUILD: build/${{ matrix.preset }}
       RESULTS: ${{ github.workspace }}/results/${{ matrix.run }}
     steps:
       - uses: actions/checkout@v5
-      - name: Record the run
+      - name: Record the run and its host (CPU model, logical CPUs; perf levels are kept per host class)
         run: |
           mkdir -p "$RESULTS"
           echo '{"run": "${{ matrix.run }}"}' > "$RESULTS/run.json"
+          python3 tools/scorecard/runners.py host --out "$RESULTS/host.json"
       - name: Install system packages
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
             libxi-dev libxkbcommon-dev libxext-dev libxfixes-dev libxss-dev libxtst-dev libdbus-1-dev \
-            libudev-dev mesa-vulkan-drivers xvfb spirv-tools ${{ matrix.validation_layer }}
+            libudev-dev mesa-vulkan-drivers xvfb dbus-daemon spirv-tools ${{ matrix.validation_layer }}
           dpkg-query -W spirv-tools mesa-vulkan-drivers ${{ matrix.validation_layer }}
           spirv-val --version | head -n 1
       - name: Configure
@@ -84,11 +87,14 @@ jobs:
           xvfb-run -a ctest --test-dir "$BUILD" -L perf --output-on-failure --output-junit "$RESULTS/ctest-perf.xml" || status=1
           xvfb-run -a python3 tools/scorecard/runners.py doctest --perf --build-dir "$BUILD" --out "$RESULTS/doctest" || status=1
           exit $status
+      # --advisory ns02-stack reports NS-0.2's encrypted-stack rate instead of failing on it, and nothing else:
+      # the owner's approval of 2026-09-30 for this hosted Linux run (scorecard.jsonc's advisory_runs;
+      # docs/evidence/ns-0.2-owner-approval-2026-09-30.md). The Windows step below stays strict.
       - name: net_bench --gate (NS-0.2, NS-0.7; 10 min)
         if: ${{ !cancelled() && matrix.run == 'linux-gcc' }}
         run: >
           python3 tools/scorecard/runners.py gate --name net_bench_gate --build-dir "$BUILD" --timeout 1800
-          --out "$RESULTS/gates" -- net_bench --gate
+          --out "$RESULTS/gates" -- net_bench --gate --advisory ns02-stack
       - name: Test inventory
         if: ${{ !cancelled() }}
         run: python3 tools/scorecard/scorecard.py inventory --build-dir "$BUILD" --out "$RESULTS/inventory.json"
@@ -124,10 +130,11 @@ jobs:
       RESULTS: ${{ github.workspace }}/results/${{ matrix.run }}
     steps:
       - uses: actions/checkout@v5
-      - name: Record the run
+      - name: Record the run and its host (CPU model, logical CPUs; perf levels are kept per host class)
         run: |
           New-Item -ItemType Directory -Force -Path $env:RESULTS | Out-Null
           Set-Content -Encoding ascii -Path "$env:RESULTS/run.json" -Value '{"run": "${{ matrix.run }}"}'
+          python tools/scorecard/runners.py host --out "$env:RESULTS/host.json"
       - uses: ilammy/msvc-dev-cmd@v1
         if: ${{ matrix.preset == 'windows-clang-cl' }}
         with:
@@ -138,9 +145,15 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test (no GPU on hosted runners)
         run: ctest --test-dir $env:BUILD -C RelWithDebInfo -LE "gpu|perf" --output-on-failure --output-junit "$env:RESULTS/ctest.xml"
+      # The entries the CTest step runs: -LE "gpu|perf" there, --label-exclude "gpu|perf" here.
       - name: Test cases (doctest XML)
         if: ${{ !cancelled() }}
-        run: python tools/scorecard/runners.py doctest --build-dir $env:BUILD --config RelWithDebInfo --out "$env:RESULTS/doctest"
+        run: >
+          python tools/scorecard/runners.py doctest --build-dir $env:BUILD --config RelWithDebInfo
+          --label-exclude "gpu|perf" --out "$env:RESULTS/doctest"
+      # Strict: the owner's approval of 2026-09-30 covers the hosted Linux run only. Hosted Windows measured the
+      # stack below 100k on 2 of 3 runs (125,611 on 2026-10-03), and the owner has not confirmed the approval
+      # for it (the record).
       - name: net_bench --gate (NS-0.2, NS-0.7; 10 min)
         if: ${{ !cancelled() && matrix.run == 'windows-vs2026' }}
         run: >
@@ -350,9 +363,10 @@ jobs:
             --previous previous/scorecard-report.json ${{ github.event_name == 'schedule' && '--scheduled' || '' }} \
             --out out/scorecard-report.json --markdown out/scorecard.md > /dev/null
           cat out/scorecard.md >> "$GITHUB_STEP_SUMMARY"
-      - name: Perf history (±5 % render and runtime, ±10 % backend, editor, iteration)
+      - name: Perf history (±5 % render and runtime, ±10 % backend, editor, iteration; per host class)
         if: ${{ !cancelled() }}
         run: |
+          set -o pipefail
           status=0
           args=(--history previous/perf-history.json --require-history)
           if [ -f previous/perf-restart ]; then
@@ -363,8 +377,10 @@ jobs:
             args=(--note "$note perf-history artifact, so every metric starts new.")
           fi
           python3 tools/scorecard/perf.py extract --results results --sha "$GITHUB_SHA" --out out/perf-entry.json
+          # The table and one ::error annotation per failing row go to the job log as well (tee), so the
+          # run page names the failing metric without the summary or the artifact.
           python3 tools/scorecard/perf.py compare --entry out/perf-entry.json "${args[@]}" \
-            --out out/perf-history.json --markdown out/perf.md > perf-compare.log || status=$?
+            --out out/perf-history.json --markdown out/perf.md 2>&1 | tee perf-compare.log || status=$?
           if [ -f out/perf.md ]; then cat out/perf.md; else cat perf-compare.log; fi >> "$GITHUB_STEP_SUMMARY"
           exit $status
       - uses: actions/upload-artifact@v4
@@ -379,5 +395,7 @@ jobs:
         if: ${{ !cancelled() && hashFiles('out/perf-history.json') != '' }}
         with:
           name: perf-history
-          path: out/perf-history.json
+          path: |
+            out/perf-history.json
+            out/perf.md
           retention-days: 90

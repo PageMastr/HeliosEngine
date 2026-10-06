@@ -1,0 +1,615 @@
+package conformance
+
+import (
+	"go/ast"
+	"go/token"
+	"path"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+)
+
+// CONF-03 (05 §1.4.2, the holder rule) is a behavioural rule: the lint checks that the required
+// conformance test exists in each language of its scope, and CI runs it.
+var _ = register(&Rule{
+	ID:     "CONF-03",
+	Anchor: "05 §1.4.2 (holder rule)",
+	Title:  "The required test conformance/holder_rule is missing from the Go Agent or the C++ cell host",
+	// "The cell host" of the table is engine/server (WP-0.14's ZoneHost, 04 §11.1).
+	Scope: []string{"services/internal/orchestrator/**", "engine/server/**"},
+	Types: regexp.MustCompile(`\.go$|` + cFamily.String()),
+	Check: checkRequiredTests,
+})
+
+// holderRuleTests are CONF-03's own required tests; the map can require more (D2 `tests`).
+var holderRuleTests = []string{"conformance/holder_rule"}
+
+var (
+	// A doctest case's opening parenthesis, matched in the blanked text (so not inside a string).
+	cTestCaseRE = regexp.MustCompile(`\b(?:DOCTEST_)?TEST_CASE\s*\(`)
+	// The case's name, at the start of its argument.
+	cTestNameRE = regexp.MustCompile(`^\s*"conformance/([A-Za-z0-9_]+)[^"\n]*"`)
+	// A doctest decorator that turns the case off or lets it fail: CI would run nothing that can fail. It
+	// is searched for in the whole decorator chain with string and character literals blanked, so it is
+	// found after any decorator (`doctest::timeout(kOutage.count())`, `doctest::description("60 s (…)")`)
+	// and never inside a string. It is matched by its constructor call, however qualified: `doctest::skip()`,
+	// `skip()` under `using namespace doctest`, and `dt::skip{}` through a namespace alias.
+	cTestOffRE = regexp.MustCompile(`\b(skip|may_fail|should_fail|expected_failures)\s*[({]`)
+)
+
+// closingParen returns the offset of the ')' that closes the '(' just before open in blanked text, or
+// len(blank) if the file ends first.
+func closingParen(blank string, open int) int {
+	depth := 0
+	for i := open; i < len(blank); i++ {
+		switch blank[i] {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth == 0 {
+				return i
+			}
+			depth--
+		}
+	}
+	return len(blank)
+}
+
+// skipsAlways returns the position of an unconditional t.Skip, t.Skipf or t.SkipNow among a test
+// body's top-level statements: such a test exists but never runs. A conditional skip (`if
+// testing.Short()`) is left to CI, which runs the Go jobs without -short.
+func skipsAlways(body *ast.BlockStmt) token.Pos {
+	if body == nil {
+		return token.NoPos
+	}
+	for _, st := range body.List {
+		if es, ok := st.(*ast.ExprStmt); ok {
+			if c, ok := es.X.(*ast.CallExpr); ok {
+				switch calleeName(c) {
+				case "Skip", "Skipf", "SkipNow":
+					return c.Pos()
+				}
+			}
+		}
+	}
+	return token.NoPos
+}
+
+// buildConstraint returns the position of a //go:build line above the package clause.
+func buildConstraint(f *ast.File) token.Pos {
+	for _, cg := range f.Comments {
+		if cg.Pos() > f.Package {
+			break
+		}
+		for _, c := range cg.List {
+			if strings.HasPrefix(c.Text, "//go:build") {
+				return c.Pos()
+			}
+		}
+	}
+	return token.NoPos
+}
+
+func checkRequiredTests(p *Pass) {
+	g := p.Tree.goIndex()
+	goCases, cCases := map[string]bool{}, map[string]bool{}
+	hasGo, hasC := "", ""
+	required := map[string]bool{}
+	for _, t := range append(append([]string(nil), holderRuleTests...), p.Tests...) {
+		required[strings.TrimPrefix(t, "conformance/")] = true
+	}
+	for _, f := range p.Files {
+		own := MatchAny(p.Rule.Scope, f) // report a missing test under the table's scope when it has files
+		if strings.HasSuffix(f, ".go") {
+			if hasGo == "" || own && !MatchAny(p.Rule.Scope, hasGo) {
+				hasGo = f
+			}
+			if !strings.HasSuffix(f, "_test.go") {
+				continue
+			}
+			gf := g.file(f)
+			if gf.File == nil {
+				p.Report(f, 0, "cannot parse: %v", gf.Err)
+				continue
+			}
+			for _, d := range gf.File.Decls {
+				fd, ok := d.(*ast.FuncDecl)
+				if !ok || fd.Name.Name != "TestConformance" || fd.Body == nil {
+					continue
+				}
+				if pos := buildConstraint(gf.File); pos.IsValid() {
+					p.Report(f, g.line(pos), "the file that defines TestConformance has a build constraint, so a CI "+
+						"job may never compile its required tests (09 §5.10.3)")
+				}
+				if pos := skipsAlways(fd.Body); pos.IsValid() {
+					p.Report(f, g.line(pos), "TestConformance skips unconditionally: its required tests never run")
+				}
+				ast.Inspect(fd.Body, func(n ast.Node) bool {
+					if c, ok := n.(*ast.CallExpr); ok && calleeName(c) == "Run" && len(c.Args) == 2 {
+						if s, ok := g.String(gf, c.Args[0]); ok {
+							goCases[s] = true
+							if pos := skipsAlways(goTestBody(g, gf, c.Args[1])); required[s] && pos.IsValid() {
+								p.Report(f, g.line(pos), "required test conformance/%s skips unconditionally: it "+
+									"exists but never runs", s)
+							}
+						}
+					}
+					return true
+				})
+			}
+			continue
+		}
+		if hasC == "" || own && !MatchAny(p.Rule.Scope, hasC) {
+			hasC = f
+		}
+		// Splices joined and `#if 0` groups skipped: a case that is never compiled does not count. The case's
+		// argument is read to its closing parenthesis over the blanked text, so nesting and literals in its
+		// decorators cannot end it early.
+		src := newCSource(p.Tree.Lines(f))
+		dead := inactiveLines(src.blankLines)
+		for _, m := range cTestCaseRE.FindAllStringIndex(src.blank, -1) {
+			if dead[src.index(m[0])] {
+				continue
+			}
+			end := closingParen(src.blank, m[1])
+			n := cTestNameRE.FindStringSubmatchIndex(src.text[m[1]:end])
+			if n == nil {
+				continue
+			}
+			name := src.text[m[1]+n[2] : m[1]+n[3]]
+			cCases[name] = true
+			if off := cTestOffRE.FindStringSubmatch(src.blank[m[1]+n[1] : end]); off != nil && required[name] {
+				p.Report(f, src.line(m[0]), "required test conformance/%s is marked doctest::%s: CI runs nothing that "+
+					"can fail", name, off[1])
+			}
+		}
+	}
+	for _, t := range dedupe(append(append([]string(nil), holderRuleTests...), p.Tests...)) {
+		name := strings.TrimPrefix(t, "conformance/")
+		if hasGo != "" && !goCases[name] {
+			p.Report(scopeDir(p, hasGo), 0, "required test %s is missing: no t.Run(%q, …) in a func TestConformance "+
+				"(05 §1.4.2; 09 §5.10.3)", t, name)
+		}
+		if hasC != "" && !cCases[name] {
+			p.Report(scopeDir(p, hasC), 0, "required test %s is missing: no TEST_CASE(\"%s…\") in the C++ scope "+
+				"(05 §1.4.2; 09 §5.10.3)", t, t)
+		}
+	}
+}
+
+// goTestBody returns the body of a t.Run function argument: a function literal, or a function of the
+// same package named by an identifier.
+func goTestBody(g *goIndex, gf *goFile, fn ast.Expr) *ast.BlockStmt {
+	switch x := fn.(type) {
+	case *ast.FuncLit:
+		return x.Body
+	case *ast.Ident:
+		for _, f := range g.tree.Files {
+			if path.Dir(f) != gf.pkg || !strings.HasSuffix(f, ".go") {
+				continue
+			}
+			if pf := g.file(f).File; pf != nil {
+				for _, d := range pf.Decls {
+					if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == x.Name {
+						return fd.Body
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// scopeDir is the directory of the first scope glob that matches f ("engine/server/**" -> "engine/server"),
+// where a missing test is reported.
+func scopeDir(p *Pass, f string) string {
+	for _, g := range p.Scope {
+		if Match(g, f) {
+			return strings.TrimSuffix(strings.TrimSuffix(g, "**"), "/")
+		}
+	}
+	return path.Dir(f)
+}
+
+// CONF-04 (ADR-004, 05 §1.4.5): IDs are time-prefixed blocks, 41-bit prefix | 5-bit shard | 17-bit offset,
+// composed only by pkg/idgen and the C++ EntityRegistry minter. There are no node IDs.
+var _ = register(&Rule{
+	ID:     "CONF-04",
+	Anchor: "ADR-004, 05 §1.4.5",
+	Title:  "Node-ID minters: node/worker/machine/datacenter IDs in ID code, Snowflake layouts, IDs composed outside the minters",
+	Scope:  []string{"services/**", "engine/ecs/**", "engine/net/**"},
+	Types:  regexp.MustCompile(`\.go$|\.toml$|` + cFamily.String()),
+	Check:  checkNodeIDs,
+})
+
+var (
+	nodeIDWordRE = regexp.MustCompile(`(^|_)(node|worker|machine|datacenter)_?ids?(_|$)`)
+	nodeIDKeyRE  = regexp.MustCompile(`(?i)\b(node|worker|machine|datacenter)[_-]?id\b`)
+	camelRE      = regexp.MustCompile(`([a-z0-9])([A-Z])`)
+	// Files that compose, parse or allocate 64-bit IDs (09 §5.10.3's "ID code").
+	idCodeRE   = regexp.MustCompile(`idgen|AllocateIdBlocks|allocateBlockPrefixes|IdMinter|composeBlockId|BlockIdLayout|(?i:snowflake)`)
+	idCodeName = regexp.MustCompile(`(?i)(^|_)(ids?|idgen|entity_?id|snowflake|minter)(_|\.)`)
+	// The minters: the only places that may compose a time-prefixed ID (05 §1.4.5 "Implementation").
+	idMinters = []string{"services/pkg/idgen/**", "engine/ecs/**/entity_id.*", "engine/ecs/**/registry.*"}
+	cIdentRE  = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+	// A shift and its amount: a name, a literal, or a parenthesized expression (`<< (kOffBits + kShBits)`).
+	// The left operand may be brace-initialized, the way this codebase widens before a shift (`u64{x} << 22`).
+	cShiftRE = regexp.MustCompile(`((?:[A-Za-z_][\w:]*\s*\{[^{}]*\})|[A-Za-z0-9_)\]]+)\s*<<=?\s*` +
+		`(?:\(([^()]*)\)|((?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*|\d+))`)
+	// Integer constants: a constexpr or const declaration (= or {…}), a #define, and an enumerator.
+	cConstRE      = regexp.MustCompile(`\b(?:constexpr|const)\b[^;{}()=]*?\b([A-Za-z_]\w*)\s*(?:=\s*([^;{}]+?)|\{([^{}]*)\})\s*;`)
+	cDefineRE     = regexp.MustCompile(`(?m)^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]+([^\n]+)$`)
+	cEnumBodyRE   = regexp.MustCompile(`\benum\b[^{;()]*\{([^{}]*)\}`)
+	cEnumeratorRE = regexp.MustCompile(`^\s*([A-Za-z_]\w*)\s*=\s*(.+?)\s*$`)
+	cIntTokenRE   = regexp.MustCompile(`^(\d+)[uUlL]*$`)
+	// A brace-initialized integer literal (`u64{1}`, `std::uint64_t{ 1ull }`): a size, like a bare literal.
+	cBraceLitRE = regexp.MustCompile(`^[\w:]+\s*\{\s*\d+[uUlL]*\s*\}$`)
+	// A power of two that scales a field: `* (1 << n)` or `(1 << n) *`, the one bare or brace-initialized.
+	cOne        = `(?:1[uUlL]*|[A-Za-z_][\w:]*\s*\{\s*1[uUlL]*\s*\})`
+	cMulShiftRE = regexp.MustCompile(`\*\s*\(\s*` + cOne + `\s*<<\s*((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*|\d+)\s*\)|` +
+		`\(\s*` + cOne + `\s*<<\s*((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*|\d+)\s*\)\s*\*`)
+)
+
+// goLiteral reports a literal operand, also in parentheses or converted (`uint64(1)`): a shift or scale of
+// one is a size, not a field.
+func goLiteral(e ast.Expr) bool {
+	switch x := e.(type) {
+	case *ast.BasicLit:
+		return true
+	case *ast.ParenExpr:
+		return goLiteral(x.X)
+	case *ast.CallExpr:
+		return len(x.Args) == 1 && goLiteral(x.Args[0])
+	}
+	return false
+}
+
+func isNodeID(ident string) bool {
+	return nodeIDWordRE.MatchString(strings.ToLower(camelRE.ReplaceAllString(ident, "${1}_${2}")))
+}
+
+type shift struct {
+	amount int64
+	line   int
+}
+
+func checkNodeIDs(p *Pass) {
+	g := p.Tree.goIndex()
+	cConsts := cConstTable(p)
+	for _, f := range p.Files {
+		text := p.Tree.Text(f)
+		idCode := idCodeRE.MatchString(text) || idCodeName.MatchString(path.Base(f))
+		var shifts []shift
+		switch {
+		case strings.HasSuffix(f, ".toml"):
+			for i, l := range p.Tree.Lines(f) {
+				if m := regexp.MustCompile(`^\s*([A-Za-z0-9_-]+)\s*=`).FindStringSubmatch(l); m != nil && nodeIDKeyRE.MatchString(m[1]) {
+					p.Report(f, i+1, "config key %q configures a node-ID minter; IDs come from time-prefixed blocks (05 §1.4.5)", m[1])
+				}
+			}
+			continue
+		case strings.HasSuffix(f, ".go"):
+			gf := g.file(f)
+			if gf.File == nil {
+				p.Report(f, 0, "cannot parse: %v", gf.Err)
+				continue
+			}
+			ast.Inspect(gf.File, func(n ast.Node) bool {
+				switch x := n.(type) {
+				case *ast.Ident:
+					if idCode && isNodeID(x.Name) {
+						p.Report(f, g.line(x.Pos()), "identifier %s names a node-ID minter; IDs come from time-prefixed "+
+							"blocks (ADR-004, 05 §1.4.5)", x.Name)
+					}
+				case *ast.BasicLit:
+					if idCode && x.Kind == token.STRING && nodeIDKeyRE.MatchString(x.Value) {
+						p.Report(f, g.line(x.Pos()), "config key %s names a node-ID minter (05 §1.4.5)", x.Value)
+					}
+				case *ast.BinaryExpr:
+					if x.Op == token.SHL {
+						if !goLiteral(x.X) {
+							if v, ok := g.Int(gf, x.Y); ok {
+								shifts = append(shifts, shift{v, g.line(x.Pos())})
+							}
+						}
+					}
+					if x.Op == token.MUL && !goLiteral(x.X) && !goLiteral(x.Y) { // ms * (1 << 22) is ms << 22
+						for _, op := range []ast.Expr{x.X, x.Y} {
+							for unwrapped := true; unwrapped; { // parentheses and conversions: uint64(1<<22)
+								switch e := op.(type) {
+								case *ast.ParenExpr:
+									op = e.X
+								case *ast.CallExpr:
+									if len(e.Args) != 1 {
+										unwrapped = false
+										break
+									}
+									op = e.Args[0]
+								default:
+									unwrapped = false
+								}
+							}
+							if sh, ok := op.(*ast.BinaryExpr); ok && sh.Op == token.SHL {
+								if one, ok := g.Int(gf, sh.X); ok && one == 1 {
+									if v, ok := g.Int(gf, sh.Y); ok {
+										shifts = append(shifts, shift{v, g.line(x.Pos())})
+									}
+								}
+							}
+						}
+					}
+				}
+				return true
+			})
+		default:
+			code := codeLines(p.Tree.Lines(f), true)
+			withStrings := codeLines(p.Tree.Lines(f), false)
+			for i, l := range code {
+				if idCode {
+					for _, id := range cIdentRE.FindAllString(l, -1) {
+						if isNodeID(id) {
+							p.Report(f, i+1, "identifier %s names a node-ID minter; IDs come from time-prefixed blocks "+
+								"(ADR-004, 05 §1.4.5)", id)
+						}
+					}
+					for _, m := range cStringRE.FindAllStringSubmatch(withStrings[i], -1) {
+						if nodeIDKeyRE.MatchString(m[1]) {
+							p.Report(f, i+1, "config key %q names a node-ID minter (05 §1.4.5)", m[1])
+						}
+					}
+				}
+				for _, m := range cShiftRE.FindAllStringSubmatch(l, -1) {
+					if cIntTokenRE.MatchString(m[1]) || cBraceLitRE.MatchString(m[1]) { // 1 << 12 is a size, not a field
+						continue
+					}
+					for _, v := range cEval(m[2]+m[3], cConsts, 0) {
+						shifts = append(shifts, shift{v, i + 1})
+					}
+				}
+				// … unless it scales a field: ms * (1ull << 22) is ms << 22.
+				for _, m := range cMulShiftRE.FindAllStringSubmatch(l, -1) {
+					for _, v := range cEval(m[1]+m[2], cConsts, 0) {
+						shifts = append(shifts, shift{v, i + 1})
+					}
+				}
+			}
+		}
+		checkLayouts(p, f, shifts)
+	}
+}
+
+// checkLayouts reports the retired layouts and a time-prefixed composition outside the minters.
+func checkLayouts(p *Pass, f string, shifts []shift) {
+	has := map[int64]int{}
+	for _, s := range shifts {
+		if has[s.amount] == 0 {
+			has[s.amount] = s.line
+		}
+	}
+	switch {
+	case has[22] > 0 && has[12] > 0:
+		p.Report(f, has[22], "the Snowflake 41/10/12 layout (<< 22 with << 12): IDs are 41/5/17 time-prefixed blocks "+
+			"(ADR-004, 05 §1.4.5)")
+	case has[22] > 0 && has[17] > 0 && has[9] > 0:
+		p.Report(f, has[22], "the retired 41/5/8/9 layout (<< 22, << 17, << 9): IDs are 41/5/17 blocks (05 §1.4.5)")
+	case has[22] > 0 && !MatchAny(idMinters, f):
+		p.Report(f, has[22], "a time-prefixed ID composed (<< 22) outside pkg/idgen and the EntityRegistry minter "+
+			"(05 §1.4.5 \"Implementation\")")
+	}
+}
+
+// cConstTable collects the integer constants of the C-family files in scope, by bare name: `constexpr` and
+// `const` declarations (`= expr` or `{expr}`), `#define NAME expr` and enumerators (`NAME = expr`). A name
+// defined more than once (kPageBits is 6 in one ECS header and 12 in another) keeps every definition.
+// Groups under `#if 0` are not read.
+func cConstTable(p *Pass) map[string][]string {
+	t := map[string][]string{}
+	for _, f := range p.Files {
+		if !cFamily.MatchString(f) {
+			continue
+		}
+		code := codeLines(p.Tree.Lines(f), true)
+		for i, dead := range inactiveLines(code) {
+			if dead {
+				code[i] = ""
+			}
+		}
+		text := strings.Join(code, "\n")
+		add := func(name, v string) {
+			if v = strings.TrimSpace(v); v != "" && !slices.Contains(t[name], v) {
+				t[name] = append(t[name], v)
+			}
+		}
+		for _, m := range cConstRE.FindAllStringSubmatch(text, -1) {
+			add(m[1], m[2]+m[3])
+		}
+		for _, m := range cDefineRE.FindAllStringSubmatch(text, -1) {
+			add(m[1], m[2])
+		}
+		for _, m := range cEnumBodyRE.FindAllStringSubmatch(text, -1) {
+			for _, e := range strings.Split(m[1], ",") {
+				if em := cEnumeratorRE.FindStringSubmatch(e); em != nil {
+					add(em[1], em[2])
+				}
+			}
+		}
+	}
+	return t
+}
+
+// cShiftLimit bounds the values cEval keeps: a shift amount of a 64-bit field is below 64. Every value is
+// a sum of non-negative literals, so a larger one only grows and is dropped where it appears; at most 64
+// values remain, however many definitions a reused name multiplies, and none that matters is lost.
+const cShiftLimit = 64
+
+// cEval evaluates a C++ constant to every value below cShiftLimit it can take: integer literals, names
+// from the table (qualifiers dropped; a name defined more than once gives each of its values), + and
+// parentheses — enough for `kOffsetBits + kShardBits` and `(kOffsetBits) + (kShardBits)`. Nil means
+// unresolved, or no value that could be a shift amount.
+func cEval(expr string, t map[string][]string, depth int) []int64 {
+	expr = strings.TrimSpace(expr)
+	for strings.HasPrefix(expr, "(") && matchingParen(expr) == len(expr)-1 {
+		expr = strings.TrimSpace(expr[1 : len(expr)-1])
+	}
+	if depth > 8 || expr == "" {
+		return nil
+	}
+	if parts := splitTopLevel(expr, '+'); len(parts) > 1 {
+		sums := []int64{0}
+		for _, part := range parts {
+			vs := cEval(part, t, depth+1)
+			if vs == nil {
+				return nil
+			}
+			var next []int64
+			for _, s := range sums {
+				for _, v := range vs {
+					if s+v < cShiftLimit && !slices.Contains(next, s+v) {
+						next = append(next, s+v)
+					}
+				}
+			}
+			if sums = next; len(sums) == 0 {
+				return nil
+			}
+		}
+		return sums
+	}
+	if m := cIntTokenRE.FindStringSubmatch(expr); m != nil {
+		if v, err := strconv.ParseInt(m[1], 10, 64); err == nil && v < cShiftLimit {
+			return []int64{v}
+		}
+		return nil
+	}
+	if i := strings.LastIndex(expr, "::"); i >= 0 {
+		expr = expr[i+2:]
+	}
+	var out []int64
+	for _, def := range t[expr] {
+		for _, v := range cEval(def, t, depth+1) {
+			if !slices.Contains(out, v) {
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+// matchingParen is the index of the parenthesis that closes s[0], or -1.
+func matchingParen(s string) int {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			if depth--; depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// splitTopLevel splits s at each sep outside parentheses.
+func splitTopLevel(s string, sep byte) []string {
+	var parts []string
+	depth, from := 0, 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case sep:
+			if depth == 0 {
+				parts = append(parts, s[from:i])
+				from = i + 1
+			}
+		}
+	}
+	return append(parts, s[from:])
+}
+
+// CONF-05 (05 §1.4.5 "Who mints"): only minting services import pkg/idgen or allocate ID blocks.
+var _ = register(&Rule{
+	ID:     "CONF-05",
+	Anchor: "05 §1.4.5 (who mints)",
+	Title:  "pkg/idgen imported, or AllocateIdBlocks called, outside the minter allow-list",
+	Scope:  []string{"services/**"},
+	Types:  regexp.MustCompile(`\.go$`),
+	Check:  checkMinters,
+})
+
+// minterPackages is 05 §1.4.5's list as services/internal package directories (world state and
+// lifecycle cleanup under their likely names), plus the orchestrator that allocates blocks and
+// internal/backend's wiring. Tests are allowed: _test.go files and test-helper packages.
+var minterPackages = []string{"identity", "character", "ledger", "market", "industry", "mail", "worldstate",
+	"world", "activity", "lifecycle", "orchestrator", "backend"}
+
+func minterAllowed(f string) bool {
+	if strings.HasSuffix(f, "_test.go") || strings.Contains(f, "/pkg/idgen/") {
+		return true
+	}
+	parts := strings.Split(f, "/")
+	for i, part := range parts[:len(parts)-1] {
+		if testHelper(part) {
+			return true
+		}
+		if part == "internal" && i+1 < len(parts)-1 {
+			for _, m := range minterPackages {
+				if parts[i+1] == m {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// testHelper reports a test-helper package directory: testkit, testdata, testutil, or `<name>test` for
+// the store, db, nats and pg helpers and the minter packages (storetest, identitytest). A name that
+// merely ends in "test" (latest, contest, attest) is not one.
+func testHelper(dir string) bool {
+	switch dir {
+	case "testkit", "testdata", "testutil":
+		return true
+	}
+	base, ok := strings.CutSuffix(dir, "test")
+	if !ok || base == "" {
+		return false
+	}
+	for _, known := range append([]string{"store", "db", "nats", "pg"}, minterPackages...) {
+		if base == known {
+			return true
+		}
+	}
+	return false
+}
+
+func checkMinters(p *Pass) {
+	g := p.Tree.goIndex()
+	for _, f := range p.Files {
+		if minterAllowed(f) {
+			continue
+		}
+		gf := g.file(f)
+		if gf.File == nil {
+			p.Report(f, 0, "cannot parse: %v", gf.Err)
+			continue
+		}
+		for _, im := range gf.File.Imports {
+			if ip, _ := strconv.Unquote(im.Path.Value); strings.HasSuffix(ip, "/pkg/idgen") {
+				p.Report(f, g.line(im.Pos()), "imports pkg/idgen outside the minters of 05 §1.4.5 (session IDs are "+
+					"random 63-bit values)")
+			}
+		}
+		ast.Inspect(gf.File, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok && calleeName(c) == "AllocateIdBlocks" {
+				p.Report(f, g.line(c.Pos()), "AllocateIdBlocks called outside the minters of 05 §1.4.5")
+			}
+			return true
+		})
+	}
+}

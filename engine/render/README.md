@@ -41,6 +41,14 @@ device.present(swapchain, r.graphics());
   class), per-subresource barriers (layout transitions, RAW/WAW/WAR on one queue, releases of
   graphics-only states before async compute, final states of imported resources in the pass or a
   graphics epilogue), `DontCare` stores for attachments nobody reads, command-list partition.
+  Each compile rebuilds the plan in the storage of the previous one, with the compiler's scratch
+  arrays kept alongside, so recompiling an unchanged graph allocates nothing once that storage has
+  grown (counted for the 200-pass perf graph: 1,069 allocations in the first compile, 38 in the second,
+  none after, where the previous compiler made 4,718 in every compile); the plan is exactly what a
+  compile into fresh storage gives (tested field by field).
+* **Reuse**: `reset(name)` empties the graph for the next frame's setup but keeps that storage, so a
+  renderer that keeps one `RenderGraph` and rebuilds it every frame compiles without reallocating its
+  plan. A new `RenderGraph` per frame works as before and is only somewhat slower (below).
 * **Execute** resolves *entry* barriers (first touch of a physical resource) against the pool's
   states from the previous frame or the import state — a graphics prologue takes transitions the
   consuming queue cannot perform — waits for the previous frame's use on other queues (and, on
@@ -58,10 +66,37 @@ device.present(swapchain, r.graphics());
 60 fps (03 §2.2 item 7, §8.1.5). `perf: render graph compile of 200 passes <= 0.3 ms (no topology
 cache)` in `render_tests_perf` asserts it on the best of 10 batches of 5 compiles, in optimized builds
 without sanitizers, and reports the median batch and §8.1.5's 120 fps column (≤ 0.2 ms) without gating
-them. §8.1.5's rows are p50; on the 4-core dev container, which is not REF, 10 runs gave a best of
-0.210–0.243 ms and a median batch of 0.217–0.251 ms, never more than 0.02 ms apart (a review's 200
-single compiles: p50 0.212–0.215 ms against a best of 0.211–0.213 ms), so the two agree here. The Phase 2 topology cache has its own
-budget: a hit ≤ 0.05 ms.
+them. The scorecard tracks the gated value as `render.graph_compile_200_passes_ms` (render budget 5 %,
+per host class). The Phase 2 topology cache has its own budget: a hit ≤ 0.05 ms.
+
+Until 2026-10-03 the compile had no margin on the nightly's most common hosted `ubuntu-24.04` class: best
+0.302–0.313 ms, median batch 0.309–0.323 ms, red on every night there (faster classes passed). A
+callgrind profile of the perf case put 32 % of the compile's 3.55 M instructions in `malloc`/`free` (a
+vector per pass, subresource, reader, batch and barrier list, and a new plan each time) and 27 % in the
+happens-before test that aliasing and placement repeat for pairs of resources. The compiler
+now keeps its scratch and the previous plan's storage (above), uses flat arrays instead of those
+vectors, and folds happens-before per resource, so that test is a few compares instead of a walk over
+pass, batch and clock records: 1.20 M instructions per compile, 0.3 % of them in the allocator, with
+placement's pair test (29 %) the largest remaining step. The plan is unchanged: besides the tests
+below, the full plans (`fullPlanText`, every field) of the stress test's 300 random graphs × 2 frames
+(compiled and executed, plus 2 more option sets each) and of the budget graph's shape at 10–400 passes
+under 48 option and import combinations, 2,040 plans in all, were byte-identical to the previous
+compiler's.
+
+Interleaved runs of the old (`main` at ee0a8af) and new `render_tests` (linux-gcc RelWithDebInfo, the
+nightly's configuration), alternating which goes first, on the shared 4-vCPU dev container while other
+agents built (1-minute load average 0.6–4.1), 60 runs of each:
+
+| `render_tests_perf` | Before: median (IQR; min–max) | After: median (IQR; min–max) | Change |
+|---|---|---|---|
+| Best of 10 batches (gated) | 0.302 ms (0.300–0.305; 0.291–0.594) | 0.104 ms (0.103–0.106; 0.102–0.181) | −66 % |
+| Median batch | 0.328 ms (0.317–0.343; 0.307–0.617) | 0.114 ms (0.111–0.120; 0.108–0.189) | −65 % |
+
+The new compile was faster in all 60 pairs. The old one now measures about 0.30 ms here (0.21–0.26 ms
+when #18 landed), as slow as the failing hosted class. A new `RenderGraph` per compile, which allocates
+its plan (1,069 allocations), measured a best of 0.126 ms against 0.284 ms (medians of 20 interleaved
+runs each, −56 %), and `reset()` with the graph rebuilt 0.097 ms, so most of the gain does not depend
+on reusing one graph. The margin on the hosted runner classes is verified only by the next nightly.
 
 ## Shader reflection (03 §1.7)
 
@@ -90,8 +125,11 @@ RGBA8Unorm, and `forward-srgb` to RGBA8Srgb, the tonemap's hardware-encoding pat
 `lint_shipped_pipelines` (label `lint`) keeps pipelines from bypassing the record: in `engine/`,
 `apps/` and `tools/` (except `engine/rhi/`, which implements the API), any identifier
 `create<X>Pipeline` other than `createShippedPipeline`/`createLocalPipeline` needs a reasoned
-`// shipped-pipelines-lint: allow <reason>` waiver, and only `src/shader_library.cpp` is exempt (waived
-today: rendertest's `createLocalPipeline()`, the raw-RHI sample and the pcg twin's test pipelines). The
+`// shipped-pipelines-lint: allow <reason>` waiver, and only `src/shader_library.cpp` (which implements
+the record) and the lints' fixture and downloaded-SDK directories (`tools/rendertest/tests/`,
+`tools/lint/tests/`, `tools/prebuilt/`) are exempt (waived today: rendertest's `createLocalPipeline()`,
+EditorUI's `editorPipeline()` (its own shaders, covered by the ED-15 goldens), the raw-RHI sample and the
+pcg twin's test pipelines). The
 lint is a best-effort textual check against accidental direct creation, not against deliberately
 adversarial source; code review and the coverage check are the backstops. This is RC-1's "every
 shipped feature has a golden" for the pipelines the golden scenes create. What it cannot see, and the
@@ -118,12 +156,17 @@ trigonometry, making the uploaded bytes (and the Null trace goldens) identical o
 
 * `test_graph.cpp` — culling, versions, setup errors, barrier derivation, same-state hazards,
   mip-chain subresources, async batches and waits, releases, final states/epilogue, aliasing
-  (incl. never across concurrent queues), placement, partition, entry resolution, dumps, compile budget.
+  (incl. never across concurrent queues), placement, partition, entry resolution, dumps, compile
+  budget, and storage reuse: a 200-pass graph recompiled after other options, recompiled again (in
+  the same memory) and rebuilt after `reset()` into a smaller graph and back must equal a fresh
+  compile in every field (`fullPlanText`, list names and placement offsets included).
 * `test_graph_stress.cpp` — 300 random DAGs × 2 frames × random options, executed on the Null
   backend (serial and parallel recording) and checked by an independent reference simulator
   (culling, schedule, happens-before of every conflicting pair per physical subresource, states,
   contents seen by every read, placement overlap). Mutating the compiler (no waits, no WAR barrier,
-  alias without happens-before, submission-order barrier simulation, …) makes it fail.
+  alias without happens-before, submission-order barrier simulation, …) makes it fail. A second case
+  compiles 150 random graphs into reused storage (after other options, as a recompile, and as another
+  graph after `reset()`) and compares each plan with a fresh graph's.
 * `test_graph_null.cpp` — trace golden of a small frame, parallel == serial recording, pool state
   carry-over and trimming, cross-frame waits, swapchain import, execute-time prologue, context validation.
 * `test_forward.cpp` — meshes, projection, camera-relative precision, Null trace golden.

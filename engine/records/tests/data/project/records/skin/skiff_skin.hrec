@@ -1,0 +1,7 @@
+{
+  "$rid": 1759060513237310278,
+  "$name": "skin/skiff_skin",
+  "$comment": "Client-only: never part of the server cook.",
+  "icon": "guid:6b657374-7265-6c00-8000-00000000000a",
+  "palette": [[0.1, 0.2, 0.3, 1], [1, 0.5, 0.25, 1]]
+}

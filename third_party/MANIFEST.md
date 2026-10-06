@@ -14,10 +14,11 @@ Vendored code is never edited in place: the few changes Helios needs are patches
 | Dear ImGui (docking) | ocornut/imgui | v1.92.9-docking (9b4eb24) | MIT | Editor / launcher / debug UI (SDL3 + Vulkan backends) |
 | ImGuizmo suite | CedricGuillemet/ImGuizmo | master (18cef5e) | MIT | Transform gizmos, sequencer, curve & gradient editors, graph editor |
 | ImPlot | epezent/implot | v1.0 (524f9fc) | MIT | Profiler / telemetry / economy charts |
-| Jolt Physics | jrouwe/JoltPhysics | v5.6.0 (e77f175) | MIT | Physics (`JPH_DOUBLE_PRECISION` + `JPH_CROSS_PLATFORM_DETERMINISTIC`; Compute/Shaders/Hair removed) |
+| Jolt Physics | jrouwe/JoltPhysics | v5.6.0 (e77f175) + 1 Helios patch | MIT | Physics (`JPH_DOUBLE_PRECISION` + `JPH_CROSS_PLATFORM_DETERMINISTIC`; Compute/Shaders/Hair removed) |
 | meshoptimizer | zeux/meshoptimizer | v1.2 (9d9890c) | MIT | Mesh optimization, meshlets, LOD simplification |
 | cgltf | jkuhlmann/cgltf | v1.15 (360db1a) | MIT | glTF 2.0 import |
 | stb | nothings/stb | master (2c980bb) | MIT / public domain | Image load/write, font rasterization, Perlin noise |
+| Roboto | googlefonts/roboto | v2.138 (release asset `roboto-unhinted.zip`; `Roboto-Regular.ttf` SHA-256 f3edb8058e523f5612bfd99d0745e661568ad85e1b6217bc62f786fabae624c6) | Apache-2.0 | Editor UI font (07 §1.3), embedded in `helios_editorui`; only Regular is vendored |
 | miniaudio | mackron/miniaudio | 0.11.25 (9634bed) | MIT-0 / public domain | Audio device + mixing + 3D spatialization |
 | zstd | facebook/zstd | v1.5.7 (f8745da) | BSD-3 | Pak/chunk compression, network compression |
 | xxHash | Cyan4973/xxHash | v0.8.4 (c87183a) | BSD-2 | Content hashing (XXH3/XXH128) |
@@ -25,13 +26,13 @@ Vendored code is never edited in place: the few changes Helios needs are patches
 | Recast/Detour | recastnavigation/recastnavigation | v1.6.0 (6dc1667) | zlib | Navmesh generation, pathfinding, crowds |
 | Monocypher | LoupVaillant/Monocypher | 4.0.3 (ab2b16d) | BSD-2 / CC0 | Ed25519 manifest signing, X25519/XChaCha20 utilities (4.0.3 fixes an EdDSA timing leak) |
 | Tracy | wolfpld/tracy | v0.14.1 (30997d5) | BSD-3 | Frame/zone profiler (enabled with `HELIOS_PROFILE=ON`; viewer must match 0.14.1) |
-| Luau | luau-lang/luau | 0.739 (a62362a) + 2 Helios patches | MIT | Gameplay scripting VM + compiler + native codegen + type analysis (editor) |
+| Luau | luau-lang/luau | 0.739 (a62362a) + 3 Helios patches | MIT | Gameplay scripting VM + compiler + native codegen + type analysis (editor) |
 | SDL3 | libsdl-org/SDL | release-3.4.16 (fa2c02b) | zlib | Windowing, input (IME, gamepads w/ rumble, raw mouse), replaces GLFW |
 | flecs | SanderMertens/flecs | v4.1.6 (fb55f3c) | MIT | Archetype ECS with relationships (single-file distr build) |
 | mimalloc | microsoft/mimalloc | v3.5.3 (d4881d3) | MIT | Heaps behind the tagged allocators (no global override) |
 | yyjson | ibireme/yyjson | 0.13.0 (6447536) | MIT | JSONC text content / config parsing and writing |
 | ozz-animation | guillaumeblanc/ozz-animation | 0.17.0 (744eb9d) | MIT | Skeletal animation runtime + offline builders (FBX/glTF tools excluded) |
-| netcode | mas-bandwidth/netcode | v1.4.8 (47a156b) | BSD-3 (bundled libsodium subset: ISC) | Connect-token secured, encrypted UDP sessions |
+| netcode | mas-bandwidth/netcode | v1.4.8 (47a156b) + 1 Helios patch | BSD-3 (bundled libsodium subset: ISC) | Connect-token secured, encrypted UDP sessions |
 | reliable | mas-bandwidth/reliable | v1.4.5 (e4e7092) | BSD-3 | Packet acks, reliability, fragmentation on top of netcode |
 | nats.c | nats-io/nats.c | v3.14.0 (6cb096a) | Apache-2.0 | Cell/gateway → Go services over NATS request/reply (client library only: static, no TLS/OpenSSL, no Streaming, no libsodium; `helios::tp::natsc`) |
 
@@ -55,16 +56,55 @@ outside every hunk: the full proof that a tree is its upstream plus its patches 
 change (the script stops at the first patch that no longer applies), the dependency's table below is
 updated, and the tests named in its last column must pass. A patch that upstream has absorbed is deleted.
 
+### Jolt Physics (`third_party/jolt/patches/`)
+
+| Patch | What it changes | Why | Upstream | Tests; `sim_abi` |
+|---|---|---|---|---|
+| `0001-stable-order.patch` | `Physics/`: `Body::sStableOrderLess` orders bodies by (object layer, user data), with the BodyID only as the last tie-break, wherever upstream orders by BodyID: `PhysicsSystem::ProcessBodyPair`'s body 1 for equal motion types, `ContactConstraintManager`'s pair order (each contact constraint's body 1 and body 2, the cache keys' body order, `SortContacts`' tie-break) and `CharacterVirtual`'s contact order (`CharacterContact::mObjectLayerB`); a contact constraint's sort key hashes both bodies' (layer, user data) and sub-shape IDs instead of their BodyIDs. Adds `Body::EFlags::NoCrossUpdateCache` (bit 7): on the first collision step of each `PhysicsSystem::Update`, a pair with a flagged body recomputes its manifold and starts its impulses at zero (persisted-contact callbacks unchanged) | A BodyID is a slot index that follows each `PhysicsSystem`'s add and remove history, so a predictor, the cell and a replay holding the same bodies under different BodyIDs solved contacts in a different order and diverged (02 §7.1, RT-03's permuted variant). `engine/physics` stores each body's stable key in its user data and sets `NoCrossUpdateCache` on ShipHull and Vehicle bodies, whose predicted step must not depend on a contact cache that a rollback cannot restore (02 §7.1, 04 §5.3) | not submitted | `physics_tests` (`determinism: permuted BodyIDs …` (both cases), `determinism: the scripted scene matches its golden hash …`, `determinism: the golden holds at …`, `stable-order: ShipHull and Vehicle bodies keep no contact cache …`, `stable-order: NoCrossUpdateCache keeps the warm start between the collision steps …` and the control); `sim_abi.physics` |
+
+The patch changes simulation results (the RT-03 goldens moved once when it landed), so it is an input of
+`sim_abi.physics` (04 §6.7): a change to it, or a Jolt bump that changes its effect, changes the physics ABI.
+Not covered, because `engine/physics` uses neither: the CCD (LinearCast) resolve order and soft bodies.
+
 ### Luau (`third_party/luau/patches/`)
 
 | Patch | What it changes | Why | Upstream | Tests; `sim_abi` |
 |---|---|---|---|---|
 | `0001-codegen-fornloop-fuel.patch` | `CodeGen/src/IrTranslation.cpp`: native code emits the numeric-`for` interrupt in `FORNLOOP`, where the interpreter has it, instead of at the top of the loop body | Native code reached one more safepoint than the interpreter for every numeric loop left by `break` or `return`, so it counted different fuel, and every numeric-loop safepoint sat one body earlier, so kills stopped it elsewhere (RT-13's fuel identity, K39; 02 §7.4, 04 §10.2) | not submitted | `script_tests` (`determinism: numeric for loops left early …`, both `luau patches: codegen-fornloop-fuel …` cases); `sim_abi.script` |
 | `0002-fuel-counter.patch` | `VM/` and `CodeGen/`: an inline counter (`global_State::fuelcounter`, `lua_fuelcounter()`) decremented at every gc < 0 safepoint, in the interpreter (`VM_INTERRUPT`), the pattern matcher and native code (x64 and A64 `INTERRUPT` lowering and interrupt helpers); `interrupt(L, -1)` runs only when it reaches zero. A host that never arms it keeps stock behaviour | Calling the host at every safepoint cost 12–17 % of script time against RT-13's ≤ 10 %; `engine/script` arms the counter with the fuel left until its next decision point, so fuel counts are unchanged (K39; 02 §7.4, 04 §10.2) | not submitted | `script_tests` (`luau patches: fuel-counter …`, `fuel: the inline counter …`, `fuel: the host runs only at decision points …`, the counter bookkeeping cases in `test_fuel.cpp`, `perf: fuel metering overhead …`); `sim_abi.script` |
+| `0003-asan-unpoison-freed-page.patch` | `VM/src/lmem.cpp`: `freepage` unpoisons a page (under AddressSanitizer) before it returns it to `lua_Alloc` | Luau poisons the unused blocks of its pages and returned empty pages to `lua_Alloc` still poisoned; the host heap (mimalloc, whose debug fill writes freed blocks) then hit use-after-poison, so every `ScriptVm::create` failed in the `linux-debug-asan` build (RT-13's ASan-clean `script_tests`). Expands to `(void)0` outside ASan builds | not submitted (upstream master unchanged, no upstream issue) | `script_tests` (`luau patches: asan-unpoison-freed-page …`, and every case that creates a `ScriptVm`, under ASan); not a `sim_abi` input (no effect outside ASan builds) |
 
-The Luau patches, with the planned `det-math` patch (04 §10.2), are inputs of `sim_abi.script` (04 §6.7):
-the component covers Luau's bytecode version range and the ordered list of these patches. `sim_abi` itself is
+The Luau patches that change VM behaviour (0001 and 0002), with the planned `det-math` patch (04 §10.2), are
+inputs of `sim_abi.script` (04 §6.7): the component covers Luau's bytecode version range and the ordered list of
+these patches. 0003 compiles to nothing outside AddressSanitizer builds, so it is not an input. `sim_abi` itself is
 computed by WP-3.1 (planned region migration); until then this list is the record of what it must cover.
+
+### netcode (`third_party/netcode/patches/`)
+
+| Patch | What it changes | Why | Upstream | Tests; `sim_abi` |
+|---|---|---|---|---|
+| `0001-write-bytes-memcpy.patch` | `netcode.c`: `netcode_write_bytes` copies with one `memcpy` instead of calling `netcode_write_uint8` per byte; the bytes written are the same | `netcode_write_packet` writes every payload packet's data through it before encrypting, and the per-byte call (not inlined in a `-fPIC` GCC build) cost 11 % of NS-0.2's encrypted-stack CPU per packet (04 §11.4; WP-0.13r's profile) | not submitted | `net_tests` (`perf: netcode patch write-bytes-memcpy …`, and every case that sends a payload packet, including the Go-vector token handshake); not a `sim_abi` input (transport only) |
+
+The bundled libsodium subset (`third_party/netcode/sodium/`) carries no Helios patch; its own review log is
+`sodium/NOTES.md`. Its sources are unchanged, but `third_party/CMakeLists.txt` compiles it with two of the
+configuration macros upstream's configure would set, by the repository owner's decision of 2026-10-05
+([`docs/evidence/netcode-crypto-owner-decision-2026-10-05.md`](../docs/evidence/netcode-crypto-owner-decision-2026-10-05.md);
+WP-0.13r, NS-0.2 headroom):
+
+| Definition | Where | Effect |
+|---|---|---|
+| `HAVE_AVX_ASM=1` | GCC and Clang (MinGW and clang-cl included) on x86-64 | The CPU probe reads XCR0 with inline `xgetbv`, so it reports AVX/AVX2 and ChaCha20 dispatches to the AVX2 kernel the subset already compiles (the SSSE3 kernel before). MSVC reads XCR0 through `_xgetbv` without it |
+| `HAVE_EXPLICIT_BZERO=1` | Linux, where `check_symbol_exists` finds `explicit_bzero` (glibc) | `sodium_memzero` wipes with `explicit_bzero` instead of a volatile byte loop; Windows keeps `SecureZeroMemory`, which `sodium_memzero` prefers on `_WIN32` |
+
+Ciphertexts, tags and the wire format are unchanged (every kernel computes the same function; `net_tests`
+checks each against RFC 8439 and the Go golden token vectors). ISA rules: `tp_netcode` links only into
+avx2-level images (`cmake/HeliosIsa.cmake` does not list it in `HELIOS_ISA_BASE_THIRD_PARTY`, so a base image
+that linked it would fail configure). Its runtime-dispatched SSSE3 and AVX2 functions were above x86-64-v1
+before this change too; if a base image ever had to link it, audit check 4 would name them, and they would have
+to join `HELIOS_ISA_SELF_DISPATCH_SYMBOLS` as self-dispatching code (they run only after `sodium_runtime_has_*`
+reports the feature, which now includes the OS's XCR0 state). Tests: `net_tests` (`net.netcode_crypto`: the
+probe sees AVX2 and ChaCha20 dispatches to the AVX2 kernel, every compiled kernel matches RFC 8439 §2.4.2 and
+the reference kernel, `perf:` `sodium_memzero` at least 4× faster than a volatile byte loop).
 
 ## Prebuilt tools (downloaded at configure time, never committed)
 

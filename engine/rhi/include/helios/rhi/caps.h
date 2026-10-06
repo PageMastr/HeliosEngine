@@ -60,7 +60,7 @@ enum class CapBit : u64 {
     PresentWait = 1ull << 15,             ///< VK_KHR_present_wait + present_id.
     CalibratedTimestamps = 1ull << 16,    ///< VK_EXT_calibrated_timestamps.
     FragmentShadingRate = 1ull << 17,     ///< VK_KHR_fragment_shading_rate.
-    ValidationLayer = 1ull << 18,         ///< Khronos validation is active (enabled).
+    ValidationLayer = 1ull << 18,         ///< Khronos validation is in the call chain and reports here.
     Swapchain = 1ull << 19,               ///< Surfaces/swapchains can be created (enabled).
     SamplerAnisotropy = 1ull << 20,       ///< (enabled)
     ShaderInt64 = 1ull << 21,             ///< 64-bit integers in shaders (enabled).
@@ -97,8 +97,12 @@ struct Caps {
     AdapterInfo adapter;
     CapBit bits = CapBit::None;
     Limits limits;
-    /// The Khronos validation layer enabled on this device, as reported by the loader:
-    /// "VK_LAYER_KHRONOS_validation 1.3.275 (implementation 1)". Empty when no layer is enabled.
+    /// The Khronos validation layer in this device's call chain, as the loader lists it and as the layer
+    /// reported itself (vkGetPhysicalDeviceToolProperties): "VK_LAYER_KHRONOS_validation 1.3.275
+    /// (implementation 1); in the call chain as "Khronos Validation Layer" 275", plus "; enabled by the
+    /// loader, not requested" when the loader added it unasked. Empty when the layer is not in the chain,
+    /// even if it was requested and the loader accepted the request, and when its reports cannot reach
+    /// the device (no VK_EXT_debug_utils messenger), since nothing would count them.
     std::string validationLayer;
 
     bool has(CapBit bit) const noexcept { return hasFlag(bits, bit); }

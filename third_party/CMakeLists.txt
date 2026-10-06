@@ -36,8 +36,16 @@ add_library(helios::tp::vma ALIAS tp_vma)
 
 # --- SDL3 (windowing, input incl. IME text, gamepads w/ rumble, raw mouse) ----------------------
 if(HELIOS_BUILD_GRAPHICS)
-  set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-  set(SDL_STATIC ON CACHE BOOL "" FORCE)
+  # Modular dev builds (HELIOS_MODULAR, ADR-016) use SDL's own shared library: SDL's state (video, windows,
+  # events) must exist once per process, and the client group (rhi), the editor group (the editor host and
+  # ImGui's SDL backend), apps and tests all call it (docs/adr/ADR-0.6c-link-model-spike.md).
+  if(HELIOS_MODULAR)
+    set(SDL_SHARED ON CACHE BOOL "" FORCE)
+    set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+  else()
+    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+    set(SDL_STATIC ON CACHE BOOL "" FORCE)
+  endif()
   set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
   set(SDL_TESTS OFF CACHE BOOL "" FORCE)
   set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -51,22 +59,65 @@ if(HELIOS_BUILD_GRAPHICS)
   set(SDL_CAMERA OFF CACHE BOOL "" FORCE)
   set(SDL_AUDIO OFF CACHE BOOL "" FORCE)         # audio goes through miniaudio
   set(SDL_VULKAN ON CACHE BOOL "" FORCE)
+  if(HELIOS_SANITIZE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # LeakSanitizer: link libX11 and its extensions instead of loading them, so they stay mapped.
+    # SDL_Quit would dlclose them, and libX11's process-lifetime caches (locale database, input
+    # method, resource-manager quarks) would then be unreachable and unsymbolised: "<unknown module>"
+    # leaks under SDL_Init in every sanitizer run that opens an X11 display (rhi_triangle_smoke).
+    set(SDL_X11_SHARED OFF CACHE BOOL "" FORCE)
+  endif()
   add_subdirectory(${TP}/sdl3 ${CMAKE_CURRENT_BINARY_DIR}/sdl3 EXCLUDE_FROM_ALL)
-  add_library(helios::tp::sdl3 ALIAS SDL3-static)
+  if(HELIOS_MODULAR)
+    add_library(helios::tp::sdl3 ALIAS SDL3-shared)
+  else()
+    add_library(helios::tp::sdl3 ALIAS SDL3-static)
+  endif()
 
   # --- Dear ImGui (docking) + backends + ImGuizmo suite + ImPlot ------------------------------
-  add_library(tp_imgui STATIC
+  set(TP_IMGUI_SOURCES
     ${TP}/imgui/imgui.cpp ${TP}/imgui/imgui_draw.cpp ${TP}/imgui/imgui_tables.cpp
     ${TP}/imgui/imgui_widgets.cpp ${TP}/imgui/imgui_demo.cpp
     ${TP}/imgui/misc/cpp/imgui_stdlib.cpp
-    ${TP}/imgui/backends/imgui_impl_sdl3.cpp ${TP}/imgui/backends/imgui_impl_vulkan.cpp
+    ${TP}/imgui/backends/imgui_impl_sdl3.cpp
     ${TP}/imguizmo/ImGuizmo.cpp ${TP}/imguizmo/ImSequencer.cpp ${TP}/imguizmo/ImCurveEdit.cpp
     ${TP}/imguizmo/ImGradient.cpp ${TP}/imguizmo/GraphEditor.cpp
     ${TP}/implot/implot.cpp ${TP}/implot/implot_items.cpp)
+  if(HELIOS_MODULAR)
+    # Modular dev builds (ADR-016): ImGui's context (GImGui) must exist once per process, and the editor
+    # group, its tests and tools all call ImGui, so it is a shared library of its own, exporting through
+    # ImGui's IMGUI_API. The Vulkan backend is left out: the editor draws ImGui through the Helios RHI
+    # (engine/editorui/src/imgui_renderer.cpp), and the backend would carry a second copy of volk
+    # (docs/adr/ADR-0.6c-link-model-spike.md).
+    add_library(tp_imgui SHARED ${TP_IMGUI_SOURCES})
+    if(WIN32)
+      # IMGUI_API covers ImGui and ImGuizmo.h (which uses IMGUI_API when it is defined); data such as
+      # GImGui needs its dllimport. ImPlot (IMPLOT_API is empty) and ImSequencer, ImCurveEdit, ImGradient
+      # and GraphEditor (no export macro) are exported by the export-all scan, as on ELF, where the
+      # library has default visibility.
+      target_compile_definitions(tp_imgui PRIVATE "IMGUI_API=__declspec(dllexport)"
+                                          INTERFACE "IMGUI_API=__declspec(dllimport)")
+      set_target_properties(tp_imgui PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    endif()
+  else()
+    add_library(tp_imgui STATIC ${TP_IMGUI_SOURCES} ${TP}/imgui/backends/imgui_impl_vulkan.cpp)
+  endif()
   target_include_directories(tp_imgui SYSTEM PUBLIC ${TP}/imgui ${TP}/imgui/backends ${TP}/imgui/misc/cpp
                                                     ${TP}/imguizmo ${TP}/implot)
   target_compile_definitions(tp_imgui PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK IMGUI_DEFINE_MATH_OPERATORS)
-  target_link_libraries(tp_imgui PUBLIC tp_volk SDL3-static)
+  # Item hooks for the editor UI test harness (helios-uitest, 07 §4.4). IMGUI_ENABLE_TEST_ENGINE makes
+  # imgui.cpp report every item to ImGuiTestEngineHook_*() while a context sets TestEngineHookItems
+  # (one branch per item otherwise; ImGuiContext's layout does not change). The hook functions are
+  # Helios code (engine/editorui/src/imgui_item_hooks.cpp, MIT) that forwards to a table edui installs
+  # and does nothing without one, so every image that links ImGui still links. Dear ImGui Test
+  # Engine itself is not vendored (docs/adr/ADR-0.18-imgui-test-engine-licence.md). PUBLIC: every TU
+  # that includes imgui_internal.h sees the same ImGuiItemStatusFlags.
+  target_compile_definitions(tp_imgui PUBLIC IMGUI_ENABLE_TEST_ENGINE)
+  target_sources(tp_imgui PRIVATE ${PROJECT_SOURCE_DIR}/engine/editorui/src/imgui_item_hooks.cpp)
+  if(HELIOS_MODULAR)
+    target_link_libraries(tp_imgui PUBLIC tp_vulkan_headers helios::tp::sdl3)
+  else()
+    target_link_libraries(tp_imgui PUBLIC tp_volk helios::tp::sdl3)
+  endif()
   helios_tp_quiet(tp_imgui)
   add_library(helios::tp::imgui ALIAS tp_imgui)
 endif()
@@ -74,7 +125,11 @@ endif()
 # --- Jolt Physics 5.6 (double precision + cross-platform determinism) -----------------------------
 # Client and server must produce bit-identical physics on MSVC, clang-cl, GCC and Clang, so FMA is
 # off (JPH_CROSS_PLATFORM_DETERMINISTIC) and the ISA feature macros are emitted explicitly: Jolt's
-# headers select SIMD paths from them, so every consumer must see the same set (hence PUBLIC).
+# headers select SIMD paths from them, so every consumer must see the same set (hence PUBLIC). The
+# compile flags that make those paths legal come from the image's `avx2` level (cmake/HeliosIsa.cmake,
+# 02 §1.1), which every image that links Jolt has, so the defines and the flags agree by construction.
+# tp_jolt carries no ISA option of its own, and configure fails if one reappears on its interface; a
+# base image that links it fails configure too.
 file(GLOB_RECURSE JOLT_SRC CONFIGURE_DEPENDS ${TP}/jolt/Jolt/*.cpp)
 list(FILTER JOLT_SRC EXCLUDE REGEX "/Jolt/(Compute|Shaders|Physics/Hair)/")
 add_library(tp_jolt STATIC ${JOLT_SRC})
@@ -84,13 +139,6 @@ target_compile_definitions(tp_jolt PUBLIC JPH_DOUBLE_PRECISION JPH_CROSS_PLATFOR
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
   target_compile_definitions(tp_jolt PUBLIC JPH_USE_AVX2 JPH_USE_AVX JPH_USE_SSE4_1 JPH_USE_SSE4_2
                                             JPH_USE_LZCNT JPH_USE_TZCNT JPH_USE_F16C)
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-    target_compile_options(tp_jolt PUBLIC /arch:AVX2)
-  elseif(MSVC) # clang-cl
-    target_compile_options(tp_jolt PUBLIC /arch:AVX2 -mbmi -mpopcnt -mlzcnt -mf16c /clang:-ffp-contract=off)
-  else()
-    target_compile_options(tp_jolt PUBLIC -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfpmath=sse -ffp-contract=off)
-  endif()
 endif()
 helios_tp_quiet(tp_jolt)
 add_library(helios::tp::jolt ALIAS tp_jolt)
@@ -158,6 +206,15 @@ foreach(t Luau.Common Luau.Ast Luau.Bytecode Luau.Inliner Luau.Compiler Luau.Con
     helios_tp_quiet(${t})
   endif()
 endforeach()
+# Debug sanitizer builds (linux-debug-asan) compile the interpreter loop at -O1. At -O0 ASan gives every
+# local of luau_execute its own redzoned stack slot: a 128 KiB frame (480 bytes at -O1), so the
+# LUAI_MAXCCALLS nested C calls a script may make (binding -> Luau -> binding) needed more than an 8 MiB
+# stack and crashed instead of raising Luau's C-stack error. -O1 keeps the full instrumentation (the ASan
+# docs recommend -O1 or higher). MSVC is left alone: /O1 conflicts with Debug's /RTC1.
+if(HELIOS_SANITIZE AND NOT MSVC)
+  set_source_files_properties(${TP}/luau/VM/src/lvmexecute.cpp TARGET_DIRECTORY Luau.VM
+    PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O1>")
+endif()
 add_library(tp_luau INTERFACE)
 target_link_libraries(tp_luau INTERFACE Luau.Compiler Luau.VM Luau.CodeGen)
 add_library(helios::tp::luau ALIAS tp_luau)
@@ -216,6 +273,26 @@ target_compile_definitions(tp_netcode PRIVATE NETCODE_ENABLE_TESTS=0 RELIABLE_EN
                                               $<$<NOT:$<CONFIG:Debug>>:NDEBUG>)
 if(WIN32)
   target_link_libraries(tp_netcode PUBLIC ws2_32 iphlpapi advapi32)
+endif()
+# The bundled libsodium subset's own faster paths, by compile definitions only (the vendored sources are
+# unchanged): the repository owner's decision of 2026-10-05, docs/evidence/netcode-crypto-owner-decision-2026-10-05.md
+# (WP-0.13r, NS-0.2 headroom; third_party/MANIFEST.md, netcode).
+#  - HAVE_AVX_ASM: the CPU probe reads XCR0 with GNU inline xgetbv. Without it GCC and Clang builds never see AVX,
+#    so they keep the SSSE3 ChaCha20 although they compile the AVX2 one. cl (MSVC) has no GNU inline asm and
+#    reads XCR0 through _xgetbv already; clang-cl gets the define and its headers pick either branch.
+#  - HAVE_EXPLICIT_BZERO: sodium_memzero wipes with explicit_bzero instead of a volatile byte loop, where libc has
+#    it (glibc Linux). sodium_memzero prefers SecureZeroMemory on _WIN32 (MSVC, clang-cl, MinGW), which stays.
+# tp_netcode links only into avx2-level images: a base image may not link it (HELIOS_ISA_BASE_THIRD_PARTY,
+# cmake/HeliosIsa.cmake), so libsodium's runtime-dispatched SSSE3/AVX2 code never meets audit check 4.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|x64)$" AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_definitions(tp_netcode PRIVATE HAVE_AVX_ASM=1)
+endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  include(CheckSymbolExists)
+  check_symbol_exists(explicit_bzero "string.h" HELIOS_LIBC_HAS_EXPLICIT_BZERO)
+  if(HELIOS_LIBC_HAS_EXPLICIT_BZERO)
+    target_compile_definitions(tp_netcode PRIVATE HAVE_EXPLICIT_BZERO=1)
+  endif()
 endif()
 helios_tp_quiet(tp_netcode)
 add_library(helios::tp::netcode ALIAS tp_netcode)

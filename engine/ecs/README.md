@@ -89,7 +89,30 @@ World add `RepDirty` in the same structural step (spawn, add, set, override, com
 the per-entity summary appears without a flecs `With` trait (which would create intermediate
 tables). Spawns and command-buffer groups look up their final table with `ecs_table_find` (no
 intermediate tables in the table graph).
-C++ types map to ids through a process-wide type slot → per-world vector (O(1), lock-free).
+C++ types map to ids through `typeKey<T>()` (`helios/ecs/type_key.h`) and a per-world open-addressing table
+(O(1), lock-free). A type in a named namespace has a name key: a compile-time hash of its canonical name
+(MSVC's `struct `/`class `/`union `/`enum ` dropped, spaces only between identifier characters), size and
+alignment, which every image built by one compiler derives alike (02 §1.4: no per-image caches, so a modular
+build's executables and game modules see the ids `helios_runtime` bound). Every supported compiler derives the
+same key for a class, union or enum declared with a name whose qualified name has neither template arguments
+nor an inline namespace, so clang-cl game modules beside an MSVC-built SDK see those ids too. Other names hold
+only within one compiler: template specializations and the types nested in them (the compilers spell template
+arguments differently) and types in inline namespaces (GCC and MSVC print `ns::v1::T`, Clang and clang-cl
+`ns::T`); a component that crosses images built by different compilers has neither in its name. Every other
+type has a per-image key drawn once from a counter in `helios_runtime`: types in unnamed namespaces, local
+classes and closures, which only one translation unit can name, global-namespace types, which Clang prints
+exactly like its local classes, and specializations with such a type among their template arguments (Clang and
+clang-cl print `ns::Box<Local>` for every function's `Local`). Two types that print the same name therefore
+never share a key, and an unregistered one resolves to no component; declare a component that crosses images,
+and its template arguments, in named namespaces. A reloadable game module keys no type per image (02 §1.4;
+symbol audit R5). Name keys clash only for two types with one canonical name and one layout, which in a
+correct program happens only on Clang and clang-cl: a type named through a local class (a class or enum nested
+in one, `Local::Inner`, or a pointer to a member of one, `int Local::*`, also as template arguments), or a
+type in an inline namespace beside a same-named type of the enclosing namespace, in translation units that see
+only one of them. Typed access through the second type reaches the first's component, of the same size and
+alignment. A 64-bit collision of two name keys could also join types of different layouts. Either way
+`registerComponent<T>`/`bindType<T>` refuse to bind the second type (`AlreadyExists`).
+`registerComponent<T>` returns 0 after a `HELIOS_VERIFY` failure whenever T cannot be bound.
 Component names must not resolve to an existing flecs entity (builtins, relations, named frames or
 scopes); such registrations fail with `AlreadyExists` instead of silently re-typing that entity.
 
@@ -184,7 +207,7 @@ counters, and optional batched tag accounting.
 
 ## Tests and benchmark
 
-`ecs_tests` (doctest, 107 cases) covers: block-id layout against the shared Go golden vectors,
+`ecs_tests` (doctest) covers: block-id layout against the shared Go golden vectors,
 the AllocateIdBlocks rule, minting (order, refill at half use, retirement, stalls, failed and async
 sources, concurrency, determinism, restarts, never id 0); U64Map fuzz vs `std::unordered_map`; NetHandle FIFO/reuse delay/
 generations/content slots; registry maps; TaggedHeap accounting, pooling, the mimalloc recycling
@@ -200,7 +223,9 @@ fields, dirty masks on whole-value writes, heap-pool ownership, dead relationshi
 children fragmentation, staggered `once`, frame/host destruction in the log, component-name
 collisions, id-0 commands). WP-1.1a's structural fast paths are pinned by `test_structural_ops.cpp`
 (a digest of a scripted workload over every structural command kind in four relation configurations,
-recorded with the World before WP-1.1a) and `test_bulk_paths.cpp` (spawnN against the same spawn +
+recorded with the World before WP-1.1a; in Debug and sanitizer builds it discounts the two
+`debug_only_*InvariantCheck` observers flecs creates per singleton component, so every build checks
+the same goldens) and `test_bulk_paths.cpp` (spawnN against the same spawn +
 set commands, `allocateN` and batched NetHandle issue against one call per id, the paged registry
 under churn and its handle releases, destroy runs against one destroy at a time, Sparse/DontFragment
 ownership, identity hints of recycled flecs indices, the flecs DontFragment-remove divergence and the
@@ -253,8 +278,9 @@ SPIKES.md §3 (Phase 0) and §5 (WP-1.1a).
   which avoids it in the World. Components created directly through flecs do not get this, and
   `test_bulk_paths.cpp` pins the upstream behaviour.
 * Toggles move one entity at a time: flecs 4.1.6 has no public bulk move (SPIKES.md §5.6).
-* No schema compiler yet: replicated components are hand-written with `_dirty` +
-  `kReplicatedFields`; the runtime descriptor path is ready for reflection `TypeInfo`.
+* No generated registration yet: helios-schemac emits `_dirty` + `kReplicatedFields` for replicated
+  components (the template path), but there is no generated `registerComponents(World&)` and no
+  reflection `TypeInfo` → `ComponentDesc` bridge; the runtime descriptor path is ready for one.
 * `UpdatePolicy::ByUpdateLod` (Phase 2) and `EntityBudgetDef` caps are not implemented.
 * Queries touching Sparse or DontFragment components iterate one entity per chunk (flecs needs
   per-entity field access for them); keep them out of hot iteration.
@@ -264,19 +290,22 @@ SPIKES.md §3 (Phase 0) and §5 (WP-1.1a).
   materialized at the group's first spawn, i.e. before later non-spawn commands of that buffer.
 * `dockedAt()` with `DockStorage::Field` prunes its reverse index lazily (on dock and on host
   destruction); it must not run concurrently with structural changes.
-* The orchestrator's AllocateIdBlocks client (the production `IdBlockSource`) does not exist yet;
-  cells use `LocalIdBlockSource`, whose ids are unique across processes only if each shard's row
-  value is persisted (`idLastPrefix`) and a shard is served by one source.
+* Cells with an orchestrator take their blocks from `server::OrchestratorIdBlockSource` (engine/server,
+  WP-0.14). Worlds without one (static-zone cells, tests, tools) use `LocalIdBlockSource`, whose ids are
+  unique across processes only if each shard's row value is persisted (`idLastPrefix`) and one source
+  serves each shard.
 * Deleting a prefab silently strips `IsA` and its inherited components from live instances (flecs
   cleanup); no structural event is logged for that.
 
 ## Plan conformance
 
-Plan-Rev: 10
+Plan-Rev: 14
 
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
 `docs/plan/09-roadmap-and-process.md` §5.10.2 D7. No conformance delta is open; see §5.10.4 (c) there.
 Revisions 7–9 change no anchor that maps to this module. Revision 10 is WP-1.1a's own change to
 ADR-004a (§6 M1 and M5, §7: its results, the `InFrame` choice and the owner's decision on the M1
 statistic). It records measurements of this module's code and bench, and adds no requirement that the
-code does not meet.
+code does not meet. Revisions 11–13 change no anchor that maps to this module. Revision 14 is WP-0.6c part
+1's amendment of 02 §1.4 (PR #59): the typed API looks a C++ type up by `typeKey<T>()`, never by a per-image
+cache of global state, which this module implements in the same PR.

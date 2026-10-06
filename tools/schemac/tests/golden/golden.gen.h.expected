@@ -14,6 +14,7 @@ struct Item;
 struct ThingDef;
 struct Motion;
 struct Plain;
+struct Status;
 struct Exploded;
 struct Chat;
 struct Hud;
@@ -21,6 +22,10 @@ struct Owns;
 struct Fire;
 struct Req;
 struct Spellings;
+struct LedgerLine;
+struct Pack;
+struct Bag;
+struct Tagged;
 struct StoreBuyRequest;
 /// Reference to a ThingDef record (serialized as its RecordId).
 using ThingRef = ::helios::refl::RecordRef<ThingDef>;
@@ -218,6 +223,32 @@ struct Plain {
     [[nodiscard]] bool operator==(const Plain& other) const noexcept;
 };
 
+/// Every raw full-state form (`--emit repl`) and a range-quantized f64.
+struct Status {
+    ::golden::all::Color mode = ::golden::all::Color::Green;
+    bool alive = true;
+    ::helios::i16 level = -3;
+    ::golden::all::Perm perm{};
+    ::helios::refl::EntityId who{};
+    ::helios::refl::RecordRef<::golden::all::ThingDef> ref{};
+    ::helios::refl::Tick at{};
+    ::helios::refl::Duration wait{};
+    ::helios::refl::NetHandle handle{};
+    ::helios::Quat rot{};
+    ::helios::Vec2 flat{};
+    ::helios::Color tint{};
+    ::helios::DVec3 far{};
+    ::helios::refl::WorldPos where{};
+    ::helios::f64 score{};
+
+    /// Replication dirty bits (bit i = kReplicatedFields[i]); set by Mut<C> (02 §4.4).
+    ::helios::u64 _dirty = 0;
+    static constexpr auto kReplicatedFields = std::make_tuple(&Status::mode, &Status::alive, &Status::level, &Status::perm, &Status::who, &Status::ref, &Status::at, &Status::wait, &Status::handle, &Status::rot, &Status::flat, &Status::tint, &Status::far, &Status::where, &Status::score);
+
+    /// Field-wise equality (floats compare bitwise; _dirty is ignored).
+    [[nodiscard]] bool operator==(const Status& other) const noexcept;
+};
+
 struct Exploded {
     ::helios::refl::WorldPos at{};
     ::helios::f32 radius{};
@@ -270,6 +301,81 @@ struct Spellings {
 
     /// Field-wise equality (floats compare bitwise).
     [[nodiscard]] bool operator==(const Spellings& other) const noexcept;
+};
+
+/// A PostgreSQL table (`--emit sql`, 05 §3): every column form, a composite key and a reserved word
+/// as a column. Since tests/golden/golden.sql-baseline.lock.jsonc it gained a rename, widenings, an
+/// optional, new columns and a removed field, which the migration stub golden shows.
+struct LedgerLine {
+    struct ShapeDot {
+        /// Field-wise equality (floats compare bitwise).
+        [[nodiscard]] bool operator==(const ShapeDot& other) const noexcept;
+    };
+
+    struct ShapeLine {
+        ::helios::f32 length{};
+
+        /// Field-wise equality (floats compare bitwise).
+        [[nodiscard]] bool operator==(const ShapeLine& other) const noexcept;
+    };
+
+    using Shape = std::variant<ShapeDot, ShapeLine>;
+
+    ::helios::refl::EntityId owner{};
+    ::helios::u32 seq{};
+    ::helios::u8 order = 7u;
+    ::helios::i64 amount = -5ll;
+    ::helios::u16 small = 3u;
+    std::optional<std::string> note{};
+    bool flag = true;
+    ::helios::u64 big{};
+    ::helios::f32 ratio = 0.5f;
+    ::helios::f64 exact{};
+    std::string label = std::string("it's");
+    ::helios::Name tag{};
+    ::helios::refl::Duration delay = ::helios::refl::Duration(1500000000ll);
+    ::helios::refl::Tick at{};
+    ::helios::refl::RecordRef<::golden::all::ThingDef> thing{};
+    ::helios::Guid id{};
+    ::golden::all::Color color = ::golden::all::Color::Blue;
+    ::golden::all::Perm perm = static_cast<::golden::all::Perm>(1ull);
+    ::helios::refl::AssetRef mesh{};
+    ::helios::refl::LocString text{};
+    ::helios::refl::WorldPos pos{};
+    std::vector<::golden::all::Item> items;
+    ::golden::all::Item inner{};
+    std::map<std::string, ::helios::u8> bag;
+    ::golden::all::LedgerLine::Shape shape{};
+
+    /// Field-wise equality (floats compare bitwise).
+    [[nodiscard]] bool operator==(const LedgerLine& other) const noexcept;
+};
+
+/// A scriptlib argument: the glue gives fields a script omits their schema defaults.
+struct Pack {
+    std::string slot{};
+    ::helios::u16 count = 1u;
+
+    /// Field-wise equality (floats compare bitwise).
+    [[nodiscard]] bool operator==(const Pack& other) const noexcept;
+};
+
+/// @max on struct fields bounds arguments and results alike.
+struct Bag {
+    std::vector<::helios::u32> ids;
+    std::string tag{};
+
+    /// Field-wise equality (floats compare bitwise).
+    [[nodiscard]] bool operator==(const Bag& other) const noexcept;
+};
+
+/// A result with Names: pushed as text; a set of Names in lexical order.
+struct Tagged {
+    ::helios::Name label{};
+    std::set<::helios::Name> names;
+
+    /// Field-wise equality (floats compare bitwise).
+    [[nodiscard]] bool operator==(const Tagged& other) const noexcept;
 };
 
 using Money = ::helios::i64;
@@ -410,6 +516,19 @@ struct Codec<::golden::all::Plain> : StructCodec<::golden::all::Plain> {
     static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::Plain& v, ReadCtx& ctx);
 };
 template <>
+struct TypeOf<::golden::all::Status> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct Codec<::golden::all::Status> : StructCodec<::golden::all::Status> {
+    static bool isDefault(const ::golden::all::Status& v) noexcept;
+    static bool equals(const ::golden::all::Status& a, const ::golden::all::Status& b) noexcept;
+    static void writeFields(TaggedWriter& w, const ::golden::all::Status& v);
+    static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::Status& v);
+    static void writeJsonFields(JsonWriter& w, const ::golden::all::Status& v);
+    static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::Status& v, ReadCtx& ctx);
+};
+template <>
 struct TypeOf<::golden::all::Exploded> {
     static const TypeInfo& get() noexcept;
 };
@@ -501,6 +620,58 @@ struct Codec<::golden::all::Spellings> : StructCodec<::golden::all::Spellings> {
     static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::Spellings& v, ReadCtx& ctx);
 };
 template <>
+struct TypeOf<::golden::all::LedgerLine> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct Codec<::golden::all::LedgerLine> : StructCodec<::golden::all::LedgerLine> {
+    static bool isDefault(const ::golden::all::LedgerLine& v) noexcept;
+    static bool equals(const ::golden::all::LedgerLine& a, const ::golden::all::LedgerLine& b) noexcept;
+    static void writeFields(TaggedWriter& w, const ::golden::all::LedgerLine& v);
+    static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::LedgerLine& v);
+    static void writeJsonFields(JsonWriter& w, const ::golden::all::LedgerLine& v);
+    static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::LedgerLine& v, ReadCtx& ctx);
+};
+template <>
+struct TypeOf<::golden::all::Pack> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct Codec<::golden::all::Pack> : StructCodec<::golden::all::Pack> {
+    static bool isDefault(const ::golden::all::Pack& v) noexcept;
+    static bool equals(const ::golden::all::Pack& a, const ::golden::all::Pack& b) noexcept;
+    static void writeFields(TaggedWriter& w, const ::golden::all::Pack& v);
+    static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::Pack& v);
+    static void writeJsonFields(JsonWriter& w, const ::golden::all::Pack& v);
+    static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::Pack& v, ReadCtx& ctx);
+};
+template <>
+struct TypeOf<::golden::all::Bag> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct Codec<::golden::all::Bag> : StructCodec<::golden::all::Bag> {
+    static bool isDefault(const ::golden::all::Bag& v) noexcept;
+    static bool equals(const ::golden::all::Bag& a, const ::golden::all::Bag& b) noexcept;
+    static void writeFields(TaggedWriter& w, const ::golden::all::Bag& v);
+    static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::Bag& v);
+    static void writeJsonFields(JsonWriter& w, const ::golden::all::Bag& v);
+    static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::Bag& v, ReadCtx& ctx);
+};
+template <>
+struct TypeOf<::golden::all::Tagged> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct Codec<::golden::all::Tagged> : StructCodec<::golden::all::Tagged> {
+    static bool isDefault(const ::golden::all::Tagged& v) noexcept;
+    static bool equals(const ::golden::all::Tagged& a, const ::golden::all::Tagged& b) noexcept;
+    static void writeFields(TaggedWriter& w, const ::golden::all::Tagged& v);
+    static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::Tagged& v);
+    static void writeJsonFields(JsonWriter& w, const ::golden::all::Tagged& v);
+    static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::Tagged& v, ReadCtx& ctx);
+};
+template <>
 struct TypeOf<::golden::all::ThingDef::Shape> {
     static const TypeInfo& get() noexcept;
 };
@@ -587,6 +758,36 @@ struct Codec<::golden::all::StoreBuyRequest> : StructCodec<::golden::all::StoreB
     static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::StoreBuyRequest& v, ReadCtx& ctx);
 };
 template <>
+struct TypeOf<::golden::all::LedgerLine::Shape> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct TypeOf<::golden::all::LedgerLine::ShapeDot> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct Codec<::golden::all::LedgerLine::ShapeDot> : StructCodec<::golden::all::LedgerLine::ShapeDot> {
+    static bool isDefault(const ::golden::all::LedgerLine::ShapeDot& v) noexcept;
+    static bool equals(const ::golden::all::LedgerLine::ShapeDot& a, const ::golden::all::LedgerLine::ShapeDot& b) noexcept;
+    static void writeFields(TaggedWriter& w, const ::golden::all::LedgerLine::ShapeDot& v);
+    static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::LedgerLine::ShapeDot& v);
+    static void writeJsonFields(JsonWriter& w, const ::golden::all::LedgerLine::ShapeDot& v);
+    static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::LedgerLine::ShapeDot& v, ReadCtx& ctx);
+};
+template <>
+struct TypeOf<::golden::all::LedgerLine::ShapeLine> {
+    static const TypeInfo& get() noexcept;
+};
+template <>
+struct Codec<::golden::all::LedgerLine::ShapeLine> : StructCodec<::golden::all::LedgerLine::ShapeLine> {
+    static bool isDefault(const ::golden::all::LedgerLine::ShapeLine& v) noexcept;
+    static bool equals(const ::golden::all::LedgerLine::ShapeLine& a, const ::golden::all::LedgerLine::ShapeLine& b) noexcept;
+    static void writeFields(TaggedWriter& w, const ::golden::all::LedgerLine::ShapeLine& v);
+    static Result<bool> readField(TaggedReader& r, FieldTag tag, ::golden::all::LedgerLine::ShapeLine& v);
+    static void writeJsonFields(JsonWriter& w, const ::golden::all::LedgerLine::ShapeLine& v);
+    static Result<bool> readJsonMember(std::string_view key, JsonValue in, ::golden::all::LedgerLine::ShapeLine& v, ReadCtx& ctx);
+};
+template <>
 struct TypeOf<::golden::all::Pair> {
     static const TypeInfo& get() noexcept;
 };
@@ -657,6 +858,199 @@ public:
     }
     /// Mutable access to the whole component; marks every replicated field dirty.
     ::golden::all::Motion& raw() noexcept {
+        markBits(kAllFields);
+        return *m_c;
+    }
+};
+
+/// Named dirty-bit mutators for golden.all.Status (replicate(all)).
+template <>
+class Mut<::golden::all::Status> : public detail::MutBase<::golden::all::Status> {
+public:
+    using MutBase::MutBase;
+    static constexpr ::helios::u64 kMode = 1ull << 0;
+    static constexpr ::helios::u64 kAlive = 1ull << 1;
+    static constexpr ::helios::u64 kLevel = 1ull << 2;
+    static constexpr ::helios::u64 kPerm = 1ull << 3;
+    static constexpr ::helios::u64 kWho = 1ull << 4;
+    static constexpr ::helios::u64 kRef = 1ull << 5;
+    static constexpr ::helios::u64 kAt = 1ull << 6;
+    static constexpr ::helios::u64 kWait = 1ull << 7;
+    static constexpr ::helios::u64 kHandle = 1ull << 8;
+    static constexpr ::helios::u64 kRot = 1ull << 9;
+    static constexpr ::helios::u64 kFlat = 1ull << 10;
+    static constexpr ::helios::u64 kTint = 1ull << 11;
+    static constexpr ::helios::u64 kFar = 1ull << 12;
+    static constexpr ::helios::u64 kWhere = 1ull << 13;
+    static constexpr ::helios::u64 kScore = 1ull << 14;
+    static constexpr ::helios::u64 kAllFields = kMode | kAlive | kLevel | kPerm | kWho | kRef | kAt | kWait | kHandle | kRot | kFlat | kTint | kFar | kWhere | kScore;
+    /// Writes mode and marks it dirty if the value changed.
+    void setMode(const ::golden::all::Color& value) {
+        if (::helios::refl::valuesEqual(m_c->mode, value)) return;
+        m_c->mode = value;
+        markBits(kMode);
+    }
+    /// In-place access to mode; marks it dirty.
+    ::golden::all::Color& editMode() noexcept {
+        markBits(kMode);
+        return m_c->mode;
+    }
+    /// Writes alive and marks it dirty if the value changed.
+    void setAlive(const bool& value) {
+        if (::helios::refl::valuesEqual(m_c->alive, value)) return;
+        m_c->alive = value;
+        markBits(kAlive);
+    }
+    /// In-place access to alive; marks it dirty.
+    bool& editAlive() noexcept {
+        markBits(kAlive);
+        return m_c->alive;
+    }
+    /// Writes level and marks it dirty if the value changed.
+    void setLevel(const ::helios::i16& value) {
+        if (::helios::refl::valuesEqual(m_c->level, value)) return;
+        m_c->level = value;
+        markBits(kLevel);
+    }
+    /// In-place access to level; marks it dirty.
+    ::helios::i16& editLevel() noexcept {
+        markBits(kLevel);
+        return m_c->level;
+    }
+    /// Writes perm and marks it dirty if the value changed.
+    void setPerm(const ::golden::all::Perm& value) {
+        if (::helios::refl::valuesEqual(m_c->perm, value)) return;
+        m_c->perm = value;
+        markBits(kPerm);
+    }
+    /// In-place access to perm; marks it dirty.
+    ::golden::all::Perm& editPerm() noexcept {
+        markBits(kPerm);
+        return m_c->perm;
+    }
+    /// Writes who and marks it dirty if the value changed.
+    void setWho(const ::helios::refl::EntityId& value) {
+        if (::helios::refl::valuesEqual(m_c->who, value)) return;
+        m_c->who = value;
+        markBits(kWho);
+    }
+    /// In-place access to who; marks it dirty.
+    ::helios::refl::EntityId& editWho() noexcept {
+        markBits(kWho);
+        return m_c->who;
+    }
+    /// Writes ref and marks it dirty if the value changed.
+    void setRef(const ::helios::refl::RecordRef<::golden::all::ThingDef>& value) {
+        if (::helios::refl::valuesEqual(m_c->ref, value)) return;
+        m_c->ref = value;
+        markBits(kRef);
+    }
+    /// In-place access to ref; marks it dirty.
+    ::helios::refl::RecordRef<::golden::all::ThingDef>& editRef() noexcept {
+        markBits(kRef);
+        return m_c->ref;
+    }
+    /// Writes at and marks it dirty if the value changed.
+    void setAt(const ::helios::refl::Tick& value) {
+        if (::helios::refl::valuesEqual(m_c->at, value)) return;
+        m_c->at = value;
+        markBits(kAt);
+    }
+    /// In-place access to at; marks it dirty.
+    ::helios::refl::Tick& editAt() noexcept {
+        markBits(kAt);
+        return m_c->at;
+    }
+    /// Writes wait and marks it dirty if the value changed.
+    void setWait(const ::helios::refl::Duration& value) {
+        if (::helios::refl::valuesEqual(m_c->wait, value)) return;
+        m_c->wait = value;
+        markBits(kWait);
+    }
+    /// In-place access to wait; marks it dirty.
+    ::helios::refl::Duration& editWait() noexcept {
+        markBits(kWait);
+        return m_c->wait;
+    }
+    /// Writes handle and marks it dirty if the value changed.
+    void setHandle(const ::helios::refl::NetHandle& value) {
+        if (::helios::refl::valuesEqual(m_c->handle, value)) return;
+        m_c->handle = value;
+        markBits(kHandle);
+    }
+    /// In-place access to handle; marks it dirty.
+    ::helios::refl::NetHandle& editHandle() noexcept {
+        markBits(kHandle);
+        return m_c->handle;
+    }
+    /// Writes rot and marks it dirty if the value changed.
+    void setRot(const ::helios::Quat& value) {
+        if (::helios::refl::valuesEqual(m_c->rot, value)) return;
+        m_c->rot = value;
+        markBits(kRot);
+    }
+    /// In-place access to rot; marks it dirty.
+    ::helios::Quat& editRot() noexcept {
+        markBits(kRot);
+        return m_c->rot;
+    }
+    /// Writes flat and marks it dirty if the value changed.
+    void setFlat(const ::helios::Vec2& value) {
+        if (::helios::refl::valuesEqual(m_c->flat, value)) return;
+        m_c->flat = value;
+        markBits(kFlat);
+    }
+    /// In-place access to flat; marks it dirty.
+    ::helios::Vec2& editFlat() noexcept {
+        markBits(kFlat);
+        return m_c->flat;
+    }
+    /// Writes tint and marks it dirty if the value changed.
+    void setTint(const ::helios::Color& value) {
+        if (::helios::refl::valuesEqual(m_c->tint, value)) return;
+        m_c->tint = value;
+        markBits(kTint);
+    }
+    /// In-place access to tint; marks it dirty.
+    ::helios::Color& editTint() noexcept {
+        markBits(kTint);
+        return m_c->tint;
+    }
+    /// Writes far and marks it dirty if the value changed.
+    void setFar(const ::helios::DVec3& value) {
+        if (::helios::refl::valuesEqual(m_c->far, value)) return;
+        m_c->far = value;
+        markBits(kFar);
+    }
+    /// In-place access to far; marks it dirty.
+    ::helios::DVec3& editFar() noexcept {
+        markBits(kFar);
+        return m_c->far;
+    }
+    /// Writes where and marks it dirty if the value changed.
+    void setWhere(const ::helios::refl::WorldPos& value) {
+        if (::helios::refl::valuesEqual(m_c->where, value)) return;
+        m_c->where = value;
+        markBits(kWhere);
+    }
+    /// In-place access to where; marks it dirty.
+    ::helios::refl::WorldPos& editWhere() noexcept {
+        markBits(kWhere);
+        return m_c->where;
+    }
+    /// Writes score and marks it dirty if the value changed.
+    void setScore(const ::helios::f64& value) {
+        if (::helios::refl::valuesEqual(m_c->score, value)) return;
+        m_c->score = value;
+        markBits(kScore);
+    }
+    /// In-place access to score; marks it dirty.
+    ::helios::f64& editScore() noexcept {
+        markBits(kScore);
+        return m_c->score;
+    }
+    /// Mutable access to the whole component; marks every replicated field dirty.
+    ::golden::all::Status& raw() noexcept {
         markBits(kAllFields);
         return *m_c;
     }

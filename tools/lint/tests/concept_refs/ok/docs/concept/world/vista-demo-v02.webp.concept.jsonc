@@ -1,0 +1,26 @@
+// Fixture sidecar.
+{
+  "image": "vista-demo-v02.webp",
+  "sha256": "f25e4d55da070610461db81cc7da3ac11a67750ddc5f154393bd97cbdb1cb7f5",
+  "title": "Demo concept",
+  "author": "Fixture author",
+  "created": "2026-10-04",
+  "source": {
+    "kind": "ai-assisted"
+  },
+  "tools": ["Krita 5.2"],
+  "ai": {
+    "tool": "Generator",
+    "model": "model-x 2.1",
+    "prompt": "Same scene, wider",
+    "inputs": [{"file": "world/vista-demo-v01.webp", "sha256": "8f49be4c7c846a5937d34b35c47d26c6a2a6f61a8eaa75d36647f78f749b33ba", "source": "ai-assisted"}]
+  },
+  "licence": "MIT",
+  "ipReview": "Fixture: original shapes only.",
+  "status": "directional",
+  "elements": [],
+  "phase": "Ph1",
+  "planRefs": ["07 §2.1 T01"],
+  "deviations": [],
+  "review": ""
+}

@@ -61,7 +61,7 @@ TEST_CASE("cli: help, version and usage errors") {
     Run help = cli({"--help"});
     CHECK(help.status == 0);
     CHECK(help.out.starts_with("usage: helios-schemac [options] <file.hschema>..."));
-    CHECK(help.out.find("planned generators (not yet implemented): luau, repl, sql, proto, editor, records, lint") != std::string::npos);
+    CHECK(help.out.find("planned generators (not yet implemented): proto, editor, records, docs") != std::string::npos);
     Run version = cli({"--version"});
     CHECK(version.status == 0);
     CHECK(version.out.starts_with("helios-schemac "));
@@ -77,11 +77,11 @@ TEST_CASE("cli: help, version and usage errors") {
     CHECK(none.err == "helios-schemac: error: no input files (see --help)\n");
     Run badGen = cli({"--emit=cpp,rust", "x.hschema"});
     CHECK(badGen.status == 2);
-    CHECK(badGen.err == "helios-schemac: error: unknown generator 'rust' (available: cpp, go, json)\n");
+    CHECK(badGen.err == "helios-schemac: error: unknown generator 'rust' (available: cpp, go, json, luau, sql, repl, lint)\n");
 }
 
 TEST_CASE("cli: planned generators fail with 'not yet implemented'") {
-    for (const char* gen : {"luau", "repl", "sql", "proto", "editor", "records", "lint", "docs"}) {
+    for (const char* gen : {"proto", "editor", "records", "docs"}) {
         Run r = cli({"--emit", std::string("cpp,") + gen, "x.hschema"});
         CHECK(r.status == 2);
         CHECK_MESSAGE(r.err.starts_with(std::string("helios-schemac: error: --emit ") + gen + " is not yet implemented"), r.err);
@@ -144,6 +144,103 @@ TEST_CASE("cli: generates outputs, lock and depfile; reruns are no-ops") {
     REQUIRE(q.status == 0);
     CHECK(q.out.starts_with("helios-schemac: updated schema lock "));
     CHECK(q.out.find("new type") == std::string::npos);
+}
+
+TEST_CASE("cli: --emit luau writes the scriptlib glue, schema.d.luau and the fuel defaults") {
+    const fs::path dir = freshDir("luau");
+    const fs::path schema = dir / "schemas" / "cli" / "lib.hschema";
+    writeFile(schema, "package cli.lib;\nscriptlib Tools @realm(server) {\n  fn ping(n: u32) -> u32 @script(cost=3) @pure;\n}\n");
+    const std::vector<std::string> args = {"-I", (dir / "schemas").string(), "--lock", (dir / "lock.jsonc").string(), "--emit", "cpp,luau",
+                                           "--cpp-out", (dir / "cpp").string(), "--luau-out", (dir / "luau").string(), schema.string()};
+    Run r = cli(args);
+    REQUIRE_MESSAGE(r.status == 0, r.err);
+    CHECK(r.out.find("  new fn cli.lib.Tools.ping (id ") != std::string::npos);
+    CHECK(r.out.find("1 file compiled, 6 outputs (6 updated)") != std::string::npos);
+    CHECK(readFile(dir / "cpp" / "cli" / "lib.luau.gen.h").find("bindTools(::helios::script::Binder& binder") != std::string::npos);
+    CHECK(fs::exists(dir / "cpp" / "cli" / "lib.luau.gen.cpp"));
+    CHECK(readFile(dir / "luau" / "schema.d.luau").find("ping: (n: number) -> number,") != std::string::npos);
+    CHECK(readFile(dir / "luau" / "fuel_costs.defaults.json").find("\"name\": \"cli.lib.Tools.ping\", \"cost\": 3, \"each\": 0") !=
+          std::string::npos);
+    CHECK(readFile(dir / "lock.jsonc").find("\"kind\": \"fn\"") != std::string::npos);
+}
+
+TEST_CASE("cli: --emit sql writes a snapshot and a migration stub per service schema") {
+    const fs::path dir = freshDir("sql");
+    const fs::path schema = dir / "schemas" / "cli" / "rows.hschema";
+    writeFile(schema, "package cli.rows;\nstruct Row @sql(schema=\"svc_cli\") { id: u32 @key; n: u8 }\n");
+    const fs::path lock = dir / "lock.jsonc";
+    std::vector<std::string> args = {"-I", (dir / "schemas").string(), "--lock", lock.string(), "--emit", "sql", "--sql-out",
+                                     (dir / "sql").string(), schema.string()};
+    Run first = cli(args);
+    REQUIRE_MESSAGE(first.status == 0, first.err);
+    CHECK(first.out.find("cli.rows.Row: SQL table svc_cli.row") != std::string::npos);
+    CHECK(readFile(dir / "sql" / "svc_cli" / "schema.sql").find("CREATE TABLE svc_cli.row (") != std::string::npos);
+    CHECK(readFile(dir / "sql" / "svc_cli" / "migration.sql").find("-- +goose Up\n-- cli.rows.Row") != std::string::npos);
+    // The next run diffs against the updated lock; --sql-baseline replays against the first one.
+    writeFile(dir / "v1.lock.jsonc", readFile(lock));
+    writeFile(schema, "package cli.rows;\nstruct Row @sql(schema=\"svc_cli\") { id: u32 @key; n: u8; m: u8 }\n");
+    Run second = cli(args);
+    REQUIRE_MESSAGE(second.status == 0, second.err);
+    CHECK(readFile(dir / "sql" / "svc_cli" / "migration.sql").find("ALTER TABLE svc_cli.row ADD COLUMN m SMALLINT") != std::string::npos);
+    CHECK(cli(args).status == 0);
+    CHECK(readFile(dir / "sql" / "svc_cli" / "migration.sql").find("No changes since the baseline lock") != std::string::npos);
+    args.insert(args.begin(), {"--sql-baseline", (dir / "v1.lock.jsonc").string()});
+    REQUIRE(cli(args).status == 0);
+    CHECK(readFile(dir / "sql" / "svc_cli" / "migration.sql").find("ADD COLUMN m SMALLINT") != std::string::npos);
+    // The header lists the schema files sorted, whatever order the command line gives them in.
+    const fs::path extra = dir / "schemas" / "cli" / "extra.hschema";
+    writeFile(extra, "package cli.extra;\nstruct Extra @sql(schema=\"svc_cli\") { id: u32 @key }\n");
+    for (const auto& [a, b] : {std::pair{schema, extra}, std::pair{extra, schema}}) {
+        const Run run = cli({"-I", (dir / "schemas").string(), "--lock", lock.string(), "--emit", "sql", "--sql-out", (dir / "sql").string(),
+                             a.string(), b.string()});
+        REQUIRE_MESSAGE(run.status == 0, run.err);
+        CHECK(readFile(dir / "sql" / "svc_cli" / "schema.sql").starts_with(
+            "-- Snapshot of svc_cli: generated by helios-schemac --emit sql from cli/extra.hschema, cli/rows.hschema. DO NOT EDIT.\n"));
+    }
+}
+
+TEST_CASE("cli: --emit repl writes descriptors and full-state codecs next to the C++") {
+    const fs::path dir = freshDir("repl");
+    const fs::path schema = dir / "schemas" / "cli" / "mover.hschema";
+    writeFile(schema, "package cli.mover;\ncomponent Mover replicate(all) { v: vec3f @quant(range=±8, bits=10) }\n");
+    Run r = cli({"-I", (dir / "schemas").string(), "--emit", "cpp,repl", "--cpp-out", (dir / "cpp").string(), "--quiet", schema.string()});
+    REQUIRE_MESSAGE(r.status == 0, r.err);
+    CHECK(readFile(dir / "cpp" / "cli" / "mover.repl.gen.h").find("struct RepOf<::cli::mover::Mover>") != std::string::npos);
+    CHECK(readFile(dir / "cpp" / "cli" / "mover.repl.gen.cpp").find("quantizeRange(c.v.x, -8.0, 8.0, 10)") != std::string::npos);
+    writeFile(schema, "package cli.mover;\ncomponent Mover replicate(all) { v: vec3f @quant(range=±8, bits=99) }\n");
+    Run bad = cli({"-I", (dir / "schemas").string(), "--emit", "repl", "--cpp-out", (dir / "cpp").string(), schema.string()});
+    CHECK(bad.status == 1);
+    CHECK(bad.err.find("bits= needs 1 to 32") != std::string::npos);
+}
+
+TEST_CASE("cli: --emit lint writes the report and prints the budget warnings") {
+    const fs::path dir = freshDir("lint");
+    const fs::path schema = dir / "say.hschema";
+    writeFile(schema, "package cli.say;\nrpc Say(text: string) client->server reliable @ratelimit(1/s) @intent(chat);\n");
+    const fs::path report = dir / "out" / "lint.json";
+    Run r = cli({"--emit", "lint", "--lint-out", report.string(), "--quiet", schema.string()});
+    REQUIRE_MESSAGE(r.status == 0, r.err);
+    CHECK(r.err.find("warning: [size.unbounded] 'Say.text'") != std::string::npos);
+    CHECK(readFile(report).find(R"({"rpc": "cli.say.Say", "ratelimit": "1/s", "intent": "chat", "reliable": true})") != std::string::npos);
+    // A failing gate still writes its report (CI keeps it); the other outputs of a failed run are not written.
+    fs::remove(report);
+    const fs::path cpp = dir / "cpp";
+    Run strict = cli({"--emit", "lint,cpp", "--cpp-out", cpp.string(), "--lint-out", report.string(), "--Werror", schema.string()});
+    CHECK(strict.status == 1);
+    CHECK(strict.err.find("error: [size.unbounded] 'Say.text'") != std::string::npos);
+    REQUIRE(fs::exists(report));
+    CHECK(readFile(report).find(R"("rule": "size.unbounded")") != std::string::npos);
+    CHECK_FALSE(fs::exists(cpp));
+    // The report lists the run's other warnings that --Werror made errors (here: no --lock).
+    CHECK(strict.err.find("error: no --lock file given") != std::string::npos);
+    CHECK_MESSAGE(readFile(report).find(R"("rule": "schemac", "file": "", "line": 0, "col": 0, "message": "no --lock file given)") != std::string::npos,
+                  readFile(report));
+    // A run that fails before the lint pass (a schema error) has no report, and leaves no older one behind.
+    writeFile(schema, "package cli.say;\nstruct A { x: f33 }\n");
+    Run broken = cli({"--emit", "lint", "--lint-out", report.string(), "--quiet", schema.string()});
+    CHECK(broken.status == 1);
+    CHECK(broken.err.find("unknown type 'f33'") != std::string::npos);
+    CHECK_FALSE(fs::exists(report));
 }
 
 TEST_CASE("cli: schema errors exit 1 with file:line:col and a source excerpt") {

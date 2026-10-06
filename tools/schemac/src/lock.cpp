@@ -18,8 +18,29 @@ std::string lockKindOf(const Decl* d) {
     case DeclKind::Enum: return "enum";
     case DeclKind::Flags: return "flags";
     case DeclKind::Variant: return "variant";
+    case DeclKind::ScriptFn: return "fn";
     default: return "struct";
     }
+}
+
+/// [A-Za-z_][A-Za-z0-9_]*, the lexer's identifiers: lock field and alternative names come from them.
+bool isLockIdentifier(std::string_view s) {
+    auto start = [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'; };
+    if (s.empty() || !start(s.front())) return false;
+    return std::all_of(s.begin(), s.end(), [&](char c) { return start(c) || (c >= '0' && c <= '9'); });
+}
+
+/// "svc_<service>.<table>" as sema builds it from @sql: lowercase letters, digits and '_', each part
+/// at most 63 bytes, the table starting with a letter.
+bool isSqlTable(std::string_view s) {
+    auto part = [](std::string_view p) {
+        return !p.empty() && p.size() <= 63 &&
+               std::all_of(p.begin(), p.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'; });
+    };
+    const usize dot = s.find('.');
+    if (dot == std::string_view::npos) return false;
+    const std::string_view schema = s.substr(0, dot), table = s.substr(dot + 1);
+    return part(schema) && schema.starts_with("svc_") && schema.size() > 4 && part(table) && table.front() >= 'a' && table.front() <= 'z';
 }
 
 /// Loader with path-qualified error messages.
@@ -99,11 +120,18 @@ public:
             if (!yyjson_is_obj(v)) return fail(path, "expected an object");
             LockType t;
             if (!readU32(v, "id", path, t.id) || !readString(v, "kind", path, t.kind) || !readU32(v, "version", path, t.version, false) ||
-                !readString(v, "base", path, t.base, false) || !readStrings(v, "was", path, t.was) ||
+                !readString(v, "base", path, t.base, false) || !readStrings(v, "was", path, t.was) || !readString(v, "sql", path, t.sql, false) ||
                 !readU32(v, "nextField", path, t.nextField, false))
                 return false;
-            if (t.kind != "struct" && t.kind != "enum" && t.kind != "flags" && t.kind != "variant")
+            if (t.kind != "struct" && t.kind != "enum" && t.kind != "flags" && t.kind != "variant" && t.kind != "fn")
                 return fail(path + ".kind", std::format("unknown kind '{}'", t.kind));
+            if (t.kind == "fn") { // a scriptlib fn: only its binding id (02 §3.5 `luau`, §7.4)
+                for (const char* key : {"fields", "values", "nextField", "was", "version", "base", "sql"}) {
+                    if (yyjson_obj_get(v, key)) return fail(path, std::format("a fn entry has only 'id' and 'kind' (found '{}')", key));
+                }
+                out.types.emplace(name, std::move(t));
+                continue;
+            }
             const char* listKey = t.kind == "variant" ? "alternatives" : "fields";
             if (yyjson_val* fields = yyjson_obj_get(v, listKey)) {
                 if (!yyjson_is_arr(fields)) return fail(path + "." + listKey, "expected an array");
@@ -138,15 +166,26 @@ public:
     /// Detects hand edits: duplicate ids, deleted entries, counters behind the ids.
     bool validate(const Lock& lock) {
         std::map<u32, std::string> typeIds;
+        std::map<std::string, std::string> tables;
         bool ok = true;
         for (const auto& [name, t] : lock.types) {
             const std::string path = "types." + name;
             if (t.id == 0) ok = fail(path, "type id 0 is invalid");
             if (auto [it, fresh] = typeIds.emplace(t.id, name); !fresh)
                 ok = fail(path, std::format("type id {} is also used by '{}'", t.id, it->second));
+            if (!t.sql.empty()) {
+                if (!isSqlTable(t.sql)) ok = fail(path + ".sql", std::format("'{}' is not a table of a service schema (svc_<service>.<table>)", t.sql));
+                if (auto [it, fresh] = tables.emplace(t.sql, name); !fresh)
+                    ok = fail(path, std::format("the table {} is also recorded by '{}'", t.sql, it->second));
+            }
             std::set<u32> ids;
             std::set<std::string> liveNames;
             for (const LockField& f : t.fields) {
+                // Names and types reach generated code (SQL column names, comments): only what the
+                // schema language can produce is accepted.
+                if (!isLockIdentifier(f.name)) ok = fail(path, std::format("'{}' is not an identifier", f.name));
+                if (std::any_of(f.type.begin(), f.type.end(), [](char ch) { return static_cast<unsigned char>(ch) < 0x20 || ch == 0x7f; }))
+                    ok = fail(path, std::format("the type of '{}' contains a control character", f.name));
                 if (f.id == 0) ok = fail(path, std::format("'{}' has id 0", f.name));
                 if (!ids.insert(f.id).second) ok = fail(path, std::format("id {} is used twice", f.id));
                 if (f.id >= t.nextField) ok = fail(path, std::format("id {} of '{}' is not below nextField {}", f.id, f.name, t.nextField));
@@ -209,7 +248,7 @@ public:
         for (const auto& [name, t] : L.types) m_used.insert(t.id);
         std::map<std::string, const Decl*> claimedBy;
         for (Decl* d : S.decls) {
-            if (!d->emitted || !d->isLockable()) continue;
+            if (!d->emitted || (!d->isLockable() && d->kind != DeclKind::ScriptFn)) continue;
             LockType* lt = findOrCreate(d);
             if (!lt) continue;
             if (auto [it, fresh] = claimedBy.emplace(d->qualifiedName, d); !fresh) {
@@ -219,9 +258,37 @@ public:
             d->typeId = lt->id;
             const std::string kind = lockKindOf(d);
             if (lt->kind != kind) {
-                D.error(d->loc, std::format("'{}' was a {} (lock id {}); a type cannot change kind — declare a new type instead",
-                                            d->qualifiedName, lt->kind, lt->id));
+                if (kind == "fn" || lt->kind == "fn")
+                    D.error(d->loc, std::format("'{}' was a {} (lock id {}) and is now a {}; a lock entry cannot change between a scriptlib "
+                                                "fn and a type — use another name",
+                                                d->qualifiedName, lt->kind, lt->id, kind));
+                else
+                    D.error(d->loc, std::format("'{}' was a {} (lock id {}); a type cannot change kind — declare a new type instead",
+                                                d->qualifiedName, lt->kind, lt->id));
                 continue;
+            }
+            if (d->kind == DeclKind::ScriptFn) continue; // a binding id only
+            if (!d->sqlTable.empty()) {
+                // The table is the type's SQL identity (--emit sql diffs against it): recorded once, never moved.
+                const auto owner = std::find_if(L.types.begin(), L.types.end(),
+                                                [&](const auto& e) { return &e.second != lt && e.second.sql == d->sqlTable; });
+                if (lt->sql.empty() && owner != L.types.end()) {
+                    // A removed type (or one renamed without @was) still owns its table: a new type taking it
+                    // over would have the migration stub rewrite that table's columns by unrelated field ids.
+                    D.error(d->loc, std::format("the table {} belongs to '{}' (lock id {}); rename that type with @was to keep its table, "
+                                                "or store '{}' in a new table",
+                                                d->sqlTable, owner->first, owner->second.id, d->qualifiedName));
+                } else if (lt->sql.empty()) {
+                    lt->sql = d->sqlTable;
+                    C.push_back(std::format("{}: SQL table {}", d->qualifiedName, d->sqlTable));
+                } else if (lt->sql != d->sqlTable) {
+                    // The common cause is a @was rename: the default table name follows the type's name.
+                    const usize dot = lt->sql.find('.');
+                    D.error(d->loc, std::format("'{}' is stored in the table {} (lock id {}); a table cannot move to {} — keep it with "
+                                                "@sql(schema=\"{}\", table=\"{}\"), or declare a new type and migrate the rows by hand",
+                                                d->qualifiedName, lt->sql, lt->id, d->sqlTable, lt->sql.substr(0, dot),
+                                                dot == std::string::npos ? lt->sql : lt->sql.substr(dot + 1)));
+                }
             }
             if (d->version < lt->version) {
                 D.error(d->loc, std::format("@version of '{}' decreased from {} to {}", d->qualifiedName, lt->version, d->version));
@@ -265,7 +332,7 @@ private:
         t.kind = lockKindOf(d);
         t.version = d->version;
         if (d->kind == DeclKind::Enum || d->kind == DeclKind::Flags) t.base = std::string(primName(d->underlying));
-        C.push_back(std::format("new type {} (id {})", d->qualifiedName, t.id));
+        C.push_back(std::format("new {} {} (id {})", d->kind == DeclKind::ScriptFn ? "fn" : "type", d->qualifiedName, t.id));
         return &L.types.emplace(d->qualifiedName, std::move(t)).first->second;
     }
 
@@ -508,7 +575,13 @@ std::string writeLock(const Lock& lock) {
             for (const std::string& w : t.was) o.str(w);
             o.endArray();
         }
-        if (t.kind == "enum" || t.kind == "flags") {
+        if (!t.sql.empty()) {
+            o.key("sql");
+            o.str(t.sql);
+        }
+        if (t.kind == "fn") {
+            // Binding id only: fuel costs are calibrated per binding id (02 §7.4), nothing else is locked.
+        } else if (t.kind == "enum" || t.kind == "flags") {
             o.key("values");
             o.beginArray();
             for (const LockEnumValue& v : t.values) {

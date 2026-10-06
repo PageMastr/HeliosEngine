@@ -1,0 +1,4 @@
+helios_runtime_link_group_modules|0000000000004000|   T  |              FUNC|0000000000000008|     |.text
+mi_malloc|0000000000004100|   T  |              FUNC|0000000000000008|     |.text
+ZSTD_compress|0000000000004200|   T  |              FUNC|0000000000000008|     |.text
+_ZN3JPH7Factory9sInstanceE|0000000000004300|   D  |            OBJECT|0000000000000008|     |.data

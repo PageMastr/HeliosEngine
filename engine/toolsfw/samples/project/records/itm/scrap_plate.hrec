@@ -1,0 +1,13 @@
+{
+  "$rid": 5999729569056161793,
+  "$name": "itm/scrap_plate",
+  "$comment": "Salvaged hull plating (UI test fixture record).",
+  "name": "loc:item.scrap_plate.name",
+  "stackMax": 50,
+  "volume": 0.25,
+  "mass": 12.5,
+  "baseAttrs": {
+    "armor": 4
+  },
+  "rarity": "Uncommon"
+}

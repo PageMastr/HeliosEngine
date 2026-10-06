@@ -1,0 +1,98 @@
+[
+  {
+    "directory": "/build",
+    "command": "/usr/bin/g++ -I/src/engine/core/include -O2 -Wall -ffp-contract=off -mavx2 -mbmi -mbmi2 -mlzcnt -mpopcnt -mf16c -mno-fma -mfpmath=sse -ffp-contract=off -o x/CMakeFiles/helios_core.dir/engine/core/src/memory.cpp.o -c /src/engine/core/src/memory.cpp",
+    "file": "/src/engine/core/src/memory.cpp",
+    "output": "x/CMakeFiles/helios_core.dir/engine/core/src/memory.cpp.o"
+  },
+  {
+    "directory": "/build",
+    "command": "/usr/bin/gcc -I/src/engine/core/include -O2 -Wall -ffp-contract=off -march=x86-64 -mtune=generic -mno-sse3 -mno-ssse3 -mno-sse4.1 -mno-sse4.2 -mno-popcnt -mno-avx -mno-avx2 -mno-fma -mno-bmi -mno-bmi2 -mno-lzcnt -mno-f16c -mno-movbe -mno-avx512f -mno-cx16 -fno-stack-protector -fno-sanitize=all -o x/CMakeFiles/helios_core_cpugate.dir/engine/core/src/cpugate/cpu_gate.c.o -c /src/engine/core/src/cpugate/cpu_gate.c",
+    "file": "/src/engine/core/src/cpugate/cpu_gate.c",
+    "output": "x/CMakeFiles/helios_core_cpugate.dir/engine/core/src/cpugate/cpu_gate.c.o"
+  },
+  {
+    "directory": "/build",
+    "command": "/usr/bin/gcc -I/src/engine/core/include -O2 -Wall -ffp-contract=off -march=x86-64 -mtune=generic -mno-sse3 -mno-ssse3 -mno-sse4.1 -mno-sse4.2 -mno-popcnt -mno-avx -mno-avx2 -mno-fma -mno-bmi -mno-bmi2 -mno-lzcnt -mno-f16c -mno-movbe -mno-avx512f -mno-cx16 -fno-stack-protector -fno-sanitize=all -o x/CMakeFiles/helios_core_cpugate_hook.dir/engine/core/src/platform/posix/cpu_gate_hook.c.o -c /src/engine/core/src/platform/posix/cpu_gate_hook.c",
+    "file": "/src/engine/core/src/platform/posix/cpu_gate_hook.c",
+    "output": "x/CMakeFiles/helios_core_cpugate_hook.dir/engine/core/src/platform/posix/cpu_gate_hook.c.o"
+  },
+  {
+    "directory": "/build",
+    "command": "/usr/bin/g++ -I/src/engine/core/include -O2 -w -mavx2 -mbmi -mbmi2 -mlzcnt -mpopcnt -mf16c -mno-fma -mfpmath=sse -ffp-contract=off -o x/CMakeFiles/tp_jolt.dir/third_party/jolt/Jolt/Core/Memory.cpp.o -c /src/third_party/jolt/Jolt/Core/Memory.cpp",
+    "file": "/src/third_party/jolt/Jolt/Core/Memory.cpp",
+    "output": "x/CMakeFiles/tp_jolt.dir/third_party/jolt/Jolt/Core/Memory.cpp.o"
+  },
+  {
+    "directory": "/build",
+    "command": "/usr/bin/g++ -I/src/engine/core/include -O2 -Wall -ffp-contract=off -mavx2 -mbmi -mbmi2 -mlzcnt -mpopcnt -mf16c -mno-fma -mfpmath=sse -ffp-contract=off -o x/CMakeFiles/helios_pcg.dir/engine/pcg/src/kernels/vm_avx2.cpp.o -c /src/engine/pcg/src/kernels/vm_avx2.cpp",
+    "file": "/src/engine/pcg/src/kernels/vm_avx2.cpp",
+    "output": "x/CMakeFiles/helios_pcg.dir/engine/pcg/src/kernels/vm_avx2.cpp.o"
+  },
+  {
+    "directory": "/build",
+    "command": "/usr/bin/g++ -I/src/engine/core/include -O2 -Wall -ffp-contract=off -march=x86-64 -mtune=generic -mno-sse3 -mno-ssse3 -mno-sse4.1 -mno-sse4.2 -mno-popcnt -mno-avx -mno-avx2 -mno-fma -mno-bmi -mno-bmi2 -mno-lzcnt -mno-f16c -mno-movbe -mno-avx512f -mno-cx16 -o x/CMakeFiles/helios_core.base.dir/engine/core/src/memory.cpp.o -c /src/engine/core/src/memory.cpp",
+    "file": "/src/engine/core/src/memory.cpp",
+    "output": "x/CMakeFiles/helios_core.base.dir/engine/core/src/memory.cpp.o"
+  },
+  {
+    "directory": "/build",
+    "command": "/usr/bin/gcc -I/src/engine/core/include -O2 -w -march=x86-64 -mtune=generic -mno-sse3 -mno-ssse3 -mno-sse4.1 -mno-sse4.2 -mno-popcnt -mno-avx -mno-avx2 -mno-fma -mno-bmi -mno-bmi2 -mno-lzcnt -mno-f16c -mno-movbe -mno-avx512f -mno-cx16 -o x/CMakeFiles/tp_zstd.base.dir/third_party/zstd/lib/decompress/huf_decompress.c.o -c /src/third_party/zstd/lib/decompress/huf_decompress.c",
+    "file": "/src/third_party/zstd/lib/decompress/huf_decompress.c",
+    "output": "x/CMakeFiles/tp_zstd.base.dir/third_party/zstd/lib/decompress/huf_decompress.c.o"
+  },
+  {
+    "directory": "/build",
+    "command": "/usr/bin/g++ -I/src/engine/core/include -O2 -Wall -ffp-contract=off -march=x86-64 -mtune=generic -mno-sse3 -mno-ssse3 -mno-sse4.1 -mno-sse4.2 -mno-popcnt -mno-avx -mno-avx2 -mno-fma -mno-bmi -mno-bmi2 -mno-lzcnt -mno-f16c -mno-movbe -mno-avx512f -mno-cx16 -o x/CMakeFiles/fx_launcher.dir/apps/launcher/main.cpp.o -c /src/apps/launcher/main.cpp",
+    "file": "/src/apps/launcher/main.cpp",
+    "output": "x/CMakeFiles/fx_launcher.dir/apps/launcher/main.cpp.o"
+  },
+  {
+    "directory": "C:\\b",
+    "command": "C:\\VS\\cl.exe /nologo /TP /W0 /arch:AVX2 /fp:precise /Fothird_party\\CMakeFiles\\tp_jolt.dir\\third_party\\jolt\\Jolt\\Core\\Memory.cpp.obj /c C:\\src\\third_party\\jolt\\Jolt\\Core\\Memory.cpp",
+    "file": "C:\\src\\third_party\\jolt\\Jolt\\Core\\Memory.cpp",
+    "output": "third_party\\CMakeFiles\\tp_jolt.dir\\third_party\\jolt\\Jolt\\Core\\Memory.cpp.obj"
+  },
+  {
+    "directory": "C:\\b",
+    "command": "C:\\VS\\cl.exe /nologo /TP /W4 /fp:precise /Fothird_party\\CMakeFiles\\helios_core.base.dir\\engine\\core\\src\\memory.cpp.obj /c C:\\src\\engine\\core\\src\\memory.cpp",
+    "file": "C:\\src\\engine\\core\\src\\memory.cpp",
+    "output": "third_party\\CMakeFiles\\helios_core.base.dir\\engine\\core\\src\\memory.cpp.obj"
+  },
+  {
+    "directory": "C:\\b",
+    "command": "C:\\VS\\clang-cl.exe /nologo /TP /W4 /arch:AVX2 /fp:precise -mbmi -mbmi2 -mlzcnt -mpopcnt -mf16c -mno-fma /clang:-ffp-contract=off /Fothird_party\\CMakeFiles\\helios_math.dir\\engine\\math\\src\\noise.cpp.obj /c C:\\src\\engine\\math\\src\\noise.cpp",
+    "file": "C:\\src\\engine\\math\\src\\noise.cpp",
+    "output": "third_party\\CMakeFiles\\helios_math.dir\\engine\\math\\src\\noise.cpp.obj"
+  },
+  {
+    "directory": "C:\\b",
+    "command": "C:\\VS\\rc.exe /nologo /foapps\\CMakeFiles\\fx_launcher.dir\\helios_manifest.rc.res C:\\b\\helios_generated\\helios_manifest.rc",
+    "file": "C:\\b\\helios_generated\\helios_manifest.rc",
+    "output": "apps\\CMakeFiles\\fx_launcher.dir\\helios_manifest.rc.res"
+  },
+  {
+    "directory": "C:\\b",
+    "command": "C:\\VS\\cl.exe /nologo /TC /W4 /GS- /Foengine\\core\\CMakeFiles\\helios_core_cpugate_hook.dir\\src\\platform\\win32\\cpu_gate_hook.c.obj /c C:\\src\\engine\\core\\src\\platform\\win32\\cpu_gate_hook.c",
+    "file": "C:\\src\\engine\\core\\src\\platform\\win32\\cpu_gate_hook.c",
+    "output": "engine\\core\\CMakeFiles\\helios_core_cpugate_hook.dir\\src\\platform\\win32\\cpu_gate_hook.c.obj"
+  },
+  {
+    "directory": "C:\\b",
+    "command": "C:\\VS\\clang-cl.exe /nologo /TC /W4 /GS- -fno-sanitize=all /Foengine\\core\\CMakeFiles\\helios_core_cpugate.dir\\src\\cpugate\\cpu_gate.c.obj /c C:\\src\\engine\\core\\src\\cpugate\\cpu_gate.c",
+    "file": "C:\\src\\engine\\core\\src\\cpugate\\cpu_gate.c",
+    "output": "engine\\core\\CMakeFiles\\helios_core_cpugate.dir\\src\\cpugate\\cpu_gate.c.obj"
+  },
+  {
+    "directory": "/build",
+    "command": "/usr/bin/clang -I/src/engine/core/include -g -fsanitize=address,undefined -fno-omit-frame-pointer -march=x86-64 -mtune=generic -mno-sse3 -mno-ssse3 -mno-sse4.1 -mno-sse4.2 -mno-popcnt -mno-avx -mno-avx2 -mno-fma -mno-bmi -mno-bmi2 -mno-lzcnt -mno-f16c -mno-movbe -mno-avx512f -mno-cx16 -fno-stack-protector -fno-sanitize=all -o x/CMakeFiles/helios_core_cpugate.dir/engine/core/src/cpugate/cpu_gate.c.o -c /src/engine/core/src/cpugate/cpu_gate.c",
+    "file": "/src/engine/core/src/cpugate/cpu_gate.c",
+    "output": "x/CMakeFiles/helios_core_cpugate.dir/engine/core/src/cpugate/cpu_gate.c.o"
+  },
+  {
+    "directory": "C:\\b",
+    "command": "C:\\VS\\cl.exe /nologo /TC /W4 /Foengine\\core\\CMakeFiles\\helios_core_cpugate.dir\\src\\cpugate\\cpu_gate.c.obj /c C:\\src\\engine\\core\\src\\cpugate\\cpu_gate.c",
+    "file": "C:\\src\\engine\\core\\src\\cpugate\\cpu_gate.c",
+    "output": "engine\\core\\CMakeFiles\\helios_core_cpugate.dir\\src\\cpugate\\cpu_gate.c.obj"
+  }
+]

@@ -10,9 +10,11 @@
 #include "helios/core/log.h"
 #include "kernels/vm_kernels.h"
 
-HELIOS_LOG_CHANNEL(LogPcg, "Pcg");
-
 namespace helios::pcg {
+
+// In namespace helios: a log channel is an inline variable, and a modular build exports only Helios
+// state from helios_runtime (symbol audit R1).
+HELIOS_LOG_CHANNEL(LogPcg, "Pcg");
 
 namespace {
 

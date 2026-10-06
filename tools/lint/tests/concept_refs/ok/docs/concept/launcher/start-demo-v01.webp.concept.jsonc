@@ -1,0 +1,22 @@
+// Fixture sidecar.
+{
+  "image": "start-demo-v01.webp",
+  "sha256": "fa5b1e2a4070eaf958ff2defaaa859ab9a23300e207156b7ad07efb8f3320380",
+  "title": "Demo concept",
+  "author": "Fixture author",
+  "created": "2026-10-04",
+  "source": {
+    "kind": "cc0",
+    "url": "https://example.org/cc0/start"
+  },
+  "tools": [],
+  "ai": null,
+  "licence": "CC0-1.0",
+  "ipReview": "Fixture: original shapes only.",
+  "status": "directional",
+  "elements": [],
+  "phase": "Ph1",
+  "planRefs": ["07 §2.1 T01"],
+  "deviations": [],
+  "review": ""
+}

@@ -120,7 +120,8 @@ def check(root: Path) -> tuple[list[str], list[str], int, int]:
             failures.append(f"Plan-Rev above the plan's revision: {m}/README.md (Plan-Rev {n} > PLAN-REV {rev})")
     if no_readme:
         notes.append("no README, so no Plan-Rev required: " + ", ".join(no_readme))
-    absent = [m for m in row if m not in mods]
+    # A row entry that is not a module directory (content/, WP-0.20) is in the tree when it exists.
+    absent = [m for m in row if m not in mods and not (root / m).is_dir()]
     if absent:
         notes.append("named in the tree inventory but not in this tree (in progress elsewhere?): " + ", ".join(absent))
     line = row_line(status)

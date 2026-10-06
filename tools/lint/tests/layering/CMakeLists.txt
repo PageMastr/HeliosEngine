@@ -1,5 +1,6 @@
-# Module-layering fixture (tools/lint/CMakeLists.txt runs it once per HELIOS_FIXTURE_CASE). It uses the
-# real cmake/HeliosModule.cmake and a miniature copy of engine/CMakeLists.txt's table. Good cases
+# Module-layering fixture (tools/lint/lint_tests.cmake runs it once per HELIOS_FIXTURE_CASE, in the shipping
+# and the modular link flavour: -DHELIOS_MODULAR=OFF|ON). It uses the real cmake/HeliosModule.cmake and a
+# miniature copy of engine/CMakeLists.txt's table. Good cases
 # print HELIOS_FIXTURE_CONFIGURE_OK after the checks; bad cases must stop configure with the
 # "helios layering:" diagnostic the test expects. LANGUAGES NONE keeps it fast: no compiler is
 # probed, and the fixture stops before generation (its sources are never compiled).
@@ -10,6 +11,11 @@ if(NOT HELIOS_SOURCE_DIR)
   message(FATAL_ERROR "pass -DHELIOS_SOURCE_DIR=<repository root>")
 endif()
 set(HELIOS_BUILD_TESTS OFF)
+if(HELIOS_FIXTURE_CASE STREQUAL "isa_base_windows")
+  # The Windows branches of the modular ISA integration (cmake/HeliosModular.cmake,
+  # helios_modular_defines_own_copy) on any host: the fixture compiles nothing.
+  set(WIN32 ON)
+endif()
 list(APPEND CMAKE_MODULE_PATH ${HELIOS_SOURCE_DIR}/cmake)
 include(HeliosModule)
 
@@ -28,8 +34,14 @@ helios_declare_module(core 1 HEADLESS)
 helios_declare_module(math 1 HEADLESS)
 helios_declare_module(reflect 2 HEADLESS)
 helios_declare_module(asset 2 HEADLESS PEERS reflect)
-helios_declare_module(ecs 2 HEADLESS PEERS reflect)
-helios_declare_module(app 2 PEERS reflect)
+if(CASE STREQUAL "cycle" OR CASE STREQUAL "bridge_cycle")
+  # Declared peers of each other, so only the cycle check can catch it.
+  helios_declare_module(ecs 2 HEADLESS PEERS reflect app)
+  helios_declare_module(app 2 PEERS reflect ecs)
+else()
+  helios_declare_module(ecs 2 HEADLESS PEERS reflect)
+  helios_declare_module(app 2 PEERS reflect)
+endif()
 helios_declare_module(physics 3 HEADLESS)
 helios_declare_module(net 3 HEADLESS)
 helios_declare_module(render 3)
@@ -40,6 +52,10 @@ helios_declare_module(toolsfw 4 EDITOR_ONLY PEERS world assetpipe)
 set(order core math reflect asset ecs app physics net render world presentation assetpipe toolsfw)
 if(CASE STREQUAL "bad_order")
   set(order core math ecs reflect asset app physics net render world presentation assetpipe toolsfw)
+elseif(CASE STREQUAL "explicit_layer")
+  list(APPEND order zonehost)
+elseif(CASE STREQUAL "unordered")
+  list(REMOVE_ITEM order net) # declared, built and depended on, but missing from the order
 endif()
 set_property(GLOBAL PROPERTY HELIOS_MODULE_ORDER ${order})
 
@@ -59,9 +75,6 @@ if(CASE STREQUAL "same_layer")
   helios_module(ecs SOURCES ${src} DEPS helios::core helios::reflect)
   helios_module(app SOURCES ${src} DEPS helios::core helios::ecs) # ecs is not a listed peer of app
 elseif(CASE STREQUAL "cycle")
-  # Declared peers of each other, so only the cycle check can catch it.
-  helios_declare_module(ecs 2 HEADLESS PEERS reflect app)
-  helios_declare_module(app 2 PEERS reflect ecs)
   helios_module(ecs SOURCES ${src} DEPS helios::core helios::app)
   helios_module(app SOURCES ${src} DEPS helios::core helios::ecs)
 else()
@@ -82,6 +95,16 @@ elseif(CASE STREQUAL "genex_nested_condition")
 elseif(CASE STREQUAL "genex_if")
   helios_module(net SOURCES ${src} DEPS helios::core
     PRIVATE_DEPS "$<IF:$<AND:$<BOOL:0>,$<CONFIG:Debug>>,helios::tp::yyjson,helios::tp::sdl3>")
+elseif(CASE STREQUAL "flag_mismatch")
+  # The table does not make net EDITOR_ONLY; the call may not add the flag.
+  helios_module(net EDITOR_ONLY SOURCES ${src} DEPS helios::core)
+elseif(CASE STREQUAL "peers_mismatch")
+  # net's row lists no peers; the call may not grant itself physics (same layer).
+  helios_module(net PEERS physics SOURCES ${src} DEPS helios::core helios::physics)
+elseif(CASE STREQUAL "redeclared_row")
+  # A second row for net, with a peer the table does not give it.
+  helios_declare_module(net 3 HEADLESS PEERS physics)
+  helios_module(net SOURCES ${src} DEPS helios::core helios::physics)
 elseif(CASE STREQUAL "headless_graphics_tp")
   target_link_libraries(fx_helper INTERFACE helios::tp::sdl3)
   helios_module(net SOURCES ${src} DEPS helios::core PRIVATE_DEPS fx_helper)
@@ -113,6 +136,23 @@ elseif(CASE STREQUAL "explicit_layer")
   helios_module(zonehost HEADLESS LAYER 4 PEERS world SOURCES ${src} DEPS helios::world)
 endif()
 
+# Module edges that only a non-module target carries (an INTERFACE or STATIC helper between two
+# modules) are module edges too.
+if(CASE STREQUAL "bridge_upward")
+  add_library(fx_bridge INTERFACE) # reflect (L2) -> fx_bridge -> world (L4); also a cycle through ecs
+  target_link_libraries(fx_bridge INTERFACE helios::world)
+  target_link_libraries(helios_reflect PRIVATE fx_bridge)
+elseif(CASE STREQUAL "bridge_same_layer")
+  add_library(fx_bridge INTERFACE) # net -> fx_bridge -> physics, both L3, not peers
+  target_link_libraries(fx_bridge INTERFACE helios::physics)
+  target_link_libraries(helios_net PRIVATE fx_bridge)
+elseif(CASE STREQUAL "bridge_cycle")
+  add_library(fx_bridge STATIC ${src}) # ecs -> fx_bridge -> app -> ecs (declared peers): a cycle
+  target_link_libraries(fx_bridge PRIVATE helios::app)
+  target_link_libraries(helios_ecs PRIVATE fx_bridge)
+  target_link_libraries(helios_app PRIVATE helios::ecs)
+endif()
+
 # Executables. CPU gate off: the fixture has no engine/core hook target.
 if(CASE STREQUAL "editor_only_client")
   helios_executable(fx-client ROLE client NO_CPU_GATE SOURCES ${src} DEPS helios::presentation helios::toolsfw)
@@ -126,8 +166,99 @@ elseif(CASE STREQUAL "server_graphics")
 else()
   helios_executable(fx-cell ROLE cell NO_CPU_GATE SOURCES ${src} DEPS helios::world)
 endif()
+if(CASE STREQUAL "editor_only_gateway")
+  helios_executable(fx-gateway ROLE gateway NO_CPU_GATE SOURCES ${src} DEPS helios::net helios::assetpipe)
+endif()
+if(CASE STREQUAL "plain_executable")
+  add_subdirectory(apps/rogue) # add_executable() under apps/, outside every role check
+elseif(CASE STREQUAL "unknown_role")
+  add_subdirectory(apps/zonehost) # helios_executable() without ROLE where no role can be inferred
+endif()
 # Tools may link editor-only modules.
 helios_executable(fx-cook ROLE tool NO_CPU_GATE SOURCES ${src} DEPS helios::assetpipe)
+if(CASE STREQUAL "direct_objects")
+  # Modular builds (HELIOS_MODULAR=ON): the module's object library instead of helios::core would put a
+  # second copy of core's code and state into the tool, beside helios_runtime's.
+  target_link_libraries(fx-cook PRIVATE helios_core)
+elseif(CASE STREQUAL "direct_objects_genex")
+  # The same, wrapped in generator expressions: the rule looks through them ($<COMPILE_ONLY:...> links no
+  # objects and stays allowed).
+  target_link_libraries(fx-cook PRIVATE "$<COMPILE_ONLY:helios_core>"
+    "$<$<CONFIG:Debug>:$<BUILD_INTERFACE:helios_core>>")
+endif()
+
+# ISA levels (02 §1.1, cmake/HeliosIsa.cmake; WP-0.2r). A base image (launcher, bootstrap) links the base
+# copies of core and its libraries; linking anything built only at avx2 stops configure.
+add_library(tp_jolt STATIC ${src}) # stands in for Jolt: an avx2-only third-party library
+if(CASE STREQUAL "isa_base_ok")
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} DEPS helios::core)
+elseif(CASE STREQUAL "isa_base_links_jolt")
+  # 09 §2 WP-0.2r's seeded fixture: a base image that links tp_jolt.
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} DEPS helios::core tp_jolt)
+elseif(CASE STREQUAL "isa_base_links_physics")
+  # Through a helper that is not a module: the path names it.
+  target_link_libraries(fx_helper INTERFACE helios::physics)
+  helios_executable(fx-bootstrap ROLE bootstrap SOURCES ${src} DEPS helios::core fx_helper)
+elseif(CASE STREQUAL "isa_fixture_base")
+  # The fixtures-only override: a tool image at base, outside apps/ and engine/.
+  helios_executable(fx-isa-fixture ROLE tool ISA base SOURCES ${src} DEPS helios::core)
+elseif(CASE STREQUAL "isa_override_in_apps")
+  add_subdirectory(apps/isa) # helios_executable(... ISA base) where real images live
+elseif(CASE STREQUAL "isa_avx2_links_copy")
+  # An avx2 image that names a base copy (a target only once the copies exist) would mix levels.
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} DEPS helios::core)
+  target_link_libraries(fx-client PRIVATE helios_core.base)
+elseif(CASE STREQUAL "isa_interface_options")
+  # tp_jolt's options before WP-0.2r, on its interface: every consumer inherited them.
+  target_compile_options(tp_jolt INTERFACE -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c) # conformance:allow CONF-11 the configure check's seeded fixture (09 §5.10.3)
+elseif(CASE STREQUAL "isa_override_elsewhere")
+  # The ISA override from a listfile outside tools/lint/ (one written into the build tree), where neither
+  # apps/ nor engine/ is in the path: still not a fixture.
+  file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/isa_elsewhere.cmake
+       "helios_executable(fx-isa-elsewhere ROLE tool ISA base SOURCES \"${src}\" DEPS helios::core)\n")
+  include(${CMAKE_CURRENT_BINARY_DIR}/isa_elsewhere.cmake)
+elseif(CASE STREQUAL "isa_invalid_value")
+  helios_executable(fx-isa-fixture ROLE tool ISA sse4 SOURCES ${src} DEPS helios::core)
+elseif(CASE STREQUAL "isa_cpu_gate_on_base")
+  # The gate guards avx2 images; a launcher must start on any x86-64 CPU.
+  helios_executable(fx-launcher ROLE launcher CPU_GATE SOURCES ${src} DEPS helios::core)
+elseif(CASE STREQUAL "isa_level_on_library")
+  # A library takes its image's level; setting one on it by hand would bypass the propagation.
+  set_target_properties(helios_math PROPERTIES HELIOS_ISA_LEVEL base)
+elseif(CASE STREQUAL "isa_gate_target_not_object")
+  # The gate's units must be an object library: an archive member holding only them could be dropped.
+  add_library(fx_gate STATIC ${src})
+  helios_cpu_gate_target(fx_gate)
+elseif(CASE STREQUAL "isa_base_windows")
+  # Modular Windows builds: the base image and its object copies define the HELIOS_<GROUP>_API data they
+  # carry (no dllimport); an INTERFACE copy (tp_yyjson.base) compiles nothing and gets no definitions.
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} DEPS helios::core)
+  function(_fx_print_own_copy_definitions)
+    get_target_property(imageDefs fx-launcher COMPILE_DEFINITIONS)
+    get_target_property(copyDefs helios_core.base COMPILE_DEFINITIONS)
+    message(STATUS "FX_OWN_COPY: fx-launcher=${imageDefs} helios_core.base=${copyDefs}")
+  endfunction()
+  cmake_language(DEFER CALL _fx_print_own_copy_definitions)
+elseif(CASE STREQUAL "isa_base_root_links_jolt")
+  # A base module that links tp_jolt does not make tp_jolt base-eligible (HELIOS_ISA_BASE_DENY).
+  target_link_libraries(helios_core PRIVATE tp_jolt)
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} DEPS helios::core)
+elseif(CASE STREQUAL "isa_base_target_objects")
+  # Objects of an avx2 object library in the base image's own sources, not linked: no copy replaces them.
+  add_library(fx_kernels OBJECT ${src})
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} $<TARGET_OBJECTS:fx_kernels> DEPS helios::core)
+elseif(CASE STREQUAL "isa_generated_source")
+  # A relative source generated at build time does not exist at configure time; the copy must still look
+  # for it in the build directory, as CMake does.
+  add_custom_command(OUTPUT fx_generated.cpp COMMAND ${CMAKE_COMMAND} -E touch fx_generated.cpp)
+  target_sources(helios_core PRIVATE fx_generated.cpp)
+  helios_executable(fx-launcher ROLE launcher SOURCES ${src} DEPS helios::core)
+  function(_fx_print_copy_sources)
+    get_target_property(copySources helios_core.base SOURCES)
+    message(STATUS "FX_COPY_SOURCES: ${copySources}")
+  endfunction()
+  cmake_language(DEFER CALL _fx_print_copy_sources)
+endif()
 
 # Runs after helios_finalize_build (deferred calls run in scheduling order), so it is only reached
 # when the checks passed. Stop before generation: the dummy sources have no enabled language.

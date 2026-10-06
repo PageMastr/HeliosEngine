@@ -8,6 +8,7 @@
 
 #include <cstdlib>
 #include <fstream>
+#include <regex>
 #include <sstream>
 
 #include "golden.gen.h"
@@ -67,6 +68,15 @@ constexpr GoldenOutput kOutputs[] = {
     {"go/golden.go", "golden.go.expected"},
     {"go/helios_codecs.go", "helios_codecs.go.expected"},
     {"golden.schema.json", "golden.schema.json.expected"},
+    {"cpp/golden.luau.gen.h", "golden.luau.gen.h.expected"},
+    {"cpp/golden.luau.gen.cpp", "golden.luau.gen.cpp.expected"},
+    {"luau/schema.d.luau", "schema.d.luau.expected"},
+    {"luau/fuel_costs.defaults.json", "fuel_costs.defaults.json.expected"},
+    {"sql/svc_golden/schema.sql", "svc_golden.schema.sql.expected"},
+    {"sql/svc_golden/migration.sql", "svc_golden.migration.sql.expected"},
+    {"cpp/golden.repl.gen.h", "golden.repl.gen.h.expected"},
+    {"cpp/golden.repl.gen.cpp", "golden.repl.gen.cpp.expected"},
+    {"golden.lint.json", "golden.lint.json.expected"},
 };
 
 TEST_CASE("golden: generator output matches the committed expectations") {
@@ -74,9 +84,13 @@ TEST_CASE("golden: generator output matches the committed expectations") {
     REQUIRE(source);
     const auto lock = readText(kGoldenDir + "/golden.lock.jsonc");
     REQUIRE_MESSAGE(lock, "tests/golden/golden.lock.jsonc is created by building schemac_tests; commit it");
+    // The lock of the release before LedgerLine's changes: the migration stub golden diffs against it.
+    const auto baseline = readText(kGoldenDir + "/golden.sql-baseline.lock.jsonc");
+    REQUIRE(baseline);
 
     MemoryFileSystem fs;
     fs.files["golden/golden.lock.jsonc"] = *lock;
+    fs.files["golden/golden.sql-baseline.lock.jsonc"] = *baseline;
     CompileOptions options;
     options.files = {"golden/golden.hschema"};
     options.includeDirs = {"golden"};
@@ -84,12 +98,24 @@ TEST_CASE("golden: generator output matches the committed expectations") {
     options.emitCpp = true;
     options.emitGo = true;
     options.emitJson = true;
+    options.emitLuau = true;
+    options.emitSql = true;
+    options.emitRepl = true;
+    options.emitLint = true;
+    options.lintOut = "golden.lint.json";
     options.cppOut = "cpp";
     options.goOut = "go";
     options.jsonOut = "golden.schema.json";
+    options.luauOut = "luau";
+    options.sqlOut = "sql";
+    options.sqlBaseline = "golden/golden.sql-baseline.lock.jsonc";
     auto c = compileFiles({{"golden/golden.hschema", *source}}, options, &fs);
     REQUIRE_MESSAGE(c->ok(), c->messages);
-    CHECK_MESSAGE(c->diags.diagnostics().empty(), c->messages);
+    // The only diagnostics are the size budgets' warnings, which golden.lint.json pins: the service rpc
+    // Store.Buy returns Containers, whose containers are unbounded on purpose.
+    for (const Diagnostic& d : c->diags.diagnostics()) {
+        CHECK_MESSAGE((d.severity == Severity::Warning && d.message.starts_with("[size.")), c->messages);
+    }
     CHECK_MESSAGE(!c->result.lockChanged, "the golden lock is stale; rebuild schemac_tests (which updates it) and commit it");
 
     for (const GoldenOutput& g : kOutputs) {
@@ -109,6 +135,74 @@ TEST_CASE("golden: generator output matches the committed expectations") {
     }
 }
 
+/// A schema set of the committed schemas/ corpus, compiled as CMake compiles it (against its lock).
+struct CorpusSet {
+    const char* name; ///< directory in tests/golden/corpus
+    std::vector<std::string> files;
+    const char* lock;
+    std::vector<std::pair<const char*, const char*>> outputs; ///< output suffix -> expected file
+};
+
+TEST_CASE("golden: the schemas/ corpus generates the committed Luau, SQL, replication and lint outputs") {
+    const std::vector<CorpusSet> sets = {
+        {"sample",
+         {"schemas/sample/common.hschema", "schemas/sample/ship.hschema", "schemas/sample/items.hschema"},
+         "schemas/sample/schema.lock.jsonc",
+         {{"cpp/sample/ship.luau.gen.h", "ship.luau.gen.h.expected"},
+          {"cpp/sample/ship.luau.gen.cpp", "ship.luau.gen.cpp.expected"},
+          {"luau/schema.d.luau", "schema.d.luau.expected"},
+          {"luau/fuel_costs.defaults.json", "fuel_costs.defaults.json.expected"},
+          {"sql/svc_character/schema.sql", "svc_character.schema.sql.expected"},
+          {"sql/svc_character/migration.sql", "svc_character.migration.sql.expected"},
+          {"cpp/sample/common.repl.gen.cpp", "common.repl.gen.cpp.expected"},
+          {"cpp/sample/ship.repl.gen.h", "ship.repl.gen.h.expected"},
+          {"cpp/sample/ship.repl.gen.cpp", "ship.repl.gen.cpp.expected"},
+          {"schema.lint.json", "schema.lint.json.expected"}}},
+    };
+    for (const CorpusSet& set : sets) {
+        INFO(set.name);
+        MemoryFileSystem fs;
+        std::map<std::string, std::string> files;
+        for (const std::string& f : set.files) {
+            const auto text = readText(std::string(HELIOS_SOURCE_DIR) + "/" + f);
+            REQUIRE_MESSAGE(text, f);
+            files[f] = *text;
+        }
+        const auto lock = readText(std::string(HELIOS_SOURCE_DIR) + "/" + set.lock);
+        REQUIRE(lock);
+        fs.files[set.lock] = *lock;
+        CompileOptions options;
+        options.files = set.files;
+        options.includeDirs = {"schemas"};
+        options.lockPath = set.lock;
+        options.emitLuau = true;
+        options.emitSql = true;
+        options.emitRepl = true;
+        options.emitLint = true;
+        options.cppOut = "cpp";
+        options.luauOut = "luau";
+        options.sqlOut = "sql";
+        auto c = compileFiles(files, options, &fs);
+        REQUIRE_MESSAGE(c->ok(), c->messages);
+        CHECK_MESSAGE(!c->result.lockChanged, set.lock << " is stale; rebuild schemac_tests (which updates it) and commit it");
+        for (const auto& [suffix, expectedName] : set.outputs) {
+            const std::string* actual = c->output(suffix);
+            REQUIRE_MESSAGE(actual, suffix);
+            const std::string path = kGoldenDir + "/corpus/" + set.name + "/" + expectedName;
+            if (updateGolden()) {
+                writeText(path, *actual);
+                MESSAGE("updated " << path);
+                continue;
+            }
+            const auto expected = readText(path);
+            REQUIRE_MESSAGE(expected, "missing " << path << " (run with HELIOS_UPDATE_GOLDEN=1)");
+            const bool same = *expected == *actual;
+            CHECK_MESSAGE(same, path << " differs at " << firstDifference(*expected, *actual)
+                                     << "\n(if intended: HELIOS_UPDATE_GOLDEN=1 schemac_tests -tc=\"golden*\")");
+        }
+    }
+}
+
 TEST_CASE("golden: generation is deterministic and independent of declaration-irrelevant input") {
     const auto source = readText(kGoldenDir + "/golden.hschema");
     REQUIRE(source);
@@ -118,6 +212,10 @@ TEST_CASE("golden: generation is deterministic and independent of declaration-ir
     options.emitCpp = true;
     options.emitGo = true;
     options.emitJson = true;
+    options.emitLuau = true;
+    options.emitSql = true;
+    options.emitRepl = true;
+    options.emitLint = true;
     auto a = compileFiles({{"golden/golden.hschema", *source}}, options);
     // Comments and whitespace do not change the output.
     std::string reformatted;
@@ -129,9 +227,17 @@ TEST_CASE("golden: generation is deterministic and independent of declaration-ir
     REQUIRE_MESSAGE(a->ok(), a->messages);
     REQUIRE_MESSAGE(b->ok(), b->messages);
     REQUIRE(a->result.outputs.size() == b->result.outputs.size());
+    // (The lint report's findings carry source lines and columns, which the noise moves: compare them
+    // without the positions.)
+    auto withoutPositions = [](const std::string& text) {
+        static const std::regex position(R"("line": \d+, "col": \d+)");
+        return std::regex_replace(text, position, "");
+    };
     for (usize i = 0; i < a->result.outputs.size(); ++i) {
         CHECK(a->result.outputs[i].path == b->result.outputs[i].path);
-        const bool same = a->result.outputs[i].content == b->result.outputs[i].content;
+        const bool lint = a->result.outputs[i].path == options.lintOut;
+        const bool same = lint ? withoutPositions(a->result.outputs[i].content) == withoutPositions(b->result.outputs[i].content)
+                               : a->result.outputs[i].content == b->result.outputs[i].content;
         CHECK_MESSAGE(same, a->result.outputs[i].path);
     }
 }

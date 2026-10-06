@@ -1,0 +1,5 @@
+// The reference game's project file may name its setting (Cinder Reach, Tallis, Kestrel).
+{
+  "product": {"productId": "cinder-reach", "installName": "CinderReach", "uriScheme": "cinderreach"},
+  "zones": [{"name": "tallis"}]
+}

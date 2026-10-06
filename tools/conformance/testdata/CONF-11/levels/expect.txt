@@ -1,0 +1,8 @@
+#! -rules CONF-11 -strict
+# After WP-0.2r the level set has 02 §1.1's name, HELIOS_ISA_AVX2: a file or target that references it,
+# or a variable that HeliosIsa.cmake's functions fill from it, below the image level is a grant, and so is
+# a per-target loop in HeliosIsa.cmake outside the function that applies an image's level.
+cmake/HeliosIsa.cmake:12: CONF-11
+engine/x/CMakeLists.txt:1: CONF-11
+engine/x/CMakeLists.txt:2: CONF-11
+engine/x/CMakeLists.txt:4: CONF-11

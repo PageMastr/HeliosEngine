@@ -1,0 +1,3 @@
+#! -rules CONF-03 -strict
+# The C++ case sits in an #if 0 group, so it is never compiled: the required test is missing.
+engine/server: CONF-03

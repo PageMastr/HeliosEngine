@@ -1,5 +1,5 @@
 # Runs the repository lints that need no build (licences, vendored patches, IP names, concept-art
-# references, shipped pipelines, the patch test-key opt-in, Windows manifest, test namespaces, the D6
+# references, the content asset manifest, shipped pipelines, the patch test-key opt-in, Windows manifest, test namespaces, the D6
 # status check of 09 §5.10.2 and the self-hosted runner policy of 09 §5.4a, which need Python 3.10+, and
 # the conformance lint of 09 §5.10.3, which needs Go), and the ISA audit
 # when a build directory is given. One entry point for CI jobs and pre-commit hooks:
@@ -35,6 +35,7 @@ _run_lint(vendor-patches -DTHIRD_PARTY_DIR=${root}/third_party -DMANIFEST=${root
           -P ${lint}/vendor_patches.cmake)
 _run_lint(ip-names -DLINT_POLICY=${lint}/ip_names_policy.cmake -DSOURCE_DIR=${root} -P ${lint}/ip_names.cmake)
 _run_lint(concept-refs -DSOURCE_DIR=${root} -P ${lint}/concept_refs.cmake)
+_run_lint(content-assets -DSOURCE_DIR=${root} -P ${lint}/content_assets.cmake)
 _run_lint(shipped-pipelines -DSOURCE_DIR=${root} -P ${root}/tools/rendertest/tests/shipped_pipelines_lint.cmake)
 _run_lint(patch-test-keys -DSOURCE_DIR=${root} -P ${root}/engine/patch/tests/test_keys_lint.cmake)
 _run_lint(windows-manifest -DMANIFEST=${root}/engine/platform/win/helios.manifest -P ${lint}/windows_manifest.cmake)

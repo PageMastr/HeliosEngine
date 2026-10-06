@@ -584,6 +584,76 @@ if(HELIOS_LINT_GIT)
 endif()
 
 # ---------------------------------------------------------------------------------------------
+# Content asset manifest (WP-0.20b; 01 §5.2, 07 §1.7): content/ASSETS.md lists every binary source under
+# content/ with its bytes and SHA-256, checked against the file or, in a checkout without the LFS objects,
+# its Git LFS pointer. The fixtures are written here: `ok` has a real file and a pointer that match their
+# rows; each other copy breaks one rule and must fail with its diagnostic.
+# ---------------------------------------------------------------------------------------------
+set(caLint -P ${LINT}/content_assets.cmake)
+helios_lint_test(lint_content_assets COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR} ${caLint})
+set(caBytes "fixture bytes\n")
+string(SHA256 caSha "${caBytes}")
+string(SHA256 caOtherSha "other bytes\n")
+set(caPointer "version https://git-lfs.github.com/spec/v1\noid sha256:${caOtherSha}\nsize 4096\n")
+set(caHeader "# Assets\n\n| Path | Title | Bytes | SHA-256 |\n|---|---|---|---|\n")
+set(caRowA "| `art/a.png` | A | 14 | `${caSha}` |\n")
+set(caRowB "| `art/b.glb` | B | 4096 | `${caOtherSha}` |\n")
+foreach(fixture ok missing_row wrong_hash wrong_bytes pointer_mismatch missing_file duplicate_row text_row bad_sha)
+  set(caRoot ${LINT_WORK}/content_assets/${fixture})
+  file(REMOVE_RECURSE ${caRoot})
+  file(WRITE ${caRoot}/content/art/a.png "${caBytes}")
+  file(WRITE ${caRoot}/content/art/b.glb "${caPointer}")
+  file(WRITE ${caRoot}/content/README.md "Text documents need no row.\n")
+  set(rows "${caRowA}${caRowB}")
+  if(fixture STREQUAL "missing_row")
+    file(WRITE ${caRoot}/content/art/c.exr "unlisted\n")
+  elseif(fixture STREQUAL "wrong_hash")
+    string(REPLACE "${caSha}" "${caOtherSha}" rows "${rows}")
+  elseif(fixture STREQUAL "wrong_bytes")
+    string(REPLACE "| 14 |" "| 15 |" rows "${rows}")
+  elseif(fixture STREQUAL "pointer_mismatch")
+    file(WRITE ${caRoot}/content/art/b.glb
+         "version https://git-lfs.github.com/spec/v1\noid sha256:${caSha}\nsize 4096\n")
+  elseif(fixture STREQUAL "missing_file")
+    string(APPEND rows "| `art/gone.png` | Gone | 1 | `${caSha}` |\n")
+  elseif(fixture STREQUAL "duplicate_row")
+    string(APPEND rows "${caRowA}")
+  elseif(fixture STREQUAL "text_row")
+    string(APPEND rows "| `README.md` | Readme | 1 | `${caSha}` |\n")
+  elseif(fixture STREQUAL "bad_sha")
+    string(APPEND rows "| `art/short.png` | Short | 1 | `abc123` |\n")
+  endif()
+  file(WRITE ${caRoot}/content/ASSETS.md "${caHeader}${rows}")
+endforeach()
+helios_lint_test(lint_content_assets_fixture_ok COMMAND ${CMAKE_COMMAND}
+  -DSOURCE_DIR=${LINT_WORK}/content_assets/ok ${caLint})
+set(caFixtures missing_row wrong_hash wrong_bytes pointer_mismatch missing_file duplicate_row text_row bad_sha
+    no_content)
+set(caExpects
+    "content/art/c\\.exr: not listed in content/ASSETS\\.md"
+    "content/art/a\\.png: SHA-256 [0-9a-f]+ differs from content/ASSETS\\.md's"
+    "content/art/a\\.png: 14 bytes, content/ASSETS\\.md says 15"
+    "content/art/b\\.glb: SHA-256 [0-9a-f]+ differs"
+    "content/art/gone\\.png: listed in content/ASSETS\\.md but missing"
+    "'art/a\\.png' is listed twice"
+    "content/README\\.md: listed in content/ASSETS\\.md but not a binary source"
+    "'abc123' is not a SHA-256"
+    "/content is not a directory")
+foreach(fixture expect IN ZIP_LISTS caFixtures caExpects)
+  set(caSource ${LINT_WORK}/content_assets/${fixture})
+  if(fixture STREQUAL "no_content")
+    set(caSource ${LINT_WORK}/content_assets)
+  endif()
+  helios_lint_test(lint_content_assets_fixture_${fixture} EXPECT_FAIL "${expect}"
+    COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${caSource} ${caLint})
+endforeach()
+unset(caLint)
+unset(caRoot)
+unset(caSource)
+unset(caFixtures)
+unset(caExpects)
+
+# ---------------------------------------------------------------------------------------------
 # Test namespaces (AAA-PLT-1): in a tests/ source with a doctest test macro, every declaration sits in
 # an unnamed namespace (or a waiver region), and test macros do so in every tests/ file, so MSVC
 # cannot merge one test file's lambdas or helpers with another's (#15). The ok fixture hides braces,

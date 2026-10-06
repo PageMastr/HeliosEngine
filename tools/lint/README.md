@@ -214,11 +214,24 @@ dumpbin by hand from a Visual Studio developer prompt (no CI job calls it):
 - `dumpbin /symbols` — `External` symbols are only `helios_cpu_gate_run`, `helios_cpu_gate_verdict` and
   `helios_cpu_gate_tls_entry` (defined) plus `HELIOS_ISA_GATE_ALLOWED_IMPORTS` (`UNDEF`: `TerminateProcess`,
   never `ExitProcess`); no `__security_cookie` / `__security_check_cookie` (the gate TUs build with `/GS-`).
+  No literal pool either, although cl and clang-cl emit those as `External` "pick any" COMDATs (`??_C@…` for
+  string literals, `__xmm@…`/`__real@…` for constants): the gate sources keep their text in static arrays, and
+  the gate level builds them with clang-cl without vectorization or loop unrolling
+  (`HELIOS_ISA_GATE_CLANG_CL` in `cmake/HeliosIsa.cmake`), whose constants LLVM puts in such pools.
+
+Until then the same symbol rule runs on Linux against MSVC-ABI objects: where clang (in cl mode), `llvm-nm` and
+`llvm-objdump` are installed, `lint_isa_coff_gate_probe` builds `cpu_gate.c` for `x86_64-pc-windows-msvc` with
+the gate level's clang-cl flags and `/O2 /Ob2`, and check 2 (`MODE=object`) reads the COFF object;
+`lint_isa_coff_gate_hook` and `lint_isa_coff_gate_hook_snb` do the same for the Windows hook (shipping and
+Sandy Bridge test builds) where the MinGW-w64 headers provide `windows.h`. The seeded
+`lint_isa_coff_gate_detects_literal_pool` (`tests/isa/gate_literal_pool.c`, one string literal) must fail with
+an `exports '??_C@…'` finding. cl's own objects are checked only by the PowerShell script.
 
 The Windows gate's placement (the first TLS callback, `.CRT$XLA0`) is tested at run time by `core_tests` on the
 Windows CI jobs until check 3's Windows half exists: a TLS callback of the gate's test child in `.CRT$XLB`,
-mimalloc's slot, must find the verdict already set, and in a shipping image the gate's slot must be
-`IMAGE_TLS_DIRECTORY.AddressOfCallBacks[0]` (`engine/core/README.md`).
+mimalloc's slot, must find the verdict already set, and the gate's slot must be
+`IMAGE_TLS_DIRECTORY.AddressOfCallBacks[0]` of the image that carries it: the executable in a shipping build,
+`helios_runtime.dll` in a modular one (which exports the slot as data for this test; `engine/core/README.md`).
 
 ## Plan conformance
 

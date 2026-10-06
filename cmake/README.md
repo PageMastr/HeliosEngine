@@ -19,7 +19,7 @@ Helios builds **whole images at one ISA level**; no list grants a target or a fi
 |---|---|---|
 | `avx2` | `-mavx2 -mbmi -mbmi2 -mlzcnt -mpopcnt -mf16c -mno-fma -mfpmath=sse -ffp-contract=off` · `/arch:AVX2 /fp:precise` · the MSVC set plus `-mbmi -mbmi2 -mlzcnt -mpopcnt -mf16c -mno-fma /clang:-ffp-contract=off` | every image of a role other than launcher and bootstrap (client, cell, gateway, voice, editor, bot, tool, sample, bench), the tests, and every library they link: every target not listed below |
 | `base` (x86-64-v1) | `-march=x86-64 -mtune=generic` and every extension above it off by name · nothing (`/arch:SSE2` is the default) | the launcher and the bootstrap (ROLE `launcher`, `bootstrap`), and the `.base` copies of what they link |
-| `gate` | the `base` set plus `-fno-stack-protector -fno-sanitize=all` · `/GS-` (plus `-fno-sanitize=all` with clang-cl); no `/RTC` and no MSVC `/fsanitize=address` (below) | the CPU gate's object libraries (`helios_cpu_gate_target()`): `helios_core_cpugate`, `helios_core_cpugate_hook` and the test hook `core_cpugate_hook_snb` |
+| `gate` | the `base` set plus `-fno-stack-protector -fno-sanitize=all` · `/GS-` (clang-cl: `HELIOS_ISA_GATE_CLANG_CL`, which adds `-fno-sanitize=all` and turns off vectorization and loop unrolling, whose constant pools the MSVC ABI emits as external COMDATs); no `/RTC` and no MSVC `/fsanitize=address` (below) | the CPU gate's object libraries (`helios_cpu_gate_target()`): `helios_core_cpugate`, `helios_core_cpugate_hook` and the test hook `core_cpugate_hook_snb` |
 
 - **How a level is applied.** `helios_isa_finalize()` runs at the end of configure, when every target exists. It
   gives every target its level with `helios_apply_isa_level()`, the one function that puts ISA flags on a

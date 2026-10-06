@@ -49,6 +49,15 @@ static const HeliosCpuidRaw hcg_test_cpu = {
 #define HCG_GATE_INPUT 0
 #endif
 
+/* Every text is a static array, never a string literal: cl and clang-cl emit each literal as an external
+ * "pick any" COMDAT (??_C@...), and the gate objects define no external symbol but their three (02 §1.1
+ * check 2, tools/ci/msvc_gate_audit.ps1). */
+static const WCHAR hcg_env_silent[] = L"HELIOS_CPU_GATE_SILENT";
+static const char hcg_newline[] = "\r\n";
+static const char hcg_backstop_text[] =
+    "Helios stopped: illegal instruction. The CPU may lack an instruction set extension this build requires "
+    "(AVX2, BMI1, BMI2, F16C, LZCNT). Detected: ";
+
 static char hcg_backstop[640];
 static DWORD hcg_backstop_len;
 
@@ -78,18 +87,22 @@ static int hcg_gui_process(void) {
 /* HELIOS_CPU_GATE_SILENT=1 skips the dialog (CI runs GUI fixtures with nobody to dismiss it). */
 static int hcg_silent(void) {
     WCHAR value[4];
-    const DWORD n = GetEnvironmentVariableW(L"HELIOS_CPU_GATE_SILENT", value, 4);
+    const DWORD n = GetEnvironmentVariableW(hcg_env_silent, value, 4);
     return n == 1 && value[0] == L'1';
 }
 
 #if !defined(HELIOS_CPU_GATE_TEST_EMULATE_SANDY_BRIDGE)
 typedef int(WINAPI* HcgMessageBoxW)(HWND, LPCWSTR, LPCWSTR, UINT);
 
+static const WCHAR hcg_user32[] = L"user32.dll";
+static const char hcg_message_box[] = "MessageBoxW";
+static const WCHAR hcg_dialog_title[] = L"Helios";
+
 /* user32 comes from System32 only. In the shipping client the executable imports it already (SDL3), so this
  * only adds a reference; in a modular build the load may nest under the loader lock, as the UCRT's own
  * fatal-error dialog does, and no application thread exists yet that could hold a lock the dialog needs. */
 static void hcg_dialog(const char* msg, DWORD len) {
-    HMODULE user32 = LoadLibraryExW(L"user32.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    HMODULE user32 = LoadLibraryExW(hcg_user32, NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (user32 != NULL) {
         /* A union converts the FARPROC without a function-pointer cast (which GCC's -Wcast-function-type and
          * MSVC's C4054/C4055 would flag). */
@@ -97,14 +110,14 @@ static void hcg_dialog(const char* msg, DWORD len) {
             FARPROC proc;
             HcgMessageBoxW box;
         } fn;
-        fn.proc = GetProcAddress(user32, "MessageBoxW");
+        fn.proc = GetProcAddress(user32, hcg_message_box);
         if (fn.proc != NULL) {
             const HcgMessageBoxW box = fn.box;
             WCHAR wide[640];
             DWORD i;
             for (i = 0; i < len && i + 1 < 640; ++i) wide[i] = (WCHAR)(unsigned char)msg[i];
             wide[i] = 0;
-            box(NULL, wide, L"Helios", MB_OK | MB_ICONERROR);
+            box(NULL, wide, hcg_dialog_title, MB_OK | MB_ICONERROR);
         }
     }
 }
@@ -114,10 +127,13 @@ static void hcg_dialog(const char* msg, DWORD len) {
  * one, so core_tests checks both inputs (the subsystem and HELIOS_CPU_GATE_SILENT) without a dialog that
  * nobody would dismiss. */
 #define HCG_TEST_NOTE(text) hcg_write_stderr(text, (DWORD)(sizeof(text) - 1))
+static const char hcg_note_dialog[] = "cpu-gate test hook: dialog (not shown in this test build)\r\n";
+static const char hcg_note_console[] = "cpu-gate test hook: no dialog: console image\r\n";
+static const char hcg_note_silent[] = "cpu-gate test hook: no dialog: HELIOS_CPU_GATE_SILENT=1\r\n";
 static void hcg_dialog(const char* msg, DWORD len) {
     (void)msg;
     (void)len;
-    HCG_TEST_NOTE("cpu-gate test hook: dialog (not shown in this test build)\r\n");
+    HCG_TEST_NOTE(hcg_note_dialog);
 }
 #endif
 
@@ -126,9 +142,9 @@ static void hcg_dialog(const char* msg, DWORD len) {
 static void hcg_refuse(const char* msg, DWORD len) {
     hcg_write_stderr(msg, len);
     if (!hcg_gui_process())
-        HCG_TEST_NOTE("cpu-gate test hook: no dialog: console image\r\n");
+        HCG_TEST_NOTE(hcg_note_console);
     else if (hcg_silent())
-        HCG_TEST_NOTE("cpu-gate test hook: no dialog: HELIOS_CPU_GATE_SILENT=1\r\n");
+        HCG_TEST_NOTE(hcg_note_silent);
     else
         hcg_dialog(msg, len);
     for (;;) TerminateProcess(GetCurrentProcess(), HCG_EXIT_CODE);
@@ -164,14 +180,12 @@ static void NTAPI hcg_tls_callback(PVOID module, DWORD reason, PVOID reserved) {
         char line[600];
         DWORD n = 0;
         n = hcg_append(line, n, sizeof(line), report.message);
-        n = hcg_append(line, n, sizeof(line), "\r\n");
+        n = hcg_append(line, n, sizeof(line), hcg_newline);
         hcg_refuse(line, n);
     }
-    hcg_backstop_len = hcg_append(hcg_backstop, 0, sizeof(hcg_backstop),
-                                  "Helios stopped: illegal instruction. The CPU may lack an instruction set "
-                                  "extension this build requires (AVX2, BMI1, BMI2, F16C, LZCNT). Detected: ");
+    hcg_backstop_len = hcg_append(hcg_backstop, 0, sizeof(hcg_backstop), hcg_backstop_text);
     hcg_backstop_len = hcg_append(hcg_backstop, hcg_backstop_len, sizeof(hcg_backstop), report.brand);
-    hcg_backstop_len = hcg_append(hcg_backstop, hcg_backstop_len, sizeof(hcg_backstop), "\r\n");
+    hcg_backstop_len = hcg_append(hcg_backstop, hcg_backstop_len, sizeof(hcg_backstop), hcg_newline);
     AddVectoredExceptionHandler(0, hcg_on_exception);
 }
 

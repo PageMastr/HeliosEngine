@@ -85,6 +85,13 @@ else()
                       -mno-avx -mno-avx2 -mno-fma -mno-bmi -mno-bmi2 -mno-lzcnt -mno-f16c -mno-movbe -mno-avx512f
                       -mno-cx16)
 endif()
+# What the gate level adds with clang-cl (02 §1.1's gate-object rules): no /GS cookie, no sanitizer, and none
+# of the optimizations that make LLVM build constant pools from the gate's loops (vectorized byte loops and
+# fully unrolled copies of known text become __xmm@... constants). The MSVC ABI emits each pool as an external
+# "pick any" COMDAT, and the gate objects define no external symbol but their three (audit check 2). The gate
+# is cold code. Set on every host: tools/lint/lint_tests.cmake compiles the gate with it on Linux.
+set(HELIOS_ISA_GATE_CLANG_CL /GS- -fno-sanitize=all /clang:-fno-vectorize /clang:-fno-slp-vectorize
+                             /clang:-fno-unroll-loops)
 
 # What a base image may link (02 §1.1's `base` row (a); 08 §2.1.1's launcher closure). Modules by name:
 # core, app, ui, text, loc, patch and crash, of which core and patch exist today. The others get copies
@@ -110,11 +117,10 @@ function(helios_apply_isa_level target level)
     # The gate runs before the CRT and the sanitizer runtimes exist: no /GS cookie or stack protector and
     # no instrumentation (02 §1.1's gate-object rules; audit check 2 rejects their symbols).
     set(flags ${HELIOS_ISA_BASE})
-    if(MSVC)
+    if(MSVC AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
+      list(APPEND flags ${HELIOS_ISA_GATE_CLANG_CL})
+    elseif(MSVC)
       list(APPEND flags /GS-)
-      if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-        list(APPEND flags -fno-sanitize=all)
-      endif()
     else()
       list(APPEND flags -fno-stack-protector -fno-sanitize=all)
     endif()

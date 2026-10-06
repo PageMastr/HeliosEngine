@@ -102,8 +102,11 @@ the test hook `core_cpugate_hook_snb`. That level is x86-64-v1 with no stack pro
 directory's C flags also drop MSVC's Debug `/RTC1`, and the top-level `/fsanitize=address` of an MSVC ASan
 build skips `gate`-level targets. Every other core TU is built at its image's level (`avx2`, or `base` in a
 launcher's `helios_core.base` copy). The gate objects define three external symbols, `helios_cpu_gate_run`,
-`helios_cpu_gate_verdict` and `helios_cpu_gate_tls_entry`. The ISA audit (`tools/lint`) checks their flags,
-disassembly and symbols on every build, and CONF-12 (`tools/conformance`) their source.
+`helios_cpu_gate_verdict` and `helios_cpu_gate_tls_entry`, and nothing else external: cl and clang-cl emit
+string literals and constant pools as external COMDATs (`??_C@…`, `__xmm@…`), so the gate's text lives in static
+arrays and clang-cl builds the gate without vectorization or loop unrolling. The ISA audit (`tools/lint`) checks
+their flags, disassembly and symbols on every build (the MSVC-ABI objects through clang in cl mode on Linux,
+`lint_isa_coff_gate_*`), and CONF-12 (`tools/conformance`) their source.
 
 In a modular dev build (`HELIOS_MODULAR=ON`, ADR-016) core is part of `helios_runtime`, and so is the probe's
 object library, still at the `gate` level (an OBJECT module does not carry the object libraries it links, so

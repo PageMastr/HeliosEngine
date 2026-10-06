@@ -196,6 +196,61 @@ if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
                 "-DOBJECT=$<TARGET_OBJECTS:lint_isa_fixture_asan>" -P ${LINT}/isa_audit.cmake)
     endif()
   endif()
+  # Check 2 on MSVC-ABI objects. On Windows tools/ci/msvc_gate_audit.ps1 reads the gate objects with dumpbin,
+  # but no CI job runs it before WP-0.2r part 2, so here clang in cl mode builds the gate's units for
+  # x86_64-pc-windows-msvc with the gate level's clang-cl flags (HELIOS_ISA_GATE_CLANG_CL) and check 2 reads
+  # the COFF objects with llvm-nm and llvm-objdump. That ABI emits string literals (??_C@...) and constant pools
+  # (__xmm@...) as external COMDATs, which 02 §1.1 does not allow in a gate object. The Windows hook needs
+  # windows.h, so it is built only where the MinGW-w64 headers are installed; they need -fno-ms-compatibility,
+  # which changes parsing, not code generation. The seeded fixture holds one string literal.
+  if(NOT WIN32)
+    find_program(HELIOS_LINT_CLANG
+                 NAMES clang-cl clang-cl-20 clang-cl-19 clang-cl-18 clang clang-20 clang-19 clang-18)
+    find_program(HELIOS_LINT_LLVM_NM NAMES llvm-nm llvm-nm-20 llvm-nm-19 llvm-nm-18)
+    find_program(HELIOS_LINT_LLVM_OBJDUMP NAMES llvm-objdump llvm-objdump-20 llvm-objdump-19 llvm-objdump-18)
+    find_path(HELIOS_LINT_MINGW_INCLUDE windows.h
+              PATHS /usr/x86_64-w64-mingw32/include /usr/share/mingw-w64/include NO_DEFAULT_PATH)
+    if(HELIOS_LINT_CLANG AND HELIOS_LINT_LLVM_NM AND HELIOS_LINT_LLVM_OBJDUMP)
+      set(coffDir ${CMAKE_BINARY_DIR}/tools/lint/coff_gate)
+      set(coffSrc ${PROJECT_SOURCE_DIR}/engine/core/src)
+      set(coffObjects "")
+      # Builds <name>.obj from <source> with the Release flags of the MSVC-family presets (/O2 /Ob2: the most
+      # inlining and loop optimization) and registers its check-2 test, a passing one unless EXPECT is given.
+      function(_helios_lint_coff_gate name source)
+        cmake_parse_arguments(C "" "EXPECT" "FLAGS" ${ARGN})
+        set(obj ${coffDir}/${name}.obj)
+        add_custom_command(OUTPUT ${obj}
+          COMMAND ${CMAKE_COMMAND} -E make_directory ${coffDir}
+          COMMAND ${HELIOS_LINT_CLANG} --driver-mode=cl --target=x86_64-pc-windows-msvc /nologo /c /O2 /Ob2
+                  /DNDEBUG ${HELIOS_ISA_GATE_CLANG_CL} /X /clang:-ffreestanding ${C_FLAGS} /Fo${obj} -- ${source}
+          DEPENDS ${source} ${coffSrc}/cpugate/cpu_gate.h ${PROJECT_SOURCE_DIR}/cmake/HeliosIsa.cmake
+          COMMENT "Building ${name}.obj (CPU gate, MSVC ABI) for ISA audit check 2" VERBATIM)
+        set(check ${CMAKE_COMMAND} ${isaCommon} -DOBJDUMP=${HELIOS_LINT_LLVM_OBJDUMP} -DNM=${HELIOS_LINT_LLVM_NM}
+                  -DMODE=object -DOBJECT=${obj} -P ${LINT}/isa_audit.cmake)
+        if(C_EXPECT)
+          helios_lint_test(lint_isa_coff_gate_detects_${name} EXPECT_FAIL "${C_EXPECT}" COMMAND ${check})
+        else()
+          helios_lint_test(lint_isa_coff_gate_${name} COMMAND ${check})
+        endif()
+        set(coffObjects ${coffObjects} ${obj} PARENT_SCOPE)
+      endfunction()
+      _helios_lint_coff_gate(probe ${coffSrc}/cpugate/cpu_gate.c)
+      if(HELIOS_LINT_MINGW_INCLUDE)
+        set(hookFlags /clang:-fno-ms-compatibility -imsvc ${HELIOS_LINT_MINGW_INCLUDE})
+        _helios_lint_coff_gate(hook ${coffSrc}/platform/win32/cpu_gate_hook.c FLAGS ${hookFlags})
+        _helios_lint_coff_gate(hook_snb ${coffSrc}/platform/win32/cpu_gate_hook.c
+                               FLAGS ${hookFlags} -DHELIOS_CPU_GATE_TEST_EMULATE_SANDY_BRIDGE=1)
+      else()
+        message(STATUS "lint_isa_coff_gate_hook: no MinGW-w64 windows.h; only the probe is built for the MSVC ABI")
+      endif()
+      _helios_lint_coff_gate(literal_pool ${LINT_TESTS}/isa/gate_literal_pool.c
+        EXPECT "exports '\\?\\?_C@[^']+' \\(type R\\): only HELIOS_ISA_GATE_EXPORTS may be external")
+      add_custom_target(lint_isa_coff_gate_build ALL DEPENDS ${coffObjects})
+      set_target_properties(lint_isa_coff_gate_build PROPERTIES FOLDER tests)
+    else()
+      message(STATUS "lint_isa_coff_gate_*: needs clang (cl mode), llvm-nm and llvm-objdump, so not registered")
+    endif()
+  endif()
   # Check 3's canary for shared libraries (ELF, both link flavours): a shared library with an IFUNC, whose
   # R_X86_64_IRELATIVE relocation the dynamic linker would apply before a gated executable's .preinit_array.
   if(isaTools MATCHES "READELF" AND NOT WIN32 AND NOT HELIOS_SANITIZE)

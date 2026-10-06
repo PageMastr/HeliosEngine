@@ -78,6 +78,13 @@ function(copy_with_sidecar file dir)
   file(COPY "${file}" "${file}.meta" DESTINATION "${dir}")
 endfunction()
 
+# Writes `content` to `path` with LF line ends on every platform: file(WRITE) writes text mode, so CRLF on
+# Windows, which would change a pointer's or a blob's bytes. @ONLY: the content has no @VAR@ to replace.
+# file(CONFIGURE) ends the file with a LF if the content does not end with one.
+function(write_lf path content)
+  file(CONFIGURE OUTPUT "${path}" CONTENT "${content}" @ONLY NEWLINE_STYLE UNIX)
+endfunction()
+
 # Replaces a binary source with a copy of one of tests/fixtures' files.
 function(replace_with_fixture file fixture)
   file(REMOVE "${file}")
@@ -112,7 +119,7 @@ endfunction()
 
 # Stages `text` at `path` (relative to WORK) with `mode` in WORK's index, written as a blob with no filter.
 function(git_stage path mode text)
-  file(WRITE "${WORK}/git-blob.tmp" "${text}")
+  write_lf("${WORK}/git-blob.tmp" "${text}")
   run_git(hash-object -w --no-filters "${WORK}/git-blob.tmp")
   file(REMOVE "${WORK}/git-blob.tmp")
   run_git(update-index --add --cacheinfo "${mode},${git_out},${path}")
@@ -472,7 +479,7 @@ elseif(CASE STREQUAL "binary_text")
 elseif(CASE STREQUAL "lfs_pointer_malformed")
   first_file("*.png" f)
   file(REMOVE "${f}")
-  file(WRITE "${f}" "version https://git-lfs.github.com/spec/v1\noid sha256:not-a-digest\nsize 12\n")
+  write_lf("${f}" "version https://git-lfs.github.com/spec/v1\noid sha256:not-a-digest\nsize 12\n")
   set(expect "\\.png: neither a Git LFS pointer nor a PNG file")
 elseif(CASE STREQUAL "upper_case_extension")
   first_file("*.md" f)
@@ -521,8 +528,8 @@ elseif(CASE STREQUAL "git_binary_outside_lfs_large")
   git_init()
   first_file("*.exr" f)
   file(RELATIVE_PATH rel "${WORK}" "${f}")
-  string(REPEAT "x" 2000 big)
-  git_stage("${rel}" 100644 "${big}")
+  string(REPEAT "x" 1999 big)
+  git_stage("${rel}" 100644 "${big}\n")
   list(APPEND args --require-git)
   set(expect "\\.exr: git stores it as a 2000-byte blob, not as a Git LFS pointer")
 elseif(CASE STREQUAL "git_tracked_symlink")

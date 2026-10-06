@@ -108,8 +108,8 @@ finding.
   gap). The scorecard carries each record's clause as a gap of `EXIT-0.conformance`, and the run fails on a
   record whose rule and owner no gap of that item names (when `scorecard.jsonc` exists, as it does in the
   repository). `-strict` ignores the file: `go run ./cmd/helios-conformance -root ../.. -strict -rules CONF-11`
-  is how WP-0.2r showed CONF-11 clean. Today's record: CONF-12 (WP-0.5r), the open row of 09 §5.10.4 (b)
-  (WP-0.2r closed CONF-11's). Adding a record is a Director decision (D3).
+  is how WP-0.2r showed CONF-11 clean. There are no records today: WP-0.2r part 1 removed CONF-11's and
+  WP-0.5r part 1 CONF-12's (09 §5.10.4 (b)). Adding a record is a Director decision (D3).
 - **Map** (`map.jsonc`): anchors to paths, rules and required tests. The run fails on a key that is not an
   anchor, an unknown rule, a bad glob, an entry with neither rules nor `why` (D5), and a rule in no entry.
 

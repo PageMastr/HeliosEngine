@@ -149,7 +149,10 @@ if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
       "msvc_gate_gs|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: baseline unit .CPU gate. built without its level set .missing: /GS-."
       "gate_sanitize|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: CPU-gate unit built with sanitizer instrumentation .-fsanitize=address."
       "gate_rtc|ISA audit failed .1 violation.*cpu_gate_hook.c .helios_core_cpugate_hook.: CPU-gate unit built with MSVC run-time checks ./RTC1."
-      "gate_coverage|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: CPU-gate unit built with coverage instrumentation .--coverage.")
+      "gate_coverage|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: CPU-gate unit built with coverage instrumentation .--coverage."
+      # A negation clears only its own kind: --coverage survives -fno-coverage-mapping and -fno-profile-arcs,
+      # -fprofile-instr-generate survives -fno-coverage-mapping; a third unit negates every kind it enables.
+      "gate_coverage_negated|ISA audit failed .2 violation.*cpu_gate.c .helios_core_cpugate.: CPU-gate unit built with coverage instrumentation .--coverage..*cpu_gate_hook.c .helios_core_cpugate_hook.: CPU-gate unit built with coverage instrumentation .-fprofile-instr-generate.")
     string(REPLACE "|" ";" parts "${case}")
     list(GET parts 0 fixture)
     list(GET parts 1 expect)

@@ -11,7 +11,10 @@
  *  - static functions and data plus exactly three external symbols over all gate objects:
  *    helios_cpu_gate_run and helios_cpu_gate_verdict (the probe, cpu_gate.c) and the Windows TLS-callback
  *    slot helios_cpu_gate_tls_entry (win32/cpu_gate_hook.c); no weak, COMDAT or selectany symbols, so no
- *    AVX2 copy of anything can be picked for the gate at link time.
+ *    AVX2 copy of anything can be picked for the gate at link time;
+ *  - text in static char arrays, never string literals: cl and clang-cl emit each literal as an external
+ *    COMDAT (??_C@...). The gate level also builds with clang-cl without vectorization or loop unrolling,
+ *    whose constant pools (__xmm@...) are external COMDATs too (cmake/HeliosIsa.cmake).
  */
 #ifndef HELIOS_CORE_CPU_GATE_H
 #define HELIOS_CORE_CPU_GATE_H

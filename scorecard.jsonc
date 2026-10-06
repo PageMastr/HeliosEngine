@@ -459,7 +459,7 @@
       "title": "Client cooks contain no server-only data",
       "class": "N", "platforms": ["linux", "windows"],
       "threshold": "Client cooks contain no `server_only` data (CI; R08-ED-P0-01)",
-      "notes": "Measured on sample records (engine/records, 02 §3.3 and §6.5): the records cook refuses a client layout that keeps a server-only field, embeds a server-only type or references a server-only record without @opaque (and the reverse direction for the server cook); records_tests and the lint_records_sec4 CTests search the raw bytes of both cooks for planted server-only sentinels, each of which must be in the server cook and in no client cook (the fixture test scans the server cook as a client cook and must fail); lint_records_sec4_nested plants them in server {} fields of structs nested in shared data (keyed lists merged and appended through $parent, an optional, a struct field, a map value, a plain list). Accepted trade-off: a withheld tag keeps its slot, parent, depth, subtree range, audience and declared flag in the client cook (TagIndex agreement needs the slots), so a client can count server-only tags and see where they sort; only their names are withheld",
+      "notes": "Measured on sample records (engine/records, 02 §3.3 and §6.5): the records cook refuses a client layout that keeps a server-only field, embeds a server-only type or references a server-only record without @opaque (and the reverse direction for the server cook); records_tests and the lint_records_sec4 CTests search the raw bytes of both cooks for planted server-only sentinels, each of which must be in the server cook and in no client cook (the fixture test scans the server cook as a client cook and must fail); lint_records_sec4_nested plants them in server {} fields of structs nested in shared data (keyed lists merged and appended through $parent, an optional, a struct field, a map value, a plain list); lint_records_sec4_content runs the same search over the reference game's own records (content/, WP-0.20: the reference ship hull's server-only aiHints keys). Accepted trade-off: a withheld tag keeps its slot, parent, depth, subtree range, audience and declared flag in the client cook (TagIndex agreement needs the slots), so a client can count server-only tags and see where they sort; only their names are withheld",
       "status": "partial",
       "tests": [
         {"doctest": "records_tests", "case": "AAA-SEC-4: the client cook of the test records holds no server-only field, record, tag name or sentinel"},
@@ -471,10 +471,10 @@
         {"ctest": "lint_records_sec4"},
         {"ctest": "lint_records_sec4_m0_sample"},
         {"ctest": "lint_records_sec4_fixture_leak"},
-        {"ctest": "lint_records_sec4_nested"}
+        {"ctest": "lint_records_sec4_nested"},
+        {"ctest": "lint_records_sec4_content"}
       ],
       "gaps": [
-        {"clause": "The game's own records: CI cooks only sample records, because the reference project's content/ does not exist yet; its client cook must run the same checks", "state": "unmeasured", "owner": "WP-0.20"},
         {"clause": "Client paks: only records are cooked so far; 02 §6.5's server-side asset data (collision, hitboxes, server{} records packed per zone) reaches paks with the zone cook, which must lint both directions too", "state": "unmeasured", "owner": "WP-2.1"}
       ]
     }
@@ -593,6 +593,20 @@
       "status": "unmeasured",
       "tests": [],
       "gaps": [{"clause": "A process record, kept by the Director in 09 §8.1", "state": "unmeasured", "owner": "Director"}]
+    },
+    {
+      "id": "EXIT-0.reference-content", "phase": 0, "source": "09 §2.1", "owner": "WP-0.20",
+      "title": "Reference-content records compile; 100 % provenance",
+      "class": "N", "platforms": ["linux", "windows"],
+      "threshold": "Records compile; 100 % provenance (WP-0.20's acceptance, for the reference game's content/)",
+      "notes": "09 §5.3 DoD item 8 registers every acceptance criterion; WP-0.20 completes M0 (09 §8.2), so its acceptance sits with the Phase 0 exit items. lint_content_records_cook cooks content/'s records with helios-cook records (the records compile), and lint_content_records_canonical has helios-tool confirm their canonical form. lint_content_check runs helios-cook check on helios.project.jsonc and content/: every file is a known document type with a valid .meta sidecar (engine/assetpipe's scanMetas: GUID, provenance, an allowed licence), which is the 100 %, plus the project file and layout rules. The lint_content_check_fixture_* cases seed one violation each (at least one per rule, a broken record among them) and must fail with its diagnostic; valid, cook_then_check and ignored_cache must pass. AAA-SEC-4's lint_records_sec4_content covers the same cook's client/server split",
+      "status": "measured",
+      "tests": [
+        {"ctest": "lint_content_check"},
+        {"ctest": "lint_content_records_cook"},
+        {"ctest": "lint_content_records_canonical"},
+        {"ctest": "lint_content_check_fixture_*"}
+      ]
     },
     {
       "id": "EXIT-0.auditors", "phase": 0, "source": "09 §5.7", "owner": "Director",

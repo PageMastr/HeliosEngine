@@ -447,7 +447,9 @@ endforeach()
 # IP-name grep (01 §4.1 rule 2, §5.2): reference-content names out of engine/Foundation code,
 # franchise names out of everything, franchise titles out of content/ and docs/concept/.
 # concept_anchor pins that a content directory counts only at the root: engine/content/ and
-# engine/docs/concept/ are engine code.
+# engine/docs/concept/ are engine code. project_file: the top-level helios.project.jsonc is the reference
+# game's (reference names pass); project_file_title: a franchise title fails there, and a reference name
+# still fails in any other top-level file. franchise_in_record: records (.hrec) are scanned.
 # ---------------------------------------------------------------------------------------------
 helios_lint_test(lint_ip_names COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
   -DLINT_POLICY=${LINT}/ip_names_policy.cmake -P ${LINT}/ip_names.cmake)
@@ -458,7 +460,9 @@ foreach(case
     "franchise_in_concept|vista-dusk-v01.webp.concept.jsonc:2: franchise name 'Coruscant'"
     "title_in_concept|t01-world-v01.png.concept.jsonc:2: franchise title 'Star Citizen'"
     "concept_anchor|failed .2 finding.*engine/content/notes.md:1: reference-content name 'Kestrel'.*engine/docs/concept/notes.md:1: reference-content name 'Kestrel'"
-    "identifier_in_code|IP-name lint failed .4 finding")
+    "identifier_in_code|IP-name lint failed .4 finding"
+    "franchise_in_record|content/records/hull/raider.hrec:4: franchise name 'Tatooine'"
+    "project_file_title|failed .2 finding.*helios.project.jsonc:3: franchise title 'Star Wars'.*notes.md:1: reference-content name 'Kestrel'")
   string(REPLACE "|" ";" parts "${case}")
   list(GET parts 0 fixture)
   list(GET parts 1 expect)
@@ -466,7 +470,7 @@ foreach(case
     COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${LINT_TESTS}/ip_names/${fixture} -DLINT_POLICY=${LINT}/ip_names_policy.cmake
             -P ${LINT}/ip_names.cmake)
 endforeach()
-foreach(fixture clean concept_names)
+foreach(fixture clean concept_names project_file)
   helios_lint_test(lint_ip_names_fixture_${fixture} COMMAND ${CMAKE_COMMAND}
     -DSOURCE_DIR=${LINT_TESTS}/ip_names/${fixture} -DLINT_POLICY=${LINT}/ip_names_policy.cmake -P ${LINT}/ip_names.cmake)
 endforeach()

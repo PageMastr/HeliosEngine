@@ -1,0 +1,53 @@
+{
+  "$rid": 6108480901779567426,
+  "$name": "hull/kestrel",
+  "$comment": "Kestrel: the light fighter of Cinder Reach's Phase 1 slice (01 §4.2). M0's editor demo is meant to edit this record (09 §2.1).",
+  "name": "loc:ship.kestrel.name",
+  "size": "Small",
+  "faction": "Pilots",
+  "mass": 14500,
+  "thrusters": [
+    {
+      "$key": "7e236e46-6e84-44c0-b92d-502d3b6e02d1",
+      "bone": "thruster_main",
+      "maxForce": 180000
+    },
+    {
+      "$key": "21f666b6-a9a2-43cf-ad60-e571aa1f493b",
+      "bone": "thruster_retro",
+      "dir": [0, 0, 1],
+      "maxForce": 60000
+    },
+    {
+      "$key": "bab0be2e-7b35-446a-b738-f6bc5cf27672",
+      "bone": "thruster_left",
+      "dir": [-1, 0, 0],
+      "maxForce": 35000
+    },
+    {
+      "$key": "7e780bb2-1b0c-4570-abad-fdc6bfa34056",
+      "bone": "thruster_right",
+      "dir": [1, 0, 0],
+      "maxForce": 35000
+    }
+  ],
+  "hardpoints": [
+    {
+      "slot": "gun_left",
+      "offset": [-2.1, -0.3, 1.8]
+    },
+    {
+      "slot": "gun_right",
+      "offset": [2.1, -0.3, 1.8]
+    }
+  ],
+  "handling": {
+    "pitchRate": 70,
+    "yawRate": 50,
+    "rollRate": 160
+  },
+  "aiHints": {
+    "breakOffHealth": 0.35,
+    "strafeRange": 450
+  }
+}

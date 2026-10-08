@@ -1,0 +1,68 @@
+{
+ "branch": "agent/claude/wp-0.5r-cpu-gate",
+ "head": "95c36d7c662faa9ae7cb01a476e374ecb61b1787",
+ "pr": 65,
+ "summary": "Round 4 for PR #65: both blocking findings and nits (a)-(e) fixed in five focused commits on 333d148, pushed without force to agent/claude/wp-0.5r-cpu-gate (head 95c36d7). The PR body is updated with a \"Review round 3: what changed\" table, and the posted body matches my local file byte for byte. A CI run on the new head is not confirmed, so none is claimed.\n\nBlocking 1 (a5a0d37). CONF-12 sees definitions inside `extern \"C\" { }` blocks again.\n- `externCRE` and `gateExternRE` now share `linkageSpec`, which accepts the blanked literal (spaces between the quotes) as well as plain \"C\" and \"C++\".\n- I kept the scan on blanked lines and matched the blanked form. Matching the unblanked head would carry a second copy of every line and its columns through the statement scan, and every linkage block holds file-scope declarations alike.\n- `gateExternRE` had the same flaw: `extern \"C\" struct t {\u2026};` was reported as defining `t`. That is fixed too.\n- New bad fixture `linkage.h` (findings at lines 4, 5, 9, 12) covers a variable and a function in an `extern \"C\"` block, a variable in an `extern \"C++\"` block, and one after the blocks. The good fixture gains `extern \"C\"` statements that define nothing. Its header block still only declares.\n- The doc comment of `checkGateSymbols` and the conformance README paragraph now say these blocks are scanned.\n\nBlocking 2 (4dd8413). `/clang:-ffreestanding` is removed from the COFF gate tests.\n- The command is now the gate level's clang-cl flags plus the presets' compile flags: `/O2 /Ob1 /DNDEBUG /Z7`. This also fixes nit (a); CMake 3.28's `Windows-MSVC.cmake` gives `/O2 /Ob1` for RelWithDebInfo.\n- New seeded test `lint_isa_coff_gate_detects_memset_libcall` (`tests/isa/gate_memset_libcall.c`, a zeroing loop of unknown length) must fail check 2 with \"references 'memset', which is not on HELIOS_ISA_GATE_ALLOWED_IMPORTS\".\n- Descriptions are corrected in the `lint_tests.cmake` comment, `tools/lint/README.md`, 09 \u00a75.10.4 (b) (Plan-Change: yes) and the PR body. The round-2 row of the body now says the flag was undisclosed.\n- The real probe and both hook objects compile and audit clean without the flag, so no header problem needed it.\n\nNits.\n- (b) 7aeeddb: the `platform_init.cpp` comment and the PR body now say platformInit() allocates nothing while its writes succeed. The allocation is not removed: that would need a raw write in both platform backends.\n- (c): the PR body now says three gated images (`core_cpugate_child`, `_snb`, `_snb_gui`), matching what was checked.\n- (d) 95c36d7: one clause in 09 \u00a75.10.4 (b) says WP-0.2r part 2's Windows check 3 needs an entry for the child's `.CRT$XLB` callback or a test-image exclusion (Plan-Change: yes).\n- (e) f6f70db: configure compiles `gate_literal_pool.c` once with the tests' flags. If that fails, no COFF test or target is registered and a STATUS line quotes the compiler's first error line.\n\nNot taken, as instructed: check 1 requiring the `/clang:-fno-*` options (nit 1), a CI cache option for missing LLVM tools (nit 3), `#pragma loop(no_vector)` for cl (kept recorded as the likely remedy), nit 5, and the RT-09/CL-17 scorecard entries. Every commit carries the WP, Criteria and Plan-Rev 14 trailers and the two attribution lines; Plan-Change is on 4dd8413 and 95c36d7; no closing keywords.\n\nCleanup: my worktree and build dirs are deleted. I created one local branch ref, `agent/claude/wp-0.5r-cpu-gate`, tracking origin, and left it in the primary repo.",
+ "verified": [
+  "go vet ./... and go test -count=1 ./... in tools/conformance: ok, before and after the final commits",
+  "CONF-12 mutation by hand: the new bad fixture reports only linkage.h:12 against 333d148's scanner, and the good fixture also fails (it reports hcg_tag)",
+  "CONF-12 mutation via ctest: conf11_12.go swapped back to 333d148's makes lint_conformance_unit and lint_conformance_fixture_CONF-12_bad and _good fail; restored, all 45 lint_conformance* tests pass",
+  "A scratch tree with definitions inside extern \"C\" blocks (header and source) gives findings again with the fix; helios-conformance -strict over the real tree: 12 rules, 0 failing, 1 suppressed, known failing none",
+  "linux-gcc (GCC 13.3, -j2, own build dir): full build, 0 compiler warnings in the build log",
+  "ctest -L lint -j2 twice: 464/464 passed both times (includes lint_isa_audit: 1372 units, 9 gated executables)",
+  "The five lint_isa_coff_gate_* tests pass: probe, hook, hook_snb, detects_literal_pool and the new detects_memset_libcall",
+  "Mutation: re-adding /clang:-ffreestanding to coffFlags makes lint_isa_coff_gate_detects_memset_libcall fail with 'the lint succeeded on a seeded violation ... is clean' while the other four pass; restored, 5/5 pass",
+  "By hand with clang-cl 18: the zeroing loop gives 'U memset' without -ffreestanding and a clean object with it; the audit message is 'object: references memset, which is not on HELIOS_ISA_GATE_ALLOWED_IMPORTS'",
+  "By hand: probe, hook and hook_snb objects built with and without /W4 /utf-8 /fp:precise /Zc:inline /bigobj /MT /EHsc and the NOMINMAX-style definitions have identical disassembly with relocations, symbols and .text/.rdata/.data/.CRT$XLA0 contents",
+  "Configure-time clang check: a stub clang-cl that exits 1 gives the STATUS line, no COFF test registered (ctest -N shows none) and no COFF build target; with real clang-cl-18 all five are registered",
+  "core_tests -tc=\"cpu gate*\": 15 test cases, 109 assertions passed",
+  "cmake -P tools/ci/run_lints.cmake: all lints passed",
+  "cross-mingw: core_tests and the four core_cpugate_child* images built (80 steps, 0 warnings)",
+  "git push without force succeeded (333d148..95c36d7); origin branch head equals local head; PR body fetched back via gh api is identical to the file I wrote",
+  "Commit trailers checked by hand; no closing keywords in commit messages or the PR body"
+ ],
+ "not_verified": [
+  "CI on the new head 95c36d7 was not checked; none is claimed in the PR body",
+  "xvfb-run ctest -LE perf (the non-lint suite) was not rerun this round: only a comment changed in engine/core, and core_tests cpu gate* plus the lint label were run",
+  "linux-clang and linux-dev (modular) builds were not rerun locally",
+  "In cross-mingw only the core targets were built: the MinGW lints and the TLS-order checks of round 2 were not rerun, and MinGW binaries cannot run here (no Wine)",
+  "No MSVC/cl or Windows toolchain here: cl's own gate objects, msvc_gate_audit.ps1 and all Windows runtime behaviour remain verified only by Windows CI",
+  "The Debug preset's /Od is not covered by the COFF tests (the comment and README say so)",
+  "tools/ci/check_owner_lines.sh is not in the tree, so trailers were checked by hand"
+ ],
+ "notes_for_lead": "Round 3's nit 1 (check 1 requiring the /clang:-fno-* options on clang-cl gate units) and nit 3 (a CI-set cache option that makes missing LLVM tools a configure error) were outside the asked set and are recorded in the PR body as not taken. The `#pragma loop(no_vector)` remedy for cl stays recorded under \"Not verified\". ADR-0.6c \u00a73 item 3 listed under both WP-0.2r part 2 and WP-0.5r's \u00a72 row, and the missing RT-09/CL-17 scorecard entries, remain Director items.\n\nThe new COFF-test configure check means a host whose clang cannot build the objects now skips the tests with a STATUS line instead of failing the build. CI still cannot detect a missing LLVM toolset: the tests would be unregistered with only a STATUS line. That is the unchanged nit 3.\n\nProcess note: my background `nohup cmake --build &` inside a run_in_background command produced a premature 'completed' notification, because that was the wrapper shell exiting; the build itself ran on and finished normally.",
+ "changes": [
+  {
+   "finding": "Blocking 1: CONF-12 blind inside extern \"C\" { } blocks in gate files after round 2's literal blanking",
+   "change": "conf11_12.go: shared linkageSpec regex used by externCRE and gateExternRE accepts the blanked literal plus plain \"C\" and \"C++\" (also fixes extern \"C\" struct t {...}; being reported as defining t); doc comment and tools/conformance/README.md updated; new bad fixture linkage.h (lines 4, 5, 9, 12) and good-fixture additions. Commit a5a0d37."
+  },
+  {
+   "finding": "Blocking 2: lint_isa_coff_gate_* built with /clang:-ffreestanding, hiding compiler-generated memset imports",
+   "change": "lint_tests.cmake: removed the flag, introduced coffFlags (/O2 /Ob1 /DNDEBUG /Z7 plus HELIOS_ISA_GATE_CLANG_CL and /X); new seeded test lint_isa_coff_gate_detects_memset_libcall with tests/isa/gate_memset_libcall.c; comments, tools/lint/README.md, 09 section 5.10.4 (b) and the PR body (round-2 row) now describe the command accurately. Commit 4dd8413 (Plan-Change: yes)."
+  },
+  {
+   "finding": "Nit (a): comment said Release /O2 /Ob2 but the MSVC-family presets build RelWithDebInfo (/O2 /Ob1)",
+   "change": "Matched the presets (/O2 /Ob1 /DNDEBUG, /Z7) in coffFlags and the comment; stated that the Debug preset /Od is not built. Commit 4dd8413."
+  },
+  {
+   "finding": "Nit (b): 'platformInit() allocates nothing before log::flush()' is imprecise because a failed os::pipeWrite builds an Error with a std::string",
+   "change": "Wording made precise in engine/core/src/platform_init.cpp and in the PR body (allocates nothing while the writes succeed); allocation not removed (needs a raw write in both platform backends). Commit 7aeeddb."
+  },
+  {
+   "finding": "Nit (c): PR body said MinGW TLS order was checked on six gated images but names three",
+   "change": "PR body corrected to the three images actually checked (core_cpugate_child, _snb, _snb_gui)."
+  },
+  {
+   "finding": "Nit (d): core_cpugate_child's own .CRT$XLB callback is not in pre_main_allowlist.cmake",
+   "change": "One clause added to 09 section 5.10.4 (b), audit row open-items cell: WP-0.2r part 2's Windows check 3 needs an entry for helios_cpugate_child_xlb_entry or a test-image exclusion. Commit 95c36d7 (Plan-Change: yes)."
+  },
+  {
+   "finding": "Nit (e): find_program(clang) accepts any clang while the COFF objects are part of ALL",
+   "change": "lint_tests.cmake: configure compiles gate_literal_pool.c once with the tests' flags; on failure no COFF test or target is registered and a STATUS line quotes the first error line. Commit f6f70db."
+  },
+  {
+   "finding": "PR body bookkeeping",
+   "change": "Added 'Review round 3: what changed' table and round-3 test results, corrected the Size paragraph, the round-2 COFF-test row (undisclosed -ffreestanding), the platformInit allocation statements and the AI-involvement line; added the #pragma loop(no_vector) remedy note; replaced the footer with the required one."
+  }
+ ]
+}

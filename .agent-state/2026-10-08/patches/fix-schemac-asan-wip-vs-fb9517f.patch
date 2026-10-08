@@ -1,0 +1,111 @@
+diff --git a/tools/schemac/README.md b/tools/schemac/README.md
+index d0f1022..6f7a76a 100644
+--- a/tools/schemac/README.md
++++ b/tools/schemac/README.md
+@@ -808,7 +808,11 @@ the rules of `@sql`. The CTest `schemac_sql_postgres`
+ releases, checks that v1's and v2's stubs (plus v2's contract step) build exactly v2's snapshot
+ (`pg_dump --schema-only`), that v2's Down returns to v1's snapshot, and that the committed SQL goldens
+ apply. It prints `SKIPPED:` without PostgreSQL binaries (`PGBIN`, `/usr/lib/postgresql/*/bin`), runs the
+-server as `nobody` when started as root, and is not registered on Windows or when cross-compiling.
++server as `nobody` when started as root, and is not registered on Windows or when cross-compiling. The
++data directory is in the build tree, but the server's Unix socket is in a short private directory under
++`$TMPDIR` (else `/tmp`), named at random and removed on every exit path: a socket path is capped at 107
++bytes on Linux, which the linux-asan nightly's build directory exceeded, and the random name keeps
++concurrent runs apart.
+ 
+ ## Deviations and limitations
+ 
+diff --git a/tools/schemac/tests/sql_postgres.cmake b/tools/schemac/tests/sql_postgres.cmake
+index f3519b0..10d9a78 100644
+--- a/tools/schemac/tests/sql_postgres.cmake
++++ b/tools/schemac/tests/sql_postgres.cmake
+@@ -11,6 +11,8 @@
+ # 4. Every snapshot in SNAPSHOTS (the committed goldens) applies to an empty database.
+ # Prints "SKIPPED:" (the CTest skip pattern) when no PostgreSQL server binaries are found. As root, the
+ # server runs as `nobody` through runuser (PostgreSQL refuses root), which needs a WORK_DIR it can reach.
++# The data directory is in WORK_DIR; the Unix socket is not (a short private directory under the temp dir,
++# so the test works at any build-directory depth, see below).
+ 
+ cmake_minimum_required(VERSION 3.28)
+ foreach(v SCHEMAC SQL_DIR WORK_DIR)
+@@ -51,13 +53,53 @@ if(run_as)
+ endif()
+ set(data "${WORK_DIR}/data")
+ set(port 55439)
+-# A Unix socket in WORK_DIR (no TCP port shared with other builds); Windows uses loopback TCP.
++
++# Creates a private (0700) directory for the server's Unix socket and stores it in `out_var`. The socket file
++# is "<dir>/.s.PGSQL.<port>" and must fit sockaddr_un.sun_path (107 bytes on Linux, 103 on macOS), which a socket
++# in WORK_DIR does not once the build directory is a few levels deep: the linux-asan nightly's
++# build/linux-debug-asan made it 108 bytes ("could not create any Unix-domain sockets"). So the socket lives
++# under the temp dir ($TMPDIR, else /tmp when that is missing or too long), in a directory named at random, so
++# concurrent runs (ctest -j, several build trees) never share one.
++function(make_socket_dir out_var)
++  set(path_max 100) # the longest socket path accepted, below the smallest sun_path with room to spare
++  foreach(root "$ENV{TMPDIR}" "/tmp")
++    string(REGEX REPLACE "/+$" "" root "${root}")
++    if(NOT root OR NOT IS_DIRECTORY "${root}")
++      continue()
++    endif()
++    string(RANDOM LENGTH 12 ALPHABET "abcdefghijklmnopqrstuvwxyz0123456789" id)
++    set(dir "${root}/helios-pg-${id}")
++    string(LENGTH "${dir}/.s.PGSQL.${port}" len)
++    if(len GREATER path_max OR EXISTS "${dir}")
++      continue()
++    endif()
++    file(MAKE_DIRECTORY "${dir}")
++    file(CHMOD "${dir}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
++    set(${out_var} "${dir}" PARENT_SCOPE)
++    return()
++  endforeach()
++  message(FATAL_ERROR "sql_postgres: no usable temp directory for the server's Unix socket (TMPDIR='$ENV{TMPDIR}')")
++endfunction()
++
++# Removes the socket directory (the server's own shutdown deletes its socket, a killed one does not).
++macro(remove_socket_dir)
++  if(socket_dir)
++    file(REMOVE_RECURSE "${socket_dir}")
++  endif()
++endmacro()
++
++# No TCP port is shared with other builds: a Unix socket (listen_addresses is empty), or loopback TCP on Windows.
++set(socket_dir "")
+ if(CMAKE_HOST_WIN32)
+   set(pg_host 127.0.0.1)
+   set(server_options "-c listen_addresses=127.0.0.1 -p ${port}")
+ else()
+-  set(pg_host "${WORK_DIR}")
+-  set(server_options "-k ${WORK_DIR} -c listen_addresses= -p ${port}")
++  make_socket_dir(socket_dir)
++  if(run_as)
++    execute_process(COMMAND chown nobody "${socket_dir}")
++  endif()
++  set(pg_host "${socket_dir}")
++  set(server_options "-k ${socket_dir} -c listen_addresses= -p ${port}")
+ endif()
+ set(errors "")
+ 
+@@ -113,6 +155,7 @@ endfunction()
+ execute_process(COMMAND ${run_as} ${PG_initdb} -D "${data}" -U postgres --auth=trust -E UTF8 RESULT_VARIABLE rc OUTPUT_QUIET
+                 ERROR_VARIABLE err)
+ if(NOT rc EQUAL 0)
++  remove_socket_dir()
+   message(FATAL_ERROR "sql_postgres: initdb failed: ${err}")
+ endif()
+ execute_process(COMMAND ${run_as} ${PG_pg_ctl} -D "${data}" -l "${WORK_DIR}/server.log" -w
+@@ -120,6 +163,7 @@ execute_process(COMMAND ${run_as} ${PG_pg_ctl} -D "${data}" -l "${WORK_DIR}/serv
+                 RESULT_VARIABLE rc OUTPUT_QUIET ERROR_VARIABLE err)
+ if(NOT rc EQUAL 0)
+   file(READ "${WORK_DIR}/server.log" log)
++  remove_socket_dir()
+   message(FATAL_ERROR "sql_postgres: the server did not start: ${err}\n${log}")
+ endif()
+ 
+@@ -200,6 +244,7 @@ SELECT 1 / (SELECT count(*)::int FROM svc_sqltest.account WHERE id = 1 AND banne
+ endif()
+ 
+ execute_process(COMMAND ${run_as} ${PG_pg_ctl} -D "${data}" -m fast -w stop OUTPUT_QUIET ERROR_QUIET)
++remove_socket_dir()
+ if(errors)
+   string(REPLACE ";" "\n  " text "${errors}")
+   message(FATAL_ERROR "sql_postgres: failed:\n  ${text}")

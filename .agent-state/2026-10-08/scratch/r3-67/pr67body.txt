@@ -1,0 +1,128 @@
+1a865613902bb3ec17f7d9203c88eedec294275f
+## What and why
+
+Director status refresh (09 §5.10.2 D6) on `main` at fb9517f, after the 22 PRs merged since the last Director PR (#51, 14e46dd): #27–#29, #33, #35, #46, #49, #50, #52–#64 and #66, with the owner's commit 1dac3d1 (`git log 14e46dd..fb9517f`). The documentation audit (#63) had brought the §8.1 rows up to f5f2729, so this refresh adds what merged after that snapshot (#59, #62, #63, #64 and #66) and re-reads the rows of #55, #57, #58, #60 and #61. It records **NS-0.2 on fixed hardware: the re-test the owner's approval owed failed on the `win-gpu` runner (run 37231118477, 2026-10-04), so under 09 §5.6 the approval lapsed that day; after the second pass (#62) the runner passed strictly** (run 37391930751, 2026-10-06), and whether hosted Linux counts as approved again is the owner's call (section 3). It decides the 12 plan-vs-code items the documentation audit (#63) left for the Director, plus the `engine/server` module-table deviation and the K5b wording, lists the decisions only the owner can make, and applies the reviewers' small doc fixes. Plan revision 14 → **15**. No code changes (Markdown only), and no threshold, budget, registry or workflow changes; the approval's lapse is 09 §5.6's own rule, recorded, and re-confirming it is left to the owner.
+
+Work package / acceptance criteria: WP none (Director). Criterion: the plan's status is accurate (09 §5.10.2 D6), and revision 15's anchors went through D1/D3/D5/D7 (CONSISTENCY.md §43 rows, PLAN-REV, §5.10.4 (c)).
+
+### 1. Status
+
+- **NS-0.2 on fixed hardware, and the approval's lapse** (09 §8.1 WP-0.4 and WP-0.13 rows, §8.2, PLAN.md §11, `engine/net/README.md`): every figure is attributed to its run (the #63 reviewer's finding). Strict `net_bench --gate` on the owner's Ryzen 5 5500, five `win-gpu` runs in time order, HTP stack in packets per core: 82,842 (run 37231118477, 2026-10-04), 82,134 (37263321224), 89,080 (37328633862, after #60), 85,054 (37340158971, the workflow's scheduled run on f5f2729, which the first draft missed) and **118,253, strict pass** (37391930751 on 2bc2d85, after #62; 8.46 µs of CPU per packet; raw 215,488); NS-0.7 passed in all five. The sequence, as 09 §5.6 and the approval record define it: the re-test failed on its first run, so **the approval lapsed on 2026-10-04**; runs 2–4 failed too; the second pass followed (#62); run 5 then passed strictly on Windows; the Linux half has not run (no Linux lab host). Nothing in §5.6 or the record revives a lapsed approval, so **hosted-Linux NS-0.2 counts as approved again only if the owner re-confirms it, dated and verbatim, in the record**; until then the status counts hosted Linux strictly (the one hosted-Linux nightly since the lapse, 2026-10-05, measured 113,289, above 100k). The nightly's `--advisory` and the registry's `approved` are not changed here (§8.2 row 8 schedules them after the owner's answer). No nightly has run yet on a `main` that includes #62, so whether hosted Windows now passes strictly is not known.
+- **Hosted Windows** (strict): runs 37112350755 and 37124127542 (2026-10-03) passed at 101,410 and 152,329; 37193564608 (2026-10-04) and 37297423497 (2026-10-05) failed at 84,989 and 84,730: below 100k in 4 of 7 runs. **NS-0.7 failed a second time on hosted Windows** (37112350755: 19,816 pps, 0.92 % drops), which the old rows did not record. **NS-0.4**: the Linux 1 h libFuzzer runs passed all five targets in all 14 non-cancelled Nightly runs from 2026-09-27 to 2026-10-05, 9 scheduled and 5 dispatched (the row still said "1 of 3"); the Windows half has no run.
+- **ADR-0.9c**: the RTX 3050's figures from all five `win-gpu` runs as additional evidence (full detail 14.59–19.65 and level-adaptive 19.52–22.55 tiles per 0.8 ms: the amber band in four runs and the red band, 14.59, in the scheduled run 37340158971, whose SSE4.2 and scalar CPU medians were also about twice the others'; CPU AVX2 1.665–1.674 ms per tile), with a per-run table. Not MIN hardware; MIN confirmation still due; **no outcome change**.
+- **Nightlies of 2026-10-04 and 2026-10-05** (WP-0.3 row, §8.2 P0 list), read from the job logs and the `windows-go` artifact: `pcg_tests_perf` (K5b, by design); **new P0s**: `assetpipe_tests_perf` (`saveMeta` p95 101.7 ms against 50 ms; WP-0.8), `schemac_sql_postgres` under ASan (PostgreSQL's socket path exceeds 107 bytes; WP-0.7b), `TestPerfDeepPaths` (2.8× against 2× on `windows-go`; it also failed CI's Windows Go job on `main` at fb9517f, 2.0×; WP-0.16), `editorui_ed15` timeout under ASan once; NS-0.2 on hosted Windows. `render_tests_perf` passed both nights (WP-0.12's margin, which #63 left "verified only by the next nightly").
+- 09 §8.1: heading date and intro; the plan, WP-0.1, WP-0.3, WP-0.4, WP-0.6, WP-0.8, WP-0.9, WP-0.12, WP-0.13, WP-0.14, WP-0.16 and WP-0.20 rows. 09 §8.2: a new order (WP-0.5r, WP-0.17, WP-0.2r part 2, WP-0.6c part 2, WP-0.1's queue, MSVC `/W4` cleanup, WP-0.5's accounting gate, WP-0.3 follow-ups, WP-0.4's lab host, WP-0.20 follow-ups, the Phase 0 exit review with F0, WP-1.1) and its "from the user" list. 09 §7: **K5b fired**. 09 §5.10.4 (c): `engine/reflect` and `tools/schemac` at 12, and revision 15's re-check. PLAN.md: status line (revision 15, three fired risks), §11's current state for fb9517f, the CI list (`windows-msvc-dev`), §12's `adr/` row (ADR-0.6c). README: the `content/` row (WP-0.20b).
+- **Not edited, so that this PR does not conflict with #65** (verified with `git merge-tree` against #65's head 333d148: clean): the §8.1 rows #65 rewrites or that border them (`engine/core`, WP-0.2/0.5, WP-0.7, vendored dependencies, "Not started", fired risks, plan conformance, tree inventory), §5.10.4 (b), PLAN.md §11's "Known deltas" lines, CONF-12 records and `scorecard.jsonc`. The §8.1 intro says so, and that §7's K5b row and the WP-0.4/WP-0.13 rows supersede the fired-risks row's "armed" and NS-0.2 sentences, its "Owner approvals in force" included, until the refresh after #65.
+
+### 2. Plan vs code: the Director's decisions (#63 "Plan vs code", items 1–12, plus two)
+
+| # | Item | Decision | Why |
+|---|---|---|---|
+| 1 | 09 §5.10.4 (c): `engine/reflect` at Plan-Rev 6 vs its README's 12 | Status amended: `engine/reflect` and `tools/schemac` get their own row at 12 | WP-0.7b wrote both to revision 12 |
+| 2 | 02 §3.6 `helios::reflect` vs code `helios::refl` | **Amend the plan** (02 §3.6, §3.8's `refl::DynMut`, WP-2.16c2) | API shape unchanged; a rename touches ~870 uses and generated code for no behaviour |
+| 3 | 02 §3.4 one `schemas/schema.lock.jsonc` vs per-package locks | **Amend**: one lock per schema package, packages may share one; `TypeRegistry` refuses a cross-lock ID collision at start-up | Matches `helios_schema()`'s default and 02 §3.8's packages; the lock's guarantees are unchanged |
+| 4 | 02 §5.8 selection (`static_modules.cpp`, no CPUID) vs lazy init + CPUID fallback | **Amend**: named entry point, start-up or first-use init, one-time `cpuGate()` check with a warned fallback; "no per-call dispatch" | In a gated image the `avx2` default never falls back, and the measurement guard still fails a non-`avx2` budgeted run |
+| 5 | 02 §7.1 three orders, ≈ 80-line patch, debug-only assert vs the 389-line patch with a fourth order and an every-build refusal | **Amend**: the file name, the fourth order (contact-constraint pair order), refusal in every build; the line estimate (not normative) dropped | The code is stricter and covers an order the plan missed (already recorded in `engine/physics/README.md`) |
+| 6 | 02 §1.1 deps of `asset`, `records` vs code | **Amend the key**: Deps are the modules a module may link; the code may link fewer | No deviation under that reading; configure enforces layer and same-layer peers |
+| 7 | 02 §1.1 `patch` deps "core" vs Monocypher, zstd | **Amend**: `core (patch → zstd, Monocypher)` | The key's `→` lists private third-party libraries |
+| 8 | 04 §11.1 / 02 §1.1 have no `engine/server` (the deviation `engine/CMakeLists.txt` records) | **Amend**: a `server` row (L4, HEADLESS, peer `authority`) and an 04 §11.1 line | One library shared by both apps and `server_tests`; `world` hosts zones, not processes. `ZoneInstance` moves to `world` with WP-1.2 |
+| 9 | 05 §7 `.hman` "schema-generated" vs hand-written | **Amend**: a fixed layout specified in `engine/patch/README.md`, one canonical body in both languages | schemac's tagged format has no single canonical encoding, which a signed manifest needs. Also amended: chunks at `klauspost/compress`'s best level (≈ zstd 11), where 05 §7 said zstd-19 (found while fixing the `services/README.md` nit) |
+| 10 | 08 §2.10.3 dev keys in `<project>/.helios/devkeys/` vs `helios-data/keys/patch/<product>/` | **Schedule a code change** in WP-2.16b's row (D3): `helios-patch` reads `product init --dev`'s keys | 08's per-project location is right for the SDK; WP-0.16's directory is a Phase 0 convenience. 08 unchanged |
+| 11 | 03's `apps/tools/` home for `helios-shaderc` and `helios-rendertest`, and LFS goldens in `tests/golden/`, vs `tools/…` and committed goldens | **Amend** 03 §8.4, §9.1: `tools/shaderc`, `tools/rendertest`; lavapipe and Null goldens committed; hardware goldens to LFS with WP-1.23 | PR-tier checkouts fetch no LFS objects (and should not need the network) |
+| 12 | 02 §3.1 / 06 §1.1 `.htags` files interned by schemac vs `TagDef` records interned by the records cook | **Amend** (02 §3.1, 06 §1.1; 07 §1.8.2 and §2.2 wording) | The code uses the plan's "inline in records" option; nothing reads `.htags` |
+| + | `engine/server` module-table deviation | Item 8 | |
+| + | K5b: 09 §7 trigger met vs §8.1 "armed" | **K5b fired 2026-09-25** in §7 (state cell) and ADR-0.9c; no gate change | §7's own rule marks a met trigger Fired |
+
+Each amended anchor has a CONSISTENCY §43 row (revision 15) naming its rework WPs (none) and its tests (D5). **D3, in flight:** #65 touches paths mapped to revision 15's anchors (`cmake/HeliosModule.cmake`, `cmake/HeliosModular.cmake`, and the cell, gateway, shaderc and rendertest mains), but nothing it implements changes, so its delta is empty; if this PR lands first, #65 needs only `Plan-Rev: 15` on its next commit. No module README changes its `Plan-Rev` (as in #51): the amendments adopt what the code was written to. Code comments that still call adopted behaviour a deviation (`engine/pcg/include/helios/pcg/kernel.h:12-14`, `engine/CMakeLists.txt:45-48`) are left for those modules' next PRs (no code changes here).
+
+### 3. For the owner (not decided here)
+
+1. **NS-0.2's lapsed approval on hosted Linux** (only the owner can pass a clause, 09 §5.6). The record and §5.6 say the approval lapses if the fixed-hardware re-test measures the stack below 100k; `win-gpu` measured 82,842 on 2026-10-04 (run 37231118477), so it lapsed that day, and after the second pass (#62) the runner passed strictly at 118,253 (run 37391930751). Hosted Linux still alternates between host classes (about 88k and 110k–132k), and the Linux half of the re-test has no host yet. Options, each recorded in the record dated and verbatim: (a) **re-confirm the approval as it is** until a Linux lab host re-tests; (b) **re-confirm it with a floor**, a number you name, below which the hosted Linux run fails again; (c) **leave it lapsed**, so hosted Linux gates strictly (it fails on the slower host class) and WP-0.3 drops `--advisory` and the registry's `approved`. The Director reads "the re-test" as every strict run on that hardware from the first, as the record words it ("If the encrypted stack measures below 100k per core on that fixed hardware, the approval lapses"); your own words named only the second pass ("if more work is needed it will get a second pass then"), so if you meant the re-test to be the run after the second pass, say so and the rows will follow. Hosted Windows was never covered; a re-confirmation covers it only if you name it.
+2. **Harrow High: its own zone session or a container.** 02 §5.5 keeps the station interior a container in zone `tallis` (Phase 1); ED-20 runs "a second zone session (Harrow High)", and NS-3.11 and NS-4.6 use a "single-cell Harrow High" hub. Options: (A) Harrow High is a container in Phase 1 and its own zone from Phase 3, and 02 §5.5 says so; (B) it stays a container, and ED-20, NS-3.11 and NS-4.6 name another single-cell hub zone (thresholds unchanged).
+3. **#66's proposals**: (1) a `third-party` provenance origin for MIT/BSD/Apache downloads, with a required licence file next to the asset and a `licence` document type; (2) a permanent per-asset and total size check (the brief's ≤ 50 assets, ≤ 15 MB each, ≤ 120 MB; today 35 files, largest 6.07 MB, 32.7 MB in all); (3) renaming `content/art/ships/kestrel/craft_speederD.glb` to a neutral name (bytes and hash unchanged); (4) a Saltmarch light prop (no CC0 kit in use has one); (5) a CI check that every LFS object is on the server (CI's first network-dependent step).
+4. **Origin of agent-written content**: keep `original` with author "Claude Code, agent-authored" (MIT, like agent-written code; today's choice) or use `ai-assisted` (needs the tool, the model and the prompt, and model identifiers are kept out of repository files).
+
+### 4. Small doc fixes (each verified first)
+
+- #63 r2: `tools/lint/README.md:5-10` now says exactly what CI runs of `run_lints.cmake` and the D6 check (`lint_run_lints_status_python`); `services/README.md:143` says zstd at klauspost's best level, as `engine/patch/README.md` does; the lines over 110 columns in `engine/ecs/SPIKES.md:9`, `engine/patch/README.md:29` and `README.md`'s status block re-wrapped. `CLAUDE.md`'s 122-column line is **not** changed: agents do not edit `CLAUDE.md`.
+- #59 r5: the Clang inline-namespace exception in 02 §1.4's lead-in, `engine/ecs/README.md` and 09 §8.1's WP-0.6 row; CONSISTENCY §43's "the open #61" note; PLAN.md §11's CI list and `adr/` index.
+- #66 r2: `content/README.md`'s fixture counts (110 cases: 104 seeded, six pass, `text_utf8_chunk_boundary` included) and the text-document rule there and in 09's WP-0.20 row.
+- README notes that described plan text revision 15 changes: `engine/reflect/README.md`, `tools/schemac/README.md` (namespace, locks), `engine/pcg/README.md` (selection), `engine/patch/README.md` (`.hman`), `tools/rendertest/README.md` (layout); and, in review round 1, `engine/net/README.md` (NS-0.2's lapsed approval) and `engine/patch/README.md` (the `.hman` section is under 05 §7's change control). These go beyond the brief's named lines; leaving them would have made them false.
+
+### Backlog items checked (NEXT-WORK, Director items)
+
+- Done here: K5b (C); NS-0.2 hardware re-test, its lapse and ADR-0.9c evidence (win-gpu run 2, task #72); the 12 items, PLAN.md status and §11, the r2 nits (#63); `engine/server` (D); MSVC `/W4` scheduled (§8.2 row 6; `/WX` is a later gate decision).
+- Already done on `main` (stale): #39's perf-under-ASan lines (the rows cite #39); README's physics row "still due" (#63); 02 vs 07 Saltmarch layout (#51); the 09 "Not started" row's "#59/#62 open" (#64/#66, and #65 rewrites the row).
+- Superseded: "nightly status after the 8 fix PRs" and "render_tests_perf once" (the WP-0.3 row now gives the 2026-10-04/05 nightlies).
+- Owner questions: N3 (now: the lapsed NS-0.2 approval, re-confirm or not), Harrow High (#51 r1), #66's proposals, #64's origin question (section 3).
+- Not done: #51 r1's optional nits (02 §5.5's "(from Ph3, 07 §1.8)" for zone sessions, which the Harrow High answer may rewrite; `zone-tallis` name-as-ID as a WP-3.7 follow-up; the evidence note's cone wording); #41's historical "Plan-Change: none" (no action); the fired-risks row (after #65); the registry's NS-0.2 follow-up text in `scorecard.jsonc` (outside plan text; §8.2 row 8 schedules it).
+
+## Review round 1: what changed
+
+Head reviewed: 76068f1. This PR changes Markdown only, so no CTest can fail on these statements; the "check" column is the command or source that shows the old text was wrong and the new text is right.
+
+| Finding | Change | Check that fails without it |
+|---|---|---|
+| 1. NS-0.2's approval lapsed under 09 §5.6, but the status said it held and the re-test passed | 09 §8.1 WP-0.13 row (status cell, a "re-test and the lapse" paragraph), WP-0.4 row, §8.2 intro, row 8 and the owner list; the §8.1 intro supersedes the fired-risks row's "Owner approvals in force" (that row is #65's); PLAN.md §11; `engine/net/README.md`; CONSISTENCY §43 rows; owner question 1 reframed with the three options. The sequence: the re-test failed on its first run (37231118477, 82,842), so the approval lapsed on 2026-10-04; runs 2–4 failed too; the second pass followed (#62); 37391930751 passed strictly (118,253); the Linux half has not run. Hosted Linux counts as approved again only if the owner re-confirms it, dated and verbatim, in the record. The Director's reading of "the re-test" is written down and put to the owner. No registry or workflow change | 09 §5.6 (`09:998-1000`) and the record (`docs/evidence/ns-0.2-owner-approval-2026-09-30.md:155-158`) against the `win-gpu` job logs (111520767958: `NS-0.2 HTP stack: … 82842 packets per core` and `NS-0.2 FAILED`) |
+| 2. Wrong list of PRs merged since #51 | 09 §8.1 intro, CONSISTENCY's §8.1 row and this description: the 22 PRs (#27–#29, #33, #35, #46, #49, #50, #52–#64, #66) and the owner's 1dac3d1; what the refresh adds after #63's snapshot and what it re-reads | `git log --first-parent --format=%s 14e46dd..fb9517f` lists 23 commits: 22 PRs and 1dac3d1, where the old sentence named 10 |
+| Found while fixing 1: a fifth `win-gpu` run that the first draft (and the lead's run list) missed | The scheduled run 37340158971 (2026-10-05, f5f2729): NS-0.2 stack 85,054 (raw 140,969), NS-0.7 pass; hnoise CPU AVX2 1.665 ms per tile, **GPU full detail 14.59 tiles per 0.8 ms, in the red band** (level-adaptive 19.52; overhead 0.197 ms; its SSE4.2 and scalar medians about twice the others'). Added to ADR-0.9c (status line, §2 tables, §6), 09 §7 K5b, the WP-0.4, WP-0.9 and WP-0.13 rows, PLAN.md and CONSISTENCY. The run formerly called "run 4" is run 5. Not MIN hardware, so no outcome change | Actions API: `win-gpu` workflow runs list 37340158971 (`schedule`, conclusion `failure`); its job log 111864907749 has `NS-0.2 HTP stack: 837248/837248 … 85054` and `GPU: … full detail 3.51 ms (14.59 tiles per 0.8 ms)` |
+| Nit 1: C4268 ×77 | ×81 (78 distinct: 79 in `jobs.h`, 2 in `tu_isolation.h`), counted as warning lines in the job log, which is how the other counts were counted | `grep -c 'warning C4268'` on job 112038791194's log: 81; the other nine codes match their totals |
+| Nit 2: NS-0.4 "13 nightlies (9 scheduled)" | 14 non-cancelled Nightly runs from 2026-09-27 to 2026-10-05, 9 scheduled and 5 dispatched (three on agent branches); 09 row and this description | Actions API, Nightly runs and their `libFuzzer (…)` jobs: 14 runs × 5 jobs, all `success` |
+| Nit 3: "one strict pass is not N's 3-night streak" | Hosted Windows has three strict passes, all on 2026-10-03 (125,611, 101,410, 152,329; one scheduled), but no 3-night streak (the scorecard's streak counts scheduled nightlies) | `tools/scorecard/README.md`'s "Green" rule; the three runs' job logs |
+| Nit 4: 09 §5.2a's path-class table said "the project's `schema.lock.jsonc`" | "each such package's `schema.lock.jsonc` (02 §3.4)"; CONSISTENCY's 02 §3.4 row names the table | `grep -n "the project's .schema.lock" docs/plan/09-roadmap-and-process.md` now finds nothing |
+| Nit 5: WP-1.23's §2 row did not list the hardware-golden LFS move | WP-1.23's row lists it (D3, an unstarted WP); CONSISTENCY's 03 §8.4 row names 09 §2 WP-1.23 | 09:165 against 03 §8.4 |
+| Nit 6: 05 §7 delegated the `.hman` layout outside `docs/plan` | 05 §7: that README section ("The `.hman` v0 format") and `services/testdata/vectors/hman/` are normative under 05 §7, and changing either is a 05 §7 Plan-Change (D1); `engine/patch/README.md`'s section and the CONSISTENCY row say so | 05 §7 text |
+| Nit 7: CONSISTENCY's 02 §1.1 row wording and test column | "Three amendments of the plan to the code"; the test column says configure enforces layer, flags and same-layer peers, not the Deps column as an upper bound | `cmake/HeliosLayering.cmake` |
+| Nit 8: 04 §11.1's `apps/cellserver/` line at 124 columns | Wrapped; the Jolt patch line (111) shortened too. No added line outside a table is over 110 columns | A width check over the PR's added lines (Python, counting characters) |
+
+## How it was tested
+
+On head 1a86561 (`main` unchanged at fb9517f; owner lines checked):
+- `cmake -P tools/ci/run_lints.cmake`: **all lints passed**, twice (before and after the last edit), including **D6 status** (`snapshot: 61 module directories, PLAN-REV 15 … OK`) and **conformance** (12 rules over 1,898 files: 0 failing, 1 suppressed; CONF-12 ×8 known failing, WP-0.5r).
+- `python3 tools/scorecard/scorecard.py check`: OK (19 criteria; it reads the plan's criterion tables), twice.
+- `ctest -L lint -j2` on a full `linux-gcc` build of the branch (GCC 13, `-j2`; 0 compiler warnings; the code is unchanged): **455/455 passed, twice** (55.4 s and 56.7 s), among them `lint_scorecard`, `lint_status_unittest`, `lint_run_lints_status_python`, the IP-name and conformance lints and the content checks. The build directory was deleted afterwards.
+- Link check (`linkcheck.py`, the #63 audit's checker; self-test passes): the 23 changed Markdown files, 206 relative links, 0 broken; all of `docs/` and `README.md`, 224 links, 0 broken.
+- `git merge-tree --write-tree HEAD origin/agent/claude/wp-0.5r-cpu-gate` (#65's head 333d148): clean; `git merge-tree` with `origin/main`: clean.
+- Owner lines: `check_owner_lines.sh HEAD`: "owner lines present in HEAD".
+- Every hardware and nightly figure was read from its job log (or, for `windows-go`, the run's `go.json` artifact): `win-gpu` jobs 111520767958, 111614870154, 111825710341, **111864907749** (the scheduled run) and 112038791194; nightly jobs of 37098788944, 37112350755, 37124127542, 37193564608 and 37297423497 (the hosted-Linux advisory levels 89,518 at 10:30 UTC on 2026-10-04 and 113,289 on 2026-10-05 included); CI run 37416153106's Windows Go job. Run lists, triggers and the libFuzzer jobs from the Actions API.
+- No model identifiers and no closing keywords in the changed files or this description (grepped).
+- **CI on 1a86561: 14/14 checks green** (Linux GCC, Clang and headless; Windows MSVC primary, 14.44 floor and modular dev; clang-cl; MinGW cross-build; Go on Linux and Windows; backend integration; both conformance lints; the CMake lints).
+
+## Not verified / known limitations
+
+- Nothing was compiled for Windows (MSVC, clang-cl) or MinGW: the PR changes Markdown only, and CI builds those.
+- Snapshot time: the Actions API was read at 07:35 UTC on 2026-10-06. No `win-gpu` run and no nightly had run since 37391930751; today's scheduled runs may add data the rows do not have.
+- Whether hosted Windows passes NS-0.2 strictly after #62: no nightly has run on a `main` that includes it.
+- The lapse is recorded in plan text and `engine/net/README.md` only. `scorecard.jsonc` (status `approved`), the nightly's `--advisory ns02-stack`, the approval record's title and `tools/scorecard/README.md` still describe the approval as in force; they change once the owner answers (09 §8.2 row 8), and a Director PR changes neither the registry nor the workflow. Until then the nightly report labels a hosted-Linux night "passed (owner approval …)" even below 100k; 09 §8.1 says such a night is not a pass for the status.
+- Why the scheduled `win-gpu` run measured lower (GPU 14.59, SSE4.2 and scalar about twice the others) is not known; the ADR says so.
+- The `merge-policy` failures on 1dac3d1 and 5bf99e6 (2026-10-04) were not investigated; the row says so.
+- Test counts in §8.1 rows this PR did not change are those of each row's last update (the intro says so); none was re-counted.
+- The rows adjacent to #65 (listed above) are knowingly left stale until #65 merges.
+
+## Plan / design impact
+
+- [ ] No design change
+- [x] Plan section or ADR updated in this PR (link): plan revision 15 — 02 §1.1, §1.4, §3.1, §3.4, §3.6, §3.8, §5.8, §7.1; 03 §8.4, §9.1; 04 §11.1; 05 §7; 06 §1.1; 07 §1.8.2, §2.2 (wording); 08 §2.5 (summary); 09 §2 (WP-1.23), §2.3a (WP-2.16b, WP-2.16c2), §5.2a (wording), §5.10.4 (c), §7 (K5b), §8.1, §8.2; `docs/adr/ADR-0.9c-hnoise-throughput.md`; `docs/plan/CONSISTENCY.md` §43; `docs/plan/PLAN-REV`; `docs/PLAN.md`
+- [ ] Deviation from the plan, described above (none introduced; this PR resolves recorded ones)
+
+## AI involvement
+
+- [ ] None
+- [ ] AI-assisted (a human wrote or substantially edited and reviewed the code). Tool/model:
+- [x] Agent-authored (an AI agent wrote most of the change). Tool/model: Claude Code (agent)
+
+## Checklist
+
+- [x] Branched from the latest `main`; one logical change (the Director's round refresh)
+- [x] Builds warning-clean; all tests pass; new behaviour has tests (timing gates named `perf: ...`): Markdown only; see "How it was tested"
+- [x] No tests, lints or CI jobs skipped, weakened or disabled
+- [x] No secrets, build output, downloaded binaries or third-party IP committed
+- [x] New dependencies are permissively licensed, vendored under `third_party/`, and listed in `MANIFEST.md` (none added)
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+https://claude.ai/code/session_01DwHyewtwdT7PjELDguMXTF
+
+
+---
+_Generated by [Claude Code](https://claude.ai/code)_

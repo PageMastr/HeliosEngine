@@ -11,9 +11,10 @@
 namespace helios::core {
 namespace {
 
-// What is wrong with `verdict`, or empty for Pass. Static text, so platformInit() reports it without
-// allocating: a bad_alloc there would std::terminate (noexcept) instead of exiting with
-// kPlatformInitExitCode.
+// What is wrong with `verdict`, or empty for Pass. Static text, so platformInit() allocates nothing to
+// report it while its writes succeed. A failed write (stderr a closed pipe, say) returns an Error that
+// holds a std::string; if that threw bad_alloc, noexcept would std::terminate instead of exiting with
+// kPlatformInitExitCode. That takes an out-of-memory process at start-up, which ends either way.
 std::string_view cpuGateProblem(CpuGateVerdict verdict) noexcept {
     switch (verdict) {
     case CpuGateVerdict::Pass: return {};

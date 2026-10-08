@@ -909,6 +909,14 @@ var _ = register(&Rule{
 	Check:  checkGate,
 })
 
+// linkageSpec is the language literal of an `extern "C"` or `extern "C++"` linkage specification.
+// checkGateSymbols reads lines whose literals are blanked (codeLines(..., true) keeps the quotes and
+// turns what is between them into spaces), so `"C"` arrives as `" "`: the pattern takes the blanked form
+// as well as the plain one. The alternative, matching the plain text, would carry a second copy of every
+// line, with its columns, through the statement scan; every linkage block holds file-scope declarations
+// alike, so the blanked form needs no finer distinction.
+const linkageSpec = `"(?:C(?:\+\+)?|\s*)"`
+
 var (
 	gateFiles    = []string{"engine/core/src/cpugate/**", "engine/core/src/platform/*/cpu_gate_hook.c"}
 	gateIncludes = map[string]bool{"cpu_gate.h": true, "stdint.h": true, "intrin.h": true, "cpuid.h": true,
@@ -925,7 +933,7 @@ var (
 	ctorRE        = regexp.MustCompile(`\b(?:constructor|init_priority)\s*\(\s*(\d+)\s*\)`)
 	dispatchRE    = regexp.MustCompile(`\b(ifunc|target_clones)\s*\(`)
 	attrGroupRE   = regexp.MustCompile(`__(?:declspec|attribute__)\s*\(`)
-	externCRE     = regexp.MustCompile(`^extern\s*"C"$`)
+	externCRE     = regexp.MustCompile(`^extern\s*` + linkageSpec + `$`)
 	aggregateRE   = regexp.MustCompile(`^(?:(?:static|extern|const|volatile)\s+)*(typedef\b|(struct|enum|union)\b)`)
 	cKeywords     = map[string]bool{"static": true, "const": true, "volatile": true, "extern": true, "inline": true,
 		"int": true, "void": true, "char": true, "unsigned": true, "signed": true, "long": true, "short": true,
@@ -1032,9 +1040,10 @@ func checkGateLine(p *Pass, f string, line int, l string) {
 }
 
 // checkGateSymbols reports file-scope definitions without `static` other than the three gate exports.
-// The scan is textual: statements at file scope (inside an `extern "C" {` block too), with preprocessor
-// lines skipped. An aggregate's body, a `typedef struct {…} Name;` and function bodies are not definitions
-// of their own; a variable declared after an aggregate's body (`struct {…} s;`) is.
+// The scan is textual: statements at file scope (inside an `extern "C" {` block too, whose language
+// literal arrives blanked: see linkageSpec), with preprocessor lines skipped. An aggregate's body, a
+// `typedef struct {…} Name;` and function bodies are not definitions of their own; a variable declared
+// after an aggregate's body (`struct {…} s;`) is.
 func checkGateSymbols(p *Pass, f string, lines []string) {
 	depth, base, stmt, start, kind := 0, 0, "", 0, ""
 	cont := false
@@ -1101,7 +1110,7 @@ func checkGateSymbols(p *Pass, f string, lines []string) {
 
 var (
 	gateSkipRE   = regexp.MustCompile(`^(static|typedef)\b`)
-	gateExternRE = regexp.MustCompile(`^extern\s*(?:"C(?:\+\+)?"\s*)?`)
+	gateExternRE = regexp.MustCompile(`^extern\s*(?:` + linkageSpec + `\s*)?`)
 	// An elaborated type that starts a statement: `struct tag`, `enum tag {…}`, `union {…}` (the body is
 	// left as "{}" by checkGateSymbols).
 	gateAggHeadRE = regexp.MustCompile(`^(?:const\s+|volatile\s+)*(?:struct|enum|union)\b\s*(?:[A-Za-z_]\w*)?\s*(?:\{\})?`)

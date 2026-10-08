@@ -313,6 +313,6 @@ needs the reviewer's eye. Over-reporting is called out where the scanner errs th
 - **CONF-12** recognises an external symbol in a gate TU by a file-scope definition without `static` (an `extern`
   one with a body or an initializer too, every declarator of a statement, a variable of `struct`, `enum` or
   `union` type, named or anonymous, and an array whose bound or `_Alignas` has parentheses), with macros not
-  expanded; audit check 2 (the objects' symbol lists) is the
-  object-level backstop. A pre-gate hook elsewhere is found by its section name or attribute, not by what a macro
-  expands to.
+  expanded, inside an `extern "C" {` (or `"C++"`) block too, whose language literal the scan sees blanked; audit
+  check 2 (the objects' symbol lists) is the object-level backstop. A pre-gate hook elsewhere is found by its
+  section name or attribute, not by what a macro expands to.

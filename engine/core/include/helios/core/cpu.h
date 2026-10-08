@@ -1,10 +1,12 @@
 #pragma once
-// CPU identification and the CPU gate (02 §1.1 "ISA levels", 08 §2.2, WP-0.5).
+// CPU identification and the CPU gate (02 §1.1 "ISA levels", 08 §2.2, WP-0.5, WP-0.5r).
 //
-// Every AVX2 image (client, cell, editor, bot, gateway, voice, tools) links a pre-initializer that
-// runs the same check before any C++ initializer and exits with kCpuGateExitCode on an unsupported
-// CPU (helios_cpu_gate() in cmake/HeliosIsa.cmake). cpuGate() exposes the check to code: the
-// launcher shows the message in its UI, `--gate-report` style tooling prints it, and kernels that
+// Every gated AVX2 image (helios_executable() roles client, cell, editor, bot, gateway, voice, tool) links a
+// pre-initializer that runs the same check before any other code of the image (Windows: its first TLS
+// callback; Linux: .preinit_array), records the verdict and exits with kCpuGateExitCode on an unsupported
+// CPU (cmake/HeliosIsa.cmake). cpuGateVerdict() reads that verdict, and core::platformInit()
+// (helios/core/platform_init.h) stops the process unless it reads Pass. cpuGate() exposes the check to code:
+// the launcher shows the message in its UI, `--gate-report` style tooling prints it, and kernels that
 // dispatch on ISA (pcg's *_avx2.cpp) read the usable features from it.
 //
 // The probe itself lives in a C translation unit compiled at the x86-64-v1 baseline with no AVX2
@@ -76,6 +78,19 @@ CpuFeatureSet cpuRequiredFeatures(CpuRequirement requirement) noexcept;
 
 /// Exit code of an executable refused by the pre-initializer gate (EX_CONFIG).
 inline constexpr int kCpuGateExitCode = 78;
+
+/// What the CPU gate's pre-initializer recorded in this process (02 §1.1 "Proof that it ran").
+enum class CpuGateVerdict : u8 {
+    NotRun, ///< No gate hook ran for the image that holds core: a dropped or misplaced hook, or an image
+            ///< built without the gate (benches, samples, tests in a shipping build).
+    Pass,
+    Fail, ///< The hook refused the CPU; it ends the process right after recording this.
+};
+
+/// The verdict the gate's pre-initializer recorded before any C++ initializer of this process ran. It reads
+/// the image that holds core: the executable in a shipping build, helios_runtime in a modular dev build.
+/// Thread-safe: written once before main(), read-only afterwards.
+CpuGateVerdict cpuGateVerdict() noexcept;
 
 /// Raw CPUID/XGETBV register values; tests fill one to emulate other CPUs.
 struct CpuidSnapshot {

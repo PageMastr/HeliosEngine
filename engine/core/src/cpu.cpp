@@ -86,6 +86,14 @@ const CpuGateReport& cpuGate() noexcept {
     return report;
 }
 
+CpuGateVerdict cpuGateVerdict() noexcept {
+    switch (helios_cpu_gate_verdict()) {
+    case HELIOS_CPU_GATE_PASS: return CpuGateVerdict::Pass;
+    case HELIOS_CPU_GATE_FAIL: return CpuGateVerdict::Fail;
+    default: return CpuGateVerdict::NotRun;
+    }
+}
+
 CpuGateReport cpuGate(CpuRequirement requirement, std::string_view displayName) {
     return run(nullptr, requirement, displayName);
 }

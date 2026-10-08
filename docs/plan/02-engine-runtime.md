@@ -163,9 +163,9 @@ baseline callers. So Helios builds **whole images at one level** and audits the 
     - *Why the old placement failed.* Round 3 placed the gate at `init_seg(compiler)`, which is `.CRT$XCC`.
       Every row above except the last ran before it, and so did Tracy's `.CRT$XCB`. All of that code is
       compiled at `avx2` under the whole-image rule, so a directly started client faulted inside mimalloc on
-      a pre-AVX CPU before the gate or its backstop existed. The landed hook (`.CRT$XIB`) has the same flaw.
-      It follows mimalloc's `.CRT$XLB` callback, and it ties with mimalloc's own `.CRT$XIB` entry, so link
-      order decides which runs first. WP-0.5r moves it to `.CRT$XLA0` (09 §5.10.4).
+      a pre-AVX CPU before the gate or its backstop existed. The hook as first landed (`.CRT$XIB`) had the
+      same flaw. It followed mimalloc's `.CRT$XLB` callback, and it tied with mimalloc's own `.CRT$XIB`
+      entry, so link order decided which ran first. WP-0.5r part 1 moved it to `.CRT$XLA0` (09 §5.10.4).
     - *Which image.* Shipping (monolithic) images carry the hook in the executable. Modular dev builds
       (§1.4) carry it in `helios_runtime.dll`, and the executable carries none. The loader initializes a
       DLL's imports before the DLL, and it calls an executable's TLS callbacks only after every statically

@@ -332,7 +332,7 @@ function(_helios_modular_link_self_contained target)
     target_link_libraries(${target} PRIVATE ${modules} ${objects})
   endif()
   helios_modular_defines_own_copy(${target})
-  # A gated Windows image normally gets the CPU-gate hook from helios_runtime.dll (helios_cpu_gate); this
+  # A gated Windows image normally gets the CPU-gate hook from helios_runtime.dll (_helios_cpu_gate); this
   # one loads no group, so it links the hook itself, as a shipping image does.
   get_target_property(gateInRuntime ${target} HELIOS_CPU_GATE_IN_RUNTIME)
   if(gateInRuntime AND TARGET helios_core_cpugate_hook)
@@ -426,11 +426,14 @@ extern \"C\" const char* helios_${group}_link_group_modules(void) {
   endforeach()
 
   # The CPU gate (02 §1.1 "Which image"): on Windows the hook lives in helios_runtime.dll, the first
-  # Helios image the loader initializes, and gated executables carry none (helios_cpu_gate imports the
+  # Helios image the loader initializes, and gated executables carry none (_helios_cpu_gate imports the
   # DLL instead). ELF executables keep the hook: .preinit_array exists only there, and glibc runs it
   # before the initializers of libhelios_runtime.so.
   if(WIN32 AND TARGET helios_runtime AND TARGET helios_core_cpugate_hook)
     target_sources(helios_runtime PRIVATE $<TARGET_OBJECTS:helios_core_cpugate_hook>)
+    # Its TLS slot is exported as data, which WINDOWS_EXPORT_ALL_SYMBOLS skips (read-only), so core_tests can
+    # check that it is AddressOfCallBacks[0] of the DLL, ahead of mimalloc's .CRT$XLB callback there.
+    target_link_options(helios_runtime PRIVATE "/EXPORT:helios_cpu_gate_tls_entry,DATA")
   endif()
 endfunction()
 

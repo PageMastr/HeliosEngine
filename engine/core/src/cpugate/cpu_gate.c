@@ -1,10 +1,12 @@
-/* CPU gate probe: CPUID/XGETBV feature detection and the verdict message (02 §1.1, 08 §2.2).
+/* CPU gate probe: CPUID/XGETBV feature detection, the verdict message and the process verdict
+ * (02 §1.1, 08 §2.2).
  *
  * This TU is compiled at the x86-64-v1 baseline (the `gate` ISA level, cmake/HeliosIsa.cmake) and must
  * stay free of libc calls, so it can run from the pre-initializer hooks before the C runtime is up
  * and on CPUs that lack every extension Helios otherwise assumes. See cpu_gate.h for the rules the
  * ISA audit enforces. Architecture- and compiler-specific code only; no OS calls (those live in
- * src/platform/{win32,posix}/cpu_gate_hook.c).
+ * src/platform/{win32,posix}/cpu_gate_hook.c). It defines two of the gate's three external symbols,
+ * helios_cpu_gate_run and helios_cpu_gate_verdict.
  */
 #include "cpu_gate.h"
 
@@ -111,30 +113,29 @@ static void hcg_regs_to_chars(const uint32_t* regs, uint32_t count, char* out) {
     }
 }
 
-static const char* hcg_feature_name(uint32_t bit) {
-    switch (bit) {
-    case HELIOS_CPU_SSE2: return "SSE2";
-    case HELIOS_CPU_SSE3: return "SSE3";
-    case HELIOS_CPU_SSSE3: return "SSSE3";
-    case HELIOS_CPU_SSE41: return "SSE4.1";
-    case HELIOS_CPU_SSE42: return "SSE4.2";
-    case HELIOS_CPU_POPCNT: return "POPCNT";
-    case HELIOS_CPU_CX16: return "CMPXCHG16B";
-    case HELIOS_CPU_LAHF: return "LAHF-SAHF";
-    case HELIOS_CPU_AVX: return "AVX";
-    case HELIOS_CPU_AVX2: return "AVX2";
-    case HELIOS_CPU_FMA: return "FMA";
-    case HELIOS_CPU_BMI1: return "BMI1";
-    case HELIOS_CPU_BMI2: return "BMI2";
-    case HELIOS_CPU_F16C: return "F16C";
-    case HELIOS_CPU_LZCNT: return "LZCNT";
-    case HELIOS_CPU_MOVBE: return "MOVBE";
-    case HELIOS_CPU_AVX512F: return "AVX-512F";
-    case HELIOS_CPU_XSAVE: return "XSAVE";
-    case HELIOS_CPU_OSXSAVE: return "OSXSAVE";
-    default: return "?";
-    }
-}
+/* Feature names by bit index (HELIOS_CPU_SSE2 is bit 0). Every text of the gate is a static array, never a
+ * string literal: cl and clang-cl emit each literal as an external "pick any" COMDAT (??_C@...), and the gate
+ * objects define no external symbol but their three (02 §1.1 check 2, tools/ci/msvc_gate_audit.ps1). */
+static const char hcg_feature_names[HELIOS_CPU_FEATURE_COUNT][11] = {
+    "SSE2", "SSE3", "SSSE3", "SSE4.1", "SSE4.2", "POPCNT", "CMPXCHG16B", "LAHF-SAHF", "AVX", "AVX2",
+    "FMA", "BMI1", "BMI2", "F16C", "LZCNT", "MOVBE", "AVX-512F", "XSAVE", "OSXSAVE"};
+
+static const char hcg_txt_not_x86[] = "CPU gate: not an x86-64 build; no instruction-set requirement applies";
+static const char hcg_txt_product[] = "Helios";
+static const char hcg_txt_unknown_vendor[] = "unknown vendor";
+static const char hcg_txt_family[] = " family ";
+static const char hcg_txt_model[] = " model ";
+static const char hcg_txt_supported[] = "CPU supported: ";
+static const char hcg_txt_open[] = " (";
+static const char hcg_txt_close[] = ")";
+static const char hcg_txt_separator[] = ", ";
+static const char hcg_txt_requires_avx2[] =
+    " requires an AVX2 CPU (Intel Haswell / AMD Excavator or newer). Detected: ";
+static const char hcg_txt_requires_v2[] = " requires an x86-64-v2 CPU (SSE4.2 and POPCNT). Detected: ";
+static const char hcg_txt_missing[] = ". Missing: ";
+static const char hcg_txt_period[] = ".";
+static const char hcg_txt_os_avx[] =
+    " The CPU has AVX, but the operating system has not enabled AVX (XSAVE/YMM) state.";
 
 static void hcg_put_features(HcgText* t, uint32_t bits) {
     uint32_t i;
@@ -142,8 +143,8 @@ static void hcg_put_features(HcgText* t, uint32_t bits) {
     for (i = 0; i < HELIOS_CPU_FEATURE_COUNT; ++i) {
         const uint32_t bit = 1u << i;
         if (!(bits & bit)) continue;
-        if (!first) hcg_put(t, ", ");
-        hcg_put(t, hcg_feature_name(bit));
+        if (!first) hcg_put(t, hcg_txt_separator);
+        hcg_put(t, hcg_feature_names[i]);
         first = 0;
     }
 }
@@ -153,7 +154,12 @@ static uint32_t hcg_bit(uint32_t reg, uint32_t bit, uint32_t feature) {
     return (reg >> bit) & 1u ? feature : 0u;
 }
 
-int helios_cpu_gate_run(const HeliosCpuidRaw* raw, uint32_t required, const char* display_name,
+/* The process verdict (helios_cpu_gate_verdict): zero, HELIOS_CPU_GATE_NOT_RUN, until a hook records
+ * one. It lives beside the probe, which every image that can call core::platformInit() links, so an image
+ * whose hook was dropped reads NOT_RUN instead of failing to link. */
+static int hcg_verdict;
+
+static int hcg_evaluate(const HeliosCpuidRaw* raw, uint32_t required, const char* display_name,
                         HeliosCpuGateReport* out) {
     HcgText msg;
     uint32_t i;
@@ -170,7 +176,7 @@ int helios_cpu_gate_run(const HeliosCpuidRaw* raw, uint32_t required, const char
         raw = &none;
     }
 #endif
-    if (!display_name || !*display_name) display_name = "Helios";
+    if (!display_name || !*display_name) display_name = hcg_txt_product;
 
     out->isX86 = raw->isX86;
     out->detected = out->usable = out->missing = 0;
@@ -186,7 +192,7 @@ int helios_cpu_gate_run(const HeliosCpuidRaw* raw, uint32_t required, const char
 
     if (!raw->isX86) {
         out->supported = 1;
-        hcg_put(&msg, "CPU gate: not an x86-64 build; no instruction-set requirement applies");
+        hcg_put(&msg, hcg_txt_not_x86);
         return 1;
     }
 
@@ -227,10 +233,10 @@ int helios_cpu_gate_run(const HeliosCpuidRaw* raw, uint32_t required, const char
             b.buf = out->brand;
             b.cap = (uint32_t)sizeof(out->brand);
             b.len = 0;
-            hcg_put(&b, out->vendor[0] ? out->vendor : "unknown vendor");
-            hcg_put(&b, " family ");
+            hcg_put(&b, out->vendor[0] ? out->vendor : hcg_txt_unknown_vendor);
+            hcg_put(&b, hcg_txt_family);
             hcg_put_u32(&b, out->family);
-            hcg_put(&b, " model ");
+            hcg_put(&b, hcg_txt_model);
             hcg_put_u32(&b, out->model);
         }
     }
@@ -279,28 +285,41 @@ int helios_cpu_gate_run(const HeliosCpuidRaw* raw, uint32_t required, const char
     out->supported = out->missing == 0;
 
     if (out->supported) {
-        hcg_put(&msg, "CPU supported: ");
+        hcg_put(&msg, hcg_txt_supported);
         hcg_put(&msg, out->brand);
-        hcg_put(&msg, " (");
+        hcg_put(&msg, hcg_txt_open);
         hcg_put_features(&msg, out->usable & (HELIOS_CPU_AVX2 | HELIOS_CPU_FMA | HELIOS_CPU_BMI1 | HELIOS_CPU_BMI2 |
                                              HELIOS_CPU_F16C | HELIOS_CPU_LZCNT | HELIOS_CPU_POPCNT |
                                              HELIOS_CPU_AVX512F));
-        hcg_put(&msg, ")");
+        hcg_put(&msg, hcg_txt_close);
         return 1;
     }
     /* Same wording as the launcher and client (08 §2.2). */
     hcg_put(&msg, display_name);
     if (required & HELIOS_CPU_AVX2) {
-        hcg_put(&msg, " requires an AVX2 CPU (Intel Haswell / AMD Excavator or newer). Detected: ");
+        hcg_put(&msg, hcg_txt_requires_avx2);
     } else {
-        hcg_put(&msg, " requires an x86-64-v2 CPU (SSE4.2 and POPCNT). Detected: ");
+        hcg_put(&msg, hcg_txt_requires_v2);
     }
     hcg_put(&msg, out->brand);
-    hcg_put(&msg, ". Missing: ");
+    hcg_put(&msg, hcg_txt_missing);
     hcg_put_features(&msg, out->missing);
-    hcg_put(&msg, ".");
+    hcg_put(&msg, hcg_txt_period);
     if ((out->detected & required & out->missing) != 0) {
-        hcg_put(&msg, " The CPU has AVX, but the operating system has not enabled AVX (XSAVE/YMM) state.");
+        hcg_put(&msg, hcg_txt_os_avx);
     }
     return 0;
+}
+
+int helios_cpu_gate_run(const HeliosCpuidRaw* raw, uint32_t required, const char* display_name,
+                        HeliosCpuGateReport* out) {
+    const int supported = hcg_evaluate(raw, required & ~HELIOS_CPU_GATE_RECORD, display_name, out);
+    if (required & HELIOS_CPU_GATE_RECORD) {
+        hcg_verdict = supported ? HELIOS_CPU_GATE_PASS : HELIOS_CPU_GATE_FAIL;
+    }
+    return supported;
+}
+
+int helios_cpu_gate_verdict(void) {
+    return hcg_verdict;
 }

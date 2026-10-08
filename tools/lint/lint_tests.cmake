@@ -147,7 +147,12 @@ if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
       "gate_default|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: baseline unit .CPU gate. built without its level set .missing: -march=x86-64, -mtune=generic."
       "gate_protector|ISA audit failed .1 violation.*cpu_gate_hook.c .helios_core_cpugate_hook.: baseline unit .CPU gate. built without its level set .missing: -fno-stack-protector."
       "msvc_gate_gs|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: baseline unit .CPU gate. built without its level set .missing: /GS-."
-      "gate_sanitize|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: CPU-gate unit built with sanitizer instrumentation .-fsanitize=address.")
+      "gate_sanitize|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: CPU-gate unit built with sanitizer instrumentation .-fsanitize=address."
+      "gate_rtc|ISA audit failed .1 violation.*cpu_gate_hook.c .helios_core_cpugate_hook.: CPU-gate unit built with MSVC run-time checks ./RTC1."
+      "gate_coverage|ISA audit failed .1 violation.*cpu_gate.c .helios_core_cpugate.: CPU-gate unit built with coverage instrumentation .--coverage."
+      # A negation clears only its own kind: --coverage survives -fno-coverage-mapping and -fno-profile-arcs,
+      # -fprofile-instr-generate survives -fno-coverage-mapping; a third unit negates every kind it enables.
+      "gate_coverage_negated|ISA audit failed .2 violation.*cpu_gate.c .helios_core_cpugate.: CPU-gate unit built with coverage instrumentation .--coverage..*cpu_gate_hook.c .helios_core_cpugate_hook.: CPU-gate unit built with coverage instrumentation .-fprofile-instr-generate.")
     string(REPLACE "|" ";" parts "${case}")
     list(GET parts 0 fixture)
     list(GET parts 1 expect)
@@ -189,6 +194,93 @@ if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
       helios_lint_test(lint_isa_object_detects_asan EXPECT_FAIL "references '__asan_[a-z_0-9]+': the gate objects run"
         COMMAND ${CMAKE_COMMAND} ${isaCommon} ${isaTools} -DMODE=object
                 "-DOBJECT=$<TARGET_OBJECTS:lint_isa_fixture_asan>" -P ${LINT}/isa_audit.cmake)
+    endif()
+  endif()
+  # Check 2 on MSVC-ABI objects. On Windows tools/ci/msvc_gate_audit.ps1 reads the gate objects with dumpbin,
+  # but no CI job runs it before WP-0.2r part 2, so here clang in cl mode builds the gate's units for
+  # x86_64-pc-windows-msvc and check 2 reads the COFF objects with llvm-nm and llvm-objdump. The flags that
+  # decide code generation are the real build's: the gate level's clang-cl flags (HELIOS_ISA_GATE_CLANG_CL)
+  # and the compile flags of the MSVC-family presets, which build RelWithDebInfo (CMake's /O2 /Ob1 /DNDEBUG,
+  # and /Z7 from CMAKE_MSVC_DEBUG_INFORMATION_FORMAT); the Debug preset's /Od is not built. Adding one that
+  # the real build lacks would test a different compiler: -ffreestanding, say, implies -fno-builtin, which
+  # stops LLVM from turning loops into memset and memcpy calls, so a gate unit that the real build compiles
+  # with such a CRT import would pass (lint_isa_coff_gate_detects_memset_libcall guards the command). It
+  # differs from the real build in /X (that build searches the Windows SDK; Linux has none), in the MinGW-w64
+  # headers and -fno-ms-compatibility of the hook (parsing and header search), and in leaving out the options
+  # of helios_apply_warnings and the top-level CMakeLists (/W4, /utf-8, /fp:precise, /Zc:inline, /bigobj, /MT,
+  # the NOMINMAX-style definitions): adding those leaves the disassembly, relocations, symbols and data of
+  # these objects unchanged. The MSVC ABI emits string literals (??_C@...) and constant pools (__xmm@...)
+  # as external COMDATs, which 02 §1.1 does not allow in a gate object. The Windows hook needs windows.h, so
+  # it is built only where the MinGW-w64 headers are installed. The seeded fixtures hold one string literal
+  # and one zeroing loop.
+  if(NOT WIN32)
+    find_program(HELIOS_LINT_CLANG
+                 NAMES clang-cl clang-cl-20 clang-cl-19 clang-cl-18 clang clang-20 clang-19 clang-18)
+    find_program(HELIOS_LINT_LLVM_NM NAMES llvm-nm llvm-nm-20 llvm-nm-19 llvm-nm-18)
+    find_program(HELIOS_LINT_LLVM_OBJDUMP NAMES llvm-objdump llvm-objdump-20 llvm-objdump-19 llvm-objdump-18)
+    find_path(HELIOS_LINT_MINGW_INCLUDE windows.h
+              PATHS /usr/x86_64-w64-mingw32/include /usr/share/mingw-w64/include NO_DEFAULT_PATH)
+    set(coffFlags /nologo /c /O2 /Ob1 /DNDEBUG /Z7 ${HELIOS_ISA_GATE_CLANG_CL} /X)
+    set(coffDir ${CMAKE_BINARY_DIR}/tools/lint/coff_gate)
+    set(coffCompiler "")
+    if(HELIOS_LINT_CLANG AND HELIOS_LINT_LLVM_NM AND HELIOS_LINT_LLVM_OBJDUMP)
+      # The objects are part of ALL, so a clang that cannot build them (too old for the /clang: options, or
+      # without the x86 target) would fail the whole build where it should only drop these tests: build one first.
+      file(MAKE_DIRECTORY ${coffDir})
+      execute_process(
+        COMMAND ${HELIOS_LINT_CLANG} --driver-mode=cl --target=x86_64-pc-windows-msvc ${coffFlags}
+                /Fo${coffDir}/configure_check.obj -- ${LINT_TESTS}/isa/gate_literal_pool.c
+        RESULT_VARIABLE coffRc OUTPUT_VARIABLE coffOut ERROR_VARIABLE coffOut)
+      if(coffRc EQUAL 0)
+        set(coffCompiler ${HELIOS_LINT_CLANG})
+      else()
+        string(REGEX REPLACE "\n.*" "" coffOut "${coffOut}")
+        message(STATUS "lint_isa_coff_gate_*: ${HELIOS_LINT_CLANG} cannot build for x86_64-pc-windows-msvc "
+                       "with the gate's clang-cl flags (${coffOut}), so not registered")
+      endif()
+    else()
+      message(STATUS "lint_isa_coff_gate_*: needs clang (cl mode), llvm-nm and llvm-objdump, so not registered")
+    endif()
+    if(coffCompiler)
+      set(coffSrc ${PROJECT_SOURCE_DIR}/engine/core/src)
+      set(coffObjects "")
+      # Builds <name>.obj from <source> with coffFlags and registers its check-2 test, a passing one unless
+      # EXPECT is given (a seeded fixture: the test passes only when check 2 fails with that diagnostic).
+      function(_helios_lint_coff_gate name source)
+        cmake_parse_arguments(C "" "EXPECT" "FLAGS" ${ARGN})
+        set(obj ${coffDir}/${name}.obj)
+        add_custom_command(OUTPUT ${obj}
+          COMMAND ${CMAKE_COMMAND} -E make_directory ${coffDir}
+          COMMAND ${coffCompiler} --driver-mode=cl --target=x86_64-pc-windows-msvc ${coffFlags} ${C_FLAGS}
+                  /Fo${obj} -- ${source}
+          DEPENDS ${source} ${coffSrc}/cpugate/cpu_gate.h ${PROJECT_SOURCE_DIR}/cmake/HeliosIsa.cmake
+          COMMENT "Building ${name}.obj (CPU gate, MSVC ABI) for ISA audit check 2" VERBATIM)
+        set(check ${CMAKE_COMMAND} ${isaCommon} -DOBJDUMP=${HELIOS_LINT_LLVM_OBJDUMP} -DNM=${HELIOS_LINT_LLVM_NM}
+                  -DMODE=object -DOBJECT=${obj} -P ${LINT}/isa_audit.cmake)
+        if(C_EXPECT)
+          helios_lint_test(lint_isa_coff_gate_detects_${name} EXPECT_FAIL "${C_EXPECT}" COMMAND ${check})
+        else()
+          helios_lint_test(lint_isa_coff_gate_${name} COMMAND ${check})
+        endif()
+        set(coffObjects ${coffObjects} ${obj} PARENT_SCOPE)
+      endfunction()
+      _helios_lint_coff_gate(probe ${coffSrc}/cpugate/cpu_gate.c)
+      if(HELIOS_LINT_MINGW_INCLUDE)
+        set(hookFlags /clang:-fno-ms-compatibility -imsvc ${HELIOS_LINT_MINGW_INCLUDE})
+        _helios_lint_coff_gate(hook ${coffSrc}/platform/win32/cpu_gate_hook.c FLAGS ${hookFlags})
+        _helios_lint_coff_gate(hook_snb ${coffSrc}/platform/win32/cpu_gate_hook.c
+                               FLAGS ${hookFlags} -DHELIOS_CPU_GATE_TEST_EMULATE_SANDY_BRIDGE=1)
+      else()
+        message(STATUS "lint_isa_coff_gate_hook: no MinGW-w64 windows.h; only the probe is built for the MSVC ABI")
+      endif()
+      _helios_lint_coff_gate(literal_pool ${LINT_TESTS}/isa/gate_literal_pool.c
+        EXPECT "exports '\\?\\?_C@[^']+' \\(type R\\): only HELIOS_ISA_GATE_EXPORTS may be external")
+      # A zeroing loop that LLVM turns into a memset call: an import from the CRT, which does not exist yet when
+      # the gate runs and is not on HELIOS_ISA_GATE_ALLOWED_IMPORTS.
+      _helios_lint_coff_gate(memset_libcall ${LINT_TESTS}/isa/gate_memset_libcall.c
+        EXPECT "references 'memset', which is not on HELIOS_ISA_GATE_ALLOWED_IMPORTS")
+      add_custom_target(lint_isa_coff_gate_build ALL DEPENDS ${coffObjects})
+      set_target_properties(lint_isa_coff_gate_build PROPERTIES FOLDER tests)
     endif()
   endif()
   # Check 3's canary for shared libraries (ELF, both link flavours): a shared library with an IFUNC, whose
@@ -816,8 +908,8 @@ helios_lint_test(lint_run_lints_status_python
 # image levels of cmake/HeliosIsa.cmake: base copies (a generated source included), and the configure
 # errors for a base image that links an avx2 library (tp_jolt, physics, tp_jolt through core) or compiles
 # in an avx2 object library's objects, an ISA override outside the fixtures or with an unknown level,
-# CPU_GATE on a base image, a level set by hand on a library, a gate target that is not an object library,
-# and ISA options on a library's interface.
+# CPU_GATE on a base image, NO_CPU_GATE on an avx2 image (WP-0.5r), a level set by hand on a library, a gate
+# target that is not an object library, and ISA options on a library's interface.
 # ---------------------------------------------------------------------------------------------
 # The fixture declares LANGUAGES NONE and stops right after the checks, so no compiler is probed;
 # the generator is passed through only so CMake does not go looking for a default one.
@@ -869,6 +961,7 @@ foreach(case
     "isa_override_elsewhere|helios_executable.fx-isa-elsewhere.: ISA is for the ISA audit's[ \n]+fixtures[ \n]+only.*isa_elsewhere.cmake"
     "isa_invalid_value|helios_executable.fx-isa-fixture.: ISA is avx2 or base, not 'sse4'"
     "isa_cpu_gate_on_base|helios_executable.fx-launcher.: CPU_GATE on a base image"
+    "isa_no_cpu_gate_on_avx2|helios_executable.fx-bot.: NO_CPU_GATE on an avx2 image"
     "isa_level_on_library|helios isa: 'helios_math' has HELIOS_ISA_LEVEL 'base', which only helios_executable.. .avx2, base. and helios_cpu_gate_target.. .gate. set"
     "isa_gate_target_not_object|helios_cpu_gate_target.fx_gate.: the CPU gate's units live in[ \n]+OBJECT[ \n]+libraries"
     "isa_base_root_links_jolt|helios isa: base image 'fx-launcher' links 'tp_jolt', which is built only at avx2: fx-launcher -> helios_core -> tp_jolt"

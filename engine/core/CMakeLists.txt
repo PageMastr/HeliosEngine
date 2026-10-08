@@ -17,8 +17,17 @@ endif()
 # CPU gate (02 §1.1, 08 §2.2): two C units at the x86-64-v1 baseline, so they run on any x86-64 CPU, in
 # object libraries of the `gate` level (cmake/HeliosIsa.cmake): their own targets, because every other
 # target of an avx2 image is compiled at avx2. The probe's object is archived into helios_core (a static
-# library links the objects of an object library it links); helios_cpu_gate() links the per-OS
-# pre-initializer hook's object into every avx2 executable. The ISA audit checks both (checks 1 and 2).
+# library links the objects of an object library it links); helios_executable() links the per-OS
+# pre-initializer hook's object into every gated avx2 executable (in a modular Windows build into
+# helios_runtime.dll). The ISA audit checks both (checks 1 and 2), CONF-12 their source.
+#
+# No /RTC instrumentation in the gate (02 §1.1 gate-object rules): the checks call into the CRT, which does
+# not exist yet when the gate runs. CMake's MSVC Debug default puts /RTC1 into CMAKE_C_FLAGS_DEBUG, which
+# applies per directory and which no target property can take back; this directory's only C units are the
+# gate's, so the C flags lose it here (C++ keeps it). Audit check 1 rejects a gate unit with /RTC.
+if(MSVC)
+  string(REGEX REPLACE "(^| )[-/]RTC[1csu]+( |$)" " " CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+endif()
 set(HELIOS_CORE_CPUGATE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/cpugate/cpu_gate.c)
 if(WIN32)
   set(HELIOS_CORE_CPUGATE_HOOK ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/win32/cpu_gate_hook.c)
@@ -85,12 +94,29 @@ if(TARGET core_tests)
   helios_apply_warnings(core_process_child)
   helios_windows_manifest(core_process_child)
 
-  # CPU-gate children: the real pre-initializer (passes on the CI CPUs), and the same hook built to
-  # evaluate a recorded Sandy Bridge CPUID instead of the live CPU, so the refusal path (message,
-  # exit code 78, nothing of main or C++ static initialization runs) is tested on any machine.
-  add_executable(core_cpugate_child ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/cpugate_child.cpp)
-  target_link_libraries(core_cpugate_child PRIVATE helios::core)
-  helios_cpu_gate(core_cpugate_child)
+  # CPU-gate children (02 §1.1; tests/test_cpu.cpp):
+  #  - core_cpugate_child: the real pre-initializer (passes on the CI CPUs) through helios_executable()'s
+  #    CPU_GATE, as a gated image gets it (in a modular Windows build from helios_runtime.dll);
+  #  - core_cpugate_child_snb: the same hook built to evaluate a recorded Sandy Bridge CPUID instead of the
+  #    live CPU, so the refusal path (message, exit code 78, nothing of main or C++ static initialization
+  #    runs) is tested on any machine; on Windows also as a WINDOWS_GUI image (core_cpugate_child_snb_gui),
+  #    whose refusal shows a dialog unless HELIOS_CPU_GATE_SILENT=1;
+  #  - core_cpugate_child_nohook: no gate at all, the "dropped hook" case: core::platformInit() must stop it
+  #    with "CPU gate did not run". Self-contained, so a modular Windows build does not hand it the gate of
+  #    helios_runtime.dll.
+  helios_executable(core_cpugate_child CPU_GATE
+                    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/cpugate_child.cpp DEPS helios::core)
+  get_target_property(gateInRuntime core_cpugate_child HELIOS_CPU_GATE_IN_RUNTIME)
+  set(cpugateRuntimeDll "")
+  if(NOT gateInRuntime)
+    # The hook (and on Windows its TLS slot) is in this executable, not in helios_runtime.dll.
+    target_compile_definitions(core_cpugate_child PRIVATE HELIOS_CPUGATE_CHILD_HOOK_IN_IMAGE=1)
+  else()
+    # The hook is in helios_runtime.dll, which exports its TLS slot (cmake/HeliosModular.cmake); the child
+    # and the test both need the DLL's name.
+    set(cpugateRuntimeDll HELIOS_CPUGATE_RUNTIME_DLL="$<TARGET_FILE_NAME:helios_runtime>")
+    target_compile_definitions(core_cpugate_child PRIVATE ${cpugateRuntimeDll})
+  endif()
   # The Sandy Bridge hook is a third gate object library: the gate's units are never compiled inside an
   # avx2 target.
   add_library(core_cpugate_hook_snb OBJECT ${HELIOS_CORE_CPUGATE_HOOK})
@@ -102,20 +128,36 @@ if(TARGET core_tests)
   add_executable(core_cpugate_child_snb ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/cpugate_child.cpp
                                          $<TARGET_OBJECTS:core_cpugate_hook_snb>)
   target_link_libraries(core_cpugate_child_snb PRIVATE helios::core)
-  foreach(child core_cpugate_child core_cpugate_child_snb)
+  add_executable(core_cpugate_child_nohook ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/cpugate_child.cpp)
+  target_link_libraries(core_cpugate_child_nohook PRIVATE helios::core)
+  helios_self_contained(core_cpugate_child_nohook)
+  set(cpugateChildren core_cpugate_child core_cpugate_child_snb core_cpugate_child_nohook)
+  if(WIN32)
+    add_executable(core_cpugate_child_snb_gui WIN32
+                   ${CMAKE_CURRENT_SOURCE_DIR}/tests/support/cpugate_child_gui.cpp $<TARGET_OBJECTS:core_cpugate_hook_snb>)
+    target_link_libraries(core_cpugate_child_snb_gui PRIVATE helios::core)
+    list(APPEND cpugateChildren core_cpugate_child_snb_gui)
+  endif()
+  foreach(child IN LISTS cpugateChildren)
     set_target_properties(${child} PROPERTIES FOLDER tests)
-    helios_apply_warnings(${child})
-    helios_windows_manifest(${child})
+    if(NOT child STREQUAL "core_cpugate_child") # helios_executable() did both
+      helios_apply_warnings(${child})
+      helios_windows_manifest(${child})
+    endif()
   endforeach()
 
-  add_dependencies(core_tests helios_core_test_plugin core_crash_child core_process_child core_cpugate_child
-                   core_cpugate_child_snb)
+  add_dependencies(core_tests helios_core_test_plugin core_crash_child core_process_child ${cpugateChildren})
   target_compile_definitions(core_tests PRIVATE
     HELIOS_TEST_PLUGIN_PATH="$<TARGET_FILE:helios_core_test_plugin>"
     HELIOS_CRASH_CHILD_PATH="$<TARGET_FILE:core_crash_child>"
     HELIOS_PROCESS_CHILD_PATH="$<TARGET_FILE:core_process_child>"
     HELIOS_CPUGATE_CHILD_PATH="$<TARGET_FILE:core_cpugate_child>"
-    HELIOS_CPUGATE_CHILD_SNB_PATH="$<TARGET_FILE:core_cpugate_child_snb>")
+    HELIOS_CPUGATE_CHILD_SNB_PATH="$<TARGET_FILE:core_cpugate_child_snb>"
+    HELIOS_CPUGATE_CHILD_NOHOOK_PATH="$<TARGET_FILE:core_cpugate_child_nohook>")
+  if(WIN32)
+    target_compile_definitions(core_tests PRIVATE
+      HELIOS_CPUGATE_CHILD_SNB_GUI_PATH="$<TARGET_FILE:core_cpugate_child_snb_gui>" ${cpugateRuntimeDll})
+  endif()
   # Stress tests (1M jobs etc.) get generous time on slow CI machines.
   set_tests_properties(core_tests PROPERTIES TIMEOUT 600)
 endif()

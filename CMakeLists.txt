@@ -57,7 +57,10 @@ if(HELIOS_SANITIZE)
   # Timing gates ("perf:" tests) report but do not assert their budgets under sanitizers.
   add_compile_definitions(HELIOS_SANITIZERS_ENABLED=1)
   if(MSVC)
-    add_compile_options(/fsanitize=address)
+    # Not on the CPU gate's objects (02 §1.1 gate-object rules: no instrumentation before the runtimes exist).
+    # cl has no switch that turns ASan off again, so the option skips `gate`-level targets
+    # (helios_cpu_gate_target, cmake/HeliosIsa.cmake); GCC and Clang get -fno-sanitize=all from that level.
+    add_compile_options("$<$<NOT:$<STREQUAL:$<TARGET_PROPERTY:HELIOS_ISA_LEVEL>,gate>>:/fsanitize=address>")
   else()
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address,undefined)

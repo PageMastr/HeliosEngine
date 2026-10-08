@@ -10,20 +10,5 @@
 // EXIT-0.conformance) in the same PR. `-strict` ignores this file. Adding a record is a Director decision
 // (D3), made in the same round as the rework WP it names.
 {
-  "known_failing": [
-    {
-      "rule": "CONF-12", "owner": "WP-0.5r", "anchor": "09 §5.10.4 (b)",
-      "reason": "The Windows gate sits in .CRT$XIB, ends with ExitProcess, exports helios_cpu_gate_crt_entry, and has neither /INCLUDE:_tls_used nor helios_cpu_gate_tls_entry. WP-0.5r moves it to .CRT$XLA0 with TerminateProcess(…, 78) and the three exports",
-      "findings": [
-        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "fe5a30b23865ecba"},   // no /INCLUDE:_tls_used
-        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "2b7de110ee0c9187"},   // no /INCLUDE:helios_cpu_gate_tls_entry
-        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "fe2731053a37dac3"},   // ExitProcess
-        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "fe2731053a37dac3"},   // ExitProcess (second call)
-        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "6d072e8abe5acd3a"},   // #pragma section(".CRT$XIB")
-        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "a48bfb6e143ed3e7"},   // __declspec(allocate(".CRT$XIB")) (MSVC)
-        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "10e5bc1974245f8f"},   // external helios_cpu_gate_crt_entry
-        {"path": "engine/core/src/platform/win32/cpu_gate_hook.c", "fingerprint": "34ff752452db202d"}    // section(".CRT$XIB") (MinGW)
-      ]
-    }
-  ]
+  "known_failing": []
 }

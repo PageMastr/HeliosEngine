@@ -5,23 +5,27 @@
 # import lists (audit check 2) and the self-dispatching functions that base images may contain (check 4).
 # Adding an entry is a reviewed change. The attributed pre-main hooks are in cmake/pre_main_allowlist.cmake.
 
-# External symbols a gate object may define (everything else must be static). WP-0.5r moves the Windows
-# entry to .CRT$XLA0 and changes these to helios_cpu_gate_run, helios_cpu_gate_verdict and
-# helios_cpu_gate_tls_entry (02 §1.1).
-set(HELIOS_ISA_GATE_EXPORTS helios_cpu_gate_run helios_cpu_gate_crt_entry)
+# External symbols a gate object may define (everything else must be static): the probe and the verdict
+# (cpu_gate.c) and the Windows TLS-callback slot in .CRT$XLA0 (win32/cpu_gate_hook.c), 02 §1.1's three.
+set(HELIOS_ISA_GATE_EXPORTS helios_cpu_gate_run helios_cpu_gate_verdict helios_cpu_gate_tls_entry)
 
 # Undefined symbols a gate object may reference: the probe entry, the OS entry points of 02 §1.1
-# (POSIX: write, _exit, sigaction; Windows: GetStdHandle, WriteFile, LoadLibraryExW, GetProcAddress,
-# ExitProcess, AddVectoredExceptionHandler, via __imp_ import thunks) and the compiler's stack-probe
-# helper. The gate is built without a stack protector and without sanitizers (the `gate` level), so no
-# __stack_chk_* or __security_cookie reference is allowed (02 §1.1: the /GS cookie is not initialized
-# before the entry point), and no __asan_*, __ubsan_* or other sanitizer runtime symbol either.
+# (POSIX: write, _exit, sigaction; Windows: GetStdHandle, WriteFile, GetModuleHandleW, GetEnvironmentVariableW,
+# LoadLibraryExW, GetProcAddress, GetCurrentProcess, TerminateProcess, AddVectoredExceptionHandler, via __imp_
+# import thunks; never ExitProcess, which would run the image's AVX2-built detach hooks), MinGW's _tls_used
+# (the TLS directory the hook's slot needs; MSVC and clang-cl pull it in with /INCLUDE:, no symbol) and the
+# compiler's stack-probe helper. The gate is built without a stack protector and without sanitizers (the
+# `gate` level), so no __stack_chk_* or __security_cookie reference is allowed (02 §1.1: the /GS cookie is
+# not initialized before the entry point), and no __asan_*, __ubsan_* or other sanitizer runtime symbol
+# either.
 set(HELIOS_ISA_GATE_ALLOWED_IMPORTS
   helios_cpu_gate_run
   write _exit sigaction
-  GetStdHandle WriteFile LoadLibraryExW GetProcAddress ExitProcess AddVectoredExceptionHandler
-  __imp_GetStdHandle __imp_WriteFile __imp_LoadLibraryExW __imp_GetProcAddress __imp_ExitProcess
-  __imp_AddVectoredExceptionHandler
+  GetStdHandle WriteFile GetModuleHandleW GetEnvironmentVariableW LoadLibraryExW GetProcAddress GetCurrentProcess
+  TerminateProcess AddVectoredExceptionHandler
+  __imp_GetStdHandle __imp_WriteFile __imp_GetModuleHandleW __imp_GetEnvironmentVariableW __imp_LoadLibraryExW
+  __imp_GetProcAddress __imp_GetCurrentProcess __imp_TerminateProcess __imp_AddVectoredExceptionHandler
+  _tls_used
   __chkstk __chkstk_ms ___chkstk_ms)
 
 # Self-dispatching third-party functions that may contain instructions above x86-64-v1 in `base` images,

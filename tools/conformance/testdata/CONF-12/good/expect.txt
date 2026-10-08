@@ -1,3 +1,4 @@
 #! -rules CONF-12 -strict
-# A conforming gate: .CRT$XLA0, both /INCLUDE:s, TerminateProcess, the allowed includes and exports;
-# a patch whose removed and context lines (not its added ones) hold early constructors; a CMake comment.
+# A conforming gate: .CRT$XLA0, both /INCLUDE:s, TerminateProcess, the allowed includes and exports, static
+# text arrays whose literals hold ';' and braces, an extern "C" block (in cpu_gate.h) that declares only and
+# extern "C" statements that define no symbol; a patch whose removed and context lines (not its added ones) hold early constructors; a CMake comment.

@@ -36,9 +36,11 @@
 #   images live.
 #   Windows executables get the Helios manifest (helios_windows_manifest). The CPU gate (a
 #   pre-initializer that refuses CPUs without AVX2, 02 §1.1 / 08 §2.2) is linked into every avx2 image of
-#   a gate role (client cell gateway voice editor bot tool) unless NO_CPU_GATE; CPU_GATE forces it into
-#   any avx2 image. A base image never carries it. (Modular Windows builds carry the gate in
-#   helios_runtime.dll instead; see helios_cpu_gate.)
+#   a gate role (client cell gateway voice editor bot tool), whose main() calls core::platformInit();
+#   CPU_GATE adds it to an avx2 image of another role (a test child). NO_CPU_GATE on an avx2 image is a
+#   configure error (WP-0.5r: no avx2 image of a gate role may opt out); a base image never carries the gate
+#   and CPU_GATE on one is an error too. (Modular Windows builds carry the gate in helios_runtime.dll
+#   instead, which gates every process that loads it; see _helios_cpu_gate in cmake/HeliosIsa.cmake.)
 #
 # helios_test(<name> SOURCES ... DEPS ...)
 #   Declares a doctest executable registered with CTest. Tests link runtime modules, so they are avx2
@@ -277,8 +279,11 @@ function(helios_executable name)
   get_property(gateRoles GLOBAL PROPERTY HELIOS_ROLES_CPU_GATE)
   if(E_CPU_GATE AND NOT level STREQUAL "avx2")
     message(FATAL_ERROR "helios_executable(${name}): CPU_GATE on a ${level} image (the gate guards avx2 images)")
-  elseif(level STREQUAL "avx2" AND (E_CPU_GATE OR (role IN_LIST gateRoles AND NOT E_NO_CPU_GATE)))
-    helios_cpu_gate(${name})
+  elseif(E_NO_CPU_GATE AND level STREQUAL "avx2")
+    message(FATAL_ERROR "helios_executable(${name}): NO_CPU_GATE on an avx2 image: every avx2 image of a gate "
+                        "role carries the CPU gate (02 §1.1; WP-0.5r)")
+  elseif(level STREQUAL "avx2" AND (E_CPU_GATE OR role IN_LIST gateRoles))
+    _helios_cpu_gate(${name})
   endif()
   set_property(GLOBAL APPEND PROPERTY HELIOS_APP_TARGETS ${name})
 endfunction()

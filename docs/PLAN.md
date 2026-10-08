@@ -1079,8 +1079,9 @@ it; the rest is the 2026-09-27 snapshot.
   passed on every other run.
 - **Known deltas from the plan** (09 §8.1, §5.10.4):
   - the vendored SDL3 is built without its renderers and Wayland (WP-0.17);
-  - the in-tree ISA and CPU-gate code still uses the per-file AVX2 allowlist and the `.CRT$XIB` entry
-    (WP-0.2r, WP-0.5r).
+  - the ISA audit and the CPU gate's backstop are partial: check 3's Windows half and check 5 come with
+    WP-0.2r part 2, the backstop's VEX/EVEX and POPCNT classifier and the crash handler's #UD takeover with
+    WP-0.5r part 2.
 - **CI** (GitHub Actions) runs on pull requests and on pushes to `main`:
   - Windows: MSVC with VS 2026 (the primary) and with VS 2022 at MSVC 14.44 (the floor), and clang-cl;
   - Linux: GCC and Clang (GPU tests on lavapipe), headless, and the MinGW cross-build;

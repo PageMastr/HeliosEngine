@@ -31,7 +31,8 @@ and `src/platform/posix/` behind the internal interface `src/platform/os.h`.
 | `containers.h` | `SmallVector`, `RingBuffer`, bounded `MpmcQueue`, `SpscQueue` |
 | `crash.h` | Minidumps (Windows) / signal backtraces (POSIX), on-demand reports |
 | `version.h` | Version constants and build info (compiler, config, git hash via `-DHELIOS_GIT_HASH`) |
-| `cpu.h` | CPU gate: CPUID/XGETBV feature detection (AVX2, FMA, BMI1/2, F16C, LZCNT, POPCNT, AVX-512, OS YMM/ZMM state), `cpuGate()` report + message, synthetic `CpuidSnapshot` evaluation |
+| `cpu.h` | CPU gate: CPUID/XGETBV feature detection (AVX2, FMA, BMI1/2, F16C, LZCNT, POPCNT, AVX-512, OS YMM/ZMM state), `cpuGate()` report + message, synthetic `CpuidSnapshot` evaluation, `cpuGateVerdict()` (what the pre-initializer recorded) |
+| `platform_init.h` | `core::platformInit()`: the start-up check every gated `main()` runs first ("CPU gate did not run" unless the verdict reads `Pass`) |
 | `process.h` | `Process::spawn` (CreateProcessW / posix_spawn): UTF-8 args, env, working dir, stdio pipes/null/inherit, inherit-handle whitelist, `wait(timeout)`, `kill()`, `communicate()`; `Pipe`/`PipeEnd`; Windows argument quoting |
 | `async_io.h` | `fs::readFileAsync` / `fs::readAsync` on a `BackgroundPool`: `AsyncRead` handle (poll, counter, callback, cancel); IORing / io_uring plan |
 
@@ -62,32 +63,70 @@ and `src/platform/posix/` behind the internal interface `src/platform/os.h`.
 `cpuGate()` checks the running CPU against what every AVX2 image needs (x86-64-v2 + AVX, AVX2,
 BMI1, BMI2, F16C, LZCNT and OS-enabled YMM state; FMA is reported, never required). The probe is the
 C unit `src/cpugate/cpu_gate.c`, compiled at the x86-64-v1 baseline with no libc calls, so it runs
-on any x86-64 CPU and before the C runtime. `helios_cpu_gate(<exe>)` (applied by
-`helios_executable()` to client, cell, gateway, voice, editor, bot and tool images) links the
-per-OS pre-initializer `src/platform/{posix,win32}/cpu_gate_hook.c`: an ELF `.preinit_array` entry
-or a `.CRT$XIB` C initializer, which runs before any C++ initializer, prints
+on any x86-64 CPU and before the C runtime. `helios_executable()` links the per-OS pre-initializer
+`src/platform/{posix,win32}/cpu_gate_hook.c` into every `avx2` image of a gate role (client, cell, gateway,
+voice, editor, bot, tool; `CPU_GATE` adds it to a test child, and `NO_CPU_GATE` on an `avx2` image is a
+configure error). The hook runs before any other code of its image:
+
+* **Linux:** the executable's single `.preinit_array` entry, which glibc runs before the initializers of
+  the executable and of every shared library.
+* **Windows:** the image's first TLS callback, `helios_cpu_gate_tls_entry` in section `.CRT$XLA0`, so it is
+  `IMAGE_TLS_DIRECTORY.AddressOfCallBacks[0]`, ahead of mimalloc's `.CRT$XLB` callback, the CRT's `.CRT$XLC`
+  one and every C and C++ initializer. The object pulls in `/INCLUDE:_tls_used` and
+  `/INCLUDE:helios_cpu_gate_tls_entry` (MinGW: a `_tls_used` reference and `used`), and it checks on
+  `DLL_PROCESS_ATTACH` only.
+
+On an unsupported CPU it prints
 
 > Helios requires an AVX2 CPU (Intel Haswell / AMD Excavator or newer). Detected: <brand>. Missing: AVX2, BMI2.
 
-to stderr (a message box when there is no console) and exits with **78** (`kCpuGateExitCode`). On a
-supported CPU it installs a SIGILL / `STATUS_ILLEGAL_INSTRUCTION` backstop with the same kind of
-message; core's crash handler replaces it once installed. Deliberate traps (`ud2`/`ud1`/`ud0`:
-`__builtin_trap`, clang-cl's trap-on-unreachable, sanitizer traps) are passed through, so they still
-crash normally and reach the crash handler instead of being reported as an unsupported CPU. The gate
-TUs are object libraries of the `gate` ISA level (`helios_cpu_gate_target()`, `cmake/HeliosIsa.cmake`;
+to stderr and exits with **78** (`kCpuGateExitCode`). The Windows failure path runs under the loader lock,
+before the CRT exists: stderr, then a message box only when the executable's PE header names the
+`WINDOWS_GUI` subsystem and `HELIOS_CPU_GATE_SILENT` is not `1`, then `TerminateProcess(GetCurrentProcess(),
+78)`, never `ExitProcess`, which would run mimalloc's AVX2-built `.CRT$XLY` detach hook on the way out. On a
+supported CPU the hook records the verdict and installs a SIGILL / `STATUS_ILLEGAL_INSTRUCTION` backstop with
+the same kind of message, which exits the same way; core's crash handler replaces it once installed.
+Deliberate traps (`ud2`/`ud1`/`ud0`: `__builtin_trap`, clang-cl's trap-on-unreachable, sanitizer traps) are
+passed through, so they still crash normally and reach the crash handler instead of being reported as an
+unsupported CPU.
+
+**Proof that it ran.** Every gated executable's `main()` starts with `core::platformInit()`
+(`helios/core/platform_init.h`), which reads `cpuGateVerdict()` (the C `helios_cpu_gate_verdict()` beside the
+probe) and stops the process with "CPU gate did not run" and exit code 70 (`kPlatformInitExitCode`) unless it
+reads `Pass`, in every build configuration. A dropped or misplaced hook therefore fails the first smoke test.
+
+The gate TUs are object libraries of the `gate` ISA level (`helios_cpu_gate_target()`, `cmake/HeliosIsa.cmake`;
 WP-0.2r): `helios_core_cpugate` (the probe, archived into `helios_core`), `helios_core_cpugate_hook` and
 the test hook `core_cpugate_hook_snb`. That level is x86-64-v1 with no stack protector (`/GS-`,
-`-fno-stack-protector`) and no sanitizer instrumentation, because the gate runs before those runtimes;
-every other core TU is built at its image's level (`avx2`, or `base` in a launcher's `helios_core.base`
-copy). The ISA audit (`tools/lint`) checks the gate objects' flags, disassembly and symbols on every
-build; `core_cpugate_child_snb` (the hook evaluating a recorded Sandy Bridge) tests the refusal path on
-any machine (CL-17, early).
+`-fno-stack-protector`) and no sanitizer instrumentation, because the gate runs before those runtimes; this
+directory's C flags also drop MSVC's Debug `/RTC1`, and the top-level `/fsanitize=address` of an MSVC ASan
+build skips `gate`-level targets. Every other core TU is built at its image's level (`avx2`, or `base` in a
+launcher's `helios_core.base` copy). The gate objects define three external symbols, `helios_cpu_gate_run`,
+`helios_cpu_gate_verdict` and `helios_cpu_gate_tls_entry`, and nothing else external: cl and clang-cl emit
+string literals and constant pools as external COMDATs (`??_C@…`, `__xmm@…`), so the gate's text lives in static
+arrays and clang-cl builds the gate without vectorization or loop unrolling. The ISA audit (`tools/lint`) checks
+their flags, disassembly and symbols on every build (the MSVC-ABI objects through clang in cl mode on Linux,
+`lint_isa_coff_gate_*`), and CONF-12 (`tools/conformance`) their source.
 
 In a modular dev build (`HELIOS_MODULAR=ON`, ADR-016) core is part of `helios_runtime`, and so is the probe's
 object library, still at the `gate` level (an OBJECT module does not carry the object libraries it links, so
 `cmake/HeliosModular.cmake` links them into the group). On Windows the hook then lives in
-`helios_runtime.dll`, which every gated executable imports, and executables carry none; ELF executables keep their `.preinit_array` hook, which calls the probe in
-`libhelios_runtime.so` (docs/adr/ADR-0.6c-link-model-spike.md §3, including what WP-0.5r changes).
+`helios_runtime.dll`, which every gated executable imports, and executables carry none; the DLL's first TLS
+callback is then the first Helios code in the process, and every process that loads the DLL is gated (tests
+and samples included; ADR-0.6c §3 item 7). ELF executables keep their `.preinit_array` hook, which calls the
+probe in `libhelios_runtime.so` across the image boundary (a PLT call after relocation, before any
+initializer); the verdict it records is the library's, which `platformInit()` reads in the same library
+(ADR-0.6c §3 item 4).
+
+`tests/test_cpu.cpp` runs the gate children (`engine/core/CMakeLists.txt`): `core_cpugate_child` (the real
+hook), `core_cpugate_child_snb` (the hook evaluating a recorded Sandy Bridge: the refusal path on any machine,
+CL-17 early), `core_cpugate_child_nohook` (no hook: `platformInit()` must stop it) and, on Windows,
+`core_cpugate_child_snb_gui` (a `WINDOWS_GUI` image). The Sandy Bridge hook writes its dialog decision to
+stderr instead of showing a dialog (console image; `HELIOS_CPU_GATE_SILENT=1`; or the dialog), so the tests
+check both inputs of that decision. On Windows the child also carries its own `.CRT$XLB` TLS callback, which
+must find the verdict already set, and checks that the gate's slot is `AddressOfCallBacks[0]` of the image
+that carries it: the executable, or in a modular build `helios_runtime.dll`, which exports the slot as data
+for this check (`cmake/HeliosModular.cmake`).
 
 ## Processes
 
@@ -195,9 +234,12 @@ ninja -C build/core helios_core core_tests && ctest --test-dir build/core -R cor
   SIGABRT hook; MSVC pure-call / invalid-parameter failures are hooked too. `__fastfail` paths
   (e.g. /GS buffer overruns) cannot be intercepted in-process.
 * `File::readAt` moves the file position on Windows (positional reads use OVERLAPPED offsets).
-* The CPU gate's message box and localized messages (08 §2.1.1) are the bootstrap's job; the core
-  hook prints English text to stderr (message box only when there is no console). The gate's
-  display name is "Helios" until product stamping (08 §2.10) lands.
+* The CPU gate's localized messages (08 §2.1.1) are the bootstrap's job; the core hook prints English
+  text to stderr (and shows it in a message box for `WINDOWS_GUI` executables). The gate's display name is
+  "Helios" until product stamping (08 §2.10) lands.
+* The illegal-instruction backstop still reports every #UD that is not a deliberate trap as a CPU fault
+  (exit 78), and `posix_crash.cpp` still restores the backstop instead of re-raising with `SIG_DFL`: the
+  round-5 VEX/EVEX and POPCNT classifier and the crash-handler takeover of #UD are WP-0.5r part 2.
 * `Process`: POSIX `wait(timeout)` polls `waitpid` with a 50 µs–5 ms backoff (no pidfd yet); a
   Process destroyed without `wait()` leaves a zombie until the parent exits. Handles listed in
   `inheritHandles` are made inheritable for the duration of `spawn()` only; third-party code that
@@ -208,10 +250,12 @@ ninja -C build/core helios_core core_tests && ctest --test-dir build/core -R cor
 
 ## Plan conformance
 
-Plan-Rev: 3
+Plan-Rev: 14
 
-The CPU-gate code was written to plan revision 3, before the ADR-011 amendment (revision 4). Open deltas are in
-09 §5.10.4 (b), for WP-0.5r: gate placement, the failure path, the exports, and the round-5 backstop
-classifier and crash-handler handover. WP-0.2r (revision 13) changed only how the gate and the module are
-built: the gate's own `gate`-level object libraries and the image ISA levels of 02 §1.1. §5.10.4 (c) has one more, for WP-0.5: 02 §2.2's ≤ 3× `mi_malloc`
-accounting target. The rest of the module has no open delta.
+Re-checked at plan revision 14 by WP-0.5r part 1: the gate's Windows placement (`.CRT$XLA0`, the first TLS
+callback), its failure path (`TerminateProcess(…, 78)`, the subsystem test and `HELIOS_CPU_GATE_SILENT`), its
+three exports, the verdict and `core::platformInit()`'s check, and the gate-object rules (no `/RTC`, no MSVC
+ASan) now follow 02 §1.1; CONF-12 passes. Open deltas in 09 §5.10.4 (b): the round-5 backstop classifier, the
+crash-handler handover and check 5's fixtures (WP-0.5r part 2), and check 3's Windows half, which WP-0.2r
+part 2 builds. §5.10.4 (c) has one more, for WP-0.5: 02 §2.2's ≤ 3× `mi_malloc` accounting target. The rest
+of the module has no open delta.

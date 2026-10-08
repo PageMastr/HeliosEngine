@@ -27,7 +27,10 @@
 #       (x86-64) and -mtune=generic, because their default -march is the toolchain's (x86-64-v2 on
 #       RHEL 9, for one); x64 MSVC and clang-cl have no base flags;
 #     - gate units also end with the stack protector off (-fno-stack-protector, or /GS- with cl and
-#       clang-cl) and no sanitizer still enabled (-fno-sanitize=all after any -fsanitize=);
+#       clang-cl), no sanitizer still enabled (-fno-sanitize=all after any -fsanitize=), no MSVC run-time
+#       checks (/RTC*) and no coverage instrumentation (--coverage, which nothing negates; -fprofile-arcs,
+#       -fprofile-instr-generate, -f[cs-]profile-generate and -fcoverage-mapping unless their own -fno-
+#       option follows; -fsanitize-coverage=, which no -fno-sanitize-coverage= clears here);
 #     - the CPU gate's sources are compiled only in gate-level targets;
 #     - no unit uses -march=native, fast-math or FP contraction (determinism across compilers, 02 §7.1).
 #  2. The gate objects (GNU binutils): no VEX/EVEX, BMI, LZCNT/TZCNT, POPCNT, MOVBE, CMPXCHG16B or SSE3+
@@ -100,7 +103,8 @@ endfunction()
 # <out>_march (and <out>_marchtoken, the option as given), <out>_mtune, <out>_msvcarch, <out>_fastmath,
 # <out>_contract, <out>_contractoff (an explicit -ffp-contract=off), <out>_stackoff (the last
 # stack-protector option turns it off: -fno-stack-protector or /GS-), <out>_sanitize (the -fsanitize=
-# options still in effect after the last -fno-sanitize=all), <out>_abovev1 (every option that enables
+# options still in effect after the last -fno-sanitize=all), <out>_rtc (MSVC's /RTC options), <out>_coverage
+# (the coverage options still in effect, per kind), <out>_abovev1 (every option that enables
 # something above x86-64-v1) and <out>_named (the positive -m extension options). Explicit -m options win
 # over -march's implied set whatever their order (GCC and Clang); among explicit options the last one wins.
 function(_isa_eval_flags tokens family out)
@@ -116,6 +120,14 @@ function(_isa_eval_flags tokens family out)
   set(contractOff OFF)
   set(stackOff OFF)
   set(sanitize "")
+  set(rtc "")
+  # Coverage instrumentation, one list per kind, because each kind has its own negation (or none).
+  set(covDriver "")
+  set(covArcs "")
+  set(covInstr "")
+  set(covGenerate "")
+  set(covMapping "")
+  set(covSancov "")
   set(aboveV1 "")
   set(named "")
   foreach(t IN LISTS tokens)
@@ -154,6 +166,34 @@ function(_isa_eval_flags tokens family out)
       list(APPEND sanitize "${t}")
     elseif(t MATCHES "^-fno-sanitize=all$")
       set(sanitize "")
+    elseif(t MATCHES "^[-/]RTC[1csu]+$")
+      # MSVC's run-time checks (CMake's Debug default /RTC1): there is no option that turns them off again.
+      list(APPEND rtc "${t}")
+    # Coverage: each negation clears only its own kind, and only what came before it (GCC and Clang).
+    # --coverage has none: both drivers keep gcov instrumentation after -fno-profile-arcs (GCC 13, Clang 18).
+    # -fno-coverage-mapping drops only the mapping, never the counters of -fprofile-instr-generate.
+    # A -fno-sanitize-coverage= may remove some of the kinds a -fsanitize-coverage= enabled, so it clears
+    # nothing here.
+    elseif(t STREQUAL "--coverage")
+      list(APPEND covDriver "${t}")
+    elseif(t STREQUAL "-fprofile-arcs")
+      list(APPEND covArcs "${t}")
+    elseif(t STREQUAL "-fno-profile-arcs")
+      set(covArcs "")
+    elseif(t MATCHES "^-fprofile-instr-generate(=.*)?$")
+      list(APPEND covInstr "${t}")
+    elseif(t STREQUAL "-fno-profile-instr-generate")
+      set(covInstr "")
+    elseif(t MATCHES "^-f(cs-)?profile-generate(=.*)?$")
+      list(APPEND covGenerate "${t}")
+    elseif(t STREQUAL "-fno-profile-generate") # Clang: it ends -fcs-profile-generate too
+      set(covGenerate "")
+    elseif(t STREQUAL "-fcoverage-mapping")
+      list(APPEND covMapping "${t}")
+    elseif(t STREQUAL "-fno-coverage-mapping")
+      set(covMapping "")
+    elseif(t MATCHES "^[-/]fsanitize-coverage=.")
+      list(APPEND covSancov "${t}")
     elseif(t MATCHES "^[-/]arch:(.+)$")
       set(msvcArch "${CMAKE_MATCH_1}")
     elseif(t MATCHES "^-m(no-)?(avx512[a-z0-9]*|avx10[.0-9a-z-]*)$")
@@ -233,6 +273,9 @@ function(_isa_eval_flags tokens family out)
   set(${out}_contractoff ${contractOff} PARENT_SCOPE)
   set(${out}_stackoff ${stackOff} PARENT_SCOPE)
   set(${out}_sanitize "${sanitize}" PARENT_SCOPE)
+  set(${out}_rtc "${rtc}" PARENT_SCOPE)
+  set(coverage ${covDriver} ${covArcs} ${covInstr} ${covGenerate} ${covMapping} ${covSancov})
+  set(${out}_coverage "${coverage}" PARENT_SCOPE)
   set(${out}_abovev1 "${aboveV1}" PARENT_SCOPE)
   set(${out}_named "${named}" PARENT_SCOPE)
 endfunction()
@@ -814,6 +857,14 @@ macro(_isa_flush_entry)
       if(level STREQUAL "gate" AND f_sanitize)
         string(REPLACE ";" " " text "${f_sanitize}")
         _violation("${unit}: CPU-gate unit built with sanitizer instrumentation (${text}), whose runtime does not exist yet when the gate runs (02 §1.1)")
+      endif()
+      if(level STREQUAL "gate" AND f_rtc)
+        string(REPLACE ";" " " text "${f_rtc}")
+        _violation("${unit}: CPU-gate unit built with MSVC run-time checks (${text}), which call the CRT before it exists (02 §1.1)")
+      endif()
+      if(level STREQUAL "gate" AND f_coverage)
+        string(REPLACE ";" " " text "${f_coverage}")
+        _violation("${unit}: CPU-gate unit built with coverage instrumentation (${text}), whose runtime does not exist yet when the gate runs (02 §1.1)")
       endif()
       if(level STREQUAL "gate" AND NOT SKIP_OBJECTS)
         set(obj "${outN}")

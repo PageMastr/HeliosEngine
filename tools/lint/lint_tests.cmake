@@ -198,11 +198,21 @@ if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
   endif()
   # Check 2 on MSVC-ABI objects. On Windows tools/ci/msvc_gate_audit.ps1 reads the gate objects with dumpbin,
   # but no CI job runs it before WP-0.2r part 2, so here clang in cl mode builds the gate's units for
-  # x86_64-pc-windows-msvc with the gate level's clang-cl flags (HELIOS_ISA_GATE_CLANG_CL) and check 2 reads
-  # the COFF objects with llvm-nm and llvm-objdump. That ABI emits string literals (??_C@...) and constant pools
-  # (__xmm@...) as external COMDATs, which 02 §1.1 does not allow in a gate object. The Windows hook needs
-  # windows.h, so it is built only where the MinGW-w64 headers are installed; they need -fno-ms-compatibility,
-  # which changes parsing, not code generation. The seeded fixture holds one string literal.
+  # x86_64-pc-windows-msvc and check 2 reads the COFF objects with llvm-nm and llvm-objdump. The flags that
+  # decide code generation are the real build's: the gate level's clang-cl flags (HELIOS_ISA_GATE_CLANG_CL)
+  # and the compile flags of the MSVC-family presets, which build RelWithDebInfo (CMake's /O2 /Ob1 /DNDEBUG,
+  # and /Z7 from CMAKE_MSVC_DEBUG_INFORMATION_FORMAT); the Debug preset's /Od is not built. Adding one that
+  # the real build lacks would test a different compiler: -ffreestanding, say, implies -fno-builtin, which
+  # stops LLVM from turning loops into memset and memcpy calls, so a gate unit that the real build compiles
+  # with such a CRT import would pass (lint_isa_coff_gate_detects_memset_libcall guards the command). It
+  # differs from the real build in /X (that build searches the Windows SDK; Linux has none), in the MinGW-w64
+  # headers and -fno-ms-compatibility of the hook (parsing and header search), and in leaving out the options
+  # of helios_apply_warnings and the top-level CMakeLists (/W4, /utf-8, /fp:precise, /Zc:inline, /bigobj, /MT,
+  # the NOMINMAX-style definitions): adding those leaves the disassembly, relocations, symbols and data of
+  # these objects unchanged. The MSVC ABI emits string literals (??_C@...) and constant pools (__xmm@...)
+  # as external COMDATs, which 02 §1.1 does not allow in a gate object. The Windows hook needs windows.h, so
+  # it is built only where the MinGW-w64 headers are installed. The seeded fixtures hold one string literal
+  # and one zeroing loop.
   if(NOT WIN32)
     find_program(HELIOS_LINT_CLANG
                  NAMES clang-cl clang-cl-20 clang-cl-19 clang-cl-18 clang clang-20 clang-19 clang-18)
@@ -212,17 +222,18 @@ if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
               PATHS /usr/x86_64-w64-mingw32/include /usr/share/mingw-w64/include NO_DEFAULT_PATH)
     if(HELIOS_LINT_CLANG AND HELIOS_LINT_LLVM_NM AND HELIOS_LINT_LLVM_OBJDUMP)
       set(coffDir ${CMAKE_BINARY_DIR}/tools/lint/coff_gate)
+      set(coffFlags /nologo /c /O2 /Ob1 /DNDEBUG /Z7 ${HELIOS_ISA_GATE_CLANG_CL} /X)
       set(coffSrc ${PROJECT_SOURCE_DIR}/engine/core/src)
       set(coffObjects "")
-      # Builds <name>.obj from <source> with the Release flags of the MSVC-family presets (/O2 /Ob2: the most
-      # inlining and loop optimization) and registers its check-2 test, a passing one unless EXPECT is given.
+      # Builds <name>.obj from <source> with coffFlags and registers its check-2 test, a passing one unless
+      # EXPECT is given (a seeded fixture: the test passes only when check 2 fails with that diagnostic).
       function(_helios_lint_coff_gate name source)
         cmake_parse_arguments(C "" "EXPECT" "FLAGS" ${ARGN})
         set(obj ${coffDir}/${name}.obj)
         add_custom_command(OUTPUT ${obj}
           COMMAND ${CMAKE_COMMAND} -E make_directory ${coffDir}
-          COMMAND ${HELIOS_LINT_CLANG} --driver-mode=cl --target=x86_64-pc-windows-msvc /nologo /c /O2 /Ob2
-                  /DNDEBUG ${HELIOS_ISA_GATE_CLANG_CL} /X /clang:-ffreestanding ${C_FLAGS} /Fo${obj} -- ${source}
+          COMMAND ${HELIOS_LINT_CLANG} --driver-mode=cl --target=x86_64-pc-windows-msvc ${coffFlags} ${C_FLAGS}
+                  /Fo${obj} -- ${source}
           DEPENDS ${source} ${coffSrc}/cpugate/cpu_gate.h ${PROJECT_SOURCE_DIR}/cmake/HeliosIsa.cmake
           COMMENT "Building ${name}.obj (CPU gate, MSVC ABI) for ISA audit check 2" VERBATIM)
         set(check ${CMAKE_COMMAND} ${isaCommon} -DOBJDUMP=${HELIOS_LINT_LLVM_OBJDUMP} -DNM=${HELIOS_LINT_LLVM_NM}
@@ -245,6 +256,10 @@ if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
       endif()
       _helios_lint_coff_gate(literal_pool ${LINT_TESTS}/isa/gate_literal_pool.c
         EXPECT "exports '\\?\\?_C@[^']+' \\(type R\\): only HELIOS_ISA_GATE_EXPORTS may be external")
+      # A zeroing loop that LLVM turns into a memset call: an import from the CRT, which does not exist yet when
+      # the gate runs and is not on HELIOS_ISA_GATE_ALLOWED_IMPORTS.
+      _helios_lint_coff_gate(memset_libcall ${LINT_TESTS}/isa/gate_memset_libcall.c
+        EXPECT "references 'memset', which is not on HELIOS_ISA_GATE_ALLOWED_IMPORTS")
       add_custom_target(lint_isa_coff_gate_build ALL DEPENDS ${coffObjects})
       set_target_properties(lint_isa_coff_gate_build PROPERTIES FOLDER tests)
     else()

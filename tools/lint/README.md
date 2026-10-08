@@ -220,12 +220,20 @@ dumpbin by hand from a Visual Studio developer prompt (no CI job calls it):
   (`HELIOS_ISA_GATE_CLANG_CL` in `cmake/HeliosIsa.cmake`), whose constants LLVM puts in such pools.
 
 Until then the same symbol rule runs on Linux against MSVC-ABI objects: where clang (in cl mode), `llvm-nm` and
-`llvm-objdump` are installed, `lint_isa_coff_gate_probe` builds `cpu_gate.c` for `x86_64-pc-windows-msvc` with
-the gate level's clang-cl flags and `/O2 /Ob2`, and check 2 (`MODE=object`) reads the COFF object;
+`llvm-objdump` are installed, `lint_isa_coff_gate_probe` builds `cpu_gate.c` for
+`x86_64-pc-windows-msvc` with the gate level's clang-cl flags and the compile flags of the MSVC-family presets
+(`RelWithDebInfo`: `/O2 /Ob1 /DNDEBUG`, `/Z7`), and check 2 (`MODE=object`) reads the COFF object;
 `lint_isa_coff_gate_hook` and `lint_isa_coff_gate_hook_snb` do the same for the Windows hook (shipping and
-Sandy Bridge test builds) where the MinGW-w64 headers provide `windows.h`. The seeded
-`lint_isa_coff_gate_detects_literal_pool` (`tests/isa/gate_literal_pool.c`, one string literal) must fail with
-an `exports '??_C@…'` finding. cl's own objects are checked only by the PowerShell script.
+Sandy Bridge test builds) where the MinGW-w64 headers provide `windows.h`. No flag that changes code
+generation may be added to that command line: `-ffreestanding` would imply `-fno-builtin` and hide the `memset`
+and `memcpy` calls that LLVM makes from loops, which the real build would import. The Debug preset's `/Od` is
+not built. The two seeded tests must fail check 2 with the expected finding:
+`lint_isa_coff_gate_detects_literal_pool` (`tests/isa/gate_literal_pool.c`, one string literal) with an
+`exports '??_C@…'` finding, and `lint_isa_coff_gate_detects_memset_libcall` (`tests/isa/gate_memset_libcall.c`, a
+byte-zeroing loop that LLVM turns into a `memset` call) with `references 'memset', which is not on
+HELIOS_ISA_GATE_ALLOWED_IMPORTS`. The second is also the guard of the command line: with `-ffreestanding` LLVM
+keeps the loop, the object comes out clean and the test fails. cl's own objects are checked only by the
+PowerShell script.
 
 The Windows gate's placement (the first TLS callback, `.CRT$XLA0`) is tested at run time by `core_tests` on the
 Windows CI jobs until check 3's Windows half exists: a TLS callback of the gate's test child in `.CRT$XLB`,

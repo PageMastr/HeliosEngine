@@ -220,7 +220,8 @@ dumpbin by hand from a Visual Studio developer prompt (no CI job calls it):
   (`HELIOS_ISA_GATE_CLANG_CL` in `cmake/HeliosIsa.cmake`), whose constants LLVM puts in such pools.
 
 Until then the same symbol rule runs on Linux against MSVC-ABI objects: where clang (in cl mode), `llvm-nm` and
-`llvm-objdump` are installed, `lint_isa_coff_gate_probe` builds `cpu_gate.c` for
+`llvm-objdump` are installed (and that clang builds a trivial unit with the flags below; otherwise the tests
+are not registered, with a `STATUS` line), `lint_isa_coff_gate_probe` builds `cpu_gate.c` for
 `x86_64-pc-windows-msvc` with the gate level's clang-cl flags and the compile flags of the MSVC-family presets
 (`RelWithDebInfo`: `/O2 /Ob1 /DNDEBUG`, `/Z7`), and check 2 (`MODE=object`) reads the COFF object;
 `lint_isa_coff_gate_hook` and `lint_isa_coff_gate_hook_snb` do the same for the Windows hook (shipping and

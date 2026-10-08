@@ -220,9 +220,28 @@ if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
     find_program(HELIOS_LINT_LLVM_OBJDUMP NAMES llvm-objdump llvm-objdump-20 llvm-objdump-19 llvm-objdump-18)
     find_path(HELIOS_LINT_MINGW_INCLUDE windows.h
               PATHS /usr/x86_64-w64-mingw32/include /usr/share/mingw-w64/include NO_DEFAULT_PATH)
+    set(coffFlags /nologo /c /O2 /Ob1 /DNDEBUG /Z7 ${HELIOS_ISA_GATE_CLANG_CL} /X)
+    set(coffDir ${CMAKE_BINARY_DIR}/tools/lint/coff_gate)
+    set(coffCompiler "")
     if(HELIOS_LINT_CLANG AND HELIOS_LINT_LLVM_NM AND HELIOS_LINT_LLVM_OBJDUMP)
-      set(coffDir ${CMAKE_BINARY_DIR}/tools/lint/coff_gate)
-      set(coffFlags /nologo /c /O2 /Ob1 /DNDEBUG /Z7 ${HELIOS_ISA_GATE_CLANG_CL} /X)
+      # The objects are part of ALL, so a clang that cannot build them (too old for the /clang: options, or
+      # without the x86 target) would fail the whole build where it should only drop these tests: build one first.
+      file(MAKE_DIRECTORY ${coffDir})
+      execute_process(
+        COMMAND ${HELIOS_LINT_CLANG} --driver-mode=cl --target=x86_64-pc-windows-msvc ${coffFlags}
+                /Fo${coffDir}/configure_check.obj -- ${LINT_TESTS}/isa/gate_literal_pool.c
+        RESULT_VARIABLE coffRc OUTPUT_VARIABLE coffOut ERROR_VARIABLE coffOut)
+      if(coffRc EQUAL 0)
+        set(coffCompiler ${HELIOS_LINT_CLANG})
+      else()
+        string(REGEX REPLACE "\n.*" "" coffOut "${coffOut}")
+        message(STATUS "lint_isa_coff_gate_*: ${HELIOS_LINT_CLANG} cannot build for x86_64-pc-windows-msvc "
+                       "with the gate's clang-cl flags (${coffOut}), so not registered")
+      endif()
+    else()
+      message(STATUS "lint_isa_coff_gate_*: needs clang (cl mode), llvm-nm and llvm-objdump, so not registered")
+    endif()
+    if(coffCompiler)
       set(coffSrc ${PROJECT_SOURCE_DIR}/engine/core/src)
       set(coffObjects "")
       # Builds <name>.obj from <source> with coffFlags and registers its check-2 test, a passing one unless
@@ -232,7 +251,7 @@ if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
         set(obj ${coffDir}/${name}.obj)
         add_custom_command(OUTPUT ${obj}
           COMMAND ${CMAKE_COMMAND} -E make_directory ${coffDir}
-          COMMAND ${HELIOS_LINT_CLANG} --driver-mode=cl --target=x86_64-pc-windows-msvc ${coffFlags} ${C_FLAGS}
+          COMMAND ${coffCompiler} --driver-mode=cl --target=x86_64-pc-windows-msvc ${coffFlags} ${C_FLAGS}
                   /Fo${obj} -- ${source}
           DEPENDS ${source} ${coffSrc}/cpugate/cpu_gate.h ${PROJECT_SOURCE_DIR}/cmake/HeliosIsa.cmake
           COMMENT "Building ${name}.obj (CPU gate, MSVC ABI) for ISA audit check 2" VERBATIM)
@@ -262,8 +281,6 @@ if(isaX86 AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
         EXPECT "references 'memset', which is not on HELIOS_ISA_GATE_ALLOWED_IMPORTS")
       add_custom_target(lint_isa_coff_gate_build ALL DEPENDS ${coffObjects})
       set_target_properties(lint_isa_coff_gate_build PROPERTIES FOLDER tests)
-    else()
-      message(STATUS "lint_isa_coff_gate_*: needs clang (cl mode), llvm-nm and llvm-objdump, so not registered")
     endif()
   endif()
   # Check 3's canary for shared libraries (ELF, both link flavours): a shared library with an IFUNC, whose

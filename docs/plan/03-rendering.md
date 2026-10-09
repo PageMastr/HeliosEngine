@@ -1845,10 +1845,13 @@ exists for one gate (AAA-REN-3) and inherits everything else from High.
   temporal warm-up) to EXR/PNG.
 - **Comparison:** ꟻLIP (NVIDIA, BSD-3, verify when vendoring), mean ≤ 0.01 plus per-test max error.
   Goldens are kept per backend and driver; CI pins the Mesa image; REF/MIN hardware keeps nightly
-  goldens. The lavapipe and Null goldens that every PR job compares are small (320 × 180 to 640 × 360) and
-  are committed as ordinary files under `tools/rendertest/golden/` (`vulkan-<driver>/`, `null/`), because
-  PR-tier checkouts do not fetch Git LFS objects. Hardware goldens go to Git LFS when the H1 lab produces
-  them (WP-1.23), with their nightly job fetching them.
+  goldens. `helios-rendertest`'s lavapipe and Null goldens, which every PR job compares, are small
+  (320 × 180 to 640 × 360) and are committed as ordinary files under `tools/rendertest/golden/`
+  (`vulkan-<driver>/`, `null/`), because PR-tier checkouts do not fetch Git LFS objects. The goldens of other
+  modules' PR-tier tests (the RHI's 256 × 256 triangle and quad, the editor's ED-15 captures up to
+  3840 × 2160, the render graph's Null traces) are committed beside those tests, under
+  `engine/<module>/tests/golden/`. Hardware goldens go to Git LFS when the H1 lab produces them (WP-1.23),
+  with their nightly job fetching them.
 - **Lavapipe realities:** it rasterizes on the CPU, so tests run at 320 × 180 to 640 × 360 and the
   per-commit suite gets ≤ 10 min on 8 cores. Mesa 25.2 lets it cover the mesh-shader and ray-query
   paths as well as the cap-masked fallbacks.
@@ -1901,7 +1904,8 @@ engine/presentation/   L4 (02 owns, 03 co-owns extractors): flecs → RenderScen
 engine/render_plugins/ aftermath, dlss, xess (optional; SDKs not vendored)
 shaders/               core/ brdf/ lighting/ atmosphere/ materials/ passes/ vfx/ terrain/
 tools/shaderc/         helios-shaderc
-tools/rendertest/      helios-rendertest; golden/vulkan-<driver>/ images and golden/null/ traces (§8.4)
+tools/rendertest/      helios-rendertest; golden/vulkan-<driver>/ images and golden/null/ traces (§8.4);
+                       other modules keep their own PR-tier goldens in engine/<module>/tests/golden/
 apps/tools/            helios-bake (impostors, nebulae, probes)
 ```
 

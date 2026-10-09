@@ -228,10 +228,11 @@ Naming lints (PascalCase types and enum values, camelCase fields) are warnings (
 
 ## Stable ids: the schema lock
 
-The schema lock (one per schema package, 02 §3.4: this repository commits `schemas/sample/schema.lock.jsonc`
-and `schemas/gameplay/schema.lock.jsonc`, and `helios_schema()` defaults to the one next to the calling
-`CMakeLists.txt`) is generated, committed and append-only (illustrative entry
-after a rename and a deletion):
+The schema lock (one per schema package or package set, 02 §3.4: this repository commits
+`schemas/sample/schema.lock.jsonc`, which three packages share, `schemas/gameplay/schema.lock.jsonc` and a
+test lock, `engine/records/tests/schema/schema.lock.jsonc`, and `helios_schema()` defaults to the one next to
+the calling `CMakeLists.txt`) is generated, committed and append-only (illustrative entry after a rename and
+a deletion):
 
 ```jsonc
 {

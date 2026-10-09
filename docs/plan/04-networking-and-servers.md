@@ -1850,7 +1850,8 @@ apps/voice/          helios-voice forwarder (engine/net only; no ECS)
 engine/replay/       SimInbox, recorder, keyframes and script rebase, replayer, state hashing
 tools/bots/  tools/devcluster/  tools/netinspect/  tools/fuzz/  tools/lint/simdet/
 third_party/luau/patches/det-math   Luau transcendentals, ^ and constant folding → det:: (§10.2)
-third_party/luau/patches/codegen-fornloop-fuel, fuel-counter   native-code fuel parity; inline fuel counter (§10.2)
+third_party/luau/patches/0001-codegen-fornloop-fuel.patch   native-code fuel parity (§10.2)
+third_party/luau/patches/0002-fuel-counter.patch   inline fuel counter (§10.2)
 third_party/jolt/patches/0001-stable-order.patch   stable-key solver order; no cross-Update cache (02 §7.1)
 schemas/net/         *.hschema wire messages (token format shared with Go via schemac)
 tests/net/ tests/replication/ tests/authority/   doctest suites, Windows↔Linux and Go-token interop

@@ -804,7 +804,7 @@ default). T28's `collab.scope` rule (Error) checks that every spatial document s
 |---|---|---|
 | **Spatial** | Everything under `content/zones/<zone>/`: object containers and entities, terrain tiles and layer stacks, scatter overrides, `ZonePartitionDef` and portal graphs | Always `zone-<zoneId>`. Never moves |
 | **Global** | Every other document under `content/`: records (items, abilities, loot and plug tables, NPC, faction, vehicle and schematic records), graphs, quests, dialogue, string tables, prefabs, materials, sequences, UI documents and `.meta` settings | `data` by default, or the one zone session that has checked it out |
-| **Global, pinned** | Project schema packages (`.hschema`, 02 §3.8), `.htags`, `PhysicsLayersDef` and project settings | Always `data`. They change validation in every session, so they never move |
+| **Global, pinned** | Project schema packages (`.hschema`, 02 §3.8), tag declarations (`TagDef` records, 06 §1.1), `PhysicsLayersDef` and project settings | Always `data`. They change validation in every session, so they never move |
 
 **Routing.** Editors mirror the home map (below) and send each transaction to the one session that homes
 every document it touches:
@@ -1241,8 +1241,8 @@ Issues unless listed):
 - *Records:* a record inspector with the record-template inheritance tree and override
   markers; **spreadsheet grid** (filter, sort, fill-down, bulk edit, HXL column formulas such as
   `damage = base * 1.1`, CSV/TSV round trip); where used; record diff/merge; per-field visibility
-  badges (`client`, `server_only`, service); `.htags` editor with hot-set meter (≤ 1,024, 06 §1.1);
-  schema-migration runner with preview diff; physics customizers (§2.6.1): the `PhysicsLayersDef`
+  badges (`client`, `server_only`, service); tag editor (`TagDef` records) with hot-set meter (≤ 1,024,
+  06 §1.1); schema-migration runner with preview diff; physics customizers (§2.6.1): the `PhysicsLayersDef`
   collision matrix as a symmetric checkbox grid with "why does A hit B" tracing, and
   `PhysicalMaterialDef` with an impact-cue and footstep audition button.
 - *Stable IDs:* record hash IDs are minted once at creation and stored in the file, so renames never

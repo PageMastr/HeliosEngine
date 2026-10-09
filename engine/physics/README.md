@@ -140,6 +140,7 @@ Plan-Rev: 12
 Written to plan revision 6 (02 §5.4, §7.1; 09 §2.1 WP-0.9) on 2026-09-25,
 ahead of its round (it needs WP-0.2r), under `docs/plan/09-roadmap-and-process.md` §5.10.2 D7. Brought to
 revision 12 on 2026-10-03 for the `stable-order` patch (02 §7.1, RT-03's permuted variant). One finding
-against 02 §7.1: stock Jolt orders by `BodyID` in a fourth place the plan does not list, the body order
-of each contact constraint (`ContactConstraintManager` stores and solves a pair lower `BodyID` first,
-whatever `ProcessBodyPair` chose); the patch covers it. The open deviations are listed in this README.
+against 02 §7.1: stock Jolt orders by `BodyID` in a fourth place that the plan did not list until
+revision 15, the body order of each contact constraint (`ContactConstraintManager` stores and solves a pair
+lower `BodyID` first, whatever `ProcessBodyPair` chose); the patch covers it, and 02 §7.1 now lists it. The
+open deviations are listed in this README.

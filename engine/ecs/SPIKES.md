@@ -6,7 +6,8 @@ Everything here comes from `ecs_bench` (engine/ecs/bench). You can reproduce it 
 ninja -C build/<dir> ecs_bench
 ./build/<dir>/bin/ecs_bench                 # RT-01 zone for 0/1/2/4 workers, then spikes (a) and (b)
 ./build/<dir>/bin/ecs_bench --spikes-only   # spikes only
-./build/<dir>/bin/ecs_bench --quick         # 60 ticks and smaller spikes (smoke run, ~20 s; CTest ecs_bench_rt01 in the linux-bench preset)
+./build/<dir>/bin/ecs_bench --quick         # 60 ticks and smaller spikes (smoke run, ~20 s)
+                                            # (CTest ecs_bench_rt01 in the linux-bench preset)
 ./build/<dir>/bin/ecs_bench --inframe-dontfragment   # InFrame as a DontFragment pair (§2.3)
 ./build/<dir>/bin/ecs_bench --per-command-creates    # burst creates as spawn() + set() (§5)
 ./build/<dir>/bin/ecs_bench --legacy-burst           # the pre-WP-1.1a burst, bugs included (§5.3)

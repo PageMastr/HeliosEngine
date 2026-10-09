@@ -25,12 +25,13 @@ The installer, `install.db` (which implements `TrustStateStore`), the planner, t
 `StreamingInstaller` of 08 §4.1 and the stamped product block that supplies the root pair (08 §2.10.4) are later
 WPs (0.17, 2.7, 2.16).
 
-Depends on `helios::core`, and privately on Monocypher (BLAKE2b and Ed25519) and zstd. The launcher (WP-0.17) will
-link this module in its x86-64-v1 (`base`) image (08 §2.1.1), so it has no ISA-specific code; file IO goes through core's platform
-layer. Base images link `helios_patch.base` (02 §1.1's `patch@base`), an object-library copy built at x86-64-v1
-together with the copies of core, Monocypher and zstd (`cmake/HeliosIsa.cmake`); it exists once a base image is
-configured, which today is the ISA audit's `lint_isa_fixture_base` and from WP-0.17 the launcher. Every other image
-links `helios_patch`, built at `avx2`.
+Depends on `helios::core`, and privately on Monocypher (BLAKE2b and Ed25519) and zstd. The launcher (WP-0.17)
+will link this module in its x86-64-v1 (`base`) image (08 §2.1.1), so it has no ISA-specific code; file IO
+goes through core's platform layer. Base images link `helios_patch.base` (02 §1.1's `patch@base`), an
+object-library copy built at x86-64-v1 together with the copies of core, Monocypher and zstd
+(`cmake/HeliosIsa.cmake`); it exists once a base image is configured, which today is the ISA audit's
+`lint_isa_fixture_base` and from WP-0.17 the launcher. Every other image links `helios_patch`, built at
+`avx2`.
 
 ## Headers
 
@@ -95,9 +96,10 @@ KiB). An insertion changes only the 1–3 chunks around it (tested at 100 bytes 
 ## The `.hman` v0 format
 
 05 §7 lists what the manifest holds (build, monotonic `sequence`, platform; per file: path, size, hash, chunk
-list, tags and install tier; a pack index and patches) and says "a schema-generated binary, zstd-compressed".
-v0 is a hand-written fixed-layout binary instead (see [Plan conformance](#plan-conformance)). All integers are
-little-endian.
+list, tags and install tier; a pack index and patches). Since plan revision 15 it also names this
+hand-written fixed layout, where it said "a schema-generated binary" (see
+[Plan conformance](#plan-conformance)), and makes this section and the shared `hman/` vectors normative: a
+change to either is a 05 §7 Plan-Change (09 §5.10.2 D1). All integers are little-endian.
 
 ```
 [0, 352)     header (fixed)
@@ -607,12 +609,12 @@ Written for plan revision 13 (05 §5, §6.5, §7, §8; 08 §2.1.1, §2.5, §2.6,
 §4.5; 02 §1.1, §6.3; 09 §2 WP-0.16) on 2026-10-04 (part 1) and 2026-10-05 (part 2). Deviations and choices the
 plan leaves open:
 
-- **Not schema-generated (05 §7).** The plan calls `.hman` "a schema-generated binary". schemac's binary codecs
-  are the tagged format (protobuf wire, which tolerates unknown and missing fields, 02 §3.4) and need
-  `engine/reflect`, which 02 §1.1's row for `patch` (deps: core) does not allow; the Go emitter has no cooked
-  codec. A signed manifest needs one canonical encoding that both languages write byte for byte, so v0 is a
-  hand-written fixed layout with a shared golden. The Director decides whether a later schemac emitter (a
-  standalone, canonical codec) replaces it.
+- **Not schema-generated (05 §7).** The plan called `.hman` "a schema-generated binary" until plan revision
+  15, which adopted this fixed layout. schemac's binary codecs are the tagged format (protobuf wire, which
+  tolerates unknown and missing fields, 02 §3.4) and need `engine/reflect`, which 02 §1.1's row for `patch`
+  (deps: core) does not allow; the Go emitter has no cooked codec. A signed manifest needs one canonical
+  encoding that both languages write byte for byte, so v0 is a hand-written fixed layout with a shared
+  golden.
 - **zstd envelope.** The canonical body is what both writers agree on; the zstd payload differs by encoder.
   `bodyHash` covers the decoded body and `headerHash` the header, so the manifest's identity (the pointer's
   `manifest_hash` in part 2) is the header hash, and the signature covers the header.

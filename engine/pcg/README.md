@@ -61,10 +61,10 @@ instead of hashing per lane; results are bit-identical. The kernel TUs hold inte
 
 **Selection** (`kernel.h`): `initializePcgModule()` reads the `pcg.kernel` CVar (default `avx2`) and logs
 `pcg.kernel=<name>`. The choice is also checked against CPUID (`core::cpuGate()`; the AVX2 kernel needs
-the full `Avx2Image` feature set) and falls back to the widest supported kernel with a warning, a
-deviation from 02 §5.8 ([below](#deviations-from-the-plan-text)). Since WP-0.2r every pcg TU, the three
-kernels included, is built at its image's `avx2` level (02 §1.1, `cmake/HeliosIsa.cmake`): no kernel has
-flags of its own, and a `base` image (launcher, bootstrap) that links `pcg` fails configure.
+the full `Avx2Image` feature set) and falls back to the widest supported kernel with a warning, as 02 §5.8
+says since plan revision 15. Since WP-0.2r every pcg TU, the three kernels included, is built at its image's
+`avx2` level (02 §1.1, `cmake/HeliosIsa.cmake`): no kernel has flags of its own, and a `base` image
+(launcher, bootstrap) that links `pcg` fails configure.
 
 ## GPU twin (`shaders/pcg/`)
 
@@ -87,9 +87,8 @@ Regenerating the corpus: `HELIOS_UPDATE_HNOISE_CORPUS=1 pcg_tests -tc="corpus:*"
 
 ## Deviations from the plan text
 
-- CPUID-checked kernel selection: 02 §5.8 says no CPUID is needed once whole images are `avx2`. They
-  have been since WP-0.2r part 1, but `src/kernel.cpp` still checks `cpuGate()` and falls back to the
-  widest supported kernel.
+- CPUID-checked kernel selection is no longer one: 02 §5.8 adopted it in plan revision 15 (the comment in
+  `kernel.h` that calls it a deviation predates that).
 - Phase 0 node set only: no dedicated crater, terrace, cellular, erosion or region nodes yet; the
   reference graph approximates those shapes with the Phase 0 nodes.
 - The GPU twin interprets bytecode per sample (uniform control flow across a dispatch) rather than

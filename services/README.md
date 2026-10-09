@@ -138,21 +138,23 @@ go run ./cmd/helios-patch publish --build ../out/win64 --product sample-game --c
 go run ./cmd/helios-patch verify --product sample-game --channel dev --platform win64 --state trust.state
 ```
 
-- **publish** walks the build in path order (regular files only; `bin/` is tier 0, or `--tier0` prefixes; a file
-  with an execute bit is `Executable`), chunks each file with FastCDC, writes each chunk that the CDN does not
-  have yet as one zstd-19 object (deduplicated by ID), builds the `.hman` (`--build-id`, default 16 hex digits
-  derived from the content and compat epoch) and signs its header with the manifest subkey, then the keyset, and
-  last the channel's pointer with the next sequence (`--compat-epoch`, `--min-launcher`, `--min-client`,
-  `--cdn-host`, `--rollout-pct`, `--lifetime` up to 7 days), so a reader never sees a pointer to objects that are
-  not there. Republishing an identical build writes nothing; the pointer is re-signed with the next sequence once
-  it is past half its lifetime. Manifests and chunks are immutable: a build ID already published with other
-  content is refused, and so is one whose manifest no longer passes the checks an install runs (a damaged payload
-  or signature; publish it under another `--build-id`), instead of being re-pointed. A chunk object already on the CDN is decoded and compared with the chunk, and rewritten if it
-  does not match (a torn copy is repaired instead of being signed into another manifest). The CDN's keyset is
-  never replaced by a lower version, a lower root epoch or other bytes of the same version (that would undo
-  revocations and fail installs that ratcheted past it), and when the signing directory has a `roots.json`
-  (dev directories do) the keyset must verify against it. A `roots.json` with a zero or other small-order key is
-  refused (`verify` too): anyone could sign a keyset under one.
+- **publish** walks the build in path order (regular files only; `bin/` is tier 0, or `--tier0` prefixes; a
+  file with an execute bit is `Executable`), chunks each file with FastCDC, writes each chunk that the CDN
+  does not have yet as one zstd frame (klauspost's encoder at its best level, about zstd 11; deduplicated by
+  ID), builds the `.hman` (`--build-id`, default 16 hex digits derived from the content and compat epoch) and
+  signs its header with the manifest subkey, then the keyset, and last the channel's pointer with the next
+  sequence (`--compat-epoch`, `--min-launcher`, `--min-client`, `--cdn-host`, `--rollout-pct`, `--lifetime` up
+  to 7 days), so a reader never sees a pointer to objects that are not there. Republishing an identical build
+  writes nothing; the pointer is re-signed with the next sequence once it is past half its lifetime. Manifests
+  and chunks are immutable: a build ID already published with other content is refused, and so is one whose
+  manifest no longer passes the checks an install runs (a damaged payload or signature; publish it under
+  another `--build-id`), instead of being re-pointed. A chunk object already on the CDN is decoded and
+  compared with the chunk, and rewritten if it does not match (a torn copy is repaired instead of being signed
+  into another manifest). The CDN's keyset is never replaced by a lower version, a lower root epoch or other
+  bytes of the same version (that would undo revocations and fail installs that ratcheted past it), and when
+  the signing directory has a `roots.json` (dev directories do) the keyset must verify against it. A
+  `roots.json` with a zero or other small-order key is refused (`verify` too): anyone could sign a keyset
+  under one.
 - **Keys.** `--channel dev` without `--keys` creates throwaway dev keys on first use in
   `helios-data/keys/patch/<product>/` (`roots.json`, the public root pair; `root-keys.json` and
   `manifest-key.json`, the private seeds, mode 0600 and marked `"dev": true`; `keyset.json`, signed by the dev

@@ -688,8 +688,8 @@ detected features as JSON, so CI reads the result without driving the UI.
 
 ### 2.5 Content-addressed chunk patching
 
-**Fixed by 05 §7:** FastCDC (16/64/256 KiB), BLAKE2b-256 chunk IDs, zstd-19 on the CDN, packs for chunks under
-32 KiB, `.hman` manifests with tiers 0/1/2, and a signed pointer with `sequence` (anti-rollback),
+**Fixed by 05 §7:** FastCDC (16/64/256 KiB), BLAKE2b-256 chunk IDs, zstd chunks on the CDN, packs for chunks
+under 32 KiB, `.hman` manifests with tiers 0/1/2, and a signed pointer with `sequence` (anti-rollback),
 `rollout_pct` and `min_launcher`. `engine/patch` also implements FastCDC in C++ for local publishing and
 tests, sharing golden vectors with Go.
 

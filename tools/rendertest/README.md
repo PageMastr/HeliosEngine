@@ -186,6 +186,7 @@ Plan-Rev: 10
 Reconciled by hand with plan revision 6 (the round-5 minor revisions) on 2026-09-25, under
 `docs/plan/09-roadmap-and-process.md` §5.10.2 D7, and re-checked at revision 10 by WP-0.12 on
 2026-09-27 (revisions 7–10 changed no anchor that maps here). No conformance delta is open; see
-§5.10.4 (c) there. Two layout deviations from 03 §9.1 remain: the tool lives in `tools/rendertest`,
-not `apps/tools/` (like `tools/schemac`; 09 §8.1 names `tools/`), and goldens are committed PNGs and
-traces here rather than Git LFS under `tests/golden/`, because the repository has no LFS yet.
+§5.10.4 (c) there. The two layout deviations from 03 §9.1 that this README recorded are gone: plan
+revision 15 adopts both, the tool in `tools/rendertest` (like `tools/schemac`) and the goldens committed here
+as PNGs and traces, because PR-tier checkouts fetch no Git LFS objects (03 §8.4: hardware goldens go to LFS
+with WP-1.23).

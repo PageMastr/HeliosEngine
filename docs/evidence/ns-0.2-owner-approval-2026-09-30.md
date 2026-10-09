@@ -190,3 +190,68 @@ and is listed in 09 §8.1.
 - `tools/scorecard/test_nightly_workflow.py` pins the scope: the only advisory in the nightly is
   `ns02-stack`, exactly on the steps of the runs in `advisory_runs` (`linux-gcc`), and NS-0.2 is the only
   criterion with an approval.
+
+## The owner's answer of 2026-10-06: the re-test is the run after the second pass
+
+Added on 2026-10-09 by the Director (Claude Code agent), plan revision 15, PR #67. Everything above this
+section is the record as of 2026-10-03 and is unchanged.
+
+### Why the owner was asked
+
+- The first strict `net_bench --gate` runs on WP-0.4's `win-gpu` runner (the owner's PC) measured the
+  encrypted stack below 100k packets per core: 82,842 (run 37231118477, 2026-10-04), then 82,134
+  (37263321224), 89,080 (37328633862) and 85,054 (37340158971, the scheduled run), the last three on
+  2026-10-05. WP-0.13r (#62) was the second pass that followed.
+- The `win-gpu` run after it, 37391930751 (2026-10-06, on 2bc2d85), **passed strictly: 118,253 packets per
+  core** (8.46 µs of CPU per packet; raw datagrams 215,488 per core; NS-0.7 passed).
+- "The re-test owed" (above) and 09 §5.6 ("If the re-test fails, the approval lapses") do not say which run
+  is the re-test. After its first review, PR #67 read it as every strict run on that hardware from the
+  first, under which the approval would have lapsed on 2026-10-04, and put that reading to the owner.
+
+### The question and the answer, verbatim
+
+The Director asked on 2026-10-06 at 14:27 UTC. The question, as the question tool returned it:
+
+> NS-0.2's 2026-09-30 approval for hosted Linux lapsed on 2026-10-04. The first fixed-hardware re-test on
+> win-gpu measured 82,842 packets per core, under the 100k bar. After the #62 rework, win-gpu passed strictly
+> at 118,253. Hosted Linux swings between about 88k and 110–132k depending on the host it lands on. What
+> should the record say?
+
+The owner selected **"(d) Re-test = post-#62 run"**. The option's description, as the owner saw it:
+
+> You meant 'the re-test' to be the run after the second pass, not the first win-gpu run. The approval never
+> lapsed, the strict pass at 118,253 satisfies it, and the rows are reworded to match.
+
+The other options were "(a) Re-confirm as is", "(b) Re-confirm with a floor" and "(c) Leave it lapsed".
+The question's first sentence was the Director's reading at the time; the answer replaces it.
+
+### What follows from the answer
+
+- The approval of 2026-09-30 is in force and never lapsed.
+- The fixed-hardware re-test on `win-gpu` is the run after the second pass, run 37391930751 (the strict pass
+  at 118,253 that the question names), and it satisfies the re-test. The four runs before it are the
+  measurements that led to the second pass.
+
+### What stays true
+
+- **The Linux half.** "The re-test owed" (above) names a Linux lab host as well as `win-gpu` (owners WP-0.4
+  and WP-0.13). No Linux lab host exists yet, and the answer does not drop that half, so it stays open as
+  worded, in `scorecard.jsonc`'s follow-up and in 09 §8.1.
+- **Hosted Windows** (`windows-vs2026`) was never covered by this approval and is not covered now. Its
+  nightly step stays strict, and on `main` with WP-0.13r it passed NS-0.2's stack clause on its own in every
+  run: 125,630 (nightly 37449776267, attempt 1, 2026-10-06), 134,410 (the owner's re-run of that job,
+  attempt 2), 163,699 (37606845041, 2026-10-07) and 130,645 (37765109895, 2026-10-08) packets per core (09
+  §8.1, WP-0.13 row, with the job IDs).
+- **Enforcement.** The nightly's `linux-gcc` step still passes `--advisory ns02-stack`, and `scorecard.jsonc`
+  still has NS-0.2 as `approved`, citing this record. The answer asks for neither to change, and a Director
+  PR changes neither.
+- **Phase exits.** 09 §5.6's "Phase exits" rule and the paragraph "Until it is done" above are unchanged.
+  This section does not decide how the open Linux half counts at the Phase 0 exit audit.
+- **A later run.** After the answer, the scheduled `win-gpu` run of 2026-10-07 (37639107710, job 112853027198)
+  measured the stack at 73,622 packets per core. In that run the MSVC build had failed ("error C1060: compiler
+  is out of heap space", "The paging file is too small for this operation to complete"), and the stack's
+  cross-check read "not meaningful: the host is not idle (background above a quarter of the CPUs)", with 10.40
+  of the 12 CPUs busy before the measurement. The runs of 2026-10-06 (dispatch and schedule) and 2026-10-08
+  measured 119,214, 115,685 and 117,645. Neither 09 §5.6 nor this record says what a strict run on that
+  hardware after the re-test means for an approval in force. The Director records the run as data, does not
+  treat it as a re-test, and lists the question for the owner in 09 §8.2.

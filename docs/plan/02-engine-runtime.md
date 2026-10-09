@@ -1459,6 +1459,18 @@ public:
   `docs/evidence/saltmarch-container-owner-decision-2026-10-04.md`). Its files are
   `content/zones/tallis/saltmarch.hcont` and `content/zones/tallis/saltmarch.entities/<guid>.hent` (§5.6), and
   designers edit it in the zone's session, `zone-tallis` (07 §1.8.2).
+- **Harrow High becomes its own zone in Phase 3.** The repository owner's decision of 2026-10-06 ("(A)
+  Container, zone from Ph3 (Recommended)"; record in
+  `docs/evidence/harrow-high-owner-decision-2026-10-06.md`). In Phases 1 and 2 the layout above stands: Harrow
+  High, the orbital station, is that station-interior container in `tallis`, so BENCH-2's descent stays
+  seamless. From Phase 3 it is a single-cell zone of its own, `harrow-high`, with its own cell and its own
+  zone session, `zone-harrow-high` (07 §1.8.2); `tallis` keeps the orbit (the 4-cell Harrow orbit of NS-3.11
+  (c) and NS-4.6 (a)) and the Saltmarch container. ED-20's second zone session (Harrow High), NS-3.11 (a) and
+  NS-4.6 (b) are Phase 3 and Phase 4 criteria and stand as written. Two costs follow, both Phase 3 work:
+  Harrow High's files move from `content/zones/tallis/` to `content/zones/harrow-high/` (WP-3.9), and docking
+  or undocking at the station becomes a zone transition (above; 04 §7). The client prefetches the destination,
+  and the zone-transition criteria apply to it as written: 04 §7's target, NS-1.4, CL-4 and AAA-SRV-5's
+  per-phase p99 (01 §3). The decision adds no budget.
 
 ### 5.6 Object containers (R04-P0-5, R06-ENG-20, W03)
 

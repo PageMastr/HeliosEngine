@@ -1022,8 +1022,8 @@ every module in the tree (61 module directories on fb9517f). CI on fb9517f (run 
   - WP-1.1a, ADR-004a's option A (#14, #34);
   - Director and documentation PRs: #21, #43, #51, the concept-art folder (#52) and the documentation audit
     (#63); and the owner's licence-holder commits (#56).
-- **In progress:** #65, WP-0.5r part 1 (the CPU gate in its final place). Next (09 §8.2): WP-0.17, WP-0.2r and
-  WP-0.5r part 2, WP-0.6c part 2 (RT-18) and WP-0.1's merge queue.
+- **In progress:** PR #65 (open), WP-0.5r part 1 (the CPU gate in its final place). Next (09 §8.2): WP-0.17,
+  WP-0.2r and WP-0.5r part 2, WP-0.6c part 2 (RT-18) and WP-0.1's merge queue.
 - **Not yet present:** the launcher and the game client (WP-0.17); asset importers and `helios-assetd`;
   animation, audio and game UI.
 - **Failing gates and fired risks:**
@@ -1039,21 +1039,31 @@ every module in the tree (61 module directories on fb9517f). CI on fb9517f (run 
     of 101.7 ms against 50 ms on the hosted runner), `schemac_sql_postgres` under ASan (a socket path too long
     for PostgreSQL), `TestPerfDeepPaths` on Windows Go (2.8× against 2×; also in CI on fb9517f) and NS-0.2's
     strict gate on hosted Windows. Each is a P0 (09 §8.2); no threshold moves.
-- **NS-0.2's owner approval of 2026-09-30 lapsed on 2026-10-04** ([09
+  - **addendum of 2026-10-09:** the scheduled nightlies of 2026-10-06 (with the owner's re-runs), 2026-10-07
+    and 2026-10-08, all on fb9517f, each failed 3 of 14 jobs in its first attempt ([09
+    §8.2](plan/09-roadmap-and-process.md#82-next-12-work-packages-in-execution-order) classes them). They
+    fail deterministically on `schemac_sql_postgres` under ASan (the socket path is 108 bytes, one over
+    PostgreSQL's 107), with a UBSan signed-overflow report at `tools/schemac/src/sema.cpp:757`, and by design
+    on `pcg_tests_perf` (K5b). Resource-sensitive: NS-0.7 on hosted Windows failed on two of the four runs,
+    whose hosts showed more background CPU than the passing two, and `TestPerfDeepPaths` failed once
+    (2.2× on 2026-10-07). New: `editorui_ed15` under ASan takes about 26.5 s, 473 s or over its 600 s timeout
+    depending on the host's CPU model. `assetpipe_tests_perf` failed once (2026-10-06, first attempt) and
+    passed since; NS-0.2 passed strictly on hosted Windows in every run. CI run 37416153106's Windows Go job
+    passed on its re-run. Fix PRs for the schemac failures and `TestPerfDeepPaths` are in progress.
+- **NS-0.2's owner approval of 2026-09-30 is in force** ([09
   §5.6](plan/09-roadmap-and-process.md#56-ci-tiers-and-evidence-classes); [the
-  record](evidence/ns-0.2-owner-approval-2026-09-30.md) quotes it verbatim). It let the hosted Linux nightly
+  record](evidence/ns-0.2-owner-approval-2026-09-30.md) quotes it verbatim). It lets the hosted Linux nightly
   run `net_bench --gate --advisory ns02-stack`, which reports the encrypted stack's rate instead of failing
-  on it, and it owed a strict re-test on fixed hardware: below 100k per core there, the approval lapses and
-  the stack gets a second pass. On the owner's PC (`win-gpu`, Ryzen 5 5500) the re-test failed: 82,842
-  packets per core on 2026-10-04 (run 37231118477), then 82,134, 89,080 and 85,054. The second pass followed
-  (WP-0.13r, #62), and run 37391930751 (2026-10-06) then **passed strictly at 118,253** (8.46 µs per packet;
-  raw datagrams 215,488 per core). The Linux half needs a Linux lab host. Hosted-Linux NS-0.2 counts as
-  approved again only if the owner re-confirms the approval, dated and verbatim, in its record (an owner
-  decision, 09 §8.2); until then it is judged strictly there too, although the nightly still passes
-  `--advisory` (the one hosted-Linux nightly since the lapse, 2026-10-05, measured 113,289). **Hosted Windows
-  was never covered** and stays strict: its stack measured below 100k in 4 of 7 nightly runs to 2026-10-05,
-  none of them after #62. **NS-0.7 is not covered**: it failed twice on hosted Windows (2026-09-27: 1.55 %
-  drops; 2026-10-03: 0.92 %) and passed on every other run, the five `win-gpu` runs included.
+  on it, and it owed a strict re-test on fixed hardware. On the owner's PC (`win-gpu`, Ryzen 5 5500) the first
+  four strict runs measured 82,842 packets per core on 2026-10-04 (run 37231118477), then 82,134, 89,080 and
+  85,054; the second pass followed (WP-0.13r, #62), and run 37391930751 (2026-10-06) **passed strictly at
+  118,253** (8.46 µs per packet; raw datagrams 215,488 per core). The owner answered on 2026-10-06 that the
+  re-test is that post-#62 run ("(d) Re-test = post-#62 run": the approval never lapsed, and the strict pass
+  at 118,253 satisfies it). The Linux half of the re-test still has no Linux lab host. **Hosted Windows was
+  never covered** and stays strict: its stack measured below 100k in 4 of 7 nightly runs to 2026-10-05, none
+  of them after #62, and passed strictly in all four runs since (125,630 to 163,699). **NS-0.7 is not
+  covered**: it failed twice on hosted Windows before #62 (2026-09-27: 1.55 % drops; 2026-10-03: 0.92 %) and
+  twice since (above), and passed on every other run, every `win-gpu` run included.
 - **Known deltas from the plan** (09 §8.1, §5.10.4):
   - the vendored SDL3 is built without its renderers and Wayland (WP-0.17);
   - the in-tree ISA and CPU-gate code still uses the per-file AVX2 allowlist and the `.CRT$XIB` entry

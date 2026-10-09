@@ -1,0 +1,48 @@
+package manifest_test
+
+import (
+	"testing"
+
+	"github.com/PageMastr/scifi-test/services/pkg/manifest"
+)
+
+func benchShape(b *testing.B, deep bool) {
+	z, err := pathsManifest(deepPathFiles, deep).Marshal(manifest.WriteOptions{Codec: manifest.CodecZstd, ZstdLevel: 3})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := manifest.Parse(z, 0); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+func BenchmarkZDeep(b *testing.B) { benchShape(b, true) }
+func BenchmarkZFlat(b *testing.B) { benchShape(b, false) }
+
+func benchValidate(b *testing.B, deep bool) {
+	m := pathsManifest(deepPathFiles, deep)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := m.Validate(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+func BenchmarkZValDeep(b *testing.B) { benchValidate(b, true) }
+func BenchmarkZValFlat(b *testing.B) { benchValidate(b, false) }
+
+func benchValidPath(b *testing.B, deep bool) {
+	m := pathsManifest(deepPathFiles, deep)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for k := range m.Files {
+			if !manifest.ValidPath(m.Files[k].Path) {
+				b.Fatal("bad")
+			}
+		}
+	}
+}
+func BenchmarkZVPDeep(b *testing.B) { benchValidPath(b, true) }
+func BenchmarkZVPFlat(b *testing.B) { benchValidPath(b, false) }

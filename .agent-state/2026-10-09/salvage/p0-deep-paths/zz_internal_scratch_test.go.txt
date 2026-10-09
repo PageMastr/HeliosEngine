@@ -1,0 +1,72 @@
+package manifest
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/PageMastr/scifi-test/services/pkg/cdc"
+)
+
+func scratchPaths(n int, deep bool) *Manifest {
+	prefix := strings.Repeat(strings.Repeat("a", MaxSegmentBytes)+"/", 3) + strings.Repeat("a", 247) + "/"
+	if deep {
+		prefix = strings.Repeat("a/", 508)
+	}
+	m := &Manifest{Header: Header{ProductID: "sample-game", Platform: "win64",
+		BuildID: "deep-paths", Sequence: 1, CreatedAt: 1791072000}}
+	m.Files = make([]File, n)
+	empty := cdc.Sum(nil)
+	for i := range m.Files {
+		m.Files[i] = File{Path: fmt.Sprintf("%sf%07d", prefix, i), Hash: empty, Tier: 1}
+	}
+	return m
+}
+
+func TestZPhases(t *testing.T) {
+	for _, shape := range []struct {
+		name  string
+		deep  bool
+		level int
+	}{{"deep3", true, 3}, {"deep19", true, 19}, {"flat3", false, 3}, {"flat19", false, 19}} {
+		z, err := scratchPaths(65536, shape.deep).Marshal(WriteOptions{Codec: CodecZstd, ZstdLevel: shape.level})
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, _ := ParseHeader(z, 0)
+		var dec, hash, decode, val time.Duration
+		for r := 0; r < 5; r++ {
+			t0 := time.Now()
+			body, err := decompress(z[HeaderSize:], info.BodySize)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t1 := time.Now()
+			_ = cdc.Sum(body)
+			t2 := time.Now()
+			m := &Manifest{Header: info.Header}
+			if err := decodeBody(body, m); err != nil {
+				t.Fatal(err)
+			}
+			t3 := time.Now()
+			if err := m.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			t4 := time.Now()
+			if r == 0 || t1.Sub(t0) < dec {
+				dec = t1.Sub(t0)
+			}
+			if r == 0 || t2.Sub(t1) < hash {
+				hash = t2.Sub(t1)
+			}
+			if r == 0 || t3.Sub(t2) < decode {
+				decode = t3.Sub(t2)
+			}
+			if r == 0 || t4.Sub(t3) < val {
+				val = t4.Sub(t3)
+			}
+		}
+		t.Logf("%-7s payload %8d: zstd %v hash %v decode %v validate %v", shape.name, len(z), dec, hash, decode, val)
+	}
+}

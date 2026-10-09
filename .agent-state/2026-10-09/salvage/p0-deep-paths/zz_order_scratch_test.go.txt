@@ -1,0 +1,28 @@
+package manifest_test
+
+import (
+	"testing"
+	"time"
+
+	"github.com/PageMastr/scifi-test/services/pkg/manifest"
+)
+
+func TestZOrder(t *testing.T) {
+	read := func(file []byte) time.Duration {
+		return bestOf(3, func() {
+			if _, err := manifest.Parse(file, 0); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	marshal := func(m *manifest.Manifest) []byte {
+		z, err := m.Marshal(manifest.WriteOptions{Codec: manifest.CodecZstd, ZstdLevel: 3})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return z
+	}
+	d := marshal(pathsManifest(deepPathFiles, true))
+	f := marshal(pathsManifest(deepPathFiles, false))
+	t.Logf("deep %v flat %v deep %v flat %v", read(d), read(f), read(d), read(f))
+}

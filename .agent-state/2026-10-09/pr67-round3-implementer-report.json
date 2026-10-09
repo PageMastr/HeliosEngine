@@ -1,0 +1,71 @@
+{
+ "pr": 67,
+ "branch": "agent/claude/director-refresh-2026-10-06",
+ "head": "2e10848635c8b0acbf039255062c22f69a6055c8",
+ "summary": "Round 3 of PR #67 is pushed as five commits on top of 1a86561 (Markdown only; PLAN-REV stays 15). The pushed head is 2e10848.\n- 1244baf: Harrow High owner decision.\n- c00c5be: 02 §1.1 Deps key.\n- 68a575d: 04 §11.1 Luau patch files and the round-2 nits.\n- 6ed6801: NS-0.2 owner answer in the evidence record and engine/net/README.\n- 2e10848: status rows, the owner answers and the nightly addenda.\n\nThe PR title is now \"Director: status refresh after #51 (22 PRs); plan revision 15\". The body was rewritten:\n- every section is updated to be true now;\n- a new \"Review round 2 and the owner's answers: what changed\" table;\n- the round-1 table is kept, with a note that finding 1's lapse reading is superseded;\n- the owner list is reduced to what is still open;\n- it ends with the required footer, and I checked that the live body matches the file byte for byte.\n\nI used the previous implementer's WIP patch as an untrusted draft and checked every claim in it. It applied cleanly, but I corrected several errors:\n- Its 02 §1.1 key still contradicted render→rhi and editorui→toolsfw, and its CONSISTENCY row wrongly said render links only modules its row lists.\n- It reworded the Phase 1 layout bullet, although the owner's option says Phase 1 is unchanged.\n- It classed editorui_ed15 as resource-sensitive instead of a new host-class finding.\n- It dated the addenda 2026-10-08.\n- It left stale \"lapsed\" text in two CONSISTENCY rows and in PLAN.md §11.\n- The PLAN.md line it changed was over 110 columns.\n- Some wording was wrong (\"the run's own cross-check calls the result\", \"GPU-test step\", \"first two revisions of PR #67\").",
+ "changes": [
+  {
+   "finding": "Blocking 1: 02 §1.1's Deps key is contradicted by engine/editorui (links rhi, render)",
+   "change": "02 §1.1's key now says what a module may link: the modules its row lists, every module reachable through those rows' Deps, and the other modules of its own row that engine/CMakeLists.txt declares as same-layer peers. That last part covers render→rhi and editorui→toolsfw, which the draft missed. The toolsfw/editorui/edtools row adds `rhi`, `render` for editorui. A script checked every module against the amended table, and I self-tested it on the old row (it reports exactly editorui→rhi and render): the 43 Helios links of the 20 helios_module() calls are 25 listed, 16 reachable and 2 own-row peers, with none outside. The layers and flags of all 39 declared modules match their rows. Also updated: the CONSISTENCY §43 02 §1.1 row (including PR #65 at 95c36d7, which adds no module link), the 09 §5.10.4 (c) revision-15 row (adds engine/editorui) and PR body item 6."
+  },
+  {
+   "finding": "Blocking 2: CONSISTENCY §43 04 §11.1 row claims the Luau patch lines name their files",
+   "change": "04 §11.1 now lists third_party/luau/patches/0001-codegen-fornloop-fuel.patch and 0002-fuel-counter.patch on their own lines; det-math stays a planned name. The §43 row says so, and notes that 0003-asan-unpoison-freed-page.patch is a sanitizer fix outside §10.2's set and is not listed."
+  },
+  {
+   "finding": "Round-2 review nit 1: new data since the snapshot",
+   "change": "Added dated addenda of 2026-10-09. The §8.1 intro lists the nightlies job by job, and §8.2 classes the failures (see the next item). The WP-0.4, WP-0.13, WP-0.16 and WP-0.18 rows and PLAN.md §11 also get addenda. The snapshot sentences stay; only present-tense ones are qualified 'at the snapshot'."
+  },
+  {
+   "finding": "Task (C): classify the nightly failures in §8.2",
+   "change": "§8.2 now uses four classes:\n- Deterministic: schemac_sql_postgres (108-byte socket path under build/linux-debug-asan) and the UBSan overflow at sema.cpp:757.\n- By design: pcg_tests_perf (K5b).\n- Resource-sensitive, with evidence: NS-0.7 on hosted Windows (background CPU on failing runs 0.41–1.37 cores against 0.09–0.22 on passing ones), TestPerfDeepPaths (2.2× while the same run read the deep-paths vector at 1.4×), and win-gpu run #9 running out of memory.\n- New: editorui_ed15 time depends on the host CPU model (26.51 s on Xeon 8573C, 474.89 and 472.44 s on EPYC 9V74, timeout on EPYC 7763; an EPYC 9V45 took 320.83 s on 2026-10-05).\nThe text says fix PRs for the schemac failures and TestPerfDeepPaths are in progress, without numbers."
+  },
+  {
+   "finding": "Round-2 review nits 2-5 (WP-0.13 status cell, record status note, PR title, run ordinals)",
+   "change": "Status cell: 'except' now lists NS-0.7 on hosted Windows and the Linux half of the re-test. The approval record gets a dated section. Title is 'after #51 (22 PRs)'. The WP-0.4 row explains time-order run numbering (run 5 = GitHub #6; #5 was skipped dispatch 37347400339)."
+  },
+  {
+   "finding": "Round-2 challenge nits 1-5 (03 golden scope, physics README, layout.go, schemac README, CI re-run and new win-gpu runs)",
+   "change": "- 03 §8.4/§9.1 are scoped to helios-rendertest's goldens; the other modules' goldens are named in engine/<module>/tests/golden/ (sizes verified from the PNG headers).\n- engine/physics/README.md says 02 §7.1 now lists the fourth BodyID order.\n- layout.go:141/:157 are added to the code comments left for follow-up (09 §5.10.4 (c), PR body).\n- tools/schemac/README.md says one lock per package or package set, and names all three committed locks.\n- CI run 37416153106's attempt 2 (12/12 jobs) and win-gpu runs 37473635682, 37478933707, 37639107710 and 37796149477 are in the addenda."
+  },
+  {
+   "finding": "Owner answer 1: NS-0.2 '(d) Re-test = post-#62 run'",
+   "change": "Every 'lapsed', 're-confirm' and 'counts strictly' statement is reworded in: the 09 §8.1 intro, the WP-0.4 and WP-0.13 rows, §8.2 (P0 list, row 8, owner list), PLAN.md §11, engine/net/README.md, the CONSISTENCY §43 rows, and the PR title and body. A grep of the whole diff finds those words only in quotes and history.\n\nA dated section is appended to docs/evidence/ns-0.2-owner-approval-2026-09-30.md, with the original text intact. It quotes the question and the answer verbatim and lists what stays true:\n- the Linux half has no lab host;\n- hosted Windows was never covered, and passed strictly on its own at 125,630, 134,410, 163,699 and 130,645;\n- --advisory ns02-stack and the registry's 'approved' are unchanged;\n- the §5.6 phase-exit rule is unchanged.\n\nThe win-gpu run #9 result (73,622, after the out-of-memory build) is recorded as data, not as a re-test, and is listed as an open owner question."
+  },
+  {
+   "finding": "Owner answer 2: Harrow High '(A) Container, zone from Ph3 (Recommended)'",
+   "change": "- 02 §5.5 gets a new bullet, 'Harrow High becomes its own zone in Phase 3'. The Phase 1 layout bullet is byte-identical to main.\n- WP-1.22's and WP-3.9's §2 rows are edited.\n- The CONSISTENCY §43 row for 02 §5.5 notes that D2's fallback resolves it to WP-1.2, which is unstarted, so there is no in-tree code.\n- New record docs/evidence/harrow-high-owner-decision-2026-10-06.md in the Saltmarch format. It quotes both asks and answers verbatim, including 'explain this with more detail and re-ask me'.\n\nWP impact is cited from the owning criteria and WPs, with no budget added:\n- the 04 §7 target;\n- NS-1.4 (WP-1.11);\n- CL-4 (WP-1.11, WP-1.20);\n- AAA-SRV-5 per phase (WP-1.11 for Ph1, WP-3.1 for Ph3)."
+  },
+  {
+   "finding": "Owner answers 3 and 4: #66 proposals '[No preference]'; origin 'Keep 'original''",
+   "change": "Recorded in the WP-0.20 row: the #66 proposals were asked on 2026-10-06, none was selected and none is scheduled. The origin question (#64) is recorded as decided, with no schema change. Both are removed from the owner list."
+  },
+  {
+   "finding": "Task: drop the agent/claude/fix-nightly-verify-all owner action",
+   "change": "git ls-remote confirms the branch no longer exists. Nothing to drop: neither the tree nor the PR body ever mentioned it."
+  }
+ ],
+ "verified": [
+  "Pushed without force: 1a86561..2e10848, and remote head = 2e10848635c8b0acbf039255062c22f69a6055c8 (git ls-remote).",
+  "cmake -P tools/ci/run_lints.cmake: all lints passed, run twice on the final head and again after the last amend. The D6 snapshot reports 61 module dirs and PLAN-REV 15 OK; conformance: 12 rules over 1899 files, 0 failing, CONF-12 x8 known.",
+  "python3 tools/scorecard/scorecard.py check: OK, run twice (19 criteria).",
+  "Configure-only linux-gcc tree (cmake --preset linux-gcc -B build/director-r3, no build), ctest -L lint -j2, run twice: 322/455 passed. The 133 failures all need built binaries (helios-cook check, records cook, schemac, ISA fixture objects, doctest inventories). The identical 133 also fail in a configure-only tree of main fb9517f. The build dir was deleted afterwards.",
+  "Link and anchor checker over the 26 changed Markdown files: 211 relative links, 0 broken; over all of docs/ and README.md: 229 links, 0 broken. I proved first that it catches a planted bad anchor and a missing file.",
+  "No added non-table line over 110 columns (Python character count over git diff -U0 fb9517f).",
+  "No model identifiers and no closing keywords in the diff or the PR body. The only commit-message match is the required Co-Authored-By trailer.",
+  "git merge-tree --write-tree origin/agent/claude/wp-0.5r-cpu-gate HEAD is clean (#65 at 95c36d7), and so is the merge-tree with origin/main.",
+  "Every addendum figure was read from job logs, artifacts or the Actions API:\n- nightly jobs: 112223252272, 112223252516, 112223252359, 112320174721, 112320176183, 112320174603, 112352660421, 112744292948, 112744292934, 112744292774, 113270732466, 113270732596, 113270732576 and 111721847161;\n- win-gpu jobs 112303280660, 112321658167, 112853027198 and 113375996729, with run #9's step conclusions from the API;\n- artifacts: windows-go go.json for Oct 6, 7 and 8, and the scorecard-report for Oct 6 a3, Oct 7 and Oct 8 (Oct 8: NS-0.2 green with streak 3, NS-0.7 FAIL);\n- the 108-byte socket path was counted from the log;\n- CI run 37416153106's attempt 2 was 12/12 success.",
+  "Harrow High record claims were checked against the tree and plan:\n- the criterion texts: ED-20 (07 §5.2), NS-3.11 and NS-4.6 (04 §11.4), NS-1.4, CL-4 (08) and AAA-SRV-5 (01 §3);\n- the WP rows WP-1.11, WP-1.20, WP-3.1 and WP-3.9;\n- 04 §7 docking text, and 07 §1.8.2's statement that zone sessions start in Ph3;\n- the files under content/zones;\n- git grep of 'Harrow High' outside docs/ and third_party/;\n- the helios-cell and helios-gateway zone defaults.",
+  "The live PR body equals the posted file byte for byte; I posted it with the MCP update_pull_request tool. A gh api PATCH appends a '---/Generated by' footer, so I replaced that body. The title was updated.",
+  "The worktree /home/user/wt/director-refresh-r3 and the build dir are removed. The primary checkout's files and branch were not touched (only fetched)."
+ ],
+ "not_verified": [
+  "CI on 2e10848 (run 37876182163) was still running when I reported: 5 checks green (Go Linux/Windows, backend integration, both conformance lints), 8 in progress.",
+  "No MSVC, clang-cl, MinGW or full Linux build was done locally (Markdown only). The 133 binary-dependent lint CTests run only in CI.",
+  "Why editorui_ed15 is so slow on AMD hosts under ASan: the logs do not time its checks.",
+  "I verified the 'NS-0.7 failed in 4 of 11 hosted-Windows runs' count only for the four runs since #62. The two earlier failures and the 7-run count come from rows a previous reviewer had verified; I did not refetch those older logs.",
+  "The CI 'linux-clang' path length for schemac_sql_postgres was not checked. The text only claims the linux-gcc path (101 bytes) passes, and I verified that one.",
+  "The owner-lines script (check_owner_lines.sh) is not in this container."
+ ],
+ "notes_for_lead": "PR #67 is ready for a round-3 review at 2e10848. Points for the reviewer and for you:\n\n1. **New owner question.** I added one item to the open owner list in §8.2 and the PR body: whether a strict win-gpu run below 100k after the re-test bears on the approval. Run #9 on 2026-10-07 measured 73,622 after the PC's MSVC build ran out of memory. Neither §5.6 nor the record covers this. I record it as data, not a re-test, and never call the approval lapsed. Drop the item if you think it is noise.\n\n2. **NS-0.2 on the scorecard.** The 2026-10-08 scorecard report shows NS-0.2 green, with a streak of 3 and Windows passing. The §8.1 intro now says the fired-risks row's 'not green until a 3-night Windows streak' is superseded.\n\n3. **Phase 1 bullet left as is.** The 02 §5.5 Phase 1 layout bullet is unchanged, because the owner's option says Phase 1 is unchanged. The draft's re-dating of zone sessions ('from Ph3') was dropped, and #51 r1's optional nit stays open in the body's 'Not done' list.\n\n4. **Old snapshot sentences.** I kept round 1's review table in the body, with a note that finding 1's reading is superseded. Two snapshot sentences got minimal tense or time qualifiers ('as the Actions API stood at 07:35 UTC on 2026-10-06', 'at the snapshot'), as round-2 review nit 1 suggested. Their figures are unchanged.\n\n5. **When #65 merges.** Update 'PR #65 (open)' in: the §8.1 intro, §8.2 row 1, the 'Finish first' paragraph, the §5.10.4 (c) row, PLAN.md §11's 'In progress' line, and the CONSISTENCY 02 §1.1 row's D3 note. merge-tree with #65 at 95c36d7 is clean.\n\n6. **Scratch files and the local branch.**\n- Scratch logs and artifacts are in /tmp/claude-0/-home-user-scifi-test/3c8d7d72-d94a-4e26-97a2-5444260e3345/scratchpad/director-r3/: logs/, art/, depcheck.py, linkcheck.py, ctest-lint-*.log.\n- The local branch ref agent/claude/director-refresh-2026-10-06 remains in /home/user/scifi-test, at the old 1a86561. I did not delete it, to avoid touching the primary checkout's refs.\n\n7. **Primary checkout HEAD moved.** It moved from 9a13373 to 4e8c0ef during my run. That was not me: I only ran git fetch there."
+}

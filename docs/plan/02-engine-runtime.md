@@ -45,10 +45,14 @@ G02, G15/R04, R05 and R06.
 ### 1.1 Layering DAG (R06-ENG-01)
 
 Key: **HL** = HEADLESS (the cell links it); **ED** = `EDITOR_ONLY`; `→` = privately linked third-party
-library. **Deps** are the Helios modules a module may link, and the code may link fewer: `asset` v0 does not
-use `reflect` yet, and `records` v0 does not use `asset` (WP-0.8). `engine/CMakeLists.txt` declares each
-row's layer, flags and same-layer peers, and configure fails on an upward or unlisted same-layer dependency
-(`cmake/HeliosLayering.cmake`).
+library. **Deps** are the Helios modules a module may link: the modules listed, every module reachable from
+them through their own rows' Deps (a row names the direct dependencies the design needs: `world` lists `ecs`,
+not `core`), and the other modules of its own row that `engine/CMakeLists.txt` declares as its same-layer
+peers (`render` links `rhi`, `editorui` links `toolsfw`). The code may link fewer: `asset` v0 does not use
+`reflect` yet, and `records` v0 does not use `asset` (WP-0.8). `engine/CMakeLists.txt` declares each row's
+layer, flags and same-layer peers, and configure fails on an upward or unlisted same-layer dependency
+(`cmake/HeliosLayering.cmake`); it does not check the Deps column, so a link outside it is a plan change
+(09 §5.10.2 D1).
 
 | L | Module (`engine/…`) | Responsibility | HL | Deps | Owner |
 |---|---|---|---|---|---|
@@ -80,7 +84,7 @@ row's layer, flags and same-layer peers, and configure fails on an upward or unl
 | 4 | `server` | The cell's and the gateway's process runtime: `ZoneHost`, `CellServer`, `GatewayServer`, `TickGraph`, the orchestrator client; Phase 0's dev `ZoneInstance` until `world` owns it (WP-1.2). `apps/cellserver` and `apps/gateway` only parse options and call it (04 §11.1) | ✓ | core, net, ecs, authority → nats.c, yyjson | 04 |
 | 4 | `presentation` | Extractors filling `RenderScene`; cameras, listener, UI surfaces | – | world, render, audio, ui, app | 02 (03 co-owns) |
 | 4 | `assetpipe` | Importers, bakers, DDC, cooker, pak writer | ED | asset, records, pcg, physics, anim, nav → cgltf, ufbx, meshopt, bc7enc_rdo, basisu | 02 |
-| 4 | `toolsfw`, `editorui`, `edtools/*` | ToolsFramework, ImGui shell, tools | ED | world, assetpipe | 07 |
+| 4 | `toolsfw`, `editorui`, `edtools/*` | ToolsFramework, ImGui shell, tools | ED | world, assetpipe; `editorui` also `rhi`, `render` (it draws ImGui through the RHI and the render graph) | 07 |
 
 **Rules.**
 - **Declaration.** Every module uses `helios_module(name [HEADLESS|EDITOR_ONLY] LAYER n …)`.

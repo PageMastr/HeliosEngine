@@ -23,9 +23,21 @@ table, backlog and owner-decision notes still hold, except where this file super
 ## Owner-facing change made at the stop
 - The account routine **"HeliosEngine PR reviewer (hourly)"** (`trig_0145sHhDK3B2v6hYq5dqAGKb`, cron `18 * * * *`,
   fires into this session) was **disabled** so it stops consuming usage while paused. Re-enable it on resume with
-  `update_trigger` `enabled: true`. Its reviewer brief path
-  (`/tmp/claude-0/-home-user-scifi-test/5ace9a00-4c52-590a-83cb-7c8b3fe07ec0/scratchpad/pr-reviewer-brief.md`)
-  was not checked; recreate it if missing.
+  `update_trigger` `enabled: true`. Its prompt reads the reviewer brief at
+  `/tmp/claude-0/-home-user-scifi-test/5ace9a00-4c52-590a-83cb-7c8b3fe07ec0/scratchpad/pr-reviewer-brief.md`;
+  a copy is saved here as `pr-reviewer-brief.md`. In a new container, put the copy back at that path (or edit the
+  routine's prompt to point at the copy) before re-enabling it.
+
+## Re-check after the container restart (2026-10-09 03:06 UTC, owner repeated "stop dev")
+- The container restarted at 03:05. Nothing is running locally: no workflow, agent, build, test or database
+  process, and the only worktree is the main checkout.
+- The routine is still **disabled** (`enabled: false`; it last fired 02:18). The 65 hourly check-ins it had queued
+  for this session (2026-10-06 09:18 to 2026-10-09 01:18) were read and acted on no further; they predate the stop.
+- Open PRs are still only #65 and #67, heads unchanged. main is still fb9517f.
+  - #65 at 95c36d7: CI 14/14 green (run 37807664593).
+  - #67 at 2e10848 (run 37876182163): 6/13 checks green (conformance, Go ubuntu and windows, backend integration,
+    conformance lint, MinGW). The other 7 were still running (Linux gcc, clang, headless; Windows MSVC primary,
+    floor, modular, clang-cl). None had failed. Check this run first on resume.
 
 ## Where things stand (main fb9517f, #66, unchanged)
 
@@ -69,5 +81,6 @@ not a re-test, and never calls the approval lapsed. The implementer suggested th
 - `RESUME.md` (this file)
 - `pr67-round3-implementer-report.json`: the #67 round-3 implementer's full report (verified, not verified, notes)
 - `roadmap-briefs-partial.json`: briefs for WP-0.5r part 2, WP-0.17, WP-0.2r part 2
+- `pr-reviewer-brief.md`: the hourly routine's external-PR reviewer brief (copy of the scratchpad file)
 - `scripts/`: the two workflow scripts of this session
 - `salvage/p0-deep-paths/`: the 2026-10-06 TestPerfDeepPaths scratch benchmarks (Go test files renamed `*.go.txt` so no tooling picks them up; not for commit to a PR)
